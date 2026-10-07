@@ -173,6 +173,13 @@ def _total_norm_by_mesh(
         # FSDP-only path.
         total_norm = per_mesh_norm_list[0]
 
+    if error_if_nonfinite and not torch.isfinite(total_norm):
+        raise RuntimeError(
+            f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, "
+            "so it cannot be clipped. To disable this error and scale the gradients by the "
+            "non-finite norm anyway, set `error_if_nonfinite=False`"
+        )
+
     return total_norm, per_mesh_norms
 
 
@@ -235,6 +242,9 @@ class GradClip(Callback):
       force_finite: if True, NaN/Inf in any grad is zeroed in-place and the
         norm re-measured, on the steps where the computed norm comes back
         non-finite (which is exactly the steps where some grad entry is).
+      error_if_nonfinite: if True, raise before clipping or optimizer update
+        whenever the global gradient norm is NaN/Inf. Takes precedence over
+        ``force_finite``.
       track_per_modality: if True, route stats into image/video buckets via
         ``model.is_image_batch(data_batch)``. If False, accumulate into a
         single un-bucketed log group.
@@ -244,10 +254,12 @@ class GradClip(Callback):
         self,
         clip_norm: float = 1.0,
         force_finite: bool = True,
+        error_if_nonfinite: bool = False,
         track_per_modality: bool = False,
     ):
         self.clip_norm = clip_norm
         self.force_finite = force_finite
+        self.error_if_nonfinite = error_if_nonfinite
         self.track_per_modality = track_per_modality
 
         # Outer key: modality bucket name. For VLM we use a single bucket "" so
@@ -351,7 +363,7 @@ class GradClip(Callback):
         #    rescale every mesh group.
         global_norm, per_mesh_norms = _total_norm_by_mesh(
             grouped_params,
-            error_if_nonfinite=False,
+            error_if_nonfinite=self.error_if_nonfinite,
             foreach=True,
         )
 

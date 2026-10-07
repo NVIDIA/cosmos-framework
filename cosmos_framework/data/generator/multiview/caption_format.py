@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
@@ -29,6 +30,19 @@ DEFAULT_CAPTION_PREFIXES: Final[dict[str, str]] = {
     "camera_right_fisheye_200fov": "The video is captured from a fisheye camera mounted on a car. The camera is facing to the right.",
     "camera_rear_fisheye_200fov": "The video is captured from a fisheye camera mounted on a car. The camera is facing backwards.",
 }
+
+
+_TIMESTAMP: re.Pattern[str] = re.compile(r"\[\s*\d+(?:\.\d+)?\s*s?\s*[-–—]\s*\d+(?:\.\d+)?\s*s?\s*\]", re.IGNORECASE)
+
+
+def first_caption_paragraph(caption: str) -> str:
+    """Keep the opening timestamped paragraph, or the first blank-line paragraph."""
+    caption = caption.strip()
+    timestamps = list(_TIMESTAMP.finditer(caption))
+    if timestamps:
+        end = timestamps[1].start() if len(timestamps) > 1 else len(caption)
+        caption = caption[timestamps[0].start() : end].rstrip(" ,;\t\r\n")
+    return re.split(r"\r?\n\s*\r?\n", caption, maxsplit=1)[0].strip()
 
 
 def _camera_identity(camera_name: str, camera_attributes: Mapping[str, str | int]) -> str:

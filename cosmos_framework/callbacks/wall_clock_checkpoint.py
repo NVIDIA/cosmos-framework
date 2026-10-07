@@ -165,6 +165,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.callbacks.data_stats_writer import checkpoint_data_stats_complete
 
 #: Set by ``get_executor_gcp()`` for every cluster it serves, so that submitting turns
 #: this on without every experiment config having to opt in.
@@ -662,6 +663,12 @@ class WallClockCheckpoint(Callback):
         store costs a retained checkpoint rather than the one we were about to keep.
         """
         dirname = self._checkpoint_dirname(iteration)
+        config = getattr(self, "config", None)
+        if getattr(getattr(config, "data_setting", None), "data_stats_writer_enabled", False):
+            # A checkpoint counts as complete only once its data stats are merged, so an older one is kept until then.
+            if not checkpoint_data_stats_complete(dirname):
+                log.error(f"[WallClockCheckpoint] Data stats for {dirname} are not merged yet.")
+                return False
         for component in DCP_COMPONENTS:
             component_dirname = os.path.join(dirname, component)
             path = os.path.join(component_dirname, DCP_METADATA)

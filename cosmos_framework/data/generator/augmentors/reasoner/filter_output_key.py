@@ -40,6 +40,8 @@ class FilterOutputKey(Augmentor):
             "pad_token_id",
             "ignore_index",
             "labels",
+            # CPU-only per-sample metadata consumed by DataStatsWriterCallback.
+            "data_stats",
         ],
         text_only: bool = False,
         args: Optional[dict] = None,

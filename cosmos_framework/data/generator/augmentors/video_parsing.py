@@ -590,6 +590,42 @@ class VideoParsingWithFullFrames(Augmentor):
 
         return True
 
+    def _pop_audio_bytes(self, data_dict: dict, video_bytes: bytes) -> tuple[bytes, str, bool] | None:
+        """Return the selected audio payload and its timeline semantics."""
+        if "audio_bytes" not in data_dict:
+            return video_bytes, "original", False
+
+        external_audio_bytes = data_dict.pop("audio_bytes")
+        audio_source = "external"
+        timeline_is_window_relative = False
+        meta_dict = data_dict.get(self.meta_key)
+        if isinstance(meta_dict, dict):
+            configured_audio_source = meta_dict.get("audio_source")
+            if isinstance(configured_audio_source, str) and configured_audio_source:
+                audio_source = configured_audio_source
+            timeline_is_window_relative = meta_dict.get("audio_timeline_is_window_relative") is True
+        if not isinstance(external_audio_bytes, bytes) or not external_audio_bytes:
+            log.warning(
+                f"Invalid selected {audio_source!r} audio bytes. "
+                f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                rank0_only=False,
+            )
+            return None
+        return external_audio_bytes, audio_source, timeline_is_window_relative
+
+    @staticmethod
+    def _audio_decode_time_range(
+        audio_time_range: tuple[float, float], timeline_is_window_relative: bool
+    ) -> tuple[float, float]:
+        """Map source-video timestamps onto the selected audio artifact."""
+        if not timeline_is_window_relative:
+            return audio_time_range
+        start_seconds, stop_seconds = audio_time_range
+        # Current video+audio midtraining populations use only starting caption chunks. The selected SAM WAV
+        # begins at that same window, so decode it from local time zero while preserving the selected duration.
+        # Supporting later caption chunks requires carrying their offset relative to the external audio window.
+        return 0.0, stop_seconds - start_seconds
+
     def __call__(self, data_dict: dict) -> dict | None:
         # if in future we need to train with batch size > 1, need to pad frames
         try:
@@ -603,6 +639,15 @@ class VideoParsingWithFullFrames(Augmentor):
 
         if not self._validate_and_probe(video, meta_dict, data_dict):
             return None
+
+        audio_bytes = video
+        audio_source = "original"
+        audio_timeline_is_window_relative = False
+        if self.extract_audio:
+            selected_audio = self._pop_audio_bytes(data_dict, video)
+            if selected_audio is None:
+                return None
+            audio_bytes, audio_source, audio_timeline_is_window_relative = selected_audio
 
         # Resize video frames if size is specified. This computes a scaling ratio that fits the
         # video within the target size bounds while preserving the original aspect ratio.
@@ -705,11 +750,16 @@ class VideoParsingWithFullFrames(Augmentor):
 
         # Extract audio for the same time range as the video frames
         if self.extract_audio:
+            if audio_time_range is not None:
+                audio_time_range = self._audio_decode_time_range(
+                    audio_time_range,
+                    audio_timeline_is_window_relative,
+                )
             audio_chunk = (
                 None
                 if audio_time_range is None
                 else self._extract_audio_chunk(
-                    video_bytes=video,
+                    audio_bytes=audio_bytes,
                     start_seconds=audio_time_range[0],
                     stop_seconds=audio_time_range[1],
                 )
@@ -718,6 +768,12 @@ class VideoParsingWithFullFrames(Augmentor):
                 video_info["sound"] = audio_chunk
             else:
                 video_info["sound"] = None
+                if audio_source != "original":
+                    log.warning(
+                        f"Selected {audio_source!r} audio produced no sound. "
+                        f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                        rank0_only=False,
+                    )
             # Always include audio_sample_rate when extract_audio is enabled,
             # even if audio extraction failed, so the collate function has a
             # consistent set of keys across all samples in the batch.
@@ -768,12 +824,12 @@ class VideoParsingWithFullFrames(Augmentor):
         return start_seconds, stop_seconds
 
     def _extract_audio_chunk(
-        self, video_bytes: bytes, start_seconds: float, stop_seconds: float
+        self, audio_bytes: bytes, start_seconds: float, stop_seconds: float
     ) -> torch.Tensor | None:  # returns [C,N_audio] or None
         """Load and align audio to a half-open interval on the media timeline.
 
         Args:
-            video_bytes: Raw video bytes
+            audio_bytes: Raw bytes containing either embedded or standalone audio.
             start_seconds: Inclusive video playback timestamp.
             stop_seconds: Exclusive video playback timestamp.
 
@@ -792,7 +848,7 @@ class VideoParsingWithFullFrames(Augmentor):
             try:
                 from torchcodec._core import create_from_bytes, get_container_metadata
 
-                _handle = create_from_bytes(video_bytes)
+                _handle = create_from_bytes(audio_bytes)
                 _meta = get_container_metadata(_handle)
                 _has_audio = _meta.best_audio_stream_index is not None
                 del _handle, _meta
@@ -801,7 +857,7 @@ class VideoParsingWithFullFrames(Augmentor):
             except (ImportError, AttributeError):
                 pass  # Fall through to AudioDecoder if _core API is unavailable
 
-            audio_decoder = AudioDecoder(video_bytes)
+            audio_decoder = AudioDecoder(audio_bytes)
             all_samples = audio_decoder.get_all_samples()
             audio = all_samples.data  # [C,N_orig]
             orig_sr = all_samples.sample_rate
@@ -876,6 +932,15 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
 
         if not self._validate_and_probe(video, meta_dict, data_dict):
             return None
+
+        audio_bytes = video
+        audio_source = "original"
+        audio_timeline_is_window_relative = False
+        if self.extract_audio:
+            selected_audio = self._pop_audio_bytes(data_dict, video)
+            if selected_audio is None:
+                return None
+            audio_bytes, audio_source, audio_timeline_is_window_relative = selected_audio
 
         # The chunk frame range must be supplied by an upstream caption-parsing augmentor
         # (e.g. TextTransformForVideoJsonCaption).
@@ -1001,11 +1066,16 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
 
         # Extract audio for the same time range as the chunk's video frames.
         if self.extract_audio:
+            if audio_time_range is not None:
+                audio_time_range = self._audio_decode_time_range(
+                    audio_time_range,
+                    audio_timeline_is_window_relative,
+                )
             audio_chunk = (
                 None
                 if audio_time_range is None
                 else self._extract_audio_chunk(
-                    video_bytes=video,
+                    audio_bytes=audio_bytes,
                     start_seconds=audio_time_range[0],
                     stop_seconds=audio_time_range[1],
                 )
@@ -1014,6 +1084,12 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
                 video_info["sound"] = audio_chunk
             else:
                 video_info["sound"] = None
+                if audio_source != "original":
+                    log.warning(
+                        f"Selected {audio_source!r} audio produced no sound. "
+                        f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                        rank0_only=False,
+                    )
             # Always include audio_sample_rate when extract_audio is enabled,
             # even if audio extraction failed, so the collate function has a
             # consistent set of keys across all samples in the batch.

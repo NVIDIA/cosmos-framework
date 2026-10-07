@@ -38,6 +38,7 @@ from PIL import Image, UnidentifiedImageError
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.augmentors.multi_reference_bbox_condition import parse_reference_bboxes
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -214,6 +215,10 @@ class ExtractMultiReferenceConversation(Augmentor):
             (used for logging only).
 
     Returns ``None`` when required fields are missing.
+
+    When ``read_reference_bboxes`` is enabled, also preserve logical input keys
+    and validated target-normalized boxes. Scene and abstract-control references
+    without boxes, including samples with an empty bbox list, remain valid.
     """
 
     def __init__(
@@ -225,6 +230,7 @@ class ExtractMultiReferenceConversation(Augmentor):
         instruction_key: str = "instruction",
         prompt_variant_keys: tuple[str, ...] | list[str] = _PROMPT_VARIANT_KEYS,
         args: Optional[dict] = None,
+        read_reference_bboxes: bool = False,
     ) -> None:
         super().__init__(input_keys or [], args=args)
         if max_reference_images <= 0:
@@ -234,6 +240,7 @@ class ExtractMultiReferenceConversation(Augmentor):
         self.media_key = media_key
         self.instruction_key = instruction_key
         self.prompt_variant_keys = tuple(prompt_variant_keys)
+        self.read_reference_bboxes: bool = read_reference_bboxes
 
     def _resolve_instruction(self, annotation: dict) -> str | None:
         """Resolve the instruction string, sampling a variant when given a dict.
@@ -314,7 +321,25 @@ class ExtractMultiReferenceConversation(Augmentor):
             return None
 
         if len(ordered_input_keys) > self.max_reference_images:
+            if self.read_reference_bboxes:
+                log.warning(
+                    f"Skipping bbox sample {data_dict.get('__key__', 'unknown')!r}: "
+                    f"{len(ordered_input_keys)} references exceed the limit {self.max_reference_images}; "
+                    "truncating would invalidate prompt and bbox references.",
+                    rank0_only=False,
+                )
+                return None
             ordered_input_keys = ordered_input_keys[: self.max_reference_images]
+
+        if self.read_reference_bboxes:
+            try:
+                data_dict["reference_bboxes"] = parse_reference_bboxes(
+                    annotation.get("reference_bboxes"), ordered_input_keys
+                )
+            except ValueError as error:
+                log.warning(f"Skipping bbox sample {data_dict.get('__key__', 'unknown')!r}: {error}", rank0_only=False)
+                return None
+            data_dict["source_reference_keys"] = ordered_input_keys
 
         source_images: list[Image.Image] = []
         for key in ordered_input_keys:
@@ -427,6 +452,9 @@ class ReorderReferenceImages(Augmentor):
     The marker rewrite is done in a single ``re.sub`` pass to avoid cascading rewrites
     (e.g. ``<img-1>`` -> ``<img-2>`` -> ``<img-3>``). Markers whose index falls outside
     ``[1, len(source_image)]`` are left untouched.
+
+    If bbox conditioning carries ``source_reference_keys``, the same permutation
+    is applied to those keys. Boxes remain keyed by the logical input group.
     """
 
     def __init__(
@@ -485,6 +513,11 @@ class ReorderReferenceImages(Augmentor):
             return match.group(0)
 
         data_dict[self.source_key] = [source_image[perm[i]] for i in range(n)]
+        # Bbox maps stay keyed by logical input group. Reorder the group keys so
+        # condition rendering/formatting uses the same new numbering as the prompt.
+        if "source_reference_keys" in data_dict:
+            reference_keys = data_dict["source_reference_keys"]
+            data_dict["source_reference_keys"] = [reference_keys[index] for index in perm]
         data_dict[self.instruction_key] = _MARKER_RE.sub(_remap, instruction)
 
         return data_dict

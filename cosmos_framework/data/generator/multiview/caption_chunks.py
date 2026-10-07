@@ -10,6 +10,7 @@ from typing import Any
 from cosmos_framework.data.generator.multiview.camera_attributes import MADS_CAMERA_ATTRIBUTES
 from cosmos_framework.data.generator.multiview.caption_format import (
     DEFAULT_CAPTION_PREFIXES,
+    first_caption_paragraph,
     format_multiview_caption,
     format_separate_view_captions,
     format_view_caption,
@@ -70,8 +71,8 @@ def chunks_from_structured_captions(payload: Mapping[str, Any]) -> list[Multivie
                 f"got start_frame={frame_start!r}, end_frame={frame_end!r}."
             )
         prompt = entry.get("caption")
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError(f"Caption chunk {chunk_id!r} must contain a non-empty caption string.")
+        if not isinstance(prompt, str):
+            raise ValueError(f"Caption chunk {chunk_id!r} must contain a caption string (which may be empty).")
         entries.append((frame_start, frame_end, str(chunk_id), prompt.strip()))
 
     entries.sort(key=lambda entry: (entry[0], entry[1], entry[2]))
@@ -114,9 +115,15 @@ def chunks_from_style_keyed_captions(payload: list[Any]) -> list[MultiviewCaptio
             None,
         )
         if prompt is None:
+            # Explicit empty descriptions preserve camera slots, as per-view training dropout does.
+            prompt = next(
+                (captions[key].strip() for key in LEGACY_CAPTION_KEYS if isinstance(captions.get(key), str)),
+                None,
+            )
+        if prompt is None:
             available_keys = ", ".join(sorted(str(key) for key in captions)) or "none"
             raise ValueError(
-                f"Caption chunk {index} has no non-empty caption under any of "
+                f"Caption chunk {index} has no caption string under any of "
                 f"{', '.join(LEGACY_CAPTION_KEYS)} (available keys: {available_keys})."
             )
         chunks.append(
@@ -209,6 +216,7 @@ def load_multiview_caption_chunks_per_view(
     views: Sequence[Any],
     *,
     first_only: bool = False,
+    first_caption_paragraph_only: bool = False,
 ) -> list[MultiviewCaptionChunk]:
     """Read every camera's caption file and assemble one prompt per chunk.
 
@@ -216,6 +224,9 @@ def load_multiview_caption_chunks_per_view(
     and ``view_prompts`` is one caption per camera for a checkpoint trained with
     ``separate_view_text_tokenization``. Which one is packed is decided at generation time from the
     checkpoint's own recorded layout, not here.
+
+    ``first_caption_paragraph_only`` matches short-window LiDAR training. It trims
+    the raw text before adding camera headers; the default preserves full captions.
 
     Chunkwise rollout generates all cameras together and slices the model output by one shared
     frame count, so the cameras have to agree on the chunk boundaries: a caption file written
@@ -253,17 +264,24 @@ def load_multiview_caption_chunks_per_view(
                 f"{ {key: (chunk.frame_start, chunk.frame_end) for key, chunk in zip(camera_keys, view_chunks, strict=True)} }."
             )
         frame_start, frame_end = spans.pop()
-        # Preserve the legacy one-camera prefixes for a model reading one merged prompt. A model
-        # trained with separate_view_text_tokenization instead receives the same selected-rig and
-        # current-camera headers as the training dataloader. Which one is packed is decided at
-        # generation time from the checkpoint's own training config.
+        # Preserve the legacy one-camera prefixes for a MADS rig. Other datasets can use opaque
+        # camera identifiers (for example PAIBench's ``dev1``), so retain their captions verbatim
+        # rather than requiring a MADS-specific prefix. A model trained with
+        # separate_view_text_tokenization receives the same selected-rig and current-camera
+        # headers as the training dataloader when the rig is MADS. Which form is packed is decided
+        # at generation time from the checkpoint's own training config.
         view_captions = [chunk.prompt for chunk in view_chunks]
-        labeled = label_view_captions(view_captions, camera_keys=camera_keys)
+        if first_caption_paragraph_only:
+            view_captions = [first_caption_paragraph(caption) for caption in view_captions]
+        use_mads_camera_rig_prefix = all(camera_key in MADS_CAMERA_ATTRIBUTES for camera_key in camera_keys)
+        labeled = (
+            label_view_captions(view_captions, camera_keys=camera_keys) if use_mads_camera_rig_prefix else view_captions
+        )
         separate_view_captions = format_separate_view_captions(
             view_captions,
             camera_names=camera_keys,
-            add_camera_rig_prefix=True,
-            camera_attributes=MADS_CAMERA_ATTRIBUTES,
+            add_camera_rig_prefix=use_mads_camera_rig_prefix,
+            camera_attributes=MADS_CAMERA_ATTRIBUTES if use_mads_camera_rig_prefix else None,
         )
         merged = format_multiview_caption(labeled, use_explicit_view_format=False, use_two_pass_format=False)
         chunks.append(

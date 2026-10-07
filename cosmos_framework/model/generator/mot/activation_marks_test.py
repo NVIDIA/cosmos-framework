@@ -80,10 +80,10 @@ def _marking_off_by_default():
 def _natten_can_run_this_block() -> bool:
     """Whether NATTEN's varlen FMHA is usable here for the shapes ``_Block`` runs.
 
-    The blocks pin ``backend="natten"`` rather than letting the frontend choose, because
-    the policy matches ops by name and only NATTEN's kernels are named "fmha". NATTEN is
-    the frontend's pick for varlen on Blackwell but not on Hopper, where flash3 outranks
-    it -- pinning is what keeps this coverage on both. Pinning an *incompatible* backend
+    The blocks pin ``backend="natten"`` rather than letting the frontend choose, to
+    exercise NATTEN's custom ops regardless of backend ordering or environment overrides.
+    Flash3 outranks it on Hopper -- pinning keeps this coverage on both architectures.
+    Pinning an *incompatible* backend
     raises, though, so compatibility is checked here and the suite skips rather than
     errors on a device NATTEN cannot serve.
     """
@@ -257,9 +257,9 @@ def test_the_attention_op_regex_covers_every_backend_that_can_be_selected() -> N
     A marked call site is only kept if some op matches ``save_ops_regex``, so a backend
     missing from that list makes marking silently inert -- the config says it is on, no
     op is eligible, the mark is never consumed and the layer recomputes everything. Not
-    hypothetical: ``["fmha"]`` covers NATTEN on every arch but nothing else, and on sm90
-    flash3 is ranked ahead of NATTEN and takes these calls, which is how the mechanism
-    came to do nothing on Hopper while reading as enabled.
+    hypothetical: before the Flash4 wrapper was added, ``["fmha"]`` covered only
+    NATTEN, and on sm90 flash3 is ranked ahead of NATTEN and takes these calls, which
+    is how the mechanism came to do nothing on Hopper while reading as enabled.
 
     Enumerated from the dispatcher rather than hard-coded, so a renamed or newly added
     kernel fails here instead of in a training run's memory profile. cuDNN is out of
@@ -282,14 +282,13 @@ def test_the_attention_op_regex_covers_every_backend_that_can_be_selected() -> N
         "natten": "natten::",
         "flash2": "flash_attn::",
         "flash3": "flash_attn_3::",
-        "flash4": "flash_attn_4::",
+        "flash4": "imaginaire_flash4::",
         "cudnn": None,
     }
     # Every backend the frontend can return, on any arch it supports. Driving the check
-    # from here rather than a hardcoded list is the point: ``flash4`` is already installed
-    # in the GB200 image but commented out of ``get_backend_list``, and the day it is
-    # enabled it ranks ahead of NATTEN on sm100 -- at which point marking would go inert
-    # on the primary training arch exactly as it did on Hopper, and this should say so.
+    # from here rather than a hardcoded list is the point: Flash4 can be explicitly
+    # selected or used as a fallback on sm100, so missing its wrapper would make marking
+    # inert for those runs. Its op ends in ``_fwd``, not ``_forward``.
     selectable = {backend for arch in (75, 80, 86, 90, 100, 103, 110, 120, 121) for backend in get_backend_list(arch)}
     assert selectable, "no backend is selectable anywhere, so this would pass vacuously"
     unknown = selectable - set(namespaces)
@@ -305,12 +304,16 @@ def test_the_attention_op_regex_covers_every_backend_that_can_be_selected() -> N
     def in_scope(name: str) -> bool:
         return name.startswith(prefixes) and not any(kernel in name for kernel in neighbourhood)
 
-    forwards = [name for name in registered if in_scope(name) and name.endswith("_forward")]
+    forwards = [name for name in registered if in_scope(name) and name.endswith(("_forward", "_fwd"))]
     # flash3 ships as ``flash_attn_3_nv`` and is absent from aarch64 images, where it is
     # not a candidate anyway. Its op name is pinned by docker/Dockerfile.base and read from
     # that tag's source, so cover it whether or not this image has the package.
     if "flash3" in selectable:
         forwards.append("flash_attn_3::_flash_attn_forward")
+    # Flash4's wrapper is guarded by CUDA availability, so CPU CI does not register
+    # it even when the package is installed. Cover its forward and backward names there too.
+    if "flash4" in selectable:
+        forwards.append("imaginaire_flash4::fmha_fwd")
 
     assert forwards, "no attention backend registered an op, so this would pass vacuously"
     missing = [name for name in forwards if not covered(name)]
@@ -318,7 +321,10 @@ def test_the_attention_op_regex_covers_every_backend_that_can_be_selected() -> N
 
     # Backward ops must not match: the policy runs over the forward, and a pattern loose
     # enough to catch them is matching on something other than what it means.
-    caught = [name for name in registered if in_scope(name) and name.endswith("_backward") and covered(name)]
+    backwards = [name for name in registered if in_scope(name) and name.endswith(("_backward", "_bwd"))]
+    if "flash4" in selectable:
+        backwards.append("imaginaire_flash4::fmha_bwd")
+    caught = [name for name in backwards if covered(name)]
     assert not caught, f"the regex reaches backward ops: {caught}"
 
 

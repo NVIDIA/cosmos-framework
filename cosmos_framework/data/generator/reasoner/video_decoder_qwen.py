@@ -220,6 +220,7 @@ def _video_decoder_qwen_func(
     if video_fps > max_fps_thres:
         raise ValueError(f"Video fps {video_fps} higher than {max_fps_thres}, skipping")
 
+    configured_max_video_token_length = max_video_token_length
     if random_augmentation:
         if frame_count_random_range is not None:
             # Random number of frames
@@ -248,6 +249,8 @@ def _video_decoder_qwen_func(
     merge_size = processor.merge_size
     min_pixels: int = token_to_pixels(min_video_token_length, patch_size, temporal_patch_size, merge_size)
     max_pixels: int = token_to_pixels(max_video_token_length, patch_size, temporal_patch_size, merge_size)
+    total_min_pixels = min_pixels
+    total_max_pixels = max_pixels
     max_frames: int = max_pixels // (min_height_width) ** 2 // temporal_patch_size
 
     nframes = smart_nframes_with_factor(
@@ -296,6 +299,7 @@ def _video_decoder_qwen_func(
 
     # recompute max_pixels based on number of sampled frames
     nframes, _, height, width = video_frames.shape
+    native_height, native_width = int(height), int(width)
     # Floor the per-frame budget at min_pixels so smart_resize never gets an inverted range
     # (min_pixels > max_pixels) for many-frame videos. Matches the projects/cosmos3/vlm decoder
     # the cosmos-rl i4 data bridge used.
@@ -319,7 +323,20 @@ def _video_decoder_qwen_func(
         ).float()  # [T,C,H,W]
     video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H,W]
 
-    result = dict(videos=video_frames, fps=sample_fps)
+    result = dict(
+        videos=video_frames,
+        fps=sample_fps,
+        native_fps=float(video_fps),
+        native_num_frames=int(total_frames),
+        sampled_num_frames=int(nframes),
+        native_height=native_height,
+        native_width=native_width,
+        native_duration_sec=float(total_frames) / video_fps,
+        configured_max_video_token_length=int(configured_max_video_token_length),
+        effective_max_video_token_length=int(max_video_token_length),
+        budget_min_pixels=int(total_min_pixels),
+        budget_max_pixels=int(total_max_pixels),
+    )
     if timing is not None:
         result[SOURCE_VIDEO_TIMING_KEY] = timing
     if uses_source_timestamps:

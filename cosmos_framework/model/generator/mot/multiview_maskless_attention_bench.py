@@ -3,7 +3,7 @@
 
 """Time the maskless multiview folds against the paths they are an alternative to.
 
-Three ways to attend one multiview sample, all timed over the same packed batch and all
+Four ways to attend one multiview sample, all timed over the same packed batch and all
 including the reasoner's own causal self-attention, since every one of them runs it:
 
 * ``dense_full`` -- ``two_way_attention`` with no mask, i.e. every GEN token attends to its
@@ -14,6 +14,8 @@ including the reasoner's own causal self-attention, since every one of them runs
 * ``multiview_maskless`` -- ``multiview_attention`` under a ``MultiviewMasklessPlan``: three
   unmasked kernels (same
   view, cross view, gen->und) merged by log-sum-exp, no ``BlockMask`` anywhere.
+* ``multiview_maskless_exact`` -- the same fast view fold, with disjoint rectangular
+  cross-view passes. Counts each pair once, matching the flex-decomposed RGB mask.
 
 ``mask_build`` times the block mask the flex row needs. It is charged separately because
 production builds it once per forward, outside the decoder layers, and every layer then
@@ -70,7 +72,10 @@ from cosmos_framework.model.generator.mot.flex_attention_bench import (
     time_call,
 )
 from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
-from cosmos_framework.model.generator.mot.multiview_maskless_attention import build_multiview_maskless_plan
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
+    MultiviewMasklessPlan,
+    build_multiview_maskless_plan,
+)
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_causal_seq,
@@ -311,7 +316,8 @@ def multiview_maskless_plan(
     device: torch.device,
     per_view_captions: bool = False,
     padded_gen_tokens: int | None = None,
-):
+    deduplicate_cross_view: bool = False,
+) -> MultiviewMasklessPlan:
     """The plan for these scenarios, one entry per item with the control items marked."""
     num_views: list[int] = []
     token_shapes: list[tuple[int, int, int]] = []
@@ -342,6 +348,7 @@ def multiview_maskless_plan(
         view_axis=[0] * len(num_views),
         captions=captions,
         padded_gen_tokens=padded_gen_tokens,
+        deduplicate_cross_view=deduplicate_cross_view,
     )
 
 
@@ -602,6 +609,7 @@ def variant_pairs(scenario: MultiviewScenario, variant: str) -> int:
         "flex_all_views": None,
         "flex_decomposed": scenario.latent_frames_per_view + scenario.num_views - 1,
         "multiview_maskless": scenario.latent_frames_per_view + scenario.num_views,
+        "multiview_maskless_exact": scenario.latent_frames_per_view + scenario.num_views - 1,
     }[variant]
     gen_keys = num_gen if cells is None else cells * scenario.spatial_tokens
     return num_gen * (num_und + gen_keys)
@@ -623,6 +631,13 @@ def run_scenario(
     plan = multiview_maskless_plan(
         [scenario], device, config.per_view_captions, int(get_full_only_seq(packs[0])[0].shape[0])
     )
+    exact_plan = multiview_maskless_plan(
+        [scenario],
+        device,
+        config.per_view_captions,
+        int(get_full_only_seq(packs[0])[0].shape[0]),
+        deduplicate_cross_view=True,
+    )
 
     calls: dict[str, Callable[[], object]] = {}
     if not config.skip_dense:
@@ -633,6 +648,9 @@ def run_scenario(
             lambda mask=block_mask: multiview_attention(*packs, flex_block_mask=mask, flex_backend=backend),
         )
     calls["multiview_maskless"] = _timed_or_trained(config, lambda: multiview_attention(*packs, maskless_plan=plan))
+    calls["multiview_maskless_exact"] = _timed_or_trained(
+        config, lambda: multiview_attention(*packs, maskless_plan=exact_plan)
+    )
 
     if config.compile:
         # Only the token count varies between steps in production, and the head dims have to
@@ -742,6 +760,13 @@ def run_ragged(
     plan = multiview_maskless_plan(
         scenarios, device, config.per_view_captions, int(get_full_only_seq(packs[0])[0].shape[0])
     )
+    exact_plan = multiview_maskless_plan(
+        scenarios,
+        device,
+        config.per_view_captions,
+        int(get_full_only_seq(packs[0])[0].shape[0]),
+        deduplicate_cross_view=True,
+    )
 
     calls: dict[str, Callable[[], object]] = {}
     if not config.skip_dense:
@@ -752,6 +777,9 @@ def run_ragged(
             lambda mask=block_mask: multiview_attention(*packs, flex_block_mask=mask, flex_backend=backend),
         )
     calls["multiview_maskless"] = _timed_or_trained(config, lambda: multiview_attention(*packs, maskless_plan=plan))
+    calls["multiview_maskless_exact"] = _timed_or_trained(
+        config, lambda: multiview_attention(*packs, maskless_plan=exact_plan)
+    )
 
     if config.compile:
         for pack in packs:

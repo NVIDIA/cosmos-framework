@@ -57,6 +57,10 @@ class LossStatistics:
     global_objective_denominator: torch.Tensor
     token_ce_sum: torch.Tensor
     valid_token_count: torch.Tensor
+    per_sample_objective_numerator: torch.Tensor
+    per_sample_objective_denominator: torch.Tensor
+    per_sample_token_ce_sum: torch.Tensor
+    per_sample_valid_token_count: torch.Tensor
 
 
 def cross_entropy_loss(
@@ -90,8 +94,9 @@ def cross_entropy_loss(
     # Shift for next-token prediction: predict token[t+1] using hidden state[t].
     # logits[:, :-1] aligns with labels[:, 1:].
     # Reference: async_safe_ce:63-73 (output[:, :-1], target[:, 1:])
-    shifted_logits = logits[:, :-1].contiguous().view(-1, logits.size(-1))
-    shifted_labels = labels[:, 1:].contiguous().view(-1)
+    batch_size = labels.shape[0]
+    shifted_logits = logits[:, :-1].contiguous().view(-1, logits.size(-1))  # [B*(T-1),V]
+    shifted_labels = labels[:, 1:].contiguous().view(-1)  # [B*(T-1)]
 
     # Per-token loss, then normalize over the global valid-token count.
     # Reference: async_safe_ce:89-109
@@ -101,8 +106,12 @@ def cross_entropy_loss(
         ignore_index=ignore_index,
         reduction="none",
     )
-    local_token_ce_sum = per_token_loss.sum()  # []
-    local_n_valid_tokens = (shifted_labels != ignore_index).sum()  # []
+    per_token_loss_2d = per_token_loss.view(batch_size, -1)  # [B,T-1]
+    valid_2d = (shifted_labels != ignore_index).view(batch_size, -1)  # [B,T-1]
+    per_sample_token_ce_sum = (per_token_loss_2d * valid_2d).sum(dim=1)  # [B]
+    per_sample_valid_token_count = valid_2d.sum(dim=1)  # [B]
+    local_token_ce_sum = per_sample_token_ce_sum.sum()  # []
+    local_n_valid_tokens = per_sample_valid_token_count.sum()  # []
     n_valid_tokens = local_n_valid_tokens.detach().clone()  # []
     num_dp_workers = 1
     if dist.is_available() and dist.is_initialized():
@@ -117,6 +126,10 @@ def cross_entropy_loss(
             global_objective_denominator=n_valid_tokens.detach(),
             token_ce_sum=local_token_ce_sum.detach(),
             valid_token_count=local_n_valid_tokens.detach(),
+            per_sample_objective_numerator=(per_sample_token_ce_sum * loss_scaling_factor).detach(),
+            per_sample_objective_denominator=per_sample_valid_token_count.detach(),
+            per_sample_token_ce_sum=per_sample_token_ce_sum.detach(),
+            per_sample_valid_token_count=per_sample_valid_token_count.detach(),
         )
     return loss
 
@@ -206,6 +219,14 @@ def weighted_cross_entropy_loss(
             global_objective_denominator=local_normalizer.detach(),
             token_ce_sum=per_token_loss.sum().detach(),
             valid_token_count=valid.sum().detach(),
+            per_sample_objective_numerator=(
+                torch.where(has_valid, per_sample_terms, torch.zeros_like(per_sample_terms)) * loss_scaling_factor
+            ).detach(),
+            per_sample_objective_denominator=torch.where(
+                has_valid, normalizer_terms, torch.zeros_like(normalizer_terms)
+            ).detach(),
+            per_sample_token_ce_sum=loss_sums.detach(),
+            per_sample_valid_token_count=valid_counts.detach().to(torch.long),
         )
     return loss
 
@@ -272,4 +293,8 @@ def fused_weighted_cross_entropy_loss(
         global_objective_denominator=global_denominator.detach(),
         token_ce_sum=loss_sums.sum().detach(),
         valid_token_count=counts.sum().detach(),
+        per_sample_objective_numerator=(loss_sums / counts.clamp(min=1).pow(exponent)).detach(),
+        per_sample_objective_denominator=torch.where(has_valid, counts.clamp(min=1).pow(1 - exponent), 0.0).detach(),
+        per_sample_token_ce_sum=loss_sums.detach(),
+        per_sample_valid_token_count=counts.detach().to(torch.long),
     )

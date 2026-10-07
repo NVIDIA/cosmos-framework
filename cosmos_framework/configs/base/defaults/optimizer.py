@@ -108,6 +108,26 @@ DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     split_expert_gate_up=False,
     batch_split_expert_ns=False,
     max_moe_expert_ns_matrices=0,
+    # Opt-in Hyperball wrapper for every DION2 matrix update. When enabled,
+    # DION2 skips DION2-side weight decay and preserves each matrix's initial
+    # global Frobenius norm. Direct mode uses the group LR directly; exact
+    # conversion restores vanilla DION2 shape scaling.
+    dion2_hyperball=False,
+    # Hyperball LR modes:
+    # - False (direct): constrained matrices use the group LR directly, and
+    #   muon_lr_scale is ignored. Hyperball-skipped matrices retain vanilla scaling.
+    # - True (exact): preserve the Newton-Schulz output norm and use the vanilla
+    #   DION2 effective LR: group_lr * muon_lr_scale * sqrt(max(M, N)).
+    dion2_hyperball_exact_lr_conversion=False,
+    # Regexes for matrices that remain DION2-routed but bypass Hyperball. This
+    # supports zero-initialized matrices, which cannot define a nonzero sphere.
+    # For example, when training from scratch with a shared-expert down
+    # projection explicitly initialized to all zeros, use:
+    # (r"(?:^|\.)shared_expert\.down_proj\.weight$",)
+    # This differs from orthogonalize_skip_patterns: matching parameters remain
+    # on vanilla DION2 rather than being routed to AdamW.
+    dion2_hyperball_skip_patterns=(),
+    hyperball_eps=1e-8,
 )
 
 LAMBDACOSINE_KWARGS: dict[str, Any] = dict(
@@ -161,6 +181,16 @@ def register_optimizers(optimizer_kwargs: dict[str, Any]) -> None:
             model=PLACEHOLDER,
             optimizer_type="Dion2WithAuxAdamW",
             **DION2_OPTIMIZER_KWARGS,
+        ),
+    )
+    cs.store(
+        group="optimizer",
+        package="optimizer",
+        name="dion2hwithauxadamw",
+        node=L(build_optimizer)(
+            model=PLACEHOLDER,
+            optimizer_type="Dion2WithAuxAdamW",
+            **{**DION2_OPTIMIZER_KWARGS, "dion2_hyperball": True},
         ),
     )
 

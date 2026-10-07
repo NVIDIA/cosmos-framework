@@ -26,6 +26,7 @@ from cosmos_framework.model.attention.checks import (
 from cosmos_framework.model.attention.cudnn import cudnn_attention
 from cosmos_framework.model.attention.flash2 import flash2_attention
 from cosmos_framework.model.attention.flash3 import flash3_attention
+from cosmos_framework.model.attention.flash4 import flash4_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.attention.natten import natten_attention, natten_multi_dim_attention
 from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends, is_torch_compiling
@@ -37,6 +38,7 @@ BACKEND_MAP = {
     "natten": natten_attention,
     "flash2": flash2_attention,
     "flash3": flash3_attention,
+    "flash4": flash4_attention,
 }
 
 MULTI_DIM_BACKEND_MAP = {

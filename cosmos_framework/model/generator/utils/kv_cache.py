@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.rolling_prompt import RollingPromptLayout, RollingTextSinkLayer
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
@@ -334,6 +335,8 @@ class KVCache:
         # buffer indices. With attention sinks enabled, this returns pinned
         # sink frames first, followed by the chronological rolling tail.
         history_indices = [self._cache_index(i) for i in self._history_frame_indices(current_idx)]
+        if not history_indices:
+            return None, None
         history_k_entries: list[object] = []
         history_v_entries: list[object] = []
         for cache_idx in history_indices:
@@ -524,6 +527,8 @@ class GenKVCache(KVCache):
             Only used with a finite cache, the BF16 backend and uniform entry
             shapes; otherwise the per-entry clone path is kept.
         """
+        self._unbounded_history: bool = cache_size is None
+        self._selected_history: tuple[int, tuple[int, ...]] | None = None
         self._buffer_pool = buffer_pool
         self._pool_slot = int(pool_slot)
         self._preallocate_ring = preallocate_ring
@@ -556,6 +561,7 @@ class GenKVCache(KVCache):
     def reset(self) -> None:
         """Reset cache state, discard static inference workspaces and release pooled slots."""
         super().reset()
+        self._selected_history = None
         self._static_k_buf = None
         self._static_v_buf = None
         self._static_valid_frame_idx = None
@@ -572,6 +578,30 @@ class GenKVCache(KVCache):
         self._ring_disabled = False
         if self._buffer_pool is not None:
             self._buffer_pool.release_owner(self)
+
+    def select_history(self, frame_idx: int, history_indices: list[int]) -> None:
+        """Select chronological past frames from the unbounded inference archive.
+
+        Selection changes only reads: archived K/V retain their original logical
+        frame IDs, token grouping, and RoPE positions. Call again when advancing
+        the denoising/clean-refresh frame; reset restores ordinary full history.
+        """
+        if not self._unbounded_history:
+            raise ValueError("History retrieval requires an unbounded KV archive, not an evicting ring")
+        if frame_idx < 0 or any(index < 0 or index >= frame_idx for index in history_indices):
+            raise ValueError("Retrieved history must contain only nonnegative, strictly past frame IDs")
+        if history_indices != sorted(set(history_indices)):
+            raise ValueError("Retrieved history must be chronological and contain no duplicate frames")
+        self._selected_history = (frame_idx, tuple(history_indices))
+        self._static_valid_frame_idx = None
+
+    def _history_frame_indices(self, frame_idx: int) -> list[int]:
+        if self._selected_history is None:
+            return super()._history_frame_indices(frame_idx)
+        selected_frame, indices = self._selected_history
+        if frame_idx != selected_frame:
+            raise ValueError(f"Stale retrieved history for frame {selected_frame}; reading frame {frame_idx}")
+        return list(indices)
 
     def store_kv(self, k: torch.Tensor, v: torch.Tensor, frame_idx: int) -> None:
         """Store K/V and invalidate static read workspaces."""
@@ -1255,7 +1285,7 @@ class KVTrainMemoryValue(MemoryValue):
     will properly decouple the training and inference KV-cache abstractions.
 
     Carries the cached K/V tensors, boolean flags, and varlen offsets that
-    ``three_way_attention_with_kv_cache`` needs.  All fields are tensors (or
+    ``three_way_attention_with_memory`` needs.  All fields are tensors (or
     tensor-derived constants) whose types and shapes must be stable across
     steps to avoid ``torch.compile`` recompilation.
 
@@ -1489,7 +1519,7 @@ class KVCacheTrainMemoryState(MemoryState):
 
         # When True (the safe default), und_kv_offsets and
         # gen_ca_cached_kv_offsets are clamped to length >= 1 and the
-        # corresponding LSE is masked to -inf in three_way_attention_with_kv_cache.
+        # corresponding LSE is masked to -inf in three_way_attention_with_memory.
         self.clamp_empty_varlen_kv = clamp_empty_varlen_kv
 
         self.has_new_caption: torch.Tensor | None = None
@@ -1996,15 +2026,80 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
 
 
 @dataclass
-class FlexARMemoryValue(MemoryValue):
-    """Read-only fixed-capacity K/V suffix for multiview transfer AR inference."""
+class JointARMemoryValue(MemoryValue):
+    """Read-only sensor K/V for joint maskless AR."""
+
+    cached_gen_k: torch.Tensor | None  # [1,S,H_kv/CP,D] or None before the first clean-chunk cache write
+    cached_gen_v: torch.Tensor | None  # [1,S,H_kv/CP,D] or None before the first clean-chunk cache write
+
+
+class JointChunkMemory(MemoryState):
+    """Serve persistent history and clean-write K/V using contiguous (src, dst, length) spans.
+
+    Writes happen only during the finalized chunk's clean forward. Noisy
+    denoising forwards leave ``spans=None`` and cannot modify stored history.
+    """
+
+    memory_seq_len: int
+    cache: list[tuple[torch.Tensor, torch.Tensor] | None]
+    spans: list[tuple[int, int, int]] | None
+
+    def __init__(self, num_layers: int, capacity: int) -> None:
+        if capacity < 1 or num_layers < 1:
+            raise ValueError("Joint memory requires positive capacity and layer count")
+        self.memory_seq_len = capacity
+        self.cache = [None] * num_layers
+        self.spans = None
+
+    def init(self, hidden_states: dict, device: torch.device) -> None:
+        """No-op: preserve persistent K/V across transformer forwards.
+
+        The model calls this hook before every forward. Buffers are allocated
+        lazily on each layer's first clean-chunk cache write, not reset here.
+        """
+
+    def requires_natten_metadata(self) -> bool:
+        return False
+
+    def is_gen_only(self) -> bool:
+        # Captions continue through the current forward; only sensor K/V is cached.
+        return False
+
+    def read_for_layer(self, layer_idx: int) -> JointARMemoryValue:
+        cached = self.cache[layer_idx]
+        if cached is None:
+            return JointARMemoryValue(cached_gen_k=None, cached_gen_v=None)
+        k, v = cached  # each [1,S,H_kv/CP,D]
+        return JointARMemoryValue(cached_gen_k=k, cached_gen_v=v)
+
+    def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
+        if self.spans is None:
+            return
+        k, v, _, _ = kv_to_store  # K/V: [1,N_current,H_kv/CP,D]
+        if self.cache[layer_idx] is None:
+            self.cache[layer_idx] = (
+                k.new_zeros((1, self.memory_seq_len, k.shape[2], k.shape[3])),  # [1,S,H_kv/CP,D]
+                v.new_zeros((1, self.memory_seq_len, v.shape[2], v.shape[3])),  # [1,S,H_kv/CP,D]
+            )
+        cached = self.cache[layer_idx]
+        assert cached is not None
+        for source, destination, length in self.spans:
+            cached[0][:, destination : destination + length].copy_(k[:, source : source + length])  # [1,L,H_kv/CP,D]
+            cached[1][:, destination : destination + length].copy_(v[:, source : source + length])  # [1,L,H_kv/CP,D]
+
+
+@dataclass
+class MultiviewARMemoryValue(MemoryValue):
+    """Read-only fixed-capacity K/V suffix for Flex or maskless multiview AR inference."""
 
     cached_gen_k: torch.Tensor | None  # [1,S_memory,H_kv,D] or None during prefill
     cached_gen_v: torch.Tensor | None  # [1,S_memory,H_kv,D] or None during prefill
+    text_sink_layer: RollingTextSinkLayer | None = None
+    prompt_layout: RollingPromptLayout | None = None
 
 
-class FlexARMemoryState(MemoryState):
-    """Capture and serve the fixed-size FlexAttention memory suffix.
+class MultiviewARMemoryState(MemoryState):
+    """Capture and serve the fixed-size multiview AR memory suffix.
 
     The cache list is shared by the prefill, denoising, and clean-refresh
     states of one CFG branch. Denoising states omit ``write_indexes`` and are
@@ -2021,6 +2116,8 @@ class FlexARMemoryState(MemoryState):
         write_indexes: torch.Tensor | None = None,
         write_offset: int = 0,
         cache_write_indexes: torch.Tensor | None = None,
+        text_sink_layers: list[RollingTextSinkLayer] | None = None,
+        prompt_layout: RollingPromptLayout | None = None,
     ) -> None:
         if memory_seq_len < 1:
             raise ValueError(f"memory_seq_len must be >= 1, got {memory_seq_len}.")
@@ -2055,6 +2152,10 @@ class FlexARMemoryState(MemoryState):
         self.write_indexes = write_indexes
         self.write_offset = write_offset
         self.cache_write_indexes = cache_write_indexes
+        self.text_sink_layers = text_sink_layers
+        self.prompt_layout = prompt_layout
+        if text_sink_layers is not None and len(text_sink_layers) != num_layers:
+            raise ValueError("Segmented prompting requires one text sink cache per transformer layer.")
 
     def requires_natten_metadata(self) -> bool:
         return False
@@ -2062,12 +2163,15 @@ class FlexARMemoryState(MemoryState):
     def init(self, hidden_states: dict, device: torch.device) -> None:
         del hidden_states, device
 
-    def read_for_layer(self, layer_idx: int) -> FlexARMemoryValue:
+    def read_for_layer(self, layer_idx: int) -> MultiviewARMemoryValue:
         cached_kv = self.cache[layer_idx]
-        if cached_kv is None:
-            return FlexARMemoryValue(cached_gen_k=None, cached_gen_v=None)
-        cached_k, cached_v = cached_kv
-        return FlexARMemoryValue(cached_gen_k=cached_k, cached_gen_v=cached_v)
+        cached_k, cached_v = (None, None) if cached_kv is None else cached_kv
+        return MultiviewARMemoryValue(
+            cached_gen_k=cached_k,
+            cached_gen_v=cached_v,
+            text_sink_layer=self.text_sink_layers[layer_idx] if self.text_sink_layers is not None else None,
+            prompt_layout=self.prompt_layout,
+        )
 
     def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
         if self.write_indexes is None:
@@ -2079,7 +2183,7 @@ class FlexARMemoryState(MemoryState):
         write_end = self.write_offset + selected_k.shape[1]
         if self.cache_write_indexes is None and write_end > self.memory_seq_len:
             raise ValueError(
-                f"Flex AR cache write [{self.write_offset}, {write_end}) exceeds capacity {self.memory_seq_len}."
+                f"Multiview AR cache write [{self.write_offset}, {write_end}) exceeds capacity {self.memory_seq_len}."
             )
         cached_kv = self.cache[layer_idx]
         if cached_kv is None:
@@ -2897,8 +3001,10 @@ __all__ = [
     "TFReplayCleanMemoryValue",
     "TFNoisyMemoryValue",
     "TeacherForcingMemoryState",
-    "FlexARMemoryState",
-    "FlexARMemoryValue",
+    "JointARMemoryValue",
+    "JointChunkMemory",
+    "MultiviewARMemoryState",
+    "MultiviewARMemoryValue",
     "ARMemoryState",
     "ARMemoryValue",
     "zero_null_action_values",

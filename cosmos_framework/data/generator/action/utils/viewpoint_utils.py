@@ -30,18 +30,34 @@ DEFAULT_VIEWPOINT_TEMPLATES: dict[str, str] = {
 }
 
 
+def _resize_to_width(view: torch.Tensor, target_w: int) -> torch.Tensor:  # [T,C,H,W]
+    """Aspect-preserving resize to ``target_w``; height follows from the view's own aspect ratio."""
+    h, w = view.shape[-2:]
+    target_h = round(h * target_w / w)
+    if target_w != w or target_h != h:
+        view = F.interpolate(view, size=(target_h, target_w), mode="bilinear", align_corners=False)
+    return view
+
+
 def compose_multiview(
     primary: torch.Tensor,  # [T,C,H,W]
     left: torch.Tensor,  # [T,C,H_l,W_l]
     right: torch.Tensor,  # [T,C,H_r,W_r]
-) -> torch.Tensor:  # [T,C,3H/2,W]
-    """Place the primary view above two half-sized side views."""
-    height, width = primary.shape[-2:]
-    half_size = (height // 2, width // 2)
-    left = F.interpolate(left, size=half_size, mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
-    right = F.interpolate(right, size=half_size, mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
-    bottom = torch.cat([left, right], dim=-1)  # [T,C,H/2,W]
-    return torch.cat([primary, bottom], dim=-2)  # [T,C,3H/2,W]
+) -> torch.Tensor:  # [T,C,H+H_bottom,W]
+    """Place the primary view above two side views resized to match its width.
+
+    ``left``/``right`` are resized aspect-preserving so their width matches
+    half the primary view's width; the resulting height follows from each
+    view's own native aspect ratio rather than being forced to match the
+    primary's, so a view whose native aspect ratio differs from the
+    primary's is not distorted.
+    """
+    _, width = primary.shape[-2:]
+    half_width = width // 2
+    left = _resize_to_width(left, half_width)  # [T,C,H_l',W/2]
+    right = _resize_to_width(right, half_width)  # [T,C,H_r',W/2]
+    bottom = torch.cat([left, right], dim=-1)  # [T,C,H_bottom,W]
+    return torch.cat([primary, bottom], dim=-2)  # [T,C,H+H_bottom,W]
 
 
 class ViewpointTextInfo(Augmentor):

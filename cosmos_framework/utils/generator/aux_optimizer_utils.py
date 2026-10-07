@@ -453,6 +453,10 @@ def _apply_stacked_expert_update_impl(
     active: torch.Tensor,
     wd_factor: torch.Tensor,
     neg_adjusted_lr: torch.Tensor,
+    hyperball_radius: torch.Tensor | None = None,
+    hyperball_enabled: torch.Tensor | None = None,
+    normalize_hyperball_update: bool = False,
+    hyperball_eps: float = 1e-8,
 ) -> None:  # target/ortho: [E,M,N], active: [E], wd_factor/neg_adjusted_lr: [] scalars
     """Masked weight decay + scaled update for one matrix, in place on ``target``.
 
@@ -462,9 +466,26 @@ def _apply_stacked_expert_update_impl(
 
     Undecorated so it inlines into the compiled batched entry point below.
     """
+    if hyperball_enabled is not None:
+        # The batching wrapper constructs the enable mask and radii together;
+        # the mask is the control signal, while radii may contain placeholders
+        # for vanilla-DION2 entries in a mixed batch.
+        radius = cast(torch.Tensor, hyperball_radius).view(-1, 1, 1)  # [E,1,1]
+        if normalize_hyperball_update:
+            ortho_fp32 = ortho.float()
+            ortho_norm = ortho_fp32.norm(dim=(-2, -1), keepdim=True).clamp_min(hyperball_eps)
+            normalized = ortho_fp32 * (radius / ortho_norm)
+            ortho = torch.where(hyperball_enabled, normalized, ortho_fp32)
+
     a = active.view(-1, 1, 1).to(target.dtype)  # [E,1,1] in {0, 1}
     target.mul_(1 - a * wd_factor)  # [E,M,N]
     target.add_(ortho.to(target.dtype) * a * neg_adjusted_lr)  # [E,M,N]
+    if hyperball_enabled is not None:
+        trial_norm = target.float().norm(dim=(-2, -1), keepdim=True).clamp_min(hyperball_eps)
+        retract = radius / trial_norm
+        retract_active = active.view(-1, 1, 1) & hyperball_enabled
+        retract = torch.where(retract_active, retract, torch.ones_like(retract))
+        target.mul_(retract.to(target.dtype))
 
 
 @torch.compile(fullgraph=True, options=_PRE_NS_COMPILE_OPTIONS)
@@ -474,10 +495,26 @@ def _apply_stacked_expert_updates_compiled(
     actives: list[torch.Tensor],
     wd_factors: torch.Tensor,
     neg_adjusted_lrs: torch.Tensor,
+    hyperball_radii: torch.Tensor | None = None,
+    hyperball_enabled: torch.Tensor | None = None,
+    normalize_hyperball_updates: bool = False,
+    hyperball_eps: float = 1e-8,
 ) -> None:  # targets/orthos: [E,M,N] each, actives: [E] each, wd_factors/neg_adjusted_lrs: [N_mat]
     """Apply a whole expert-matrix batch in ONE graph (see combo_kernels note above)."""
     for i, (target, ortho, active) in enumerate(zip(targets, orthos, actives)):
-        _apply_stacked_expert_update_impl(target, ortho, active, wd_factors[i], neg_adjusted_lrs[i])
+        radius = None if hyperball_radii is None else hyperball_radii[i]
+        enabled = None if hyperball_enabled is None else hyperball_enabled[i]
+        _apply_stacked_expert_update_impl(
+            target,
+            ortho,
+            active,
+            wd_factors[i],
+            neg_adjusted_lrs[i],
+            radius,
+            enabled,
+            normalize_hyperball_updates,
+            hyperball_eps,
+        )
 
 
 def apply_stacked_expert_updates_batched(
@@ -488,6 +525,9 @@ def apply_stacked_expert_updates_batched(
     weight_decays: list[float],
     adjusted_lrs: list[float | torch.Tensor],
     masters: list[torch.Tensor | None],
+    hyperball_radii: list[torch.Tensor | None] | None = None,
+    normalize_hyperball_updates: bool = False,
+    hyperball_eps: float = 1e-8,
 ) -> None:
     """Batched form of :func:`_apply_stacked_expert_matrix_update`.
 
@@ -505,6 +545,10 @@ def apply_stacked_expert_updates_batched(
     As with :func:`compute_pre_ns_updates_moe_expert`, every tensor within
     ``local_params`` (and within ``orthos``) must share one shape and stride, so
     callers batch one role at a time.
+
+    When ``hyperball_radii`` is provided, direct-mode update normalization and
+    post-step retraction run inside the same compiled graph as the ordinary
+    decay/update math. A ``None`` entry leaves that matrix on vanilla DION2.
     """
     if not local_params:
         return
@@ -523,7 +567,35 @@ def apply_stacked_expert_updates_batched(
     wd_factors = _as_tensor([blr * wd for blr, wd in zip(base_lrs, weight_decays, strict=True)])  # [N_mat]
     neg_adjusted_lrs = -_as_tensor(list(adjusted_lrs))  # [N_mat]
 
-    _apply_stacked_expert_updates_compiled(targets, orthos, actives, wd_factors, neg_adjusted_lrs)
+    stacked_radii = None
+    hyperball_enabled = None
+    if hyperball_radii is not None and any(radius is not None for radius in hyperball_radii):
+        exemplar = next(radius for radius in hyperball_radii if radius is not None)
+        stacked_radii = torch.stack(
+            [
+                radius.to(device=device, dtype=torch.float32)
+                if radius is not None
+                else torch.zeros_like(exemplar, device=device, dtype=torch.float32)
+                for radius in hyperball_radii
+            ]
+        )
+        hyperball_enabled = torch.tensor(
+            [radius is not None for radius in hyperball_radii],
+            dtype=torch.bool,
+            device=device,
+        ).view(-1, 1, 1, 1)
+
+    _apply_stacked_expert_updates_compiled(
+        targets,
+        orthos,
+        actives,
+        wd_factors,
+        neg_adjusted_lrs,
+        stacked_radii,
+        hyperball_enabled,
+        normalize_hyperball_updates,
+        hyperball_eps,
+    )
 
     if use_master:
         # Pure copy with nothing to fuse, so foreach is the right tool here (unlike
@@ -546,6 +618,16 @@ class _ExpertApplyGroup:
     weight_decays: list[float] = field(default_factory=list)
     adjusted_lrs: list[float | torch.Tensor] = field(default_factory=list)
     masters: list[torch.Tensor | None] = field(default_factory=list)
+    source_params: list[nn.Parameter] = field(default_factory=list)
+    matrix_shapes: list[tuple[int, int]] = field(default_factory=list)
+    logical_indices: list[int | None] = field(default_factory=list)
+    update_transform: Callable[[nn.Parameter, torch.Tensor, tuple[int, int], int | None], torch.Tensor] | None = None
+    post_update: Callable[[nn.Parameter, torch.Tensor, torch.Tensor | None, torch.Tensor, int | None], None] | None = (
+        None
+    )
+    hyperball_radius_for: Callable[[nn.Parameter, int | None], torch.Tensor | None] | None = None
+    normalize_hyperball_updates: bool = False
+    hyperball_eps: float = 1e-8
 
     def add(
         self,
@@ -556,6 +638,9 @@ class _ExpertApplyGroup:
         weight_decay: float,
         adjusted_lr: float | torch.Tensor,
         master: torch.Tensor | None,  # [E,M,N] or None
+        source_param: nn.Parameter,
+        matrix_shape: tuple[int, int],
+        logical_index: int | None = None,
     ) -> None:
         self.params.append(param)
         self.orthos.append(ortho)
@@ -564,9 +649,23 @@ class _ExpertApplyGroup:
         self.weight_decays.append(weight_decay)
         self.adjusted_lrs.append(adjusted_lr)
         self.masters.append(master)
+        self.source_params.append(source_param)
+        self.matrix_shapes.append(matrix_shape)
+        self.logical_indices.append(logical_index)
 
     def apply(self) -> None:
-        apply_stacked_expert_updates_batched(
+        if self.update_transform is not None:
+            self.orthos = [
+                self.update_transform(p, ortho, matrix_shape, logical_index)
+                for p, ortho, matrix_shape, logical_index in zip(
+                    self.source_params,
+                    self.orthos,
+                    self.matrix_shapes,
+                    self.logical_indices,
+                    strict=True,
+                )
+            ]
+        apply_args = (
             self.params,
             self.orthos,
             self.actives,
@@ -575,6 +674,29 @@ class _ExpertApplyGroup:
             self.adjusted_lrs,
             self.masters,
         )
+        if self.hyperball_radius_for is None:
+            apply_stacked_expert_updates_batched(*apply_args)
+        else:
+            radii = [
+                self.hyperball_radius_for(p, logical_index)
+                for p, logical_index in zip(self.source_params, self.logical_indices, strict=True)
+            ]
+            apply_stacked_expert_updates_batched(
+                *apply_args,
+                hyperball_radii=radii,
+                normalize_hyperball_updates=self.normalize_hyperball_updates,
+                hyperball_eps=self.hyperball_eps,
+            )
+        if self.post_update is not None:
+            for p, local_param, master, active, logical_index in zip(
+                self.source_params,
+                self.params,
+                self.masters,
+                self.actives,
+                self.logical_indices,
+                strict=True,
+            ):
+                self.post_update(p, local_param, master, active, logical_index)
 
 
 # -----------------------------------------------------------------------------
@@ -782,6 +904,18 @@ class _StackedExpertStepContext:
     base_lr_for: Callable[[nn.Parameter], "float | torch.Tensor"]
     weight_decay_for: Callable[[nn.Parameter], float]
     adjusted_lr_for: Callable[["tuple[int, ...]", "float | torch.Tensor"], "float | torch.Tensor"]
+    adjusted_lr_for_param: (
+        Callable[[nn.Parameter, "tuple[int, ...]", "float | torch.Tensor"], "float | torch.Tensor"] | None
+    ) = None
+    update_transform: Callable[[nn.Parameter, torch.Tensor, "tuple[int, int]", "int | None"], torch.Tensor] | None = (
+        None
+    )
+    post_update: (
+        Callable[[nn.Parameter, torch.Tensor, "torch.Tensor | None", torch.Tensor, "int | None"], None] | None
+    ) = None
+    hyperball_radius_for: Callable[[nn.Parameter, "int | None"], torch.Tensor | None] | None = None
+    normalize_hyperball_updates: bool = False
+    hyperball_eps: float = 1e-8
 
 
 @dataclass(frozen=True)
@@ -832,7 +966,9 @@ def _prepare_stacked_expert_param(
     # setdefault (not ``[p]``) so any MutableMapping works, not just the
     # defaultdict(dict) that torch.optim.Optimizer.state happens to be.
     state = context.optimizer_state.setdefault(p, {})
-    if len(state) == 0:
+    # Hyperball may initialize its radius state before the first optimizer step,
+    # so state can be non-empty even though momentum has not been created yet.
+    if "momentum_buffer" not in state:
         state["momentum_buffer"] = torch.zeros_like(p).float()
 
     master = None
@@ -855,6 +991,7 @@ def _apply_stacked_expert_matrix_update(
     p: nn.Parameter,
     context: _StackedExpertStepContext,
     master: torch.Tensor | None = None,
+    logical_index: int | None = None,
 ) -> None:
     """Apply per-expert masked weight decay and orthogonalized update.
 
@@ -870,20 +1007,48 @@ def _apply_stacked_expert_matrix_update(
         p: The original ``nn.Parameter`` (used only for per-group lr / wd lookup).
         context: Optimizer context.
         master: FP32 master weight for ``local_param``, or ``None``.
+        logical_index: Optional logical-matrix index within a fused parameter.
+            Split gate/up projections use 0/1; ordinary expert matrices use None.
     """
+    if context.update_transform is not None:
+        ortho = context.update_transform(p, ortho, matrix_shape, logical_index)
+
     base_lr = context.base_lr_for(p)
     wd = context.weight_decay_for(p)
-    adjusted_lr = context.adjusted_lr_for(matrix_shape, base_lr)
+    adjusted_lr = (
+        context.adjusted_lr_for_param(p, matrix_shape, base_lr)
+        if context.adjusted_lr_for_param is not None
+        else context.adjusted_lr_for(matrix_shape, base_lr)
+    )
 
-    if master is not None:
-        a_wd = active.view(-1, 1, 1).to(master.dtype)
-        master.mul_(1 - a_wd * (base_lr * wd))
-        master.add_(ortho.float() * (-adjusted_lr))
-        local_param.copy_(master)
+    if context.hyperball_radius_for is None:
+        # Preserve the historical eager path when Hyperball is disabled.
+        if master is not None:
+            a_wd = active.view(-1, 1, 1).to(master.dtype)
+            master.mul_(1 - a_wd * (base_lr * wd))
+            master.add_(ortho.float() * (-adjusted_lr))
+            local_param.copy_(master)
+        else:
+            a_wd = active.view(-1, 1, 1).to(local_param.dtype)
+            local_param.mul_(1 - a_wd * (base_lr * wd))
+            local_param.add_(ortho.to(local_param.dtype) * (-adjusted_lr))
     else:
-        a_wd = active.view(-1, 1, 1).to(local_param.dtype)
-        local_param.mul_(1 - a_wd * (base_lr * wd))
-        local_param.add_(ortho.to(local_param.dtype) * (-adjusted_lr))
+        radius = context.hyperball_radius_for(p, logical_index)
+        apply_stacked_expert_updates_batched(
+            [local_param],
+            [ortho],
+            [active],
+            [base_lr],
+            [wd],
+            [adjusted_lr],
+            [master],
+            [radius],
+            context.normalize_hyperball_updates,
+            context.hyperball_eps,
+        )
+
+    if context.post_update is not None:
+        context.post_update(p, local_param, master, active, logical_index)
 
 
 def _step_one_stacked_expert_param(
@@ -992,6 +1157,7 @@ def _step_split_stacked_expert_pair(
                     gate_up_param,
                     context,
                     gate_master,  # type: ignore[arg-type]
+                    logical_index=0,
                 )
                 _apply_stacked_expert_matrix_update(
                     gate_up_prep.local_param[..., gate_width:],
@@ -1001,6 +1167,7 @@ def _step_split_stacked_expert_pair(
                     gate_up_param,
                     context,
                     up_master,  # type: ignore[arg-type]
+                    logical_index=1,
                 )
             if down_prep is not None:
                 d_ortho_t = orthos[o_idx]  # still transposed: [E, H, I]
@@ -1036,6 +1203,7 @@ def _step_split_stacked_expert_pair(
                 gate_up_param,
                 context,
                 gate_master,  # type: ignore[arg-type]
+                logical_index=0,
             )
             _apply_stacked_expert_matrix_update(
                 gate_up_prep.local_param[..., gate_width:],
@@ -1045,6 +1213,7 @@ def _step_split_stacked_expert_pair(
                 gate_up_param,
                 context,
                 up_master,  # type: ignore[arg-type]
+                logical_index=1,
             )
 
         if down_prep is not None:
@@ -1178,9 +1347,27 @@ def _step_stacked_moe_megabatch(
         down_per = down_block.split(E, dim=0) if n_d else ()
 
         # Apply each role separately so aliased gate/up slices do not share a compiled graph.
-        gate_group = _ExpertApplyGroup()
-        up_group = _ExpertApplyGroup()
-        down_group = _ExpertApplyGroup()
+        gate_group = _ExpertApplyGroup(
+            update_transform=context.update_transform,
+            post_update=context.post_update,
+            hyperball_radius_for=context.hyperball_radius_for,
+            normalize_hyperball_updates=context.normalize_hyperball_updates,
+            hyperball_eps=context.hyperball_eps,
+        )
+        up_group = _ExpertApplyGroup(
+            update_transform=context.update_transform,
+            post_update=context.post_update,
+            hyperball_radius_for=context.hyperball_radius_for,
+            normalize_hyperball_updates=context.normalize_hyperball_updates,
+            hyperball_eps=context.hyperball_eps,
+        )
+        down_group = _ExpertApplyGroup(
+            update_transform=context.update_transform,
+            post_update=context.post_update,
+            hyperball_radius_for=context.hyperball_radius_for,
+            normalize_hyperball_updates=context.normalize_hyperball_updates,
+            hyperball_eps=context.hyperball_eps,
+        )
 
         g_idx = d_idx = 0
         for k, (gate_up_param, down_param) in enumerate(pairs):
@@ -1190,7 +1377,11 @@ def _step_stacked_moe_megabatch(
                 matrix_shape = (gu.local_param.shape[-2], gate_width)
                 base_lr = context.base_lr_for(gate_up_param)
                 wd = context.weight_decay_for(gate_up_param)
-                adj_lr = context.adjusted_lr_for(matrix_shape, base_lr)
+                adj_lr = (
+                    context.adjusted_lr_for_param(gate_up_param, matrix_shape, base_lr)
+                    if context.adjusted_lr_for_param is not None
+                    else context.adjusted_lr_for(matrix_shape, base_lr)
+                )
 
                 # Inactive-expert zeroing happens inside the compiled apply.
                 gate_group.add(
@@ -1201,6 +1392,9 @@ def _step_stacked_moe_megabatch(
                     wd,
                     adj_lr,
                     gu.master[..., :gate_width] if gu.master is not None else None,
+                    gate_up_param,
+                    matrix_shape,
+                    logical_index=0,
                 )
                 up_group.add(
                     gu.local_param[..., gate_width:],
@@ -1210,6 +1404,9 @@ def _step_stacked_moe_megabatch(
                     wd,
                     adj_lr,
                     gu.master[..., gate_width:] if gu.master is not None else None,
+                    gate_up_param,
+                    matrix_shape,
+                    logical_index=1,
                 )
                 g_idx += 1
 
@@ -1222,8 +1419,14 @@ def _step_stacked_moe_megabatch(
                     down_active_list[d_idx],
                     base_lr,
                     context.weight_decay_for(down_param),
-                    context.adjusted_lr_for(tuple(down_param.shape[-2:]), base_lr),
+                    (
+                        context.adjusted_lr_for_param(down_param, tuple(down_param.shape[-2:]), base_lr)
+                        if context.adjusted_lr_for_param is not None
+                        else context.adjusted_lr_for(tuple(down_param.shape[-2:]), base_lr)
+                    ),
                     d.master,
+                    down_param,
+                    tuple(down_param.shape[-2:]),
                 )
                 d_idx += 1
 
@@ -1247,8 +1450,14 @@ def step_stacked_expert_params(
     base_lr_for: Callable,
     weight_decay_for: Callable,
     adjusted_lr_for: Callable,
+    adjusted_lr_for_param: Callable | None = None,
     moe_megabatches: "list[list[tuple[nn.Parameter, nn.Parameter]]] | None" = None,
     profile_phases: bool = False,
+    update_transform: Callable | None = None,
+    post_update: Callable | None = None,
+    hyperball_radius_for: Callable | None = None,
+    normalize_hyperball_updates: bool = False,
+    hyperball_eps: float = 1e-8,
 ) -> None:
     """Orthogonalize all stacked MoE expert parameters.
 
@@ -1281,10 +1490,20 @@ def step_stacked_expert_params(
         base_lr_for: Callable ``(p) -> lr``.
         weight_decay_for: Callable ``(p) -> wd``.
         adjusted_lr_for: Callable ``(matrix_shape, base_lr) -> adjusted_lr``.
+        adjusted_lr_for_param: Optional callable ``(p, matrix_shape, base_lr)``
+            for optimizers whose scaling mode varies per parameter.
         moe_megabatches: Pre-built list of K-pair batches for megabatch NS (built by
             ``_create_moe_megabatches``). Pass ``None`` to use the split-pair path.
         profile_phases: When True, emit ``torch.profiler.record_function`` and NVTX
             ranges for ``moe.megabatch.{pre_ns,ns,apply}`` inside megabatch steps.
+        update_transform: Optional transformation applied to each orthogonalized
+            update before the parameter step.
+        post_update: Optional projection applied after each parameter step.
+        hyperball_radius_for: Optional callable returning per-expert radii for a
+            logical matrix, or ``None`` for an unconstrained matrix.
+        normalize_hyperball_updates: Whether to normalize each orthogonalized
+            update to its Hyperball radius before applying it.
+        hyperball_eps: Positive denominator floor for Hyperball norms.
     """
     context = _StackedExpertStepContext(
         optimizer_state=optimizer_state,
@@ -1299,6 +1518,12 @@ def step_stacked_expert_params(
         base_lr_for=base_lr_for,
         weight_decay_for=weight_decay_for,
         adjusted_lr_for=adjusted_lr_for,
+        adjusted_lr_for_param=adjusted_lr_for_param,
+        update_transform=update_transform,
+        post_update=post_update,
+        hyperball_radius_for=hyperball_radius_for,
+        normalize_hyperball_updates=normalize_hyperball_updates,
+        hyperball_eps=hyperball_eps,
     )
 
     if moe_megabatches is not None:

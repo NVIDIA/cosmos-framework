@@ -13,7 +13,7 @@ on CPU. Both are marked ``CPU`` and run in the normal (non-GPU) CI lane.
 
 ``test_balanced_vae_encode_on_a_real_4gpu_node`` is marked ``GPU`` and CANNOT run without
 one: it needs a real 4-GPU node under ``torchrun`` (see ``_GPU_ONLY_REASON`` and the command
-below), because it drives ``VisionEncoder.encode_items`` through the actual Wan2.2
+below), because it drives ``SensorEncoder.encode_items`` through the actual Wan2.2
 VAE encode. There is deliberately no CPU/gloo fallback for it; anywhere else it skips.
 
     torchrun --nproc_per_node=4 --master_port=12345 -m pytest \\
@@ -304,10 +304,10 @@ class TestOffloadEncode:
 
 
 # ---------------------------------------------------------------------------
-# GPU-ONLY: real single-node, 4-GPU exercise of VisionEncoder.encode_items
+# GPU-ONLY: real single-node, 4-GPU exercise of SensorEncoder.encode_items
 #
 # Everything above runs the offload_encode/plan_rebalance primitives directly against a
-# fake CPU encode_fn under gloo -- it never exercises VisionEncoder.encode_items
+# fake CPU encode_fn under gloo -- it never exercises SensorEncoder.encode_items
 # itself, and in particular never catches whether the video handed to the REAL VAE encode
 # is normalized the way self.encode expects (this is exactly the bug the GPU test was
 # written to catch: the balanced path was feeding offload_encode raw uint8 [0,255]
@@ -354,7 +354,7 @@ def _imbalanced_batch(rank: int, height: int, width: int) -> dict:
     whichever rank ends up actually running ``self.encode`` on it -- its owner, or a peer
     it was offloaded to -- can be identified downstream from the (post-normalization)
     tensor content alone, without threading any side-channel metadata through
-    ``VisionEncoder.encode_balanced``/``offload_encode``.
+    ``SensorEncoder.encode_balanced``/``offload_encode``.
     """
     # Imported lazily: this pulls in the whole cost_model/sequence_packing stack, which the
     # CPU tests above neither need nor should pay for at collection time.
@@ -392,7 +392,7 @@ def _imbalanced_batch(rank: int, height: int, width: int) -> dict:
 @pytest.mark.serial
 @requires_four_gpus_under_torchrun
 def test_balanced_vae_encode_on_a_real_4gpu_node() -> None:
-    """Drive a real training step through ``VisionEncoder.encode_balanced`` on 4 GPUs.
+    """Drive a real training step through ``SensorEncoder.encode_balanced`` on 4 GPUs.
 
     If the balanced path's gate, normalization, or the ``offload_encode`` exchange
     itself were wrong, this either crashes (shape/dtype mismatch reaching the real VAE),
@@ -427,7 +427,7 @@ def test_balanced_vae_encode_on_a_real_4gpu_node() -> None:
     assert model.parallel_dims.lb_enabled, "vae_load_balance_group_size=4 should enable the lb overlay mesh."
     assert model.parallel_dims.lb_size == 4
 
-    # predicted_encode_seconds() (called from VisionEncoder.encode_balanced) reads a benchmarked
+    # predicted_encode_seconds() (called from SensorEncoder.encode_balanced) reads a benchmarked
     # per-chunk-shape timing table that only exists after compile_encode() has run -- in
     # production this happens once via the compile_tokenizer callback, which this
     # trimmed-down harness (build_model + run_step, no ImaginaireTrainer/callbacks) never

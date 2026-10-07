@@ -76,6 +76,7 @@ class TeacherForcingFlexMetadata:
     num_und: int
     query: FlexQueryMetadata
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig
+    caption_time_bounds: tuple[torch.Tensor, torch.Tensor] | None = None  # 2*[KV], segmented prompts only
 
     def __post_init__(self) -> None:
         if not isinstance(self.teacher_forcing_replay_policy, TeacherForcingReplayPolicyConfig):
@@ -94,6 +95,10 @@ class TeacherForcingFlexMetadata:
             field_value = getattr(self, field_name)
             if field_value.numel() != kv_len:
                 raise ValueError(f"{field_name} has {field_value.numel()} entries, expected {kv_len}.")
+        if self.caption_time_bounds is not None and any(
+            tensor.numel() != kv_len for tensor in self.caption_time_bounds
+        ):
+            raise ValueError("Caption time bounds must cover the full key stream.")
 
     @property
     def seq_len(self) -> int:
@@ -205,6 +210,8 @@ class _StreamFields:
     caption_scope: torch.Tensor  # [S]
     token_role_id: torch.Tensor  # [S]
     causal_step_id: torch.Tensor  # [S]
+    caption_start: torch.Tensor | None = None  # [S]
+    caption_end: torch.Tensor | None = None  # [S]
 
 
 def _key_stream_fields(metadata: TeacherForcingFlexMetadata) -> _StreamFields:
@@ -219,6 +226,12 @@ def _key_stream_fields(metadata: TeacherForcingFlexMetadata) -> _StreamFields:
         caption_scope=metadata.caption_scope,
         token_role_id=metadata.token_role_id,
         causal_step_id=metadata.causal_step_id,
+        caption_start=(
+            metadata.caption_time_bounds[0] if metadata.caption_time_bounds is not None else None
+        ),  # [KV]|None
+        caption_end=(
+            metadata.caption_time_bounds[1] if metadata.caption_time_bounds is not None else None
+        ),  # [KV]|None
     )
 
 
@@ -423,6 +436,8 @@ def build_teacher_forcing_multiview_flex_metadata(
         raise ValueError("The clean pass does not consume cached clean target K/V.")
     if materialized_target_frame_ranges is not None and pass_kind != "clean":
         raise ValueError("Materialized target ranges are only supported by the AR clean-prefill pass.")
+    # Replay keeps a causal look-back duration; shared attention takes signed bounds.
+    window_seconds = teacher_forcing_replay_policy.decomposed_temporal_window_seconds
     base = build_multiview_flex_metadata(
         gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
@@ -432,7 +447,7 @@ def build_teacher_forcing_multiview_flex_metadata(
         und_seq_len=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
-        decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
+        decomposed_temporal_window_seconds=None if window_seconds is None else (-window_seconds, 0.0),
         # The replay policy expresses control visibility itself, through ``control_visibility``
         # and ``controls_read_strict_past_clean_rgb``, and layers it onto this metadata below.
         # Letting the base add its own control->sensor edges would double-specify it.
@@ -752,6 +767,8 @@ def build_multiview_transfer_ar_flex_metadata(
             f"[{current_frame_start}, {current_frame_start + current_chunk_len}) "
             f"is outside {frames_per_view} frames per view."
         )
+    # Replay keeps a causal look-back duration; shared attention takes signed bounds.
+    window_seconds = teacher_forcing_replay_policy.decomposed_temporal_window_seconds
     base = build_multiview_flex_metadata(
         gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
@@ -761,7 +778,7 @@ def build_multiview_transfer_ar_flex_metadata(
         und_seq_len=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
-        decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
+        decomposed_temporal_window_seconds=None if window_seconds is None else (-window_seconds, 0.0),
         control_attends_sensor=False,
     )
     positions, is_und, is_gen = _stream_membership(base, len(sensor_mask_items))  # [S], [S], [S]
@@ -895,6 +912,15 @@ def _teacher_forcing_pair_predicate(
         caption_reaches_query = (query_caption_scope == scope_all) | (
             (query_caption_scope == scope_same_view) & same_view
         )  # [Q,KV]
+        # Segmented prompt schedules use half-open physical-time intervals. The small
+        # tolerance assigns a rounded boundary to its new segment exactly once.
+        # Legacy metadata has no caption bounds and keeps the original predicate.
+        if kv_fields.caption_start is not None and kv_fields.caption_end is not None:
+            caption_reaches_query = (
+                caption_reaches_query
+                & (q_fields.timestamp[q_idx] >= kv_fields.caption_start[kv_idx] - 1e-4)
+                & (q_fields.timestamp[q_idx] < kv_fields.caption_end[kv_idx] - 1e-4)
+            )  # [Q,KV]
         target_to_und = q_is_target & (kv_role == _ROLE_UND) & caption_reaches_query  # [Q,KV]
         condition_to_und = q_is_condition & (kv_role == _ROLE_UND) & caption_reaches_query  # [Q,KV]
         control_to_control = q_is_control & (kv_role == _ROLE_CONTROL) & same_view & control_step_allowed  # [Q,KV]
@@ -920,8 +946,11 @@ def _teacher_forcing_pair_predicate(
         clean_step_allowed = (q_is_current & (kv_step < q_step)) | ((~q_is_current) & clean_pass_causal)  # [Q,KV]
         target_to_clean = q_is_target & (kv_role == _ROLE_CLEAN_TARGET) & clean_step_allowed & in_scope  # [Q,KV]
         target_to_control = q_is_target & (kv_role == _ROLE_CONTROL) & same_view & control_step_allowed  # [Q,KV]
+        # Observed sensor targets follow the configured target view/time scope.
+        # Initial LiDAR can read simultaneous RGB conditions; control ownership
+        # and the replay-chunk guard remain unchanged.
         target_to_condition = (
-            q_is_target & (kv_role == _ROLE_TARGET_CONDITION) & same_view & (kv_step <= q_step)
+            q_is_target & (kv_role == _ROLE_TARGET_CONDITION) & in_scope & (kv_step <= q_step)
         )  # [Q,KV]
         padding_to_padding = (q_role == _ROLE_PADDING) & (kv_role == _ROLE_PADDING)  # [Q,KV]
         allowed = (
@@ -944,10 +973,20 @@ def _teacher_forcing_pair_predicate(
 
 def _stream_metadata_groups(fields_: _StreamFields, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     """Split a stream into runs that agree on every predicate field."""
-    return metadata_run_groups(
-        tuple(getattr(fields_, field_.name) for field_ in fields(fields_) if field_.name != "timestamp"),
-        device=device,
-    )
+    group_fields: list[torch.Tensor] = []  # each [S]
+    for field_ in fields(fields_):
+        if field_.name == "timestamp":
+            continue
+        value = getattr(fields_, field_.name)  # [S]|None
+        if value is None:
+            continue
+        if field_.name in ("caption_start", "caption_end"):
+            # The shared run grouper converts fields to integer keys. Preserve
+            # fractional caption boundaries as exact bit patterns instead of
+            # truncating seconds and merging distinct overlapping intervals.
+            value = value.to(torch.float64).view(torch.int64)  # [S]
+        group_fields.append(value)
+    return metadata_run_groups(tuple(group_fields), device=device)
 
 
 def build_teacher_forcing_block_mask(

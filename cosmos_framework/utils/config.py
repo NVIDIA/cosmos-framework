@@ -517,7 +517,7 @@ class Config:
     # Checkpointer configs.
     checkpoint: CheckpointConfig = attrs.field(factory=CheckpointConfig)
 
-    # enable upload reproducible setup to s3
+    # Upload additional reproducibility artifacts to S3. Remotely saved jobs upload config.yaml independently.
     upload_reproducible_setup: bool = False
 
     def pretty_print(self, use_color: bool = False) -> str:

@@ -61,6 +61,7 @@ CaptionSubject = Literal[
     "right_arm_attachment_site_end_effector",
     "right_handheld_gripper_end_effector",
     "dual_arm_end_effectors",
+    "dual_arm_joint_positions",
     "ego_and_dual_arm_end_effectors",
     "dual_handheld_gripper_end_effectors",
     "human_wrists_and_fingertips",
@@ -68,6 +69,10 @@ CaptionSubject = Literal[
     "human_head_wrists_and_fingertips",
 ]
 CaptionSubjectMappings: dict[CaptionSubject, str] = {
+    "dual_arm_joint_positions": (
+        "The action performed by the robot is defined as the joint positions of its left and right arms "
+        "and both grippers' positions."
+    ),
     "camera_ego_pose": "The camera action is defined as its ego motion, mapped to the ego-pose component.",
     "vehicle_ego_pose": (
         "The action performed by the vehicle is defined as its ego motion, mapped to the ego-pose component."
@@ -215,6 +220,12 @@ ACTION_CAPTION_ATTRIBUTE_ADAPTER = ActionCaptionAttributeAdapter(
         "embodiment_c_ext": P("real", "dual_arm", "head_over_wrists", "ego_and_dual_arm_end_effectors"),
         "agibot_world": P("real", "dual_arm", "head_over_wrists", "ego_and_dual_arm_end_effectors"),
         "agibot": P("real", "dual_arm", "head_over_wrists", "ego_and_dual_arm_end_effectors"),
+        "embodiment_b": P("real", "dual_arm", "head_over_wrists", "ego_and_dual_arm_end_effectors"),
+        "genrobot_10k": P("real", "dual_arm", "dual_wrist", "dual_handheld_gripper_end_effectors"),
+        "robodojo": P("synthetic", "dual_arm", "above_over_wrists", "dual_arm_end_effectors"),
+        "robodojo_joint": P("synthetic", "dual_arm", "above_over_wrists", "dual_arm_joint_positions"),
+        "robodojo_real": P("real", "dual_arm", "above_over_wrists", "dual_arm_end_effectors"),
+        "robodojo_real_joint": P("real", "dual_arm", "above_over_wrists", "dual_arm_joint_positions"),
         "robomind_franka": P("real", "single_arm", "above_over_side_third_person", "right_arm_end_effector"),
         "robomind_franka_dual": P("real", "dual_arm", "above_over_side_third_person", "dual_arm_end_effectors"),
         "robomind_ur": P("real", "single_arm", "above", "right_arm_attachment_site_end_effector"),

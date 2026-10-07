@@ -26,6 +26,10 @@ class DataSetting:
         max_tokens: Per-sample token limit used by filtering.
         max_tokens_in_batch: Padded-token budget for dynamic batching.
         long_threshold: Single seed-sample length threshold that emits the sample alone.
+        data_stats_writer_enabled: Write per-sample parquet rows at every checkpoint save; a checkpoint
+            counts as complete only once its rows are flushed and merged.
+        lance_cache_manifest: Recipe cache manifest for the shared remote Lance loader; None uses pinned PAI-v9.
+        lance_data_root: Absolute local root of a receipt-backed conversation Lance export.
     """
 
     qwen_max_video_token_length: int = 8192
@@ -75,6 +79,9 @@ class DataSetting:
     data_prefetch_factor: int | None = 1
     val_split_ratio: float = 0.0
     recipe_name: str | None = None
+    data_stats_writer_enabled: bool = False
+    lance_cache_manifest: str | None = None
+    lance_data_root: str | None = None
 
 
 @attrs.define(slots=False)

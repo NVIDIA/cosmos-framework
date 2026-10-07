@@ -20,18 +20,20 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
-    three_way_attention_with_kv_cache,
+    three_way_attention_with_memory,
 )
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
     ARMemoryValue,
     DualKVCache,
-    FlexARMemoryState,
-    FlexARMemoryValue,
     GenKVCache,
+    JointARMemoryValue,
+    JointChunkMemory,
     KVBufferPool,
     KVCache,
     KVCacheTrainMemoryState,
+    MultiviewARMemoryState,
+    MultiviewARMemoryValue,
     TeacherForcingMemoryState,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
@@ -45,10 +47,47 @@ from cosmos_framework.model.generator.utils.kv_storage_backend import (
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> None:
+def test_chunk_memory_writes_only_requested_spans_and_preserves_history() -> None:
+    memory = JointChunkMemory(num_layers=2, capacity=12)
+    assert isinstance(memory.read_for_layer(0), JointARMemoryValue)
+    assert memory.read_for_layer(0).cached_gen_k is None
+    assert not memory.requires_natten_metadata()
+    assert not memory.is_gen_only()
+    k = torch.arange(8).reshape(1, 4, 1, 2).float()  # [1,4,1,2]
+    v = k + 100  # [1,4,1,2]
+    memory.write_for_layer(0, (k, v, k, v))
+    assert memory.cache == [None, None]
+    memory.spans = [(0, 0, 2), (2, 6, 2)]
+    memory.write_for_layer(0, (k, v, k, v))
+    first = memory.read_for_layer(0)
+    assert isinstance(first, JointARMemoryValue)
+    assert first.cached_gen_k is not None and first.cached_gen_v is not None
+    snapshot = first.cached_gen_k.clone()  # [1,12,1,2]
+    memory.spans = None
+    memory.write_for_layer(0, (k + 1, v + 1, k, v))
+    torch.testing.assert_close(first.cached_gen_k, snapshot, rtol=0, atol=0)
+    memory.spans = [(0, 2, 2), (2, 8, 2)]
+    memory.write_for_layer(0, (k + 10, v + 10, k, v))
+    torch.testing.assert_close(first.cached_gen_k[:, :2], k[:, :2])
+    torch.testing.assert_close(first.cached_gen_k[:, 6:8], k[:, 2:])
+    torch.testing.assert_close(first.cached_gen_v[:, 8:10], v[:, 2:] + 10)
+    assert memory.cache[1] is None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("num_layers,capacity", [(0, 4), (1, 0), (-1, 4), (1, -1)])
+def test_joint_chunk_memory_requires_positive_dimensions(num_layers: int, capacity: int) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        JointChunkMemory(num_layers=num_layers, capacity=capacity)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_multiview_ar_memory_state_captures_selected_tokens_at_requested_offset() -> None:
     """Prefill and refresh writes share one fixed-capacity cache without exposing padding."""
     cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None]
-    prefill = FlexARMemoryState(
+    prefill = MultiviewARMemoryState(
         num_layers=1,
         memory_seq_len=8,
         cache=cache,
@@ -60,7 +99,7 @@ def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> 
     und = torch.empty(1, 0, 2, 2)  # [1,0,2,2]
     prefill.write_for_layer(0, (gen_k, gen_v, und, und))
 
-    refresh = FlexARMemoryState(
+    refresh = MultiviewARMemoryState(
         num_layers=1,
         memory_seq_len=8,
         cache=cache,
@@ -69,7 +108,7 @@ def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> 
     )
     refresh.write_for_layer(0, (gen_k, gen_v, und, und))
     value = refresh.read_for_layer(0)
-    assert isinstance(value, FlexARMemoryValue)
+    assert isinstance(value, MultiviewARMemoryValue)
     assert value.supports_context_parallel_attention
     assert value.cached_gen_k is not None and value.cached_gen_v is not None
     assert torch.equal(value.cached_gen_k[:, :3], gen_k[:, [0, 2, 1]])
@@ -79,9 +118,9 @@ def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> 
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_flex_ar_memory_state_scatters_selected_tokens_to_indexed_cache_slots() -> None:
+def test_multiview_ar_memory_state_scatters_selected_tokens_to_indexed_cache_slots() -> None:
     """Explicit cache indexes support interleaved writes without changing source selection."""
-    state = FlexARMemoryState(
+    state = MultiviewARMemoryState(
         num_layers=1,
         memory_seq_len=6,
         write_indexes=torch.tensor([2, 0]),  # [S_write]
@@ -118,13 +157,13 @@ def test_flex_ar_memory_state_scatters_selected_tokens_to_indexed_cache_slots() 
         (torch.tensor([0]), torch.tensor([4]), "must be in"),
     ],
 )
-def test_flex_ar_memory_state_validates_cache_write_indexes(
+def test_multiview_ar_memory_state_validates_cache_write_indexes(
     write_indexes: torch.Tensor | None,
     cache_write_indexes: torch.Tensor | None,
     match: str,
 ) -> None:
     with pytest.raises(ValueError, match=match):
-        FlexARMemoryState(
+        MultiviewARMemoryState(
             num_layers=1,
             memory_seq_len=4,
             write_indexes=write_indexes,
@@ -1771,7 +1810,7 @@ def test_teacher_forcing_memory_state_compacts_clean_target_and_preserves_gradie
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_rolling_kv_cache_layer_loop_matches_eager_ar():
     """End-to-end: ``KVCacheTrainMemoryState.init/read_for_layer/write_for_layer``
-    wrapped around ``three_way_attention_with_kv_cache`` matches a manually-
+    wrapped around ``three_way_attention_with_memory`` matches a manually-
     maintained eager ``attention_AR_gen_only`` loop, segment by segment.
 
     Mirrors ``test_non_cp_ar_inference_rolling_window`` but:
@@ -1842,7 +1881,7 @@ def test_rolling_kv_cache_layer_loop_matches_eager_ar():
             sample_lens=[padded_causal_len + tokens_per_seg],
             actual_len=padded_causal_len + tokens_per_seg,
         )
-        rolling_out_pack = three_way_attention_with_kv_cache(
+        rolling_out_pack = three_way_attention_with_memory(
             pack_q, pack_k, pack_v, memory_value=mv, attention_meta=rolling_mask
         )
         rolling_gen_out = get_gen_seq(rolling_out_pack).unflatten(-1, (num_heads, head_dim))
@@ -1915,7 +1954,7 @@ def test_rolling_kv_cache_memory_state_init_invariants():
 
     This is the pure-Python mirror of the compile single-graph invariant
     tested (CUDA-gated, L1) in
-    ``test_three_way_attention_with_kv_cache_compiles_single_graph``.
+    ``test_three_way_attention_with_memory_compiles_single_graph``.
     CPU-only, no CUDA dependency, always runs in L0 CI.
     """
     device = torch.device("cpu")

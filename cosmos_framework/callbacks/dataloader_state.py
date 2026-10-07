@@ -62,6 +62,7 @@ class DataLoaderStateCallback(Callback):
         draw_count = update.get("draw_count")
         fingerprint = update.get("fingerprint")
         source_cursors = update.get("source_cursors")
+        pool = update.get("pool")
         if not isinstance(worker_id, int) or worker_id < 0:
             raise ValueError(f"Lance VLM resume worker_id must be non-negative, got {worker_id!r}.")
         if not isinstance(draw_count, int) or draw_count < 0:
@@ -73,6 +74,15 @@ class DataLoaderStateCallback(Callback):
             for name, cursor in source_cursors.items()
         ):
             raise ValueError("Lance VLM source cursors must map source names to non-negative integers.")
+        if not isinstance(pool, list) or any(
+            not isinstance(entry, list)
+            or len(entry) != 2
+            or not isinstance(entry[0], str)
+            or not isinstance(entry[1], int)
+            or entry[1] < 1
+            for entry in pool
+        ):
+            raise ValueError("Lance VLM packing pool must be a list of [source name, positive cursor] pairs.")
 
         saved = self.lance_state.get(worker_id)
         previous_current = saved["current"] if saved is not None else None
@@ -95,6 +105,7 @@ class DataLoaderStateCallback(Callback):
             "draw_count": draw_count,
             "fingerprint": fingerprint,
             "source_cursors": merged_cursors,
+            "pool": pool,
         }
         self.lance_state[worker_id] = {"previous": previous_current, "current": current}
 

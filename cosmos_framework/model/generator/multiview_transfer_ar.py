@@ -20,7 +20,7 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     build_multiview_transfer_ar_memory_layout,
 )
 from cosmos_framework.model.generator.teacher_forcing import mark_modality_as_clean_condition
-from cosmos_framework.model.generator.utils.kv_cache import FlexARMemoryState
+from cosmos_framework.model.generator.utils.kv_cache import MultiviewARMemoryState
 from cosmos_framework.data.generator.sequence_packing.autoregressive import pack_input_sequence_autoregressive
 
 MultiviewTransferARKVCache = list[tuple[torch.Tensor, torch.Tensor] | None]
@@ -78,6 +78,7 @@ class MultiviewTransferARSession:
     cfg_active: bool
     cfgp_enabled: bool
     text_view_ids: tuple[int, ...] | None = None
+    target_view_ids: torch.Tensor | None = None  # [V] physical rig IDs
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class MultiviewTransferARReplayContext:
     text_tokens: tuple[tuple[int, ...], ...]
     fps_vision: tuple[float, ...]
     text_view_ids: tuple[int, ...] | None = None
+    target_view_ids: torch.Tensor | None = None  # [V] physical rig IDs
 
 
 class MultiviewTransferARBackend:
@@ -151,7 +153,8 @@ class MultiviewTransferARBackend:
         if prefill_pack.vision is None or len(prefill_pack.vision.token_shapes) != 2:
             raise ValueError("Multiview transfer AR requires packed [control, target] vision metadata.")
         flex_backend = getattr(self.host.net, "flex_backend", None)
-        if flex_backend is None:
+        maskless_replay = getattr(self.host.net, "teacher_forcing_maskless", False)
+        if flex_backend is None and not maskless_replay:
             raise ValueError("Multiview transfer AR requires an initialized FlexAttention backend.")
         if text_view_ids is not None and text_view_ids != list(range(num_views)):
             raise ValueError(
@@ -161,7 +164,7 @@ class MultiviewTransferARBackend:
         control_shape, target_shape = prefill_pack.vision.token_shapes
         total_memory_tokens = control_shape[0] * control_shape[1] * control_shape[2]
         total_memory_tokens += target_shape[0] * target_shape[1] * target_shape[2]
-        kv_alignment = int(flex_backend.block_size[1])
+        kv_alignment = 1 if maskless_replay else int(flex_backend.block_size[1])
         memory_seq_len = ((total_memory_tokens + kv_alignment - 1) // kv_alignment) * kv_alignment
         target_condition_ranges = [(0, condition_count)] if condition_count else []
         num_layers = int(self.host.net.num_hidden_layers)  # type: ignore[attr-defined]
@@ -181,6 +184,9 @@ class MultiviewTransferARBackend:
             cfg_active=cfg_active,
             cfgp_enabled=cfgp_enabled,
             text_view_ids=tuple(text_view_ids) if text_view_ids is not None else None,
+            target_view_ids=prefill_pack.vision_view_ids[1]
+            if prefill_pack.vision_view_ids is not None
+            else None,  # [V]
         )
 
     @staticmethod
@@ -226,6 +232,7 @@ class MultiviewTransferARBackend:
         chunk_start: int,
         memory_layout: MultiviewTransferARMemoryLayout,
         current_role: MultiviewTransferARCurrentRole,
+        vision_view_ids: torch.Tensor | None = None,  # [V] physical rig IDs, distinct from caption-local text_view_ids
     ) -> PackedSequence:
         """Pack one synchronized chunk at its shared camera-local mRoPE positions."""
         if vision_latent.shape[2] % num_views != 0:
@@ -262,6 +269,7 @@ class MultiviewTransferARBackend:
             num_views=num_views,
             text_view_ids=list(text_view_ids) if text_view_ids is not None else None,
         )
+        pack.vision_view_ids = [vision_view_ids] if vision_view_ids is not None else None  # list[[V]] or None
         pack.to_cuda()
         pack.multiview_transfer_ar_metadata = {
             "current_frame_start": chunk_start,
@@ -288,7 +296,7 @@ class MultiviewTransferARBackend:
         cache_write_indexes: torch.Tensor | None = None,  # [S_write] or None
     ) -> None:
         """Run a clean pass and commit selected generated-token K/V."""
-        memory = FlexARMemoryState(
+        memory = MultiviewARMemoryState(
             num_layers=int(self.host.net.num_hidden_layers),  # type: ignore[attr-defined]
             memory_seq_len=memory_seq_len,
             cache=cache,
@@ -424,8 +432,8 @@ class MultiviewTransferARBackend:
         session: MultiviewTransferARSession,
         *,
         branch: _ARBranch = "conditional",
-    ) -> FlexARMemoryState:
-        """Create the read-only Flex memory view for a denoising branch."""
+    ) -> MultiviewARMemoryState:
+        """Create the read-only multiview memory view for a denoising branch."""
         if session.cfgp_enabled:
             if self.host.parallel_dims is None:
                 raise ValueError("CFGP multiview transfer AR requires initialized parallel dimensions.")
@@ -441,7 +449,7 @@ class MultiviewTransferARBackend:
             cache = session.conditional_cache if branch == "conditional" else session.unconditional_cache
         if cache is None:
             raise ValueError(f"Multiview transfer AR has no {branch} cache.")
-        return FlexARMemoryState(
+        return MultiviewARMemoryState(
             num_layers=int(self.host.net.num_hidden_layers),  # type: ignore[attr-defined]
             memory_seq_len=session.memory_seq_len,
             cache=cache,
@@ -464,6 +472,7 @@ class MultiviewTransferARBackend:
             vision_latent=denoised_chunk,
             text_tokens=conditional_text_tokens,
             text_view_ids=session.text_view_ids,
+            vision_view_ids=session.target_view_ids,
             fps_vision=fps_vision,
             num_views=session.num_views,
             frames_per_view=session.frames_per_view,
@@ -479,6 +488,7 @@ class MultiviewTransferARBackend:
                 vision_latent=denoised_chunk,
                 text_tokens=unconditional_text_tokens,
                 text_view_ids=session.text_view_ids,
+                vision_view_ids=session.target_view_ids,
                 fps_vision=fps_vision,
                 num_views=session.num_views,
                 frames_per_view=session.frames_per_view,
@@ -604,6 +614,7 @@ class MultiviewTransferARBackend:
             text_tokens=tuple(tuple(tokens) for tokens in text_tokens),
             fps_vision=tuple(fps_vision),
             text_view_ids=session.text_view_ids,
+            target_view_ids=session.target_view_ids,
         )
 
     def build_replay_pack_and_memory(
@@ -613,7 +624,7 @@ class MultiviewTransferARBackend:
         vision_latent: torch.Tensor,  # [1,C,V*chunk_len,H,W]
         chunk_start: int,
         timestep: float,
-    ) -> tuple[PackedSequence, FlexARMemoryState]:
+    ) -> tuple[PackedSequence, MultiviewARMemoryState]:
         """Rebuild one differentiable current-chunk input from a backend replay context."""
         target_condition_ranges = [(0, context.condition_count)] if context.condition_count else []
         memory_layout = build_multiview_transfer_ar_memory_layout(
@@ -631,6 +642,7 @@ class MultiviewTransferARBackend:
             vision_latent=vision_latent,
             text_tokens=[list(tokens) for tokens in context.text_tokens],
             text_view_ids=context.text_view_ids,
+            vision_view_ids=context.target_view_ids,
             fps_vision=list(context.fps_vision),
             num_views=context.num_views,
             frames_per_view=context.frames_per_view,
@@ -647,7 +659,7 @@ class MultiviewTransferARBackend:
             device=self.host.tensor_kwargs["device"],
             dtype=torch.float32,
         )  # [N_noisy_vision]
-        memory = FlexARMemoryState(
+        memory = MultiviewARMemoryState(
             num_layers=int(self.host.net.num_hidden_layers),  # type: ignore[attr-defined]
             memory_seq_len=context.memory_seq_len,
             cache=context.cache,

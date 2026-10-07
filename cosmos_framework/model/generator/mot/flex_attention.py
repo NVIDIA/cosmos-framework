@@ -74,10 +74,13 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CAPTION_ACCESSES,
     CAPTION_SCOPE_ALL,
     CAPTION_SCOPE_SAME_VIEW,
+    DECOMPOSED_TEMPORAL_WINDOW_EPS,
     FLEX_GEOMETRY_PREFERENCES,
     AttentionScope,
     CaptionAccess,
+    TemporalWindow,
     resolve_caption_scope,
+    temporal_window_bounds,
 )
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
     build_block_mask_from_metadata_runs,
@@ -171,8 +174,9 @@ class FlexMetadata:
       one whose ``view_id`` matches the query's, or none at all (the gen->und pass);
     * sensor Q -> sensor K: within whatever ``AttentionScope`` admits (every view, its own
       view, or -- ``"decomposed"`` -- its own view or its own frame, or -- with
-      ``decomposed_temporal_window_seconds`` set -- its own view or a key within that many
-      seconds of it, at or before it), regardless of whether either token is conditioning;
+      ``decomposed_temporal_window_seconds`` set -- its own view or a key whose capture-time
+      offset falls in the configured (start, end) interval),
+      regardless of whether either token is conditioning;
     * sensor Q (conditioning or noisy) -> control K: same view, any frame;
     * control Q -> control K: same view, any frame;
     * control Q -> non-control sensor K: same view, any frame and noise state, only when
@@ -212,7 +216,7 @@ class FlexMetadata:
     caption_scope: torch.Tensor
     num_und: int
     attention_scope: AttentionScope
-    decomposed_temporal_window_seconds: float | None
+    decomposed_temporal_window_seconds: TemporalWindow | None
     control_attends_sensor: bool
 
     def __post_init__(self) -> None:
@@ -222,11 +226,7 @@ class FlexMetadata:
         # is also built directly, and a silently narrower mask is worse than a rejected one.
         if self.attention_scope not in ATTENTION_SCOPES:
             raise ValueError(f"Unknown attention_scope {self.attention_scope!r}; expected one of {ATTENTION_SCOPES}.")
-        if self.decomposed_temporal_window_seconds is not None and self.decomposed_temporal_window_seconds < 0:
-            raise ValueError(
-                "decomposed_temporal_window_seconds must be non-negative, got "
-                f"{self.decomposed_temporal_window_seconds}."
-            )
+        temporal_window_bounds(self.decomposed_temporal_window_seconds)
 
     @property
     def q_len(self) -> int:
@@ -353,7 +353,7 @@ def _multiview_pair_predicate(
     q_fields: _StreamFields,
     kv_fields: _StreamFields,
     attention_scope: AttentionScope,
-    decomposed_temporal_window_seconds: float | None = None,
+    decomposed_temporal_window_seconds: TemporalWindow | None = None,
     control_attends_sensor: bool = False,
 ) -> MaskMod:
     """Return the multiview supertoken predicate, reading each side's own fields.
@@ -393,13 +393,15 @@ def _multiview_pair_predicate(
     ``"decomposed"``'s temporal half is, by default, "the query's own frame index" --
     ``same_frame``, which only means the same instant when every sensor shares one clock.
     ``decomposed_temporal_window_seconds`` replaces that with a real-time comparison instead:
-    a key is in the query's temporal reach when ``0 <= q_timestamp - k_timestamp <=
-    decomposed_temporal_window_seconds`` (both bounds widened by a small float32 tolerance, since
+    a key is in the query's temporal reach when ``start <= k_timestamp - q_timestamp <= end``
+    (both bounds widened by a small float32 tolerance, since
     ``timestamp`` is computed from ``frame_id * seconds_per_frame`` and a pair meant to land
-    exactly on a boundary can round a hair past it), i.e. the key was captured at or before the
-    query, within that many seconds -- what lets a 7.5 Hz camera and a 10 Hz LiDAR sweep register
+    exactly on a boundary can round a hair past it). Bounds (-N, 0) restrict cross-view keys
+    to at or before the query -- what lets a 7.5 Hz camera and a 10 Hz LiDAR sweep register
     against each other by real capture time rather than by a frame index neither shares. Left
-    ``None``, the scope keeps its original same-frame-index meaning.
+    ``None``, the scope keeps its original same-frame-index meaning. A positive
+    end bound admits future keys as well; (-N, N) gives a symmetric window. This
+    does not change same-view, control, caption, or sample-isolation rules.
 
     A batch with no control item carries ``is_control`` all-``False``, which drops all
     control terms on its own -- see :class:`FlexMetadata`.
@@ -435,18 +437,17 @@ def _multiview_pair_predicate(
     has_temporal_window = torch.tensor(decomposed_temporal_window_seconds is not None, device=device)
     # The value is meaningless while has_temporal_window is False (the same_frame branch runs
     # instead), so 0.0 stands in rather than a sentinel that would need its own guard.
-    temporal_window = torch.tensor(
-        0.0 if decomposed_temporal_window_seconds is None else decomposed_temporal_window_seconds,
-        dtype=torch.float32,
-        device=device,
-    )
+    bounds = temporal_window_bounds(decomposed_temporal_window_seconds)
+    # Separate scalar allocations keep captured storage offsets zero for FA4 lowering.
+    temporal_window_start = torch.tensor(0.0 if bounds is None else bounds[0], dtype=torch.float32, device=device)  # []
+    temporal_window_end = torch.tensor(0.0 if bounds is None else bounds[1], dtype=torch.float32, device=device)  # []
     # timestamp is frame_id * seconds_per_frame in float32 (build_multiview_flex_metadata), so a
     # pair that is mathematically exactly on the window boundary -- the motivating case, aligning
     # sensors at rates like 7.5 Hz and 10 Hz -- can round a hair to either side of it. This
-    # widens both edges of the ``[0, temporal_window]`` bound by a tolerance well above float32
+    # widens both edges of the ``[start, end]`` interval by a tolerance well above float32
     # rounding noise at realistic frame counts, and well below any window worth configuring in
     # seconds, so it only ever pulls a boundary pair back in, never admits an unrelated one.
-    temporal_window_eps = torch.tensor(1e-4, dtype=torch.float32, device=device)
+    temporal_window_eps = torch.tensor(DECOMPOSED_TEMPORAL_WINDOW_EPS, dtype=torch.float32, device=device)  # []
 
     def pair_allowed(
         b: torch.Tensor,
@@ -470,11 +471,11 @@ def _multiview_pair_predicate(
         caption_scope = q_fields.caption_scope[q_idx]
         gen_to_und = k_und & ((caption_scope == scope_all) | ((caption_scope == scope_same_view) & same_view))
         # The "own instant" half of decomposed: same frame index by default, or a
-        # non-negative, bounded gap in real capture time once a window is configured.
-        timestamp_gap = q_fields.timestamp[q_idx] - kv_fields.timestamp[kv_idx]
-        within_temporal_window = (timestamp_gap >= -temporal_window_eps) & (
-            timestamp_gap <= temporal_window + temporal_window_eps
-        )
+        # bounded gap in real capture time once a window is configured (past-only by default).
+        timestamp_offset = kv_fields.timestamp[kv_idx] - q_fields.timestamp[q_idx]  # broadcast Q/K shape
+        within_temporal_window = (timestamp_offset >= temporal_window_start - temporal_window_eps) & (
+            timestamp_offset <= temporal_window_end + temporal_window_eps
+        )  # broadcast Q/K shape
         reaches_own_instant = is_decomposed & torch.where(has_temporal_window, within_temporal_window, same_frame)
         # Sensor attention uses the same view/instant footprint for conditioning and noisy
         # tokens, matching the dense base I2V/V2V attention pattern within that scope.
@@ -767,17 +768,32 @@ def _check_view_grids_agree(sensor_mask_items: Sequence[Sequence[SensorMaskItem]
     grid of another shape (and its own frame rate) on the next.
     """
     for sample_idx, sample_items in enumerate(sensor_mask_items):
-        grid_by_view_offset: dict[int, tuple[int, int]] = {}
+        # Split rather than one (num_views, frames_per_view) tuple: an action control item
+        # carries one step per raw frame transition rather than per latent frame, so it
+        # shares its view offset's view count while its frame count differs from the vision
+        # item it conditions. No control rule reads a control's frame, so only non-control
+        # items have to agree on it.
+        num_views_by_view_offset: dict[int, int] = {}
+        frames_per_view_by_view_offset: dict[int, int] = {}
         seconds_per_frame_by_view_offset: dict[int, float] = {}
         for item_idx, item in enumerate(sample_items):
-            # setdefault records the offset's first grid and returns it thereafter, so every
-            # later item at that offset is compared against the one that established it.
-            expected_grid = grid_by_view_offset.setdefault(item.view_offset, item.view_grid)
-            if item.view_grid != expected_grid:
+            expected_num_views = num_views_by_view_offset.setdefault(item.view_offset, item.num_views)
+            if item.num_views != expected_num_views:
                 raise ValueError(
                     "All items of a sample sharing a view offset must share the same "
                     f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
-                    f"offset {item.view_offset} has {item.view_grid}, expected {expected_grid}."
+                    f"offset {item.view_offset} has {item.view_grid}, expected "
+                    f"({expected_num_views}, frames_per_view)."
+                )
+            if item.is_control:
+                continue
+            expected_frames_per_view = frames_per_view_by_view_offset.setdefault(item.view_offset, item.frames_per_view)
+            if item.frames_per_view != expected_frames_per_view:
+                raise ValueError(
+                    "All items of a sample sharing a view offset must share the same "
+                    f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
+                    f"offset {item.view_offset} has {item.view_grid}, expected "
+                    f"({expected_num_views}, {expected_frames_per_view})."
                 )
             expected_seconds_per_frame = seconds_per_frame_by_view_offset.setdefault(
                 item.view_offset, item.seconds_per_frame
@@ -800,7 +816,7 @@ def build_multiview_flex_metadata(
     und_seq_len: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
-    decomposed_temporal_window_seconds: float | None,
+    decomposed_temporal_window_seconds: TemporalWindow | None,
     control_attends_sensor: bool,
     sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
@@ -845,8 +861,8 @@ def build_multiview_flex_metadata(
             restriction: the temporal half then compares real capture time instead, which is
             defined across sensors.
         decomposed_temporal_window_seconds: with ``attention_scope="decomposed"``, replaces
-            "the query's own frame index" with "any key within this many seconds at or before
-            the query's real capture time" for the scope's temporal half -- see
+            "the query's own frame index" with inclusive (start, end) key-time offsets from
+            the query's capture time -- see
             :func:`_multiview_pair_predicate`. ``None`` (the default) keeps the frame-index
             form, which is also the only form :class:`SensorMaskItem`'s default
             ``seconds_per_frame=1.0`` produces the same answer for. Ignored outside
@@ -1384,7 +1400,7 @@ def build_multiview_block_mask(
     und_seq_len: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
-    decomposed_temporal_window_seconds: float | None,
+    decomposed_temporal_window_seconds: TemporalWindow | None,
     control_attends_sensor: bool,
     sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,

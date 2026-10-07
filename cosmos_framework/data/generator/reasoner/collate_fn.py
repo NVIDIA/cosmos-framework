@@ -35,6 +35,19 @@ def custom_collate(batch: list[dict[str, Any]], pad_to_multiple_of: int = FP8_PA
         # NOT stamp collate_ms; the callback simply skips the metric for this step).
         return batch[0]
 
+    # Keep data-stats metadata as CPU-native Python values. Default collation would turn each
+    # scalar into a separate tensor and cause many unnecessary H2D copies in the trainer. The
+    # sampling weight is copied in because LowPrecisionCallback casts the batch-level float
+    # tensor to the model precision (bf16) before callbacks read it.
+    has_data_stats = ["data_stats" in item for item in batch]
+    if any(has_data_stats) and not all(has_data_stats):
+        raise ValueError("data_stats must be present on every sample in a batch or none")
+    data_stats = (
+        [{**item.pop("data_stats"), "dataset_weight": item.get("dataset_weight")} for item in batch]
+        if all(has_data_stats)
+        else None
+    )
+
     # First assert all keys are 1D
     for key in ["input_ids", "token_mask", "attention_mask", "labels"]:
         assert all([item[key].ndim == 1 for item in batch]), f"Key {key} is not 1D"
@@ -64,6 +77,8 @@ def custom_collate(batch: list[dict[str, Any]], pad_to_multiple_of: int = FP8_PA
         if pad_to_multiple_of != FP8_PAD_MULTIPLE:
             raise ValueError("Sequence bucketing applies only to padded batches")
         result = _collate_true_packing(batch)
+        if data_stats is not None:
+            result["data_stats"] = data_stats
         result["collate_ms"] = (time.perf_counter() - t_collate_start) * 1000.0
         return result
 
@@ -239,6 +254,8 @@ def custom_collate(batch: list[dict[str, Any]], pad_to_multiple_of: int = FP8_PA
         "logical_batch_size": batch_size,
         "logical_supervised_tokens": supervised_tokens,
     }
+    if data_stats is not None:
+        result["data_stats"] = data_stats
     # Only present on the FLOP-based batching path (None otherwise) -> emit conditionally so the
     # batch dict carries no None values into misc.to(...).
     if predicted_runtime_ms is not None:

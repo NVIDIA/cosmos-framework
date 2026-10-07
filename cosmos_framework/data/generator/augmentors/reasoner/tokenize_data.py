@@ -12,6 +12,10 @@ from PIL import Image
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.augmentors.reasoner.sample_data_stats import (
+    SampleDataStats,
+    system_prompt_from,
+)
 from cosmos_framework.data.generator.reasoner.video_decoder_qwen import (
     VideoTemporalMode,
     get_effective_temporal_patch_size,
@@ -156,6 +160,7 @@ class TokenizeData(Augmentor):
         max_image_token_length: int = 8192,
         custom_system_prompt: str | None = None,
         strip_original_system_prompt: bool = False,
+        data_stats_writer_enabled: bool = False,
         text_only: bool = False,
         sound_und: bool = False,
         audio_processor: Optional[_AudioProcessor] = None,
@@ -174,6 +179,7 @@ class TokenizeData(Augmentor):
             max_video_token_length (int): Maximum number of video tokens to use. Defaults to 8192.
             custom_system_prompt: Prompt to inject when no leading system message exists.
             strip_original_system_prompt: Remove existing system messages before optional injection.
+            data_stats_writer_enabled: Collect per-sample metadata for DataStatsWriterCallback.
             sound_und (bool): Opt in to audio preprocessing and audio-token registration.
                 Disabled by default so existing text/vision tokenizers are unchanged.
         """
@@ -190,6 +196,7 @@ class TokenizeData(Augmentor):
         self.max_image_token_length = max_image_token_length
         self.custom_system_prompt = custom_system_prompt
         self.strip_original_system_prompt = strip_original_system_prompt
+        self.collect_data_stats = data_stats_writer_enabled
         self.video_temporal_mode: VideoTemporalMode = video_temporal_mode
         self.effective_temporal_patch_size: int = get_effective_temporal_patch_size(
             getattr(self.processor, "temporal_patch_size", 2), video_temporal_mode
@@ -279,6 +286,7 @@ class TokenizeData(Augmentor):
                 total_images += len([content for content in message["content"] if content["type"] == "image"])
                 total_videos += len([content for content in message["content"] if content["type"] == "video"])
                 total_audios += len([content for content in message["content"] if content["type"] == "audio"])
+        data_stats = SampleDataStats.from_conversation(conversation) if self.collect_data_stats else None
 
         # url
         url = data_dict["__url__"].root + "/" + data_dict["__url__"].path
@@ -408,6 +416,9 @@ class TokenizeData(Augmentor):
                         content["max_pixels"] = max_pixels_per_image
                         raw_image = np.asarray(image.convert("RGB"))  # [H,W,3]
                         raw_images.append(torch.from_numpy(raw_image).permute(2, 0, 1)[:, None])  # [3,1,H,W]
+                        native_height, native_width = raw_image.shape[:2]
+                        if data_stats is not None:
+                            data_stats.add_image(native_height, native_width, self.processor)
 
                     elif content["type"] == "video":
                         # as tokenization will NOT upsample the video, we can use a larger value here at the cost of multiple video having 1.5x token length
@@ -450,6 +461,12 @@ class TokenizeData(Augmentor):
                                     "video_metadata requires TokenizeData(video_timestamp_mode='qwen_index')"
                                 )
                             video_metadata = validate_source_video_metadata(video_metadata, len(videos))
+                        if data_stats is not None:
+                            data_stats.add_video(
+                                video_media,
+                                self.processor,
+                                self.effective_temporal_patch_size,
+                            )
                         # this is because videos are decoded to be around "max_video_token_length" tokens
 
                         videos = maybe_subsample_frames(
@@ -702,12 +719,16 @@ class TokenizeData(Augmentor):
         input_ids = torch.LongTensor(input_ids)  # [N_token]
         token_mask = torch.BoolTensor(token_mask)  # [N_token]; True = compute loss on this token
 
-        data_dict.update(
-            {
-                "input_ids": input_ids,
-                "token_mask": token_mask,
-            }
-        )
+        data_dict.update({"input_ids": input_ids, "token_mask": token_mask})
+        if data_stats is not None:
+            data_dict["data_stats"] = data_stats.finalize(
+                input_ids=input_ids,
+                processor=self.processor,
+                system_prompt=system_prompt_from(conversation),
+                is_thinking_stripped=bool(data_dict.get("is_thinking_stripped", False)),
+                max_image_token_length=self.max_image_token_length,
+                max_video_token_length=self.max_video_token_length,
+            )
         if audio_outputs is not None:
             data_dict.update(audio_outputs)
         for key in PROCESSOR_KEYS_TO_ADD:

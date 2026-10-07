@@ -6,8 +6,8 @@
 ``ActivationCheckpointingConfig`` is referenced from both
 ``OmniMoTModelConfig.activation_checkpointing`` (MoT) and
 ``PolicyConfig.activation_checkpointing`` (VLM, in
-vfm/configs/base/vlm/defaults/training.py). Both read sites consume every
-field, because both apply AC with ``ptd_checkpoint_wrapper`` — see
+vfm/configs/base/vlm/defaults/training.py). Both apply AC with
+``ptd_checkpoint_wrapper``; CPU offload settings apply to the MoT path — see
 ``parallelize_unified_mot.apply_ac`` and ``parallelize_vlm.apply_ac``.
 
 Historically the VLM path used HF's binary ``gradient_checkpointing_enable``
@@ -23,12 +23,14 @@ import attrs
 # * natten: fmha_forward
 # * flash2: _flash_attn_varlen_forward (varlen), _flash_attn_forward (dense)
 # * flash3: _flash_attn_forward (dense, varlen)
+# * flash4: fmha_fwd (imaginaire_flash4 custom op, dense and varlen)
 #
 # cuDNN is deliberately absent since it does not support varlen attention.
 ATTENTION_FORWARD_OPS_REGEX = [
     "fmha_forward",
     "_flash_attn_varlen_forward",
     "_flash_attn_forward",
+    "fmha_fwd",
 ]
 
 
@@ -62,9 +64,9 @@ class ActivationCheckpointingConfig:
     #
     # Defaults to attention on whichever backend the frontend picks, which is what
     # every config asking for selective AC wants and is not what a name like "fmha"
-    # delivers: that covers NATTEN alone, and NATTEN is only the *selected* backend
-    # where the others refuse the call. On sm100 cuDNN and flash2 both reject varlen
-    # so NATTEN wins and "fmha" matches; on sm90 flash3 is ranked first and takes it,
+    # delivers: that covers NATTEN and our Flash4 wrapper, but misses flash2/flash3.
+    # On sm100, NATTEN remains preferred for compatible varlen calls because cuDNN
+    # rejects varlen and Flash4 follows NATTEN, so "fmha" matches; on sm90 flash3 takes it,
     # leaving nothing in the region named "fmha", so selective AC there kept nothing
     # and silently recomputed every attention it was configured to save.
     #
@@ -94,3 +96,18 @@ class ActivationCheckpointingConfig:
     # Determinism check forwarded to ``ptd_checkpoint_wrapper`` /
     # ``torch.utils.checkpoint.checkpoint``.
     determinism_check: str = "default"
+
+    # Offload large AC checkpoint inputs to CPU memory during forward
+    # and fetch them back synchronously during backward recompute. Other denoise
+    # autograd saves stay on their original device. Reduces GPU peak by the
+    # full-AC checkpoint ramp at the cost of PCIe round-trips.
+    # Only meaningful when ``mode`` is ``"full"`` or ``"selective"``.
+    offload_to_cpu: bool = False
+
+    # Keep an activation on GPU if its CPU copy would leave less than this
+    # fraction of any finite job-cgroup RAM limit free. Warn and keep it on GPU
+    # when no finite cgroup limit or live usage can be measured.
+    min_cgroup_memory_free_fraction: float = attrs.field(
+        default=0.10,
+        validator=[attrs.validators.ge(0.0), attrs.validators.lt(1.0)],
+    )

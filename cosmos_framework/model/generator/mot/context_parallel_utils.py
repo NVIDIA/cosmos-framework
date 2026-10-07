@@ -31,6 +31,7 @@ Integration Guide:
    loss or post-processing.
 """
 
+import math
 from typing import Any, Callable
 
 import torch
@@ -53,6 +54,88 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     num_local_real_tokens,
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
+
+_CP_OUTPUT_GATHER_BYTES = 256 * 1024 * 1024
+
+
+class _GatherInterleavedOutput(torch.autograd.Function):
+    """Gather directly into token order with bounded forward/backward communication storage."""
+
+    @staticmethod
+    def forward(
+        ctx: Any,
+        und: torch.Tensor,  # [N_und_local,D]
+        gen: torch.Tensor,  # [N_gen_local,D]
+        und_indices: torch.Tensor,  # [N_und]
+        gen_indices: torch.Tensor,  # [N_gen]
+        group: dist.ProcessGroup,
+        correct_cp_gradients: bool,
+    ) -> torch.Tensor:  # [N_und+N_gen,D]
+        world_size = dist.get_world_size(group)
+        row_bytes = math.prod(und.shape[1:]) * und.element_size()
+        chunk_rows = max(1, _CP_OUTPUT_GATHER_BYTES // max(1, world_size * row_bytes))
+        ctx.group = group
+        ctx.correct_cp_gradients = correct_cp_gradients
+        ctx.local_lengths = (und.shape[0], gen.shape[0])
+        ctx.chunk_rows = chunk_rows
+        # Only index metadata survives forward; neither gathered features nor stream inputs are needed.
+        und_indices = und_indices.to(torch.int64)  # [N_und]
+        gen_indices = gen_indices.to(torch.int64)  # [N_gen]
+        ctx.save_for_backward(und_indices, gen_indices)
+        output = und.new_empty((und_indices.numel() + gen_indices.numel(), *und.shape[1:]))  # [N,D]
+        rows = min(chunk_rows, max(und.shape[0], gen.shape[0]))
+        workspace = und.new_empty((world_size * rows, *und.shape[1:]))  # [CP*rows,D]
+        for stream, indices in ((und, und_indices), (gen, gen_indices)):
+            local_rows = stream.shape[0]
+            for start in range(0, local_rows, chunk_rows):
+                width = min(chunk_rows, local_rows - start)
+                gathered = workspace[: world_size * width]  # [CP*width,D]
+                local = stream[start : start + width].contiguous()  # [width,D]
+                dist.all_gather_into_tensor(gathered, local, group=group)  # [CP*width,D]
+                for owner in range(world_size):
+                    offset = owner * local_rows + start
+                    count = max(0, min(width, indices.numel() - offset))
+                    output.index_copy_(
+                        0, indices[offset : offset + count], gathered[owner * width : owner * width + count]
+                    )  # [N,D]
+        return output
+
+    @staticmethod
+    def backward(
+        ctx: Any,
+        grad_output: torch.Tensor,  # [N,D]
+    ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:
+        world_size = dist.get_world_size(ctx.group)
+        rank = dist.get_rank(ctx.group)
+        gradients: list[torch.Tensor] = []
+        rows = min(ctx.chunk_rows, max(ctx.local_lengths)) if ctx.correct_cp_gradients else 0
+        workspace = grad_output.new_empty((world_size * rows, *grad_output.shape[1:]))  # [CP*rows,D]
+        for local_rows, indices in zip(ctx.local_lengths, ctx.saved_tensors, strict=True):
+            gradient = grad_output.new_zeros((local_rows, *grad_output.shape[1:]))  # [N_local,D]
+            for start in range(0, local_rows, ctx.chunk_rows):
+                width = min(ctx.chunk_rows, local_rows - start)
+                if ctx.correct_cp_gradients:
+                    gathered = workspace[: world_size * width].zero_()  # [CP*width,D]
+                    for owner in range(world_size):
+                        offset = owner * local_rows + start
+                        count = max(0, min(width, indices.numel() - offset))
+                        torch.index_select(
+                            grad_output,
+                            0,
+                            indices[offset : offset + count],
+                            out=gathered[owner * width : owner * width + count],
+                        )  # [count,D]
+                    # Sum the replicated loss contributions before FSDP/DDP averages parameters.
+                    dist.reduce_scatter_tensor(gradient[start : start + width], gathered, group=ctx.group)  # [width,D]
+                else:
+                    # Match the legacy Replicate-to-Shard backward without scaling head gradients.
+                    offset = rank * local_rows + start
+                    count = max(0, min(width, indices.numel() - offset))
+                    torch.index_select(
+                        grad_output, 0, indices[offset : offset + count], out=gradient[start : start + count]
+                    )  # [count,D]
+            gradients.append(gradient)
+        return gradients[0], gradients[1], None, None, None, None
 
 
 def _pad_to_N(N: int, x: torch.Tensor) -> torch.Tensor:
@@ -210,6 +293,7 @@ def get_context_parallel_last_hidden_state(
     parallel_dims: ParallelDims | None,
     *,
     correct_cp_gradients: bool = False,
+    bounded_memory: bool = False,
 ) -> torch.Tensor:  # packed_outputs streams: [N_local,hidden_size], returns: [N,hidden_size]
     if parallel_dims is None or not parallel_dims.cp_enabled:
         return get_all_seq_unpadded(packed_outputs)
@@ -219,16 +303,28 @@ def get_context_parallel_last_hidden_state(
     und_hidden_seq = get_und_seq(packed_outputs)  # [text_shard_len,hidden_size]
     gen_hidden_seq = get_gen_seq(packed_outputs)  # [gen_shard_len,hidden_size]
 
-    gathered_und_seq = all_gather_tensor(
-        und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
-    )  # [text_len,hidden_size]
-    gathered_gen_seq = all_gather_tensor(
-        gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
-    )  # [gen_len,hidden_size]
+    if not bounded_memory:
+        gathered_und_seq = all_gather_tensor(
+            und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
+        )  # [text_len,hidden_size]
+        gathered_gen_seq = all_gather_tensor(
+            gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
+        )  # [gen_len,hidden_size]
 
-    gathered_hidden_pack = from_mode_splits(gathered_und_seq, gathered_gen_seq, packed_outputs, is_sharded=False)
-    last_hidden_state = get_all_seq_unpadded(gathered_hidden_pack)
-    return last_hidden_state
+        gathered_hidden_pack = from_mode_splits(gathered_und_seq, gathered_gen_seq, packed_outputs, is_sharded=False)
+        last_hidden_state = get_all_seq_unpadded(gathered_hidden_pack)  # [N,hidden_size]
+        return last_hidden_state
+
+    # Gathering both full streams and then interleaving duplicates a full hidden state.
+    # Large teacher-forcing packs exceed memory here even after attention has completed.
+    return _GatherInterleavedOutput.apply(
+        und_hidden_seq,
+        gen_hidden_seq,
+        packed_outputs["_causal_indices"],
+        packed_outputs["_full_indices"],
+        parallel_dims.cp_mesh.get_group(),
+        correct_cp_gradients,
+    )  # [N,hidden_size]
 
 
 def all_to_all_tensor(
@@ -473,18 +569,21 @@ def context_parallel_attention(
     if memory_value is not None:
         und_len = packed_key_states["_num_causal_tokens"]
         gen_len = packed_key_states["_num_full_tokens"]
-        # Concrete real-token counts off the metadata, sliced out of gathered streams whose lengths
-        # are unbacked -- so the same clamp question as the trim below, and the same answer: the
-        # gathered stream carries every real token plus whatever padding, never fewer.
+        # Metadata gives the real-token counts; the gathered streams also contain padding.
+        # With unbacked CP lengths (no concrete size hints), Python slicing may need to
+        # decide whether to truncate its stop index to the gathered length. This raised
+        # GuardOnDataDependentSymNode in the Torch 2.13 compiled CP path.
+        # The checks below ensure the real tokens fit. narrow specifies that exact length,
+        # returning the same view and preserving the slice's gradients for valid inputs.
         torch._check(und_len <= k_und_seq.shape[0])
         torch._check(gen_len <= k_gen_seq.shape[0])
         torch._check(und_len <= v_und_seq.shape[0])
         torch._check(gen_len <= v_gen_seq.shape[0])
         kv_to_store = (
-            k_gen_seq[:gen_len].unsqueeze(0),
-            v_gen_seq[:gen_len].unsqueeze(0),
-            k_und_seq[:und_len].unsqueeze(0),
-            v_und_seq[:und_len].unsqueeze(0),
+            k_gen_seq.narrow(0, 0, gen_len).unsqueeze(0),  # [1,N_gen,H_kv_local,head_dim]
+            v_gen_seq.narrow(0, 0, gen_len).unsqueeze(0),  # [1,N_gen,H_kv_local,head_dim]
+            k_und_seq.narrow(0, 0, und_len).unsqueeze(0),  # [1,N_und,H_kv_local,head_dim]
+            v_und_seq.narrow(0, 0, und_len).unsqueeze(0),  # [1,N_und,H_kv_local,head_dim]
         )
 
     q_und_seq_len = q_und_seq.shape[0]

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Equivalence tests for ``three_way_attention_with_kv_cache``.
+"""Equivalence tests for ``three_way_attention_with_memory``.
 
 Instructions
 ------------
@@ -34,12 +34,12 @@ Teacher-forcing: two-pass mirror of production
 In TF mode the tested path mirrors the production two-pass mechanism
 exactly:
 
-  * **Pass 1** runs ``three_way_attention_with_kv_cache`` on the *clean*
+  * **Pass 1** runs ``three_way_attention_with_memory`` on the *clean*
     Q/K/V using ``KVTrainMemoryValue`` (standard, non-TF flags) — so clean
     queries see text + cache + clean (temporal-causal SA).  The output of
     Pass 1 is *discarded*; only the clean K/V tensors are kept and threaded
     into Pass 2 as ``cached_clean_gen_k/v``.
-  * **Pass 2** runs ``three_way_attention_with_kv_cache`` on the *noisy*
+  * **Pass 2** runs ``three_way_attention_with_memory`` on the *noisy*
     Q/K/V using ``TFNoisyMemoryValue`` populated with the clean K/V from
     Pass 1.
 
@@ -63,7 +63,7 @@ The mask permits:
 - Text queries → text keys, top-left causal.
 - (TF) Clean Q (Pass-1 mirror) → text K, cache K, and clean K at frames
   ``[0, t]`` (temporal-causal).  Matches what Pass 1 of
-  ``three_way_attention_with_kv_cache`` computes.
+  ``three_way_attention_with_memory`` computes.
 - Video queries → all text and all cache (unconditional).
 - (TF only)   Video frame t → clean frames ``[0, t)`` (strictly past).
 - (TF)        Video frame t → video frame ``t`` only (spatial within frame).
@@ -109,7 +109,7 @@ import os
 # selection — cosmos_framework.model.attention.backends.choose_backend is
 # ``@lru_cache``'d, so once it's been called the env var won't take effect.
 #
-# Update: backend is now locked to natten in three_way_attention_with_kv_cache.
+# Update: backend is now locked to natten in three_way_attention_with_memory.
 # To test with other backends, remove the backend="natten" arguments, and
 # (optionally) uncomment the following:
 #
@@ -130,7 +130,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
 )
 from cosmos_framework.model.generator.mot.causal_attention import (
-    three_way_attention_with_kv_cache,
+    three_way_attention_with_memory,
 )
 from cosmos_framework.model.generator.utils.kv_cache import (
     KVTrainMemoryValue,
@@ -261,7 +261,7 @@ def _make_composite_mask_mod(
       - (TF) Clean Q at frame ``t`` (Pass-1 mirror) → all text K, all
         cache K, and clean K at frames ``<= t`` (temporal-causal within
         the clean span).  This is the full Pass-1 three-way attention
-        pattern: ``three_way_attention_with_kv_cache`` called on clean
+        pattern: ``three_way_attention_with_memory`` called on clean
         Q/K/V with a ``KVTrainMemoryValue`` (no TF flags).
       - Noisy Q → all text K, all cache K (unconditional).
       - (TF only)   Noisy frame ``t`` → clean frames ``< t`` (strictly past).
@@ -360,7 +360,7 @@ def _make_composite_mask_mod(
 
         # --- Clean-Q row (TF only) --------------------------------------
         # Pass 1 of teacher forcing runs the full
-        # ``three_way_attention_with_kv_cache`` over clean tokens with
+        # ``three_way_attention_with_memory`` over clean tokens with
         # ``KVTrainMemoryValue`` (standard, non-TF flags), so clean Q at
         # frame f attends to:
         #   - all real text K
@@ -547,7 +547,7 @@ def _reference_forward(
 
 
 # ---------------------------------------------------------------------------
-# Tested path: three_way_attention_with_kv_cache via SequencePack
+# Tested path: three_way_attention_with_memory via SequencePack
 # ---------------------------------------------------------------------------
 
 
@@ -690,17 +690,17 @@ def _run_three_way(
     device: torch.device,
     attention_fn: Callable | None = None,
 ) -> tuple[torch.Tensor | None, torch.Tensor]:
-    """Single ``three_way_attention_with_kv_cache`` invocation.
+    """Single ``three_way_attention_with_memory`` invocation.
 
     Returns ``(text_out, video_out)`` with the padded text region sliced
     down to its real length.
 
     ``attention_fn`` lets the caller inject a wrapped variant of
-    ``three_way_attention_with_kv_cache`` (e.g. ``torch.compile``'d) so
+    ``three_way_attention_with_memory`` (e.g. ``torch.compile``'d) so
     the same helper can drive both the eager and compiled test variants.
     """
     if attention_fn is None:
-        attention_fn = three_way_attention_with_kv_cache
+        attention_fn = three_way_attention_with_memory
     q_pack = _build_packed_state(text_seq=text_q, video_seq=video_q, device=device)
     k_pack = _build_packed_state(text_seq=text_k, video_seq=video_k, device=device)
     v_pack = _build_packed_state(text_seq=text_v, video_seq=video_v, device=device)
@@ -739,19 +739,19 @@ def _tested_forward(
 ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor]:
     """Run the tested decomposition and return ``(text_out, clean_out, video_out)``.
 
-    Standard mode: a single ``three_way_attention_with_kv_cache`` call.
+    Standard mode: a single ``three_way_attention_with_memory`` call.
     ``clean_out`` is ``None``.
 
     Teacher-forcing mode: two passes, mirroring production exactly.
 
-      * Pass 1 calls ``three_way_attention_with_kv_cache`` on the *clean*
+      * Pass 1 calls ``three_way_attention_with_memory`` on the *clean*
         Q/K/V with a ``KVTrainMemoryValue`` (standard flags, no TF).
         The returned text+video output is the Pass-1 attention output;
         the video part is ``clean_out``.  Production discards Pass 1's
         per-layer outputs and keeps only the clean K/V projections to
         feed into Pass 2; this test keeps the video output too so the
         forward check can compare it to the reference's clean-Q rows.
-      * Pass 2 calls ``three_way_attention_with_kv_cache`` on the *noisy*
+      * Pass 2 calls ``three_way_attention_with_memory`` on the *noisy*
         video Q/K/V with a ``TFNoisyMemoryValue`` whose
         ``cached_clean_gen_k/v`` point at the SAME clean K/V leaf tensors
         used in Pass 1.  Pass 2's text+video output supplies ``text_out``
@@ -764,7 +764,7 @@ def _tested_forward(
     pointer or detach trick — matching production with
     ``teacher_forcing_detach_clean_kv=False``.
 
-    When ``use_compile`` is True, ``three_way_attention_with_kv_cache``
+    When ``use_compile`` is True, ``three_way_attention_with_memory``
     is wrapped in ``torch.compile(fullgraph=True)`` so both Pass 1 and
     Pass 2 run through the compiled graph.  The Dynamo cache is reset
     first so each test starts from a clean compile.
@@ -780,9 +780,9 @@ def _tested_forward(
 
     if use_compile:
         torch._dynamo.reset()
-        attention_fn: Callable = torch.compile(three_way_attention_with_kv_cache, fullgraph=True)
+        attention_fn: Callable = torch.compile(three_way_attention_with_memory, fullgraph=True)
     else:
-        attention_fn = three_way_attention_with_kv_cache
+        attention_fn = three_way_attention_with_memory
 
     if mode == "teacher_forcing":
         clean_q = inputs["clean_q"]
@@ -898,7 +898,7 @@ def test_three_way_attention_forward_matches_concat_reference(
     dtype: torch.dtype,
     tol: float,
 ):
-    """Forward output of ``three_way_attention_with_kv_cache`` must match a
+    """Forward output of ``three_way_attention_with_memory`` must match a
     single dense attention call over the concatenated K/V sequence with
     the variant's composite mask.
     """
@@ -975,7 +975,7 @@ def test_three_way_attention_gradients_match_concat_reference(
         projections in the rolling cache.  ``_build_raw_inputs`` builds
         these without ``requires_grad`` so no leaf grad ever exists.
 
-    Two ``torch.where`` calls inside ``three_way_attention_with_kv_cache``
+    Two ``torch.where`` calls inside ``three_way_attention_with_memory``
     could in principle break the ``merge_attentions`` data-pointer
     contract:
       - The cached-video LSE mask (``has_cached_gen`` → -inf) sits between
@@ -1122,7 +1122,7 @@ def test_attention_empty_varlen_kv_returns_zero_neg_inf(dtype: torch.dtype):
     construction and no clamp/mask workaround is needed.
 
       - bf16: kernel returns ``0`` / ``-inf`` cleanly — we skip the
-        clamp+mask in ``three_way_attention_with_kv_cache`` for bf16.
+        clamp+mask in ``three_way_attention_with_memory`` for bf16.
       - fp32: kernel returns NaN — we apply the clamp+mask workaround
         (``cumulative_seqlen_KV = [0, max(real, 1)]`` plus a
         ``MergeAttentionsBridge``-wrapped ``torch.where(has_*, lse, -inf)``).
@@ -1180,7 +1180,7 @@ def test_attention_empty_varlen_self_attention_returns_zero(dtype: torch.dtype):
     output, not NaN.
 
     Mirrors the text self-attention call inside
-    ``three_way_attention_with_kv_cache`` when no caption is present:
+    ``three_way_attention_with_memory`` when no caption is present:
     Q / K / V come from the pack's ``causal_seq`` slot (padded to a
     constant length for compile stability), and ``text_kv_offsets`` is
     ``[0, 0]`` (or, if ``clamp_empty_varlen_kv`` is True, ``[0, 1]`` —

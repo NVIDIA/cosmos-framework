@@ -23,9 +23,10 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     AttentionScope,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
+    TemporalWindow,
 )
 from cosmos_framework.model.generator.mot import flex_attention as flex_attention_module
-from cosmos_framework.model.generator.mot.attention import build_packed_sequence
+from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.flex_attention import (
     CaptionMaskItem,
     FlexBackend,
@@ -34,8 +35,11 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     _build_stream_sample_ids,
     _from_flex_layout,
     _get_triton_flex_backend,
+    _key_stream_fields,
     _metadata_groups,
     _multiview_mask_mod,
+    _multiview_pair_predicate,
+    _query_stream_fields,
     _to_flex_layout,
     build_block_mask,
     build_multiview_block_mask,
@@ -46,6 +50,7 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     triton_backend_block_size,
 )
 from cosmos_framework.model.generator.mot.multiview_attention import (
+    is_single_camera_pack,
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
 )
@@ -141,7 +146,7 @@ def _metadata_from_tokens(
     device: str = "cpu",
     und_samples: list[int] | None = None,
     attention_scope: str = "all_views",
-    decomposed_temporal_window_seconds: float | None = None,
+    decomposed_temporal_window_seconds: TemporalWindow | None = None,
     control_attends_sensor: bool = False,
     und_caption_views: list[int] | None = None,
 ) -> FlexMetadata:
@@ -301,7 +306,7 @@ def _reference_visibility(
     seq_len: int,
     und_samples: list[int] | None = None,
     attention_scope: AttentionScope = "all_views",
-    decomposed_temporal_window_seconds: float | None = None,
+    decomposed_temporal_window_seconds: TemporalWindow | None = None,
     control_attends_sensor: bool = False,
 ) -> torch.Tensor:
     """Ground-truth ``[seq_len, num_und + seq_len]`` bool ``M[q, k] = q attends to k``.
@@ -320,7 +325,7 @@ def _reference_visibility(
     that changes shape has to be restated here.
 
     ``decomposed_temporal_window_seconds`` swaps ``"decomposed"``'s "same frame index" half
-    for "any key's ``ts`` within that many seconds at or before the query's", using each
+    for "any key's ``ts`` inside the signed (start, end) offsets from the query's", using each
     token dict's ``ts`` (defaulting to its frame index, as :func:`_metadata_from_tokens`
     does).
     """
@@ -344,8 +349,9 @@ def _reference_visibility(
         if decomposed_temporal_window_seconds is None:
             same_instant = dq["t"] == dk["t"]
         else:
-            gap = dq.get("ts", dq["t"]) - dk.get("ts", dk["t"])
-            same_instant = 0 <= gap <= decomposed_temporal_window_seconds
+            offset = dk.get("ts", dk["t"]) - dq.get("ts", dq["t"])
+            start, end = decomposed_temporal_window_seconds
+            same_instant = start <= offset <= end
         return dq["v"] == dk["v"] or same_instant
 
     m = torch.zeros(seq_len, num_und + seq_len, dtype=torch.bool)
@@ -753,7 +759,9 @@ def _mask_mod_captures(metadata: FlexMetadata) -> list[object]:
 
 
 @pytest.mark.L0
-def test_multiview_mask_mod_captures_only_tensors() -> None:
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [None, (-0.4, 0.0), (-0.4, 0.2)])
+def test_multiview_mask_mod_captures_only_tensors(window: TemporalWindow | None) -> None:
     """The traced ``mask_mod`` must close over tensors alone, or FlashAttention-4 refuses the graph.
 
     Inductor lifts a captured Python int into a symbol, and rejects the FLASH lowering for
@@ -774,6 +782,8 @@ def test_multiview_mask_mod_captures_only_tensors() -> None:
         seq_len=_GEN_ALIGNMENT,
         und_samples=und_samples,
         control_attends_sensor=True,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
     )
     assert metadata.num_und > 0  # the fused stream, i.e. the case that would need a shift
 
@@ -784,7 +794,9 @@ def test_multiview_mask_mod_captures_only_tensors() -> None:
 
 
 @pytest.mark.L0
-def test_multiview_mask_mod_captures_no_offset_views() -> None:
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [None, (-0.4, 0.0), (-0.4, 0.2)])
+def test_multiview_mask_mod_captures_no_offset_views(window: TemporalWindow | None) -> None:
     """Every captured field must start at offset zero, a scalar-free capture being the point.
 
     Dropping the captured ``num_und`` is only half of it. The query side reads the GEN tail of
@@ -797,7 +809,13 @@ def test_multiview_mask_mod_captures_no_offset_views() -> None:
     only a dynamic compiled run on Hopper or Blackwell would ever object.
     """
     und_samples = _und_samples(12, 12, length=_UND_ALIGNMENT)
-    metadata = _metadata_from_tokens(_make_multiview_tokens(), seq_len=_GEN_ALIGNMENT, und_samples=und_samples)
+    metadata = _metadata_from_tokens(
+        _make_multiview_tokens(),
+        seq_len=_GEN_ALIGNMENT,
+        und_samples=und_samples,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+    )
     assert metadata.num_und > 0  # otherwise the tail is the whole stream and every offset is 0 anyway
 
     offsets = [value.storage_offset() for value in _mask_mod_captures(metadata) if isinstance(value, torch.Tensor)]
@@ -859,23 +877,75 @@ def test_multiview_mask_mod_noisy_scopes_cut_the_camera_grid() -> None:
 
 
 @pytest.mark.L0
-def test_multiview_mask_mod_decomposed_temporal_window_replaces_same_frame() -> None:
+@pytest.mark.CPU
+@pytest.mark.parametrize("duration", [0, 0.1, 0.4, 1.0])
+@pytest.mark.parametrize("control_attends_sensor", [False, True])
+def test_migrated_legacy_window_preserves_attention_edges(duration: float, control_attends_sensor: bool) -> None:
+    """Compare migrated bounds against the old scalar predicate, including boundary rounding."""
+    tokens = [
+        dict(s=0, t=i, v=view, ts=time, noisy=i != 0, control=control)
+        for view in range(2)
+        for control in (False, True)
+        for i, time in enumerate([0.0, 0.1, 0.4, 1.0, 1.0 - duration - 5e-5, 1.0 - duration - 5e-3, 1.0 + 5e-5])
+    ]
+    tokens.append(dict(s=1, t=0, v=0, ts=1.0, noisy=True))  # A different sample must stay isolated.
+    config = MultiviewAttentionMaskConfig(decomposed_temporal_window_seconds=duration)
+    assert config.decomposed_temporal_window_seconds == (-duration, 0.0)
+    metadata = _metadata_from_tokens(
+        tokens, seq_len=len(tokens) + 1, und_samples=[0, 0, 1], control_attends_sensor=control_attends_sensor
+    )
+    expected = _mask_mod_to_dense(metadata)  # [Q,K], existing all-views/control/caption rules
+    query_time = metadata.timestamp[metadata.num_und :, None]  # [Q,1]
+    key_time = metadata.timestamp[None, :]  # [1,K]
+    gap = query_time - key_time  # [Q,K], old scalar code used query minus key
+    same_view = metadata.view_id[metadata.num_und :, None] == metadata.view_id[None, :]  # [Q,K]
+    sensor_pairs = (
+        ~metadata.is_control[metadata.num_und :, None]
+        & ~metadata.is_control[None, :]
+        & (torch.arange(metadata.seq_len)[None, :] >= metadata.num_und)
+    )  # [Q,K]
+    old_scope = same_view | ((gap >= -1e-4) & (gap <= duration + 1e-4))  # [Q,K]
+    expected &= ~sensor_pairs | old_scope  # [Q,K]
+    migrated = dataclasses.replace(
+        metadata,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=config.decomposed_temporal_window_seconds,
+    )
+    actual = _mask_mod_to_dense(migrated)  # [Q,K]
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "window,past,future",
+    [((-0.5, 0.0), True, False), ((-0.5, 0.5), True, True), ((-0.2, 0.5), False, True)],
+)
+def test_multiview_mask_mod_decomposed_temporal_window_replaces_same_frame(
+    window: TemporalWindow, past: bool, future: bool
+) -> None:
     """With a window set, decomposed's temporal half compares ``ts`` instead of ``t``.
 
     Fractional and out-of-order ``ts`` values (a query does not have to be the later of a
-    pair) exercise the ``0 <= q_ts - k_ts <= window`` form directly: only a key captured at
-    or before the query, within the window, is in reach through this half of the scope.
+    pair) exercise signed key-time offsets directly. A zero upper bound is past-looking;
+    positive upper bounds can admit future keys too, without restricting same-view attention.
     """
     tokens = [
         dict(s=0, t=0, v=0, ts=1.0, noisy=True),  # query
         dict(s=0, t=1, v=1, ts=0.6, noisy=True),  # different view, 0.4s before: in a 0.5s window
         dict(s=0, t=2, v=1, ts=1.4, noisy=True),  # different view, 0.4s after: q_ts - k_ts < 0
         dict(s=0, t=3, v=1, ts=0.3, noisy=True),  # different view, 0.7s before: outside a 0.5s window
+        dict(s=0, t=4, v=1, ts=1.7, noisy=True),  # different view, 0.7s after: outside either window
+        dict(s=0, t=5, v=0, ts=3.0, noisy=True),  # same view: full-temporal, even outside the window
     ]
-    metadata = _metadata_from_tokens(tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=0.5)
+    metadata = _metadata_from_tokens(
+        tokens,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+    )
     m = _mask_mod_to_dense(metadata)[0].tolist()
 
-    assert m == [True, True, False, False]
+    assert m == [True, past, future, False, False, True]
 
     # A window of 0 recovers "same instant", stated in real time rather than frame index.
     same_instant_tokens = [
@@ -883,27 +953,79 @@ def test_multiview_mask_mod_decomposed_temporal_window_replaces_same_frame() -> 
         dict(s=0, t=5, v=1, ts=1.0, noisy=True),  # different frame index, same timestamp
     ]
     zero_window = _metadata_from_tokens(
-        same_instant_tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=0.0
+        same_instant_tokens,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=(0.0, 0.0),
     )
     assert _mask_mod_to_dense(zero_window)[0, 1]
 
 
 @pytest.mark.L0
-def test_multiview_mask_mod_decomposed_temporal_window_tolerates_float_rounding() -> None:
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [(-0.5, 0.0), (-0.5, 0.5), (-0.5, 0.2)])
+def test_multiview_mask_mod_decomposed_temporal_window_tolerates_float_rounding(window: tuple[float, float]) -> None:
     """``timestamp`` is ``frame_id * seconds_per_frame`` in float32, so a pair meant to land
     exactly on the window boundary can round a hair past it; the comparison has to tolerate
     that noise without also admitting a key that is genuinely outside the window.
     """
-    window = 0.5
     tokens = [
         dict(s=0, t=0, v=0, ts=1.0, noisy=True),  # query
-        dict(s=0, t=1, v=1, ts=1.0 - window - 5e-5, noisy=True),  # a hair past the boundary: still in reach
-        dict(s=0, t=2, v=1, ts=1.0 - window - 5e-3, noisy=True),  # genuinely outside the window
+        dict(s=0, t=1, v=1, ts=1.0 + window[0] - 5e-5, noisy=True),  # a hair past the boundary: still in reach
+        dict(s=0, t=2, v=1, ts=1.0 + window[0] - 5e-3, noisy=True),  # genuinely outside the window
+        dict(s=0, t=3, v=1, ts=1.0 + window[1] + 5e-5, noisy=True),  # future boundary within tolerance
+        dict(s=0, t=4, v=1, ts=1.0 + window[1] + 5e-3, noisy=True),  # genuinely outside the future window
     ]
-    metadata = _metadata_from_tokens(tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=window)
+    metadata = _metadata_from_tokens(
+        tokens,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+    )
     m = _mask_mod_to_dense(metadata)[0].tolist()
 
-    assert m == [True, True, False]
+    assert m == [True, True, False, True, False]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "window,past,future",
+    [((-0.4, 0.0), True, False), ((-0.4, 0.4), True, True), ((-0.2, 0.4), False, True)],
+)
+def test_window_direction_reaches_both_flex_block_and_token_masks(
+    window: tuple[float, float], past: bool, future: bool
+) -> None:
+    """The public builder must apply the direction to both block pruning and token masking."""
+    block_size = triton_backend_block_size()
+    spatial = block_size[0]
+    item = SensorMaskItem(
+        token_shape=(4, 1, spatial),
+        condition_mask=torch.zeros(4, dtype=torch.bool),  # [4]
+        num_views=2,
+        view_offset=0,
+        is_control=False,
+        seconds_per_frame=0.4,
+        caption_access="camera",
+    )
+    mask = _build_block_mask(
+        gen_seq_len=4 * spatial,
+        full_q_offsets=torch.tensor([0, 4 * spatial]),  # [2]
+        sensor_mask_items=[[item]],
+        device=torch.device("cpu"),
+        block_size=block_size,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+    )
+    # Camera-major cells: (view0,t0), (view0,t1), (view1,t0), (view1,t1).
+    expected = torch.ones((4, 4), dtype=torch.bool)  # [4,4]
+    expected[0, 3] = expected[2, 1] = future  # [4,4], future cross-view keys only
+    expected[1, 2] = expected[3, 0] = past  # [4,4], past cross-view keys only
+    assert mask.full_kv_num_blocks is not None
+    full_blocks = _blocks_to_dense(mask.full_kv_num_blocks, mask.full_kv_indices, 4, 4)  # [4,4]
+    torch.testing.assert_close(full_blocks, expected)
+    assert not mask.kv_num_blocks.any(), "Each block contains one homogeneous view/frame cell."
+    cell_starts = torch.arange(4) * spatial  # [4]
+    actual = mask.mask_mod(torch.tensor(0), torch.tensor(0), cell_starts[:, None], cell_starts[None, :])  # [4,4]
+    torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.L0
@@ -1588,6 +1710,39 @@ def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bo
     )
 
 
+def _mask_items_action_pack(
+    *,
+    num_views: int,
+    with_view_metadata: bool = True,
+    with_action_view_metadata: bool = True,
+) -> PackedSequence:
+    """A one-sample pack with one camera item and one camera-pose action item.
+
+    The two metadata flags are separate so a test can drop the action counts while the
+    vision counts stay present, which is the only way to reach the action-specific gate:
+    the vision one is checked first.
+    """
+    vision_shape = (2 * num_views, 1, 1)
+    action_shape = (3 * num_views,)
+    return PackedSequence(
+        sample_lens=[vision_shape[0] + action_shape[0]],
+        vision=ModalityData(
+            tokens=[torch.zeros(1)],  # list[[1]]
+            token_shapes=[vision_shape],
+            condition_mask=[torch.zeros(vision_shape)],  # list[[T,H,W]]
+            seconds_per_frame=[1.0],
+        ),
+        action=ModalityData(
+            tokens=[torch.zeros(1)],  # list[[1]]
+            token_shapes=[action_shape],
+            condition_mask=[torch.ones(action_shape[0], 1)],  # list[[T_action,1]]
+            seconds_per_frame=[1.0],
+        ),
+        num_views_per_vision_item=[num_views] if with_view_metadata else None,
+        num_views_per_action_item=[num_views] if with_view_metadata and with_action_view_metadata else None,
+    )
+
+
 @pytest.mark.L0
 def test_mask_items_leave_a_camera_only_pack_on_view_zero() -> None:
     """No LiDAR means every item stays on view 0, which keeps the camera mask untouched."""
@@ -1624,10 +1779,138 @@ def test_mask_items_read_a_joint_pack_without_per_camera_metadata_as_single_came
 
 
 @pytest.mark.L0
-def test_mask_items_reject_a_camera_only_pack_without_per_camera_metadata() -> None:
-    """Without a second stream to vouch for one view per item, a missing count stays an error."""
-    with pytest.raises(ValueError, match="per-camera VAE metadata"):
-        _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+def test_mask_items_read_a_camera_only_pack_without_per_camera_metadata_as_single_camera() -> None:
+    """A single-view stream carries no per-camera counts, because only a multiview one writes them.
+
+    Absent counts are therefore read as one view per item -- a single-camera grid, whose
+    scopes collapse to attention within that view, so no cross-view pair can be drawn wrong.
+    """
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+
+    assert [item.num_views for item in items[0]] == [1, 1]
+    assert [item.view_offset for item in items[0]] == [0, 0]
+
+
+def _mask_items_partly_posed_action_pack(
+    *,
+    num_views: int,
+    num_action_items_per_sample: tuple[int, ...] = (0, 1),
+) -> PackedSequence:
+    """A two-sample pack where only the second sample carries a camera-pose action item.
+
+    What a multiview stream packs when only part of it ships pose sidecars. The counts
+    are a parameter so a test can hand over ones that do not describe the pack.
+    """
+    vision_shape = (2 * num_views, 1, 1)
+    action_shape = (3 * num_views,)
+
+    def stream(token_shapes: list[tuple[int, ...]], *, mask_rows: bool) -> ModalityData:
+        return ModalityData(
+            tokens=[torch.zeros(1) for _ in token_shapes],  # list[[1]]
+            token_shapes=token_shapes,
+            condition_mask=[
+                torch.ones(shape[0], 1) if mask_rows else torch.zeros(shape)  # [T,1] / [T,H,W]
+                for shape in token_shapes
+            ],
+            seconds_per_frame=[1.0 for _ in token_shapes],
+        )
+
+    return PackedSequence(
+        sample_lens=[vision_shape[0], vision_shape[0] + action_shape[0]],
+        vision=stream([vision_shape, vision_shape], mask_rows=False),
+        action=stream([action_shape], mask_rows=True),
+        num_views_per_vision_item=[num_views, num_views],
+        num_views_per_action_item=[num_views],
+        num_action_items_per_sample=list(num_action_items_per_sample),
+    )
+
+
+@pytest.mark.L0
+def test_mask_items_give_the_action_control_to_the_sample_that_packed_it() -> None:
+    """A pack mixing posed and unposed samples describes each by what it actually owns."""
+    items = _multiview_mask_items_for_test(_mask_items_partly_posed_action_pack(num_views=2))
+
+    # The unposed sample reads [vision]; the posed one reads [vision, action].
+    assert [len(sample_items) for sample_items in items] == [1, 2]
+    assert [item.is_control for item in items[0]] == [False]
+    assert [item.is_control for item in items[1]] == [False, True]
+    # The action item keeps its own view grid.
+    assert items[1][1].num_views == 2
+
+
+@pytest.mark.L0
+def test_mask_items_reject_action_counts_that_do_not_account_for_every_item() -> None:
+    """Counts claiming no sample owns the packed action item leave it unattributed."""
+    with pytest.raises(ValueError, match="account for every packed action item"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(0, 0))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_more_than_one_action_item_for_a_sample() -> None:
+    """An action item is its sample's camera control, so a second one has no target."""
+    with pytest.raises(ValueError, match="a sample takes at most one"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(0, 2))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_action_counts_that_miss_a_sample() -> None:
+    """One entry per sample is what makes the counts readable as a grouping."""
+    with pytest.raises(ValueError, match="one entry per sample"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(1,))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_an_action_pack_without_per_action_view_metadata() -> None:
+    """On a pack whose cameras span a rig, the action stream's own view counts stay required."""
+    with pytest.raises(ValueError, match="num_views_per_action_item"):
+        _multiview_mask_items_for_test(_mask_items_action_pack(num_views=2, with_action_view_metadata=False))
+
+
+@pytest.mark.L0
+def test_mask_items_read_a_single_view_action_pack_as_one_view_per_item() -> None:
+    """A single-view Action stream carries one view per item, which its control edges need."""
+    items = _multiview_mask_items_for_test(_mask_items_action_pack(num_views=1, with_view_metadata=False))
+
+    # The sample reads [vision, action], the order the packer lays down.
+    assert [item.num_views for item in items[0]] == [1, 1]
+    # Action items are always control streams for their matching vision item.
+    assert [item.is_control for item in items[0]] == [False, True]
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    "pack, expected",
+    [
+        # No per-camera counts at all: only a multiview dataset writes them, so their
+        # absence is what a single-view stream looks like.
+        (_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False), True),
+        (_mask_items_pack(num_views=1, with_lidar=False), True),
+        (_mask_items_pack(num_views=2, with_lidar=False), False),
+        # A zero-view item is malformed, not single-camera: it has to reach the mask
+        # builder's own check rather than a fallback that skips it.
+        (_mask_items_pack(num_views=0, with_lidar=False), False),
+        # LiDAR takes a view offset of its own, which is scoping worth keeping however
+        # many cameras ride with it.
+        (_mask_items_pack(num_views=1, with_lidar=True, with_view_metadata=False), False),
+        (_mask_items_pack(num_views=1, with_lidar=True), False),
+    ],
+)
+def test_single_camera_packs_are_the_ones_a_view_scoped_mask_would_say_nothing_about(
+    pack: PackedSequence, expected: bool
+) -> None:
+    assert is_single_camera_pack(pack) is expected
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_vision_item_spanning_no_views() -> None:
+    with pytest.raises(ValueError, match="num_views=0"):
+        _multiview_mask_items_for_test(_mask_items_pack(num_views=0, with_lidar=False))
 
 
 @pytest.mark.L0
@@ -1706,10 +1989,10 @@ def _multiview_maskless_geometry_for_test(packed_seq: PackedSequence, **kwargs):
         # cannot: their structural refusals all fire before anything reads the items.
         sensor_mask_items=_sensor_mask_items_if_derivable(packed_seq),
         gen_seq_len=sum(
-            int(latent_t) * int(patch_h) * int(patch_w)
-            for modality in (packed_seq.vision, packed_seq.lidar)
+            math.prod(int(dim) for dim in token_shape)
+            for modality in (packed_seq.vision, packed_seq.lidar, packed_seq.radar, packed_seq.action)
             if modality is not None
-            for latent_t, patch_h, patch_w in modality.token_shapes
+            for token_shape in modality.token_shapes
         ),
     )
     options.update(kwargs)
@@ -2019,6 +2302,268 @@ def test_multiview_maskless_geometry_refuses_a_multi_control_pack() -> None:
 
 @pytest.mark.L0
 @torch.no_grad()
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+def test_multiview_maskless_geometry_supports_optional_camera_pose_actions(control_attends_sensor: bool) -> None:
+    """A multiview mix may carry rows with and without one camera-pose action control."""
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    plan = _multiview_maskless_geometry_for_test(pack, control_attends_sensor=control_attends_sensor)
+
+    assert plan.num_views == (2, 2, 2)
+    assert plan.token_shapes == ((4, 1, 1), (4, 1, 1), (6, 1, 1))
+    assert plan.items_per_sample == (1, 2)
+    assert plan.is_control == (False, False, True)
+    assert plan.view_axis == (0, 0, 0)
+    assert plan.control_attends_sensor is control_attends_sensor
+    # The action tokens share their target camera's view groups and are left out of the
+    # cross-instant pass, which is the mask's own control rule.
+    assert plan.same_view_offsets is not None
+    assert torch.diff(plan.same_view_offsets).tolist() == [2, 2, 5, 5]
+    assert plan.cross_view_gather is not None
+    assert len(plan.cross_view_gather) == 8
+    assert plan.cross_view_offsets is not None
+    assert torch.diff(plan.cross_view_offsets).tolist() == [2, 2, 2, 2]
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_action_plan_matches_the_flex_mask() -> None:
+    """With control_attends_sensor set, the folds admit exactly the pairs the mask admits."""
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    plan = _multiview_maskless_geometry_for_test(pack)
+    metadata = build_multiview_flex_metadata(
+        gen_seq_len=plan.num_gen_tokens,
+        full_q_offsets=torch.tensor([0, 4, 14], dtype=torch.int32),
+        und_seq_len=0,
+        causal_offsets=None,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=None,
+        control_attends_sensor=True,
+        sensor_mask_items=_multiview_mask_items_for_test(pack),
+        caption_mask_items=None,
+        device=torch.device("cpu"),
+    )
+    q = torch.arange(plan.num_gen_tokens)
+    same = torch.zeros((plan.num_gen_tokens, plan.num_gen_tokens), dtype=torch.bool)
+    assert plan.same_view_offsets is not None
+    same_gather = plan.same_view_gather if plan.same_view_gather is not None else q
+    for start, end in zip(plan.same_view_offsets[:-1], plan.same_view_offsets[1:]):
+        group = same_gather[int(start) : int(end)]
+        same[group[:, None], group] = True
+    cross = torch.zeros_like(same)
+    assert plan.cross_view_gather is not None
+    assert plan.cross_view_offsets is not None
+    for start, end in zip(plan.cross_view_offsets[:-1], plan.cross_view_offsets[1:]):
+        group = plan.cross_view_gather[int(start) : int(end)]
+        cross[group[:, None], group] = True
+    pair_allowed = _multiview_pair_predicate(
+        _query_stream_fields(metadata),
+        _key_stream_fields(metadata),
+        "decomposed",
+        control_attends_sensor=True,
+    )
+    flex_mask = pair_allowed(torch.tensor(0), torch.tensor(0), q[:, None], q[None, :])
+
+    assert torch.equal(same | cross, flex_mask)
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+@pytest.mark.parametrize("window", [(-0.67, 0.67), (-1.0, 0.0), (1.0, 1.0)])
+@pytest.mark.parametrize("include_first_frame", [False, True])
+def test_exact_windowed_cross_view_pass_over_an_action_pack_matches_the_flex_mask(
+    window: tuple[float, float], control_attends_sensor: bool, include_first_frame: bool
+) -> None:
+    """Exact counting over a posed pack keys each cross-view pair the mask admits exactly once.
+
+    The action item is a control, so it takes no part in the windowed cross-view pass as a
+    query or a key: its rows reach sensors only through its camera's same-view group. The
+    first-frame rule, which the mask does not have, adds every other view's frame 0 to a sensor
+    query's keys -- once, even where the window already reaches it.
+    """
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    plan = _multiview_maskless_geometry_for_test(
+        pack,
+        control_attends_sensor=control_attends_sensor,
+        deduplicate_cross_view=True,
+        decomposed_temporal_window_seconds=window,
+        decomposed_temporal_window_includes_first_frame=include_first_frame,
+    )
+    metadata = build_multiview_flex_metadata(
+        gen_seq_len=plan.num_gen_tokens,
+        full_q_offsets=torch.tensor([0, 4, 14], dtype=torch.int32),
+        und_seq_len=0,
+        causal_offsets=None,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+        control_attends_sensor=control_attends_sensor,
+        sensor_mask_items=_multiview_mask_items_for_test(pack),
+        caption_mask_items=None,
+        device=torch.device("cpu"),
+    )
+    q = torch.arange(plan.num_gen_tokens)
+    pair_allowed = _multiview_pair_predicate(
+        _query_stream_fields(metadata),
+        _key_stream_fields(metadata),
+        "decomposed",
+        decomposed_temporal_window_seconds=window,
+        control_attends_sensor=control_attends_sensor,
+    )
+    flex_mask = pair_allowed(torch.tensor(0), torch.tensor(0), q[:, None], q[None, :])
+    same_view = (metadata.sample_id[:, None] == metadata.sample_id[None, :]) & (
+        metadata.view_id[:, None] == metadata.view_id[None, :]
+    )
+
+    cross = torch.zeros_like(flex_mask, dtype=torch.int64)
+    assert plan.cross_view_partitions
+    for partition in plan.cross_view_partitions:
+        for qs, qe, ks, ke in zip(
+            partition.query_offsets[:-1],
+            partition.query_offsets[1:],
+            partition.key_offsets[:-1],
+            partition.key_offsets[1:],
+            strict=True,
+        ):
+            queries = partition.query_indices[int(qs) : int(qe)]
+            keys = partition.key_indices[int(ks) : int(ke)]
+            cross[queries[:, None], keys] += 1
+
+    expected = flex_mask & ~same_view
+    if include_first_frame:
+        sensor = ~metadata.is_control
+        expected |= (
+            (metadata.sample_id[:, None] == metadata.sample_id[None, :])
+            & ~same_view
+            & sensor[:, None]
+            & sensor[None, :]
+            & (metadata.timestamp == 0)[None, :]
+        )
+    assert int(cross.max()) == 1, "Exact counting keys every cross-view pair once."
+    assert torch.equal(cross.bool(), expected)
+    action_rows = torch.arange(8, 14)
+    assert not cross[action_rows].any() and not cross[:, action_rows].any()
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "num_views,with_action,control_attends_sensor,takes_folds",
+    [
+        # One view per item: the folds reduce to attention within the sample, so dense serves it.
+        pytest.param(1, False, False, False, id="single_camera"),
+        pytest.param(1, True, True, False, id="single_camera_action_reads_vision"),
+        # Off the flag an action query may not read its camera, which dense would let it.
+        pytest.param(1, True, False, True, id="single_camera_action_withheld_from_vision"),
+        pytest.param(2, True, True, True, id="multiview"),
+    ],
+)
+def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
+    num_views: int, with_action: bool, control_attends_sensor: bool, takes_folds: bool
+) -> None:
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
+
+    pack = _mask_items_partly_posed_action_pack(num_views=num_views)
+    if not with_action:
+        pack.action = None
+        pack.num_views_per_action_item = None
+        pack.num_action_items_per_sample = None
+        pack.sample_lens = [2 * num_views, 2 * num_views]
+    network = SimpleNamespace(
+        multiview_backend="maskless",
+        natten_parameter_list=None,
+        config=SimpleNamespace(
+            multiview_attention_config=MultiviewAttentionConfig(
+                backend="maskless",
+                mask=MultiviewAttentionMaskConfig(
+                    attention_scope="decomposed",
+                    control_attends_sensor=control_attends_sensor,
+                ),
+            )
+        ),
+    )
+    num_gen_tokens = sum(
+        math.prod(token_shape)
+        for modality in (pack.vision, pack.action)
+        if modality is not None
+        for token_shape in modality.token_shapes
+    )
+    attention_meta = SimpleNamespace(multiview_maskless=None)
+
+    Cosmos3VFMNetwork._prepare_multiview_attention(
+        cast(Cosmos3VFMNetwork, network),
+        pack,
+        cast(SequencePack, {"full_only_seq": torch.zeros(num_gen_tokens, 1)}),
+        cast(SplitInfo, attention_meta),
+    )
+
+    assert (attention_meta.multiview_maskless is not None) is takes_folds
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "control_attends_sensor,takes_folds",
+    [
+        pytest.param(True, False, id="control_reads_target"),
+        # Off the flag the camera control may not read its target, which dense would let it.
+        pytest.param(False, True, id="control_withheld_from_target"),
+    ],
+)
+def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_reads_the_target(
+    control_attends_sensor: bool, takes_folds: bool
+) -> None:
+    """A camera item conditioning the next one is a control even without an action stream."""
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
+
+    pack = _multiview_maskless_pack(
+        sample_lens=[2],
+        vision=ModalityData(
+            tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
+            token_shapes=[(6, 2, 3), (6, 2, 3)],
+            condition_mask=[torch.ones(6), torch.zeros(6)],  # list[[T]]
+            seconds_per_frame=[1.0, 1.0],
+        ),
+        num_vision_items_per_sample=[2],
+        num_views_per_vision_item=[1, 1],
+    )
+    network = SimpleNamespace(
+        multiview_backend="maskless",
+        natten_parameter_list=None,
+        config=SimpleNamespace(
+            multiview_attention_config=MultiviewAttentionConfig(
+                backend="maskless",
+                mask=MultiviewAttentionMaskConfig(
+                    attention_scope="decomposed",
+                    control_attends_sensor=control_attends_sensor,
+                ),
+            )
+        ),
+    )
+    attention_meta = SimpleNamespace(multiview_maskless=None)
+
+    Cosmos3VFMNetwork._prepare_multiview_attention(
+        cast(Cosmos3VFMNetwork, network),
+        pack,
+        cast(SequencePack, {"full_only_seq": torch.zeros(2 * 6 * 2 * 3, 1)}),
+        cast(SplitInfo, attention_meta),
+    )
+
+    assert (attention_meta.multiview_maskless is not None) is takes_folds
+
+
+@pytest.mark.L0
+def test_multiview_maskless_geometry_rejects_action_without_a_target_vision_item() -> None:
+    pack = _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(1, 0))
+    pack.num_vision_items_per_sample = [0, 2]
+
+    with pytest.raises(ValueError, match="action control needs exactly one target vision item"):
+        _multiview_maskless_geometry_for_test(pack)
+
+
+@pytest.mark.L0
+@torch.no_grad()
 def test_multiview_maskless_geometry_refuses_three_items_on_one_stream() -> None:
     """More than one control on a stream is the weighted multi-control layout, not this path."""
     three = ModalityData(
@@ -2214,7 +2759,7 @@ def _case_items(case: dict) -> list[list[SensorMaskItem]]:
 def _build_case_metadata(
     case: dict,
     attention_scope: AttentionScope = "all_views",
-    decomposed_temporal_window_seconds: float | None = None,
+    decomposed_temporal_window_seconds: TemporalWindow | None = None,
     control_attends_sensor: bool = False,
 ) -> tuple[FlexMetadata, int]:
     """Run the builder on a case; returns the metadata and the real token count."""
@@ -2527,6 +3072,59 @@ def test_build_multiview_flex_metadata_reaches_the_control_item_by_view() -> Non
 
 
 @pytest.mark.L0
+def test_build_multiview_flex_metadata_allows_control_items_with_different_frame_counts() -> None:
+    """Same-view control streams can tick on a different grid than target RGB."""
+    items = [
+        [
+            _sensor_item(token_shape=(4, 1, 1), condition_mask=_condition_mask(4, []), num_views=2),
+            _sensor_item(
+                token_shape=(6, 1, 1),
+                condition_mask=_condition_mask(6, list(range(6))),
+                num_views=2,
+                is_control=True,
+                seconds_per_frame=1.0 / 30.0,
+            ),
+        ]
+    ]
+    metadata = _build_metadata(
+        gen_seq_len=10,
+        full_q_offsets=torch.tensor([0, 10], dtype=torch.int32),  # [2]
+        sensor_mask_items=items,
+        device=torch.device("cpu"),
+    )
+
+    assert metadata.seq_len == 10
+
+
+@pytest.mark.L0
+def test_mask_items_build_action_control_attention_by_view() -> None:
+    """Vision tokens attend all vision views, and only same-view action controls."""
+    items = _multiview_mask_items_for_test(_mask_items_action_pack(num_views=2))
+    assert [item.is_control for item in items[0]] == [False, True]
+    assert [item.num_views for item in items[0]] == [2, 2]
+
+    metadata = _build_metadata(
+        gen_seq_len=10,
+        full_q_offsets=torch.tensor([0, 10], dtype=torch.int32),  # [2]
+        sensor_mask_items=items,
+        attention_scope="all_views",
+        device=torch.device("cpu"),
+    )
+    m = _mask_mod_to_dense(metadata)  # [seq_len,seq_len]
+
+    vision_v0f0 = 0
+    vision_v1f0 = 2
+    vision_v1f1 = 3
+    action_v0_step0 = 4
+    action_v1_step0 = 7
+    action_v1_step2 = 9
+    assert m[vision_v1f0, vision_v0f0], "all_views should keep cross-view vision attention"
+    assert m[vision_v1f1, action_v1_step0], "vision should see same-view action control tokens"
+    assert m[vision_v1f0, action_v1_step2], "a view's whole action stream is readable from each of its frames"
+    assert not m[vision_v1f1, action_v0_step0], "vision must not see another view's action controls"
+
+
+@pytest.mark.L0
 def test_build_multiview_flex_metadata_expands_the_control_flags_over_each_items_tokens() -> None:
     """``is_control_per_item`` is per item; the field it drives is per token."""
     metadata, _ = _build_case_metadata(_MULTIVIEW_CASES["transfer_two_items_two_samples"])
@@ -2727,10 +3325,21 @@ def test_joint_camera_lidar_rejects_the_decomposed_scope() -> None:
 
 
 @pytest.mark.L0
-def test_joint_camera_lidar_decomposed_scope_allowed_with_a_temporal_window() -> None:
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "window,past,future",
+    [((0.0, 0.0), False, False), ((-1.0, 0.0), True, False), ((-1.0, 1.0), True, True), ((-0.5, 1.0), False, True)],
+)
+def test_joint_camera_lidar_decomposed_scope_allowed_with_a_temporal_window(
+    window: TemporalWindow, past: bool, future: bool
+) -> None:
     """A temporal window compares real capture time instead, which is defined across sensors."""
     case = _MULTIVIEW_CASES["joint_camera_and_lidar"]
-    metadata, _ = _build_case_metadata(case, attention_scope="decomposed", decomposed_temporal_window_seconds=0.0)
+    metadata, _ = _build_case_metadata(
+        case,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=window,
+    )
     m = _mask_mod_to_dense(metadata)
 
     # Layout (see _MULTIVIEW_CASES["joint_camera_and_lidar"]): camera control 0..5, camera
@@ -2748,7 +3357,8 @@ def test_joint_camera_lidar_decomposed_scope_allowed_with_a_temporal_window() ->
 
     assert m[camera_noisy_frame1, lidar_noisy_frame1], "same real capture time, different views: in reach"
     assert m[lidar_noisy_frame1, camera_noisy_frame1]
-    assert not m[camera_noisy_frame1, lidar_noisy_frame2], "a different instant stays out of a 0s window"
+    assert bool(m[camera_noisy_frame1, lidar_noisy_frame2]) == future
+    assert bool(m[lidar_noisy_frame2, camera_noisy_frame1]) == past
 
 
 @pytest.mark.L0
@@ -2922,6 +3532,37 @@ def _checkpointed_flex_attention(selective: bool) -> torch.nn.Module:
     config = ActivationCheckpointingConfig(mode="selective" if selective else "full")
     wrap = _apply_selective_ac if selective else _apply_full_ac
     return wrap(_FlexAttentionModule(), config)
+
+
+@pytest.mark.L0
+def test_flex_attention_uses_precompiled_callable_outside_dynamo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eager calls keep the precompiled FlexAttention wrapper for fused kernels."""
+    seq_len = _TRITON_BACKEND.full_seq_alignment
+    metadata = _metadata_from_tokens(_make_multiview_tokens(), seq_len=seq_len)
+    block_mask = _eager_block_mask(metadata, _TRITON_BACKEND.block_size)
+
+    def fail_raw(*_args: object, **_kwargs: object) -> torch.Tensor:
+        raise AssertionError("raw torch FlexAttention should only run inside an enclosing Dynamo trace.")
+
+    def fake_compiled(
+        query: torch.Tensor,
+        _key: torch.Tensor,
+        _value: torch.Tensor,
+        **_kwargs: object,
+    ) -> torch.Tensor:
+        return query  # [1,H,S,D]
+
+    monkeypatch.setattr(flex_attention_module, "torch_flex_attention", fail_raw)
+    monkeypatch.setattr(flex_attention_module, "_COMPILED_FLEX_ATTENTION", fake_compiled)
+
+    q = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+    k = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+    v = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+
+    out = flex_attention(q, k, v, block_mask, _TRITON_BACKEND)
+
+    assert isinstance(out, torch.Tensor)
+    torch.testing.assert_close(out, q)
 
 
 @pytest.mark.L0
@@ -3131,6 +3772,8 @@ def test_flash_backend_forward_matches_dense_reference() -> None:
 @pytest.mark.parametrize("compiled_checkpoint", [False, True])
 @pytest.mark.parametrize("selective_checkpoint", [False, True])
 @pytest.mark.parametrize("kv_heads", [1, 4])
+# Cold FA4 forward/backward compilation approaches the default 60s limit on ARM runners.
+@pytest.mark.timeout(180)
 def test_flash_backend_gradients_match_dense_reference(
     compiled_checkpoint: bool, selective_checkpoint: bool, kv_heads: int
 ) -> None:

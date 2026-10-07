@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import torch
+
+from cosmos_framework.model.generator.mot.replica_partition import ReplicaPartitioner, WorkUnit, run_units_locally
+from cosmos_framework.utils.generator.host_threads import host_threads_per_local_rank, torch_host_threads
 
 
 def safe_multiview_camera_name(camera_key: str, view_index: int) -> str:
@@ -118,6 +123,110 @@ def iter_multiview_video_by_view(
         yield video_cthw[:, frame_start:frame_end]  # [C,F,H,W]
 
 
+def resident_host_tensor(shape: Sequence[int], dtype: torch.dtype) -> torch.Tensor:
+    """A CPU tensor whose pages are already resident, for large device-to-host copies.
+
+    A copy into freshly allocated pageable memory faults its pages in one at a time: on a GB200
+    node, assembling 11 decoded 297x480x832 fp32 views into a fresh buffer took ~2.4 s, and
+    ~0.2 s once this rank's host threads had touched the pages first (a ~0.07 s ``zero_``).
+    """
+    tensor = torch.empty(tuple(shape), dtype=dtype, device="cpu")  # [*shape]
+    with torch_host_threads(host_threads_per_local_rank()):
+        tensor.zero_()  # [*shape]
+    return tensor
+
+
+@dataclass
+class MultiviewDecode:
+    """Per-camera decode units and their ordered assembly, shared by camera and joint generation.
+
+    The caller chooses local execution, broadcast, or collection on one rank, and can schedule
+    additional sensor decodes beside ``units``. ``result()`` is None on ranks receiving no views.
+    """
+
+    decode: Callable[[torch.Tensor], torch.Tensor]
+    latent: torch.Tensor  # [B,C,V*T_latent,H,W] or [C,V*T_latent,H,W]
+    sample_n_views: int
+    num_video_frames_per_view: int
+    assemble_on_cpu: bool = False
+    _temporal_dim: int = field(init=False)
+    _latent_frames_per_view: int = field(init=False)
+    _decoded_views: list[torch.Tensor] = field(default_factory=list, init=False)  # each [B,C,F,H,W] or [C,F,H,W]
+    _decoded_output: torch.Tensor | None = field(default=None, init=False)  # [B,C,V*F,H,W] or [C,V*F,H,W]
+
+    def __post_init__(self) -> None:
+        if self.latent.ndim not in (4, 5):
+            raise ValueError(
+                f"Multiview latents must have shape [B,C,T,H,W] or [C,T,H,W], got shape {tuple(self.latent.shape)}."
+            )
+        self._temporal_dim = self.latent.ndim - 3
+        num_latent_frames = int(self.latent.shape[self._temporal_dim])
+        if num_latent_frames % self.sample_n_views != 0:
+            raise ValueError(
+                "Multiview latent length must be divisible by sample_n_views: "
+                f"got T={num_latent_frames}, sample_n_views={self.sample_n_views}."
+            )
+        self._latent_frames_per_view = num_latent_frames // self.sample_n_views
+
+    @property
+    def units(self) -> list[WorkUnit]:
+        return [WorkUnit(run=partial(self._decode_view, index)) for index in range(self.sample_n_views)]
+
+    def _decode_view(self, view_idx: int) -> torch.Tensor:  # returns [B,C,F,H,W] or [C,F,H,W]
+        view_latent = self.latent.narrow(  # [B,C,T_latent,H,W] or [C,T_latent,H,W]
+            self._temporal_dim,
+            view_idx * self._latent_frames_per_view,
+            self._latent_frames_per_view,
+        )
+        decoded_view = self.decode(view_latent)  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
+        # Checked where the view is decoded, so a bad clip fails its unit, which every rank of
+        # the replica hears about, rather than only the output rank's assembly.
+        if decoded_view.ndim != self.latent.ndim:
+            raise ValueError(
+                "Decoded multiview tensors must preserve the latent rank: "
+                f"got latent shape {tuple(view_latent.shape)} and decoded shape {tuple(decoded_view.shape)}."
+            )
+        if decoded_view.shape[self._temporal_dim] != self.num_video_frames_per_view:
+            raise ValueError(
+                "Decoded camera clip length must match num_video_frames_per_view: "
+                f"got T={decoded_view.shape[self._temporal_dim]}, expected {self.num_video_frames_per_view}."
+            )
+        return decoded_view
+
+    def collect(
+        self,
+        view_idx: int,
+        decoded_view: torch.Tensor,  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
+    ) -> None:
+        if self.assemble_on_cpu:
+            if self._decoded_output is None:
+                output_shape = list(decoded_view.shape)
+                output_shape[self._temporal_dim] = self.sample_n_views * self.num_video_frames_per_view
+                self._decoded_output = resident_host_tensor(
+                    output_shape, decoded_view.dtype
+                )  # [B,C,V*F,H,W] or [C,V*F,H,W]
+            output_view = self._decoded_output.narrow(  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
+                self._temporal_dim,
+                view_idx * self.num_video_frames_per_view,
+                self.num_video_frames_per_view,
+            )
+            # One copy per (batch, channel) plane: each is a single contiguous block of the camera-major
+            # output, so it lands with one device-to-host transfer and no host staging tensor.
+            source_batches = decoded_view.unsqueeze(0) if decoded_view.ndim == 4 else decoded_view  # [B,C,F,H,W]
+            target_batches = output_view.unsqueeze(0) if output_view.ndim == 4 else output_view  # [B,C,F,H,W]
+            for target_batch, source_batch in zip(target_batches, source_batches, strict=True):  # each [C,F,H,W]
+                for target_plane, source_plane in zip(target_batch, source_batch, strict=True):  # each [F,H,W]
+                    target_plane.copy_(source_plane)  # [F,H,W]
+            del decoded_view
+        else:
+            self._decoded_views.append(decoded_view)
+
+    def result(self) -> torch.Tensor | None:  # returns [B,C,V*F,H,W] or [C,V*F,H,W] or None
+        if self._decoded_views:
+            return torch.cat(self._decoded_views, dim=self._temporal_dim)  # [B,C,V*F,H,W] or [C,V*F,H,W]
+        return self._decoded_output
+
+
 def decode_multiview_latent_per_view(
     decode: Callable[[torch.Tensor], torch.Tensor],
     latent: torch.Tensor,
@@ -125,64 +234,49 @@ def decode_multiview_latent_per_view(
     num_video_frames_per_view: int,
     *,
     assemble_on_cpu: bool = False,
+    partitioner: ReplicaPartitioner | None = None,
 ) -> torch.Tensor:  # latent: [B,C,V*T_latent,H,W] or [C,V*T_latent,H,W], returns same rank with T=V*F
-    """Decode camera-major latent clips independently and assemble their pixels."""
-    if latent.ndim not in (4, 5):
-        raise ValueError(
-            f"Multiview latents must have shape [B,C,T,H,W] or [C,T,H,W], got shape {tuple(latent.shape)}."
-        )
+    """Decode camera-major views locally or once across a replica, returning all views on every rank.
 
-    temporal_dim = latent.ndim - 3
-    num_latent_frames = int(latent.shape[temporal_dim])
-    if num_latent_frames % sample_n_views != 0:
-        raise ValueError(
-            "Multiview latent length must be divisible by sample_n_views: "
-            f"got T={num_latent_frames}, sample_n_views={sample_n_views}."
-        )
+    A partitioner requires every replica rank to call with the same views. Results are broadcast
+    and assembled one view at a time so caption continuations retain their conditioning frames.
+    """
+    camera = MultiviewDecode(decode, latent, sample_n_views, num_video_frames_per_view, assemble_on_cpu)
 
-    latent_frames_per_view = num_latent_frames // sample_n_views
-    decoded_views: list[torch.Tensor] = []
-    decoded_output: torch.Tensor | None = None
-    for view_idx in range(sample_n_views):
-        view_latent = latent.narrow(  # [B,C,T_latent,H,W] or [C,T_latent,H,W]
-            temporal_dim,
-            view_idx * latent_frames_per_view,
-            latent_frames_per_view,
-        )
-        decoded_view = decode(view_latent)  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
-        if decoded_view.ndim != latent.ndim:
-            raise ValueError(
-                "Decoded multiview tensors must preserve the latent rank: "
-                f"got latent shape {tuple(view_latent.shape)} and decoded shape {tuple(decoded_view.shape)}."
-            )
-        if decoded_view.shape[temporal_dim] != num_video_frames_per_view:
-            raise ValueError(
-                "Decoded camera clip length must match num_video_frames_per_view: "
-                f"got T={decoded_view.shape[temporal_dim]}, expected {num_video_frames_per_view}."
-            )
-        if assemble_on_cpu:
-            if decoded_output is None:
-                output_shape = list(decoded_view.shape)
-                output_shape[temporal_dim] = sample_n_views * num_video_frames_per_view
-                decoded_output = torch.empty(
-                    output_shape,
-                    dtype=decoded_view.dtype,
-                    device="cpu",
-                )  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
-            output_view = decoded_output.narrow(  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
-                temporal_dim,
-                view_idx * num_video_frames_per_view,
-                num_video_frames_per_view,
-            )
-            output_view.copy_(decoded_view)  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
-            del decoded_view
-        else:
-            decoded_views.append(decoded_view)
+    if partitioner is None:
+        for index, unit in enumerate(camera.units):
+            camera.collect(index, unit.run())
+    else:
+        partitioner.run(camera.units, on_collected=camera.collect, label="multiview decode")
+    output = camera.result()  # [B,C,V*F,H,W] or [C,V*F,H,W]
+    assert output is not None, "every rank must receive every camera view"
+    return output
 
-    if decoded_output is not None:
-        return decoded_output
 
-    return torch.cat(decoded_views, dim=temporal_dim)  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
+def load_multiview_media_units(
+    units: list[WorkUnit],
+    *,
+    partitioner: ReplicaPartitioner | None = None,
+    keep_on_host: bool = True,
+    label: str = "camera media load",
+) -> list[torch.Tensor]:  # each unit returns [3,T,H,W]
+    """Load each camera clip once across a replica, delivering ordered pixels to every rank.
+
+    Every replica rank must submit the same units. Clips are assigned round-robin in unit order.
+    Broadcast clips arrive on the replica's communication device; ``keep_on_host`` returns them
+    to CPU for callers that assemble raw camera pixels there. Without a partitioner, load locally.
+    """
+    clips: list[torch.Tensor | None] = [None] * len(units)
+
+    def keep_clip(index: int, clip: torch.Tensor) -> None:  # clip: [3,T,H,W]
+        clips[index] = clip.cpu() if keep_on_host else clip  # [3,T,H,W]
+
+    if partitioner is None:
+        run_units_locally(units, keep_clip)
+    else:
+        partitioner.run(units, on_collected=keep_clip, label=label)
+    assert all(clip is not None for clip in clips), "every rank must receive every camera clip"
+    return cast(list[torch.Tensor], clips)
 
 
 def load_multiview_media_pixels(
@@ -206,7 +300,8 @@ def load_multiview_media_pixels(
             max_frames=max_frames,
             keep=cast(Literal["first", "last"], keep),
         )  # [3,T,H,W]
-        frames_uint8 = ((frames_normalized + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)  # [3,T,H,W]
+        with torch_host_threads(host_threads_per_local_rank()):
+            frames_uint8 = ((frames_normalized + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)  # [3,T,H,W]
         return frames_uint8
     if suffix not in image_extensions:
         raise ValueError(f"Unsupported multiview media extension: {path.suffix!r} ({path}).")
@@ -221,7 +316,9 @@ def pad_multiview_view_video(
     height: int,
     width: int,
 ) -> torch.Tensor:  # frames: [3,T,H,W] or None, returns [3,F,H,W]
-    video = torch.full((3, num_frames, height, width), 128, dtype=torch.uint8)  # [3,F,H,W]
+    # Pad where the frames already are, so GPU-resident frames never round-trip through the host.
+    device = frames.device if frames is not None else torch.device("cpu")
+    video = torch.full((3, num_frames, height, width), 128, dtype=torch.uint8, device=device)  # [3,F,H,W]
     if frames is None:
         return video
     if (

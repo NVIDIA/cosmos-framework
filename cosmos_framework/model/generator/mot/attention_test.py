@@ -784,6 +784,74 @@ def test_multi_control_range_annotation_rejects_inconsistent_token_count() -> No
         _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=9)
 
 
+@pytest.mark.L0
+@torch.no_grad()
+def test_multi_control_dynamic_compile_does_not_read_token_counts_from_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the per-control slices free of data-dependent device-scalar reads.
+
+    The real Blackwell failure occurs later in cuDNN's Inductor lowering, when the unbacked
+    sequence-length symint from ``int(offsets[-1])`` reaches a stride comparison. Compiling the
+    whole path with a pure-Torch attention stub is enough to catch the source of that symint on
+    CPU: Dynamo rejects the device-scalar conversion before backend lowering. The pack already
+    carries the same counts as host-side ints, which is what this test requires the path to use.
+    """
+    text_tokens = 3
+    control_tokens = (2, 3)
+    noisy_tokens = 4
+    full_tokens = sum(control_tokens) + noisy_tokens
+    total_tokens = text_tokens + full_tokens
+    und_indexes = torch.arange(text_tokens, dtype=torch.long)
+    gen_indexes = torch.arange(text_tokens, total_tokens, dtype=torch.long)
+
+    def make_pack(values: torch.Tensor) -> SequencePack:
+        return sequence_pack_from_packed_sequence(
+            packed_sequence=values,
+            attn_modes=["causal", "full"],
+            split_lens=[text_tokens, full_tokens],
+            sample_lens=[total_tokens],
+            packed_und_token_indexes=und_indexes,
+            packed_gen_token_indexes=gen_indexes,
+        )
+
+    query = make_pack(torch.randn(total_tokens, 4, 8))
+    key = make_pack(torch.randn(total_tokens, 2, 8))
+    value = make_pack(torch.randn(total_tokens, 2, 8))
+    split_info = attention.SplitInfo(
+        split_lens=[text_tokens, full_tokens],
+        attn_modes=["causal", "full"],
+        sample_lens=[total_tokens],
+        actual_len=total_tokens,
+    )
+    first_control_end = control_tokens[0]
+    controls_end = sum(control_tokens)
+    split_info.control_stream_token_ranges = [(0, first_control_end), (first_control_end, controls_end)]
+    split_info.noisy_token_range = (controls_end, full_tokens)
+    split_info.control_weights = [0.4, 0.6]
+
+    def fake_attention(
+        query_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        del key_states, kwargs
+        return query_states.new_zeros((*query_states.shape[:-1], value_states.shape[-1]))
+
+    monkeypatch.setattr(attention, "attention", fake_attention)
+
+    def run(query_pack: SequencePack, key_pack: SequencePack, value_pack: SequencePack) -> torch.Tensor:
+        result = attention.multi_control_two_way_attention(query_pack, key_pack, value_pack, split_info)
+        return result["full_only_seq"]
+
+    torch.compiler.reset()
+    compiled = torch.compile(run, fullgraph=True, dynamic=True, backend="eager")
+    output = compiled(query, key, value)
+
+    assert output.shape == (query["full_only_seq"].shape[0], 4 * 8)
+
+
 # ── two_way_attention on the multiview FlexAttention mask ────────────────────
 # The generator's full attention has two implementations of "every GEN token attends to
 # its whole sample": the dense varlen kernel, and a single FlexAttention call over the
@@ -1101,19 +1169,26 @@ def _flex_lowering_or_skip(backend: FlexBackend) -> Iterator[None]:
 # The level is per parametrization rather than on the test, because the two settings cost very
 # different amounts. The static case compiles a graph per shape -- seven Inductor compilations,
 # against the two the dynamic case shares across the whole sweep -- which does not fit the 60s
-# per-test timeout the L0 job runs with. The nightly L1 job allows 600s. Only the
-# dynamic setting is the training default, so it is the one worth paying for on every merge
-# request.
+# per-test timeout the L0 job runs with. The nightly L1 job allows 600s. The Flash
+# dynamic case also needs bounded headroom for cold CuTeDSL compilation on ARM runners.
+# Only the dynamic setting is the training default, so it is the one worth paying for on
+# every merge request.
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="NATTEN is not available, or too old.")
 @pytest.mark.parametrize(
-    "compile_dynamic",
+    ("backend_preference", "compile_dynamic"),
     [
-        pytest.param(True, id="compile-dynamic", marks=pytest.mark.L0),
-        pytest.param(False, id="compile-static", marks=pytest.mark.L1),
+        pytest.param("flex_triton", True, id="flex_triton-compile-dynamic", marks=pytest.mark.L0),
+        pytest.param("flex_triton", False, id="flex_triton-compile-static", marks=pytest.mark.L1),
+        pytest.param(
+            "flex_flash",
+            True,
+            id="flex_flash-compile-dynamic",
+            marks=[pytest.mark.L0, pytest.mark.timeout(180)],
+        ),
+        pytest.param("flex_flash", False, id="flex_flash-compile-static", marks=pytest.mark.L1),
     ],
 )
-@pytest.mark.parametrize("backend_preference", ["flex_triton", "flex_flash"])
 def test_two_way_attention_flex_matches_dense_across_batch_shapes(
     backend_preference: str, compile_dynamic: bool
 ) -> None:
@@ -2007,11 +2082,200 @@ def _plan(
     device: torch.device,
     padded: int | None = None,
     attention_scope: str = "decomposed",
-):
+    deduplicate_cross_view: bool = False,
+    temporal_window_seconds: tuple[float, float] | None = None,
+) -> multiview_maskless_attention.MultiviewMasklessPlan:
     """The single-sample plan."""
     return multiview_maskless_attention.build_multiview_maskless_plan(
-        [num_views], [token_shape], device=device, padded_gen_tokens=padded, attention_scope=attention_scope
+        [num_views],
+        [token_shape],
+        device=device,
+        padded_gen_tokens=padded,
+        attention_scope=attention_scope,
+        deduplicate_cross_view=deduplicate_cross_view,
+        decomposed_temporal_window_seconds=temporal_window_seconds,
+        seconds_per_frame=[2 / 15] if temporal_window_seconds is not None else None,
     )
+
+
+@pytest.mark.L0
+def test_window_plan_separates_control_and_sensor_tokens() -> None:
+    # This test verifies the plan-building side of the four directional
+    # same-view attention edges. Control and sensor tokens for the same camera
+    # view belong to one logical view group, but windowed attention must keep
+    # their packed positions in separate gathers so each edge can independently
+    # select its query and key populations:
+    #
+    #   Sensor queries  -> Sensor keys
+    #   Sensor queries  -> Control keys
+    #   Control queries -> Control keys
+    #   Control queries -> Sensor keys
+    #
+    # It does not run an attention kernel or validate window numerics; it checks
+    # that the plan supplies the correct token routing to those kernels.
+    #
+    # One sample contains a control item followed by its RGB target. Each item has
+    # two views. ``latent_t=6`` therefore means three frames per view, and the
+    # ``1 x 2`` spatial grid contributes two tokens per frame:
+    #
+    #   2 views x 3 frames x 2 spatial tokens = 12 tokens per item.
+    plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        num_views=[2, 2],  # Control and RGB each contain two camera views.
+        token_shapes=[
+            (6, 1, 2),  # Control: (views * frames, height, width).
+            (6, 1, 2),  # RGB: the same layout as its control item.
+        ],
+        device=torch.device("cpu"),
+        items_per_sample=[2],  # The two items belong to one sample.
+        is_control=[True, False],  # The control item precedes its RGB target.
+        control_attends_sensor=True,
+        sensor_to_sensor_window=(-8, 8),  # Enable window-plan construction.
+    )
+
+    # Neighborhood attention receives one view as ``[frames, height, width]``.
+    assert plan.neighborhood_layout == (3, 1, 2)
+    assert plan.control_gather is not None
+    assert plan.sensor_gather is not None
+    # The pack stores the control item first and the RGB item second. The plan
+    # must keep those query/key populations separate so the four directional
+    # sensor/control attention edges select the correct tokens.
+    assert plan.control_gather.tolist() == list(range(12))
+    assert plan.sensor_gather.tolist() == list(range(12, 24))
+
+
+@pytest.mark.L0
+def test_nonwindowed_plan_allows_different_control_and_sensor_layouts() -> None:
+    # A same-view group may contain variable-length control and sensor token runs.
+    # Verify that differing frame and spatial layouts are accepted and that no
+    # optional window-plan fields are populated.
+    plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        num_views=[2, 2],
+        token_shapes=[
+            (4, 1, 2),  # Control: 2 views x 2 frames x 2 spatial tokens.
+            (6, 1, 1),  # RGB: 2 views x 3 frames x 1 spatial token.
+        ],
+        device=torch.device("cpu"),
+        items_per_sample=[2],
+        is_control=[True, False],
+        control_attends_sensor=True,
+    )
+
+    assert plan.neighborhood_layout is None
+    assert plan.control_gather is None
+    assert plan.sensor_gather is None
+
+
+@pytest.mark.L0
+def test_window_plan_rejects_different_control_and_sensor_layouts() -> None:
+    # Neighborhood attention reshapes all four directional edges using one
+    # shared per-view (frames, height, width) layout. The paired control and sensor
+    # items below describe different layouts, so plan construction must reject
+    # them before building the neighborhood gathers.
+    with pytest.raises(ValueError, match="needs matching control/sensor layouts"):
+        multiview_maskless_attention.build_multiview_maskless_plan(
+            num_views=[2, 2],
+            token_shapes=[
+                (4, 1, 2),  # Control: per-view layout (2 frames, 1 height, 2 width).
+                (6, 1, 1),  # RGB: per-view layout (3 frames, 1 height, 1 width).
+            ],
+            device=torch.device("cpu"),
+            items_per_sample=[2],
+            is_control=[True, False],
+            control_attends_sensor=True,
+            sensor_to_sensor_window=(-1, 1),  # Enable neighborhood-plan construction.
+        )
+
+
+@pytest.mark.L0
+def test_window_plan_supports_sensor_to_sensor_window_without_control() -> None:
+    # One sensor item has two views, three frames per view, and two spatial tokens
+    # per frame. With no control item, all 12 tokens belong to the sensor gather.
+    plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        num_views=[2],  # One sensor item containing two views.
+        token_shapes=[(6, 1, 2)],  # (2 views * 3 frames, 1 height, 2 width).
+        device=torch.device("cpu"),
+        sensor_to_sensor_window=(-8, 8),
+    )
+
+    assert plan.neighborhood_layout == (3, 1, 2)
+    assert plan.sensor_gather is not None
+    assert plan.sensor_gather.tolist() == list(range(12))
+    assert plan.control_gather is None
+
+
+@pytest.mark.L0
+def test_window_plan_rejects_control_edges_without_control() -> None:
+    # A control edge is undefined when the batch contains only sensor queries and
+    # keys. Sensor-to-sensor windowing remains valid for the same geometry.
+    with pytest.raises(ValueError, match="without control items supports only sensor_to_sensor_window"):
+        multiview_maskless_attention.build_multiview_maskless_plan(
+            num_views=[2],  # One sensor item containing two views.
+            token_shapes=[(6, 1, 2)],  # (2 views * 3 frames, 1 height, 2 width).
+            device=torch.device("cpu"),
+            sensor_to_control_window=(-8, 8),
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="NATTEN neighborhood attention requires CUDA")
+@pytest.mark.parametrize("window", [(-1, 1), (-2, 0)])
+def test_same_view_neighborhood_attention_matches_frame_window_boundary_policy(window: tuple[int, int]) -> None:
+    # This is a kernel-level test of the NATTEN-backed neighborhood attention
+    # helper. It verifies that an inclusive temporal window is translated into
+    # the expected key set for every query frame:
+    #
+    #   (-1, 1) uses three centered frames, shifted inward at either boundary.
+    #   (-2, 0) reads the current frame and up to two preceding frames.
+    #
+    # NATTEN preserves the width of a centered window by shifting it inward at
+    # either sequence boundary. A causal window instead clips at the beginning.
+    # The explicit reference below models those boundary policies and computes
+    # ordinary scaled dot-product attention over the selected key frames.
+    device = torch.device("cuda")
+    # One view has five frames, a 2 x 2 spatial grid, one query head, and
+    # 64 values per head. Thus each Q/K/V tensor contains 20 tokens.
+    frames, height, width, heads, head_dim = 5, 2, 2, 1, 64
+    spatial = height * width
+    generator = torch.Generator(device=device).manual_seed(11)
+    q = torch.randn(
+        frames * spatial, heads, head_dim, device=device, dtype=torch.bfloat16, generator=generator
+    )  # [N,H,D]
+    k = torch.randn_like(q)  # [N,H,D]
+    v = torch.randn_like(q)  # [N,H,D]
+    # Identity gathers isolate the temporal-window calculation from any token
+    # reordering performed by a multi-item attention plan.
+    gather = torch.arange(frames * spatial, device=device)  # [N]
+
+    actual, _ = multiview_maskless_attention._same_view_neighborhood_attention(
+        q,
+        k,
+        v,
+        query_gather=gather,
+        key_gather=gather,
+        layout=(frames, height, width),  # NATTEN layout: (time, height, width).
+        window=window,  # Centered fixed-width or causal temporal bounds.
+    )  # [1,N,H,D]
+
+    reference_frames: list[torch.Tensor] = []
+    scale = head_dim**-0.5
+    for query_frame in range(frames):
+        if window[1] == -window[0]:
+            radius = window[1]
+            center = min(max(query_frame, radius), frames - radius - 1)
+            key_start, key_stop = center - radius, center + radius + 1
+        else:
+            key_start = max(0, query_frame + window[0])
+            key_stop = min(frames, query_frame + window[1] + 1)
+        q_frame = q[query_frame * spatial : (query_frame + 1) * spatial].float()  # [S,H,D]
+        k_window = k[key_start * spatial : key_stop * spatial].float()  # [K,H,D]
+        v_window = v[key_start * spatial : key_stop * spatial].float()  # [K,H,D]
+        scores = torch.einsum("shd,khd->hsk", q_frame, k_window) * scale  # [H,S,K]
+        weights = scores.softmax(dim=-1)  # [H,S,K]
+        frame_out = torch.einsum("hsk,khd->shd", weights, v_window)  # [S,H,D]
+        reference_frames.append(frame_out)
+    reference = torch.cat(reference_frames).unsqueeze(0)  # [1,N,H,D]
+
+    torch.testing.assert_close(actual.float(), reference, atol=3e-2, rtol=3e-2)
 
 
 def _multiview_maskless_reference(
@@ -2122,6 +2386,55 @@ def test_multiview_maskless_attention_matches_a_dense_reference(num_q_heads: int
     # The pack was padded to the backend's block, and those rows belong to no view: the passes
     # trim them, so what lands there is the zero the re-pad writes rather than a stale row.
     assert torch.equal(gen_out[num_gen_tokens:], torch.zeros_like(gen_out[num_gen_tokens:]))
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+def test_single_view_maskless_attention_matches_dense_forward_and_backward() -> None:
+    """One view makes the folds exactly ordinary per-sample two-way attention.
+
+    This pins the equivalence the network's single-camera bypass rests on, rather than only
+    its metadata decision. Forward and every seeded GEN gradient are compared across
+    independent leaves, including the normalised UND keys used by the GEN-to-caption half.
+    """
+    device = torch.device("cuda")
+    backend = resolve_flex_backend(device, "flex_triton")
+    shape = _MultiviewShape(
+        und_lens=(5, 3),
+        token_shapes=((4, 2, 3), (3, 2, 2)),
+        num_views=(1, 1),
+    )
+
+    def run(*, dense: bool) -> tuple[torch.Tensor, torch.Tensor]:
+        torch.manual_seed(17)
+        qkv = torch.randn(3, shape.real_len, 4, 64, device=device, dtype=torch.bfloat16, requires_grad=True)
+        packs = cast(
+            tuple[SequencePack, SequencePack, SequencePack],
+            tuple(_multiview_pack(qkv[index], shape, backend) for index in range(3)),
+        )
+        if dense:
+            output = attention.two_way_attention(*packs)
+        else:
+            plan = multiview_maskless_attention.build_multiview_maskless_plan(
+                shape.num_views,
+                shape.token_shapes,
+                device=device,
+                items_per_sample=(1, 1),
+                padded_gen_tokens=_padded_gen_tokens(packs[0]),
+            )
+            output = multiview_attention(*packs, maskless_plan=plan)
+        gen_output = get_gen_seq(output)[: sum(shape.gen_lens)]
+        torch.manual_seed(19)
+        gen_output.backward(torch.randn_like(gen_output))
+        assert qkv.grad is not None
+        return gen_output.detach(), qkv.grad.detach()
+
+    folded_output, folded_grad = run(dense=False)
+    dense_output, dense_grad = run(dense=True)
+    torch.testing.assert_close(folded_output, dense_output, atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(folded_grad, dense_grad, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.L0
@@ -3037,7 +3350,12 @@ def test_marking_costs_less_memory_than_keeping_every_maskless_fold() -> None:
 @pytest.mark.GPU
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
-def test_marking_a_maskless_fold_does_not_change_its_gradients() -> None:
+@pytest.mark.parametrize(
+    ("deduplicate_cross_view", "window"), [(False, None), (True, None), (True, (-0.4, 0.0)), (False, (-0.4, 0.0))]
+)
+def test_marking_a_maskless_fold_does_not_change_its_gradients(
+    deduplicate_cross_view: bool, window: tuple[float, float] | None
+) -> None:
     """Marking decides what is kept, never what is computed.
 
     Not implied by the unmarked checkpointing test above: the mark clones K before the
@@ -3081,7 +3399,14 @@ def test_marking_a_maskless_fold_does_not_change_its_gradients() -> None:
             for key in ("causal_seq", "full_only_seq"):
                 pack[key].requires_grad_(True)
                 leaves[f"{name}.{key}"] = pack[key]
-        plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+        plan = _plan(
+            num_views,
+            token_shape,
+            device,
+            _padded_gen_tokens(batch.packs[0]),
+            deduplicate_cross_view=deduplicate_cross_view,
+            temporal_window_seconds=window,
+        )
         num_gen_tokens = batch.gen_q.shape[0]
 
         class _Layer(torch.nn.Module):
@@ -3716,6 +4041,123 @@ def test_multiview_maskless_plan_refuses_a_control_item_without_the_control_rule
         multiview_maskless_attention.build_multiview_maskless_plan(
             [1, 1], [(2, 1, 1), (2, 1, 1)], device=torch.device("cpu"), items_per_sample=[2], is_control=[True, False]
         )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
+@pytest.mark.parametrize("cross_view_window", [None, (-0.4, 0.4)])
+def test_full_neighborhood_split_matches_combined_same_view(
+    control_attends_sensor: bool,
+    deduplicate_cross_view: bool,
+    cross_view_window: tuple[float, float] | None,
+) -> None:
+    """Full-window splits preserve outputs and gradients under either control/counting rule."""
+    device = torch.device("cuda")
+    # One control item and one RGB item each contain two views, three frames per
+    # view, and a 2 x 2 spatial grid: 24 tokens per item and 48 GEN tokens total.
+    num_views, frames, height, width = 2, 3, 2, 2
+    tokens_per_item = num_views * frames * height * width
+    gen_len, und_len = 2 * tokens_per_item, 5
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    torch.manual_seed(17)
+    qkv = [
+        torch.randn(shape.real_len, heads, head_dim, device=device, dtype=torch.bfloat16, requires_grad=True)  # [N,H,D]
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan_kwargs = dict(
+        num_views=[num_views, num_views],  # Control and RGB each contain both views.
+        token_shapes=[
+            (num_views * frames, height, width),  # Control: (latent_t, height, width).
+            (num_views * frames, height, width),  # RGB: identical token geometry.
+        ],
+        device=device,
+        items_per_sample=[2],  # Both items belong to the same sample.
+        is_control=[True, False],  # Control first, RGB target second.
+        control_attends_sensor=control_attends_sensor,
+        deduplicate_cross_view=deduplicate_cross_view,
+        decomposed_temporal_window_seconds=cross_view_window,
+        seconds_per_frame=[0.1, 0.1],
+        view_axis=[0, 0],  # Both items use the same camera-view numbering.
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+    )
+    # No windows uses the original combined same-view pass. Supplying one full
+    # radius activates the four-edge implementation without removing any keys.
+    combined_plan = multiview_maskless_attention.build_multiview_maskless_plan(**plan_kwargs)
+    split_plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        **plan_kwargs,
+        sensor_to_control_window=(-4, 4),  # Covers all three frames, including boundaries.
+    )
+
+    combined_pack = multiview_attention(*packs, maskless_plan=combined_plan)
+    split_pack = multiview_attention(*packs, maskless_plan=split_plan)
+    combined = get_gen_seq(combined_pack)[:gen_len]  # [N_gen,H*D]
+    split = get_gen_seq(split_pack)[:gen_len]  # [N_gen,H*D]
+
+    torch.testing.assert_close(split.float(), combined.float(), atol=3e-2, rtol=3e-2)
+
+    # The split introduces nested merges and a disjoint-query bridge. Compare Q/K/V
+    # gradients as well as outputs so storage-patching failures cannot pass unnoticed.
+    seed_grad = torch.randn_like(combined)  # [N_gen,H*D]
+    combined_grads = torch.autograd.grad(combined, qkv, seed_grad, retain_graph=True)  # each [N,H,D]
+    split_grads = torch.autograd.grad(split, qkv, seed_grad)  # each [N,H,D]
+    for actual, expected in zip(split_grads, combined_grads):
+        torch.testing.assert_close(actual.float(), expected.float(), atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_full_sensor_to_sensor_window_matches_combined_same_view_without_control() -> None:
+    """A sensor-only full-radius window must preserve the dense same-view result."""
+    device = torch.device("cuda")
+    # One RGB item contains two views, three frames per view, and a 2 x 2
+    # spatial grid: 24 GEN tokens in total and no control-token population.
+    num_views, frames, height, width = 2, 3, 2, 2
+    gen_len, und_len = num_views * frames * height * width, 5
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    torch.manual_seed(19)
+    qkv = [
+        torch.randn(shape.real_len, heads, head_dim, device=device, dtype=torch.bfloat16)  # [N,H,D]
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan_kwargs = dict(
+        num_views=[num_views],  # The RGB item contains both views.
+        token_shapes=[(num_views * frames, height, width)],  # (latent_t, height, width).
+        device=device,
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+    )
+    # The configured radius covers every frame and therefore changes only the
+    # implementation of same-view attention, not its key set.
+    combined_plan = multiview_maskless_attention.build_multiview_maskless_plan(**plan_kwargs)
+    windowed_plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        **plan_kwargs,
+        sensor_to_sensor_window=(-4, 4),
+    )
+
+    combined_pack = multiview_attention(*packs, maskless_plan=combined_plan)
+    windowed_pack = multiview_attention(*packs, maskless_plan=windowed_plan)
+    combined = get_gen_seq(combined_pack)[:gen_len]  # [N_gen,H*D]
+    windowed = get_gen_seq(windowed_pack)[:gen_len]  # [N_gen,H*D]
+
+    torch.testing.assert_close(windowed.float(), combined.float(), atol=3e-2, rtol=3e-2)
 
 
 @pytest.mark.L0

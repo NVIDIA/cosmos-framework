@@ -39,6 +39,10 @@ from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_a
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
+from cosmos_framework.utils.generator.activation_offloading import (
+    checkpoint_with_flattened_inputs,
+    offload_checkpoint_inputs,
+)
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
 
@@ -179,6 +183,7 @@ def _apply_selective_ac(
 
     return ptd_checkpoint_wrapper(
         module,
+        checkpoint_fn=checkpoint_with_flattened_inputs if ac.offload_to_cpu else None,
         context_fn=lambda: create_selective_checkpoint_contexts(
             make_selective_ac_policy(save_ops_regex, save_only_marked_ops=ac.save_only_marked_ops)
         ),
@@ -194,6 +199,7 @@ def _apply_full_ac(
     """Apply full activation checkpointing to ``module``."""
     return ptd_checkpoint_wrapper(
         module,
+        checkpoint_fn=checkpoint_with_flattened_inputs if config.offload_to_cpu else None,
         preserve_rng_state=config.preserve_rng_state,
         determinism_check=config.determinism_check,
     )
@@ -567,6 +573,9 @@ def parallelize_unified_mot(
     apply_ac(model, ac_config)
     if compile_config.enabled:
         apply_compile(model, compile_config)
+    if ac_config.mode != "none" and ac_config.offload_to_cpu:
+        for block in model.model.layers.children():
+            offload_checkpoint_inputs(block, min_cgroup_memory_free_fraction=ac_config.min_cgroup_memory_free_fraction)
     if parallel_dims is not None and parallel_dims.dp_enabled:
         apply_fsdp(model, parallel_dims, mp_policy)
     return model

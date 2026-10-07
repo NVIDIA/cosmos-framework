@@ -220,7 +220,7 @@ class TestBackendListIntegration(unittest.TestCase):
 class TestBackendListOrdering(unittest.TestCase):
     """Pin the per-arch default backend ordering in get_backend_list.
 
-    Ordering encodes known relative performance, so a silent reorder is a
+    Ordering encodes rollout priority and known relative performance, so a silent reorder is a
     regression. These tests lock the exact list (with no env-var filtering) for
     each architecture branch, including the SM11x/12x block and its ordering
     difference vs SM100/103.
@@ -257,12 +257,12 @@ class TestBackendListOrdering(unittest.TestCase):
         assert get_backend_list(80) == ["flash2", "cudnn", "natten"]
         assert get_backend_list(89) == ["flash2", "cudnn", "natten"]
 
-        # H100 (SM90) -> flash3 leads.
-        assert get_backend_list(90) == ["flash3", "cudnn", "natten", "flash2"]
+        # H100/H200 (SM90) -> flash3 leads, followed by flash4.
+        assert get_backend_list(90) == ["flash3", "flash4", "cudnn", "natten", "flash2"]
 
-        # SM100/103 -> cudnn, natten, flash2 (flash2 trails natten).
+        # SM100/103 -> cudnn leads, then natten, flash4, flash2 (flash4 trails natten during rollout).
         for arch in (100, 103):
-            assert get_backend_list(arch) == ["cudnn", "natten", "flash2"], arch
+            assert get_backend_list(arch) == ["cudnn", "natten", "flash4", "flash2"], arch
 
         # SM110/120/121 -> cudnn, flash2, natten (flash2 ahead of natten).
         for arch in (110, 120, 121):

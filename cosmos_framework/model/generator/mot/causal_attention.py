@@ -20,11 +20,10 @@ from cosmos_framework.model.attention import (
     multi_dimensional_attention_varlen,
 )
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.model.generator.mot.attention import SplitInfo, two_way_attention
+from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
 from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
 from cosmos_framework.model.generator.mot.merge_bridge import MergeAttentionsBridge
-from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -37,10 +36,18 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
 )
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.mot.maskless_attention import (
+    ReplayMasklessPlan,
+    cat_replay_kv,
+    replay_maskless_attention,
+)
+from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
+from cosmos_framework.model.generator.rolling_prompt import RollingPromptLayout, RollingTextSinkLayer
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryValue,
-    FlexARMemoryValue,
+    JointARMemoryValue,
     KVTrainMemoryValue,
+    MultiviewARMemoryValue,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
 )
@@ -124,7 +131,7 @@ def _bridge_lse_with_neg_inf_mask(
     ``.data.copy_()`` patch back into the kernel's saved LSE storage so
     the kernel's backward sees the merged LSE.
 
-    Used by ``three_way_attention_with_kv_cache`` for both:
+    Used by ``three_way_attention_with_memory`` for both:
       - The cached-video CA component, gated by ``has_cached_video``.
       - The video-to-text CA component, gated by ``has_caption``.
     """
@@ -374,24 +381,7 @@ def dispatch_attention_no_memory_ac_safe(
             attention_meta=attention_mask,
             packed_key_states_normalized=packed_key_states_normalized,
         )
-    if isinstance(attention_mask, SplitInfo):
-        # A mask means the multiview pathway, whose UND half is shared with the maskless folds
-        # and so lives with them rather than in ``two_way_attention``.
-        if attention_mask.flex_block_mask is not None:
-            return multiview_attention(
-                packed_query_states,
-                packed_key_states,
-                packed_value_states,
-                flex_block_mask=attention_mask.flex_block_mask,
-                flex_backend=attention_mask.flex_backend,
-                packed_key_states_normalized=packed_key_states_normalized,
-            )
-        return two_way_attention(
-            packed_query_states,
-            packed_key_states,
-            packed_value_states,
-            packed_key_states_normalized=packed_key_states_normalized,
-        )
+    # Non-three-way paths do not merge NATTEN attention outputs, so keep the shared implementation.
     output, _ = vfm_dispatch_attention(
         packed_query_states,
         packed_key_states,
@@ -404,26 +394,34 @@ def dispatch_attention_no_memory_ac_safe(
     return output
 
 
-def two_way_flex_attention_with_memory(
+def multiview_attention_with_memory(
     packed_query_states: SequencePack,
     packed_key_states: SequencePack,
     packed_value_states: SequencePack,
     *,
     packed_key_states_normalized: SequencePack | None,
-    flex_block_mask: BlockMask,
-    flex_backend: FlexBackend,
-    flex_memory_k: torch.Tensor | None,
-    flex_memory_v: torch.Tensor | None,
+    memory_k: torch.Tensor | None,  # [1,N_memory,H,D]
+    memory_v: torch.Tensor | None,  # [1,N_memory,H,D]
+    flex_block_mask: BlockMask | None,
+    flex_backend: FlexBackend | None,
+    replay_maskless_plan: ReplayMasklessPlan | None = None,
+    text_sink_layer: RollingTextSinkLayer | None = None,
+    prompt_layout: RollingPromptLayout | None = None,
 ) -> SequencePack:
-    """Run two-way attention with an optional key-only Flex K/V suffix."""
-    if (flex_memory_k is None) != (flex_memory_v is None):
-        raise ValueError("flex_memory_k and flex_memory_v must be provided together.")
+    """Run Flex or maskless multiview replay with an optional key-only K/V suffix."""
+    if (memory_k is None) != (memory_v is None):
+        raise ValueError("memory_k and memory_v must be provided together.")
     packed_key_normalized = (
         packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
     )
     causal_q, causal_q_offsets = get_causal_seq(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
     causal_k, causal_k_offsets = get_causal_seq(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
     causal_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    und_k, _ = get_causal_seq(packed_key_normalized)  # [N_und,H,D], [B+1]
+    if text_sink_layer is not None:
+        if prompt_layout is None:
+            raise ValueError("Rolling text sink K/V requires its document layout.")
+        causal_k, und_k, causal_v = text_sink_layer.apply(causal_k, und_k, causal_v, prompt_layout)  # 3*[N_und,H,D]
     max_causal_len = packed_query_states["max_causal_len"]
     full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
 
@@ -434,6 +432,12 @@ def two_way_flex_attention_with_memory(
     if caption_offsets is not None:
         causal_q_offsets, max_causal_len = caption_offsets  # [N_captions+1], int
         causal_k_offsets = causal_q_offsets  # [N_captions+1]
+
+    if replay_maskless_plan is not None and torch.compiler.is_compiling():
+        # NATTEN validates these bounds with Python branches. State the caption
+        # packing contract explicitly when CP stream lengths are unbacked.
+        torch._check(max_causal_len <= causal_q.shape[0])
+        torch._check(max_causal_len <= causal_k.shape[0])
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
     causal_res = attention(
@@ -451,25 +455,37 @@ def two_way_flex_attention_with_memory(
         raise TypeError("Two-way causal attention must return a tensor.")
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_und,H*D]
 
-    und_k, _ = get_causal_seq(packed_key_normalized)  # [N_und,H,D], [B+1]
-    und_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1]
+    und_v = causal_v  # [N_und,H,D]
     gen_k, _ = get_full_only_seq(packed_key_normalized)  # [N_gen,H,D], [B+1]
     gen_v, _ = get_full_only_seq(packed_value_states)  # [N_gen,H,D], [B+1]
     key_parts = [und_k, gen_k]
     value_parts = [und_v, gen_v]
-    if flex_memory_k is not None:
-        assert flex_memory_v is not None
-        key_parts.append(flex_memory_k.squeeze(0))  # [N_memory,H,D]
-        value_parts.append(flex_memory_v.squeeze(0))  # [N_memory,H,D]
-    flex_keys = torch.cat(key_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
-    flex_values = torch.cat(value_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
-    full_res = flex_attention(
-        full_q.unsqueeze(0),  # [1,N_gen,H,D]
-        flex_keys,
-        flex_values,
-        flex_block_mask,
-        flex_backend,
-    )  # [1,N_gen,H,D]
+    if memory_k is not None:
+        assert memory_v is not None
+        if replay_maskless_plan is not None and torch.compiler.is_compiling():
+            torch._check(memory_k.shape[1] == memory_v.shape[1])
+        key_parts.append(memory_k.squeeze(0))  # [N_memory,H,D]
+        value_parts.append(memory_v.squeeze(0))  # [N_memory,H,D]
+    concatenate = cat_replay_kv if replay_maskless_plan is not None and memory_k is not None else torch.cat
+    flex_keys = concatenate(key_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    flex_values = concatenate(value_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    if replay_maskless_plan is not None:
+        full_res = replay_maskless_attention(
+            full_q.unsqueeze(0),
+            flex_keys,
+            flex_values,
+            replay_maskless_plan,  # [1,N_gen,H,D], [1,KV,H,D], [1,KV,H,D]
+        )  # [1,N_gen,H,D]
+    else:
+        if flex_block_mask is None or flex_backend is None:
+            raise ValueError("Two-way Flex replay requires its mask and backend.")
+        full_res = flex_attention(
+            full_q.unsqueeze(0),  # [1,N_gen,H,D]
+            flex_keys,
+            flex_values,
+            flex_block_mask,
+            flex_backend,
+        )  # [1,N_gen,H,D]
     full_out = full_res.squeeze(0).flatten(-2, -1)  # [N_gen,H*D]
     return from_mode_splits(causal_out, full_out, packed_query_states)
 
@@ -1402,7 +1418,7 @@ def teacher_forcing_target_only_attention(
     return target_out, empty_text_out
 
 
-def three_way_attention_with_kv_cache(
+def three_way_attention_with_memory(
     packed_query_states: SequencePack,
     packed_key_states: SequencePack,
     packed_value_states: SequencePack,
@@ -1410,7 +1426,7 @@ def three_way_attention_with_kv_cache(
     attention_meta: SplitInfo | None = None,
     packed_key_states_normalized: SequencePack | None = None,
 ) -> SequencePack:
-    """Branchless three-way attention for KV cache training.
+    """Branchless three-way attention with cached K/V memory.
 
     Originally introduced for KV-cache training; also used by compile-safe
     AR inference under ``torch.compile`` (which constructs a
@@ -1659,102 +1675,6 @@ def three_way_attention_with_kv_cache(
     assert isinstance(text_res, torch.Tensor)
     text_out = text_res.squeeze(0).flatten(-2, -1)
     return from_mode_splits(text_out, video_out, packed_query_states)
-
-
-class _ACSafeMergeAttentionsFn(torch.autograd.Function):
-    """AC-compatible drop-in for NATTEN's ``MergeAttentionsAutogradFn``.
-
-    NATTEN's backward indexes ``ctx.saved_tensors`` in multiple slices
-    (``[:2]``, ``[2 : N+2]``, ``[N+2:]``), and each indexing access fires
-    the non-reentrant ``torch.utils.checkpoint`` unpack hook for *every*
-    saved tensor. The hook only permits one unpack per saved tensor, so
-    activation checkpointing + NATTEN merge_attentions raises
-    ``CheckpointError: Unpack is being triggered for a tensor that was
-    already unpacked once`` (see the replayed-LSE + AC=full long-video
-    TF path).
-
-    This version preserves the same forward math and the same
-    storage-patching backward contract (see :class:`MergeAttentionsBridge`
-    docstring for the full description), but reads ``ctx.saved_tensors``
-    exactly once.  Numerics match ``naive_merge_attentions`` (iterative
-    pairwise LSE rescale) — which is what NATTEN's kernel implements up
-    to reduction order.
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        num_components: int,
-        *tensors: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        outputs = tensors[:num_components]
-        lses = tensors[num_components:]
-        output_dtype = outputs[0].dtype
-        normalized_lses = [lse.squeeze(-1) if lse.ndim == 4 else lse for lse in lses]
-
-        merged_lse = normalized_lses[0]
-        merged_out = outputs[0]
-        for i in range(1, num_components):
-            new_lse = torch.logaddexp(merged_lse, normalized_lses[i])
-            w_old = torch.exp(merged_lse - new_lse).unsqueeze(-1)
-            w_new = torch.exp(normalized_lses[i] - new_lse).unsqueeze(-1)
-            merged_out = w_old * merged_out + w_new * outputs[i]
-            merged_lse = new_lse
-        merged_out = merged_out.to(output_dtype)
-
-        ctx.save_for_backward(merged_out, merged_lse, *outputs, *lses)
-        ctx.num_components = num_components
-        return merged_out, merged_lse
-
-    @staticmethod
-    def backward(
-        ctx,
-        grad_merged_out: torch.Tensor,
-        grad_merged_lse: torch.Tensor,
-    ) -> tuple[torch.Tensor | None, ...]:
-        # Single access — avoid retriggering the AC unpack hook for any saved tensor.
-        saved = ctx.saved_tensors
-        merged_out = saved[0]
-        merged_lse = saved[1]
-        num = ctx.num_components
-        outputs = saved[2 : 2 + num]
-        lses = saved[2 + num : 2 + 2 * num]
-
-        # Patch each component's storage with the merged O / LSE.  The
-        # upstream attention kernel's backward will read these as its
-        # saved O / LSE and compute gradients as if it had produced the
-        # merged output.  The original LSE shape is preserved (the
-        # forward squeezes a trailing singleton, so we re-broadcast).
-        for o in outputs:
-            o.data.copy_(merged_out.data)
-        for l in lses:
-            if l.ndim == merged_lse.ndim + 1 and l.shape[-1] == 1:
-                l.data.copy_(merged_lse.data.unsqueeze(-1))
-            else:
-                l.data.copy_(merged_lse.data)
-
-        # Same upstream-grad contract as NATTEN: dL/dO_i = dL/dO_merged
-        # for every component; dL/dLSE_i is forwarded unchanged for
-        # parity (i4 attention treats LSE as non-differentiable, so this
-        # gradient is silently dropped at the kernel boundary).
-        grads = (None,) + (grad_merged_out,) * num + (grad_merged_lse,) * num
-        return grads
-
-
-def merge_attentions_ac_safe(
-    outputs: list[torch.Tensor],
-    lse_tensors: list[torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """AC-safe drop-in for ``cosmos_framework.model.attention.merge_attentions``.
-
-    Use at call sites that live inside an activation-checkpointed module
-    boundary.  Matches NATTEN's storage-patching backward contract so
-    upstream i4 attention kernels (whose LSE is not differentiable)
-    still receive correct gradients via their own saved O / LSE
-    backward formulas.
-    """
-    assert len(outputs) == len(lse_tensors) >= 2
-    return _ACSafeMergeAttentionsFn.apply(len(outputs), *outputs, *lse_tensors)
 
 
 def naive_merge_attentions(
@@ -2149,7 +2069,11 @@ def dispatch_attention_with_memory(
 ) -> tuple[SequencePack, KVToStore | None]:
     """Dispatch that routes memory-augmented attention to the appropriate kernel.
 
-    - ``KVTrainMemoryValue`` → ``three_way_attention_with_kv_cache``
+    - Joint persistent sensor K/V requires a maskless replay plan.
+    - Two-way replay metadata with TF or multiview AR memory →
+      ``multiview_attention_with_memory`` (Flex or maskless). Maskless plans
+      require a replay-memory value even when its cached K/V tensors are absent.
+    - ``KVTrainMemoryValue`` → ``three_way_attention_with_memory``
       (rolling-KV *training* path)
     - ``ARMemoryValue`` with ``frame_idx > 0`` → ``attention_AR_gen_only``
       (AR inference frame 1+; covers eager, compile-no-CG, and compile+CG.
@@ -2157,42 +2081,48 @@ def dispatch_attention_with_memory(
       by ``ARMemoryState(for_cuda_graphs=True)`` populating
       ``memory_value.gen_k_buf_full`` and friends.)
     - ``ARMemoryValue`` with ``frame_idx == 0`` → interactive no-memory dispatch
-    - ``None`` → interactive no-memory dispatch
+    - ``None`` without a replay plan → interactive no-memory dispatch
     """
+    replay_maskless_plan = getattr(attention_mask, "replay_maskless_plan", None)
+    if replay_maskless_plan is not None and not isinstance(replay_maskless_plan, ReplayMasklessPlan):
+        raise TypeError("Maskless attention requires a ReplayMasklessPlan.")
+    if isinstance(memory_value, JointARMemoryValue) and replay_maskless_plan is None:
+        raise ValueError("Joint AR memory requires a maskless replay plan.")
+    is_replay_memory = isinstance(
+        memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, MultiviewARMemoryValue, JointARMemoryValue)
+    )
+    if replay_maskless_plan is not None and not is_replay_memory:
+        raise TypeError("Maskless multiview replay requires a replay memory value.")
+
     if (
-        isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, FlexARMemoryValue))
-        and isinstance(attention_mask, SplitInfo)
+        isinstance(attention_mask, SplitInfo)
         and not attention_mask.is_three_way
-        and attention_mask.flex_block_mask is not None
+        and is_replay_memory
+        and (replay_maskless_plan is not None or attention_mask.flex_block_mask is not None)
     ):
-        if attention_mask.flex_backend is None:
-            raise ValueError("Two-way Flex memory attention requires a FlexBackend.")
-        output = two_way_flex_attention_with_memory(
+        if isinstance(memory_value, TFNoisyMemoryValue):
+            memory_k, memory_v = memory_value.cached_clean_gen_k, memory_value.cached_clean_gen_v  # each [1,M,H,D]
+        elif isinstance(memory_value, (MultiviewARMemoryValue, JointARMemoryValue)):
+            memory_k, memory_v = memory_value.cached_gen_k, memory_value.cached_gen_v  # each [1,M,H,D]
+        else:
+            memory_k, memory_v = None, None
+        output = multiview_attention_with_memory(
             packed_query_states,
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
             flex_block_mask=attention_mask.flex_block_mask,
             flex_backend=attention_mask.flex_backend,
-            flex_memory_k=(
-                memory_value.cached_clean_gen_k
-                if isinstance(memory_value, TFNoisyMemoryValue)
-                else memory_value.cached_gen_k
-                if isinstance(memory_value, FlexARMemoryValue)
-                else None
-            ),
-            flex_memory_v=(
-                memory_value.cached_clean_gen_v
-                if isinstance(memory_value, TFNoisyMemoryValue)
-                else memory_value.cached_gen_v
-                if isinstance(memory_value, FlexARMemoryValue)
-                else None
-            ),
+            replay_maskless_plan=replay_maskless_plan,
+            memory_k=memory_k,
+            memory_v=memory_v,
+            text_sink_layer=memory_value.text_sink_layer if isinstance(memory_value, MultiviewARMemoryValue) else None,
+            prompt_layout=memory_value.prompt_layout if isinstance(memory_value, MultiviewARMemoryValue) else None,
         )
         return output, None
     if isinstance(memory_value, KVTrainMemoryValue):
         attention_meta = attention_mask if isinstance(attention_mask, SplitInfo) else None
-        output = three_way_attention_with_kv_cache(
+        output = three_way_attention_with_memory(
             packed_query_states,
             packed_key_states,
             packed_value_states,
@@ -2216,23 +2146,12 @@ def dispatch_attention_with_memory(
             memory_value=memory_value,
             packed_key_states_normalized=packed_key_states_normalized,
         )
-    if isinstance(attention_mask, SplitInfo) and attention_mask.is_three_way:
-        output = dispatch_attention_no_memory_ac_safe(
-            packed_query_states,
-            packed_key_states,
-            packed_value_states,
-            attention_mask,
-            natten_metadata=natten_metadata,
-            packed_key_states_normalized=packed_key_states_normalized,
-        )
-        return output, None
-    # Non-three-way paths do not merge NATTEN attention outputs, so keep the shared implementation.
-    return vfm_dispatch_attention(
+    output = dispatch_attention_no_memory_ac_safe(
         packed_query_states,
         packed_key_states,
         packed_value_states,
         attention_mask,
         natten_metadata=natten_metadata,
-        memory_value=None,
         packed_key_states_normalized=packed_key_states_normalized,
     )
+    return output, None

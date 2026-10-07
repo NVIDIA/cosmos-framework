@@ -12,7 +12,7 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     AttentionScope,
 )
 
-TeacherForcingKVImplementation = Literal["multiview_flex_kv", "singleview_threeway_kv"]
+TeacherForcingKVImplementation = Literal["multiview_flex_kv", "multiview_maskless_kv", "singleview_threeway_kv"]
 TEACHER_FORCING_KV_IMPLEMENTATIONS = get_args(TeacherForcingKVImplementation)
 
 TeacherForcingControlVisibility = Literal["global", "causal", "current"]

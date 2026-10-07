@@ -518,6 +518,8 @@ class ActionTransformPipeline:
             embodiment, view-composition, and caption-subject postfixes attached
             by registered Lance Action datasets. Enabling this disables the
             generic viewpoint postfix so each caption has one view description.
+            Requires an ``action_caption_attributes`` mapping on every sample;
+            missing metadata raises before resizing or tokenization, including JSON prompts.
             Defaults to ``False``.
         append_duration_fps_timestamps: Whether to append duration and FPS metadata to the
             caption (matching VFM's ``DurationFPSTextTimeStamps`` augmentor).
@@ -719,7 +721,7 @@ class ActionTransformPipeline:
         2. Format the caption as a structured JSON prompt (if enabled).
         3. If enabled, serialize the mode-specific description as prompt
            metadata. For inverse dynamics, omit the input action caption.
-        4. For plain prompts, append registered semantic postfixes when present;
+        4. For plain prompts, require and append registered semantic postfixes when enabled;
            otherwise append generic viewpoint metadata (if enabled).
         5. Append duration/FPS metadata to plain prompts (if enabled).
         6. Append resolution metadata to plain prompts (if enabled).
@@ -753,6 +755,16 @@ class ActionTransformPipeline:
         """
         mode = data_dict.get("mode")
         assert mode is not None, "mode is required"
+
+        if self.append_action_caption_semantics:
+            if "action_caption_attributes" not in data_dict:
+                raise ValueError(
+                    "append_action_caption_semantics=True requires action_caption_attributes on every sample; "
+                    f"sample={data_dict.get('__key__', '<unknown>')!r}. "
+                    "Check the dataset's action-caption protocol registration and metadata propagation."
+                )
+            if not isinstance(data_dict["action_caption_attributes"], Mapping):
+                raise TypeError("action_caption_attributes must be a mapping.")
 
         # 1. Resize + reflection-pad spatial dimensions to the closest predefined target from ``VIDEO_RES_SIZE_INFO[resolution]``.
         data_dict = self.video_resize(data_dict, resolution)

@@ -36,6 +36,7 @@ import pytest
 import torch
 from torch.distributed.fsdp import CPUOffloadPolicy, OffloadPolicy
 
+from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import (
     _PACK_DYNAMIC_LEN_KEYS,
@@ -386,7 +387,7 @@ class TestFSDPCPUOffload:
                 side_effect=lambda *_: calls.append("fsdp"),
             ),
         ):
-            parallelize_unified_mot(model, parallel_dims, compile_config, SimpleNamespace())
+            parallelize_unified_mot(model, parallel_dims, compile_config, ActivationCheckpointingConfig(mode="none"))
 
         assert calls == ["ac", "compile", "fsdp"]
 

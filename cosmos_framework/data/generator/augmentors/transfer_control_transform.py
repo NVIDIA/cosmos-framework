@@ -40,14 +40,16 @@ from cosmos_framework.data.generator.sequence_packing import SequencePlan
 
 
 class SampleResolution(Augmentor):
-    """Sample one resolution from a list and set data_dict['_res_size_map'] for downstream resize/padding.
+    """Sample one resolution from a list and set data_dict['_res_size_map'] for downstream resizing.
 
-    When used before ResizeLargestSideAspectPreserving and ReflectionPadding, those augmentors will
-    use obtain_augmentation_size(), which reads _res_size_map when present. This allows one dataloader
-    to produce samples at different resolutions (e.g. 480 and 720) by sampling per sample.
+    ResizeToSize reads this map through obtain_augmentation_size() before controls are generated.
+    Aspect-preserving resize and padding augmentors also honor the map through the same helper.
+    This allows one dataloader to produce samples at different resolutions (e.g. 480 and 720)
+    by sampling per sample.
 
     resolutions_weights: Optional sampling weights for each resolution (same length as resolutions).
     Weights are used by random.choices and need not sum to 1. If None, sampling is uniform.
+    max_aspect_ratio_distortion: Optional per-resolution limits for direct Transfer resizing.
     """
 
     def __init__(
@@ -57,6 +59,7 @@ class SampleResolution(Augmentor):
         args: dict | None = None,
         resolutions: list[str] | None = None,
         resolutions_weights: list[float] | None = None,
+        max_aspect_ratio_distortion: dict[str, float] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(input_keys, output_keys, args)
@@ -65,6 +68,7 @@ class SampleResolution(Augmentor):
         for r in self.resolutions:
             assert r in VIDEO_RES_SIZE_INFO, f"Unknown resolution {r}; known: {list(VIDEO_RES_SIZE_INFO.keys())}"
         self.resolutions_weights = resolutions_weights
+        self.max_aspect_ratio_distortion: dict[str, float] | None = max_aspect_ratio_distortion
         if self.resolutions_weights is not None:
             assert len(self.resolutions_weights) == len(self.resolutions), (
                 "resolutions_weights must have same length as resolutions."
@@ -76,6 +80,8 @@ class SampleResolution(Augmentor):
         else:
             res = random.choice(self.resolutions)
         data_dict["_res_size_map"] = VIDEO_RES_SIZE_INFO[res]
+        if self.max_aspect_ratio_distortion is not None:
+            data_dict["_res_max_aspect_ratio_distortion"] = self.max_aspect_ratio_distortion[res]
         return data_dict
 
 
@@ -89,6 +95,9 @@ class TransferToTrainingFormat(Augmentor):
 
     Supports both image (3D: C,H,W) and video (4D: C,T,H,W); for image output, 4D tensors
     are sliced to the first frame. Same output structure as ImageEditingToTrainingFormat.
+    Conditioning counts refer to latent frames. The causal video tokenizer preserves
+    the first frame and compresses subsequent frames by ``temporal_compression_factor``.
+    Always leave at least one target latent frame unconditioned for supervision.
     """
 
     def __init__(
@@ -100,13 +109,18 @@ class TransferToTrainingFormat(Augmentor):
         conditioning_config: dict[int, float] | None = None,
         share_vision_temporal_positions: bool = True,
         args: dict | None = None,
+        temporal_compression_factor: int = 4,
     ) -> None:
         super().__init__(input_keys or [], None, args)
-        self.mean = mean
-        self.std = std
-        self.output_media_key = output_media_key
-        self.conditioning_config = conditioning_config
-        self.share_vision_temporal_positions = share_vision_temporal_positions
+        if not isinstance(temporal_compression_factor, int) or temporal_compression_factor < 1:
+            raise ValueError("temporal_compression_factor must be a positive integer")
+        self.mean: float = mean
+        self.std: float = std
+        self.output_media_key: str = output_media_key
+        self.conditioning_config: dict[int, float] | None = conditioning_config
+        self.share_vision_temporal_positions: bool = share_vision_temporal_positions
+        self.temporal_compression_factor: int = temporal_compression_factor
+        self.normalized_conditioning_config: dict[int, float] | None = None
 
         if self.conditioning_config is not None:
             for num_frames, prob in self.conditioning_config.items():
@@ -118,8 +132,6 @@ class TransferToTrainingFormat(Augmentor):
             if total_prob <= 0:
                 raise ValueError("conditioning_config probabilities must sum to a positive number")
             self.normalized_conditioning_config = {k: v / total_prob for k, v in self.conditioning_config.items()}
-        else:
-            self.normalized_conditioning_config = None
 
     def _normalize_tensor(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize channel-wise to given mean/std. Accepts values in [0,1] or [0,255] (auto-detected)."""
@@ -169,14 +181,15 @@ class TransferToTrainingFormat(Augmentor):
                 frames_options = list(self.normalized_conditioning_config.keys())
                 weights = list(self.normalized_conditioning_config.values())
                 num_condition_frames = random.choices(frames_options, weights=weights, k=1)[0]
-                if self.output_media_key == "video" and target_norm.dim() == 4:
-                    max_cond = target_norm.shape[1] - 1
-                    num_condition_frames = min(num_condition_frames, max_cond)
 
-            if num_condition_frames > 0 and target_norm.shape[1] > 1:
-                condition_frames_indexes = list(range(num_condition_frames))
-            else:
-                condition_frames_indexes = []
+            target_latent_frames = 1
+            if self.output_media_key == "video" and target_norm.dim() == 4:
+                target_latent_frames = 1 + (target_norm.shape[1] - 1) // self.temporal_compression_factor
+            # SequencePlan indexes latent frames, not decoded pixel frames. A five-frame
+            # Wan clip has only two latent frames, so conditioning both would remove all
+            # target supervision and skip transformer backward on this rank under FSDP.
+            num_condition_frames = min(num_condition_frames, max(0, target_latent_frames - 1))
+            condition_frames_indexes = list(range(num_condition_frames))
 
             data_dict["sequence_plan"] = SequencePlan(
                 has_text=True,

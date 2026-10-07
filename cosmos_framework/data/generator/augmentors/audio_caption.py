@@ -15,6 +15,9 @@ import sys
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 
+_BACKGROUND_RECORDING_CONDITIONS_LABEL = "Background and recording conditions:"
+_BACKGROUND_AUDIO_RECORDING_CONDITIONS_LABEL = "Background audio and recording conditions:"
+
 
 def _debug(msg: str) -> None:
     """Write debug message to stderr (unbuffered, reliable in worker processes)."""
@@ -60,16 +63,24 @@ class AudioCaptionAppender(Augmentor):
         # Try flat key first
         value = meta_dict.get(self.audio_caption_key)
         if isinstance(value, str) and len(value) > 0:
-            return value
+            return self._normalize_audio_caption(value)
 
         # Try nested: look for a dict value containing "caption_sound"
         for key, val in meta_dict.items():
             if isinstance(val, dict) and "caption_sound" in val:
                 caption = val["caption_sound"]
                 if isinstance(caption, str) and len(caption) > 0:
-                    return caption
+                    return self._normalize_audio_caption(caption)
 
         return None
+
+    @staticmethod
+    def _normalize_audio_caption(caption: str) -> str:
+        """Use an explicitly audio-focused label for recording conditions."""
+        return caption.replace(
+            _BACKGROUND_RECORDING_CONDITIONS_LABEL,
+            _BACKGROUND_AUDIO_RECORDING_CONDITIONS_LABEL,
+        )
 
     def __call__(self, data_dict: dict) -> dict | None:
         """Append audio caption to the video caption if available.

@@ -1009,6 +1009,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.cpu_offload_state_dict = _create_cpu_state_dict(state_dict, pin_memory=True, share_memory=True)
 
         log.info(f"Staging the state_dict in CPU memory")
+        # State tensors alias live parameters and optimizer buffers. Wait for
+        # their updates on the caller's stream before copying the snapshot.
+        self.staging_stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.staging_stream):
             self.cpu_offload_state_dict = _copy_state_dict(
                 state_dict,

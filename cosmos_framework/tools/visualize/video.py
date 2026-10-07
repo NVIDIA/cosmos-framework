@@ -48,7 +48,7 @@ def _to_writer_uint8(sample: Tensor, pattern: str) -> np.ndarray:
 def save_img_or_video(
     sample: Tensor,  # [C,T,H,W] float in [0,1], or uint8 in [0,255]
     save_fp_wo_ext: Union[str, IO[Any]],
-    fps: int = 24,
+    fps: float = 24,
     quality=None,
     ffmpeg_params=None,
     **kwargs,
@@ -60,7 +60,7 @@ def save_img_or_video(
         sample (Tensor): Input tensor with shape (C, T, H, W), floating point in [0, 1]
             range or uint8 in [0, 255].
         save_fp_wo_ext (Union[str, IO[Any]]): File path without extension or file-like object.
-        fps (int): Frames per second for video. Default is 24.
+        fps (float): Frames per second for video, including fractional rates. Default is 24.
     """
     assert sample.ndim == 4, "Only support 4D tensor"
     assert isinstance(save_fp_wo_ext, str) or hasattr(save_fp_wo_ext, "write"), (
