@@ -361,12 +361,14 @@ jobs:
       # and inference2/, are intentionally omitted to keep this single-runner job within
       # its time budget. Add an L0 marker when one of those tests should join this gate.
       # L1, L2, and unmarked cases remain available for explicit or scheduled runs.
+      # CPU-only tests generated from i4 are already covered by i4 CI and are deselected here;
+      # CF-owned tests plus mapped GPU, mixed-device, and unclassified tests remain in this job.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            cosmos_framework/ -o addopts= -m L0 \
+            cosmos_framework/ -o addopts= -m L0 --skip-mapped-cpu-tests \
             --deselect cosmos_framework/model/generator/mot/attention_test.py::test_two_way_attention_flex_matches_dense_across_batch_shapes
 
       # Deselected above and run here instead, in a process of its own.
