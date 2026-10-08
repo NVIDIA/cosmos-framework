@@ -53,13 +53,16 @@ from cosmos_framework.utils.generator.quantization import apply_quantization_inp
 # Thus these load_model functions are designed with less dependency.
 
 
-def checkpoint_path_to_cached_path(path: str, cache_rootdir: Optional[str] = None) -> str:
+def checkpoint_path_to_cached_path(
+    path: str, cache_rootdir: str | None = None, *, load_ema_to_reg: bool = False
+) -> str:
+    """Cache S3 checkpoints by bucket, object key and the selected weight set."""
     if cache_rootdir is None:
         homedir = os.getenv("HOME") or ""
         cache_rootdir = osp.join(homedir, ".cache/imaginaire4/checkpoints/")
 
     if path.startswith("s3://"):
-        return osp.join(cache_rootdir, path.removeprefix("s3://").split("/", maxsplit=1)[1])
+        return osp.join(cache_rootdir, "ema" if load_ema_to_reg else "regular", path.removeprefix("s3://"))
     else:
         return path
 
@@ -359,7 +362,8 @@ def load_model_from_checkpoint(
         seed: Random seed used for initialization (if applicable).
         experiment_opts: Extra experiment/config override options.
         use_cache_checkpoint: If True, locally save & read remote checkpoints to speed up repeated loads.
-            Be aware, the default cache path is $HOME/.cache/imaginaire4/checkpoints/<same s3 path>.
+            The default cache path is $HOME/.cache/imaginaire4/checkpoints/<regular|ema>/<bucket>/<object key>.
+            Legacy caches without weight-set and bucket identity are left intact but not reused.
             Applies to the DCP path only; for safetensors checkpoints a warning is logged
             and caching is skipped (the DCP write cache is not a meaningful round-trip for
             safetensors sources).
@@ -514,7 +518,9 @@ def load_model_from_checkpoint(
 
         checkpoint_cache_path = None
         if use_cache_checkpoint:
-            checkpoint_cache_path = checkpoint_path_to_cached_path(checkpoint_path, cache_checkpoint_rootdir)
+            checkpoint_cache_path = checkpoint_path_to_cached_path(
+                checkpoint_path, cache_checkpoint_rootdir, load_ema_to_reg=load_ema_to_reg
+            )
 
         if checkpoint_cache_path is None:
             load_model(checkpoint_path)

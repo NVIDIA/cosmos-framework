@@ -1209,8 +1209,8 @@ def test_multiview_transfer_ar_yields_logical_frames_as_chunks_finish(
 ) -> None:
     """Multi-chunk transfer exposes progress and refreshes RGB-aware control K/V in order."""
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
-    from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     num_views = 2
     frames_per_view = 5
@@ -1322,7 +1322,7 @@ def test_multiview_transfer_ar_yields_logical_frames_as_chunks_finish(
             return_value=[sequence_plan],
         ),
         patch(
-            "cosmos_framework.model.generator.multiview_transfer_ar.build_multiview_transfer_ar_memory_layout",
+            "cosmos_framework.model.generator.utils.multiview_ar.build_multiview_transfer_ar_memory_layout",
             return_value=memory_layout,
         ),
     ):
@@ -1403,7 +1403,7 @@ def test_multiview_transfer_ar_yields_logical_frames_as_chunks_finish(
 @pytest.mark.CPU
 def test_multiview_transfer_ar_pack_sets_metadata_and_aligned_view_positions() -> None:
     """Synchronized chunks align camera-local mRoPE positions and retain Flex metadata."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
+    from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     model = MagicMock()
     model.config.diffusion_expert_config.patch_spatial = 1
@@ -1419,7 +1419,7 @@ def test_multiview_transfer_ar_pack_sets_metadata_and_aligned_view_positions() -
     vision_latent = torch.zeros(1, 4, 4, 2, 2)  # [B,C,V*chunk_len,H,W]
 
     with patch(
-        "cosmos_framework.model.generator.multiview_transfer_ar.pack_input_sequence_autoregressive",
+        "cosmos_framework.model.generator.utils.multiview_ar.pack_input_sequence_autoregressive",
         return_value=packed_seq,
     ) as pack_input:
         result = MultiviewTransferARBackend(model).build_current_pack(
@@ -1459,8 +1459,8 @@ def test_multiview_transfer_ar_pack_sets_metadata_and_aligned_view_positions() -
 def test_multiview_transfer_prefill_is_clean_without_extending_conditioned_prefix(condition_count: int) -> None:
     """Recomputed RGB history omits diffusion embeddings without changing the rollout prefix."""
     from cosmos_framework.data.generator.sequence_packing import ModalityData
-    from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
     from cosmos_framework.model.generator.omni_mot_causal_model import _multiview_conditioned_prefix_length
+    from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     target_mask = (torch.arange(5) < condition_count).repeat(2).reshape(10, 1, 1)  # [V*T,1,1]
     control_mask = torch.ones_like(target_mask)  # [V*T,1,1]
@@ -1515,7 +1515,7 @@ def test_multiview_transfer_prefill_is_clean_without_extending_conditioned_prefi
 @pytest.mark.CPU
 def test_multiview_transfer_clean_pack_uses_teacher_forcing_condition_semantics() -> None:
     """Clean target history omits timestep embeddings while retaining its explicit Flex role."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
+    from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     model = MagicMock()
     model.config.diffusion_expert_config.patch_spatial = 1
@@ -1537,7 +1537,7 @@ def test_multiview_transfer_clean_pack_uses_teacher_forcing_condition_semantics(
     memory_layout = MagicMock()
 
     with patch(
-        "cosmos_framework.model.generator.multiview_transfer_ar.pack_input_sequence_autoregressive",
+        "cosmos_framework.model.generator.utils.multiview_ar.pack_input_sequence_autoregressive",
         return_value=packed_seq,
     ):
         result = MultiviewTransferARBackend(model).build_current_pack(
@@ -1568,7 +1568,7 @@ def test_multiview_transfer_clean_pack_uses_teacher_forcing_condition_semantics(
 @pytest.mark.CPU
 def test_multiview_transfer_ar_memory_merge_updates_only_selected_slots() -> None:
     """A clean recomputation refreshes control slots without erasing RGB history."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
+    from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     destination_k = torch.full((1, 5, 1, 1), -1.0)  # [1,S_memory,H_kv,D]
     destination_v = torch.full((1, 5, 1, 1), -2.0)  # [1,S_memory,H_kv,D]
@@ -1603,7 +1603,7 @@ def test_multiview_transfer_backend_assigns_prefill_cache_by_cfg_branch(
     expected_pack_name: str | None,
 ) -> None:
     """Sequential CFG keeps two caches while CFGP stores only the rank-local branch."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import (
+    from cosmos_framework.model.generator.utils.multiview_ar import (
         MultiviewTransferARBackend,
         MultiviewTransferARSession,
     )
@@ -1679,7 +1679,7 @@ def test_multiview_transfer_backend_resolves_cfgp_rank_local_memory(
     remote_branch: Literal["conditional", "unconditional"],
 ) -> None:
     """CFGP exposes the single allocated cache through the logical branch owned by each rank."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import (
+    from cosmos_framework.model.generator.utils.multiview_ar import (
         MultiviewTransferARBackend,
         MultiviewTransferARSession,
     )
@@ -1720,11 +1720,11 @@ def test_multiview_transfer_backend_resolves_cfgp_rank_local_memory(
 @pytest.mark.CPU
 def test_multiview_transfer_backend_prefills_and_commits_fixed_cache_slots() -> None:
     """The real backend preserves prefill slots while committing camera-major clean history."""
-    from cosmos_framework.model.generator.multiview_transfer_ar import (
+    from cosmos_framework.model.generator.utils.kv_cache import MultiviewARMemoryState
+    from cosmos_framework.model.generator.utils.multiview_ar import (
         MultiviewTransferARBackend,
         MultiviewTransferARSession,
     )
-    from cosmos_framework.model.generator.utils.kv_cache import MultiviewARMemoryState
 
     denoise_call_count = 0
 

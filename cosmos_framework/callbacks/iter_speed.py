@@ -370,7 +370,14 @@ class IterSpeed(EveryN):
 
         per_sample_batch_counter = dict()
         # for VFM
-        if hasattr(model, "is_image_batch") and hasattr(model, "input_image_key") and hasattr(model, "input_video_key"):
+        if "image_batch_size" in output_batch and "video_batch_size" in output_batch:
+            # The model counts samples in the processed CP payload. Always log
+            # both modalities, including zero when one is absent from this batch.
+            per_sample_batch_counter["image_batch_size"] = output_batch["image_batch_size"]
+            per_sample_batch_counter["video_batch_size"] = output_batch["video_batch_size"]
+        elif (
+            hasattr(model, "is_image_batch") and hasattr(model, "input_image_key") and hasattr(model, "input_video_key")
+        ):
             is_image_batch = model.is_image_batch(data_batch)
             if is_image_batch:
                 image_batch_size = len(data_batch[model.input_image_key])

@@ -636,6 +636,7 @@ def build_multiview_maskless_plan(
     *,
     device: torch.device,
     seconds_per_frame: Sequence[float] | None = None,
+    frame_offsets: Sequence[int] | None = None,
     items_per_sample: Sequence[int] | None = None,
     is_control: Sequence[bool] | None = None,
     control_attends_sensor: bool | None = None,
@@ -690,7 +691,7 @@ def build_multiview_maskless_plan(
     Without a temporal window, the instant of a token is its frame's **midpoint**, quantised by the anchor item's frame
     period::
 
-        instant = floor((frame_id + 0.5) * seconds_per_frame / anchor_seconds_per_frame)
+        instant = floor((frame_id + frame_offset + 0.5) * seconds_per_frame / anchor_seconds_per_frame)
 
     A latent frame is a span rather than a point -- temporal compression folds several pixel
     frames into one -- so the midpoint is what says which anchor frame a frame mostly happened
@@ -717,6 +718,9 @@ def build_multiview_maskless_plan(
         seconds_per_frame: real time between two latent frames of each item. ``None`` gives
             every item 1.0, which makes an instant the frame index -- correct whenever the
             batch carries one rate.
+        frame_offsets: first frame of each item on its own clock; ``None`` keeps every
+            item starting at zero. Frame-rate robot actions grouped by the VAE factor
+            start at latent frame 1, after the initial observation, without null padding.
         items_per_sample: how many items each sample owns. ``None`` means one each.
         is_control: whether each item conditions the target that follows it. ``None`` means
             none of them do.
@@ -786,6 +790,7 @@ def build_multiview_maskless_plan(
     if not num_items:
         raise ValueError("build_multiview_maskless_plan needs at least one item.")
     rates = [1.0] * num_items if seconds_per_frame is None else list(seconds_per_frame)
+    offsets = [0] * num_items if frame_offsets is None else list(frame_offsets)
     control = [False] * num_items if is_control is None else list(is_control)
     axes = [0] * num_items if view_axis is None else list(view_axis)
     # ``None`` reproduces what the axis used to decide on its own: the cameras' axis is the one
@@ -797,6 +802,7 @@ def build_multiview_maskless_plan(
     )
     for name, values in (
         ("seconds_per_frame", rates),
+        ("frame_offsets", offsets),
         ("is_control", control),
         ("view_axis", axes),
         ("caption_access", accesses),
@@ -805,6 +811,8 @@ def build_multiview_maskless_plan(
             raise ValueError(f"num_views describes {num_items} items but {name} describes {len(values)}.")
     if any(rate <= 0 or not math.isfinite(rate) for rate in rates):
         raise ValueError(f"seconds_per_frame must be positive and finite, got {rates}.")
+    if any(not isinstance(offset, int) or offset < 0 for offset in offsets):
+        raise ValueError(f"frame_offsets must be nonnegative integers, got {offsets}.")
     counts = [1] * num_items if items_per_sample is None else list(items_per_sample)
     if sum(counts) != num_items:
         raise ValueError(f"items_per_sample sums to {sum(counts)} but the batch holds {num_items} items.")
@@ -881,6 +889,8 @@ def build_multiview_maskless_plan(
         control_to_sensor_window,
     )
     uses_frame_windows = any(window is not None for window in frame_windows)
+    if uses_frame_windows and any(offsets):
+        raise ValueError("Nonzero item frame offsets are not supported by same-view neighborhood windows.")
 
     view_group: dict[tuple[int, int, int], int] = {}
     group_sample: dict[int, int] = {}
@@ -969,7 +979,9 @@ def build_multiview_maskless_plan(
                     # Match Flex's float32 frame-start clock exactly for windows;
                     # leave the original midpoint quantisation intact otherwise.
                     frame_times = (
-                        (torch.arange(frames, dtype=torch.float32, device="cpu") * rates[item]).tolist()  # [F] -> list
+                        (
+                            (torch.arange(frames, dtype=torch.float32, device="cpu") + offsets[item]) * rates[item]
+                        ).tolist()  # [F] -> list
                         if decomposed_temporal_window_seconds is not None
                         else None
                     )
@@ -979,7 +991,7 @@ def build_multiview_maskless_plan(
                             instant = (
                                 frame_times[frame]
                                 if frame_times is not None
-                                else math.floor((frame + 0.5) * (rates[item] / anchor_rate) + 1e-6)
+                                else math.floor((frame + offsets[item] + 0.5) * (rates[item] / anchor_rate) + 1e-6)
                             )
                             start = position + (view * frames + frame) * spatial
                             instant_cells.setdefault((sample, instant), {}).setdefault(group, []).append(
@@ -987,7 +999,9 @@ def build_multiview_maskless_plan(
                             )
                 else:
                     frame_ids = torch.arange(frames, device=device, dtype=torch.float64)  # [F]
-                    instants = torch.floor((frame_ids + 0.5) * (rates[item] / anchor_rate) + 1e-6).long()  # [F]
+                    instants = torch.floor(
+                        (frame_ids + offsets[item] + 0.5) * (rates[item] / anchor_rate) + 1e-6
+                    ).long()  # [F]
                     instant_ids.append(instants.repeat_interleave(spatial).repeat(views) + (sample << 32))  # [V*F*S]
                     sensor_positions.append(
                         torch.arange(position, position + item_lens[item], device=device)

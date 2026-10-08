@@ -969,18 +969,25 @@ class EveryNDrawSample(EveryN):
         if distributed.is_rank0() and wandb.run:
             sample_counter = getattr(trainer, "sample_counter", iteration)
             data_type = "image" if model.is_image_batch(data_batch) else "video"
+            image_flags = data_batch.get("sample_is_image")
+            if image_flags and any(image_flags) and not all(image_flags):
+                data_type = "mixed"
+            media_caption = f"{sample_counter}"
+            if image_flags is not None:
+                sources = data_batch.get("dataset_name", [])
+                media_caption += " | sources: " + ", ".join(str(source) for source in sources)
             tag += f"_{data_type}"
             info = {
                 "trainer/global_step": iteration,
                 "sample_counter": sample_counter,
             }
             if self.do_x0_prediction:
-                _add_wandb_media(info, f"{self.name}/{tag}_x0", x0_img_fp, f"{sample_counter}")
+                _add_wandb_media(info, f"{self.name}/{tag}_x0", x0_img_fp, media_caption)
                 # convert mse_loss to a dict
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
 
-            _add_wandb_media(info, f"{self.name}/{tag}_sample", sample_img_fp, f"{sample_counter}")
+            _add_wandb_media(info, f"{self.name}/{tag}_sample", sample_img_fp, media_caption)
             wandb.log(
                 info,
                 step=iteration,

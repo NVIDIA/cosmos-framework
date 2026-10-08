@@ -42,7 +42,6 @@ from cosmos_framework.model.generator.mot.maskless_attention import (
     replay_maskless_attention,
 )
 from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
-from cosmos_framework.model.generator.rolling_prompt import RollingPromptLayout, RollingTextSinkLayer
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryValue,
     JointARMemoryValue,
@@ -50,6 +49,10 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     MultiviewARMemoryValue,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
+)
+from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
+    RollingPromptLayout,
+    RollingTextSinkLayer,
 )
 
 

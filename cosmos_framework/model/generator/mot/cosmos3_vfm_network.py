@@ -13,6 +13,7 @@ from transformers.modeling_utils import PreTrainedModel
 from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
 from cosmos_framework.configs.base.defaults.multiview_attention import (
+    CaptionAccess,
     MultiviewAttentionConfig,
     ResolvedBackend,
     TemporalWindow,
@@ -90,6 +91,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
         multiview_attention_config: MultiviewAttentionConfig | None = None,
+        multiview_action_conditioning: bool = False,
         action_dim=32,
         num_embodiment_domains=32,
         action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -148,6 +150,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         # window, the folds read all of it through ``maskless_unavailable_reason``, and a copy of
         # each on this config could disagree with the other.
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
+        self.multiview_action_conditioning = multiview_action_conditioning
         # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
         # the attrs converter. Restore the legacy counting default and normalize durations
         # here, before building attention.
@@ -849,6 +852,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         """
         if self.config.enable_vision_modality_embeddings:
             modality_embed = self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
+            if packed_seq.vision_is_image is not None and packed_seq.vision is not None:
+                shapes = packed_seq.vision.token_shapes
+                if len(packed_seq.vision_is_image) != len(shapes):
+                    raise ValueError("Image identities must match the packed vision items.")
+                flags = torch.tensor(packed_seq.vision_is_image, device=packed_sequence.device, dtype=torch.long)  # [I]
+                lengths = torch.tensor([t * h * w for t, h, w in shapes], device=flags.device)  # [I]
+                embeddings = torch.stack((self.video_modality_embed, self.image_modality_embed))  # [2,H]
+                modality_embed = embeddings[flags].repeat_interleave(lengths, dim=0)  # [N_vision,H]
         elif self.config.enable_media_modality_embedding:
             modality_embed = self.media_modality_embed
         else:
@@ -959,7 +970,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 packed_tokens, modality.token_shapes, view_ids, self.rig_view_embed
             )  # [total_patches,hidden_size]
         if modality_embed is not None:
-            packed_tokens = packed_tokens + modality_embed.view(1, -1)  # [total_patches,hidden_size]
+            if modality_embed.ndim == 2:
+                # The linear output is not saved for backward. Reuse its buffer
+                # so per-token identities do not add another full hidden-state allocation.
+                packed_tokens.add_(modality_embed)  # [total_patches,hidden_size]
+            else:
+                packed_tokens = packed_tokens + modality_embed  # [total_patches,hidden_size]
 
         if modality.mse_loss_indexes.numel() > 0:
             timesteps = modality.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames]
@@ -1005,6 +1021,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 original_latent_shapes=original_latent_shapes,
             )
         )
+
+        if getattr(packed_seq, "vision_is_image", None) is not None and self.config.enable_vision_modality_embeddings:
+            # A vision-less rank must still reach both enabled image/video
+            # embeddings when another rank has camera supervision.
+            embedding_probe = 0.0 * (self.image_modality_embed.sum() + self.video_modality_embed.sum())  # []
+            output_dict["preds_vision"][0] = output_dict["preds_vision"][0] + embedding_probe  # [1,C,T,H,W]
 
     def _decode_lidar(
         self,
@@ -1337,6 +1359,78 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # geometry, because what this gates is whether the stream is multiview-aware at all -- both
         # folds and mask are inside.
         if self.multiview_backend is None:
+            return
+
+        if getattr(self.config, "multiview_action_conditioning", False):
+            counts = packed_seq.num_vision_items_per_sample
+            if counts is None:
+                # Preserve dense attention for the unchanged single-view streams
+                # mixed into an opt-in run; their existing action block is unchanged.
+                return
+            if (
+                self.multiview_backend != "maskless"
+                or packed_seq.num_action_tokens_per_supertoken != 0
+                or packed_seq.vision is None
+                or packed_seq.action is None
+                or packed_seq.sound is not None
+                or packed_seq.lidar is not None
+                or packed_seq.radar is not None
+            ):
+                raise ValueError("Multiview action conditioning requires RGB/action blocks and maskless attention.")
+            config = self.config.multiview_attention_config
+            full_seq, _ = get_full_only_seq(input_pack)
+            shapes: list[tuple[int, int, int]] = []
+            rates: list[float] = []
+            view_axis: list[int] = []
+            frame_offsets: list[int] = []
+            items_per_sample: list[int] = []
+            factor = self.config.temporal_compression_factor_vision
+            if len(packed_seq.action.token_shapes) != len(counts):
+                raise ValueError("Multiview packs require one camera-major action payload per sample.")
+            vision_cursor = 0
+            for sample, num_views in enumerate(counts):
+                view_shapes = packed_seq.vision.token_shapes[vision_cursor : vision_cursor + num_views]
+                view_rates = packed_seq.vision.seconds_per_frame[vision_cursor : vision_cursor + num_views]
+                latent_t = view_shapes[0][0]
+                if any(shape[0] != latent_t for shape in view_shapes) or packed_seq.action.token_shapes[sample] != (
+                    num_views * (latent_t - 1) * factor,
+                ):
+                    raise ValueError("Multiview action blocks must retain every frame-rate action for every view.")
+                shapes.extend((t, h, w) for t, h, w in view_shapes)
+                rates.extend(view_rates)
+                view_axis.extend(range(num_views))
+                frame_offsets.extend([0] * num_views)
+                # The action block stays separate. Describe its full frame-rate
+                # rows in latent-sized groups, sharing each RGB view's attention
+                # identity. Match pack_supertokens_temporal_causal's [null, V0],
+                # [actions[0:factor], V1], ... alignment, but omit its null prefix.
+                # The first real action group therefore starts at latent frame 1.
+                if latent_t > 1:
+                    shapes.extend([(latent_t - 1, 1, factor)] * num_views)
+                    rates.extend(view_rates)
+                    view_axis.extend(range(num_views))
+                    frame_offsets.extend([1] * num_views)
+                items_per_sample.append(num_views * (2 if latent_t > 1 else 1))
+                vision_cursor += num_views
+            caption_access: list[CaptionAccess] = ["all_captions"] * len(shapes)
+            # All RGB items are synchronized targets, not Auto's prefix controls/
+            # last target. Conditioned actions join the same view/time groups;
+            # their clean inputs do not make them separate control-image streams.
+            attention_meta.multiview_maskless = build_multiview_maskless_plan(
+                [1] * len(shapes),
+                shapes,
+                device=full_seq.device,
+                seconds_per_frame=rates,
+                frame_offsets=frame_offsets,
+                items_per_sample=items_per_sample,
+                is_control=[False] * len(shapes),
+                view_axis=view_axis,
+                caption_access=caption_access,
+                padded_gen_tokens=full_seq.shape[0],
+                attention_scope=config.mask.attention_scope,
+                deduplicate_cross_view=config.deduplicate_cross_view,
+                decomposed_temporal_window_seconds=config.mask.decomposed_temporal_window_seconds,
+            )
             return
 
         # No pathway check here: ``multiview_backend`` is non-None exactly when

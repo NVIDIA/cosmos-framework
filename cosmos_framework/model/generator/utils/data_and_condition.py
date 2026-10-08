@@ -85,6 +85,24 @@ class GenerationDataClean:
     # None for non-transfer or single-control samples.
     control_weights: list[list[float]] | None = None
 
+    # Explicit image identity per logical sample. None preserves the legacy
+    # homogeneous flag and its scheduling/RNG behavior. Multiple vision items
+    # belonging to a sample inherit its identity, including image-editing controls.
+    sample_is_image: list[bool] | None = None
+    # Sparse action/audio rows retain their owning logical sample for inference
+    # slicing and batched CFG. None keeps the existing homogeneous layout.
+    action_sample_ids: list[int] | None = None
+    sound_sample_ids: list[int] | None = None
+
+    def vision_image_flags(self) -> list[bool] | None:
+        """Expand sample identities to the flattened vision-item order."""
+        if self.sample_is_image is None:
+            return None
+        counts = self.num_vision_items_per_sample or [1] * self.batch_size
+        if len(counts) != self.batch_size or len(self.sample_is_image) != self.batch_size:
+            raise ValueError("Vision ownership and image identity must match the logical batch size.")
+        return [flag for flag, count in zip(self.sample_is_image, counts, strict=True) for _ in range(count)]
+
 
 @dataclass(slots=True)
 class GenerationDataNoised:

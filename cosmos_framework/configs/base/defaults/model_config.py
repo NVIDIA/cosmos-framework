@@ -133,22 +133,28 @@ class RectifiedFlowTrainingConfig:
     # control items; this is independent of per-item active-token normalization.
     exclude_fully_conditioned_items: bool | None = None
 
-    # Sample-level (vs rank-level) loss averaging for the vision modality.
+    # Loss reduction mode for all supervised modalities.
     #
-    # By default the vision loss on each rank is a mean over that rank's samples, and
+    # With "local_item_mean" (default), vision loss is a mean over each rank's items, and
     # FSDP/DDP averages gradients across ranks — so every *rank* contributes equally
-    # regardless of how many image/video samples it holds ("rank-level averaging").
-    # When ranks carry different sample counts this over-weights samples on sparse ranks.
+    # regardless of how many image/video items it holds ("rank-level averaging").
+    # When ranks carry different item counts this over-weights items on sparse ranks.
     #
-    # When True, the loss is renormalized so every *sample* contributes equally across
-    # the whole data-parallel group: each iteration all-reduces the total number of image
-    # and video samples over the DP group, and image and video losses are each normalized
-    # by their own global sample count and then summed. This counteracts the framework's
-    # rank-level gradient averaging so the effective objective is a true per-sample mean.
-    # The two independently normalized terms are weighted by the existing `image_loss_scale`
-    # (images; falls back to `loss_scale` when None) and `loss_scale` (videos), so their
-    # balance is tuned with the same knobs as the legacy rank-level path.
-    sample_level_loss_averaging: bool = False
+    # With "global_sample_mean", image/video/action/sound/LiDAR/radar losses are independently normalized
+    # by each modality's global sample count, then summed with their configured weights.
+    # This counteracts FSDP/DDP rank-level gradient averaging so every *sample*
+    # contributes equally within its modality, for homogeneous and mixed batches.
+    # Images use `image_loss_scale` (falling back to `loss_scale`), videos use
+    # `loss_scale`, and action/sound/LiDAR/radar retain their own configured loss weights.
+    # Denominators count logical samples contributing supervision, after averaging
+    # their timestep-weighted supervised item losses;
+    # neither tokens, clean controls, nor missing modalities add to those counts.
+    # Weights are never renormalized, including when a modality is globally absent.
+    # This intentional objective change applies per microbatch; gradient accumulation
+    # and independently weighted MoE auxiliary losses keep their existing semantics.
+    # Select this behavior independently of the dataloader class. "local_item_mean" preserves
+    # local rank-level averaging, including mixed image/video item weights.
+    loss_reduction_mode: Literal["local_item_mean", "global_sample_mean"] = "local_item_mean"
 
 
 @attrs.define(slots=False)
@@ -174,6 +180,18 @@ class FixedStepSamplerConfig:
     t_list: list[float] = [0.999, 0.75, 0.5, 0.25]
     # Distilled fixed-step sampling uses stochastic re-noising at each step.
     sample_type: str = "sde"
+
+
+@attrs.define(slots=False)
+class MultiviewActionConditioningConfig:
+    """Opt-in synchronized RGB targets with full frame-rate actions replicated per view.
+
+    Fixed view codes are written into padded action channels after normalization;
+    the first (reference) view must use zeros to retain single-view compatibility.
+    """
+
+    view_code_start: int
+    view_codes: list[list[float]]
 
 
 # Don't have any defaults and init only in config file.
@@ -310,6 +328,11 @@ class OmniMoTModelConfig:
     # Whether the within-sample GEN attention is multiview-aware, which attention it runs as
     # (the maskless decomposition or a masked FlexAttention call), and under what mask.
     multiview_attention: MultiviewAttentionConfig = MultiviewAttentionConfig()
+
+    # None preserves Auto's separate action controls and control/target item roles.
+    # Opt-in batches use separate ragged RGB and full frame-rate action blocks;
+    # single-view batches in the same run keep their original dense packing.
+    multiview_action_conditioning: MultiviewActionConditioningConfig | None = None
 
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.

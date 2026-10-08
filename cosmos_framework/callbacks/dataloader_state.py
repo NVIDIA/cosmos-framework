@@ -11,12 +11,21 @@ from typing import Any
 import torch
 
 from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.trainer import persistent_validation_enabled
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
 
 LANCE_VLM_RESUME_FORMAT = "lance_vlm_cursor_v1"
 LANCE_VLM_RESUME_STATE_KEY = "_lance_vlm_resume_state"
 LANCE_VLM_RESUME_WORKER_ENV_PREFIX = "LANCE_VLM_RESUME_STATE_WORKER_"
+VAL_STATE_KEY = "val"
+_STATE_LABELS = {"train": "dataloader", "val": "validation dataloader"}
+
+
+def no_replace_resume_env_names(split: str, worker_id: int) -> tuple[str, str]:
+    """Return the env vars that carry one worker's last consumed (epoch, index) for a split."""
+    prefix = "NSL_STATE_WORKER" if split == "train" else "NSL_STATE_VAL_WORKER"
+    return f"{prefix}_{worker_id}_EPOCH", f"{prefix}_{worker_id}_INDEX"
 
 
 @dataclass
@@ -36,9 +45,14 @@ class DataLoaderStateCallback(Callback):
         self.distributor_type = distributor_type
         self.config: Any = None
         self.state: dict[int, NoReplaceShardlistState] = {}
+        self.val_state: dict[int, NoReplaceShardlistState] = {}
         self.lance_state: dict[int, dict[str, Any]] = {}
         self._pending_lance_state: dict[str, Any] | None = None
         self.verbose = True
+
+    def _tracks_validation(self) -> bool:
+        """Validation cursors only carry over when the trainer keeps one validation iterator alive."""
+        return self.distributor_type == "no_replace" and persistent_validation_enabled(self.config.trainer)
 
     def on_training_step_batch_start(
         self,
@@ -109,18 +123,19 @@ class DataLoaderStateCallback(Callback):
         }
         self.lance_state[worker_id] = {"previous": previous_current, "current": current}
 
-    def _update_state_from_batch(self, data_batch: dict[str, torch.Tensor]) -> None:
+    @staticmethod
+    def _update_state_from_batch(
+        state: dict[int, NoReplaceShardlistState], data_batch: dict[str, torch.Tensor]
+    ) -> None:
         worker_ids = data_batch["sample_worker_id"].tolist()  # [B]
         epochs = data_batch["sample_epoch"].tolist()  # [B]
         indices = data_batch["sample_index"].tolist()  # [B]
         for worker_id, epoch, index in zip(worker_ids, epochs, indices, strict=True):
-            if worker_id not in self.state:
-                self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
+            if worker_id not in state:
+                state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
 
-            elif self.state[worker_id].epoch < epoch or (
-                self.state[worker_id].index < index and self.state[worker_id].epoch == epoch
-            ):
-                self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
+            elif state[worker_id].epoch < epoch or (state[worker_id].index < index and state[worker_id].epoch == epoch):
+                state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
 
     def on_training_step_batch_end(
         self,
@@ -135,7 +150,7 @@ class DataLoaderStateCallback(Callback):
                 self._update_lance_state(self._pending_lance_state)
                 self._pending_lance_state = None
             else:
-                self._update_state_from_batch(data_batch)
+                self._update_state_from_batch(self.state, data_batch)
 
     def on_training_step_end(
         self,
@@ -157,6 +172,18 @@ class DataLoaderStateCallback(Callback):
                             msg += f"worker {wid}: epoch={state.epoch}, index={state.index}\n"
                     log.info(msg)
 
+    def on_validation_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        # Lance batches carry no shardlist cursor.
+        if "sample_worker_id" in data_batch and self._tracks_validation():
+            self._update_state_from_batch(self.val_state, data_batch)
+
     def has_checkpoint_state(self) -> bool:
         return self.distributor_type == "no_replace"
 
@@ -165,15 +192,11 @@ class DataLoaderStateCallback(Callback):
             return {}
 
         if self.lance_state:
-            return {"format": LANCE_VLM_RESUME_FORMAT, "workers": self.lance_state}
-
-        state_dict: dict[int, dict[str, int]] = {}
-        for worker_id, per_worker_state in self.state.items():
-            state_dict[worker_id] = {"epoch": per_worker_state.epoch, "index": per_worker_state.index}
-            log.info(
-                f"Saved dataloader state for worker {worker_id}: "
-                f"epoch={per_worker_state.epoch}, index={per_worker_state.index}"
-            )
+            state_dict: dict[Any, Any] = {"format": LANCE_VLM_RESUME_FORMAT, "workers": self.lance_state}
+        else:
+            state_dict = self._save_shardlist_state(self.state, "train")
+        if self.val_state:
+            state_dict[VAL_STATE_KEY] = self._save_shardlist_state(self.val_state, "val")
         return state_dict
 
     def load_state_dict(self, state_dict: dict[Any, Any]) -> None:
@@ -183,6 +206,14 @@ class DataLoaderStateCallback(Callback):
         if not state_dict:
             log.info("No dataloader state found in checkpoint")
             return
+
+        state_dict = dict(state_dict)
+        val_state_dict = state_dict.pop(VAL_STATE_KEY, None)
+        if val_state_dict is not None:
+            if self._tracks_validation():
+                self.val_state = self._load_shardlist_state(val_state_dict, "val")
+            else:
+                log.info("Ignoring validation dataloader state because the validation iterator is not persistent")
 
         if state_dict.get("format") == LANCE_VLM_RESUME_FORMAT:
             workers = state_dict.get("workers")
@@ -203,11 +234,31 @@ class DataLoaderStateCallback(Callback):
                 )
             return
 
-        self.state = {}
+        self.state = self._load_shardlist_state(state_dict, "train")
+
+    @staticmethod
+    def _save_shardlist_state(state: dict[int, NoReplaceShardlistState], split: str) -> dict[int, dict[str, int]]:
+        state_dict: dict[int, dict[str, int]] = {}
+        for worker_id, per_worker_state in state.items():
+            state_dict[worker_id] = {"epoch": per_worker_state.epoch, "index": per_worker_state.index}
+            log.info(
+                f"Saved {_STATE_LABELS[split]} state for worker {worker_id}: "
+                f"epoch={per_worker_state.epoch}, index={per_worker_state.index}"
+            )
+        return state_dict
+
+    @staticmethod
+    def _load_shardlist_state(state_dict: dict[int, dict[str, int]], split: str) -> dict[int, NoReplaceShardlistState]:
+        """Restore per-worker cursors and export them to the split's dataloader workers, which start after loading."""
+        state: dict[int, NoReplaceShardlistState] = {}
         for worker_id, per_worker_state in state_dict.items():
             epoch = per_worker_state["epoch"]
             index = per_worker_state["index"]
-            self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
-            os.environ[f"NSL_STATE_WORKER_{worker_id}_EPOCH"] = str(epoch)
-            os.environ[f"NSL_STATE_WORKER_{worker_id}_INDEX"] = str(index)
-            log.info(f"Loaded no replace dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
+            state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
+            epoch_env, index_env = no_replace_resume_env_names(split, worker_id)
+            os.environ[epoch_env] = str(epoch)
+            os.environ[index_env] = str(index)
+            log.info(
+                f"Loaded no replace {_STATE_LABELS[split]} state for worker {worker_id}: epoch={epoch}, index={index}"
+            )
+        return state

@@ -1232,10 +1232,8 @@ class IterativeJointDataLoader(JointDataLoader):
                 raise ValueError(f"Invalid packing limits for {name}: {limits}")
             if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in limits.values()):
                 raise ValueError(f"Packing limits for {name} must be positive integers: {limits}")
-        # Keep PyTorch/WebDataset/Lance worker creation on the main thread.
-        # The packer thread starts only after child iterator prewarm has completed.
-        if enable_async_batch_building and not prewarm:
-            raise ValueError("enable_async_batch_building=True requires prewarm=True.")
+        # Set this before the base constructor initializes child iterators.
+        self.enable_async_batch_building: bool = enable_async_batch_building
 
         # A time ceiling skews the token mix here exactly as it does on the random
         # loader, but the correction cannot be applied here: this loader seeds the draw
@@ -1291,9 +1289,16 @@ class IterativeJointDataLoader(JointDataLoader):
         total_ratio = sum(self.data_ratios)
         self.data_probs = np.array([ratio / total_ratio for ratio in self.data_ratios])
         # Async batch builder state
-        self.enable_async_batch_building: bool = enable_async_batch_building
         self.async_batch_building_timeout_s: float = float(async_batch_building_timeout_s)
         self._async_batch_builder: _AsyncBatchBuilder | None = None
+
+    def _initialize_child_iterators_once(self) -> None:
+        # Keep PyTorch/WebDataset/Lance worker creation outside the packer thread.
+        # Workerless loaders can initialize lazily without fetching every stream first.
+        if self.enable_async_batch_building and not self.prewarm:
+            if any(getattr(loader, "num_workers", None) != 0 for loader in self.dataloader_list):
+                raise ValueError("Async batch building without prewarm requires num_workers=0 on every child loader.")
+        super()._initialize_child_iterators_once()
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         self._initialize_child_iterators_once()
@@ -1892,3 +1897,236 @@ class RandomJointDataLoader(JointDataLoader):
                 # exactly the quantity whose split across sources is being held.
                 self.token_mix.observe(index_id, metrics.current_sequence_length)
             yield output_batch
+
+
+@dataclass(frozen=True)
+class SampleTokenMixConfig:
+    """Estimate source token lengths per fresh sample, including deferred draws.
+
+    Ratios become target token shares when enabled. The estimate is updated once
+    per fresh, packable candidate; rechecking a deferred sample never counts it a
+    second time. Both loaders use the shared ``TokenMixController`` estimator.
+    """
+
+    enabled: bool = True
+    half_life_samples: float = 50.0
+    warmup_samples_per_source: int = 8
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.half_life_samples) or self.half_life_samples <= 0:
+            raise ValueError("half_life_samples must be finite and positive.")
+        if self.warmup_samples_per_source < 1:
+            raise ValueError("warmup_samples_per_source must be positive.")
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    source: int
+    sample: dict[str, Any]
+    tokens: int
+    seconds: float
+
+
+def collate_mixed_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep every column aligned and expose ragged vision items under one key.
+
+    Pixel normalization belongs to the model input boundary. Here image and video
+    tensors retain their native shapes/dtypes, with a per-sample image flag. Empty
+    vision lists represent samples with another modality, such as LiDAR. Optional
+    metadata stays aligned even when only one source supplies it.
+    """
+    if not samples:
+        raise ValueError("Cannot collate an empty mixed batch.")
+    excluded = {"images", "video", *_BATCH_TIMING_KEYS}
+    keys = set().union(*(sample.keys() for sample in samples)) - excluded
+    batch = {key: [sample.get(key) for sample in samples] for key in keys}
+    batch["vision"] = [sample.get("images", sample.get("video", [])) for sample in samples]
+    batch["sample_is_image"] = ["images" in sample for sample in samples]
+    return batch
+
+
+class RandomMixedJointDataLoader(JointDataLoader):
+    """Mix sources within each packed batch without altering the legacy loaders.
+
+    Each rank owns an independent RNG. Under a time budget, configured ratios
+    target token shares; without it, ratios are sample draw probabilities unless
+    sample token-mix control is explicitly enabled. Random draws allow, but do not
+    require, several sources in a batch.
+
+    Deferred candidates are kept in draw order and offered first in the next
+    batch. In particular its oldest candidate starts that batch, even if its cost
+    exceeds the time target, so lookahead cannot starve expensive samples. A token
+    limit still rejects individually oversized samples using the base contract.
+    Finite sources are retired on exhaustion; the remaining sources continue
+    with renormalized probabilities until all sources and pending samples finish.
+    """
+
+    def __init__(
+        self,
+        dataloaders: dict[str, Any],
+        tokenizer_spatial_compression_factor: int,
+        tokenizer_temporal_compression_factor: int,
+        patch_spatial: int,
+        max_sequence_length: int | None = None,
+        max_samples_per_batch: int | None = None,
+        lidar_spatial_compression: Sequence[int] | None = None,
+        lidar_temporal_compression_factor: int | None = None,
+        sound_latent_fps: float = 0,
+        audio_sample_rate: int = 48000,
+        default_lookahead_limit: int = 10,
+        lookahead_limits: dict[str, int] | None = None,
+        uniae_chunk_frames: int | Mapping[str, int] | None = None,
+        uniae_pad_frames: int | None = None,
+        iteration_time_budget: IterationTimeBudgetConfig | None = None,
+        token_mix_control: SampleTokenMixConfig | None = None,
+        seed: int = 42,
+        prewarm: bool = True,
+        prewarm_concurrency: int = 1,
+        lazy_initialize_child_iterators: bool = False,
+        forkserver_preload_modules: list[str] | None = None,
+    ) -> None:
+        if default_lookahead_limit < 1 or any(value < 1 for value in (lookahead_limits or {}).values()):
+            raise ValueError("Lookahead limits must be positive.")
+        ratios = [entry["ratio"] for entry in dataloaders.values() if entry is not None]
+        if not ratios or not all(math.isfinite(ratio) and ratio >= 0 for ratio in ratios) or not any(ratios):
+            raise ValueError("Source ratios must be finite and nonnegative, with at least one positive ratio.")
+        super().__init__(
+            dataloaders=dataloaders,
+            tokenizer_spatial_compression_factor=tokenizer_spatial_compression_factor,
+            tokenizer_temporal_compression_factor=tokenizer_temporal_compression_factor,
+            patch_spatial=patch_spatial,
+            max_sequence_length=max_sequence_length,
+            max_samples_per_batch=max_samples_per_batch,
+            lidar_spatial_compression=lidar_spatial_compression,
+            lidar_temporal_compression_factor=lidar_temporal_compression_factor,
+            sound_latent_fps=sound_latent_fps,
+            audio_sample_rate=audio_sample_rate,
+            prewarm=prewarm,
+            prewarm_concurrency=prewarm_concurrency,
+            default_lookahead_limit=default_lookahead_limit,
+            lookahead_limits=lookahead_limits,
+            uniae_chunk_frames=uniae_chunk_frames,
+            uniae_pad_frames=uniae_pad_frames,
+            lazy_initialize_child_iterators=lazy_initialize_child_iterators,
+            iteration_time_budget=iteration_time_budget,
+            forkserver_preload_modules=forkserver_preload_modules,
+        )
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        self.rng: np.random.Generator = np.random.default_rng(np.random.SeedSequence([seed, rank]))
+        config = token_mix_control or SampleTokenMixConfig(enabled=self.iteration_time_budget is not None)
+        # Legacy batch-named fields count observations; here each is one fresh sample.
+        # Sample lengths can differ far more than packed batches, so keep this draw unclipped.
+        self.token_mix: TokenMixController = TokenMixController(
+            self.dataset_name_list,
+            self.data_ratios,
+            TokenMixControlConfig(
+                enabled=config.enabled,
+                half_life_batches=config.half_life_samples,
+                warmup_batches_per_source=config.warmup_samples_per_source,
+                max_weight_ratio=None,
+            ),
+        )
+        self.accepted_tokens: np.ndarray = np.zeros(len(self.dataset_name_list), dtype=np.int64)
+        self._active: np.ndarray = np.ones(len(self.dataset_name_list), dtype=bool)
+        self._pending: deque[_Candidate] = deque()
+
+    def _fresh_candidate(self, metrics: _PackingMetrics, worker_timings: list[dict[str, Any]]) -> _Candidate | None:
+        while np.any(self._active):
+            source = int(self.rng.choice(len(self.dataloader_list), p=self.token_mix.probabilities(self._active)))
+            from_buffer = bool(self.buffers[source])
+            try:
+                sample = self._get_next_sample(source)
+            except StopIteration:
+                self._active[source] = False
+                continue
+            metrics.from_buffer += int(from_buffer)
+            metrics.from_workers += int(not from_buffer)
+            if not from_buffer:
+                worker_timings.append(
+                    {
+                        "dataset_name": self.dataset_name_list[source],
+                        **{key: sample[key] for key in _BATCH_TIMING_KEYS if key in sample},
+                    }
+                )
+            if _sample_should_drop(sample):
+                self._log_drop_sample(sample, self.dataset_name_list[source])
+                metrics.dropped_count += 1
+                _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, sample)
+                continue
+            tokens, seconds = self._compute_sample_cost(sample)
+            if not self._sample_fits(
+                num_tokens=tokens,
+                sample_seconds=seconds,
+                packed_tokens=0,
+                packed_sample_seconds=0.0,
+                batch_started=False,
+            ):
+                metrics.dropped_count += 1
+                _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, sample)
+                continue
+            if tokens <= 0:
+                raise ValueError("A packable sample must contain at least one token.")
+            self.token_mix.observe(source, tokens, record_realized=False)
+            return _Candidate(source, sample, tokens, seconds)
+        return None
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        self._initialize_child_iterators_once()
+        while self._pending or np.any(self._active):
+            metrics = _PackingMetrics()
+            samples: list[dict[str, Any]] = []
+            deferred: deque[_Candidate] = deque()
+            source_stats: dict[str, dict[str, int | float]] = {}
+            worker_timings: list[dict[str, Any]] = []
+            misses = 0
+            while self.max_samples_per_batch is None or len(samples) < self.max_samples_per_batch:
+                if self._pending:
+                    candidate = self._pending.popleft()
+                    metrics.from_buffer += 1
+                else:
+                    candidate = self._fresh_candidate(metrics, worker_timings)
+                if candidate is None:
+                    break
+                if not self._sample_fits(
+                    num_tokens=candidate.tokens,
+                    sample_seconds=candidate.seconds,
+                    packed_tokens=metrics.current_sequence_length,
+                    packed_sample_seconds=metrics.sample_seconds,
+                    batch_started=bool(samples),
+                ):
+                    deferred.append(candidate)
+                    misses += 1
+                    if misses >= self.lookahead_limits[candidate.source]:
+                        break
+                    continue
+
+                name = self.dataset_name_list[candidate.source]
+                sample = dict(candidate.sample)
+                sample["dataset_name"] = name
+                samples.append(sample)
+                metrics.num_samples += 1
+                metrics.current_sequence_length += candidate.tokens
+                metrics.sample_seconds += candidate.seconds
+                self.accepted_tokens[candidate.source] += candidate.tokens
+                stats = source_stats.setdefault(name, {"_num_tokens": 0, "_num_samples": 0, "_sample_seconds": 0.0})
+                stats["_num_tokens"] += candidate.tokens
+                stats["_num_samples"] += 1
+                stats["_sample_seconds"] += candidate.seconds
+
+            # Existing pending candidates preceded all fresh draws. Put candidates
+            # skipped this batch back ahead of those we have not visited yet.
+            deferred.extend(self._pending)
+            self._pending = deferred
+            if not samples:
+                return
+            batch = collate_mixed_samples(samples)
+            batch["_source_packing_metrics"] = source_stats
+            # One timing record per child batch fetch, including dropped draws.
+            # Buffered/deferred samples do not charge their worker a second time.
+            batch["_source_worker_timings"] = worker_timings
+            metrics.attach_to(
+                batch,
+                buffer_size=len(self._pending) + sum(len(buffer) for buffer in self.buffers),
+                projected_iteration_sec=self._projected_iteration_sec(metrics.sample_seconds),
+            )
+            yield batch

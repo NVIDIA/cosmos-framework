@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -13,6 +14,7 @@ from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequ
 from cosmos_framework.data.generator.sequence_packing.temporal_causal import pack_supertokens_temporal_causal
 
 if TYPE_CHECKING:
+    from cosmos_framework.configs.base.defaults.model_config import MultiviewActionConditioningConfig
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 
 
@@ -146,6 +148,117 @@ def uses_single_timestep(input_timesteps: torch.Tensor) -> bool:
         return False
     flat = input_timesteps.reshape(-1)
     return bool((flat == flat[0]).all())
+
+
+def replicate_multiview_actions(
+    data: GenerationDataClean, *, num_views: int, temporal_factor: int, action_dim: int
+) -> GenerationDataClean:
+    """Replicate all frame-rate actions camera-major; leave single-view data untouched."""
+    if data.num_vision_items_per_sample is None:
+        return data
+    if data.num_vision_items_per_sample != [num_views] * data.batch_size:
+        raise ValueError("Multiview action conditioning requires one RGB item per configured view and no controls.")
+    assert data.x0_tokens_vision is not None and data.x0_tokens_action is not None
+    actions: list[torch.Tensor] = []
+    domains: list[torch.Tensor] = []
+    for sample, raw_action in enumerate(data.x0_tokens_action):
+        latent_t = data.x0_tokens_vision[num_views * sample].shape[2]
+        if (
+            raw_action.ndim != 2
+            or raw_action.shape[1] != action_dim
+            or raw_action.shape[0] != (latent_t - 1) * temporal_factor
+        ):
+            raise ValueError(f"Multiview requires all {action_dim}D frame-rate actions aligned to T+1 observations.")
+        actions.append(raw_action.repeat(num_views, 1))
+        if data.action_domain_id is not None:
+            domain = data.action_domain_id[sample].reshape(-1)
+            if domain.numel() not in (1, raw_action.shape[0]):
+                raise ValueError("Action domains must be scalar or have one ID per frame-rate action.")
+            domains.append(domain.repeat(num_views) if domain.numel() > 1 else domain)
+    return replace(
+        data,
+        x0_tokens_action=actions,
+        raw_state_action=actions,
+        action_domain_id=domains or None,
+        num_views_per_action_item=[num_views] * data.batch_size,
+    )
+
+
+def pack_multiview_action_conditioning(
+    plans: list[SequencePlan],
+    text_tokens: list[list[int]],
+    data: GenerationDataClean,
+    timesteps: torch.Tensor,
+    *,
+    config: MultiviewActionConditioningConfig,
+    special_tokens: dict[str, int],
+    patch_spatial: int,
+    temporal_factor: int,
+    temporal_margin: int,
+    base_fps: float,
+) -> PackedSequence:
+    """Pack separate RGB and full frame-rate action blocks with synchronized ragged views."""
+    num_views = len(config.view_codes)
+    if data.num_vision_items_per_sample != [num_views] * data.batch_size:
+        raise ValueError("Multiview action batches must match the configured view count.")
+    assert data.x0_tokens_vision is not None and data.x0_tokens_action is not None
+    builder = PackedSequenceBuilder(uses_single_timestep=uses_single_timestep(timesteps))
+    for sample, plan in enumerate(plans):
+        if not plan.has_vision or not plan.has_action or plan.has_sound or plan.has_lidar or plan.has_radar:
+            raise ValueError("Multiview action conditioning supports RGB + conditioned action forward dynamics only.")
+        sample_start = builder.current_seq_index
+        builder.set_mrope_temporal_offset(0)
+        builder.pack_text_tokens(text_tokens[sample], special_tokens, has_generation=True, use_float_positions=True)
+        builder.advance_mrope_temporal_offset(temporal_margin)
+        temporal_offset = builder.mrope_temporal_offset
+        fps = float(data.fps_vision[sample]) if data.fps_vision is not None else base_fps
+        views = data.x0_tokens_vision[num_views * sample : num_views * (sample + 1)]
+        latent_t = views[0].shape[2]
+        if any(view.shape[2] != latent_t for view in views):
+            raise ValueError("All views must share latent time, even when their spatial grids differ.")
+        action = data.x0_tokens_action[sample]
+        actions_per_view = (latent_t - 1) * temporal_factor
+        if action.ndim != 2 or action.shape[0] != num_views * actions_per_view:
+            raise ValueError("All frame-rate actions must be replicated camera-major without temporal subsampling.")
+        # Fixed codes occupy configured padded slots after normalization;
+        # fully conditioned frame-rate actions bypass RF masking.
+        action = action.clone()
+        # Torch probing OmegaConf containers retains caller-frame tensors until
+        # cyclic GC; materialize plain lists before passing codes to Torch.
+        codes = action.new_tensor([list(code) for code in config.view_codes])
+        start = config.view_code_start
+        action.reshape(num_views, actions_per_view, action.shape[1])[..., start : start + codes.shape[1]] = codes[
+            :, None, :
+        ]
+        generation_start = builder.current_seq_index
+        for view in views:
+            builder.set_mrope_temporal_offset(temporal_offset)
+            builder.pack_vision_tokens(
+                view,
+                plan.condition_frame_indexes_vision,
+                float(timesteps[sample].flatten()[0]),
+                patch_spatial,
+                fps,
+                True,
+                base_fps,
+                temporal_factor,
+                None,
+                None,
+            )
+        builder.pack_action_tokens(
+            action,
+            list(range(action.shape[0])),
+            0.0,
+            action_temporal_offset=temporal_offset,
+            enable_fps_modulation=True,
+            base_fps=base_fps,
+            action_fps=fps,
+            base_temporal_compression_factor=temporal_factor,
+            action_start_frame_offset=1,
+            num_views=num_views,
+        )
+        builder.finish_sample(builder.current_seq_index - generation_start, builder.current_seq_index - sample_start)
+    return builder.finalize(gen_data_clean=data)
 
 
 def pack_input_sequence(
@@ -876,6 +989,17 @@ def pack_input_sequence(
         seq_builder.null_action_supertokens = null_action_flags[0]
 
     # Finalize and return packed data
-    return seq_builder.finalize(
+    packed = seq_builder.finalize(
         gen_data_clean=gen_data_clean,
     )
+    # Loss normalization counts logical owners, not flattened control/target items.
+    # Keep this metadata outside the token layout so attention packing is unchanged.
+    for name in ("vision", "lidar", "radar", "action", "sound"):
+        counts = getattr(gen_data_clean, f"num_{name}_items_per_sample", None)
+        packed.modality_sample_ids[name] = [
+            sample_index
+            for sample_index, plan in enumerate(sequence_plans)
+            if getattr(plan, f"has_{name}")
+            for _ in range(counts[sample_index] if counts is not None else 1)
+        ]
+    return packed

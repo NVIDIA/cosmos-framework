@@ -1191,6 +1191,7 @@ class PackedSequenceBuilder:
             split_lens=split_lens,
             attn_modes=attn_modes,
             is_image_batch=gen_data_clean.is_image_batch,
+            vision_is_image=gen_data_clean.vision_image_flags(),
             uses_single_timestep=self.uses_single_timestep,
             # Text modality (converted to tensors)
             text_ids=torch.tensor(self.text_ids, dtype=torch.long),  # [N_text_tokens]
@@ -1354,6 +1355,10 @@ class PackedSequence:
     # FlexAttention mask as its vision items followed by its LiDAR items.
     num_lidar_items_per_sample: list[int] | None = None
 
+    # Modality identity and ownership are data properties, independent of the
+    # loader. Sample IDs map flattened supervised items back to logical samples.
+    vision_is_image: list[bool] | None = None
+    modality_sample_ids: dict[str, list[int]] = field(default_factory=dict)
     # Same bookkeeping for the radar stream, whose items follow the sample's LiDAR items.
     # None when the batch carries no radar.
     num_radar_items_per_sample: list[int] | None = None

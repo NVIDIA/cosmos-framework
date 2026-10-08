@@ -58,6 +58,10 @@ class TeacherForcingReplayPolicyConfig:
         validator=attrs.validators.optional(attrs.validators.ge(0)),
     )
 
+    # Maskless decomposed replay merges same-view and cross-view partitions.
+    # Exclude their overlapping keys when reproducing deduplicated attention.
+    deduplicate_cross_view: bool = attrs.field(default=False, validator=attrs.validators.instance_of(bool))
+
     def __attrs_post_init__(self) -> None:
         """Reject replay graphs that can relay future RGB through global control K/V."""
         self.validate()

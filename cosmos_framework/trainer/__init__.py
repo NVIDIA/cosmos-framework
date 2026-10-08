@@ -76,6 +76,15 @@ class ContextParallelDataWindow:
             )
 
 
+def persistent_validation_enabled(config_trainer: Any) -> bool:
+    """Whether training keeps one validation iterator alive, so validation data advances across calls."""
+    return bool(
+        config_trainer.run_validation
+        and getattr(config_trainer, "prefetch_validation", False)
+        and config_trainer.max_val_iter is not None
+    )
+
+
 class ImaginaireTrainer:
     """The base trainer class of Imaginaire.
 
@@ -317,12 +326,7 @@ class ImaginaireTrainer:
             # callbacks) so data-augmentation randomness starts from a deterministic state
             # regardless of how much RNG state init consumed.
             misc.set_random_seed(seed=self.config.trainer.seed, by_rank=True)
-        if (
-            self.config.trainer.run_validation
-            and getattr(self.config.trainer, "prefetch_validation", False)
-            and self.config.trainer.max_val_iter is not None
-            and self._validation_iterator is None
-        ):
+        if persistent_validation_enabled(self.config.trainer) and self._validation_iterator is None:
             self._validation_iterator = iter(dataloader_val)
         with (
             maybe_enable_profiling(self.config, global_step=iteration) as torch_profiler,

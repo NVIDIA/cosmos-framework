@@ -388,7 +388,12 @@ class SigmaLossAnalysis(Callback):
             if sigma.ndim == 2:
                 sigma = sigma.mean(dim=-1)  # [B]  (reduced from [B,T_max] or [B,1])
 
-            if cast(_SupportsIsImageBatch, model).is_image_batch(data_batch):
+            vision_flags = output_batch.get("vision_is_image")
+            if vision_flags is not None:
+                is_image = torch.tensor(vision_flags, dtype=torch.bool, device=sigma.device)  # [B_items]
+                self.image_cache.add(sigma[is_image], fm_loss_vision_per_instance[is_image])
+                self.video_cache.add(sigma[~is_image], fm_loss_vision_per_instance[~is_image])
+            elif cast(_SupportsIsImageBatch, model).is_image_batch(data_batch):
                 self.image_cache.add(sigma, fm_loss_vision_per_instance)
             else:
                 self.video_cache.add(sigma, fm_loss_vision_per_instance)

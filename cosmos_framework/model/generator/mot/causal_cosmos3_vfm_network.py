@@ -36,7 +36,10 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     build_teacher_forcing_multiview_flex_metadata,
 )
 from cosmos_framework.model.generator.mot.maskless_attention import build_replay_maskless_plan
-from cosmos_framework.model.generator.rolling_replay import RollingReplayRequest, build_rolling_replay_metadata
+from cosmos_framework.model.generator.utils.rolling_kv.rolling_replay import (
+    RollingReplayRequest,
+    build_rolling_replay_metadata,
+)
 
 
 def build_interactive_multiview_mask_items(

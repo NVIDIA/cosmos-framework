@@ -379,8 +379,11 @@ def build_replay_maskless_plan(
             & cross_enabled[:, None]
             & cross_time
         )  # [R_Q,R_KV]
-        # Preserve production maskless weighting: a same-view key present in
-        # both partitions contributes twice to the merged softmax denominator.
+        # Legacy maskless weighting counts a same-view key in both partitions.
+        # Deduplicated recipes retain it only in the same-view partition so the
+        # merged softmax denominator counts every permitted key once.
+        if policy.deduplicate_cross_view:
+            cross = cross & ~view_match  # [R_Q,R_KV]
         partitions.append(("cross_instant" if window is None else "cross_window", cross))
     partitions.append(("caption", allowed & caption))  # [R_Q,R_KV]
     passes = tuple(

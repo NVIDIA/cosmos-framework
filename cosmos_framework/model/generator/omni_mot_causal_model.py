@@ -43,7 +43,6 @@ from cosmos_framework.configs.base.defaults.replay_attention import (
     TeacherForcingReplayPolicyConfig,
 )
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
-from cosmos_framework.model.generator.joint_transfer_ar import sample_joint_transfer_ar
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
 from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
@@ -63,7 +62,6 @@ from cosmos_framework.model.generator.mot.post_saturation.runtime import (
 from cosmos_framework.model.generator.mot.post_saturation.static_compile import (
     validate_ar_static_und_cache_lengths,
 )
-from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
 from cosmos_framework.model.generator.teacher_forcing import (
     make_teacher_forcing_clean_pack,
 )
@@ -76,6 +74,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TeacherForcingMemoryState,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
+from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend, sample_joint_transfer_ar
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
 from cosmos_framework.data.generator.sequence_packing.autoregressive import (
     pack_input_sequence_autoregressive,
@@ -2941,7 +2940,9 @@ class OmniMoTCausalModel(OmniMoTModel):
             seed = _broadcast_seed([seed], self.parallel_dims.cfgp_mesh.get_group(), self.parallel_dims.cfgp_rank)[0]
         cfg_active = guidance != 1.0 or cfgp_enabled
         if getattr(self.config, "rolling_kv_cache_chunks", None) is not None:
-            from cosmos_framework.model.generator.rolling_transfer_ar import iter_rolling_transfer_ar
+            from cosmos_framework.model.generator.utils.rolling_kv.rolling_transfer_ar import (
+                iter_rolling_transfer_ar,
+            )
 
             if normalize_cfg and cfg_active:
                 raise ValueError("Rolling replay requires normalize_cfg=False when guidance is active.")
