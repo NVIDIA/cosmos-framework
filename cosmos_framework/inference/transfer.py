@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 import torch
 
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import (
     BlurTransferArgs,
     EdgeTransferArgs,
@@ -25,11 +26,10 @@ from cosmos_framework.inference.vision import (
     read_and_resize_media,
     uint8_to_normalized_float,
 )
-from cosmos_framework.utils import log
-from cosmos_framework.data.generator.sequence_packing import SequencePlan
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, VelocityPostprocess
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
+from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.utils import log
 
 
 @dataclass
@@ -294,19 +294,16 @@ def build_control_cfg_postprocess(
     *,
     control_guidance: float,
     control_guidance_interval: Optional[list[float]] = None,
-) -> Optional[
-    Callable[
-        ...,
-        Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]],
-    ]
-]:
+) -> Callable[..., VelocityPostprocess | None] | None:
     """Return a ``velocity_postprocess_builder`` that injects control-CFG.
 
     Pass the returned builder to ``OmniMoTModel.generate_samples_from_batch``.
     The builder is invoked once at the start of sampling with the prepared
     inference state; it builds the alternate (target-only) state and returns a
     per-step closure that mixes the conditional velocity with an extra forward
-    pass that has all control items dropped.
+    pass that has all control items dropped. The returned ``VelocityPostprocess``
+    declares that extra branch to the sampler for diffusion-cache bookkeeping
+    and FSDP forward-count alignment.
 
     Returns ``None`` when control-CFG is a no-op (``control_guidance == 1.0``),
     so the model takes its fast single-forward path.
@@ -321,9 +318,7 @@ def build_control_cfg_postprocess(
         cond_tokens: list[list[int]],
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
-    ) -> Optional[
-        Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
-    ]:
+    ) -> VelocityPostprocess | None:
         nc_state = _build_no_control_inference_state(sequence_plans, gen_data_clean)
         if nc_state is None:
             log.warning(
@@ -341,15 +336,24 @@ def build_control_cfg_postprocess(
                 raise ValueError(f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}")
             control_guidance_bounds = (control_guidance_interval[0], control_guidance_interval[1])
 
+        def control_active(timestep: torch.Tensor) -> bool:  # timestep: [B,1]
+            return control_guidance_bounds is None or (
+                control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]
+            )
+
+        def cfg_branches(timestep: torch.Tensor) -> tuple[str, ...]:  # timestep: [B,1]
+            # Declare the no-control forward while active. Changing the branch set
+            # resets all diffusion-cache histories at the interval boundary.
+            return ("cond_no_control",) if control_active(timestep) else ()
+
         def postprocess(
             cond_v_full: list[torch.Tensor],
             noise_x: list[torch.Tensor],
             timestep: torch.Tensor,
             text_guidance_scale: float,
         ) -> list[torch.Tensor]:
-            if control_guidance_bounds is not None:
-                if not (control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]):
-                    return cond_v_full
+            if not control_active(timestep):
+                return cond_v_full
 
             noise_x_nc = [nx[c:] for nx, c in zip(noise_x, ctrl_dims, strict=True)]  # [[N_target],...]
             cond_v_nc = model._get_velocity(
@@ -385,7 +389,7 @@ def build_control_cfg_postprocess(
                 mixed.append(torch.cat([v_full_i[:c], mixed_suffix], dim=0))  # [N_full]
             return mixed
 
-        return postprocess
+        return VelocityPostprocess(apply=postprocess, cfg_branches=cfg_branches)
 
     return builder
 
