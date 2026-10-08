@@ -48,10 +48,10 @@ def _get_available_gpus() -> int:
 def pytest_addoption(parser: pytest.Parser):
     parser.addoption("--manual", action="store_true", default=False, help="Run manual tests")
     parser.addoption(
-        "--skip-mapped-cpu-tests",
+        "--skip-mapped-non-gpu-tests",
         action="store_true",
         default=False,
-        help="Skip CPU-only tests whose files are generated from imaginaire4 sources.",
+        help="Skip tests generated from imaginaire4 unless they explicitly require a GPU.",
     )
     parser.addoption(
         "--num-gpus",
@@ -155,14 +155,13 @@ def _mapped_destinations(root_dir: Path) -> frozenset[str]:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]):
     args = get_args()
-    skip_mapped_cpu_tests = bool(config.getoption("--skip-mapped-cpu-tests"))
-    mapped_destinations = _mapped_destinations(config.rootpath) if skip_mapped_cpu_tests else frozenset()
+    skip_mapped_non_gpu_tests = bool(config.getoption("--skip-mapped-non-gpu-tests"))
+    mapped_destinations = _mapped_destinations(config.rootpath) if skip_mapped_non_gpu_tests else frozenset()
 
     for item in items:
         manual_mark = _get_marker(item, "manual")
         level_mark = _get_marker(item, "level")
         gpus_mark = _get_marker(item, "gpus")
-        cpu_mark = _get_marker(item, "CPU")
         gpu_mark = _get_marker(item, "GPU")
         try:
             level = _parse_level_marker(level_mark) if level_mark else 0
@@ -187,10 +186,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(
                 pytest.mark.skip(reason=f"test requires {gpus} GPUs, but only {available_gpus} are available")
             )
-        if skip_mapped_cpu_tests and cpu_mark is not None and gpu_mark is None and gpus == 0:
+        if skip_mapped_non_gpu_tests and gpu_mark is None and gpus == 0:
             item_path = Path(str(item.path)).relative_to(config.rootpath).as_posix()
             if item_path in mapped_destinations:
-                item.add_marker(pytest.mark.skip(reason="mapped CPU-only test is covered by imaginaire4 CI"))
+                item.add_marker(pytest.mark.skip(reason="mapped non-GPU test is covered by imaginaire4 CI"))
 
     # Exclude skipped tests
     selected_items = []
