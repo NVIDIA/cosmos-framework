@@ -59,6 +59,43 @@ def test_unit_control_guidance_uses_single_branch() -> None:
     assert build_control_cfg_postprocess(control_guidance=1.0) is None
 
 
+@pytest.mark.parametrize("text_guidance", [1.0, 3.0])
+@pytest.mark.parametrize("control_guidance", [0.5, 1.5, 2.0])
+def test_control_cfg_increment_is_independent_of_text_guidance(text_guidance: float, control_guidance: float) -> None:
+    control = torch.zeros(2, 3)
+    target = torch.ones(4, 3)
+    data = GenerationDataClean(
+        batch_size=1,
+        is_image_batch=False,
+        x0_tokens_vision=[control, target],
+        num_vision_items_per_sample=[2],
+    )
+    full = torch.arange(control.numel() + target.numel(), dtype=torch.float32) + 10.0
+    no_control = torch.arange(target.numel(), dtype=torch.float32) + 1.0
+    unconditional = torch.full_like(full, -2.0)
+    noise = torch.zeros_like(full)
+    timestep = torch.tensor([[0.5]])
+    model = SimpleNamespace(_get_velocity=Mock(return_value=[no_control]))
+    builder = build_control_cfg_postprocess(control_guidance=control_guidance)
+    assert builder is not None
+    postprocess = builder(
+        model=model,
+        cond_tokens=[[7]],
+        sequence_plans=[SequencePlan(has_text=True, has_vision=True)],
+        gen_data_clean=data,
+    )
+    assert postprocess is not None
+
+    adjusted = postprocess([full], [noise], timestep, text_guidance)[0]
+    actual = unconditional + text_guidance * (adjusted - unconditional)
+    expected = unconditional + text_guidance * (full - unconditional)
+    expected[control.numel() :] += (control_guidance - 1.0) * (full[control.numel() :] - no_control)
+    torch.testing.assert_close(actual, expected)
+
+    with pytest.raises(ValueError, match="text guidance scale 0.0"):
+        postprocess([full], [noise], timestep, 0.0)
+
+
 class _CacheLanguageModel(torch.nn.Module):
     """Distinct, constant residuals make cross-branch cache reuse observable."""
 
@@ -151,8 +188,9 @@ def test_control_cfg_cache_reuses_separate_branches_and_refreshes_at_interval_bo
             gen_data_clean=data,
             text_tokens=[[7]],
         )
-        mixed = postprocess(full, noise, timestep, 1.0)
-        expected = -1.0 if branches else 2.0  # 5 + 2 * (2 - 5) for active control-CFG.
+        text_guidance = 3.0 if text_cfg else 1.0
+        mixed = postprocess(full, noise, timestep, text_guidance)
+        expected = 2.0 + (2.0 - 5.0) / text_guidance if branches else 2.0
         torch.testing.assert_close(mixed[0][control.numel() :], torch.full((target.numel(),), expected))
         if text_cfg:
             negative = model._get_velocity(
@@ -162,6 +200,11 @@ def test_control_cfg_cache_reuses_separate_branches_and_refreshes_at_interval_bo
                 text_tokens=[[0]],
             )
             torch.testing.assert_close(negative[0][control.numel() :], torch.full((target.numel(),), 9.0))
+            prediction = negative[0] + text_guidance * (mixed[0] - negative[0])
+            # Text-CFG baseline is 9 + 3 * (2 - 9) = -12; control adds 2 - 5 = -3.
+            torch.testing.assert_close(
+                prediction[control.numel() :], torch.full((target.numel(),), -15.0 if branches else -12.0)
+            )
         # First step and both interval boundaries refresh every branch; the next step reuses each one.
         assert model.net.language_model.calls - before == (len(pathways) if step % 2 == 0 else 0)
         assert set(cache._pathways) == set(pathways)

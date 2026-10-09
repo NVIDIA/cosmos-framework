@@ -355,6 +355,17 @@ def build_control_cfg_postprocess(
             if not control_active(timestep):
                 return cond_v_full
 
+            if text_guidance_scale == 0.0:
+                raise ValueError(
+                    "control_guidance != 1.0 cannot be composed with text guidance scale 0.0 because "
+                    "the text-CFG blend would discard every conditional control increment."
+                )
+
+            # Text CFG subsequently multiplies every change to the conditional
+            # branch by its guidance scale. Compensate here so the final control
+            # increment remains exactly (control_guidance - 1) * (full - no-control).
+            effective_control_guidance = 1.0 + (control_guidance - 1.0) / text_guidance_scale
+
             noise_x_nc = [nx[c:] for nx, c in zip(noise_x, ctrl_dims, strict=True)]  # [[N_target],...]
             cond_v_nc = model._get_velocity(
                 net=net,
@@ -371,15 +382,6 @@ def build_control_cfg_postprocess(
             # of cond_v_full is already zeroed by the model's velocity mask
             # (control items are fully conditioned), so leave it untouched.
             mixed: list[torch.Tensor] = []
-            # The caller applies text CFG after this hook. Divide the requested
-            # control scale by that outer scale so the final control delta is
-            # ``control_guidance * (v_full - v_no_control)`` rather than being
-            # multiplied by text guidance a second time. A zero text scale
-            # already discards the conditional branch entirely, so retain the
-            # legacy finite scale in that degenerate case.
-            effective_control_guidance = (
-                control_guidance / text_guidance_scale if text_guidance_scale != 0.0 else control_guidance
-            )
             for v_full_i, v_nc_i, c in zip(cond_v_full, cond_v_nc, ctrl_dims, strict=True):
                 suffix_full = v_full_i[c:]  # [N_target]
                 assert suffix_full.shape == v_nc_i.shape, (
