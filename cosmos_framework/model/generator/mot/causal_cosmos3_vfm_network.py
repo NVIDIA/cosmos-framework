@@ -36,6 +36,9 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     build_teacher_forcing_multiview_flex_metadata,
 )
 from cosmos_framework.model.generator.mot.maskless_attention import build_replay_maskless_plan
+from cosmos_framework.model.generator.mot.multiview_action_attention import (
+    build_multiview_action_attention_plan,
+)
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_replay import (
     RollingReplayRequest,
     build_rolling_replay_metadata,
@@ -93,6 +96,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig | None
     teacher_forcing_frames_per_chunk: int
     teacher_forcing_maskless: bool = False
+    teacher_forcing_multiview_threeway: bool = False
 
     def __init__(self, language_model: torch.nn.Module, config: Any) -> None:
         super().__init__(language_model=language_model, config=config)
@@ -116,6 +120,16 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         packed_seq = self._active_packed_seq
         if packed_seq is None:
             return None
+        if self.teacher_forcing_multiview_threeway:
+            if not getattr(packed_seq, "multiview_action_conditioning", False):
+                return None
+            assert packed_seq.vision is not None
+            attention_meta = kwargs["attention_mask"]
+            gen, _ = get_full_only_seq(args[0])  # [N_gen_local,H,D]
+            attention_meta.multiview_action_attention_plan = build_multiview_action_attention_plan(
+                packed_seq.vision.token_shapes, packed_seq.num_action_tokens_per_supertoken, gen.device
+            )
+            return args, kwargs
         ar_metadata = getattr(packed_seq, "multiview_transfer_ar_metadata", None)
         rolling_request = getattr(packed_seq, "rolling_replay_request", None)
         teacher_forcing_pass = getattr(packed_seq, "teacher_forcing_pass", None)
@@ -299,6 +313,8 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         previous_packed_seq = self._active_packed_seq
         self._active_packed_seq = packed_seq
         try:
+            if self.teacher_forcing_multiview_threeway and getattr(packed_seq, "multiview_action_conditioning", False):
+                kwargs["bounded_cp_output_gather"] = True
             if (
                 self.teacher_forcing_maskless
                 and video_temporal_causal is not False

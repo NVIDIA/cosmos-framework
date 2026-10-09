@@ -364,6 +364,20 @@ def normalize_multiview_control_weights(weights: list[float]) -> list[float]:
     return [weight / total_weight for weight in weights]
 
 
+def slice_camera_major_frames(
+    clip: torch.Tensor,  # [C,V*T,H,W] or [B,C,V*T,H,W]
+    n_views: int,
+    start: int,
+    length: int,
+) -> torch.Tensor:  # [C,V*length,H,W] or [B,C,V*length,H,W]
+    """Trim the same temporal window from every camera-major view slice."""
+    *leading, total_frames, height, width = clip.shape
+    frames_per_view = total_frames // n_views
+    clip = clip.reshape(*leading, n_views, frames_per_view, height, width)  # [...,V,T,H,W]
+    clip = clip[..., start : start + length, :, :]  # [...,V,length,H,W]
+    return clip.reshape(*leading, n_views * length, height, width)  # [...,V*length,H,W]
+
+
 def slice_multiview_view_frames(
     frames: torch.Tensor,
     *,

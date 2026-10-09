@@ -42,6 +42,10 @@ from cosmos_framework.model.generator.mot.maskless_attention import (
     replay_maskless_attention,
 )
 from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
+from cosmos_framework.model.generator.mot.multiview_action_attention import (
+    MultiviewActionAttentionPlan,
+    same_instant_multiview_rgb_attention,
+)
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryValue,
     JointARMemoryValue,
@@ -49,6 +53,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     MultiviewARMemoryValue,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
+    zero_null_action_values,
 )
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
@@ -1180,6 +1185,53 @@ def _clean_pass_target_attention_components(
     raise ValueError(f"Unknown clean-pass causality: {policy.clean_pass_causality!r}")
 
 
+def _teacher_forcing_view_attention_components(
+    query: torch.Tensor,  # [T*S,H,D]
+    key: torch.Tensor,  # [T*S,H_kv,D]
+    value: torch.Tensor,  # [T*S,H_kv,D]
+    memory_value: TFReplayCleanMemoryValue | TFNoisyMemoryValue,
+    *,
+    token_shape: tuple[int, int, int],
+    num_action_tokens: int,
+    cached_clean_gen_k: torch.Tensor | None = None,  # [1,T*S,H_kv,D]
+    cached_clean_gen_v: torch.Tensor | None = None,  # [1,T*S,H_kv,D]
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Run the existing three-way TF receptive fields for one camera.
+
+    Single-view replay calls this once. Multiview replay calls the same helper
+    independently for each camera before adding its one RGB-only varlen pass.
+    """
+    frames, height, width = token_shape
+    tokens_per_frame = num_action_tokens + height * width
+    item_len = frames * tokens_per_frame
+    if query.shape[0] != item_len or key.shape[0] != item_len or value.shape[0] != item_len:
+        raise ValueError(
+            "Teacher-forcing view length does not match its token shape: "
+            f"shape={token_shape}, actions={num_action_tokens}, expected={item_len}, "
+            f"got Q/K/V={query.shape[0]}/{key.shape[0]}/{value.shape[0]}."
+        )
+    query_2d = query.reshape(1, frames, tokens_per_frame, query.shape[-2], query.shape[-1])
+    key_2d = key.reshape(1, frames, tokens_per_frame, key.shape[-2], key.shape[-1])
+    value_2d = value.reshape(1, frames, tokens_per_frame, value.shape[-2], value.shape[-1])
+    if isinstance(memory_value, TFNoisyMemoryValue):
+        return teacher_forcing_gen_attention(
+            query_2d,
+            key_2d,
+            value_2d,
+            memory_value,
+            memory_value.frames_per_chunk,
+            cached_clean_gen_k=cached_clean_gen_k,
+            cached_clean_gen_v=cached_clean_gen_v,
+        )
+    return _clean_pass_target_attention_components(
+        query_2d,
+        key_2d,
+        value_2d,
+        memory_value.teacher_forcing_replay_policy,
+        memory_value.frames_per_chunk,
+    )
+
+
 def teacher_forcing_transfer_attention(
     control_q: torch.Tensor,  # [T*S,H,D]
     control_k: torch.Tensor,  # [T*S,H_kv,D]
@@ -1428,6 +1480,7 @@ def three_way_attention_with_memory(
     memory_value: KVTrainMemoryValue,
     attention_meta: SplitInfo | None = None,
     packed_key_states_normalized: SequencePack | None = None,
+    multiview_action_attention_plan: MultiviewActionAttentionPlan | None = None,
 ) -> SequencePack:
     """Branchless three-way attention with cached K/V memory.
 
@@ -1475,15 +1528,24 @@ def three_way_attention_with_memory(
         video_out, text_out = teacher_forcing_target_only_attention(video_q, video_k, video_v, memory_value)
         return from_mode_splits(text_out, video_out, packed_query_states)
 
+    uses_multiview_action_attention = multiview_action_attention_plan is not None
     if attention_meta is not None and attention_meta.null_action_supertokens:
-        video_v = video_v.clone()
-        starts = video_pack_q_offsets[:-1].long()
-        null_positions = (starts.unsqueeze(1) + torch.arange(num_action_tokens, device=starts.device)).reshape(-1)
-        video_v[null_positions] = 0
+        if uses_multiview_action_attention:
+            video_v = zero_null_action_values(
+                video_v.unsqueeze(0),
+                memory_value.vision_token_shapes,
+                num_action_tokens,
+                True,
+            ).squeeze(0)
+        else:
+            video_v = video_v.clone()
+            starts = video_pack_q_offsets[:-1].long()
+            null_positions = (starts.unsqueeze(1) + torch.arange(num_action_tokens, device=starts.device)).reshape(-1)
+            video_v[null_positions] = 0
 
     # --- video self-attention: temporal-causal via multi_dimensional_attention ---
     vision_token_shapes = memory_value.vision_token_shapes
-    is_transfer = len(vision_token_shapes) == 2
+    is_transfer = len(vision_token_shapes) == 2 and not uses_multiview_action_attention
     if is_transfer:
         if not isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue)):
             raise TypeError("Two-item temporal-causal transfer is supported only by replay teacher forcing.")
@@ -1496,7 +1558,11 @@ def three_way_attention_with_memory(
     T, H_p, W_p = vision_token_shapes[0]
     S_super = num_action_tokens + H_p * W_p
     item_len = T * S_super
-    video_len = item_len * (2 if is_transfer else 1)
+    video_len = (
+        sum(frames * (num_action_tokens + height * width) for frames, height, width in vision_token_shapes)
+        if uses_multiview_action_attention
+        else item_len * (2 if is_transfer else 1)
+    )
     num_heads = video_q.shape[1]
     num_kv_heads = video_k.shape[1]
     head_dim = video_q.shape[2]
@@ -1507,6 +1573,7 @@ def three_way_attention_with_memory(
     # requires an exact (T, S_super) reshape.
     # The padding will be added back after merge_attentions.
     padded_video_len = video_q.shape[0]
+    padded_video_q = video_q
     video_q = video_q[:video_len]
     video_k = video_k[:video_len]
     video_v = video_v[:video_len]
@@ -1514,7 +1581,61 @@ def three_way_attention_with_memory(
     # Naming: ``_sa`` = self-attention, ``_ca`` = cross-attention, ``_lse`` = log-sum-exp.
     attn_outputs: list[torch.Tensor]
     lse_outputs: list[torch.Tensor]
-    if is_transfer:
+    if uses_multiview_action_attention:
+        assert multiview_action_attention_plan is not None
+        if not isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue)):
+            raise TypeError("Hybrid multiview replay requires teacher-forcing replay memory.")
+        view_components: list[tuple[torch.Tensor, torch.Tensor]] = []
+        offset = 0
+        for token_shape in vision_token_shapes:
+            frames, height, width = token_shape
+            spatial_tokens = num_action_tokens + height * width
+            view_len = frames * spatial_tokens
+            components = _teacher_forcing_view_attention_components(
+                video_q[offset : offset + view_len],
+                video_k[offset : offset + view_len],
+                video_v[offset : offset + view_len],
+                memory_value,
+                token_shape=token_shape,
+                num_action_tokens=num_action_tokens,
+                cached_clean_gen_k=(
+                    memory_value.cached_clean_gen_k[:, offset : offset + view_len]
+                    if isinstance(memory_value, TFNoisyMemoryValue)
+                    else None
+                ),
+                cached_clean_gen_v=(
+                    memory_value.cached_clean_gen_v[:, offset : offset + view_len]
+                    if isinstance(memory_value, TFNoisyMemoryValue)
+                    else None
+                ),
+            )
+            view_components.append(_merge_transfer_item_components(components, item_len=view_len))
+            offset += view_len
+        same_view_out, same_view_lse = view_components[0]
+        for view_out, view_lse in view_components[1:]:
+            same_view_out, same_view_lse = ConcatenateAttentionsBridge.apply(
+                same_view_out,
+                same_view_lse,
+                view_out,
+                view_lse,
+            )
+        attn_outputs = [same_view_out]
+        lse_outputs = [same_view_lse]
+
+        # The only additional keys are live RGB at the same instant. Actions
+        # stay view-local, and V=1 retains precisely the original three-way path.
+        if multiview_action_attention_plan.rgb_indexes.numel():
+            # Normalized K is reserved for GEN-to-UND/text attention below.
+            # RGB self-attention must use the same raw GEN K as the per-view
+            # three-way component and Stage-0 decomposed attention.
+            gen_k, _ = get_full_only_seq(packed_key_states)  # [N_gen_padded,H_kv,D]
+            gen_v, _ = get_full_only_seq(packed_value_states)  # [N_gen_padded,H_kv,D]
+            multiview_rgb_out, multiview_rgb_lse = same_instant_multiview_rgb_attention(
+                padded_video_q, gen_k, gen_v, multiview_action_attention_plan
+            )
+            attn_outputs.append(multiview_rgb_out)
+            lse_outputs.append(multiview_rgb_lse)
+    elif is_transfer:
         assert isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue))
         transfer_components = teacher_forcing_transfer_attention(
             video_q[:item_len],  # [T*S,H,D]
@@ -1529,33 +1650,23 @@ def three_way_attention_with_memory(
         attn_outputs = [out for out, _lse in transfer_components]  # each [1,2*T*S,H,D]
         lse_outputs = [lse for _out, lse in transfer_components]  # each [1,2*T*S,H]
     else:
-        # Reshape to expose temporal dimension for the causal mask.
-        video_q_2d = video_q.reshape(1, T, S_super, num_heads, head_dim)  # [1,T,S_super,H,D]
-        video_k_2d = video_k.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
-        video_v_2d = video_v.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
-
         video_components: list[tuple[torch.Tensor, torch.Tensor]]
-        if isinstance(memory_value, TFNoisyMemoryValue):
-            # Teacher forcing: two merge components framewise, four chunkwise
-            # (frames_per_chunk > 1, chunk partition [1, C, C, ...]).
-            video_components = teacher_forcing_gen_attention(
-                video_q_2d,
-                video_k_2d,
-                video_v_2d,
+        if isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue)):
+            # This exact helper is applied once for single-view and once per
+            # camera for multiview; only the latter adds an RGB varlen component.
+            video_components = _teacher_forcing_view_attention_components(
+                video_q,
+                video_k,
+                video_v,
                 memory_value,
-                memory_value.frames_per_chunk,
-            )
-        elif isinstance(memory_value, TFReplayCleanMemoryValue):
-            # Single-view three-way replay uses only clean-pass causality from
-            # the unified policy; multiview scope does not apply to this layout.
-            video_components = _clean_pass_target_attention_components(
-                video_q_2d,
-                video_k_2d,
-                video_v_2d,
-                memory_value.teacher_forcing_replay_policy,
-                memory_value.frames_per_chunk,
+                token_shape=vision_token_shapes[0],
+                num_action_tokens=num_action_tokens,
             )
         else:
+            # Reshape to expose temporal dimension for the causal mask.
+            video_q_2d = video_q.reshape(1, T, S_super, num_heads, head_dim)  # [1,T,S_super,H,D]
+            video_k_2d = video_k.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
+            video_v_2d = video_v.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
             # --- Standard temporal-causal self-attention ---
             video_sa, video_sa_lse = multi_dimensional_attention(  # [1,T,S_super,H,D], [1,T,S_super,H]
                 video_q_2d,
@@ -2086,6 +2197,12 @@ def dispatch_attention_with_memory(
     - ``ARMemoryValue`` with ``frame_idx == 0`` → interactive no-memory dispatch
     - ``None`` without a replay plan → interactive no-memory dispatch
     """
+    multiview_action_attention_plan = getattr(attention_mask, "multiview_action_attention_plan", None)
+    if multiview_action_attention_plan is not None:
+        if not isinstance(multiview_action_attention_plan, MultiviewActionAttentionPlan) or not isinstance(
+            memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue)
+        ):
+            raise TypeError("Multiview action attention requires a varlen plan and teacher-forcing memory.")
     replay_maskless_plan = getattr(attention_mask, "replay_maskless_plan", None)
     if replay_maskless_plan is not None and not isinstance(replay_maskless_plan, ReplayMasklessPlan):
         raise TypeError("Maskless attention requires a ReplayMasklessPlan.")
@@ -2132,6 +2249,7 @@ def dispatch_attention_with_memory(
             memory_value=memory_value,
             attention_meta=attention_meta,
             packed_key_states_normalized=packed_key_states_normalized,
+            multiview_action_attention_plan=multiview_action_attention_plan,
         )
         return output, None
     # Keep the post-saturation static-compile predicate first so Dynamo can

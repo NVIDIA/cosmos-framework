@@ -25,6 +25,79 @@ def resize_and_center_crop_tensor(frames: torch.Tensor, target_h: int, target_w:
     return torchvision_F.center_crop(resized_frames, [target_h, target_w])  # [...,target_h,target_w]
 
 
+def resize_and_center_crop_affine(source_hw: tuple[int, int], target_hw: tuple[int, int]) -> torch.Tensor:
+    """Source-to-output pixel affine of ``resize_and_center_crop_tensor`` in integer-center coordinates."""
+    (orig_h, orig_w), (target_h, target_w) = source_hw, target_hw
+    if min(orig_h, orig_w, target_h, target_w) <= 0:
+        raise ValueError(f"Image sizes must be positive, got source={source_hw}, target={target_hw}.")
+    scaling_ratio = max(target_w / orig_w, target_h / orig_h)
+    resize_h = int(math.ceil(scaling_ratio * orig_h))
+    resize_w = int(math.ceil(scaling_ratio * orig_w))
+    # Matches torchvision center_crop offsets, which round half to even.
+    top, left = int(round((resize_h - target_h) / 2.0)), int(round((resize_w - target_w) / 2.0))
+    sx, sy = resize_w / orig_w, resize_h / orig_h
+    return torch.tensor(  # [3,3]
+        [[sx, 0.0, (sx - 1) / 2 - left], [0.0, sy, (sy - 1) / 2 - top], [0.0, 0.0, 1.0]], dtype=torch.float64
+    )
+
+
+def _resize_and_crop_window(
+    source_hw: tuple[int, int], target_hw: tuple[int, int], zoom: float, crop_center: tuple[float, float]
+) -> tuple[int, int, int, int]:
+    """Resized size and crop origin ``(resize_h, resize_w, top, left)`` of ``resize_and_crop_tensor``."""
+    (orig_h, orig_w), (target_h, target_w) = source_hw, target_hw
+    if min(orig_h, orig_w, target_h, target_w) <= 0:
+        raise ValueError(f"Image sizes must be positive, got source={source_hw}, target={target_hw}.")
+    if not (math.isfinite(zoom) and zoom >= 1.0):
+        raise ValueError(f"Crop zoom must be finite and at least 1, got {zoom}.")
+    if not all(0.0 <= fraction <= 1.0 for fraction in crop_center):
+        raise ValueError(f"Crop center fractions must lie in [0, 1], got {crop_center}.")
+    scaling_ratio = max(target_w / orig_w, target_h / orig_h) * zoom
+    resize_h = int(math.ceil(scaling_ratio * orig_h))
+    resize_w = int(math.ceil(scaling_ratio * orig_w))
+    # Round half to even, as torchvision center_crop does, so (0.5, 0.5) is its center crop.
+    top = int(round(crop_center[0] * (resize_h - target_h)))
+    left = int(round(crop_center[1] * (resize_w - target_w)))
+    return resize_h, resize_w, top, left
+
+
+def resize_and_crop_tensor(
+    frames: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    *,
+    zoom: float = 1.0,
+    crop_center: tuple[float, float] = (0.5, 0.5),
+) -> torch.Tensor:
+    """Aspect-ratio-preserving resize to ``zoom`` times the covering size, then a target-size crop.
+
+    ``crop_center`` places the crop along the slack in each axis, (top, left) fractions from 0
+    (first rows or columns) to 1 (last); ``zoom=1`` at (0.5, 0.5) is ``resize_and_center_crop_tensor``.
+    """
+    if frames.dim() < 2:
+        raise ValueError(f"Expected image-like tensor with trailing H,W dimensions, got shape {tuple(frames.shape)}.")
+    resize_h, resize_w, top, left = _resize_and_crop_window(
+        (int(frames.shape[-2]), int(frames.shape[-1])), (target_h, target_w), zoom, crop_center
+    )
+    resized_frames = torchvision_F.resize(frames, [resize_h, resize_w], antialias=True)  # [...,resize_h,resize_w]
+    return resized_frames[..., top : top + target_h, left : left + target_w]  # [...,target_h,target_w]
+
+
+def resize_and_crop_affine(
+    source_hw: tuple[int, int],
+    target_hw: tuple[int, int],
+    *,
+    zoom: float = 1.0,
+    crop_center: tuple[float, float] = (0.5, 0.5),
+) -> torch.Tensor:
+    """Source-to-output pixel affine of ``resize_and_crop_tensor`` in integer-center coordinates."""
+    resize_h, resize_w, top, left = _resize_and_crop_window(source_hw, target_hw, zoom, crop_center)
+    sx, sy = resize_w / source_hw[1], resize_h / source_hw[0]
+    return torch.tensor(  # [3,3]
+        [[sx, 0.0, (sx - 1) / 2 - left], [0.0, sy, (sy - 1) / 2 - top], [0.0, 0.0, 1.0]], dtype=torch.float64
+    )
+
+
 def tensor_to_pil_images(video_tensor: torch.Tensor, *, channels_first: bool | None = None) -> list[Image.Image]:
     """Convert a video tensor of shape (C, T, H, W) or (T, C, H, W) into a list of PIL images.
 

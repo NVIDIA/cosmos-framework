@@ -15,6 +15,7 @@ import torch
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan
+from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
 from cosmos_framework.model.generator.teacher_forcing import mark_modality_as_clean_condition
 from cosmos_framework.model.generator.utils.multiview_ar import JointARChunk, joint_ar_chunks
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
@@ -28,19 +29,6 @@ from cosmos_framework.model.generator.utils.rolling_kv.rolling_sink_rope import 
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
-
-
-def _camera_slice(
-    latent: torch.Tensor,
-    num_views: int,
-    start: int,
-    stop: int,  # latent: [1,C,V*T,H,W]
-) -> torch.Tensor:  # [1,C,V*(stop-start),H,W]
-    batch, channels, total, height, width = latent.shape
-    grid = latent.reshape(batch, channels, num_views, total // num_views, height, width)  # [1,C,V,T,H,W]
-    return grid[:, :, :, start:stop].reshape(
-        batch, channels, num_views * (stop - start), height, width
-    )  # [1,C,V*Tc,H,W]
 
 
 def _initial_target(
@@ -80,8 +68,8 @@ def _chunk_data(
         raw_state_vision=None,
         raw_state_lidar=None,
         x0_tokens_vision=[
-            _camera_slice(data.x0_tokens_vision[0], num_views, start, stop),
-            _camera_slice(vision, num_views, start, stop),
+            slice_camera_major_frames(data.x0_tokens_vision[0], num_views, start, stop - start),
+            slice_camera_major_frames(vision, num_views, start, stop - start),
         ],  # each [1,Cv,V*Tvc,Hv,Wv]
         x0_tokens_lidar=lidar_items,
     )

@@ -11,8 +11,27 @@ from cosmos_framework.utils.generator.multiview import (
     iter_multiview_video_by_view,
     normalize_multiview_control_weights,
     pad_multiview_view_video,
+    slice_camera_major_frames,
     slice_multiview_view_frames,
 )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("batched", [False, True])
+def test_slice_camera_major_frames_preserves_each_views_temporal_window(batched: bool) -> None:
+    storage = torch.arange(2 * 3 * 15 * 2 * 4).reshape(2, 3, 15, 2, 4)  # [B,C,V*T,H,2*W]
+    clip = storage[..., ::2] if batched else storage[0, ..., ::2]  # [B,C,V*T,H,W] or [C,V*T,H,W]
+    for views in (1, 3):
+        frames = clip.shape[-3] // views
+        for start, length in ((0, frames), (0, 1), (1, 2), (frames, 0)):
+            expected = torch.cat(
+                [clip[..., view * frames + start : view * frames + start + length, :, :] for view in range(views)],
+                dim=-3,
+            )  # [...,V*length,H,W]
+            actual = slice_camera_major_frames(clip, views, start, length)  # [...,V*length,H,W]
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
 
 # ---------------------------------------------------------------------------
 # decode_multiview_latent_per_view

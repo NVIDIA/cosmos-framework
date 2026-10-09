@@ -158,6 +158,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import torch
 
@@ -178,9 +179,11 @@ SAVED_MARKER = "wall_clock_checkpoint.json"
 #: Written before deletion starts so an interrupted deletion can be resumed.
 DELETING_MARKER = "wall_clock_deleting.json"
 
-#: The state a resume needs, one DCP component per subdirectory.  ``dataloader/`` is
+#: The standard state a resume needs, one DCP component per subdirectory. ``dataloader/`` is
 #: left out: it is optional and written as pickles rather than by DCP, so it has no
 #: ``.metadata`` and its absence says nothing about whether the save finished.
+#: Distillation writes separate optimizer/scheduler components; capture those from
+#: the writer's save hook and persist them in each wall-clock marker.
 DCP_COMPONENTS = ("model", "optim", "scheduler", "trainer")
 
 #: Written by DCP once a component's shards are all in, which makes it the closest
@@ -255,6 +258,10 @@ class WallClockCheckpoint(Callback):
         # Confirmed wall-clock checkpoints, ascending. Only maintained on rank 0,
         # which is the only rank that prunes.
         self._wall_clock_iterations: list[int] = []
+        self._dcp_components: tuple[str, ...] = DCP_COMPONENTS
+        # Async completion must use that save's layout, even if another save's
+        # hook has since described different optimizer/scheduler components.
+        self._pending_dcp_components: dict[int, tuple[str, ...]] = {}
 
         # Captured from on_before_optimizer_step so we can call checkpointer.save().
         self._optimizer: torch.optim.Optimizer | None = None
@@ -332,14 +339,21 @@ class WallClockCheckpoint(Callback):
         self._last_checkpoint_iteration = iteration
         self._milestone_skip_logged = False
 
+    def on_save_checkpoint(self, model: ImaginaireModel, state_dict: dict[str, Any]) -> None:
+        """Capture the actual DCP writer layout, excluding optional pickle state."""
+        del model
+        self._dcp_components = tuple(key for key in state_dict if key != "dataloader")
+        self._pending_dcp_components[self._last_checkpoint_iteration] = self._dcp_components
+
     def on_save_checkpoint_success(self, iteration: int = 0, elapsed_time: float = 0) -> None:
         self._observe_write_duration(elapsed_time)
+        components = self._pending_dcp_components.pop(iteration, self._dcp_components)
         if iteration not in self._triggered_iterations:
             return
         self._triggered_iterations.discard(iteration)
         if not distributed.is_rank0():
             return
-        if self._mark_saved(iteration):
+        if self._mark_saved(iteration, components):
             self._wall_clock_iterations.append(iteration)
             self._prune()
 
@@ -504,11 +518,15 @@ class WallClockCheckpoint(Callback):
     def _backend_key(self) -> str | None:
         return self.trainer.checkpointer.save_s3_backend_key
 
-    def _mark_saved(self, iteration: int) -> bool:
+    def _mark_saved(self, iteration: int, components: tuple[str, ...]) -> bool:
         """Tag a checkpoint as ours. Returns False if the tag could not be written."""
         path = os.path.join(self._checkpoint_dirname(iteration), SAVED_MARKER)
         try:
-            easy_io.dump({"iteration": iteration, "saved_at": time.time()}, path, backend_key=self._backend_key)
+            easy_io.dump(
+                {"iteration": iteration, "saved_at": time.time(), "dcp_components": list(components)},
+                path,
+                backend_key=self._backend_key,
+            )
         except Exception as error:  # noqa: BLE001 - a missing tag only costs us pruning
             log.warning(f"[WallClockCheckpoint] Could not write {path}: {error}. This checkpoint will not be pruned.")
             return False
@@ -669,7 +687,10 @@ class WallClockCheckpoint(Callback):
             if not checkpoint_data_stats_complete(dirname):
                 log.error(f"[WallClockCheckpoint] Data stats for {dirname} are not merged yet.")
                 return False
-        for component in DCP_COMPONENTS:
+        components = self._saved_dcp_components(dirname)
+        if components is None:
+            return False
+        for component in components:
             component_dirname = os.path.join(dirname, component)
             path = os.path.join(component_dirname, DCP_METADATA)
             try:
@@ -683,6 +704,25 @@ class WallClockCheckpoint(Callback):
                 log.error(f"[WallClockCheckpoint] {component_dirname} is short; iteration {iteration} may not load.")
                 return False
         return True
+
+    def _saved_dcp_components(self, dirname: str) -> tuple[str, ...] | None:
+        """Read the writer's saved layout, retaining support for older markers."""
+        path = os.path.join(dirname, SAVED_MARKER)
+        try:
+            marker = easy_io.load(path, backend_key=self._backend_key)
+            # Older markers carry no layout. Use the current writer's known
+            # components, or the standard layout before its first save hook.
+            components = marker.get("dcp_components", self._dcp_components)
+            if (
+                not isinstance(components, (list, tuple))
+                or not all(isinstance(name, str) and name and os.path.basename(name) == name for name in components)
+                or not {"model", "trainer"}.issubset(components)
+            ):
+                raise ValueError("Checkpoint marker has no valid DCP component layout.")
+            return tuple(components)
+        except Exception as error:  # noqa: BLE001 - unreadable completion evidence must defer deletion
+            log.warning(f"[WallClockCheckpoint] Could not read components from {path}: {error}")
+            return None
 
     def _verify_shard_sizes(self, component_dirname: str) -> bool:
         """Check every shard is at least as long as this component's metadata says.

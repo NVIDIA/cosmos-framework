@@ -76,11 +76,15 @@ def open_lance_dataset_with_retry(
     *,
     storage_options: dict[str, str],
     version: int | None = None,
+    metadata_cache_size_bytes: int | None = None,
 ) -> lance.LanceDataset:
     """Open a Lance dataset, dispersing retries for transient object-store errors."""
     import lance
 
+    cache_options = (
+        {} if metadata_cache_size_bytes is None else {"metadata_cache_size_bytes": metadata_cache_size_bytes}
+    )
     return run_lance_io_with_retry(
-        lambda: lance.dataset(uri, storage_options=storage_options, version=version),
+        lambda: lance.dataset(uri, storage_options=storage_options, version=version, **cache_options),
         description=f"dataset-open for {uri!r}",
     )

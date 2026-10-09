@@ -45,7 +45,11 @@ class PromptFormat(Augmentor):
         # check if this is list of list of dict or list of dict
 
         if isinstance(list_of_conversation[0], list):
-            selected_conversation = random.sample(list_of_conversation, 1)[0]
+            selected_index = random.sample(range(len(list_of_conversation)), 1)[0]
+            selected_conversation = list_of_conversation[selected_index]
+            conversation_metadata = data_dict.pop("_conversation_metadata", None)
+            if conversation_metadata is not None:
+                data_dict.update(conversation_metadata[selected_index])
         elif isinstance(list_of_conversation[0], dict):
             selected_conversation = list_of_conversation
         else:

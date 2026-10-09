@@ -25,6 +25,7 @@ def _sample_record(iteration: int, caption: str | None = None) -> dict[str, obje
         "rank": 0,
         "media_type": "video",
         "dataset_name": "video_256",
+        "source_stream": "video_256",
         "source_dataset_name": "source",
         "source_id": "",
         "sample_id": f"video-{iteration}",
@@ -52,9 +53,24 @@ def test_extract_records_from_consumed_image_batch(monkeypatch: pytest.MonkeyPat
     assert [record["sample_id"] for record in records] == ["image-a", "image-b"]
     assert [record["media_type"] for record in records] == ["image", "image"]
     assert [record["source_dataset_name"] for record in records] == ["source-a", "source-b"]
+    assert [record["source_stream"] for record in records] == ["images", "images"]
     assert all(record["run_id"] == "12345" for record in records)
     assert all(record["iteration"] == 7 for record in records)
     assert all(record["rank"] == 3 for record in records)
+
+
+def test_extract_records_preserves_mixed_transfer_source_stream() -> None:
+    callback = SampledMediaRecorder(enabled=True, output_uri="/tmp/samples.lance")
+    batch = {
+        "__key__": ["sample-a"],
+        "dataset_name": ["transfer_rgb"],
+        "transfer_source_stream": ["transfer_depth_single_view_720"],
+    }
+
+    records = callback._extract_records(batch, iteration=7, rank=3)
+
+    assert records[0]["dataset_name"] == "transfer_rgb"
+    assert records[0]["source_stream"] == "transfer_depth_single_view_720"
 
 
 def test_extract_records_prefers_action_fingerprint() -> None:
@@ -208,8 +224,8 @@ def test_local_lance_append_upgrades_legacy_table_metadata_only(tmp_path: Path) 
     pa = pytest.importorskip("pyarrow")
     output_uri = str(tmp_path / "samples.lance")
     callback = SampledMediaRecorder(enabled=True, output_uri=output_uri)
-    vlm_fields = {"source_id", "conversation", "media_items"}
-    legacy_schema = pa.schema([field for field in callback._table_schema() if field.name not in vlm_fields])
+    missing_fields = {"source_stream", "source_id", "conversation", "media_items"}
+    legacy_schema = pa.schema([field for field in callback._table_schema() if field.name not in missing_fields])
     legacy_table = pa.Table.from_pylist([_sample_record(1)], schema=legacy_schema)
     lance.write_dataset(legacy_table, output_uri, mode="create")
     data_files_before = lance.dataset(output_uri).get_fragments()[0].data_files()
@@ -221,3 +237,4 @@ def test_local_lance_append_upgrades_legacy_table_metadata_only(tmp_path: Path) 
     assert set(upgraded.schema.names) == set(callback._table_schema().names)
     assert upgraded.to_table(columns=["caption"])["caption"].to_pylist() == [None, "recorded caption"]
     assert upgraded.to_table(columns=["source_id"])["source_id"].to_pylist() == [None, ""]
+    assert upgraded.to_table(columns=["source_stream"])["source_stream"].to_pylist() == [None, "video_256"]

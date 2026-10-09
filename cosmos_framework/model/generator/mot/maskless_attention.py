@@ -6,7 +6,8 @@
 Replay roles determine each query group's keys. Grouping happens once before the
 decoder, over metadata runs rather than a quadratic token mask. Queries sharing
 the same keys share one varlen group, including across frames in a replay chunk.
-The two sensor passes deliberately overlap, as in bidirectional maskless attention.
+The sensor passes overlap when cross-view deduplication is disabled (legacy checkpoint
+behavior). With deduplicate_cross_view enabled, same-view edges appear only once.
 
 The same-view partition re-reads each view's causal history once per chunk. Gathering it
 would copy those keys per group, so it always runs gapped, reading them in place; only the small

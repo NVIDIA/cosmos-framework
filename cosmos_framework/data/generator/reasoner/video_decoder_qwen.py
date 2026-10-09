@@ -9,6 +9,7 @@ Changes:
 """
 
 import hashlib
+import math
 import random
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -215,9 +216,9 @@ def _video_decoder_qwen_func(
 
     if video_fps < 1:
         raise ValueError("Video fps lower than 1, skipping")
-    if video_fps < min_fps_thres:
+    if video_fps < min_fps_thres and not math.isclose(video_fps, min_fps_thres, rel_tol=1e-12):
         raise ValueError(f"Video fps {video_fps} lower than {min_fps_thres}, skipping")
-    if video_fps > max_fps_thres:
+    if video_fps > max_fps_thres and not math.isclose(video_fps, max_fps_thres, rel_tol=1e-12):
         raise ValueError(f"Video fps {video_fps} higher than {max_fps_thres}, skipping")
 
     configured_max_video_token_length = max_video_token_length

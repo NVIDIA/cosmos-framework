@@ -181,6 +181,7 @@ class SampledMediaRecorder(Callback):
         count = len(sample_ids)
         media_urls = _as_list(data_batch.get("__url__"), count)
         dataset_names = _as_list(data_batch.get("dataset_name"), count)
+        source_streams = _as_list(data_batch.get("transfer_source_stream"), count)
         source_names = _as_list(data_batch.get("source_dataset_name"), count)
         captions = _as_optional_string_list(data_batch.get("ai_caption"), count) if self.record_caption else []
         source_ids = _as_list(data_batch.get("source_id"), count)
@@ -208,6 +209,7 @@ class SampledMediaRecorder(Callback):
                 "rank": rank,
                 "media_type": media_types[sample_index],
                 "dataset_name": dataset_names[sample_index],
+                "source_stream": source_streams[sample_index] or dataset_names[sample_index],
                 "source_dataset_name": source_names[sample_index],
                 "source_id": source_ids[sample_index],
                 "sample_id": sample_id,
@@ -235,6 +237,7 @@ class SampledMediaRecorder(Callback):
                 pa.field("rank", pa.int32(), nullable=False),
                 pa.field("media_type", pa.string(), nullable=False),
                 pa.field("dataset_name", pa.string(), nullable=False),
+                pa.field("source_stream", pa.string(), nullable=True),
                 pa.field("source_dataset_name", pa.string(), nullable=False),
                 pa.field("source_id", pa.string(), nullable=True),
                 pa.field("sample_id", pa.string(), nullable=False),
@@ -254,7 +257,7 @@ class SampledMediaRecorder(Callback):
         # A tuple in _table_schema() declaration order, not a set: the loop below appends
         # missing columns in this order, and set iteration is hash-randomized -- two runs
         # upgrading the same legacy table would otherwise produce different column orders.
-        optional_field_order = ("source_id", "caption", "caption_mode", "conversation", "media_items")
+        optional_field_order = ("source_stream", "source_id", "caption", "caption_mode", "conversation", "media_items")
         optional_fields = frozenset(optional_field_order)
         expected_by_name = {field.name: field for field in expected_schema}
         existing_by_name = {field.name: field for field in existing.schema}

@@ -51,16 +51,22 @@ class _Field:
 
 
 _FIELDS = (
-    _Field("phase", pa.string(), 'Data split that produced the row: "train" or "val".'),
+    _Field("phase", pa.string(), 'Data split that produced the row: "train", "val", or "data_only".'),
     _Field("step", pa.int64(), "Completed optimizer step associated with the sample."),
     _Field("rank", pa.int32(), "Distributed process rank that consumed the sample."),
     _Field("sample_rank", pa.int32(), "Rank recorded by the dataset distributor."),
     _Field("worker_id", pa.int32(), "Dataloader worker that selected the sample."),
-    _Field("epoch", pa.int32(), "Distributor epoch from which the sample was selected."),
-    _Field("sample_index", pa.int64(), "Sample index within the worker's epoch shard."),
+    _Field("epoch", pa.int32(), "WDS distributor epoch or Lance recipe epoch (legacy: per-source pass)."),
+    _Field("sample_index", pa.int64(), "WDS epoch shard index or zero-based Lance worker-local schedule position."),
     _Field("dataset_name", pa.string(), "Recipe dataset/category name."),
+    _Field("source_backend", pa.string(), "Source identity domain: webdataset or lance."),
+    _Field("dataset_population", pa.int64(), "Lance grouped sample count; null for WebDataset."),
+    _Field("sample_id", pa.string(), "Stable sample identity independent of GCS or Lustre storage."),
+    _Field("source_occurrence", pa.int64(), "Worker-local Lance source cursor after this occurrence."),
+    _Field("group_index", pa.int64(), "Source-local Lance grouped sample index; null for WebDataset or legacy runs."),
+    _Field("batch_sample_index", pa.int32(), "Logical sample position within the delivered batch."),
     _Field("file_name", pa.string(), "Sample key with the leading dataset prefix removed."),
-    _Field("url", pa.string(), "Full source tar URL/path."),
+    _Field("url", pa.string(), "Source artifact URL/path; a TAR for WebDataset."),
     _Field("num_trainable_tokens", pa.int32(), "Valid next-token labels for this sample."),
     _Field("token_ce_sum", pa.float32(), "Cross entropy summed over valid labels in this sample."),
     _Field("mean_token_ce", pa.float32(), "token_ce_sum divided by num_trainable_tokens."),
@@ -110,7 +116,7 @@ _FIELDS = (
 
 DATA_STATS_SCHEMA = pa.schema(
     [field.arrow() for field in _FIELDS],
-    metadata={b"schema_version": b"1"},
+    metadata={b"schema_version": b"2"},
 )
 
 
@@ -162,7 +168,7 @@ def merge_save_dir(save_dir: Path) -> None:
             )
         expected_rows = sum(pq.read_metadata(path).num_rows for path in rank_files)
         temporary_path = save_dir / f"{MERGED_FILE}.tmp"
-        with pq.ParquetWriter(temporary_path, DATA_STATS_SCHEMA, compression="zstd") as writer:
+        with pq.ParquetWriter(temporary_path, pq.read_schema(rank_files[0]), compression="zstd") as writer:
             for path in rank_files:
                 writer.write_table(pq.read_table(path))
         # The rank files are deleted next, so the merged file must read back with every row first.
@@ -199,51 +205,69 @@ _BATCH_KEYS = (
     "sample_worker_id",
     "sample_epoch",
     "sample_index",
-    "dataset_num_urls",
 )
+_PROVENANCE_KEYS = frozenset({"source_backend", "dataset_population", "sample_id", "source_occurrence", "group_index"})
 # Every schema field that _record does not compute must come from the sample's data_stats dict.
-_COMPUTED_FIELDS = frozenset(
-    {
-        "phase",
-        "step",
-        "rank",
-        "sample_rank",
-        "worker_id",
-        "epoch",
-        "sample_index",
-        "dataset_name",
-        "file_name",
-        "url",
-        "num_trainable_tokens",
-        "token_ce_sum",
-        "mean_token_ce",
-        "objective_numerator",
-        "objective_weight",
-        "objective_contribution",
-        "context_length",
-        "dataset_num_urls",
-        "total_training_steps",
-    }
+_COMPUTED_FIELDS = (
+    frozenset(
+        {
+            "phase",
+            "step",
+            "rank",
+            "sample_rank",
+            "worker_id",
+            "epoch",
+            "sample_index",
+            "dataset_name",
+            "file_name",
+            "url",
+            "num_trainable_tokens",
+            "token_ce_sum",
+            "mean_token_ce",
+            "objective_numerator",
+            "objective_weight",
+            "objective_contribution",
+            "context_length",
+            "dataset_num_urls",
+            "total_training_steps",
+            "batch_sample_index",
+        }
+    )
+    | _PROVENANCE_KEYS
 )
 _METADATA_KEYS = frozenset(DATA_STATS_SCHEMA.names) - _COMPUTED_FIELDS
 
 
 def _check_sample(key: str, metadata: dict[str, Any], batch_values: dict[str, Any]) -> None:
     """Raise, naming the sample, if its data-stats fields are missing, unexpected, null, or implausible."""
-    if set(metadata) != _METADATA_KEYS:
+    required_metadata = set(metadata) - _PROVENANCE_KEYS
+    if required_metadata != _METADATA_KEYS:
         raise KeyError(
-            f"data_stats of sample {key}: missing {sorted(_METADATA_KEYS - set(metadata))}, "
-            f"unexpected {sorted(set(metadata) - _METADATA_KEYS)}"
+            f"data_stats of sample {key}: missing {sorted(_METADATA_KEYS - required_metadata)}, "
+            f"unexpected {sorted(required_metadata - _METADATA_KEYS)}"
         )
     values = {**batch_values, "dataset_weight": metadata["dataset_weight"]}
     nulls = [name for name, value in values.items() if value is None]
     if nulls:
         raise ValueError(f"Sample {key} has no value for {nulls}")
-    if not 0 < values["dataset_weight"] <= 1 or values["dataset_num_urls"] <= 0:
+    population_key = "dataset_population" if metadata.get("source_backend") == "lance" else "dataset_num_urls"
+    population = metadata.get(population_key, values.get(population_key))
+    if not 0 < values["dataset_weight"] <= 1 or population is None or population <= 0:
         raise ValueError(
             f"Sample {key} has dataset_weight={values['dataset_weight']} and "
-            f"dataset_num_urls={values['dataset_num_urls']}; expected a weight in (0, 1] and a positive count"
+            f"{population_key}={population}; expected a weight in (0, 1] and a positive count"
         )
+    if metadata.get("source_backend") == "lance" and (
+        not metadata.get("sample_id")
+        or not isinstance(metadata.get("source_occurrence"), int)
+        or metadata["source_occurrence"] <= 0
+    ):
+        raise ValueError(f"Sample {key} has no valid Lance identity/cursor")
+    group_index = metadata.get("group_index")
+    if group_index is not None and (
+        metadata.get("source_backend") != "lance" or type(group_index) is not int or not 0 <= group_index < population
+    ):
+        raise ValueError(f"Sample {key} has invalid group_index={group_index}")
 
 
 def _values(value: Any, size: int) -> list[Any]:
@@ -273,11 +297,14 @@ class DataStatsWriterCallback(Callback):
         enabled: bool = False,
         merge_in_background: bool = True,
         merge_timeout_seconds: float = 1800.0,
+        flush_on_end: bool = False,
     ) -> None:
         super().__init__()
         self.enabled = enabled
         self.merge_in_background = merge_in_background
         self.merge_timeout_seconds = merge_timeout_seconds
+        self.flush_on_end = flush_on_end
+        self._last_recorded_iteration: int = 0
         # Rows recorded since the previous save, one small table per microbatch.
         self._tables: list[pa.Table] = []
         self._rank = 0
@@ -315,7 +342,7 @@ class DataStatsWriterCallback(Callback):
         self,
         phase: str,
         data_batch: dict[str, Any],
-        output_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor] | None,
         iteration: int,
     ) -> None:
         if not self.enabled:
@@ -330,7 +357,7 @@ class DataStatsWriterCallback(Callback):
             )
         if data_batch.get("true_packing") or "cu_seq_lens_q" in data_batch:
             raise NotImplementedError("Per-sample data-stats logging currently requires padded batches")
-        missing = [key for key in _LOSS_KEYS if key not in output_batch]
+        missing = [key for key in _LOSS_KEYS if output_batch is not None and key not in output_batch]
         if missing:
             raise KeyError(f"Model output is missing data-stats loss fields: {missing}")
         missing = [key for key in _BATCH_KEYS if data_batch.get(key) is None]
@@ -339,22 +366,33 @@ class DataStatsWriterCallback(Callback):
 
         size = len(metadata)
         columns = {key: _values(data_batch[key], size) for key in _BATCH_KEYS}
+        columns["dataset_num_urls"] = _values(data_batch.get("dataset_num_urls", [None] * size), size)
         keys = [str(key) for key in columns["__key__"]]
         for index, sample_metadata in enumerate(metadata):
-            _check_sample(keys[index], sample_metadata, {name: values[index] for name, values in columns.items()})
-        token_sums = _values(output_batch[_LOSS_KEYS[0]], size)
-        valid_counts = _values(output_batch[_LOSS_KEYS[1]], size)
-        numerators = _values(output_batch[_LOSS_KEYS[2]], size)
-        weights = _values(output_batch[_LOSS_KEYS[3]], size)
-        global_weight = float(output_batch[_LOSS_KEYS[4]].detach().cpu())
+            batch_values = {name: values[index] for name, values in columns.items()}
+            if sample_metadata.get("source_backend") == "lance":
+                batch_values.pop("dataset_num_urls")
+            _check_sample(keys[index], sample_metadata, batch_values)
+        if output_batch is None:
+            labels = data_batch["labels"]
+            ignore_indices = _values(data_batch["ignore_index"], size)
+            valid_counts = [int((labels[index, 1:] != ignore_indices[index]).sum()) for index in range(size)]
+            token_sums = numerators = weights = [None] * size
+            global_weight = 0.0
+        else:
+            token_sums = _values(output_batch[_LOSS_KEYS[0]], size)
+            valid_counts = _values(output_batch[_LOSS_KEYS[1]], size)
+            numerators = _values(output_batch[_LOSS_KEYS[2]], size)
+            weights = _values(output_batch[_LOSS_KEYS[3]], size)
+            global_weight = float(output_batch[_LOSS_KEYS[4]].detach().cpu())
 
         rows: list[dict[str, Any]] = []
         context_length = int(self.config.model.config.policy.model_max_length)
         total_steps = int(self.config.trainer.max_iter)
         for index, sample_metadata in enumerate(metadata):
             token_count = int(valid_counts[index])
-            token_sum = float(token_sums[index])
-            numerator = float(numerators[index])
+            token_sum = None if token_sums[index] is None else float(token_sums[index])
+            numerator = None if numerators[index] is None else float(numerators[index])
             key = keys[index]
             rows.append(
                 {
@@ -366,16 +404,24 @@ class DataStatsWriterCallback(Callback):
                     "epoch": int(columns["sample_epoch"][index]),
                     "sample_index": int(columns["sample_index"][index]),
                     "dataset_name": str(columns["dataset_name"][index]),
+                    "batch_sample_index": index,
+                    "source_backend": sample_metadata.get("source_backend", "webdataset"),
+                    "dataset_population": sample_metadata.get("dataset_population"),
+                    "sample_id": sample_metadata.get("sample_id", f"{columns['__url__'][index]}:{key}"),
+                    "source_occurrence": sample_metadata.get("source_occurrence"),
+                    "group_index": sample_metadata.get("group_index"),
                     "file_name": key.split("__", 1)[1] if "__" in key else key,
                     "url": str(columns["__url__"][index]),
                     "num_trainable_tokens": token_count,
                     "token_ce_sum": token_sum,
-                    "mean_token_ce": token_sum / token_count if token_count else None,
+                    "mean_token_ce": token_sum / token_count if token_count and token_sum is not None else None,
                     "objective_numerator": numerator,
-                    "objective_weight": float(weights[index]),
-                    "objective_contribution": numerator / global_weight if global_weight > 0 else None,
+                    "objective_weight": None if weights[index] is None else float(weights[index]),
+                    "objective_contribution": numerator / global_weight
+                    if global_weight > 0 and numerator is not None
+                    else None,
                     "context_length": context_length,
-                    "dataset_num_urls": int(columns["dataset_num_urls"][index]),
+                    "dataset_num_urls": columns["dataset_num_urls"][index],
                     "total_training_steps": total_steps,
                     # Includes dataset_weight: the batch-level tensor is bf16 here, but custom_collate keeps
                     # the exact value per sample.
@@ -386,6 +432,11 @@ class DataStatsWriterCallback(Callback):
             self._tables.append(pa.Table.from_pylist(rows, schema=DATA_STATS_SCHEMA))
         except (pa.ArrowException, OverflowError) as error:
             raise ValueError(f"data_stats rows of samples {keys} do not match the schema: {error}") from error
+        self._last_recorded_iteration = iteration
+
+    def record_data_batch(self, data_batch: dict[str, Any], iteration: int) -> None:
+        """Record delivered samples without a model forward pass or invented losses."""
+        self._record("data_only", data_batch, None, iteration)
 
     def on_training_step_batch_end(
         self,
@@ -497,6 +548,16 @@ class DataStatsWriterCallback(Callback):
         if not self.enabled:
             return
         self._complete_last_save()
+        if self.flush_on_end:
+            iteration = self._last_recorded_iteration
+            if dist.is_available() and dist.is_initialized():
+                iterations = [iteration] * self._world_size
+                dist.all_gather_object(iterations, iteration)
+                iteration = max(iterations)
+            if iteration != self._last_save:
+                self._flush(iteration)
+                self._complete_last_save()
+            return
         dropped = sum(table.num_rows for table in self._tables)
         if dropped:
             log.info(f"[DataStats] Not saving {dropped} rows recorded after the final checkpoint on rank 0.")
