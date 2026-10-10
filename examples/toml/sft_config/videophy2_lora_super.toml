@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# videophy2_lora_super — LoRA SFT on VideoPhy-2 via CosmosDataLoader,
+# Cosmos3-Super tier (Qwen3-VL-32B-Instruct).
+# Base config = cosmos_framework/configs/base/reasoner/config.py (selected by [job].task="vlm").
+#
+# LoRA counterpart of videophy2_sft_super. Where that recipe full-fine-tunes the
+# 32B backbone, this one freezes it entirely and trains rank-16 adapters on the
+# LLM attention projections — which is what makes the 32B tier comfortable on a
+# 4-GPU (GB200x4) allocation: only the adapters carry optimizer state.
+#
+# Weights: no converter step required. With VLM_SAFETENSORS_PATH unset the
+# framework loads the public Qwen/Qwen3-VL-32B-Instruct snapshot resolved from
+# model_name (~64 GB download on first run). Set VLM_SAFETENSORS_PATH to use a
+# local/merged snapshot instead.
+#
+# Want the 8B tier instead (much smaller download, good for a first run)? There
+# is no separate nano LoRA recipe because it would differ from this file in two
+# values only — point [job].experiment at videophy2_sft_nano and
+# [model.backbone].model_name at Qwen/Qwen3-VL-8B-Instruct. Every LoRA and
+# training setting below carries over unchanged.
+#
+# Dataset prep:
+#   python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+#       --out_root $VIDEOPHYSICS_ROOT --split both
+#
+# Required env at launch: VIDEOPHYSICS_ROOT (read by the experiment Python).
+#
+# Example launch:
+#   bash examples/launch_sft_videophy2_lora_super.sh
+
+[job]
+task         = "vlm"
+experiment   = "videophy2_sft_super"       # the full-FT recipe; LoRA is switched on below
+project      = "cosmos3"
+group        = "vlm_videophy2_lora"
+name         = "videophy2_lora_super"
+wandb_mode   = "online"
+
+[model]
+attn_implementation = "cosmos"
+precision           = "bfloat16"
+
+# LoRA on the 32B backbone: 64 decoder layers x 4 projections = 256 adapters.
+lora_enabled        = true
+lora_rank           = 16
+lora_alpha          = 32
+lora_target_modules = "q_proj,k_proj,v_proj,o_proj"
+
+[model.backbone]
+model_name = "Qwen/Qwen3-VL-32B-Instruct"
+
+[model.ema]
+enabled         = false
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree      = -1                     # FSDP full shard, auto from WORLD_SIZE
+data_parallel_replicate_degree  = 1
+context_parallel_shard_degree   = 1                      # raise to 2 (needs even GPU count) if it OOMs
+cfg_parallel_shard_degree       = 1
+
+[model.compile]
+enabled                         = false
+compile_dynamic                 = true
+
+[model.activation_checkpointing]
+mode                = "full"
+save_ops_regex      = ["fmha"]
+preserve_rng_state  = true
+determinism_check   = "default"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-8
+fused          = true
+keys_to_select = ["lora_"]
+# Matched to the full-FT videophy2_sft_super recipe (lr 1e-6, wd 0.1), with lr
+# lifted 5x because LoRA adapters start from lora_B=0 and only ~0.1% of params
+# carry gradient. Every other field equals videophy2_sft_super.toml.
+lr             = 5.0e-6
+weight_decay   = 0.1
+
+[scheduler]
+cycle_lengths      = [300]                                # tracks max_iter
+f_max              = [1.0]
+f_min              = [0.1]
+f_start            = [0.05]
+verbosity_interval = 0
+warm_up_steps      = [5]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 8
+logging_iter            = 1
+max_iter                = 300                             # longer run to see the full LoRA trajectory
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 1.0
+force_finite = false
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path            = "???"
+save_iter            = 1000
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length   = 16000

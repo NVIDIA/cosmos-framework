@@ -16,6 +16,7 @@ ties validation + override-build + Hydra-compose together lives in
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -52,6 +53,7 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
         ("model", "attn_implementation"): None,
         ("model", "backbone"): None,                                           # VLM-only — VFM has no model.config.backbone
+        ("model", "lora_exclude_path_regex"): None,                            # VLM-only — VFM's single tower needs no path scoping
         # Per-caption token cap lives on the nested SFT dataset, not a top-level
         # dataloader scalar — route it to the get_sft_dataset node.
         ("dataloader_train", "max_caption_tokens"): (
@@ -72,10 +74,6 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         # No VLM analog — skip these leaves
         ("model", "max_num_tokens_after_packing"): None,
         ("model", "joint_attn_implementation"): None,
-        ("model", "lora_enabled"): None,
-        ("model", "lora_rank"): None,
-        ("model", "lora_alpha"): None,
-        ("model", "lora_target_modules"): None,
         ("model", "tokenizer"): None,                                          # blocks model.tokenizer.*
         ("dataloader_train", "seed"): None,
         ("optimizer", "eps"): None,                                            # VLM_OPTIMIZER_KWARGS has no eps field
@@ -85,6 +83,13 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("model", "attn_implementation"): ("model", "config", "policy", "attn_implementation"),
         ("model", "ema"): ("model", "config", "ema"),
         ("model", "backbone"): ("model", "config", "policy", "backbone"),
+        # LoRA knobs live on PolicyConfig for VLM (they sit flat on
+        # OmniMoTModelConfig for VFM, which the catch-all below already handles).
+        ("model", "lora_enabled"): ("model", "config", "policy", "lora_enabled"),
+        ("model", "lora_rank"): ("model", "config", "policy", "lora_rank"),
+        ("model", "lora_alpha"): ("model", "config", "policy", "lora_alpha"),
+        ("model", "lora_target_modules"): ("model", "config", "policy", "lora_target_modules"),
+        ("model", "lora_exclude_path_regex"): ("model", "config", "policy", "lora_exclude_path_regex"),
         # VLM uses CosmosDataLoader whose batch/token caps live on the nested
         # PoolPackingBatcher (dataloader_train.batcher.*), not flat on the loader.
         ("dataloader_train", "max_samples_per_batch"): ("dataloader_train", "batcher", "max_batch_size"),
@@ -181,6 +186,11 @@ def _emit_with_remap(
     out.append(f"{'.'.join(new_path)}={_hydra_format(value)}")
 
 
+# Characters Hydra accepts in an unquoted override value. Anything else (regex
+# metacharacters, commas, whitespace, quotes) gets single-quoted by _hydra_format.
+_HYDRA_UNQUOTED_SAFE = re.compile(r"[A-Za-z0-9_./:@+-]*")
+
+
 def _hydra_format(v: Any, in_list: bool = False) -> str:
     """Convert a Python value to a Hydra CLI override RHS.
 
@@ -199,12 +209,17 @@ def _hydra_format(v: Any, in_list: bool = False) -> str:
         return "[" + ",".join(_hydra_format(x, in_list=True) for x in v) + "]"
     if isinstance(v, str):
         # Inside a list literal, always quote so numeric-looking strings
-        # ("480") aren't parsed as int. At top level, quote only when the
-        # string contains characters Hydra would otherwise interpret —
-        # commas (sweep / list marker) or whitespace. Env-interpolation
-        # strings like ``${oc.env:NAME}`` are safe unquoted because Hydra
-        # recognizes the ``${...}`` form even with a colon inside.
-        if in_list or "," in v or " " in v:
+        # ("480") aren't parsed as int. At top level, quote anything outside
+        # Hydra's unquoted-value character set: a comma is a sweep/list marker,
+        # whitespace ends the token, and metacharacters like ``^`` or ``\``
+        # (regex values such as lora_exclude_path_regex) make its lexer throw
+        # LexerNoViableAltException. Single quotes preserve backslashes
+        # verbatim, so a quoted regex round-trips unchanged.
+        # Env-interpolation strings like ``${oc.env:NAME}`` must stay unquoted
+        # so Hydra resolves them instead of passing the literal through.
+        if not in_list and v.startswith("${") and v.endswith("}"):
+            return v
+        if in_list or not _HYDRA_UNQUOTED_SAFE.fullmatch(v):
             return f"'{v}'"
         return v
     return str(v)
