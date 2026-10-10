@@ -14,9 +14,6 @@ import torch
 
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan
-from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
-from cosmos_framework.model.generator.teacher_forcing import mark_modality_as_clean_condition
 from cosmos_framework.model.generator.utils.multiview_ar import JointARChunk, joint_ar_chunks
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptPack,
@@ -26,6 +23,9 @@ from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
 )
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_replay import RollingReplayCache, RollingReplayRequest
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_sink_rope import prepare_media_sink_key_rotation
+from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan
+from cosmos_framework.data.generator.sequence_packing.packers import mark_modality_as_clean_condition
+from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel

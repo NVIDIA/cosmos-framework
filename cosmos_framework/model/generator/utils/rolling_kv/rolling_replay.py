@@ -11,7 +11,6 @@ from typing import Literal
 
 import torch
 
-from cosmos_framework.model.generator.mot.flex_attention import CaptionMaskItem, SensorMaskItem
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_CLEAN_TARGET,
@@ -20,6 +19,7 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     TeacherForcingFlexMetadata,
     build_teacher_forcing_multiview_flex_metadata,
 )
+from cosmos_framework.model.generator.mot.flex_attention import CaptionMaskItem, SensorMaskItem
 from cosmos_framework.model.generator.utils.kv_cache import KVToStore, MultiviewARMemoryState
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,

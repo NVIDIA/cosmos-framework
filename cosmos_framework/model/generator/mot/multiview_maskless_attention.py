@@ -34,11 +34,19 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     temporal_window_bounds,
 )
 from cosmos_framework.model.generator.mot.activation_marks import mark_next_activation
+from cosmos_framework.model.generator.mot.camera_relative_pose import (
+    CameraPosePartition,
+    CameraRelativePosePlan,
+    apply_camera_pose,
+    apply_prope_pairs,
+    prope_pair_channels,
+)
 from cosmos_framework.model.generator.mot.merge_bridge import (
     BridgeFn,
     DisjointQueriesBridge,
     MergeAttentionsBridge,
 )
+from cosmos_framework.model.generator.mot.rigrope import apply_mrope_rotary, apply_rig_rotary
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_causal_seq,
@@ -129,6 +137,18 @@ def maskless_unavailable_reason(config: MultiviewAttentionConfig) -> str | None:
             "and not a fold"
         )
     return None
+
+
+@dataclass(frozen=True)
+class CrossViewPass:
+    """One varlen cross-view pass: query runs gathered from the GEN stream and their key runs."""
+
+    gather: torch.Tensor  # [N_query]
+    offsets: torch.Tensor  # [R+1]
+    max_len: int
+    kv_gather: torch.Tensor  # [N_keys]
+    kv_offsets: torch.Tensor  # [R+1]
+    kv_max_len: int
 
 
 @dataclass(frozen=True)
@@ -228,6 +248,9 @@ class MultiviewMasklessPlan:
             deduplicating. Each directed cross-view edge occurs once across all levels;
             a view's own keys are never repeated by any level. With a window and no
             deduplication, one pass includes all sensor views, including the query's own.
+        cross_view_extra_passes: further cross-view passes after the one the ``cross_view_*``
+            fields describe, merged beside it. Only ``"other_views"`` band keys build them: one
+            pass per level of its view tree past the first.
         caption_gather: the caption tokens' indices into the causal stream, one contiguous run
             per same-view group, in that partition's order. ``None`` unless the batch carries
             per-view captions, in which case the gen->und pass keys each sample's GEN tokens
@@ -277,7 +300,33 @@ class MultiviewMasklessPlan:
     cross_view_offsets: torch.Tensor | None = None
     cross_view_max_len: int = 0
     cross_view_gather: torch.Tensor | None = None
+    cross_view_kv_offsets: torch.Tensor | None = None
+    cross_view_kv_max_len: int = 0
+    cross_view_kv_gather: torch.Tensor | None = None
     cross_view_empty: bool = False
+    cross_view_extra_passes: tuple[CrossViewPass, ...] = ()
+    # Geometry rotary is opt-in and prepared outside the compiled layers. Incoming GEN Q/K
+    # stay raw only for the direct cross-view RigRoPE and PRoPE modes; these mRoPE tables restore the
+    # pretrained rotation for same-view and caption attention.
+    camera_relative_pose: CameraRelativePosePlan | None = None
+    rigrope_cos: torch.Tensor | None = None  # [N_gen,D]
+    rigrope_sin: torch.Tensor | None = None  # [N_gen,D]
+    # Which GEN tokens' samples carry RigRoPE geometry; the rest keep mRoPE in the cross-view
+    # pass. ``None`` means every token does.
+    rigrope_valid: torch.Tensor | None = None  # [N_gen] bool
+    # Which of this rank's query and KV heads use RigRoPE; the rest keep mRoPE. ``None`` means
+    # all. Local heads, so under context parallelism these are the rank's own head shard.
+    rigrope_q_heads: torch.Tensor | None = None  # [H_local] bool
+    rigrope_k_heads: torch.Tensor | None = None  # [H_kv_local] bool
+    # Which channels of a RigRoPE head take RigRoPE; the rest keep mRoPE. ``None`` means all.
+    rigrope_pairs: torch.Tensor | None = None  # [D] bool
+    # ``"prope_cross_view"``: each GEN token's reference-to-camera transform and its inverse,
+    # identity for tokens without geometry. The geometry heads are ``rigrope_q_heads`` and
+    # ``rigrope_k_heads``.
+    prope_reference_to_camera: torch.Tensor | None = None  # [N_gen,4,4]
+    prope_camera_to_reference: torch.Tensor | None = None  # [N_gen,4,4]
+    mrope_cos: torch.Tensor | None = None  # [N_gen,D]
+    mrope_sin: torch.Tensor | None = None  # [N_gen,D]
     caption_gather: torch.Tensor | None = None
     caption_offsets: torch.Tensor | None = None
     caption_max_len: int = 0
@@ -293,6 +342,63 @@ class MultiviewMasklessPlan:
     sensor_to_control_window: TemporalFrameWindow | None = None
     control_to_control_window: TemporalFrameWindow | None = None
     control_to_sensor_window: TemporalFrameWindow | None = None
+
+
+def cross_view_passes(plan: MultiviewMasklessPlan) -> list[CrossViewPass]:
+    """Every cross-view pass the plan runs, the aligned partition keying its own query runs.
+
+    Under ``deduplicate_cross_view`` or a temporal window the passes are the plan's
+    ``cross_view_partitions`` instead, one per level of its view tree.
+    """
+    if plan.cross_view_empty:
+        return []
+    if plan.cross_view_partitions:
+        return [
+            CrossViewPass(
+                partition.query_indices,
+                partition.query_offsets,
+                partition.max_query_len,
+                partition.key_indices,
+                partition.key_offsets,
+                partition.max_key_len,
+            )
+            for partition in plan.cross_view_partitions
+        ]
+    gather, offsets = plan.cross_view_gather, plan.cross_view_offsets
+    assert gather is not None and offsets is not None, "A plan with a cross-instant partition carries its gather."
+    if plan.cross_view_kv_gather is None:
+        first = CrossViewPass(gather, offsets, plan.cross_view_max_len, gather, offsets, plan.cross_view_max_len)
+    else:
+        assert plan.cross_view_kv_offsets is not None
+        first = CrossViewPass(
+            gather,
+            offsets,
+            plan.cross_view_max_len,
+            plan.cross_view_kv_gather,
+            plan.cross_view_kv_offsets,
+            plan.cross_view_kv_max_len,
+        )
+    return [first, *plan.cross_view_extra_passes]
+
+
+def _view_tree_splits(views: Sequence[int]) -> list[tuple[int, list[int], list[int]]]:
+    """``(level, left, right)`` for each node of a balanced binary split of ``views``.
+
+    Two distinct views sit on opposite sides of exactly one node, the one where their paths
+    part, and a view never sits opposite itself. Each level's nodes are disjoint, so a level is
+    one pass in which every query appears at most once.
+    """
+    splits: list[tuple[int, list[int], list[int]]] = []
+    stack: list[tuple[int, list[int]]] = [(0, list(views))]
+    while stack:
+        level, node = stack.pop()
+        if len(node) < 2:
+            continue
+        middle = len(node) // 2
+        left, right = node[:middle], node[middle:]
+        splits.append((level, left, right))
+        stack.extend(((level + 1, left), (level + 1, right)))
+    return splits
 
 
 def _cumulative_offsets(lengths: Sequence[int], device: torch.device) -> torch.Tensor:
@@ -645,6 +751,9 @@ def build_multiview_maskless_plan(
     padded_gen_tokens: int | None = None,
     attention_scope: str = "decomposed",
     caption_access: Sequence[CaptionAccess] | None = None,
+    cross_view_band_radius: int = 0,
+    include_frame_zero: bool = False,
+    cross_view_band_keys: str = "all_views",
     deduplicate_cross_view: bool = False,
     decomposed_temporal_window_seconds: TemporalWindow | None = None,
     decomposed_temporal_window_includes_first_frame: bool = False,
@@ -749,6 +858,20 @@ def build_multiview_maskless_plan(
             double-weighted and there is nothing for inclusion-exclusion to subtract back out.
             ``"all_views"`` is not accepted: it is one unmasked pass per sample rather than a
             partition of one, which this builder does not express.
+        cross_view_band_radius: instants either side of each query instant its cross-view key
+            run also covers. Zero keeps the aligned partition.
+        include_frame_zero: whether every cross-view key run also covers the sample's first
+            instant.
+        cross_view_band_keys: which views the band keys at instants other than the query's
+            own. ``"all_views"`` keys them all. ``"own_view"`` splits each query instant into one
+            run per same-view group and keys that group alone there, gathering the query's own
+            instant, which keeps every view, once per group. Both ignored without a band.
+            ``"other_views"`` keys every *other* group at every band instant, the query's own
+            instant included, and never its own group, which the same-view pass already keys at
+            every frame: each key then counts once, at radius zero too. It runs one pass per
+            level of a balanced binary split of each sample's groups -- two groups meet on
+            opposite sides of exactly one node -- so it gathers each key once per level,
+            ``ceil(log2(groups))`` passes, rather than once per query group.
 
     Returns:
         The plan, with its partitions as varlen offsets and the gathers that reach them.
@@ -772,6 +895,23 @@ def build_multiview_maskless_plan(
             ``lidar_attends_captions=False``, which is generation without text conditioning
             rather than an attention this builds.
     """
+    if cross_view_band_radius < 0:
+        raise ValueError(f"cross_view_band_radius must be non-negative, got {cross_view_band_radius}.")
+    if cross_view_band_keys not in ("all_views", "own_view", "other_views"):
+        raise ValueError(
+            f"cross_view_band_keys must be 'all_views', 'own_view' or 'other_views', got {cross_view_band_keys!r}."
+        )
+    exclude_own_view = cross_view_band_keys == "other_views"
+    if attention_scope == "same_view" and (cross_view_band_radius or include_frame_zero or exclude_own_view):
+        raise ValueError("The experimental cross-view expansion requires attention_scope='decomposed'.")
+    if (deduplicate_cross_view or decomposed_temporal_window_seconds is not None) and (
+        cross_view_band_radius or include_frame_zero or exclude_own_view
+    ):
+        # Both rebuild the cross-instant pass from the same instants, so they do not compose.
+        raise ValueError(
+            "The experimental cross-view expansion replaces the cross-instant pass, as do "
+            "deduplicate_cross_view and decomposed_temporal_window_seconds; set one or the other."
+        )
     if attention_scope not in ("decomposed", "same_view"):
         raise ValueError(
             f"attention_scope={attention_scope!r} is not one this fold expresses; expected "
@@ -898,6 +1038,9 @@ def build_multiview_maskless_plan(
     view_ids: list[torch.Tensor] = []
     instant_ids: list[torch.Tensor] = []
     sensor_positions: list[torch.Tensor] = []
+    sensor_view_ids: list[torch.Tensor] = []
+    # The expanded cross-view approximation is materialized below from these aligned instant
+    # IDs: each query instant stays unique while its KV run may replicate neighboring tokens.
     instant_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] = {}
     caption_reader_runs: list[torch.Tensor] = []
     caption_reader_lens: list[int] = []
@@ -1002,10 +1145,11 @@ def build_multiview_maskless_plan(
                     instants = torch.floor(
                         (frame_ids + offsets[item] + 0.5) * (rates[item] / anchor_rate) + 1e-6
                     ).long()  # [F]
-                    instant_ids.append(instants.repeat_interleave(spatial).repeat(views) + (sample << 32))  # [V*F*S]
-                    sensor_positions.append(
-                        torch.arange(position, position + item_lens[item], device=device)
-                    )  # [N_item]
+                    item_instants = instants.repeat_interleave(spatial).repeat(views)  # [V*F*S]
+                    item_positions = torch.arange(position, position + item_lens[item], device=device)  # [N_item]
+                    instant_ids.append(item_instants + (sample << 32))
+                    sensor_positions.append(item_positions)
+                    sensor_view_ids.append(view_ids[-1])
             # The cameras' axis is the one captions are written for; every other axis is a
             # sensor no caption describes, which is what the flag decides the fate of.
             if subset_gen_to_und and accesses[item] != "no_captions":
@@ -1074,7 +1218,8 @@ def build_multiview_maskless_plan(
             ]
     split_fields = _control_split_fields(group_sensor_runs, group_control_runs, device) if needs_control_split else {}
     same_view_gather, same_view_lens = _partition(torch.cat(view_ids))
-    if not instant_ids:
+
+    def _without_cross_view() -> MultiviewMasklessPlan:
         # No legacy instant partition: either every sample has one view group,
         # or exact/windowed cross-view rectangles replace the legacy instant partition.
         partitions = _cross_view_partitions(
@@ -1112,12 +1257,138 @@ def build_multiview_maskless_plan(
             same_view_gather=same_view_gather,
             **split_fields,
         )
+
+    if not instant_ids:
+        # Every sample owned a single view group, so nothing is left to attend by instant.
+        return _without_cross_view()
     # Sliced to the sensor tokens, so the gather indexes the packed stream but is shorter than
     # it: the pass runs over that subset and its output is scattered back, leaving the control
     # rows at a log-sum-exp the merge gives no weight.
     sensor_index = torch.cat(sensor_positions)  # [N_sensor]
-    order, cross_view_lens = _partition(torch.cat(instant_ids))
-    cross_view_gather = sensor_index if order is None else sensor_index[order]
+    sensor_instants = torch.cat(instant_ids)
+    order, aligned_lens = _partition(sensor_instants)
+    aligned_gather = sensor_index if order is None else sensor_index[order]
+
+    cross_view_kv_gather = None
+    cross_view_kv_lens = aligned_lens
+    extra_passes: list[CrossViewPass] = []
+    if cross_view_band_radius or include_frame_zero or exclude_own_view:
+        # Keep one query run per (sample, instant) -- per (sample, instant, view) under
+        # ``"own_view"``, per (sample, instant, tree side) under ``"other_views"`` -- but expand
+        # its KV run to neighboring instants.
+        # ``torch.unique_consecutive`` is safe after the stable group sort and avoids a Python
+        # scalar read from a CUDA tensor.
+        sorted_ids = sensor_instants if order is None else sensor_instants[order]
+        groups = torch.split(aligned_gather, aligned_lens)
+        group_ids = torch.unique_consecutive(sorted_ids)
+        group_by_id = {int(group_id): group for group_id, group in zip(group_ids.tolist(), groups)}
+        query_runs: list[torch.Tensor] = []
+        kv_runs: list[torch.Tensor] = []
+        cross_view_kv_lens = []
+        cross_view_lens = aligned_lens
+        host_groups: dict[int, torch.Tensor] = {}
+        host_views: dict[int, torch.Tensor] = {}
+        per_view = cross_view_band_keys in ("own_view", "other_views")
+        if per_view:
+            # Split on the host: one boolean mask per (instant, view) run would otherwise be a
+            # device sync each.
+            sensor_views = torch.cat(sensor_view_ids)
+            sorted_views = (sensor_views if order is None else sensor_views[order]).cpu()
+            host_groups = dict(zip(group_ids.tolist(), torch.split(aligned_gather.cpu(), aligned_lens)))
+            host_views = dict(zip(group_ids.tolist(), torch.split(sorted_views, aligned_lens)))
+            cross_view_lens = []
+        # Per tree level, its query runs and their key runs.
+        level_runs: dict[int, tuple[list[torch.Tensor], list[torch.Tensor]]] = {}
+        sample_splits: dict[int, list[tuple[int, torch.Tensor, torch.Tensor]]] = {}
+        if exclude_own_view:
+            # The split is per sample over every group it brings to the pass, so a group keeps
+            # one side of each node at every instant.
+            sample_groups: dict[int, set[int]] = {}
+            for group_id, views in host_views.items():
+                sample_groups.setdefault(group_id >> 32, set()).update(torch.unique(views).tolist())
+            sample_splits = {
+                sample_prefix: [
+                    (level, torch.tensor(left), torch.tensor(right))
+                    for level, left, right in _view_tree_splits(sorted(view_groups))
+                ]
+                for sample_prefix, view_groups in sample_groups.items()
+            }
+        for group_id_tensor, query_run in zip(group_ids, groups):
+            group_id = int(group_id_tensor)
+            sample_prefix = group_id >> 32
+            instant = group_id & ((1 << 32) - 1)
+            wanted = {
+                instant + offset
+                for offset in range(-cross_view_band_radius, cross_view_band_radius + 1)
+                if instant + offset >= 0
+            }
+            if include_frame_zero:
+                wanted.add(0)
+            key_ids = [
+                (sample_prefix << 32) + key_instant
+                for key_instant in sorted(wanted)
+                if (sample_prefix << 32) + key_instant in group_by_id
+            ]
+            if not per_view:
+                kv_run = torch.cat([group_by_id[key_id] for key_id in key_ids])
+                query_runs.append(query_run)
+                kv_runs.append(kv_run)
+                cross_view_kv_lens.append(int(kv_run.shape[0]))
+                continue
+            query_views = host_views[group_id]
+            if exclude_own_view:
+                for level, left, right in sample_splits[sample_prefix]:
+                    for query_side, key_side in ((left, right), (right, left)):
+                        side_query_run = host_groups[group_id][torch.isin(query_views, query_side)]
+                        kv_run = torch.cat(
+                            [host_groups[key_id][torch.isin(host_views[key_id], key_side)] for key_id in key_ids]
+                        )
+                        # A run with no queries or no keys leaves the pass: its rows take the
+                        # scatter's no-weight fill, which is what keying nothing comes to.
+                        if side_query_run.numel() and kv_run.numel():
+                            level_query_runs, level_kv_runs = level_runs.setdefault(level, ([], []))
+                            level_query_runs.append(side_query_run)
+                            level_kv_runs.append(kv_run)
+                continue
+            for view in torch.unique(query_views).tolist():
+                view_query_run = host_groups[group_id][query_views == view]
+                kv_run = torch.cat(
+                    [
+                        host_groups[key_id] if key_id == group_id else host_groups[key_id][host_views[key_id] == view]
+                        for key_id in key_ids
+                    ]
+                )
+                query_runs.append(view_query_run)
+                kv_runs.append(kv_run)
+                cross_view_lens.append(int(view_query_run.shape[0]))
+                cross_view_kv_lens.append(int(kv_run.shape[0]))
+        if exclude_own_view:
+            if not level_runs:
+                # No sample has two groups sharing a band, so no query has another view to reach.
+                return _without_cross_view()
+            levels = sorted(level_runs)
+            query_runs, kv_runs = level_runs[levels[0]]
+            cross_view_lens = [int(run.shape[0]) for run in query_runs]
+            cross_view_kv_lens = [int(run.shape[0]) for run in kv_runs]
+            for level in levels[1:]:
+                level_query_runs, level_kv_runs = level_runs[level]
+                query_lens = [int(run.shape[0]) for run in level_query_runs]
+                kv_lens = [int(run.shape[0]) for run in level_kv_runs]
+                extra_passes.append(
+                    CrossViewPass(
+                        gather=torch.cat(level_query_runs).to(device),
+                        offsets=_cumulative_offsets(query_lens, device),
+                        max_len=max(query_lens),
+                        kv_gather=torch.cat(level_kv_runs).to(device),
+                        kv_offsets=_cumulative_offsets(kv_lens, device),
+                        kv_max_len=max(kv_lens),
+                    )
+                )
+        cross_view_gather = torch.cat(query_runs).to(device)
+        cross_view_kv_gather = torch.cat(kv_runs).to(device)
+    else:
+        cross_view_gather = aligned_gather
+        cross_view_lens = aligned_lens
 
     caption_gather, caption_lens = _caption_partition(
         captions, view_group, group_sample, group_access, device, bool(pad_tokens)
@@ -1148,6 +1419,12 @@ def build_multiview_maskless_plan(
         cross_view_offsets=_cumulative_offsets(cross_view_lens, device),
         cross_view_max_len=max(cross_view_lens),
         cross_view_gather=cross_view_gather,
+        cross_view_kv_offsets=(
+            None if cross_view_kv_gather is None else _cumulative_offsets(cross_view_kv_lens, device)
+        ),
+        cross_view_kv_max_len=(0 if cross_view_kv_gather is None else max(cross_view_kv_lens)),
+        cross_view_kv_gather=cross_view_kv_gather,
+        cross_view_extra_passes=tuple(extra_passes),
     )
 
 
@@ -1194,17 +1471,68 @@ def _gather_from_packed(gather: torch.Tensor) -> BridgeFn:
     return _inverse
 
 
+def _rigrope_or_mrope(
+    rigrope: torch.Tensor,  # [N,H,D]
+    mrope: torch.Tensor,  # [N,H,D]
+    token_has_geometry: torch.Tensor | None,  # [N] bool
+    rigrope_heads: torch.Tensor | None,  # [H] bool
+) -> torch.Tensor:  # returns [N,H,D]
+    """Take RigRoPE on the RigRoPE heads of tokens with geometry, mRoPE everywhere else."""
+    use = torch.ones(1, rigrope.shape[1], dtype=torch.bool, device=rigrope.device)  # [1,H]
+    if rigrope_heads is not None:
+        if rigrope_heads.shape != (rigrope.shape[1],):
+            raise ValueError(
+                f"RigRoPE head mask {tuple(rigrope_heads.shape)} does not match {rigrope.shape[1]} local heads"
+            )
+        use = rigrope_heads[None, :]  # [1,H]
+    if token_has_geometry is not None:
+        use = use & token_has_geometry[:, None]  # [N,H]
+    return torch.where(use[..., None], rigrope, mrope)  # [N,H,D]
+
+
+def rigrope_local_head_masks(
+    num_heads: int,
+    num_kv_heads: int,
+    rigrope_kv_heads: int,
+    *,
+    cp_rank: int = 0,
+    cp_size: int = 1,
+    device: torch.device | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:  # returns [H_local], [H_kv_local]
+    """Mark this rank's query and KV heads that belong to the leading ``rigrope_kv_heads`` groups.
+
+    Global query head ``h`` reads KV head ``h // (num_heads // num_kv_heads)``. Under context
+    parallelism the heads arrive as ``context_parallel_attention`` shards them: each KV head is
+    first repeated ``max(cp_size // num_kv_heads, 1)`` times, then both head axes are split into
+    contiguous per-rank chunks. The masks follow that layout so a query head and the KV head it
+    reads always agree.
+    """
+    group = num_heads // num_kv_heads
+    repeats = max(cp_size // num_kv_heads, 1)
+    q_per_rank = num_heads // cp_size
+    kv_per_rank = num_kv_heads * repeats // cp_size
+    q_heads = torch.arange(cp_rank * q_per_rank, (cp_rank + 1) * q_per_rank, device=device)  # [H_local]
+    kv_slots = torch.arange(cp_rank * kv_per_rank, (cp_rank + 1) * kv_per_rank, device=device)  # [H_kv_local]
+    return q_heads // group < rigrope_kv_heads, kv_slots // repeats < rigrope_kv_heads
+
+
 def _check_plan_matches_pack(plan: MultiviewMasklessPlan, packed_query_states: SequencePack) -> None:
     """Refuse a pack whose shape the plan does not describe, before any of the folds run.
 
     Raises:
         ValueError: when the pack's sample count or padded GEN token count disagrees with it.
     """
-    # Real samples only: a pack with a pad segment describes it as one more entry in
-    # ``sample_offsets``, and that pseudo-sample is not one the plan has a fold for.
-    num_samples = get_num_real_samples(packed_query_states)
-    if num_samples != len(plan.items_per_sample):
-        raise ValueError(f"The plan describes {len(plan.items_per_sample)} samples but the pack holds {num_samples}.")
+    # Eager only: the sample count is a dynamic size of ``sample_offsets``, and comparing it to a
+    # Python int specializes the compiled graph on it, recompiling for every count packing draws
+    # (see ``attention._use_varlen``). Eager runs of the same plans still exercise the check.
+    if not torch.compiler.is_compiling():
+        # Real samples only: a pack with a pad segment describes it as one more entry in
+        # ``sample_offsets``, and that pseudo-sample is not one the plan has a fold for.
+        num_samples = get_num_real_samples(packed_query_states)
+        if num_samples != len(plan.items_per_sample):
+            raise ValueError(
+                f"The plan describes {len(plan.items_per_sample)} samples but the pack holds {num_samples}."
+            )
 
     # A shape, not a value read off a tensor: the latter is an unbacked symbol under
     # torch.compile, and comparing one to a Python int is a data-dependent guard Dynamo refuses.
@@ -1215,6 +1543,236 @@ def _check_plan_matches_pack(plan: MultiviewMasklessPlan, packed_query_states: S
             f"The plan describes a GEN stream padded to {plan.padded_gen_tokens} tokens but the pack "
             f"holds {packed_gen_tokens}."
         )
+
+
+def _camera_pose_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    partition: CameraPosePartition,
+    num_gen_tokens: int,
+    pose_plan: CameraRelativePosePlan | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run one PRoPE partition and bridge its transformed output/gradients."""
+    query = q[partition.query_indices]
+    key = k[partition.key_indices]
+    value = v[partition.key_indices]
+    if pose_plan is not None:
+        query = apply_camera_pose(query, pose_plan.reference_to_camera.transpose(-1, -2))
+        key = apply_camera_pose(key, pose_plan.camera_to_reference)
+        value = apply_camera_pose(value, pose_plan.camera_to_reference)
+    out, lse = attention(
+        query.unsqueeze(0),
+        key.unsqueeze(0),
+        value.unsqueeze(0),
+        cumulative_seqlen_Q=partition.query_offsets,
+        cumulative_seqlen_KV=partition.key_offsets,
+        max_seqlen_Q=partition.max_query_len,
+        max_seqlen_KV=partition.max_key_len,
+        return_lse=True,
+    )
+    scatter = _scatter_to_packed(partition.query_indices, num_gen_tokens)
+    gather = _gather_from_packed(partition.query_indices)
+    if pose_plan is None:
+        return MergeAttentionsBridge.apply(out, lse, scatter, gather)
+
+    def output_to_packed(inner: torch.Tensor, inner_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        transformed = apply_camera_pose(inner[0], pose_plan.reference_to_camera).unsqueeze(0)
+        return scatter(transformed, inner_lse)
+
+    def output_from_packed(outer: torch.Tensor, outer_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        inner, inner_lse = gather(outer, outer_lse)
+        restored = apply_camera_pose(inner[0], pose_plan.camera_to_reference).unsqueeze(0)
+        return restored, inner_lse
+
+    def gradient_from_packed(grad: torch.Tensor, grad_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        inner, inner_lse = gather(grad, grad_lse)
+        transformed = apply_camera_pose(inner[0], pose_plan.reference_to_camera.transpose(-1, -2)).unsqueeze(0)
+        return transformed, inner_lse
+
+    return MergeAttentionsBridge.apply(out, lse, output_to_packed, output_from_packed, gradient_from_packed)
+
+
+def _on_heads(
+    transformed: torch.Tensor,  # [N,H,D]
+    original: torch.Tensor,  # [N,H,D]
+    heads: torch.Tensor | None,  # [H] bool
+) -> torch.Tensor:  # returns [N,H,D]
+    """Take ``transformed`` on the marked heads and ``original`` on the rest; all heads when unmarked."""
+    if heads is None:
+        return transformed
+    if heads.shape != (transformed.shape[1],):
+        raise ValueError(f"PRoPE head mask {tuple(heads.shape)} does not match {transformed.shape[1]} local heads")
+    return torch.where(heads[None, :, None], transformed, original)  # [N,H,D]
+
+
+def _prope_transforms(plan: MultiviewMasklessPlan) -> tuple[torch.Tensor, torch.Tensor]:  # each [N_gen,4,4]
+    reference_to_camera = plan.prope_reference_to_camera
+    camera_to_reference = plan.prope_camera_to_reference
+    if reference_to_camera is None or camera_to_reference is None:
+        raise ValueError("A PRoPE cross-view plan must carry both per-token transforms")
+    return reference_to_camera, camera_to_reference
+
+
+def _prope_cross_view_inputs(
+    q: torch.Tensor,  # [N_gen,heads,head_dim], mRoPE applied
+    k: torch.Tensor,  # [N_gen,kv_heads,head_dim], mRoPE applied
+    v: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    raw_q: torch.Tensor,  # [N_gen,heads,head_dim]
+    raw_k: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    plan: MultiviewMasklessPlan,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:  # [N_gen,heads,D], [N_gen,kv_heads,D] x2
+    """The PRoPE queries, keys and values every cross-view pass gathers from.
+
+    On a geometry head the even split-half pairs carry PRoPE on the raw projections and the odd
+    pairs keep mRoPE. Both act pair-wise on disjoint channels, so each stays exactly relative;
+    the odd pairs keep every mRoPE axis, which is what lets the band's time offsets still reach
+    the scores.
+
+    The transforms are per token, so they run once over the stream rather than on each pass's
+    gather: a band copies each key into every query instant that reaches it, and an exact band
+    once more per view-tree level, so transforming after the gather repeats the work per copy.
+    Tokens no pass gathers carry the identity transform and go unread.
+    """
+    reference_to_camera, camera_to_reference = _prope_transforms(plan)
+    pairs = prope_pair_channels(q.shape[-1], q.device)  # [D]
+    cross_q = apply_prope_pairs(torch.where(pairs, raw_q, q), reference_to_camera.transpose(-1, -2))
+    cross_k = apply_prope_pairs(torch.where(pairs, raw_k, k), camera_to_reference)
+    cross_v = apply_prope_pairs(v, camera_to_reference)
+    return (
+        _on_heads(cross_q, q, plan.rigrope_q_heads),
+        _on_heads(cross_k, k, plan.rigrope_k_heads),
+        _on_heads(cross_v, v, plan.rigrope_k_heads),
+    )
+
+
+def _prope_cross_view_attention(
+    cross_q: torch.Tensor,  # [N_gen,heads,head_dim], from _prope_cross_view_inputs
+    cross_k: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    cross_v: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    plan: MultiviewMasklessPlan,
+    cross_pass: CrossViewPass,
+    num_gen_tokens: int,
+) -> tuple[torch.Tensor, torch.Tensor]:  # returns [1,N_gen,heads,head_dim], [1,N_gen,heads]
+    """Run a cross-instant pass with PRoPE on the geometry heads and mRoPE on the rest.
+
+    The output's PRoPE channels go back to the query camera through the bridge, whose gradient
+    is the transform's transpose rather than its inverse.
+    """
+    reference_to_camera, camera_to_reference = _prope_transforms(plan)
+    gather, kv_gather = cross_pass.gather, cross_pass.kv_gather
+
+    out, lse = attention(
+        cross_q[gather].unsqueeze(0),  # [1,N_query,heads,head_dim], one run per query instant
+        cross_k[kv_gather].unsqueeze(0),  # [1,N_keys,kv_heads,head_dim], optionally expanded
+        cross_v[kv_gather].unsqueeze(0),  # [1,N_keys,kv_heads,head_dim]
+        cumulative_seqlen_Q=cross_pass.offsets,
+        cumulative_seqlen_KV=cross_pass.kv_offsets,
+        max_seqlen_Q=cross_pass.max_len,
+        max_seqlen_KV=cross_pass.kv_max_len,
+        return_lse=True,
+    )  # out: [1,N_query,heads,head_dim], lse: [1,N_query,heads]
+
+    scatter = _scatter_to_packed(gather, num_gen_tokens)
+    unscatter = _gather_from_packed(gather)
+    q_pose = reference_to_camera[gather]  # [N_query,4,4]
+    q_pose_inverse = camera_to_reference[gather]  # [N_query,4,4]
+    heads = plan.rigrope_q_heads
+
+    def transform_geometry_heads(features: torch.Tensor, matrices: torch.Tensor) -> torch.Tensor:
+        transformed = apply_prope_pairs(features, matrices)
+        return transformed if heads is None else _on_heads(transformed, features, heads)
+
+    def output_to_packed(inner: torch.Tensor, inner_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        transformed = transform_geometry_heads(inner[0], q_pose)
+        return scatter(transformed.unsqueeze(0), inner_lse)
+
+    def output_from_packed(outer: torch.Tensor, outer_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        inner, inner_lse = unscatter(outer, outer_lse)
+        restored = transform_geometry_heads(inner[0], q_pose_inverse)
+        return restored.unsqueeze(0), inner_lse
+
+    def gradient_from_packed(grad: torch.Tensor, grad_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        inner, inner_lse = unscatter(grad, grad_lse)
+        transformed = transform_geometry_heads(inner[0], q_pose.transpose(-1, -2))
+        return transformed.unsqueeze(0), inner_lse
+
+    return MergeAttentionsBridge.apply(out, lse, output_to_packed, output_from_packed, gradient_from_packed)
+
+
+def _aligned_cross_view_inputs(
+    q: torch.Tensor,  # [N_gen,heads,head_dim], mRoPE applied when the plan carries it
+    k: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    raw_q: torch.Tensor,  # [N_gen,heads,head_dim]
+    raw_k: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    plan: MultiviewMasklessPlan,
+) -> tuple[torch.Tensor, torch.Tensor]:  # returns [N_gen,heads,head_dim], [N_gen,kv_heads,head_dim]
+    """The queries and keys every cross-view pass gathers from: mRoPE, or RigRoPE where the plan carries it.
+
+    RigRoPE is a per-token rotation, so it runs once over the stream rather than on each pass's
+    gather: a band copies each key into every query instant that reaches it, and an exact band
+    once more per view-tree level, so rotating after the gather repeats the work per copy.
+    Tokens no pass gathers carry zero angles and go unread.
+    """
+    if plan.rigrope_cos is None:
+        return q, k
+    if plan.rigrope_sin is None:
+        raise ValueError("A decomposed RigRoPE plan with RigRoPE cosine must carry its sine")
+    cross_q = apply_rig_rotary(raw_q, plan.rigrope_cos, plan.rigrope_sin)  # [N_gen,heads,D]
+    cross_k = apply_rig_rotary(raw_k, plan.rigrope_cos, plan.rigrope_sin)  # [N_gen,kv_heads,D]
+    if plan.rigrope_pairs is not None:
+        if plan.mrope_cos is None:
+            raise ValueError("A RigRoPE plan that keeps mRoPE on some channels must carry mRoPE")
+        cross_q = torch.where(plan.rigrope_pairs, cross_q, q)  # [N_gen,heads,D]
+        cross_k = torch.where(plan.rigrope_pairs, cross_k, k)  # [N_gen,kv_heads,D]
+    if plan.rigrope_valid is not None or plan.rigrope_q_heads is not None:
+        if plan.mrope_cos is None:
+            raise ValueError("A RigRoPE plan that keeps mRoPE on some tokens or heads must carry mRoPE")
+        cross_q = _rigrope_or_mrope(cross_q, q, plan.rigrope_valid, plan.rigrope_q_heads)
+        cross_k = _rigrope_or_mrope(cross_k, k, plan.rigrope_valid, plan.rigrope_k_heads)
+    return cross_q, cross_k
+
+
+def _aligned_cross_view_attention(
+    cross_q: torch.Tensor,  # [N_gen,heads,head_dim], from _aligned_cross_view_inputs
+    cross_k: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    v: torch.Tensor,  # [N_gen,kv_heads,head_dim]
+    cross_pass: CrossViewPass,
+    num_gen_tokens: int,
+) -> tuple[torch.Tensor, torch.Tensor]:  # returns [1,N_gen,heads,head_dim], [1,N_gen,heads]
+    """Run a cross-instant pass under mRoPE, or RigRoPE where the plan carries it."""
+    # ── Pass 2: same frame, every view ────────────────────────────────────────
+    # A frame's views are strided through the packed order, so this pass reaches them through
+    # a gather. The way back is a copy too, and a copy is what
+    # ``merge_attentions``'s backward cannot see through -- it repairs each branch by writing
+    # the merged output and LSE into the storage the kernel saved, found by data pointer, and a
+    # copy leaves the kernel's own storage unpatched. The bridge re-establishes that link.
+    #
+    # The scatter back is linear with constant fill -- the control rows the pass skips take an
+    # output of zero and a log-sum-exp the merge gives no weight -- which is the class the
+    # bridge documents itself as valid for, and it is why the same callable serves as the
+    # gradient operator and as the inverse.
+    gather, kv_gather = cross_pass.gather, cross_pass.kv_gather
+    # Queries and keys are gathered separately because a band keys each query instant
+    # against a run of instants; RigRoPE is a per-token rotation, so each side takes the
+    # rotation of the tokens it gathered.
+    out, lse = attention(
+        cross_q[gather].unsqueeze(0),  # [1,N_query,heads,head_dim], one run per query instant
+        cross_k[kv_gather].unsqueeze(0),  # [1,N_keys,kv_heads,head_dim], optionally expanded
+        v[kv_gather].unsqueeze(0),  # [1,N_keys,kv_heads,head_dim]
+        cumulative_seqlen_Q=cross_pass.offsets,
+        cumulative_seqlen_KV=cross_pass.kv_offsets,
+        max_seqlen_Q=cross_pass.max_len,
+        max_seqlen_KV=cross_pass.kv_max_len,
+        return_lse=True,
+    )  # out: [1,N_query,heads,head_dim], lse: [1,N_query,heads]
+
+    return MergeAttentionsBridge.apply(
+        out,
+        lse,
+        _scatter_to_packed(gather, num_gen_tokens),
+        _gather_from_packed(gather),
+    )  # [1,N_gen,heads,head_dim], [1,N_gen,heads]
 
 
 def _natten_window(
@@ -1397,6 +1955,12 @@ def multiview_maskless_gen_attention(
     # a padded key only ever meets a padded query, which is what trimming used to buy, and the
     # pack's offsets and maximum lengths describe exactly the tensors handed to the kernels.
     q, k, v = full_q, full_k, full_v  # [N_full,*,head_dim]
+    raw_q, raw_k = q, k
+    if plan.mrope_cos is not None:
+        if plan.mrope_sin is None:
+            raise ValueError("A decomposed RigRoPE plan with mRoPE cosine must carry its sine")
+        q = apply_mrope_rotary(q, plan.mrope_cos, plan.mrope_sin)  # [N_full,heads,head_dim]
+        k = apply_mrope_rotary(k, plan.mrope_cos, plan.mrope_sin)  # [N_full,kv_heads,head_dim]
 
     # ── Pass 1: same view, every frame or configured neighborhood ─────────────
     # Tokens are camera-major (view-outer, frame-inner, spatial-innermost), so one item per view
@@ -1532,60 +2096,35 @@ def multiview_maskless_gen_attention(
     # instant groups sit inside its view groups, so the pass would only double-weight each
     # query's own instant. Skipped outright rather than merged at zero weight, which saves
     # the kernel as well as the distortion.
-    cross_view_out = cross_view_lse = None
-    partition_outputs: list[torch.Tensor] = []  # each [1,N,H,D]
-    partition_lses: list[torch.Tensor] = []  # each [1,N,H]
-    if plan.deduplicate_cross_view or plan.decomposed_temporal_window_seconds is not None:
-        for partition in plan.cross_view_partitions:
-            out, lse = attention(
-                q[partition.query_indices].unsqueeze(0),  # [1,Nq,H,D]
-                k[partition.key_indices].unsqueeze(0),  # [1,Nk,Hkv,D]
-                v[partition.key_indices].unsqueeze(0),  # [1,Nk,Hkv,D]
-                cumulative_seqlen_Q=partition.query_offsets,
-                cumulative_seqlen_KV=partition.key_offsets,
-                max_seqlen_Q=partition.max_query_len,
-                max_seqlen_KV=partition.max_key_len,
-                return_lse=True,
-            )  # [1,Nq,H,D], [1,Nq,H]
-            out, lse = MergeAttentionsBridge.apply(
-                out,
-                lse,
-                _scatter_to_packed(partition.query_indices, num_gen_tokens),
-                _gather_from_packed(partition.query_indices),
-            )  # [1,N,H,D], [1,N,H]
-            partition_outputs.append(out)
-            partition_lses.append(lse)
+    # One branch per cross-view pass; ``"other_views"`` band keys run one per view-tree level.
+    cross_view_outs: list[torch.Tensor] = []
+    cross_view_lses: list[torch.Tensor] = []
+    pose_other_out = pose_other_lse = None
+    if plan.camera_relative_pose is not None:
+        pose_plan = plan.camera_relative_pose
+        cross_view_out, cross_view_lse = _camera_pose_attention(q, k, v, pose_plan.cameras, num_gen_tokens, pose_plan)
+        cross_view_outs.append(cross_view_out)
+        cross_view_lses.append(cross_view_lse)
+        if pose_plan.other is not None:
+            pose_other_out, pose_other_lse = _camera_pose_attention(q, k, v, pose_plan.other, num_gen_tokens)
+    elif plan.prope_reference_to_camera is not None and not plan.cross_view_empty:
+        if plan.mrope_cos is None:
+            raise ValueError("A PRoPE cross-view plan keeps mRoPE on its other channels and heads, so must carry it")
+        cross_q, cross_k, cross_v = _prope_cross_view_inputs(q, k, v, raw_q, raw_k, plan)
+        for cross_pass in cross_view_passes(plan):
+            cross_view_out, cross_view_lse = _prope_cross_view_attention(
+                cross_q, cross_k, cross_v, plan, cross_pass, num_gen_tokens
+            )  # [1,N_gen,heads,head_dim], [1,N_gen,heads]
+            cross_view_outs.append(cross_view_out)
+            cross_view_lses.append(cross_view_lse)
     elif not plan.cross_view_empty:
-        # ── Pass 2: same frame, every view ────────────────────────────────────────
-        # A frame's views are strided through the packed order, so this pass reaches them through
-        # a gather. The way back is a copy too, and a copy is what
-        # ``merge_attentions``'s backward cannot see through -- it repairs each branch by writing
-        # the merged output and LSE into the storage the kernel saved, found by data pointer, and a
-        # copy leaves the kernel's own storage unpatched. The bridge re-establishes that link.
-        #
-        # The scatter back is linear with constant fill -- the control rows the pass skips take an
-        # output of zero and a log-sum-exp the merge gives no weight -- which is the class the
-        # bridge documents itself as valid for, and it is why the same callable serves as the
-        # gradient operator and as the inverse.
-        gather = plan.cross_view_gather
-        assert gather is not None, "A plan with a cross-instant partition carries its gather."
-        cross_view_out, cross_view_lse = attention(
-            q[gather].unsqueeze(0),  # [1,N_gen,heads,head_dim]  frame-major
-            k[gather].unsqueeze(0),  # [1,N_gen,kv_heads,head_dim]
-            v[gather].unsqueeze(0),  # [1,N_gen,kv_heads,head_dim]
-            cumulative_seqlen_Q=plan.cross_view_offsets,
-            cumulative_seqlen_KV=plan.cross_view_offsets,
-            max_seqlen_Q=plan.cross_view_max_len,
-            max_seqlen_KV=plan.cross_view_max_len,
-            return_lse=True,
-        )  # out: [1,N_gen,heads,head_dim], lse: [1,N_gen,heads]
-
-        cross_view_out, cross_view_lse = MergeAttentionsBridge.apply(
-            cross_view_out,
-            cross_view_lse,
-            _scatter_to_packed(gather, num_gen_tokens),
-            _gather_from_packed(gather),
-        )  # [1,N_gen,heads,head_dim], [1,N_gen,heads]
+        cross_q, cross_k = _aligned_cross_view_inputs(q, k, raw_q, raw_k, plan)
+        for cross_pass in cross_view_passes(plan):
+            cross_view_out, cross_view_lse = _aligned_cross_view_attention(
+                cross_q, cross_k, v, cross_pass, num_gen_tokens
+            )  # [1,N_gen,heads,head_dim], [1,N_gen,heads]
+            cross_view_outs.append(cross_view_out)
+            cross_view_lses.append(cross_view_lse)
 
     # ── Pass 3: gen->und ──────────────────────────────────────────────────────
     # Every sample's GEN tokens against its own captions and nothing else, which the two offset
@@ -1675,18 +2214,16 @@ def multiview_maskless_gen_attention(
     # Under ``control_attends_sensor=False`` that is exactly why the split is two varlen segments
     # of this pass rather than two passes: either pass alone would leave the other's rows
     # uncovered, and no ordering of the two would fix it.
-    outputs = [same_view_out]
-    lse_tensors = [same_view_lse]
-    outputs.extend(partition_outputs)
-    lse_tensors.extend(partition_lses)
-    if cross_view_out is not None:
-        assert cross_view_lse is not None
-        outputs.append(cross_view_out)
-        lse_tensors.append(cross_view_lse)
+    outputs = [same_view_out, *cross_view_outs]
+    lse_tensors = [same_view_lse, *cross_view_lses]
     # The gen->und pass always ran: a plan whose every item is cut off from the captions is
     # refused where it is built, so there is always something for it to read.
     outputs.append(gen_to_und_out)
     lse_tensors.append(gen_to_und_lse)
+    if pose_other_out is not None:
+        assert pose_other_lse is not None
+        outputs.append(pose_other_out)
+        lse_tensors.append(pose_other_lse)
     full_res, _ = merge_attentions(
         outputs=outputs, lse_tensors=lse_tensors, torch_compile=True
     )  # [1,N_gen,heads,head_dim]

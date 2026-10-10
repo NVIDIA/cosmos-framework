@@ -14,8 +14,8 @@ from torch._dynamo.decorators import mark_unbacked
 from torch.distributed.device_mesh import init_device_mesh
 from torch.utils.checkpoint import checkpoint
 
-from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer
-from cosmos_framework.utils import distributed
+from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer, StepBatch
+from cosmos_framework.utils import distributed, misc
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.model.generator.mot.attention import (
@@ -28,7 +28,6 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     context_parallel_attention,
     get_context_parallel_sharded_sequence,
 )
-
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
 from cosmos_framework.model.generator.utils.memory import MemoryValue
@@ -51,6 +50,10 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
+# isort: split
+
+# isort: split
+# isort: split
 
 
 class _CountingIterator:
@@ -95,6 +98,121 @@ def test_context_parallel_window_fetches_once_per_cp_size(monkeypatch: pytest.Mo
 
     assert observed == [10, 10, 20, 20]
     assert dataloader_iter.fetch_count == 2
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_fetch_is_release_unaware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_fetch_data_batch always returns the window batch, even in release mode.
+
+    Release-specific routing (prepared batch selection, host retention) is
+    handled by _next_step_batch; _fetch_data_batch is a pure fetch + window
+    advance with no release awareness.
+    """
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    raw_video = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)  # [B,C,T,H,W]
+    host_batch = {"video": raw_video, "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+
+    first_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert not stop
+    assert first_batch is host_batch
+    assert trainer._cp_data_window.batch is host_batch
+
+    model._cp_window_slot = 1
+
+    # Slot 1: _fetch_data_batch returns the window batch (not the prepared batch).
+    second_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert not stop
+    assert second_batch is host_batch
+    assert dataloader_iter.fetch_count == 1
+    assert not trainer._cp_data_window.active
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_routes_release_mode_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """StepBatch encapsulates host retention, CUDA transfer, and callback merging."""
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    raw_video = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)
+    host_batch = {"video": raw_video, "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+    # Stub CUDA transfer to identity (CPU-only test).
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    # Slot 0: owner slot — StepBatch.training is the (mock-transferred) batch,
+    # pre-step callback returns it directly, host_raw is captured.
+    step0, stop = trainer._next_step_batch(model, dataloader_iter)
+    assert not stop
+    assert isinstance(step0, StepBatch)
+    assert step0._is_fetch_slot
+    assert step0._host_raw is host_batch
+    assert step0.callback_pre_step is step0.training
+
+    # Simulate the model trimming raw tensors and storing the prepared batch.
+    prepared = {"packed_tokens": torch.ones(1, 4), "dataset_name": "prepared"}
+    trainer._cp_data_window.store_prepared_batch(prepared)
+    model._cp_window_slot = 1
+
+    # Slot 1: non-owner — StepBatch returns the prepared batch, callbacks merge host.
+    step1, stop = trainer._next_step_batch(model, dataloader_iter)
+    assert not stop
+    assert isinstance(step1, StepBatch)
+    assert not step1._is_fetch_slot
+    assert step1.training is prepared
+    cb = step1.callback_post_step
+    assert cb["video"] is raw_video
+    assert cb["packed_tokens"] is prepared["packed_tokens"]
+    assert cb["dataset_name"] == "prepared"
+    assert dataloader_iter.fetch_count == 1
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_non_cp_returns_step_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without CP, _next_step_batch wraps a simple fetch + CUDA transfer."""
+    trainer = object.__new__(ImaginaireTrainer)
+    trainer._cp_data_window = ContextParallelDataWindow()
+    model = SimpleNamespace(parallel_dims=None)
+    batch = {"x": torch.tensor([1.0])}
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    step, stop = trainer._next_step_batch(model, iter([batch]))
+    assert not stop
+    assert isinstance(step, StepBatch)
+    assert step._is_fetch_slot
+    assert step._host_raw is None
+    assert step.training is batch
+    assert step.callback_pre_step is step.training
+    assert step.callback_post_step is step.training
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_finalize_stores_prepared_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """StepBatch.finalize() stores the prepared batch at slot 0 in release mode."""
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    host_batch = {"video": torch.zeros(1), "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    step, _ = trainer._next_step_batch(model, dataloader_iter)
+    assert trainer._cp_data_window.prepared_batch is None
+    step.finalize()
+    assert trainer._cp_data_window.prepared_batch is step.training
 
 
 @pytest.mark.L0

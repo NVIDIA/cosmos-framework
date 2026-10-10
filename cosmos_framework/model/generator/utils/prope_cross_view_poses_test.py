@@ -9,8 +9,11 @@ import torch
 
 from cosmos_framework.data.generator.multiview.camera_geometry import PER_FRAME_CAMERA_TO_RIG_KEY
 from cosmos_framework.model.generator.utils.camera_relative_pose import (
+    invert_affine_transform,
     invert_rigid_transform,
+    prepare_camera_relative_poses,
     prepare_prope_cross_view_poses,
+    prope_intrinsics,
 )
 from cosmos_framework.model.generator.utils.rigrope_geometry_test import (
     Tokenizer,
@@ -144,3 +147,111 @@ def test_pose_world_rig_with_invalid_poses_fails_closed_without_a_fallback() -> 
     assert unposed["rig_geometry"][PER_FRAME_CAMERA_TO_RIG_KEY]
     with pytest.raises(ValueError, match="valid poses on every latent frame"):
         _prepare([unposed], allow_missing=False)
+
+
+def _intrinsics_record() -> dict[str, Any]:
+    """Two pinhole views with different K; the second is resized by half and cropped."""
+    record = _pose_world_record()
+    second = {**record["calibration"][1], "fx_px": 9.0, "fy_px": 11.0, "cx_px": 14.0, "cy_px": 17.5}
+    affine = torch.eye(3).repeat(2, 1, 1)  # [V,3,3]
+    affine[1] = torch.tensor([[0.5, 0.0, 4.25], [0.0, 0.5, -1.75], [0.0, 0.0, 1.0]])
+    return {**record, "calibration": [record["calibration"][0], second], "image_from_calibration": affine}
+
+
+def test_prope_intrinsics_project_camera_points_to_the_normalized_encoded_frame() -> None:
+    record = _intrinsics_record()
+    height, width = 24, 40
+    points = torch.tensor([[0.3, -0.2, 2.0], [-1.0, 0.5, 4.0], [0.0, 0.0, 1.0]], dtype=torch.float64)  # [N,3]
+    for view, calibration in enumerate(record["calibration"]):
+        native = torch.tensor(
+            [
+                [calibration["fx_px"], 0.0, calibration["cx_px"]],
+                [0.0, calibration["fy_px"], calibration["cy_px"]],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float64,
+        )  # [3,3]
+        pixels = points @ native.T @ record["image_from_calibration"][view].double().T  # [N,3]
+        # Integer-center pixels: the frame's outer edges, -0.5 and W - 0.5, map to -1/2 and 1/2.
+        expected = (pixels[:, :2] / pixels[:, 2:] + 0.5) / pixels.new_tensor([width, height]) - 0.5  # [N,2]
+        lifted = prope_intrinsics(record, view, (height, width))  # [4,4]
+        projected = torch.cat((points, points.new_ones(3, 1)), dim=-1) @ lifted.T  # [N,4]
+        torch.testing.assert_close(projected[:, :2] / projected[:, 2:3], expected, atol=1e-12, rtol=0)
+        torch.testing.assert_close(projected[:, 3], points.new_ones(3), atol=0, rtol=0)
+
+
+def test_prope_intrinsics_accept_small_but_invertible_normalized_projection() -> None:
+    record = _intrinsics_record()
+    # A tiny but invertible crop/resize can make det(normalize @ affine @ K) < 1e-12.
+    # The old absolute determinant threshold rejected this valid projection.
+    record["image_from_calibration"][1, :2, :2] *= 1e-4
+    lifted = prope_intrinsics(record, 1, (480, 832))
+    intrinsics = lifted[:3, :3]
+    assert abs(float(torch.linalg.det(intrinsics))) < 1e-12
+    assert int(torch.linalg.matrix_rank(intrinsics)) == 3
+    assert torch.isfinite(lifted).all()
+
+
+@pytest.mark.parametrize("failure", ["singular", "nonfinite"])
+def test_prope_intrinsics_reject_invalid_projection(failure: str) -> None:
+    record = _intrinsics_record()
+    if failure == "singular":
+        record["image_from_calibration"][1, 0] = 0
+    else:
+        record["image_from_calibration"][1, 0, 0] = float("nan")
+    with pytest.raises(ValueError, match="finite and invertible"):
+        prope_intrinsics(record, 1, (480, 832))
+
+
+def test_intrinsics_fold_each_views_projection_into_the_cross_view_poses() -> None:
+    record = _intrinsics_record()
+    extrinsic = _only(_prepare([record]))  # [V,F,4,4]
+    projective = _only(_prepare([record], intrinsics=True))  # [V,F,4,4]
+    lifted = torch.stack([prope_intrinsics(record, view, (32, 32)) for view in range(2)])  # [V,4,4]
+    torch.testing.assert_close(projective, lifted[:, None] @ extrinsic, atol=1e-6, rtol=0)
+    # The attention reads K_q T_q T_k^-1 K_k^-1 for each token pair.
+    pairs = projective[:, :, None, None] @ invert_affine_transform(projective)[None, None]  # [V,F,V,F,4,4]
+    expected = (
+        lifted[:, None, None, None] @ _relative(extrinsic) @ torch.linalg.inv(lifted)[None, None, :, None]
+    )  # [V,F,V,F,4,4]
+    torch.testing.assert_close(pairs, expected, atol=1e-5, rtol=0)
+    assert not torch.allclose(projective, extrinsic, atol=1e-3)
+
+
+def test_per_camera_prope_folds_intrinsics_and_requires_calibration() -> None:
+    record = _intrinsics_record()
+
+    def prepare(geometry: dict[str, Any], intrinsics: bool) -> torch.Tensor:  # [V,F,4,4]
+        result = prepare_camera_relative_poses(
+            [geometry],
+            pixel_shapes=[(6, 32, 32)],
+            latent_frames=[6],
+            num_views=[2],
+            items_per_sample=[1],
+            tokenizer=Tokenizer(),
+            intrinsics=intrinsics,
+        )
+        return _only(result)
+
+    lifted = torch.stack([prope_intrinsics(record, view, (32, 32)) for view in range(2)])  # [V,4,4]
+    torch.testing.assert_close(
+        prepare(record, intrinsics=True), lifted[:, None] @ prepare(record, intrinsics=False), atol=1e-6, rtol=0
+    )
+    uncalibrated = {**record, "calibration": [record["calibration"][0], None]}
+    prepare(uncalibrated, intrinsics=False)
+    with pytest.raises(ValueError, match="require each view's calibration"):
+        prepare(uncalibrated, intrinsics=True)
+
+
+def test_affine_inverse_matches_the_rigid_inverse_and_inverts_projections() -> None:
+    torch.manual_seed(5)
+    rotation, _ = torch.linalg.qr(torch.randn(4, 3, 3, dtype=torch.float64))  # [N,3,3]
+    rigid = torch.eye(4, dtype=torch.float64).repeat(4, 1, 1)  # [N,4,4]
+    rigid[:, :3, :3] = rotation * torch.linalg.det(rotation).sign()[:, None, None]
+    rigid[:, :3, 3] = torch.randn(4, 3, dtype=torch.float64)
+    torch.testing.assert_close(invert_affine_transform(rigid), invert_rigid_transform(rigid), atol=1e-12, rtol=0)
+    lifted = prope_intrinsics(_intrinsics_record(), 1, (24, 40))  # [4,4]
+    projective = (lifted @ rigid).float()  # [N,4,4]
+    inverse = invert_affine_transform(projective)  # [N,4,4]
+    assert inverse.dtype == torch.float32
+    torch.testing.assert_close(inverse @ projective, torch.eye(4).expand(4, 4, 4), atol=1e-5, rtol=0)

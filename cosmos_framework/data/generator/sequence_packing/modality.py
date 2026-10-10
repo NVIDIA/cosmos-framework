@@ -61,6 +61,9 @@ class ModalityDataBuilder:
             frames of this item (``temporal_compression_factor / fps``), or ``1.0`` when
             the item's fps is unknown. Vision and LiDAR items typically disagree here even
             when both share a frame index, since the two sensors run at different rates.
+        seconds_per_frame_known: Per-payload whether ``seconds_per_frame`` came from a real fps
+            rather than the ``1.0`` placeholder. The placeholder is harmless where only ratios
+            between items matter, and wrong wherever the value is read as seconds.
     """
 
     spans: list[ModalitySpan] = field(default_factory=list)
@@ -73,6 +76,7 @@ class ModalityDataBuilder:
     condition_mask: list[torch.Tensor] = field(default_factory=list)
     noisy_frame_indexes: list[torch.Tensor] = field(default_factory=list)
     seconds_per_frame: list[float] = field(default_factory=list)
+    seconds_per_frame_known: list[bool] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +103,8 @@ class ModalityData:
         seconds_per_frame: Per-payload real-world seconds between two consecutive latent
             frames of this item, or ``1.0`` when the item's fps is unknown. See
             ``ModalityDataBuilder.seconds_per_frame``.
+        seconds_per_frame_known: Per-payload whether ``seconds_per_frame`` came from a real fps.
+            Empty for data built by hand rather than by the packer, which reads as known.
         domain_id: Domain IDs for multi-domain training. Only used for action.
         raw_action_dim: Raw action dimensions. Only used for action-channel masking.
     """
@@ -113,6 +119,7 @@ class ModalityData:
     condition_mask: list[torch.Tensor] = field(default_factory=list)
     noisy_frame_indexes: list[torch.Tensor] = field(default_factory=list)
     seconds_per_frame: list[float] = field(default_factory=list)
+    seconds_per_frame_known: list[bool] = field(default_factory=list)
     domain_id: list[torch.Tensor] = field(default_factory=list)
     raw_action_dim: list[torch.Tensor | None] | None = field(default_factory=list)
     action_valid_mask: list[torch.Tensor | None] | None = field(default_factory=list)

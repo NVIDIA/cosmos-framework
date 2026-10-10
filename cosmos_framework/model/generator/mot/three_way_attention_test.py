@@ -124,17 +124,17 @@ import torch
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_causal_seq,
-    get_gen_seq,
-)
 from cosmos_framework.model.generator.mot.causal_attention import (
     three_way_attention_with_memory,
 )
 from cosmos_framework.model.generator.utils.kv_cache import (
     KVTrainMemoryValue,
     TFNoisyMemoryValue,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_causal_seq,
+    get_gen_seq,
 )
 
 # Shape / config constants.

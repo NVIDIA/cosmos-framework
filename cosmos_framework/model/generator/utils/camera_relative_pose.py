@@ -8,7 +8,9 @@ CameraGeometry poses are OpenCV camera-to-world matrices in meters. Attention
 uses reference-to-camera matrices, centered on the same primary camera at each
 instant. The dense camera branch only compares cameras at the same instant, so
 this removes large world translations without changing its relative transforms.
-Intrinsics and lens distortion are not used by this extrinsics-only ablation.
+By default only extrinsics are used. With ``intrinsics`` each camera's transform is
+PRoPE's projection lift(K) @ reference-to-camera, where K is the calibration's linear
+(pinhole) part in the encoded frame; lens distortion is never used.
 """
 
 import math
@@ -35,6 +37,59 @@ def invert_rigid_transform(matrix: torch.Tensor) -> torch.Tensor:  # [...,4,4] -
     translation = -(rotation @ matrix[..., :3, 3:4])  # [...,3,1]
     upper = torch.cat((rotation, translation), dim=-1)  # [...,3,4]
     return torch.cat((upper, matrix[..., 3:4, :]), dim=-2)  # [...,4,4]
+
+
+def invert_affine_transform(matrix: torch.Tensor) -> torch.Tensor:  # [...,4,4] -> [...,4,4]
+    """Invert transforms with bottom row [0,0,0,1], such as PRoPE's lift(K) @ T, in float64."""
+    linear = torch.linalg.inv(matrix[..., :3, :3].double())  # [...,3,3]
+    translation = -(linear @ matrix[..., :3, 3:4].double())  # [...,3,1]
+    upper = torch.cat((linear, translation), dim=-1)  # [...,3,4]
+    return torch.cat((upper, matrix[..., 3:4, :].double()), dim=-2).to(matrix.dtype)  # [...,4,4]
+
+
+def prope_intrinsics(record: Mapping[str, Any], view: int, image_hw: tuple[int, int]) -> torch.Tensor:  # [4,4]
+    """lift(K) for one view: its linear intrinsics in the encoded frame, which spans [-1/2, 1/2].
+
+    K maps the calibration's native pixels through ``image_from_calibration`` into the
+    encoded ``image_hw`` frame, then normalizes integer-center pixels by the frame size, as
+    PRoPE normalizes by image width and height. Every lens model contributes its linear
+    ``fx, fy, cx, cy``; distortion and F-theta polynomials are ignored.
+    """
+    calibrations = record.get("calibration")
+    affines = record.get("image_from_calibration")
+    calibration = None if calibrations is None else calibrations[view]
+    if calibration is None or affines is None:
+        raise ValueError("PRoPE intrinsics require each view's calibration and image_from_calibration")
+    native = torch.tensor(
+        [
+            [float(calibration["fx_px"]), 0.0, float(calibration["cx_px"])],
+            [0.0, float(calibration["fy_px"]), float(calibration["cy_px"])],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float64,
+    )  # [3,3]
+    affine = torch.as_tensor(affines[view], dtype=torch.float64).cpu()  # [3,3]
+    height, width = image_hw
+    normalize = torch.tensor(
+        [[1.0 / width, 0.0, 0.5 / width - 0.5], [0.0, 1.0 / height, 0.5 / height - 0.5], [0.0, 0.0, 1.0]],
+        dtype=torch.float64,
+    )  # [3,3]
+    intrinsics = normalize @ affine @ native  # [3,3]
+    # A fixed determinant threshold is not scale invariant: normalizing a valid K into a
+    # large encoded frame can make its determinant arbitrarily small. Reject matrices that
+    # are numerically rank deficient instead, using PyTorch's dtype/scale-relative tolerance.
+    if not torch.isfinite(intrinsics).all() or int(torch.linalg.matrix_rank(intrinsics)) < 3:
+        raise ValueError("PRoPE intrinsics must be finite and invertible")
+    lifted = torch.eye(4, dtype=torch.float64)  # [4,4]
+    lifted[:3, :3] = intrinsics
+    return lifted
+
+
+def _with_intrinsics(
+    relative: torch.Tensor, record: Mapping[str, Any], image_hw: tuple[int, int]
+) -> torch.Tensor:  # [V,F,4,4] -> [V,F,4,4]
+    lifted = torch.stack([prope_intrinsics(record, view, image_hw) for view in range(relative.shape[0])])  # [V,4,4]
+    return lifted.to(relative.device)[:, None] @ relative  # [V,F,4,4]
 
 
 def validate_camera_poses(poses: torch.Tensor) -> None:  # [V,T,4,4]
@@ -81,6 +136,7 @@ def prepare_camera_relative_poses(
     num_views: Sequence[int],
     items_per_sample: Sequence[int],
     tokenizer: Any,
+    intrinsics: bool = False,
 ) -> list[torch.Tensor | None]:  # each tensor: [V,F,4,4]
     """Select poses at tokenizer patch right edges; duplicate them for control/target.
 
@@ -88,6 +144,7 @@ def prepare_camera_relative_poses(
     describes the final sampled frames, so its time axis indexes those frames, not
     the original video's frame IDs. Missing poses are an error for multiview samples;
     single-camera samples take the exact existing attention path and need none.
+    ``intrinsics`` left-multiplies each view's transform by :func:`prope_intrinsics`.
     """
     if sum(items_per_sample) != len(num_views) or not (len(num_views) == len(pixel_shapes) == len(latent_frames)):
         raise ValueError("Camera pose metadata must match the flattened vision item layout")
@@ -129,8 +186,10 @@ def prepare_camera_relative_poses(
             selected = poses[:, indices]  # [V,F,4,4]
             validate_camera_poses(selected)
             anchor = selected[reference : reference + 1]  # [1,F,4,4]
-            relative = (invert_rigid_transform(selected) @ anchor).float()  # [V,F,4,4]
-            result.append(relative)
+            relative = invert_rigid_transform(selected) @ anchor  # [V,F,4,4]
+            if intrinsics:
+                relative = _with_intrinsics(relative, record, (height, width))
+            result.append(relative.float())
         cursor += count
     return result
 
@@ -158,6 +217,7 @@ def prepare_prope_cross_view_poses(
     translation_scale_m: float = 25.0,
     translation_floor_m: float = 0.05,
     pose_world_frame: PoseWorldFrame = "scene",
+    intrinsics: bool = False,
 ) -> list[torch.Tensor | None]:  # each tensor: [V,F,4,4]
     """Reference-to-camera transforms for ``geometry_position_encoding="prope_cross_view"``.
 
@@ -170,7 +230,9 @@ def prepare_prope_cross_view_poses(
     mode of that name does; ``"scene"`` anchors every frame on the reference camera at the
     first latent frame and so keeps it. Translations are divided by ``translation_scale_m``,
     or under ``"per_sample_rms"`` by the RMS camera distance from the per-frame (or
-    first-frame) centroid, floored at ``translation_floor_m``.
+    first-frame) centroid, floored at ``translation_floor_m``. ``intrinsics`` then
+    left-multiplies each view's transform by :func:`prope_intrinsics`; the RigRoPE gate
+    already requires every view's calibration, so ``allow_missing`` covers it too.
     """
     if translation_normalization not in ("fixed", "per_sample_rms"):
         raise ValueError(f"Unknown PRoPE translation normalization {translation_normalization!r}")
@@ -234,6 +296,8 @@ def prepare_prope_cross_view_poses(
                 unit = max(float(spread.square().sum(dim=-1).mean().sqrt()), translation_floor_m)
             relative = invert_rigid_transform(selected) @ anchor  # [V,F,4,4]
             relative[..., :3, 3] /= unit
+            if intrinsics:
+                relative = _with_intrinsics(relative, record, (height, width))
             result.append(relative.float())
         cursor += count
     return result

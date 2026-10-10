@@ -40,8 +40,8 @@ def test_clean_tf_cache_preserves_target_indexes_and_caption_layout(
     view_scoped: bool, detach_clean_kv: bool, maskless_replay: bool
 ) -> None:
     """Exercise the real mask builder and index helper through the model entry point."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     original_masks = [
         torch.ones(4),  # [V*T]
@@ -246,9 +246,9 @@ def test_target_only_compile_restriction_applies_only_to_training(
     strategy: str, compile_enabled: bool, inference_mode: bool
 ) -> None:
     """Checkpoint replay settings must not reject default compiled inference."""
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
     config = SimpleNamespace(
         causal_training_strategy=strategy,
@@ -294,8 +294,8 @@ def test_target_only_teacher_forcing_requires_one_logical_sample(
     num_items: int, item_counts: list[int] | None, sample_lens: list[int], valid: bool
 ) -> None:
     """Implicit single-target grouping is valid; multiple logical samples are not."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = MagicMock()
     model.config.video_temporal_causal = True
@@ -512,8 +512,8 @@ def test_multiview_replay_selection_does_not_infer_from_backend_knobs(
 @pytest.mark.parametrize("implementation", ["multiview_flex_kv", "multiview_maskless_kv"])
 def test_multiview_replay_selection_rejects_non_replay_strategy(implementation: str) -> None:
     """A multiview replay selector cannot silently fall through to a non-replay backend."""
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -534,10 +534,10 @@ def test_multiview_replay_selection_rejects_non_replay_strategy(implementation: 
 @pytest.mark.parametrize("causal_training_strategy", ["teacher_forcing", "teacher_forcing_dcm"])
 def test_maskless_replay_requires_backend_before_network_build(causal_training_strategy: str) -> None:
     """Reject a missing replay backend before allocating the network or changing its config."""
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator import omni_mot_causal_model as causal_model_module
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -580,11 +580,11 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     implementation: str, video_temporal_causal: bool, causal_training_strategy: str
 ) -> None:
     """Construct the selected student network while preserving bidirectional teacher settings."""
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator import omni_mot_causal_model as causal_model_module
     from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import InteractiveCosmos3VFMNetwork
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
     replay_policy = TeacherForcingReplayPolicyConfig(
         control_visibility="causal",
@@ -697,8 +697,8 @@ class TestTeacherForcingTransferControlDropout:
     @pytest.mark.parametrize("dropout_rate", [0.0, 1.0])
     def test_target_only_replay_accepts_pack_after_control_dropout(self, dropout_rate: float) -> None:
         """Keep the grouping returned by real control dropout when validating replay."""
-        from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
         model = self._make_model(dropout_rate)
         model.config.video_temporal_causal = True
@@ -933,9 +933,9 @@ def test_teacher_forcing_cp_local_kv_heads_match_ulysses_layout() -> None:
 @pytest.mark.CPU
 def test_three_way_teacher_forcing_memory_state_does_not_require_flex_metadata() -> None:
     """Legacy replay defaults the Flex-only clean-memory capacity to zero."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -976,10 +976,10 @@ def test_multiview_clean_tf_cache_selects_target_tokens_and_preserves_condition_
     causal_training_strategy: str,
 ) -> None:
     """Both TF stages select real target tokens before the clean copy becomes fully conditioned."""
-    from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -1137,9 +1137,7 @@ def test_multiview_transfer_ar_mode_dispatches_to_specialized_iterator() -> None
         "sample_n_views": torch.tensor([2]),  # [B]
     }
 
-    with patch(
-        "cosmos_framework.model.generator.omni_mot_causal_model.reset_ar_post_saturation_runtime_for_generation"
-    ):
+    with patch("cosmos_framework.model.generator.omni_mot_causal_model.reset_ar_post_saturation_runtime_for_generation"):
         outputs = list(
             OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
                 model,
@@ -1165,8 +1163,8 @@ def test_multiview_transfer_ar_yields_logical_frames_as_chunks_finish(
     controls_read_rgb: bool, rig_embeddings: bool
 ) -> None:
     """Multi-chunk transfer exposes progress and refreshes RGB-aware control K/V in order."""
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.model.generator.utils.multiview_ar import MultiviewTransferARBackend
 
     num_views = 2
@@ -1415,11 +1413,11 @@ def test_multiview_transfer_ar_pack_sets_metadata_and_aligned_view_positions() -
 @pytest.mark.parametrize("condition_count", [0, 1, 5])
 def test_multiview_transfer_prefill_is_clean_without_extending_conditioned_prefix(condition_count: int) -> None:
     """Recomputed RGB history omits diffusion embeddings without changing the rollout prefix."""
-    from cosmos_framework.data.generator.sequence_packing import ModalityData
     from cosmos_framework.model.generator.utils.multiview_ar import (
         MultiviewTransferARBackend,
         multiview_conditioned_prefix_length,
     )
+    from cosmos_framework.data.generator.sequence_packing import ModalityData
 
     target_mask = (torch.arange(5) < condition_count).repeat(2).reshape(10, 1, 1)  # [V*T,1,1]
     control_mask = torch.ones_like(target_mask)  # [V*T,1,1]
@@ -1770,8 +1768,8 @@ def test_multiview_transfer_backend_prefills_and_commits_fixed_cache_slots() -> 
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_multiview_transfer_ar_uses_negative_prompt_for_unconditional_tokens() -> None:
-    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
     class TextTokensObserved(Exception):
         pass
@@ -3629,9 +3627,11 @@ class TestBidirectionalStepMixing:
     @pytest.mark.CPU
     def test_init_validates_moba_config_once(self) -> None:
         """__init__ validates MoBA config when enabled and skips validation when disabled."""
-        from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
-        from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+        from cosmos_framework.configs.base.defaults.replay_attention import (
+            TeacherForcingReplayPolicyConfig,
+        )
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
         def _fake_base_init(self, config) -> None:
             torch.nn.Module.__init__(self)

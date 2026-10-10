@@ -261,6 +261,11 @@ class OmniMoTModelConfig:
     # Opt in to summed CP output gradients; keep legacy scaling for existing optimizer state.
     correct_cp_gradients: bool = False
 
+    # Keep the raw CP data window on the host and release raw video CUDA inputs
+    # immediately after slot-0 tokenization. H100 multiview experiments opt in;
+    # the model default remains disabled.
+    release_cp_raw_batch_after_preprocessing: bool = False
+
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
 
@@ -397,6 +402,16 @@ class OmniMoTModelConfig:
 
     # action configs
     action_gen: bool = False  # whether to use action related parameters and condition/generate action tokens
+    # Action schema consumed by the model. Legacy configs omit this field and
+    # therefore retain the historical native action contract.
+    action_schema: Literal["native", "unified_v1"] = attrs.field(
+        default="native",
+        validator=attrs.validators.in_({"native", "unified_v1"}),
+    )
+    # Schema-space normalization controls must live with the model config so
+    # consolidated checkpoints can reconstruct action postprocessing.
+    action_global_asinh: bool = False
+    action_metric_gripper: bool = False
     max_action_dim: int = 32  # maximum dimension of the action space, we need to pad the data to this dimension.
     num_embodiment_domains: int = 32  # number of action domains/types supported by the I/O projectors
     # Selects both action2llm and llm2action together so experiments cannot accidentally

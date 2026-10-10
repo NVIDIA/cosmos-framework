@@ -17,6 +17,9 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CAPTION_SCOPE_NONE,
     CAPTION_SCOPE_SAME_VIEW,
 )
+from cosmos_framework.configs.base.defaults.replay_attention import (
+    TeacherForcingReplayPolicyConfig,
+)
 from cosmos_framework.model.generator.mot.flex_attention import (
     CaptionMaskItem,
     SensorMaskItem,
@@ -28,9 +31,6 @@ from cosmos_framework.model.generator.mot.flex_attention import (
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
     build_block_mask_from_metadata_runs,
     metadata_run_groups,
-)
-from cosmos_framework.configs.base.defaults.replay_attention import (
-    TeacherForcingReplayPolicyConfig,
 )
 
 MaskMod = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]

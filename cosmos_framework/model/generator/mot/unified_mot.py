@@ -777,13 +777,21 @@ class PackedAttentionMoT(nn.Module):
             get_und_seq(packed_sin),
             unsqueeze_dim=1,
         )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
-        q_gen_, k_gen_ = self._apply_rotary_pos_emb(
-            q_gen,
-            k_gen,
-            get_gen_seq(packed_cos),
-            get_gen_seq(packed_sin),
-            unsqueeze_dim=1,
-        )  # q_gen_: [N_gen,num_heads,head_dim], k_gen_: [N_gen,num_kv_heads,head_dim]
+        maskless_plan = getattr(attention_mask, "multiview_maskless", None)
+        defer_gen_rope = maskless_plan is not None and maskless_plan.mrope_cos is not None
+        if defer_gen_rope:
+            # Exact cross-view RigRoPE needs raw Q/K. The decomposed attention applies
+            # pretrained mRoPE only to same-view/caption branches and direct RigRoPE only
+            # to cross-view Q/K.
+            q_gen_, k_gen_ = q_gen, k_gen
+        else:
+            q_gen_, k_gen_ = self._apply_rotary_pos_emb(
+                q_gen,
+                k_gen,
+                get_gen_seq(packed_cos),
+                get_gen_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # q_gen_: [N_gen,num_heads,head_dim], k_gen_: [N_gen,num_kv_heads,head_dim]
 
         packed_query_states_ = from_und_gen_splits(q_und_, q_gen_, pack)  # [N_und+N_gen,num_heads,head_dim]
         packed_key_states_ = from_und_gen_splits(k_und_, k_gen_, pack)  # [N_und+N_gen,num_kv_heads,head_dim]
