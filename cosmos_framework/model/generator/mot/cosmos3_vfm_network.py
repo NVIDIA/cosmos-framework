@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import dataclasses
 import math
 from collections.abc import Sequence
 from typing import List, Tuple
 
+import attrs
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -16,6 +18,8 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CaptionAccess,
     MultiviewAttentionConfig,
     ResolvedBackend,
+    RigRopeChannels,
+    RigRopeMissingGeometry,
     TemporalWindow,
     load_temporal_window,
 )
@@ -25,6 +29,10 @@ from cosmos_framework.model.generator.mot.action_io_projector import (
     build_action_io_projector,
 )
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
+from cosmos_framework.model.generator.mot.camera_relative_pose import (
+    build_camera_relative_pose_plan,
+    prope_pair_channels,
+)
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
@@ -46,6 +54,13 @@ from cosmos_framework.model.generator.mot.multiview_attention import (
 from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
     MultiviewMasklessPlan,
     build_multiview_maskless_plan,
+    cross_view_passes,
+    rigrope_local_head_masks,
+)
+from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features, spread_over_even_pairs
+from cosmos_framework.model.generator.utils.camera_relative_pose import (
+    invert_affine_transform,
+    invert_rigid_transform,
 )
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.rig_view_embedding import add_view_embeddings
@@ -53,6 +68,7 @@ from cosmos_framework.data.generator.sequence_packing import ModalityData, Packe
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    from_all_seq,
     get_caption_seq_offsets,
     get_causal_seq,
     get_full_only_seq,
@@ -152,16 +168,32 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
         self.multiview_action_conditioning = multiview_action_conditioning
         # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
-        # the attrs converter. Restore the legacy counting default and normalize durations
-        # here, before building attention.
-        if not hasattr(self.multiview_attention_config, "deduplicate_cross_view"):
-            self.multiview_attention_config.deduplicate_cross_view = False
+        # the attrs converter. Restore every field a config saved before it existed lacks --
+        # the legacy counting default, the geometry and band settings, all off by default --
+        # and normalize durations here, before building attention.
+        default_attention_config = MultiviewAttentionConfig()
+        for field in attrs.fields(MultiviewAttentionConfig):
+            if not hasattr(self.multiview_attention_config, field.name):
+                setattr(self.multiview_attention_config, field.name, getattr(default_attention_config, field.name))
         mask_config = self.multiview_attention_config.mask
         mask_config.decomposed_temporal_window_seconds = load_temporal_window(
             mask_config.decomposed_temporal_window_seconds
         )
         if not hasattr(mask_config, "decomposed_temporal_window_includes_first_frame"):
             mask_config.decomposed_temporal_window_includes_first_frame = False
+        attention_config = self.multiview_attention_config
+        if multiview_action_conditioning and (
+            getattr(attention_config, "geometry_position_encoding", "baseline") != "baseline"
+            or getattr(attention_config, "maskless_cross_view_band_radius", 0) != 0
+            or getattr(attention_config, "maskless_cross_view_include_frame_zero", False)
+            or getattr(attention_config, "maskless_cross_view_band_keys", "all_views") != "all_views"
+        ):
+            # Action conditioning builds its own maskless plan, which carries no camera geometry
+            # and no cross-view band, so these settings would otherwise be silently ignored.
+            raise ValueError(
+                "Multiview action conditioning supports neither RigRoPE/PRoPE geometry nor cross-view bands; "
+                "keep geometry_position_encoding='baseline' and the default maskless_cross_view_band_* settings."
+            )
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -235,6 +267,56 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # under it mid-run.
         self.flex_backend: FlexBackend | None = None
         self.multiview_backend: ResolvedBackend | None = None
+        self.rigrope: RopeRigPE | None = None
+        self.rigrope_kv_heads: int | None = None
+        geometry_mode = config.multiview_attention_config.geometry_position_encoding
+        if geometry_mode != "baseline":
+            if (
+                config.joint_attn_implementation != "multiview"
+                or config.multiview_attention_config.backend != "maskless"
+                or config.multiview_attention_config.mask.attention_scope != "decomposed"
+            ):
+                raise ValueError(
+                    f"{geometry_mode} requires multiview decomposed maskless attention; "
+                    "Flex and other attention scopes are unsupported"
+                )
+            if geometry_mode in ("prope", "prope_cross_view") and self.head_dim % 8:
+                raise ValueError("PRoPE requires head_dim divisible by 8")
+            if config.multiview_attention_config.rigrope_channels == "even_pairs":
+                if geometry_mode != "rigrope_cross_view":
+                    raise ValueError("rigrope_channels='even_pairs' applies to rigrope_cross_view only")
+                if self.head_dim % 8:
+                    raise ValueError("Even-pair RigRoPE requires head_dim divisible by 8")
+            if geometry_mode == "prope_cross_view":
+                if config.multiview_attention_config.rigrope_missing_geometry == "mrope":
+                    # The heads' PRoPE channels drop mRoPE for every posed sample, so a sample
+                    # without poses keeps them unrotated (identity pose) rather than switching
+                    # those channels back to mRoPE.
+                    raise ValueError(
+                        "prope_cross_view requires rigrope_missing_geometry 'error', 'no_rotation' or 'time_only'"
+                    )
+                self.rigrope_kv_heads = _rigrope_kv_heads(
+                    config.multiview_attention_config.rigrope_head_fraction, self.num_kv_heads
+                )
+            if geometry_mode == "rigrope_cross_view":
+                multiview_config = config.multiview_attention_config
+                if (
+                    multiview_config.rigrope_missing_geometry == "time_only"
+                    and not multiview_config.rigrope_include_time
+                ):
+                    # Posed samples would then rotate by rays alone while unposed ones rotate by
+                    # time, so the same heads would read one channel two ways.
+                    raise ValueError("rigrope_missing_geometry='time_only' requires rigrope_include_time=True")
+                # Even pairs take a half-width table, which keeps every descriptor component at
+                # half the frequencies rather than dropping components.
+                self.rigrope = RopeRigPE(
+                    self.head_dim // 2 if multiview_config.rigrope_channels == "even_pairs" else self.head_dim,
+                    max_freq_exponent=multiview_config.rigrope_max_freq_exponent,
+                    min_freq_exponent=multiview_config.rigrope_min_freq_exponent,
+                )
+                self.rigrope_kv_heads = _rigrope_kv_heads(
+                    config.multiview_attention_config.rigrope_head_fraction, self.num_kv_heads
+                )
         if config.joint_attn_implementation == "multiview":
             # The device is only read for the GPU architecture the FlashAttention-4 block size
             # follows from, which is the same for every device in this process, so the local one
@@ -349,6 +431,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
     def init_weights(self, buffer_device: torch.device | None):
         if self.config.vision_gen or self.config.action_gen or self.config.sound_gen:
             self.time_embedder._init_weights(buffer_device=buffer_device)
+
+        if self.rigrope is not None:
+            # Its frequency table is a non-persistent buffer, so neither materialization nor a
+            # checkpoint load fills it in.
+            self.rigrope.reset_parameters(device=buffer_device)
 
         if self.config.vision_gen:
             if self.config.num_view_embeddings:
@@ -1343,6 +1430,19 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # list of [C,T] per sample
             output_dict.update(preds_sound=preds_sound)
 
+    def _rigrope_head_masks(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """This rank's query and KV heads that use RigRoPE, or ``None`` when every head does."""
+        if self.rigrope_kv_heads is None:
+            return None
+        cp_rank, cp_size = 0, 1
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            cp_group = self.parallel_dims.cp_mesh.get_group()
+            cp_rank = torch.distributed.get_rank(cp_group)
+            cp_size = torch.distributed.get_world_size(cp_group)
+        return rigrope_local_head_masks(
+            self.num_heads, self.num_kv_heads, self.rigrope_kv_heads, cp_rank=cp_rank, cp_size=cp_size, device=device
+        )
+
     def _prepare_multiview_attention(
         self,
         packed_seq: PackedSequence,
@@ -1474,6 +1574,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # A single-camera pack has no LiDAR or radar stream, so those two are the only controls.
         # Skipping the fold and its gen->und merge matters for the image and single-view Action
         # streams of a mixed recipe, while true multiview packs still take the folds below.
+        # Every geometry mode acts only between cameras, so a single-camera pack needs no poses.
         carries_control = packed_seq.action is not None or any(
             int(count) > 1 for count in packed_seq.num_vision_items_per_sample or []
         )
@@ -1530,11 +1631,21 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
                 attention_scope=self.config.multiview_attention_config.mask.attention_scope,
                 control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+                cross_view_band_radius=self.config.multiview_attention_config.maskless_cross_view_band_radius,
+                include_frame_zero=self.config.multiview_attention_config.maskless_cross_view_include_frame_zero,
+                cross_view_band_keys=self.config.multiview_attention_config.maskless_cross_view_band_keys,
                 sensor_to_sensor_window=self.config.multiview_attention_config.mask.sensor_to_sensor_window,
                 sensor_to_control_window=self.config.multiview_attention_config.mask.sensor_to_control_window,
                 control_to_control_window=self.config.multiview_attention_config.mask.control_to_control_window,
                 control_to_sensor_window=self.config.multiview_attention_config.mask.control_to_sensor_window,
                 device=input_pack["full_only_seq"].device,
+                geometry_position_encoding=self.config.multiview_attention_config.geometry_position_encoding,
+                prope_intrinsics=self.config.multiview_attention_config.prope_intrinsics,
+                rigrope=self.rigrope,
+                rigrope_missing_geometry=self.config.multiview_attention_config.rigrope_missing_geometry,
+                rigrope_time_scale_s=self.config.multiview_attention_config.rigrope_time_scale_s,
+                rigrope_head_masks=self._rigrope_head_masks(input_pack["full_only_seq"].device),
+                rigrope_channels=self.config.multiview_attention_config.rigrope_channels,
                 deduplicate_cross_view=self.config.multiview_attention_config.deduplicate_cross_view,
                 decomposed_temporal_window_seconds=(
                     self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
@@ -1543,6 +1654,32 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                     self.config.multiview_attention_config.mask.decomposed_temporal_window_includes_first_frame
                 ),
             )
+            geometry_mode = self.config.multiview_attention_config.geometry_position_encoding
+            if (
+                geometry_mode in ("rigrope_cross_view", "prope_cross_view")
+                and not attention_meta.multiview_maskless.cross_view_empty
+            ):
+                positions = packed_seq.position_ids
+                cos, sin = self.language_model.model.rotary_emb(
+                    input_pack["full_only_seq"],
+                    position_ids=positions.unsqueeze(0) if positions.ndim == 1 else positions.unsqueeze(1),
+                )
+                pair_split = (
+                    geometry_mode == "prope_cross_view"
+                    or self.config.multiview_attention_config.rigrope_channels == "even_pairs"
+                )
+                if pair_split and cos.shape[-1] != self.head_dim:
+                    # PRoPE and even-pair RigRoPE take whole split-half pairs (i, i + head_dim/2);
+                    # partial rotary pairs channels within its own rotary span instead.
+                    raise ValueError(
+                        f"{geometry_mode} on split-half pairs requires full-head mRoPE; "
+                        f"rotary spans {cos.shape[-1]} of {self.head_dim}"
+                    )
+                attention_meta.multiview_maskless = dataclasses.replace(
+                    attention_meta.multiview_maskless,
+                    mrope_cos=get_full_only_seq(from_all_seq(cos.squeeze(0), input_pack))[0],
+                    mrope_sin=get_full_only_seq(from_all_seq(sin.squeeze(0), input_pack))[0],
+                )
             return
 
         # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
@@ -1903,11 +2040,21 @@ def _multiview_maskless_geometry(
     gen_seq_len: int,
     attention_scope: str,
     control_attends_sensor: bool,
+    cross_view_band_radius: int = 0,
+    include_frame_zero: bool = False,
+    cross_view_band_keys: str = "all_views",
     sensor_to_sensor_window: tuple[int, int] | None = None,
     sensor_to_control_window: tuple[int, int] | None = None,
     control_to_control_window: tuple[int, int] | None = None,
     control_to_sensor_window: tuple[int, int] | None = None,
     device: torch.device,
+    geometry_position_encoding: str = "baseline",
+    prope_intrinsics: bool = False,
+    rigrope: RopeRigPE | None = None,
+    rigrope_missing_geometry: RigRopeMissingGeometry = "error",
+    rigrope_time_scale_s: float = 1.0,
+    rigrope_head_masks: tuple[torch.Tensor, torch.Tensor] | None = None,
+    rigrope_channels: RigRopeChannels = "all",
     deduplicate_cross_view: bool = False,
     decomposed_temporal_window_seconds: TemporalWindow | None = None,
     decomposed_temporal_window_includes_first_frame: bool = False,
@@ -1976,7 +2123,28 @@ def _multiview_maskless_geometry(
             with it on a same-view group is one pass over itself, with it off that pass splits in
             two. A batch marking no control item is the same attention either way, and the plan
             builder refuses one that marks a control item without being told.
+        cross_view_band_radius: ``maskless_cross_view_band_radius``, the instants either side of
+            a query's that its cross-view pass keys.
+        include_frame_zero: ``maskless_cross_view_include_frame_zero``.
+        cross_view_band_keys: ``maskless_cross_view_band_keys``.
         device: where the plan's index tensors belong, i.e. where the batch will attend.
+        geometry_position_encoding: the cross-view geometry mode the plan carries tables for.
+        prope_intrinsics: whether the PRoPE poses fold in intrinsics (``lift(K) @ T``), which
+            makes them affine rather than rigid, so they take a general inverse.
+        rigrope: the RigRoPE angle module, required by ``"rigrope_cross_view"``.
+        rigrope_missing_geometry: what the cross-view pass does for a multiview item without
+            RigRoPE features: fail the batch (``"error"``), keep mRoPE on every head
+            (``"mrope"``), apply no rotation on the RigRoPE heads (``"no_rotation"``),
+            which zero features give, or rotate those heads by capture time alone
+            (``"time_only"``); see ``MultiviewAttentionConfig``. ``"prope_cross_view"`` reads
+            ``"no_rotation"`` and ``"time_only"`` alike as an identity transform.
+        rigrope_time_scale_s: seconds per unit of the descriptors' time channel, for posed and
+            ``"time_only"`` items alike.
+        rigrope_head_masks: this rank's query and KV heads that use RigRoPE (or, under
+            ``"prope_cross_view"``, PRoPE), from
+            :func:`~...multiview_maskless_attention.rigrope_local_head_masks`; ``None`` for all.
+        rigrope_channels: ``"even_pairs"`` when ``rigrope`` is a half-width table for the even
+            split-half pairs, whose odd pairs then keep mRoPE; ``"all"`` for a full-width one.
         deduplicate_cross_view: use disjoint rectangles, counting each key once.
         decomposed_temporal_window_seconds: optional (start, end) cross-view window
             relative to the query's capture time; (-N, 0) gives a past-only window.
@@ -1993,7 +2161,7 @@ def _multiview_maskless_geometry(
         ValueError: when this batch cannot be served by the folds.
     """
     num_samples = len(packed_seq.sample_lens)
-    vision, lidar, radar = packed_seq.vision, packed_seq.lidar, packed_seq.radar
+    vision, lidar, radar, action = packed_seq.vision, packed_seq.lidar, packed_seq.radar, packed_seq.action
     if vision is None and lidar is None and radar is None:
         raise ValueError(
             f"{_MASKLESS_REFUSAL}it carries neither a vision, a LiDAR nor a radar generation "
@@ -2018,7 +2186,6 @@ def _multiview_maskless_geometry(
     # again for the resolved lists rather than to re-check them, and the defaults stay in one
     # place. Ahead of the per-stream counts because an action control with no camera to target
     # is the more specific account of a sample that also owns no sensor item.
-    action = packed_seq.action
     action_metadata = validate_multiview_pack(packed_seq)
     action_counts = action_metadata.counts_per_sample
     views_per_action_item = action_metadata.views_per_item
@@ -2043,11 +2210,16 @@ def _multiview_maskless_geometry(
         raise ValueError(
             f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
             f"lidar={list(lidar_counts)}, radar={list(radar_counts)}. Each sample takes at most "
-            "one item per stream beside its control item, and at least one overall; more is an "
-            "image-editing layout this path does not serve." + _MASKLESS_REFUSAL_TAIL
+            "one target item per stream beside that stream's control item, and at least one "
+            "overall; more is an image-editing layout this path does not serve." + _MASKLESS_REFUSAL_TAIL
         )
 
-    views_per_vision_item = packed_seq.num_views_per_vision_item or []
+    views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
+    if vision is not None and not views_per_vision_item:
+        # One view per item, as _multiview_sensor_mask_items reads the same pack: only a
+        # multiview dataset writes the counts, so a pack without them is single-camera by
+        # construction -- a single-view stream mixed into a multiview recipe.
+        views_per_vision_item = [1] * len(vision.token_shapes)
     if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
         # Camera items need the per-camera VAE metadata to say where one view's frames end.
         raise ValueError(
@@ -2140,7 +2312,7 @@ def _multiview_maskless_geometry(
         if caption_mask_items is not None
         else None
     )
-    return build_multiview_maskless_plan(
+    plan = build_multiview_maskless_plan(
         num_views,
         token_shapes,
         device=device,
@@ -2162,11 +2334,221 @@ def _multiview_maskless_geometry(
         # "no_captions" item's group takes an empty run of captions under the per-view layout
         # and leaves the gen->und pass under the sample-level one.
         caption_access=caption_accesses,
+        cross_view_band_radius=cross_view_band_radius,
+        include_frame_zero=include_frame_zero,
+        cross_view_band_keys=cross_view_band_keys,
         # The stream's padded length, which only the built pack knows: the plan's partitions
         # cover the padding rather than stopping at the batch's real tokens, so that the folds
         # and the pack share one set of coordinates.
         padded_gen_tokens=gen_seq_len,
     )
+    if geometry_position_encoding == "prope":
+        if packed_seq.lidar is not None or packed_seq.action is not None:
+            raise ValueError("PRoPE is camera-only in decomposed attention")
+        if plan.cross_view_kv_gather is not None or plan.cross_view_partitions:
+            # The camera-relative pose pass replaces the cross-view pass and its key runs.
+            raise ValueError(
+                "PRoPE does not support the maskless cross-view band, deduplicate_cross_view or "
+                "decomposed_temporal_window_seconds"
+            )
+        camera_poses = packed_seq.camera_relative_poses_per_vision_item
+        # Single-camera items keep the ordinary partition, so only multiview items need poses.
+        if camera_poses is None or any(
+            poses is None and views > 1 for poses, views in zip(camera_poses, plan.num_views, strict=True)
+        ):
+            raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+        plan = dataclasses.replace(
+            plan,
+            camera_relative_pose=build_camera_relative_pose_plan(plan, camera_poses, projective=prope_intrinsics),
+        )
+    elif geometry_position_encoding == "prope_cross_view":
+        if packed_seq.lidar is not None:
+            raise ValueError("Decomposed cross-view PRoPE does not support LiDAR")
+        if rigrope_missing_geometry == "mrope":
+            raise ValueError("prope_cross_view requires rigrope_missing_geometry 'error', 'no_rotation' or 'time_only'")
+        assert packed_seq.vision is not None
+        vision_items = len(packed_seq.vision.token_shapes)
+        camera_poses = packed_seq.camera_relative_poses_per_vision_item
+        if camera_poses is None and rigrope_missing_geometry != "error":
+            camera_poses = [None] * vision_items
+        if camera_poses is None or len(camera_poses) != vision_items:
+            raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+        # Plan items run per sample, its vision items then its camera-pose action items, which
+        # take the identity: the cross-view pass never reads their rows.
+        plan_poses: list[tuple[torch.Tensor | None, bool]] = []
+        vision_cursor = 0
+        for vision_count, action_count in zip(vision_counts, action_counts, strict=True):
+            for _ in range(vision_count):
+                plan_poses.append((camera_poses[vision_cursor], True))
+                vision_cursor += 1
+            plan_poses.extend((None, False) for _ in range(action_count))
+        if len(plan_poses) != len(plan.token_shapes):
+            raise ValueError("PRoPE pose traversal did not cover every packed item")
+        transforms = []
+        target_token_ranges = []
+        token_cursor = 0
+        for (poses, is_vision), shape, views, control in zip(
+            plan_poses, plan.token_shapes, plan.num_views, plan.is_control, strict=True
+        ):
+            num_tokens = math.prod(shape)
+            if is_vision and not control:
+                target_token_ranges.append((token_cursor, token_cursor + num_tokens))
+            token_cursor += num_tokens
+            if poses is None:
+                if is_vision and rigrope_missing_geometry == "error" and views != 1:
+                    raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+                # Single-view samples never enter the cross-view gather, and a multiview sample
+                # without geometry keeps its PRoPE channels unrotated: the identity transform.
+                transforms.append(torch.eye(4, device=device).expand(num_tokens, 4, 4))  # [N,4,4]
+                continue
+            frames = shape[0] // views
+            if poses.shape != (views, frames, 4, 4):
+                raise ValueError(f"PRoPE poses {tuple(poses.shape)} do not match {views} views of {shape}")
+            # Tokens are view-outer, frame, then spatial-innermost, as the poses are laid out.
+            transforms.append(
+                poses.to(device=device, dtype=torch.float32)
+                .reshape(views * frames, 4, 4)
+                .repeat_interleave(shape[1] * shape[2], dim=0)
+            )  # [V*F*S,4,4]
+        reference_to_camera = torch.cat(transforms)  # [N_real,4,4]
+        if reference_to_camera.shape[0] != plan.num_gen_tokens:
+            raise ValueError("PRoPE transforms do not cover real generation tokens")
+        if packed_seq.action is not None:
+            # Checked once per plan, so the attention layers need not sync on it per layer.
+            is_target = torch.zeros(plan.num_gen_tokens, dtype=torch.bool, device=device)  # [N_gen]
+            for start, end in target_token_ranges:
+                is_target[start:end] = True
+            for cross_pass in cross_view_passes(plan):
+                for gather in (cross_pass.gather, cross_pass.kv_gather):
+                    if not bool(is_target[gather].all()):
+                        raise ValueError("The PRoPE cross-view pass must read target camera tokens only")
+        padding = torch.eye(4, device=device).expand(gen_seq_len - plan.num_gen_tokens, 4, 4)
+        reference_to_camera = torch.cat([reference_to_camera, padding])  # [N_gen,4,4]
+        invert = invert_affine_transform if prope_intrinsics else invert_rigid_transform
+        plan = dataclasses.replace(
+            plan,
+            prope_reference_to_camera=reference_to_camera,
+            prope_camera_to_reference=invert(reference_to_camera),  # [N_gen,4,4]
+            rigrope_q_heads=None if rigrope_head_masks is None else rigrope_head_masks[0],  # [H_local] bool
+            rigrope_k_heads=None if rigrope_head_masks is None else rigrope_head_masks[1],  # [H_kv_local] bool
+        )
+    elif geometry_position_encoding == "rigrope_cross_view":
+        if rigrope is None:
+            raise ValueError("RigRoPE module was not initialized")
+        if packed_seq.lidar is not None:
+            raise ValueError("Decomposed cross-view RigRoPE does not support LiDAR")
+        # Camera-pose action items may follow a sample's vision item; the cross-view pass never
+        # reads their rows, so they take zero descriptors.
+        assert packed_seq.vision is not None
+        vision_items = len(packed_seq.vision.token_shapes)
+        features = packed_seq.rigrope_features_per_vision_item
+        if features is None and rigrope_missing_geometry != "error":
+            features = [None] * vision_items
+        if features is None or len(features) != vision_items:
+            raise ValueError("RigRoPE requires valid calibrated geometry for every multiview item")
+        descriptors = []
+        has_geometry = []
+        rate_known = packed_seq.vision.seconds_per_frame_known or [True] * vision_items
+        # Plan items run per sample, its vision items then its action items, while features and
+        # rate_known index vision items alone.
+        plan_items: list[tuple[torch.Tensor | None, int, bool]] = []
+        vision_cursor = 0
+        for vision_count, action_count in zip(vision_counts, action_counts, strict=True):
+            for _ in range(vision_count):
+                plan_items.append((features[vision_cursor], vision_cursor, True))
+                vision_cursor += 1
+            plan_items.extend((None, -1, False) for _ in range(action_count))
+        if len(plan_items) != len(plan.token_shapes):
+            raise ValueError("RigRoPE descriptor traversal did not cover every packed item")
+        target_token_ranges: list[tuple[int, int]] = []
+        token_cursor = 0
+        for (feature, vision_index, is_vision), shape, views, rate, control in zip(
+            plan_items, plan.token_shapes, plan.num_views, plan.seconds_per_frame, plan.is_control, strict=True
+        ):
+            num_tokens = math.prod(shape)
+            if is_vision and not control:
+                target_token_ranges.append((token_cursor, token_cursor + num_tokens))
+            token_cursor += num_tokens
+            has_geometry.append(torch.full((num_tokens,), feature is not None, device=device, dtype=torch.bool))
+            if not is_vision:
+                descriptors.append(torch.zeros(num_tokens, 8, device=device, dtype=torch.float32))  # [N_action,8]
+                continue
+            if feature is None and rigrope_missing_geometry == "error" and views != 1:
+                raise ValueError("RigRoPE requires valid calibrated geometry for every multiview item")
+            known = rate_known[vision_index]
+            if feature is None:
+                if rigrope_missing_geometry == "time_only" and views > 1 and not known:
+                    # Its ``seconds_per_frame`` is the packer's 1.0 placeholder, several times a
+                    # real latent step, which this mode would read as seconds.
+                    raise ValueError(
+                        "RigRoPE time_only needs the fps of every multiview item without geometry; "
+                        "this item was packed without one"
+                    )
+                # Single-view samples never enter the cross-view gather, so their rows are unread.
+                # A multiview sample's zero features rotate by zero angles, which is the
+                # ``"no_rotation"`` state; ``"mrope"`` masks them back to mRoPE by ``rigrope_valid``,
+                # and ``"time_only"`` fills in the time channel alone.
+                descriptor = torch.zeros(num_tokens, 8, device=device, dtype=torch.float32)  # [N,8]
+                if rigrope_missing_geometry == "time_only":
+                    # The time channel alone, in latent-frame steps of ``seconds_per_frame`` from
+                    # the item's first frame -- the spacing a posed sample's capture times take --
+                    # laid out view-outer, frame, then spatial like the packed tokens.
+                    frames, spatial = shape[0] // views, shape[1] * shape[2]
+                    times = torch.arange(frames, device=device, dtype=torch.float32) * rate  # [F]
+                    descriptor[:, 7] = times.repeat_interleave(spatial).repeat(views)  # [V*F*S]
+                descriptors.append(descriptor)
+                continue
+            if feature.shape[0] != views or shape[0] % views:
+                raise ValueError(f"RigRoPE features {tuple(feature.shape)} do not match {views} views of {shape}")
+            # Token shapes stack views on the latent time axis; features keep one grid per view.
+            resized = resize_rig_features(feature, (shape[0] // views, shape[1], shape[2]))  # [V,T,H,W,8]
+            descriptors.append(resized.reshape(-1, 8).to(device=device, dtype=torch.float32))
+        coords = torch.cat(descriptors)
+        if coords.shape[0] != plan.num_gen_tokens:
+            raise ValueError("RigRoPE descriptors do not cover real generation tokens")
+        if packed_seq.action is not None:
+            # Checked once per plan, so the attention layers need not sync on it per layer.
+            is_target = torch.zeros(plan.num_gen_tokens, dtype=torch.bool, device=device)  # [N_gen]
+            for start, end in target_token_ranges:
+                is_target[start:end] = True
+            for cross_pass in cross_view_passes(plan):
+                for gather in (cross_pass.gather, cross_pass.kv_gather):
+                    if not bool(is_target[gather].all()):
+                        raise ValueError("The RigRoPE cross-view pass must read target camera tokens only")
+        coords = torch.nn.functional.pad(coords, (0, 0, 0, gen_seq_len - coords.shape[0]))
+        if rigrope_time_scale_s != 1.0:
+            coords = torch.cat([coords[:, :7], coords[:, 7:] / rigrope_time_scale_s], dim=-1)  # [N_gen,8]
+        angles = rigrope(coords).reshape(gen_seq_len, -1)
+        rigrope_pairs = None
+        if rigrope_channels == "even_pairs":
+            angles = spread_over_even_pairs(angles)  # [N_gen,D]
+            rigrope_pairs = prope_pair_channels(angles.shape[-1], angles.device)  # [D] bool
+        plan = dataclasses.replace(
+            plan,
+            rigrope_pairs=rigrope_pairs,
+            rigrope_cos=angles.cos(),
+            rigrope_sin=angles.sin(),
+            rigrope_valid=(
+                torch.nn.functional.pad(torch.cat(has_geometry), (0, gen_seq_len - plan.num_gen_tokens))
+                if rigrope_missing_geometry == "mrope"
+                else None
+            ),  # [N_gen] bool
+            rigrope_q_heads=None if rigrope_head_masks is None else rigrope_head_masks[0],  # [H_local] bool
+            rigrope_k_heads=None if rigrope_head_masks is None else rigrope_head_masks[1],  # [H_kv_local] bool
+        )
+    elif geometry_position_encoding != "baseline":
+        raise ValueError(f"Unknown geometry_position_encoding={geometry_position_encoding!r}")
+    return plan
+
+
+def _rigrope_kv_heads(head_fraction: float, num_kv_heads: int) -> int | None:
+    """Return how many leading KV head groups use RigRoPE, ``None`` for every group."""
+    kv_heads = head_fraction * num_kv_heads
+    if not math.isclose(kv_heads, round(kv_heads)) or round(kv_heads) < 1:
+        raise ValueError(
+            f"rigrope_head_fraction={head_fraction} must select a whole number of the {num_kv_heads} KV head groups"
+        )
+    return None if round(kv_heads) == num_kv_heads else round(kv_heads)
 
 
 def _mask_item_token_shape(token_shape: tuple[int, ...]) -> tuple[int, ...]:

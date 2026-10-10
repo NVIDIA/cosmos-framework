@@ -47,6 +47,13 @@ class GenerationDataClean:
     # embedding row separately and never appears in these tensors.
     vision_view_ids: list[torch.Tensor] | None = None
 
+    # Decomposed geometry metadata, parallel to flattened vision/LiDAR items. PRoPE
+    # carries reference-to-camera matrices; RigRoPE carries [V,T,H,W,8] spatial
+    # descriptors. These are host-prepared and never inferred inside attention.
+    camera_relative_poses_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_lidar_item: list[torch.Tensor | None] | None = None
+
     # LiDAR (list of per-item range-view latents, flattened over samples the way
     # x0_tokens_vision is). A range clip is its own modality with its own VAE and its own
     # sweep rate, so it never appears among the vision items.

@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 import json
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, get_args
 
@@ -76,6 +77,10 @@ from cosmos_framework.model.generator.sensor_encoder import (
     normalize_uint8_item,
 )
 from cosmos_framework.model.generator.utils.batch_normalization import normalize_vision_batch_inplace
+from cosmos_framework.model.generator.utils.camera_relative_pose import (
+    prepare_camera_relative_poses,
+    prepare_prope_cross_view_poses,
+)
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -95,6 +100,7 @@ from cosmos_framework.model.generator.utils.moe_utils import (
     uses_ema_router_bias,
 )
 from cosmos_framework.model.generator.utils.rig_view_embedding import vision_view_ids
+from cosmos_framework.model.generator.utils.rigrope_geometry import prepare_rigrope_features
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
 )
@@ -305,6 +311,14 @@ class OmniMoTModel(ImaginaireModel):
         # Current owner rank in the CP data window; advances modulo CP size after
         # each successful training step and returns to 0 for the next window.
         self._cp_window_slot: int = 0
+        # Multiview items seen with and without RigRoPE geometry, for the fallback's coverage log.
+        self._rigrope_items_seen: int = 0
+        self._rigrope_items_with_geometry: int = 0
+        self._rigrope_coverage_batches: int = 0
+        # The longest capture-time span of a posed item, against which rigrope_time_scale_s is set.
+        self._rigrope_longest_time_span_s: float = 0.0
+        # The largest descriptor moment magnitude of a posed item, which shows the moment unit in use.
+        self._rigrope_largest_moment: float = 0.0
         self.config = config
         log.info(f"OmniMoTModel: config {self.config}")
 
@@ -1363,6 +1377,30 @@ class OmniMoTModel(ImaginaireModel):
         vae_pixel_shapes = payload["vae_pixel_shapes"]
         return input_text_indexes, sequence_plans, gen_data_clean, memory_info, data_resolutions, vae_pixel_shapes
 
+    def _release_raw_video_after_tokenization(
+        self,
+        gen_data_clean: GenerationDataClean,
+        data_batch: dict[str, torch.Tensor],
+    ) -> None:
+        """Free raw video tensors from GPU after CP slot-0 tokenization.
+
+        Only video (the largest modality) is dropped, and only for non-image
+        batches.  The trainer retains the original host batch for callbacks,
+        which re-encode from its uint8 video.
+
+        ``num_vision_items_per_sample`` and ``image_size`` are kept: both
+        describe the flattened vision-item layout and must stay mutually
+        consistent.  :meth:`build_callback_batch` restores host video and
+        flattens it to match the retained counts so callbacks see a
+        self-consistent batch without recomputation.
+        """
+        if not self.config.release_cp_raw_batch_after_preprocessing:
+            return
+        if gen_data_clean.is_image_batch:
+            return
+        gen_data_clean.raw_state_vision = None
+        data_batch.pop(self.input_video_key, None)
+
     def _get_training_inputs(
         self, data_batch: dict[str, torch.Tensor], iteration: int
     ) -> tuple[
@@ -1406,6 +1444,7 @@ class OmniMoTModel(ImaginaireModel):
         if cp_window_slot == 0:
             local_training_data = self._prepare_training_data(data_batch, iteration)
             self._cp_local_training_payload = self._pack_training_payload(*local_training_data)
+            self._release_raw_video_after_tokenization(local_training_data[2], data_batch)
         if self._cp_local_training_payload is None:
             raise RuntimeError("CP training payload cache is empty before its data window is complete.")
         payload = broadcast_context_parallel_object(
@@ -3560,6 +3599,9 @@ class OmniMoTModel(ImaginaireModel):
             fps_sound=gen_data_clean.fps_sound if has_sound else None,
             num_vision_items_per_sample=num_items,
             num_views_per_vision_item=gen_data_clean.num_views_per_vision_item,
+            camera_relative_poses_per_vision_item=gen_data_clean.camera_relative_poses_per_vision_item,
+            rigrope_features_per_vision_item=gen_data_clean.rigrope_features_per_vision_item,
+            rigrope_features_per_lidar_item=gen_data_clean.rigrope_features_per_lidar_item,
             vision_view_ids=gen_data_clean.vision_view_ids,
             # LiDAR fields
             raw_state_lidar=gen_data_clean.raw_state_lidar,
@@ -4894,6 +4936,21 @@ class OmniMoTModel(ImaginaireModel):
             num_views_per_action_item=num_views_per_action_item,
             num_vision_items_per_sample=subset_num_items,
             num_views_per_vision_item=subset_num_views_per_vision_item,
+            camera_relative_poses_per_vision_item=(
+                gen_data_clean.camera_relative_poses_per_vision_item[vision_item_slice]
+                if gen_data_clean.camera_relative_poses_per_vision_item is not None
+                else None
+            ),
+            rigrope_features_per_vision_item=(
+                gen_data_clean.rigrope_features_per_vision_item[vision_item_slice]
+                if gen_data_clean.rigrope_features_per_vision_item is not None
+                else None
+            ),
+            rigrope_features_per_lidar_item=(
+                gen_data_clean.rigrope_features_per_lidar_item[lidar_slice]
+                if gen_data_clean.rigrope_features_per_lidar_item is not None and subset_x0_lidar is not None
+                else None
+            ),
             vision_view_ids=(
                 gen_data_clean.vision_view_ids[vision_item_slice]
                 if gen_data_clean.vision_view_ids is not None
@@ -5044,6 +5101,51 @@ class OmniMoTModel(ImaginaireModel):
                 "Set lidar_tokenizer and lidar_state_ch on the model config."
             )
         return self.tokenizer_lidar_gen
+
+    def _log_rigrope_coverage(self, features: Sequence[torch.Tensor | None], num_views: Sequence[int]) -> None:
+        """Report how many multiview items this rank encoded used RigRoPE geometry rather than its fallback.
+
+        Every rank reports its own batches, at its 1st, 2nd, 4th, 8th, ... batch and then every
+        100th: under context parallelism each rank encodes only one batch per window, so rank 0
+        alone would see a sliver of the data and report rarely. The report includes the largest
+        posed moment magnitude (about 1 under per-sample RMS units, far below it at a fixed 25 m)
+        and, with time in the descriptors, the longest posed time span seen, as a warning while
+        that span is past ``rigrope_time_scale_s``.
+        """
+        multiview = [feature for feature, views in zip(features, num_views, strict=True) if views > 1]
+        posed = [feature for feature in multiview if feature is not None]
+        self._rigrope_items_seen += len(multiview)
+        self._rigrope_items_with_geometry += len(posed)
+        self._rigrope_coverage_batches += 1
+        multiview_config = self.config.multiview_attention
+        # The descriptors are still host tensors here, so these read no device value.
+        moments = [float(torch.linalg.vector_norm(feature[..., 3:6], dim=-1).amax()) for feature in posed]
+        self._rigrope_largest_moment = max([self._rigrope_largest_moment, *moments])
+        if multiview_config.rigrope_include_time:
+            spans = [float(feature[..., 7].amax() - feature[..., 7].amin()) for feature in posed]
+            self._rigrope_longest_time_span_s = max([self._rigrope_longest_time_span_s, *spans])
+        batches = self._rigrope_coverage_batches
+        if batches & (batches - 1) == 0 or batches % 100 == 0:
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            share = self._rigrope_items_with_geometry / max(self._rigrope_items_seen, 1)
+            log.info(
+                f"[rank {rank}] RigRoPE coverage after {batches} batches: "
+                f"{self._rigrope_items_with_geometry}/{self._rigrope_items_seen} multiview items "
+                f"({100.0 * share:.1f}%) used geometry; the rest took the "
+                f"{multiview_config.rigrope_missing_geometry!r} fallback. Largest posed moment "
+                f"{self._rigrope_largest_moment:.3f}.",
+                rank0_only=False,
+            )
+            if multiview_config.rigrope_include_time:
+                longest, scale = self._rigrope_longest_time_span_s, multiview_config.rigrope_time_scale_s
+                message = (
+                    f"[rank {rank}] RigRoPE longest posed time span so far: {longest:.2f} s against "
+                    f"rigrope_time_scale_s={scale:g}"
+                )
+                if longest > scale:
+                    log.warning(f"{message}; offsets past the scale wrap the slowest time frequency.", rank0_only=False)
+                else:
+                    log.info(f"{message}.", rank0_only=False)
 
     def _require_radar_tokenizer(self) -> VideoTokenizerInterface:
         """Return the radar VAE, or say which config knob is missing."""
@@ -5544,9 +5646,84 @@ class OmniMoTModel(ImaginaireModel):
             x0_tokens_vision=x0_tokens_vision,
             num_views_per_vision_item=num_views_per_vision_item,
         )
+
+        geometry_mode = self.config.multiview_attention.geometry_position_encoding
+        # Without per-camera VAE metadata every vision item is a single view, which is how the
+        # network reads it too, and single-view items never enter the cross-view pass where
+        # geometry acts. They therefore carry no geometry rather than failing the batch.
+        single_view_geometry: list[torch.Tensor | None] | None = (
+            None if num_views_per_vision_item is not None else [None] * len(x0_tokens_vision or [])
+        )
+        camera_relative_poses_per_vision_item = None
+        if geometry_mode in ("prope", "prope_cross_view") and single_view_geometry is not None:
+            camera_relative_poses_per_vision_item = single_view_geometry
+        elif geometry_mode == "prope":
+            assert num_views_per_vision_item is not None
+            camera_relative_poses_per_vision_item = prepare_camera_relative_poses(
+                data_batch.get("camera_geometry"),
+                pixel_shapes=[
+                    (int(item.shape[-3]), int(item.shape[-2]), int(item.shape[-1])) for item in raw_state_vision
+                ],
+                latent_frames=[int(item.shape[-3]) for item in x0_tokens_vision],
+                num_views=num_views_per_vision_item,
+                items_per_sample=num_vision_items_per_sample or [1] * batch_size,
+                tokenizer=self.tokenizer_vision_gen,
+                intrinsics=self.config.multiview_attention.prope_intrinsics,
+            )
+        elif geometry_mode == "prope_cross_view":
+            assert num_views_per_vision_item is not None
+            multiview_config = self.config.multiview_attention
+            camera_relative_poses_per_vision_item = prepare_prope_cross_view_poses(
+                data_batch.get("camera_geometry"),
+                pixel_shapes=[
+                    (int(item.shape[-3]), int(item.shape[-2]), int(item.shape[-1])) for item in raw_state_vision
+                ],
+                latent_frames=[int(item.shape[-3]) for item in x0_tokens_vision],
+                num_views=num_views_per_vision_item,
+                items_per_sample=num_vision_items_per_sample or [1] * batch_size,
+                tokenizer=self.tokenizer_vision_gen,
+                allow_missing=multiview_config.rigrope_missing_geometry != "error",
+                translation_normalization=multiview_config.rigrope_moment_normalization,
+                translation_scale_m=multiview_config.rigrope_moment_scale_m,
+                translation_floor_m=multiview_config.rigrope_moment_scale_floor_m,
+                pose_world_frame=multiview_config.rigrope_pose_world_frame,
+                intrinsics=multiview_config.prope_intrinsics,
+            )
+
         if raw_state_lidar is not None and x0_tokens_lidar is None:
             # Not shared across a replica: encode LiDAR here, after the SR latent noise, as always.
             x0_tokens_lidar = self._encode_lidar_items(raw_state_lidar)
+
+        rigrope_features_per_vision_item = rigrope_features_per_lidar_item = None
+        if geometry_mode == "rigrope_cross_view" and x0_tokens_lidar:
+            raise ValueError("Decomposed cross-view RigRoPE is camera-only; LiDAR integration is not implemented")
+        if geometry_mode == "rigrope_cross_view" and single_view_geometry is not None:
+            rigrope_features_per_vision_item = single_view_geometry
+        elif geometry_mode == "rigrope_cross_view":
+            assert num_views_per_vision_item is not None
+            rigrope_features_per_vision_item, rigrope_features_per_lidar_item = prepare_rigrope_features(
+                data_batch,
+                raw_vision=raw_state_vision,
+                latent_vision=x0_tokens_vision,
+                raw_lidar=None,
+                latent_lidar=None,
+                num_views=num_views_per_vision_item,
+                vision_counts=num_vision_items_per_sample or [1] * batch_size,
+                lidar_counts=[0] * batch_size,
+                camera_tokenizer=self.tokenizer_vision_gen,
+                lidar_tokenizer=None,
+                projection=None,
+                moment_scale_m=self.config.multiview_attention.rigrope_moment_scale_m,
+                include_time=self.config.multiview_attention.rigrope_include_time,
+                canonical_frame=self.config.multiview_attention.rigrope_canonical_frame,
+                moment_normalization=self.config.multiview_attention.rigrope_moment_normalization,
+                moment_scale_floor_m=self.config.multiview_attention.rigrope_moment_scale_floor_m,
+                pose_world_frame=self.config.multiview_attention.rigrope_pose_world_frame,
+                cross_view_only=True,
+                allow_missing=self.config.multiview_attention.rigrope_missing_geometry != "error",
+            )
+            if self.config.multiview_attention.rigrope_missing_geometry != "error":
+                self._log_rigrope_coverage(rigrope_features_per_vision_item, num_views_per_vision_item)
 
         # Radar BEV clips: likewise their own VAE, so likewise outside the vision items.
         raw_state_radar, x0_tokens_radar, num_radar_items_per_sample = self._encode_radar_stream(data_batch, batch_size)
@@ -5677,6 +5854,9 @@ class OmniMoTModel(ImaginaireModel):
             action_family=action_family,
             num_vision_items_per_sample=num_vision_items_per_sample,
             num_views_per_vision_item=num_views_per_vision_item,
+            camera_relative_poses_per_vision_item=camera_relative_poses_per_vision_item,
+            rigrope_features_per_vision_item=rigrope_features_per_vision_item,
+            rigrope_features_per_lidar_item=rigrope_features_per_lidar_item,
             vision_view_ids=physical_view_ids,
             raw_state_lidar=raw_state_lidar,
             x0_tokens_lidar=x0_tokens_lidar,
@@ -5813,6 +5993,12 @@ class OmniMoTModel(ImaginaireModel):
                     "LiDAR items must match num_lidar_items_per_sample: "
                     f"got {len(flat_items)} items for {sum(num_lidar_items_per_sample)} expected."
                 )
+
+        # Cached/packed loaders can retain empty item lists after whole-stream
+        # dropout. Preserve the same absent-modality contract as a missing key;
+        # an empty latent list would otherwise disagree with has_lidar=False.
+        if not flat_items:
+            return None, None
 
         raw_state_lidar: list[torch.Tensor] = []
         for item in flat_items:

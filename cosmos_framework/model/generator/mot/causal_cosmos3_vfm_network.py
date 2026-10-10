@@ -13,21 +13,8 @@ import attrs
 import torch
 from torch.utils.hooks import RemovableHandle
 
-from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
-    Cosmos3VFMNetwork,
-    _multiview_caption_mask_items,
-    _multiview_sensor_mask_items,
-)
-from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
-from cosmos_framework.data.generator.sequence_packing import PackedSequence
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_causal_seq,
-    get_full_only_seq,
-)
-from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     MULTIVIEW_TRANSFER_AR_CURRENT_ROLES,
     MultiviewTransferARMemoryLayout,
@@ -35,6 +22,12 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     build_teacher_forcing_block_mask,
     build_teacher_forcing_multiview_flex_metadata,
 )
+from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
+    Cosmos3VFMNetwork,
+    _multiview_caption_mask_items,
+    _multiview_sensor_mask_items,
+)
+from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
 from cosmos_framework.model.generator.mot.maskless_attention import build_replay_maskless_plan
 from cosmos_framework.model.generator.mot.multiview_action_attention import (
     build_multiview_action_attention_plan,
@@ -43,6 +36,13 @@ from cosmos_framework.model.generator.utils.rolling_kv.rolling_replay import (
     RollingReplayRequest,
     build_rolling_replay_metadata,
 )
+from cosmos_framework.data.generator.sequence_packing import PackedSequence
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_causal_seq,
+    get_full_only_seq,
+)
+from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
 def build_interactive_multiview_mask_items(

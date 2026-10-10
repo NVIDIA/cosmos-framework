@@ -2793,6 +2793,33 @@ def test_multiview_maskless_plan_drops_lidar_from_the_sample_level_gen_to_und_pa
 
 
 @pytest.mark.L0
+def test_multiview_maskless_plan_expands_cross_view_to_pm5_and_first_frame() -> None:
+    """The speed-probe topology keeps one query copy and expands only its KV runs."""
+    plan = multiview_maskless_attention.build_multiview_maskless_plan(
+        [2],
+        [(16, 1, 1)],
+        device=torch.device("cpu"),
+        cross_view_band_radius=5,
+        include_frame_zero=True,
+    )
+
+    assert plan.cross_view_gather is not None
+    assert plan.cross_view_kv_gather is not None
+    assert plan.cross_view_offsets is not None
+    assert plan.cross_view_kv_offsets is not None
+    assert plan.cross_view_gather.tolist() == [index for frame in range(8) for index in (frame, frame + 8)]
+    assert torch.diff(plan.cross_view_offsets).tolist() == [2] * 8
+    # Query frame 0 sees 0..5; middle frame 4 sees all 0..7; last frame 7 sees 0 and 2..7.
+    assert torch.diff(plan.cross_view_kv_offsets).tolist() == [12, 14, 16, 16, 16, 16, 16, 14]
+    assert plan.cross_view_kv_gather[:12].tolist() == [index for frame in range(6) for index in (frame, frame + 8)]
+    assert plan.cross_view_kv_gather[-14:].tolist() == [
+        0,
+        8,
+        *[index for frame in range(2, 8) for index in (frame, frame + 8)],
+    ]
+
+
+@pytest.mark.L0
 def test_multiview_maskless_plan_rejects_a_scope_the_folds_do_not_express() -> None:
     """``"all_views"`` is one pass per sample, not a partition of one, so it is not built here."""
     with pytest.raises(ValueError, match="attention_scope='all_views' is not one this fold expresses"):

@@ -13,12 +13,6 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import torch
 import torch.distributed as dist
 
-from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
-from cosmos_framework.model.generator.omni_mot_model import _broadcast_seed, _per_view_caption_groups
-from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan, build_sequence_plans_from_data_batch
-from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_CLEAN_TARGET,
     _ROLE_CURRENT_TARGET,
@@ -28,14 +22,20 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     TeacherForcingFlexMetadata,
     build_multiview_transfer_ar_memory_layout,
 )
-from cosmos_framework.model.generator.teacher_forcing import mark_modality_as_clean_condition
+from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
+from cosmos_framework.model.generator.omni_mot_model import _broadcast_seed, _per_view_caption_groups
+from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.kv_cache import (
     JointChunkMemory,
     MultiviewARMemoryState,
     TeacherForcingMemoryState,
 )
+from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import RollingPromptSchedule
+from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan, build_sequence_plans_from_data_batch
 from cosmos_framework.data.generator.sequence_packing.autoregressive import pack_input_sequence_autoregressive
+from cosmos_framework.data.generator.sequence_packing.packers import mark_modality_as_clean_condition
+from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem

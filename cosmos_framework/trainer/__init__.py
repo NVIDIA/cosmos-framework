@@ -6,7 +6,7 @@ import inspect
 import os
 import signal
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -38,10 +38,13 @@ class ContextParallelDataWindow:
     """Caches one dataloader batch across a ``cp_size``-step CP data window.
 
     Each slot is one training step within the window; CP rank ``s`` owns slot ``s``.
-    The cached batch is cleared after the final slot.
+    The cached batch is cleared after the final slot. When raw-batch release is
+    enabled, ``batch`` remains on the host and ``prepared_batch`` holds the much
+    smaller device batch left after model preprocessing.
     """
 
     batch: dict[str, Any] | None = None
+    prepared_batch: dict[str, Any] | None = None
     offset: int = 0
 
     @property
@@ -50,6 +53,7 @@ class ContextParallelDataWindow:
 
     def clear(self) -> None:
         self.batch = None
+        self.prepared_batch = None
         self.offset = 0
 
     def advance(self, cp_size: int) -> None:
@@ -61,6 +65,64 @@ class ContextParallelDataWindow:
         """Replace the cached batch with a device copy while the window is active."""
         if self.active:
             self.batch = data_batch
+
+    def store_prepared_batch(self, data_batch: dict[str, Any]) -> None:
+        """Cache the device batch after its raw video tensors are released."""
+        if self.active:
+            self.prepared_batch = data_batch
+
+    @staticmethod
+    def build_callback_batch(
+        host_batch: dict[str, Any] | None,
+        prepared_batch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Restore host raw inputs alongside metadata produced during preprocessing.
+
+        When video was released from the prepared batch during tokenization, the
+        host batch's video is restored.  If the prepared batch carries
+        ``num_vision_items_per_sample`` (indicating a flattened multi-item
+        layout), the restored host video is flattened to match: each nested
+        sub-list is expanded and every item gains a leading batch dimension.
+        For uint8 multiview video these are tensor views — no pixel copy.
+
+        ``is_preprocessed`` is set to ``False`` only when the restored video is
+        unnormalized uint8.  Already-normalized float32 host video and retained
+        CUDA images keep the flag so downstream consumers skip re-normalization.
+        """
+        if host_batch is None:
+            return prepared_batch
+        callback_batch = dict(host_batch)
+        callback_batch.update(prepared_batch)
+
+        # Detect video keys restored from the host: present in host but absent
+        # from the prepared batch (the model popped them during tokenization).
+        _VIDEO_KEYS = ("video", "images")
+        for key in _VIDEO_KEYS:
+            if key not in host_batch or key in prepared_batch:
+                continue
+            # Video was restored from host.  Flatten nested multi-item lists to
+            # match the ``num_vision_items_per_sample`` layout the prepared batch
+            # carries, and add the batch dimension that preprocessing added.
+            items = callback_batch[key]
+            if isinstance(items, list) and items and isinstance(items[0], (list, tuple)):
+                callback_batch[key] = [
+                    item.unsqueeze(0) if isinstance(item, torch.Tensor) and item.dim() == 4 else item
+                    for sublist in items
+                    for item in sublist
+                ]
+                items = callback_batch[key]
+
+            # Set ``is_preprocessed`` to False only when the restored media is
+            # unnormalized uint8 and therefore needs re-normalization.
+            if (
+                isinstance(items, list)
+                and items
+                and isinstance(items[0], torch.Tensor)
+                and items[0].dtype == torch.uint8
+            ):
+                callback_batch["is_preprocessed"] = False
+
+        return callback_batch
 
     def assert_synced_with_model(self, model: Any) -> None:
         """Raise if the model's CP window slot has drifted from this window's offset.
@@ -74,6 +136,79 @@ class ContextParallelDataWindow:
             raise RuntimeError(
                 f"CP data-window desync: trainer offset {self.offset} != model window slot {model_window_slot}."
             )
+
+
+@dataclass
+class StepBatch:
+    """Encapsulates batch routing for one training step.
+
+    Returned by :meth:`ImaginaireTrainer._next_step_batch` so the ``train()``
+    loop never needs conditional logic for CP window slots or raw-batch release.
+    """
+
+    training: dict[str, Any]
+    """Batch on CUDA, passed to ``training_step``."""
+
+    _host_raw: dict[str, Any] | None
+    """Host batch with raw uint8 pixels.  ``None`` outside release mode."""
+
+    _window: ContextParallelDataWindow | None
+    """Reference to the CP data window; used by :meth:`finalize`."""
+
+    _is_fetch_slot: bool
+    """``True`` for the first slot of a CP window (where fresh data is fetched
+    and tokenized), or for every step in non-CP training."""
+
+    _cached_pre: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    """Cached pre-step callback batch.  Computed on first access so that
+    paired hooks (``on_training_step_start`` / ``on_training_step_batch_start``)
+    share the same dictionary and observe each other's edits."""
+
+    _cached_post: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    """Cached post-step callback batch.  Computed on first access after
+    :meth:`finalize` so that paired hooks
+    (``on_training_step_batch_end`` / ``on_training_step_end``) share the same
+    dictionary and observe each other's edits."""
+
+    @property
+    def callback_pre_step(self) -> dict[str, Any]:
+        """Batch for ``on_training_step_start`` / ``on_training_step_batch_start``.
+
+        At the fetch slot with release, the CUDA batch still has raw tensors
+        (the model hasn't run yet), so no merge is needed.  At later slots the
+        raw pixels only exist on the host and must be merged with the device
+        metadata.  The result is cached so both hooks see the same object.
+        """
+        if self._cached_pre is None:
+            if self._host_raw is None or self._is_fetch_slot:
+                self._cached_pre = self.training
+            else:
+                self._cached_pre = ContextParallelDataWindow.build_callback_batch(self._host_raw, self.training)
+        return self._cached_pre
+
+    @property
+    def callback_post_step(self) -> dict[str, Any]:
+        """Batch for ``on_training_step_batch_end`` / ``on_training_step_end``.
+
+        After the training step the model may have trimmed raw tensors from the
+        CUDA batch in-place, so both fetch and later slots need the host merge.
+        The result is cached so both hooks see the same object.
+        """
+        if self._cached_post is None:
+            if self._host_raw is None:
+                self._cached_post = self.training
+            else:
+                self._cached_post = ContextParallelDataWindow.build_callback_batch(self._host_raw, self.training)
+        return self._cached_post
+
+    def finalize(self) -> None:
+        """Post-training-step bookkeeping.
+
+        At the fetch slot in release mode the model has trimmed the raw device
+        tensors in-place; store what remains so later slots can reuse it.
+        """
+        if self._window is not None and self._is_fetch_slot and self._host_raw is not None:
+            self._window.store_prepared_batch(self.training)
 
 
 def persistent_validation_enabled(config_trainer: Any) -> bool:
@@ -253,6 +388,80 @@ class ImaginaireTrainer:
         self._cp_data_window.advance(cp_size)
         return data_batch, False
 
+    def _next_step_batch(
+        self,
+        model: ImaginaireModel,
+        dataloader_iter: Any,
+    ) -> tuple[StepBatch | None, bool]:
+        """Fetch, prepare, and route the next training batch.
+
+        Delegates to :meth:`_fetch_data_batch` for the actual fetch (which
+        subclasses may override), then wraps the result in a :class:`StepBatch`
+        that encapsulates CUDA transfer, host-batch retention, and callback
+        batch construction.  The ``train()`` loop is routing-agnostic.
+
+        Returns:
+            tuple: (step_batch, stop_signal)
+                - step_batch: A :class:`StepBatch` ready for the training step,
+                  or ``None`` if stopped.
+                - stop_signal (bool): ``True`` if the dataloader is exhausted.
+        """
+        parallel_dims = getattr(model, "parallel_dims", None)
+        cp_enabled = parallel_dims is not None and parallel_dims.cp_enabled
+        release = self._release_cp_raw_batch_after_preprocessing(model) if cp_enabled else False
+
+        # Fast path: no release mode — fetch, move to CUDA, cache for later CP slots.
+        if not release:
+            data_batch, stop = self._fetch_data_batch(model, dataloader_iter)
+            if stop:
+                return None, True
+            training = misc.to(data_batch, device="cuda")
+            self._cp_data_window.store_device_batch(training)
+            return StepBatch(training=training, _host_raw=None, _window=None, _is_fetch_slot=True), False
+
+        # Release mode: capture window references *before* _fetch_data_batch,
+        # whose internal advance() may clear the window at the last slot.
+        is_fetch_slot = not self._cp_data_window.active
+        if self._cp_data_window.active:
+            host_raw: dict[str, Any] | None = self._cp_data_window.batch
+            prepared: dict[str, Any] | None = (
+                self._cp_data_window.prepared_batch if self._cp_data_window.offset > 0 else None
+            )
+        else:
+            host_raw = None
+            prepared = None
+
+        data_batch, stop = self._fetch_data_batch(model, dataloader_iter)
+        if stop:
+            return None, True
+
+        # For the fetch slot the returned batch itself is the host batch.
+        if is_fetch_slot:
+            host_raw = data_batch
+            training = misc.to(data_batch, device="cuda")
+        else:
+            # Non-owner slots use the pre-captured prepared batch
+            # (the trimmed device batch stored by finalize() at slot 0).
+            if prepared is None:
+                raise RuntimeError("CP prepared batch is empty before its data window is complete.")
+            training = prepared
+
+        return StepBatch(
+            training=training,
+            _host_raw=host_raw,
+            _window=self._cp_data_window,
+            _is_fetch_slot=is_fetch_slot,
+        ), False
+
+    @staticmethod
+    def _release_cp_raw_batch_after_preprocessing(model: ImaginaireModel) -> bool:
+        """Return whether this CP model keeps raw inputs on the host between slots."""
+        parallel_dims = getattr(model, "parallel_dims", None)
+        if parallel_dims is None or not parallel_dims.cp_enabled:
+            return False
+        model_config = getattr(model, "config", None)
+        return bool(getattr(model_config, "release_cp_raw_batch_after_preprocessing", False))
+
     @staticmethod
     def _context_parallel_size(model: ImaginaireModel) -> int:
         parallel_dims = getattr(model, "parallel_dims", None)
@@ -352,7 +561,7 @@ class ImaginaireTrainer:
                                 profile_cuda=False,
                             ),
                         ):
-                            data_batch, stop_signal = self._fetch_data_batch(
+                            step_batch, stop_signal = self._next_step_batch(
                                 model,
                                 dataloader_train_iter,
                             )
@@ -362,13 +571,11 @@ class ImaginaireTrainer:
                         break
                     finally:
                         self.callbacks.on_after_dataloading(iteration)
-                    # Move all tensors in the data batch to GPU device.
-                    data_batch = misc.to(data_batch, device="cuda")
-                    # Keep the CUDA copy for later slots in the CP data window.
-                    self._cp_data_window.store_device_batch(data_batch)
                     # The actual training step.
-                    self.callbacks.on_training_step_start(model, data_batch, iteration=iteration)
-                    self.callbacks.on_training_step_batch_start(model, data_batch, iteration=iteration)
+                    self.callbacks.on_training_step_start(model, step_batch.callback_pre_step, iteration=iteration)
+                    self.callbacks.on_training_step_batch_start(
+                        model, step_batch.callback_pre_step, iteration=iteration
+                    )
                     if not model.training:
                         model_ddp.train()
                     assert model_ddp.training, "model_ddp is not in training mode."
@@ -378,12 +585,13 @@ class ImaginaireTrainer:
                         optimizer,
                         scheduler,
                         grad_scaler,
-                        data_batch,
+                        step_batch.training,
                         iteration=iteration,
                         grad_accum_iter=grad_accum_iter,
                     )
+                    step_batch.finalize()
                     self.callbacks.on_training_step_batch_end(
-                        model, data_batch, output_batch, loss, iteration=iteration
+                        model, step_batch.callback_post_step, output_batch, loss, iteration=iteration
                     )
                     # If the gradients are still being accumulated, continue to load the next training batch.
                     if grad_accum_iter != 0:
@@ -395,7 +603,13 @@ class ImaginaireTrainer:
                     # Save checkpoint.
                     if iteration % self.config.checkpoint.save_iter == 0:
                         self.checkpointer.save(model, optimizer, scheduler, grad_scaler, iteration=iteration)
-                    self.callbacks.on_training_step_end(model, data_batch, output_batch, loss, iteration=iteration)
+                    self.callbacks.on_training_step_end(
+                        model,
+                        step_batch.callback_post_step,
+                        output_batch,
+                        loss,
+                        iteration=iteration,
+                    )
                     # Callback consumers have finished; do not retain GPU outputs through
                     # validation or the next training step. Callback-owned references remain valid.
                     del output_batch, loss

@@ -592,6 +592,7 @@ class PackedSequenceBuilder:
         # of enable_fps_modulation (which only gates whether mRoPE positions use it).
         seconds_per_frame = temporal_compression_factor / fps if fps else 1.0
         modality.seconds_per_frame.append(seconds_per_frame)
+        modality.seconds_per_frame_known.append(bool(fps))
         mrope_ids, self._mrope_temporal_offset = get_3d_mrope_ids_vae_tokens(
             grid_t=latent_t,
             grid_h=patch_h,
@@ -682,6 +683,7 @@ class PackedSequenceBuilder:
         action.token_shapes.append((action_split_len,))
         action.tokens.append(input_action_tokens)
         action.seconds_per_frame.append(1.0 / action_fps if action_fps else 1.0)
+        action.seconds_per_frame_known.append(bool(action_fps))
         action_payload_index = len(action.tokens) - 1
 
         condition_set = {idx for idx in condition_frame_indexes_action if 0 <= idx < action_split_len}
@@ -1082,6 +1084,7 @@ class PackedSequenceBuilder:
             "condition_mask": list(modality.condition_mask),
             "noisy_frame_indexes": list(modality.noisy_frame_indexes),
             "seconds_per_frame": list(modality.seconds_per_frame),
+            "seconds_per_frame_known": list(modality.seconds_per_frame_known),
         }
         if domain_id is not None:
             kwargs["domain_id"] = domain_id
@@ -1218,6 +1221,9 @@ class PackedSequenceBuilder:
             # Vision item layout (multi-item samples, multiview cameras)
             num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
             num_views_per_vision_item=gen_data_clean.num_views_per_vision_item,
+            camera_relative_poses_per_vision_item=gen_data_clean.camera_relative_poses_per_vision_item,
+            rigrope_features_per_vision_item=gen_data_clean.rigrope_features_per_vision_item,
+            rigrope_features_per_lidar_item=gen_data_clean.rigrope_features_per_lidar_item,
             vision_view_ids=gen_data_clean.vision_view_ids,
             # LiDAR item layout
             num_lidar_items_per_sample=gen_data_clean.num_lidar_items_per_sample,
@@ -1344,6 +1350,9 @@ class PackedSequence:
     # build the multiview FlexAttention mask.
     num_vision_items_per_sample: list[int] | None = None
     num_views_per_vision_item: list[int] | None = None
+    camera_relative_poses_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_lidar_item: list[torch.Tensor | None] | None = None
     # Physical camera IDs, one [V] tensor per flattened vision item in camera-major order,
     # copied from GenerationDataClean. Controls and targets retain the same IDs without
     # renumbering selected cameras. None when disabled or no RGB is present; excludes LiDAR.
@@ -1411,6 +1420,21 @@ class PackedSequence:
             self.ce_loss_weights = to_device_nonblocking(self.ce_loss_weights, "cuda")
         if self.vision_view_ids is not None:
             self.vision_view_ids = [to_device_nonblocking(ids, "cuda") for ids in self.vision_view_ids]  # list[[V]]
+        if self.camera_relative_poses_per_vision_item is not None:
+            self.camera_relative_poses_per_vision_item = [
+                to_device_nonblocking(poses, "cuda") if poses is not None else None
+                for poses in self.camera_relative_poses_per_vision_item
+            ]
+        if self.rigrope_features_per_vision_item is not None:
+            self.rigrope_features_per_vision_item = [
+                to_device_nonblocking(features, "cuda") if features is not None else None
+                for features in self.rigrope_features_per_vision_item
+            ]
+        if self.rigrope_features_per_lidar_item is not None:
+            self.rigrope_features_per_lidar_item = [
+                to_device_nonblocking(features, "cuda") if features is not None else None
+                for features in self.rigrope_features_per_lidar_item
+            ]
         if self.vision is not None:
             self.vision.to_cuda()
         if self.lidar is not None:

@@ -37,6 +37,7 @@ from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot.activation_marks import enable_marking, is_mark_op
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_attention
+from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.utils.generator.activation_offloading import (
@@ -44,7 +45,6 @@ from cosmos_framework.utils.generator.activation_offloading import (
     offload_checkpoint_inputs,
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
-from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
 
 
 def _to_empty_preserving_buffers(

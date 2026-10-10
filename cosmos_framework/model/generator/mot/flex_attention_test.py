@@ -1826,6 +1826,78 @@ def _mask_items_partly_posed_action_pack(
 
 
 @pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_supports_optional_camera_pose_actions() -> None:
+    """The source mv100 layout may mix rows with and without one dense action control."""
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    plan = _multiview_maskless_geometry_for_test(pack)
+
+    assert plan.num_views == (2, 2, 2)
+    assert plan.token_shapes == ((4, 1, 1), (4, 1, 1), (6, 1, 1))
+    assert plan.items_per_sample == (1, 2)
+    assert plan.is_control == (False, False, True)
+    assert plan.view_axis == (0, 0, 0)
+    # Control tokens share their target camera view groups and are excluded from the
+    # cross-instant pass, exactly the all-frame control rules of the source mask.
+    assert torch.diff(plan.same_view_offsets).tolist() == [2, 2, 5, 5]
+    assert plan.cross_view_gather is not None
+    assert len(plan.cross_view_gather) == 8
+    assert torch.diff(plan.cross_view_offsets).tolist() == [2, 2, 2, 2]
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_action_plan_matches_source_flex_mask() -> None:
+    """The folds reproduce the source action-control rules for one representative pack."""
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    plan = _multiview_maskless_geometry_for_test(pack)
+    mask_items = _multiview_mask_items_for_test(pack)
+    metadata = build_multiview_flex_metadata(
+        gen_seq_len=plan.num_gen_tokens,
+        full_q_offsets=torch.tensor([0, 4, 14], dtype=torch.int32),
+        und_seq_len=0,
+        causal_offsets=None,
+        attention_scope="decomposed",
+        decomposed_temporal_window_seconds=None,
+        control_attends_sensor=True,
+        sensor_mask_items=mask_items,
+        caption_mask_items=None,
+        device=torch.device("cpu"),
+    )
+    q = torch.arange(plan.num_gen_tokens)
+    same = torch.zeros((plan.num_gen_tokens, plan.num_gen_tokens), dtype=torch.bool)
+    same_gather = plan.same_view_gather if plan.same_view_gather is not None else q
+    for start, end in zip(plan.same_view_offsets[:-1], plan.same_view_offsets[1:]):
+        group = same_gather[int(start) : int(end)]
+        same[group[:, None], group] = True
+    cross = torch.zeros_like(same)
+    assert plan.cross_view_gather is not None
+    assert plan.cross_view_offsets is not None
+    for start, end in zip(plan.cross_view_offsets[:-1], plan.cross_view_offsets[1:]):
+        group = plan.cross_view_gather[int(start) : int(end)]
+        cross[group[:, None], group] = True
+    fold_mask = same | cross
+    pair_allowed = _multiview_pair_predicate(
+        _query_stream_fields(metadata),
+        _key_stream_fields(metadata),
+        "decomposed",
+        control_attends_sensor=True,
+    )
+    flex_mask = pair_allowed(torch.tensor(0), torch.tensor(0), q[:, None], q[None, :])
+
+    assert torch.equal(fold_mask, flex_mask)
+
+
+@pytest.mark.L0
+def test_multiview_maskless_geometry_rejects_action_without_a_target_vision_item() -> None:
+    pack = _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(1, 0))
+    pack.num_vision_items_per_sample = [0, 2]
+
+    with pytest.raises(ValueError, match="action control needs exactly one target vision item"):
+        _multiview_maskless_geometry_for_test(pack)
+
+
+@pytest.mark.L0
 def test_mask_items_give_the_action_control_to_the_sample_that_packed_it() -> None:
     """A pack mixing posed and unposed samples describes each by what it actually owns."""
     items = _multiview_mask_items_for_test(_mask_items_partly_posed_action_pack(num_views=2))
@@ -2033,6 +2105,369 @@ def test_multiview_maskless_geometry_reads_the_single_camera_item_it_accepts() -
     assert plan.cross_view_gather is not None
 
 
+def _rigrope_mixed_pack(features: list[torch.Tensor | None]) -> PackedSequence:
+    """A three-view sample (T=2 per view) packed with a single-view sample (T=2)."""
+    return _multiview_maskless_pack(
+        sample_lens=[1, 1],
+        vision=ModalityData(
+            tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
+            token_shapes=[(6, 2, 3), (2, 2, 3)],
+            condition_mask=[torch.ones(6), torch.ones(2)],  # list[[V*T]]
+            seconds_per_frame=[1.0, 1.0],
+        ),
+        num_vision_items_per_sample=[1, 1],
+        num_views_per_vision_item=[3, 1],
+        rigrope_features_per_vision_item=features,
+    )
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_resizes_each_view_and_skips_single_view_samples() -> None:
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features
+
+    rigrope = RopeRigPE(8)
+    features = torch.randn(3, 2, 4, 6, 8)  # [V,T,H_vae,W_vae,8]
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_mixed_pack([features, None]), geometry_position_encoding="rigrope_cross_view", rigrope=rigrope
+    )
+
+    assert plan.rigrope_cos is not None and plan.rigrope_sin is not None
+    assert plan.rigrope_cos.shape == (36 + 12, 8)
+    expected = rigrope(resize_rig_features(features, (2, 2, 3)).reshape(-1, 8)).reshape(36, -1)  # [36,8]
+    torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
+    torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
+    # The single-view sample never enters the cross-view gather.
+    assert plan.cross_view_gather is not None and int(plan.cross_view_gather.max()) < 36
+    assert torch.equal(plan.rigrope_sin[36:], torch.zeros(12, 8))
+    assert plan.rigrope_pairs is None
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_even_pair_rigrope_rotates_only_the_prope_pairs() -> None:
+    from cosmos_framework.model.generator.mot.camera_relative_pose import prope_pair_channels
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features, spread_over_even_pairs
+
+    rigrope = RopeRigPE(8)
+    features = torch.randn(3, 2, 4, 6, 8)  # [V,T,H_vae,W_vae,8]
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_mixed_pack([features, None]),
+        geometry_position_encoding="rigrope_cross_view",
+        rigrope=rigrope,
+        rigrope_channels="even_pairs",
+    )
+
+    assert plan.rigrope_cos is not None and plan.rigrope_sin is not None and plan.rigrope_pairs is not None
+    assert torch.equal(plan.rigrope_pairs, prope_pair_channels(16, torch.device("cpu")))
+    half = rigrope(resize_rig_features(features, (2, 2, 3)).reshape(-1, 8)).reshape(36, -1)  # [36,8]
+    expected = spread_over_even_pairs(half)  # [36,16]
+    torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
+    torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
+    assert torch.equal(plan.rigrope_sin[:, ~plan.rigrope_pairs], torch.zeros(48, 8))
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_requires_multiview_features() -> None:
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
+
+    with pytest.raises(ValueError, match="valid calibrated geometry for every multiview item"):
+        _multiview_maskless_geometry_for_test(
+            _rigrope_mixed_pack([None, None]), geometry_position_encoding="rigrope_cross_view", rigrope=RopeRigPE(8)
+        )
+
+
+def _rigrope_action_pack(
+    views: tuple[int, ...], features: list[torch.Tensor | None]
+) -> PackedSequence:  # features: list[[V,T,H,W,8] | None]
+    """One sample per view count (T=2 per view), each camera item followed by its pose control."""
+    vision_shapes = [(2 * count, 2, 3) for count in views]
+    action_shapes = [(2 * count, 1, 1) for count in views]
+    return _multiview_maskless_pack(
+        sample_lens=[1] * len(views),
+        vision=ModalityData(
+            tokens=[torch.zeros(1) for _ in views],  # list[[1]]
+            token_shapes=vision_shapes,
+            condition_mask=[torch.ones(shape[0]) for shape in vision_shapes],  # list[[V*T]]
+            seconds_per_frame=[1.0] * len(views),
+        ),
+        action=ModalityData(
+            tokens=[torch.zeros(1) for _ in views],  # list[[1]]
+            token_shapes=action_shapes,
+            condition_mask=[torch.ones(shape[0], 1) for shape in action_shapes],  # list[[V*T,1]]
+            seconds_per_frame=[1.0] * len(views),
+        ),
+        num_vision_items_per_sample=[1] * len(views),
+        num_action_items_per_sample=[1] * len(views),
+        num_views_per_vision_item=list(views),
+        num_views_per_action_item=list(views),
+        rigrope_features_per_vision_item=features,
+    )
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_interleaves_pose_actions_per_sample() -> None:
+    """RigRoPE rows follow the packer's per-sample vision-then-action order."""
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features
+
+    rigrope = RopeRigPE(8)
+    first, second = torch.randn(3, 2, 4, 6, 8), torch.randn(3, 2, 4, 6, 8)  # [V,T,H_vae,W_vae,8]
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_action_pack((3, 3), [first, second]), geometry_position_encoding="rigrope_cross_view", rigrope=rigrope
+    )
+
+    assert plan.rigrope_cos is not None and plan.rigrope_sin is not None
+    assert plan.rigrope_cos.shape == (2 * (36 + 6), 8)
+    for start, feature in ((0, first), (42, second)):
+        expected = rigrope(resize_rig_features(feature, (2, 2, 3)).reshape(-1, 8)).reshape(36, -1)  # [36,8]
+        torch.testing.assert_close(plan.rigrope_cos[start : start + 36], expected.cos())
+        torch.testing.assert_close(plan.rigrope_sin[start : start + 36], expected.sin())
+    # Action rows only align the tables to the packed GEN stream; the cross-view pass never reads them.
+    action_rows = list(range(36, 42)) + list(range(78, 84))
+    torch.testing.assert_close(plan.rigrope_cos[action_rows], torch.ones(12, 8))
+    torch.testing.assert_close(plan.rigrope_sin[action_rows], torch.zeros(12, 8))
+    assert plan.cross_view_gather is not None
+    assert not set(plan.cross_view_gather.tolist()) & set(action_rows)
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_band_keys_no_pose_action_rows() -> None:
+    """With the band and the time-only fallback, neither gather reaches an action row."""
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
+
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_action_pack((3,), [None]),
+        geometry_position_encoding="rigrope_cross_view",
+        rigrope=RopeRigPE(16),
+        rigrope_missing_geometry="time_only",
+        rigrope_time_scale_s=4.0,
+        cross_view_band_radius=1,
+        include_frame_zero=True,
+    )
+
+    assert plan.rigrope_cos is not None and plan.cross_view_gather is not None
+    assert plan.cross_view_kv_gather is not None
+    assert int(plan.cross_view_gather.max()) < 36 and int(plan.cross_view_kv_gather.max()) < 36
+    torch.testing.assert_close(plan.rigrope_cos[36:], torch.ones(6, 16))
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_checks_features_against_their_own_vision_item() -> None:
+    """The vision/action interleave must not shift which item a feature is checked against."""
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features
+
+    rigrope = RopeRigPE(8)
+    with pytest.raises(ValueError, match="valid calibrated geometry for every multiview item"):
+        _multiview_maskless_geometry_for_test(
+            _rigrope_action_pack((1, 3), [None, None]), geometry_position_encoding="rigrope_cross_view", rigrope=rigrope
+        )
+    features = torch.randn(3, 2, 4, 6, 8)  # [V,T,H_vae,W_vae,8]
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_action_pack((3, 1), [features, None]), geometry_position_encoding="rigrope_cross_view", rigrope=rigrope
+    )
+    expected = rigrope(resize_rig_features(features, (2, 2, 3)).reshape(-1, 8)).reshape(36, -1)  # [36,8]
+    assert plan.rigrope_cos is not None and plan.rigrope_sin is not None
+    torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
+    torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
+    assert plan.cross_view_gather is not None and int(plan.cross_view_gather.max()) < 36
+
+
+def _random_rigid(*shape: int) -> torch.Tensor:  # [*shape,4,4]
+    rotation, _ = torch.linalg.qr(torch.randn(*shape, 3, 3))  # [*shape,3,3]
+    rotation = rotation * torch.linalg.det(rotation).sign()[..., None, None]  # det +1
+    transform = torch.eye(4).expand(*shape, 4, 4).clone()  # [*shape,4,4]
+    transform[..., :3, :3] = rotation
+    transform[..., :3, 3] = torch.randn(*shape, 3)
+    return transform
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("missing_geometry", ["no_rotation", "time_only"])
+@pytest.mark.parametrize("intrinsics", [False, True])
+def test_multiview_maskless_geometry_prope_lays_out_poses_per_token(missing_geometry: str, intrinsics: bool) -> None:
+    """Posed camera tokens take their (view, frame) pose; actions, unposed samples and padding the identity.
+
+    With intrinsics the poses are lift(K) @ T, which only a general inverse undoes.
+    """
+    pack = _rigrope_action_pack((3, 3), [None, None])
+    poses = _random_rigid(3, 2)  # [V,F,4,4]
+    if intrinsics:
+        lifted = torch.eye(4).repeat(3, 1, 1)  # [V,4,4]
+        lifted[:, 0, 0], lifted[:, 1, 1], lifted[:, 0, 2] = torch.tensor([0.3, 0.6, 1.2]), 0.5, -0.1
+        poses = lifted[:, None] @ poses  # [V,F,4,4]
+    pack.camera_relative_poses_per_vision_item = [poses, None]
+    q_heads, k_heads = torch.tensor([True, False]), torch.tensor([True])  # [H_local], [H_kv_local]
+    plan = _multiview_maskless_geometry_for_test(
+        pack,
+        geometry_position_encoding="prope_cross_view",
+        prope_intrinsics=intrinsics,
+        rigrope_missing_geometry=missing_geometry,
+        rigrope_head_masks=(q_heads, k_heads),
+        cross_view_band_radius=1,
+        include_frame_zero=True,
+        gen_seq_len=2 * (36 + 6) + 4,
+    )
+
+    assert plan.rigrope_q_heads is q_heads and plan.rigrope_k_heads is k_heads
+    assert plan.rigrope_cos is None
+    reference_to_camera, camera_to_reference = plan.prope_reference_to_camera, plan.prope_camera_to_reference
+    assert reference_to_camera is not None and camera_to_reference is not None
+    assert reference_to_camera.shape == (2 * (36 + 6) + 4, 4, 4)
+    # Views outer, frames, then the 2x3 spatial grid innermost.
+    torch.testing.assert_close(reference_to_camera[:36], poses.reshape(6, 4, 4).repeat_interleave(6, dim=0))
+    identity_rows = list(range(36, 2 * (36 + 6) + 4))
+    torch.testing.assert_close(reference_to_camera[identity_rows], torch.eye(4).expand(len(identity_rows), 4, 4))
+    torch.testing.assert_close(
+        camera_to_reference @ reference_to_camera, torch.eye(4).expand_as(reference_to_camera), atol=1e-5, rtol=0
+    )
+    assert plan.cross_view_gather is not None and plan.cross_view_kv_gather is not None
+    action_rows = set(range(36, 42)) | set(range(78, 84))
+    assert not set(plan.cross_view_gather.tolist()) & action_rows
+    assert not set(plan.cross_view_kv_gather.tolist()) & action_rows
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_prope_refuses_what_it_cannot_encode() -> None:
+    pack = _rigrope_action_pack((3, 1), [None, None])
+    pack.camera_relative_poses_per_vision_item = [None, None]
+    with pytest.raises(ValueError, match="valid camera geometry for every multiview item"):
+        _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope_cross_view")
+    with pytest.raises(ValueError, match="rigrope_missing_geometry"):
+        _multiview_maskless_geometry_for_test(
+            pack, geometry_position_encoding="prope_cross_view", rigrope_missing_geometry="mrope"
+        )
+    # A single-view sample needs no poses even when failing closed.
+    pack.camera_relative_poses_per_vision_item = [_random_rigid(3, 2), None]
+    plan = _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope_cross_view")
+    assert plan.prope_reference_to_camera is not None
+    pack.camera_relative_poses_per_vision_item = [_random_rigid(3, 3), None]
+    with pytest.raises(ValueError, match="do not match 3 views"):
+        _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope_cross_view")
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("has_geometry", [False, True])
+@pytest.mark.parametrize("missing_geometry", ["mrope", "no_rotation"])
+def test_multiview_maskless_geometry_rigrope_fallback_marks_tokens_with_geometry(
+    has_geometry: bool, missing_geometry: str
+) -> None:
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
+
+    features = torch.randn(3, 2, 4, 6, 8) if has_geometry else None  # [V,T,H_vae,W_vae,8]
+    q_heads, k_heads = torch.tensor([True, False]), torch.tensor([True])  # [H_local], [H_kv_local]
+    plan = _multiview_maskless_geometry_for_test(
+        _rigrope_mixed_pack([features, None]),
+        geometry_position_encoding="rigrope_cross_view",
+        rigrope=RopeRigPE(8),
+        rigrope_missing_geometry=missing_geometry,
+        rigrope_head_masks=(q_heads, k_heads),
+    )
+
+    assert plan.rigrope_q_heads is q_heads and plan.rigrope_k_heads is k_heads
+    assert plan.rigrope_cos is not None and plan.rigrope_sin is not None
+    if missing_geometry == "mrope":
+        assert plan.rigrope_valid is not None
+        assert plan.rigrope_valid.tolist() == [has_geometry] * 36 + [False] * 12
+        return
+    # "no_rotation" needs no mask: a sample without geometry rotates by zero angles.
+    assert plan.rigrope_valid is None
+    if not has_geometry:
+        assert torch.equal(plan.rigrope_cos[:36], torch.ones(36, 8))
+        assert torch.equal(plan.rigrope_sin[:36], torch.zeros(36, 8))
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("time_scale", [1.0, 4.0])
+def test_multiview_maskless_geometry_rigrope_time_only_rotates_by_latent_frame_time(time_scale: float) -> None:
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
+
+    rigrope = RopeRigPE(16)
+    pack = _rigrope_mixed_pack([None, None])
+    assert pack.vision is not None
+    pack.vision.seconds_per_frame[0] = 0.4
+    plan = _multiview_maskless_geometry_for_test(
+        pack,
+        geometry_position_encoding="rigrope_cross_view",
+        rigrope=rigrope,
+        rigrope_missing_geometry="time_only",
+        rigrope_time_scale_s=time_scale,
+        cross_view_band_radius=1,
+    )
+
+    assert plan.rigrope_valid is None and plan.rigrope_cos is not None and plan.rigrope_sin is not None
+    # Three views of two latent frames of 2x3 tokens, view-outer: frame 0 at 0 s, frame 1 at 0.4 s.
+    coords = torch.zeros(36, 8)  # [N,8]
+    coords[:, 7] = torch.tensor([0.0, 0.4 / time_scale]).repeat_interleave(6).repeat(3)  # [V*F*S]
+    expected = rigrope(coords).reshape(36, -1)  # [36,16]
+    torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
+    torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
+    # Head dim 16 gives one frequency per channel, so only the time slots (7 and 15) rotate.
+    assert torch.count_nonzero(expected[:, :7]) == torch.count_nonzero(expected[:, 8:15]) == 0
+    assert plan.cross_view_kv_gather is not None
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_rigrope_time_only_refuses_an_unknown_fps() -> None:
+    from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
+
+    pack = _rigrope_mixed_pack([None, None])
+    assert pack.vision is not None
+    # The single-view sample never enters the cross-view pass, so only the rig's fps matters.
+    pack.vision.seconds_per_frame_known = [True, False]
+    options: dict = dict(
+        geometry_position_encoding="rigrope_cross_view", rigrope=RopeRigPE(16), rigrope_missing_geometry="time_only"
+    )
+    assert _multiview_maskless_geometry_for_test(pack, **options).rigrope_cos is not None
+    pack.vision.seconds_per_frame_known = [False, True]
+    with pytest.raises(ValueError, match="needs the fps of every multiview item"):
+        _multiview_maskless_geometry_for_test(pack, **options)
+    # Posed items carry real timestamps, and the other fallbacks never read the rate.
+    for missing_geometry in ("no_rotation", "mrope"):
+        _multiview_maskless_geometry_for_test(pack, **{**options, "rigrope_missing_geometry": missing_geometry})
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_prope_refuses_the_cross_view_band() -> None:
+    pack = _multiview_maskless_pack(camera_relative_poses_per_vision_item=[torch.eye(4).expand(3, 2, 4, 4)])
+    with pytest.raises(ValueError, match="PRoPE does not support the maskless cross-view band"):
+        _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope", cross_view_band_radius=1)
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_prope_needs_no_poses_for_single_camera_samples() -> None:
+    """A mixed pack's single-camera sample keeps its ordinary partition, so it needs no poses."""
+    pack = _multiview_maskless_pack(
+        sample_lens=[1, 1],
+        vision=ModalityData(
+            tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
+            token_shapes=[(6, 2, 3), (2, 2, 3)],
+            condition_mask=[torch.ones(6), torch.ones(2)],  # list[[T]]
+            seconds_per_frame=[1.0, 1.0],
+        ),
+        num_vision_items_per_sample=[1, 1],
+        num_views_per_vision_item=[3, 1],
+        camera_relative_poses_per_vision_item=[_random_rigid(3, 2), None],
+    )
+
+    plan = _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope")
+
+    assert plan.camera_relative_pose is not None
+    pack.camera_relative_poses_per_vision_item = [None, None]
+    with pytest.raises(ValueError, match="valid camera geometry for every multiview item"):
+        _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope")
+
+
 @pytest.mark.L0
 def test_multiview_maskless_geometry_accepts_a_training_step() -> None:
     """Grad mode is not a gate: the decomposition's backward is correct, so training takes it too.
@@ -2052,7 +2487,6 @@ def test_multiview_maskless_geometry_accepts_a_training_step() -> None:
     [
         pytest.param(dict(sample_lens=[1, 1]), "two samples", id="two_samples"),
         pytest.param(dict(vision=None, num_views_per_vision_item=None), "no camera stream", id="no_vision"),
-        pytest.param(dict(num_views_per_vision_item=None), "no per-camera view counts", id="no_view_metadata"),
     ],
 )
 def test_multiview_maskless_geometry_refuses_a_pack_it_cannot_express(overrides: dict, reason: str) -> None:
@@ -2098,6 +2532,47 @@ def test_multiview_maskless_geometry_accepts_a_lidar_only_sample() -> None:
     assert plan.num_views == (1,)
     assert plan.token_shapes == ((3, 2, 2),)
     assert plan.num_gen_tokens == 3 * 2 * 2
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_reads_metadata_free_vision_as_single_view() -> None:
+    """The mixed Super streams omit camera counts, which only a multiview dataset writes."""
+    pack = _multiview_maskless_pack(num_views_per_vision_item=None)
+
+    plan = _multiview_maskless_geometry_for_test(pack)
+
+    assert plan.num_views == (1,)
+    assert plan.items_per_sample == (1,)
+    assert plan.token_shapes == ((6, 2, 3),)
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_reads_metadata_free_single_view_action() -> None:
+    """The inherited Super Action stream is one camera plus one one-view action control."""
+    pack = _mask_items_action_pack(
+        num_views=1,
+        with_view_metadata=False,
+        with_action_view_metadata=False,
+    )
+
+    plan = _multiview_maskless_geometry_for_test(pack)
+
+    assert plan.num_views == (1, 1)
+    assert plan.items_per_sample == (2,)
+    assert plan.is_control == (False, True)
+    assert plan.view_axis == (0, 0)
+
+
+@pytest.mark.L0
+@torch.no_grad()
+def test_multiview_maskless_geometry_refuses_metadata_free_action_on_a_rig() -> None:
+    """Without action view counts every action item of a multi-camera pack would land on view 0."""
+    pack = _mask_items_action_pack(num_views=2, with_action_view_metadata=False)
+
+    with pytest.raises(ValueError, match="num_views_per_action_item"):
+        _multiview_maskless_geometry_for_test(pack)
 
 
 @pytest.mark.L0
@@ -2472,6 +2947,8 @@ def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
     network = SimpleNamespace(
         multiview_backend="maskless",
         natten_parameter_list=None,
+        rigrope=None,
+        _rigrope_head_masks=lambda device: None,
         config=SimpleNamespace(
             multiview_attention_config=MultiviewAttentionConfig(
                 backend="maskless",
@@ -2498,6 +2975,65 @@ def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
     )
 
     assert (attention_meta.multiview_maskless is not None) is takes_folds
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "control_attends_sensor,takes_folds",
+    [pytest.param(True, False, id="dense"), pytest.param(False, True, id="folds")],
+)
+def test_maskless_per_camera_prope_single_camera_packs_need_no_poses(
+    control_attends_sensor: bool, takes_folds: bool
+) -> None:
+    """Per-camera PRoPE acts only between cameras, so a single-camera pack carries no poses.
+
+    The model gives single-camera items no poses. Such a pack takes the dense shortcut when
+    it may, and otherwise the folds, without failing the multiview geometry check.
+    """
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
+
+    pack = _multiview_maskless_pack(
+        sample_lens=[2],
+        vision=ModalityData(
+            tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
+            token_shapes=[(6, 2, 3), (6, 2, 3)],
+            condition_mask=[torch.ones(6), torch.zeros(6)],  # list[[T]]
+            seconds_per_frame=[1.0, 1.0],
+        ),
+        num_vision_items_per_sample=[2],
+        num_views_per_vision_item=[1, 1],
+    )
+    pack.camera_relative_poses_per_vision_item = [None, None]
+    network = SimpleNamespace(
+        multiview_backend="maskless",
+        natten_parameter_list=None,
+        rigrope=None,
+        _rigrope_head_masks=lambda device: None,
+        config=SimpleNamespace(
+            multiview_attention_config=MultiviewAttentionConfig(
+                backend="maskless",
+                geometry_position_encoding="prope",
+                mask=MultiviewAttentionMaskConfig(
+                    attention_scope="decomposed",
+                    control_attends_sensor=control_attends_sensor,
+                ),
+            )
+        ),
+    )
+    attention_meta = SimpleNamespace(multiview_maskless=None)
+
+    Cosmos3VFMNetwork._prepare_multiview_attention(
+        cast(Cosmos3VFMNetwork, network),
+        pack,
+        cast(SequencePack, {"full_only_seq": torch.zeros(2 * 6 * 2 * 3, 1)}),
+        cast(SplitInfo, attention_meta),
+    )
+
+    assert (attention_meta.multiview_maskless is not None) is takes_folds
+    if takes_folds:
+        assert attention_meta.multiview_maskless.camera_relative_pose is None
 
 
 @pytest.mark.L0
@@ -2531,6 +3067,8 @@ def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_r
     network = SimpleNamespace(
         multiview_backend="maskless",
         natten_parameter_list=None,
+        rigrope=None,
+        _rigrope_head_masks=lambda device: None,
         config=SimpleNamespace(
             multiview_attention_config=MultiviewAttentionConfig(
                 backend="maskless",

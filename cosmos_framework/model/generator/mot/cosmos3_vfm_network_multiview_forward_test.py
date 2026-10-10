@@ -36,6 +36,8 @@ from cosmos_framework.configs.base.defaults.multiview_attention import Multiview
 from cosmos_framework.data.generator.action.utils.transforms import build_sequence_plan_from_mode
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.mot.multiview_attention import resolve_multiview_backend
+from cosmos_framework.model.generator.mot.parallelize_unified_mot import _to_empty_preserving_buffers
+from cosmos_framework.model.generator.mot.rigrope import RopeRigPE
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.packers import (
@@ -126,6 +128,9 @@ class _StubLanguageModel(torch.nn.Module):
         self.model.embed_tokens = torch.nn.Embedding(vocab_size, HIDDEN_SIZE)
         self.seen_attention_mask: SplitInfo | None = None
 
+    def init_weights(self, buffer_device: torch.device | None) -> None:
+        pass
+
     def forward(
         self,
         input_pack: SequencePack,
@@ -202,8 +207,16 @@ def _multiview_network(
     temporal_window_seconds: tuple[float, float] | None = None,
     deduplicate_cross_view: bool = False,
     action_conditioning: bool = False,
+    geometry_position_encoding: str = "baseline",
+    materialize: bool = True,
+    pre_geometry_export: bool = False,
 ) -> Cosmos3VFMNetwork:
-    """The network under test, on the stub reasoner, with the multiview mask configured."""
+    """The network under test, on the stub reasoner, with the multiview mask configured.
+
+    ``materialize=False`` returns the network as built, so a caller can build it on meta.
+    ``pre_geometry_export`` hands the attention config over as a checkpoint exported before
+    the geometry modes and bands saved it: plain JSON with only its three original keys.
+    """
     from cosmos_framework.configs.base.defaults.multiview_attention import (
         MultiviewAttentionConfig,
         MultiviewAttentionMaskConfig,
@@ -213,6 +226,23 @@ def _multiview_network(
         Cosmos3VFMNetworkConfig,
     )
 
+    attention_config = MultiviewAttentionConfig(
+        geometry_position_encoding=geometry_position_encoding,
+        deduplicate_cross_view=deduplicate_cross_view,
+        # Pinned rather than "auto" so the stream padding and the mask's block size are the
+        # same on every host this runs on, FlashAttention-4 present or not.
+        backend="maskless" if maskless_attention else "flex_triton",
+        mask=MultiviewAttentionMaskConfig(
+            # The scope the folds are the maskless alternative to, so the flex route this
+            # harness compares against is the one a caller would be choosing between.
+            attention_scope="decomposed",
+            decomposed_temporal_window_seconds=temporal_window_seconds,
+            # "maskless" requires it, and it is inert on a batch with no control item.
+            control_attends_sensor=True,
+        ),
+    )
+    exported = OmegaConf.create(attrs.asdict(attention_config))
+    pre_geometry = OmegaConf.create({key: exported[key] for key in ("backend", "mask", "deduplicate_cross_view")})
     language_model = _StubLanguageModel()
     config = Cosmos3VFMNetworkConfig(
         vlm_config=language_model.config,
@@ -227,22 +257,10 @@ def _multiview_network(
         max_latent_w=LATENT_HW,
         max_latent_t=LATENT_T,
         joint_attn_implementation="multiview",
-        multiview_attention_config=MultiviewAttentionConfig(
-            deduplicate_cross_view=deduplicate_cross_view,
-            # Pinned rather than "auto" so the stream padding and the mask's block size are the
-            # same on every host this runs on, FlashAttention-4 present or not.
-            backend="maskless" if maskless_attention else "flex_triton",
-            mask=MultiviewAttentionMaskConfig(
-                # The scope the folds are the maskless alternative to, so the flex route this
-                # harness compares against is the one a caller would be choosing between.
-                attention_scope="decomposed",
-                decomposed_temporal_window_seconds=temporal_window_seconds,
-                # "maskless" requires it, and it is inert on a batch with no control item.
-                control_attends_sensor=True,
-            ),
-        ),
+        multiview_attention_config=pre_geometry if pre_geometry_export else attention_config,
     )
-    return Cosmos3VFMNetwork(language_model, config).to(device=device, dtype=torch.float32)
+    network = Cosmos3VFMNetwork(language_model, config)
+    return network.to(device=device, dtype=torch.float32) if materialize else network
 
 
 def _run_forward(
@@ -437,3 +455,55 @@ def test_opt_in_action_conditioning_train_all_ragged_views_and_action_encoder() 
     grads = [parameter.grad for parameter in network.action2llm.parameters() if parameter.grad is not None]
     assert grads and all(torch.isfinite(grad).all() for grad in grads)
     assert sum(grad.abs().sum() for grad in grads) > 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("cpu_offload", [False, True], ids=["to_empty_first", "cpu_offload"])
+def test_init_weights_materializes_the_rigrope_frequency_table(cpu_offload: bool) -> None:
+    """A meta-built network gets its fixed frequencies back, as ``build_net`` materializes it.
+
+    The table is a non-persistent buffer, so the checkpoint load that follows cannot fill it.
+    The ordinary path runs ``to_empty`` and then ``init_weights``; the CPU-offload path runs
+    ``init_weights`` on meta and then materializes, keeping every buffer no longer on meta.
+    """
+    device = torch.device("cpu")
+    with torch.device("meta"):
+        network = _multiview_network(
+            maskless_attention=True,
+            device=device,
+            geometry_position_encoding="rigrope_cross_view",
+            materialize=False,
+        )
+    assert network.rigrope is not None and network.rigrope.freq_matrix.is_meta
+    if cpu_offload:
+        network.init_weights(buffer_device=device)
+        _to_empty_preserving_buffers(network, device=device, recurse=True)
+    else:
+        network.to_empty(device=device)
+        network.rigrope.freq_matrix.fill_(float("nan"))  # [8,D/2]
+        network.init_weights(buffer_device=device)
+
+    rigrope = network.rigrope
+    reference = RopeRigPE(
+        rigrope.head_dim, max_freq_exponent=rigrope.max_freq_exponent, min_freq_exponent=rigrope.min_freq_exponent
+    )
+    torch.testing.assert_close(network.rigrope.freq_matrix, reference.freq_matrix, rtol=0, atol=0)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("maskless_attention", [True, False], ids=["maskless", "flex_triton"])
+def test_a_checkpoint_exported_before_the_geometry_modes_builds_with_them_off(maskless_attention: bool) -> None:
+    """Every field added since then is restored to its default, which leaves the baseline running."""
+    network = _multiview_network(
+        maskless_attention=maskless_attention, device=torch.device("cpu"), pre_geometry_export=True
+    )
+
+    restored = network.config.multiview_attention_config
+    defaults = MultiviewAttentionConfig()
+    for field in attrs.fields(MultiviewAttentionConfig):
+        if field.name not in ("backend", "mask"):
+            assert getattr(restored, field.name) == getattr(defaults, field.name), field.name
+    assert restored.backend == ("maskless" if maskless_attention else "flex_triton")
+    assert network.rigrope is None

@@ -53,12 +53,11 @@ class MergeAttentionsBridge(torch.autograd.Function):
       exact inverse — undoes ``forward_fn`` so that ``inverse_fn ∘
       forward_fn`` is the identity on the inner tensors.
 
-    For ``forward_fn`` that is linear with constant-fill (cat-pad,
-    permutation, scatter with zeros, …), the *gradient* w.r.t. the
-    inner input is also ``inverse_fn`` applied to the upstream gradient
-    — so the same callable serves both backward roles below.  If your
-    forward is not in this class (e.g. it has trainable parameters, or
-    is non-linear), do not use this bridge.
+    For shape-only ``forward_fn`` (cat-pad, permutation, scatter with zeros,
+    …), the gradient operator is also ``inverse_fn``. For a fixed invertible
+    linear feature transform, supply ``gradient_fn`` separately: restoring
+    saved outputs needs the inverse, whereas gradients need the transpose.
+    Transforms with trainable parameters or nonlinear transforms are unsupported.
 
     Backward:
       Runs *after* ``merge_attentions``' backward (autograd is
@@ -78,6 +77,7 @@ class MergeAttentionsBridge(torch.autograd.Function):
         lse_inner: torch.Tensor,
         forward_fn: BridgeFn,
         inverse_fn: BridgeFn,
+        gradient_fn: BridgeFn | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         out_full, lse_full = forward_fn(out_inner, lse_inner)
         out_full = out_full.contiguous()
@@ -87,6 +87,8 @@ class MergeAttentionsBridge(torch.autograd.Function):
         # by merge_attentions.backward before our backward runs).
         ctx.save_for_backward(out_inner, lse_inner, out_full, lse_full)
         ctx.inverse_fn = inverse_fn
+        ctx.gradient_fn = inverse_fn if gradient_fn is None else gradient_fn
+        ctx.num_inputs = len(ctx.needs_input_grad)
         return out_full, lse_full
 
     @staticmethod
@@ -94,7 +96,7 @@ class MergeAttentionsBridge(torch.autograd.Function):
         ctx,
         grad_out_full: torch.Tensor,
         grad_lse_full: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, None]:
+    ) -> tuple[torch.Tensor | None, ...]:
         out_inner, lse_inner, out_full, lse_full = ctx.saved_tensors
         inverse_fn: BridgeFn = ctx.inverse_fn
         # By now merge_attentions.backward has already run and patched
@@ -106,13 +108,11 @@ class MergeAttentionsBridge(torch.autograd.Function):
         patched_out_inner, patched_lse_inner = inverse_fn(out_full, lse_full)
         out_inner.data.copy_(patched_out_inner.data)
         lse_inner.data.copy_(patched_lse_inner.data)
-        # For linear-with-constant-fill forward_fn (cat-pad, permute,
-        # scatter-with-zeros, …), the backward gradient operator equals
-        # inverse_fn.  (Constant rows added by forward_fn are not
-        # functions of the inner inputs, so their gradient does not flow
-        # back; the remaining rows pass through.)
-        grad_out_inner, grad_lse_inner = inverse_fn(grad_out_full, grad_lse_full)
-        return grad_out_inner, grad_lse_inner, None, None
+        # Shape-only transforms share their inverse and gradient operator.
+        # Camera SE(3) output transforms instead use the transpose for gradients.
+        # Constant rows added by forward_fn do not propagate gradients.
+        grad_out_inner, grad_lse_inner = ctx.gradient_fn(grad_out_full, grad_lse_full)
+        return (grad_out_inner, grad_lse_inner, None, None, None)[: ctx.num_inputs]
 
 
 class DisjointQueriesBridge(torch.autograd.Function):

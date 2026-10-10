@@ -29,26 +29,20 @@ from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
-from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
-from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan, build_sequence_plans_from_data_batch
-from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
-from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TEACHER_FORCING_KV_IMPLEMENTATIONS,
     TeacherForcingKVImplementation,
     TeacherForcingReplayPolicyConfig,
 )
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
+from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
     build_interactive_multiview_mask_items,
 )
-from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.maskless_attention import require_gapped_replay
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
@@ -62,9 +56,8 @@ from cosmos_framework.model.generator.mot.post_saturation.runtime import (
 from cosmos_framework.model.generator.mot.post_saturation.static_compile import (
     validate_ar_static_und_cache_lengths,
 )
-from cosmos_framework.model.generator.teacher_forcing import (
-    make_teacher_forcing_clean_pack,
-)
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
+from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.frustum_retrieval import FrustumHistorySelector
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
@@ -73,6 +66,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TeacherForcingMemoryState,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
+from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.multiview_ar import (
     MultiviewTransferARBackend,
     generate_multiview_transfer_ar_chunk,
@@ -81,12 +75,18 @@ from cosmos_framework.model.generator.utils.multiview_ar import (
     sample_joint_transfer_ar,
 )
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
+from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan, build_sequence_plans_from_data_batch
 from cosmos_framework.data.generator.sequence_packing.autoregressive import (
     pack_input_sequence_autoregressive,
     pack_input_sequence_autoregressive_batch,
     pack_multiview_action_temporal_causal,
     resolve_text_system_prompt,
 )
+from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.data.generator.sequence_packing.packers import (
+    make_teacher_forcing_clean_pack,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
 _ARBranch = Literal["conditional", "unconditional"]

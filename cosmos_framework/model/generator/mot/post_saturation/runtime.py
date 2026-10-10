@@ -5,11 +5,11 @@
 
 from typing import Any
 
-from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.model.generator.mot.post_saturation.cuda_graph import ARPostSaturationCUDAGraphManager
 from cosmos_framework.model.generator.mot.post_saturation.static_compile import (
     _is_post_saturation_static_compile_frame,
 )
+from cosmos_framework.data.generator.sequence_packing import PackedSequence
 
 AR_POST_SATURATION_CUDA_GRAPH_MODE = "cuda-graph"
 AR_POST_SATURATION_STATIC_COMPILE_MODES = frozenset({"static-compile", AR_POST_SATURATION_CUDA_GRAPH_MODE})

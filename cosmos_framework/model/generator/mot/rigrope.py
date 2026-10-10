@@ -81,12 +81,18 @@ class RopeRigPE(nn.Module):
             col += count
         return freq_matrix.float()  # [8,D/2]
 
-    def reset_parameters(self) -> None:
-        """Re-initialise frequency buffer (needed after meta -> CUDA)."""
+    def reset_parameters(self, device: torch.device | None = None) -> None:
+        """Re-initialise frequency buffer (needed after meta -> CUDA).
+
+        ``to_empty`` leaves the buffer uninitialized and, being non-persistent, no checkpoint
+        restores it. ``device`` places it there, which also materializes a buffer still on meta;
+        by default it stays where it is.
+        """
         new = self._build_freq_matrix(
             self.feature_dim, self.head_dim // 2, self.max_freq_exponent, self.min_freq_exponent
         )  # [8,D/2]
-        self.freq_matrix.data.copy_(new.to(self.freq_matrix.device))  # [8,D/2]
+        target = self.freq_matrix.device if device is None else device
+        self.register_buffer("freq_matrix", new.to(target), persistent=False)  # [8,D/2]
 
     def forward(self, coords: torch.Tensor) -> torch.Tensor:  # [...,8] -> [N,1,1,D]
         """Compute TE-compatible RoPE; leading dimensions are flattened."""

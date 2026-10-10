@@ -707,6 +707,24 @@ def _synchronize_context_parallel_sampling_batch(
     return synchronized_batch
 
 
+def prepare_training_sampling_batch(
+    model: Any,
+    data_batch: dict[str, Any],
+) -> dict[str, Any]:
+    """Move raw video in the selected sampling batch to CUDA without CP collectives.
+
+    Move video to CUDA regardless of tensor size, CP configuration, or whether
+    it is already normalized floating-point data. Preserve dtype and the
+    preprocessing flag, and leave the caller's host media references unchanged.
+    """
+    sampling_batch = data_batch
+    video_key = getattr(model, "input_video_key", "video")
+    if video_key in sampling_batch:
+        sampling_batch = dict(sampling_batch)
+        sampling_batch[video_key] = misc.to(sampling_batch[video_key], device="cuda")  # nested [B,C,T,H,W]
+    return sampling_batch
+
+
 def _replica_identity(model: Any, rank: int) -> tuple[int, bool]:
     """Return this rank's sample-replica index and whether it owns that replica.
 
@@ -909,6 +927,7 @@ class EveryNDrawSample(EveryN):
             context = nullcontext
 
         data_batch = _synchronize_context_parallel_sampling_batch(model, data_batch, self.n_viz_sample)
+        data_batch = prepare_training_sampling_batch(model, data_batch)
 
         tag = "ema" if self.is_ema else "reg"
         sample_counter = getattr(trainer, "sample_counter", iteration)

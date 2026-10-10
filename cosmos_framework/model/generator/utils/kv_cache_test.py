@@ -9,15 +9,8 @@ import pytest
 import torch
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_gen_seq,
-    get_num_real_samples,
-    has_pad_segment,
-    sequence_pack_from_packed_sequence,
-)
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
     three_way_attention_with_memory,
@@ -42,6 +35,13 @@ from cosmos_framework.model.generator.utils.kv_cache import (
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_gen_seq,
+    get_num_real_samples,
+    has_pad_segment,
+    sequence_pack_from_packed_sequence,
 )
 
 
