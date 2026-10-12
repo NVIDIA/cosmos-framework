@@ -72,6 +72,12 @@ Keep this one skill entrypoint for both workflows.
   not a newly trained checkpoint.
 - Use `status` / `logs` for evidence. `cancel ... --approve` stops native jobs.
   An `UNKNOWN` launch is an investigation gate, never permission to resubmit.
+  Lost/invalid SLURM submission replies now enter bounded core reconciliation;
+  review `execution.slurm.submission_reconcile_seconds` (default 120). Existing
+  jobs are adopted. Unobserved attempts require a shared POSIX-lock launch fence
+  before replacement, and consume the reviewed retry caps even if they appear
+  late only to be rejected. Conflicts/unavailable evidence remain blocked.
+  Do not blanket-cancel a blocked result or repeat sbatch outside the controller.
   A `scheduler_unavailable` observation is not a failed trial: the controller
   retries read-only SLURM queries within the original deadline. Do not wrap a
   transient status error in blanket cancellation or restart a paid request.

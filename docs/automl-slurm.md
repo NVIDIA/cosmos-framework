@@ -141,8 +141,9 @@ build changes its identity even while the development version stays fixed.
 See [development version and build identity](automl.md#development-version-and-build-identity).
 
 Pending jobs remain pending. Submission intent is durable before the scheduler
-RPC; a lost response is reconciled by unique job name and owner. No or multiple
-matches is `UNKNOWN`, never permission to submit again. Native `COMPLETED`
+RPC; a lost response enters automatic bounded reconciliation by unique job name
+and owner. An existing job is adopted without resubmission. Multiple matches or
+unresolved evidence block the search, not authorize another launch. Native `COMPLETED`
 requires exit `0:0`, matching worker/batch job IDs, successful receipts, and
 native workload artifacts. A receipt from another node is not checked as if
 its PID belonged to the CPU controller.
@@ -167,6 +168,44 @@ and the active trial's `observed_state: UNKNOWN`; it does not label the native
 job complete or canceled. Worker and scheduler deadlines remain effective.
 Inspect native status before resuming with the same engine/identity; never erase
 cancellation markers or automatically submit a replacement.
+
+### Submission reconciliation
+
+`execution.slurm.submission_reconcile_seconds` defaults to **120** (1–900).
+A timeout, transport/exit error or invalid `sbatch` acknowledgement keeps the
+candidate reserved while the controller queries both queue and accounting.
+The reconciliation window is persisted across resume and capped by the original
+experiment deadline; in-flight scheduler calls retain their bounded timeouts.
+Read-only reconciliation needs no additional allocation or LLM-call allowance.
+
+Repeated healthy observations with no matching job can permit a replacement
+only after a shared-filesystem launch fence is closed atomically. The staged
+batch supervisor claims the same fence before modifying worker/execution files
+or launching the training/evaluation step. If it has already claimed the fence,
+the controller waits for its identity instead of replacing it. A late batch for
+a closed fence exits without running a workload or overwriting its receipts.
+This protocol requires shared POSIX `flock` semantics on the controller and
+compute nodes; a missing, invalid or unavailable fence blocks replacement.
+Worker evidence or conflicting identities also block it. Empty scheduler output
+alone is never proof that the submission failed.
+
+A fenced, unobserved attempt uses the existing recovery caps below. Every
+uncertain submission counts conservatively toward the allocation envelope,
+including one that later appears only to be rejected by the fence. Fencing
+prevents duplicate workloads, not a possible short late scheduler allocation;
+the original native deadline still bounds that allocation. With retry caps zero,
+the attempt ends in error rather than allocating again. A replacement retains
+the candidate, seed, promotion source and original deadline, gets fresh paths
+and a retry-linked record, and does not repeat an LLM proposal.
+
+`_submission_reconciliation.json` records observations and decisions. When the
+window expires with unavailable or conflicting evidence, the controller returns
+experiment `ERROR` with an explicit blocked reason, retaining the unresolved
+trial rather than claiming it terminated. Verification wrappers must not turn
+this result into blanket cancellation. Use the same manifest/build when resuming;
+never clear an old fence, receipt or cancellation marker. New local core wheels
+stage the supervisor/fence helpers automatically; this core-only correction does
+not require rebuilding the training image. Historical runs are not migrated.
 
 `cancel --approve` requests native cancellation of owned queued/running jobs.
 Catchable controller termination also requests cancellation; uncatchable
@@ -210,13 +249,15 @@ backoff and controller downtime all consume the **original** elapsed deadline.
 A retry is refused unless a whole allocation still fits. No time, GPU, dataset,
 step or LLM-call budget is silently increased.
 
-Automatic retries cover terminal `NODE_FAIL`, `BOOT_FAIL` and `PREEMPTED`.
+Automatic retries cover terminal `NODE_FAIL`, `BOOT_FAIL` and `PREEMPTED`, and
+unobserved submissions fenced before workload start as described above.
 For a stalled active allocation, the controller can classify a node as unresponsive
 only after matching the owned job to a node with native `DOWN` or
 `NOT_RESPONDING` evidence. `DRAIN` alone, an NCCL timeout, OOM, code/configuration
 errors and elapsed/workload timeouts are **not** automatic-retry evidence.
-Scheduler-query outages still retry only read-only observations. Missing or
-conflicting launch identities never permit a replacement.
+Scheduler-query outages still retry only read-only observations. Conflicting
+identities always block replacement; an unobserved submission requires the
+closed, unclaimed launch fence described above.
 
 The staged worker and batch supervisor publish independent heartbeats. A live
 worker heartbeat does not establish training progress: the Framework adapter

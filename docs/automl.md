@@ -711,3 +711,56 @@ not that missing signal. GEPA progress publication/no-progress monitoring remain
 a follow-up gap, not a regression introduced by this split. Independent non-author
 validation, core distribution/dependency review and release integration are still
 required before the coordinated merge.
+
+### Automatic submission reconciliation correction (2026-10-12)
+
+The lost `sbatch` replies above exposed a missing controller capability, not an
+algorithm failure. A new local core build implements
+[bounded submission reconciliation](automl-slurm.md#submission-reconciliation):
+adopt an existing job, or atomically fence an unobserved attempt before using the
+approved retry allowance. Conflicting identities, unavailable scheduler evidence
+or an unavailable fence return a blocked error without blanket cancellation or
+another launch. A late fenced batch cannot start the workload or overwrite its
+receipts, although it may consume a short native allocation. Both retry caps
+still default to zero; the earlier matrix's zero-retry policy would not authorize
+automatic replacements unchanged.
+
+The local core wheel remains **1.0.0.dev0**, SHA256
+`8ea4df261d92cecb2a5579fc10c04a111851c95fc3cd388bc4e30974e07265c0`, with
+`engine_build=7cdb3a60e88fd91322595b4f53d0307c6f04e85137045f871f2821a53f266ab3`.
+All 19 runtime Python files matched the source and the installed wheel. A fresh
+Python 3.12 controller imported the unchanged Framework **1.2.2** adapter without
+Torch; this planning-only installation is not a complete GPU training environment.
+No version or dependency changes were made for this correction.
+
+Against the installed wheel, **28 existing core tests**, **14 existing adapter
+tests**, and **112 CPU operational checks** passed:
+
+- **32 submission checks:** real subprocess acknowledgement timeouts against a
+  simulated scheduler, delayed visibility/adoption, absence fencing, blocked
+  outages/conflicts, late and duplicate batch rejection, bounded lock contention,
+  independent-process claim/fence races, restart recovery, retry-linked Framework
+  records, exhausted/disabled caps, cancellation, LLM proposal reuse and GEPA
+  evaluation-batch retry accounting.
+- **54 existing recovery checks:** all numerical/LLM controller modes and GEPA,
+  terminal infrastructure failures, successful-parent checkpoint selection,
+  watchdogs, original deadlines and global retry/example caps; all 89 simulated
+  allocations reached terminal states.
+- **26 lifecycle/outage checks:** pause/resume, cancellation, deadlines, startup,
+  scheduler visibility, identity/receipt validation and bounded query outages.
+
+Ruff lint/format, both AutoML skill validations, discovery/local documentation
+links and whitespace checks passed. No new unit tests were added; the existing
+documentation-link check was corrected to distinguish external links and local
+anchors. The future matrix wrapper preserves a returned blocked state instead
+of converting it into an exception and blanket cancellation. Historical wrappers,
+ledgers, wheels and completed runs were not changed.
+
+These checks used local CPU subprocesses, a simulated scheduler and loopback LLM
+responses, **not live SLURM, GPUs or external API calls**. Cross-node shared
+filesystem `flock` semantics and live fault recovery still need validation. The
+core stages its supervisor/fence from the controller wheel, so this correction
+does not require a training-image rebuild; no existing cluster controller was
+upgraded. The earlier GPU results used the earlier core hash and do not validate
+this new build. The separate GEPA progress-file gap above remains open, as do
+the core distribution/dependency review and coordinated merge gates.

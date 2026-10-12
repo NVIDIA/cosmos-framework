@@ -156,6 +156,9 @@ def test_discovery_and_documentation_links():
     assert yaml.safe_load(canonical.read_text().split("---", 2)[1])["name"] == "cosmos-automl"
     for source in [canonical, ROOT / "docs/automl.md"]:
         for target in re.findall(r"\]\(([^)]+)\)", source.read_text()):
+            if target.startswith(("https://", "http://", "#")):
+                continue
+            target = target.split("#", 1)[0]
             assert (source.parent / target).exists(), target
 
 
