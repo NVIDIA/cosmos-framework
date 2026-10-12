@@ -62,8 +62,10 @@ fields and a longer ``mask_mod``, not new varlen bookkeeping.
 from __future__ import annotations
 
 import math
+import operator
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields
+from functools import lru_cache
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask
@@ -1202,14 +1204,45 @@ def _get_flash_flex_backend(device: torch.device) -> FlexBackend:
     return FlexBackend(name="flash", block_size=flash_backend_block_size(device), kernel_options=kernel_options)
 
 
+@lru_cache(maxsize=1)
+def _flash_sparse_backward_unavailable_reason() -> str | None:
+    """Probe torch's support for masked FA4 backward without executing a GPU kernel.
+
+    Importability alone is insufficient: torch 2.10 can find FA4 while rejecting
+    every nontrivial mask in backward. Ask its own capability check using an
+    identity score graph and a nontrivial mask, rather than guessing from a version.
+    """
+    try:
+        from torch._inductor.ir import Subgraph
+        from torch._inductor.kernel.flex.flex_flash_attention import _can_use_flex_flash_attention_backward
+    except ImportError as e:
+        return f"this torch build has no FlashAttention-4 sparse backward capability check ({e})"
+
+    score_graph = torch.fx.Graph()
+    score_inputs = [score_graph.placeholder(name) for name in ("score", "b", "h", "q", "k")]
+    score_graph.output(score_inputs[0])
+    mask_graph = torch.fx.Graph()
+    mask_inputs = [mask_graph.placeholder(name) for name in ("b", "h", "q", "k")]
+    mask_graph.output(mask_graph.call_function(operator.ge, (mask_inputs[2], mask_inputs[3])))
+    supported, reason = _can_use_flex_flash_attention_backward(
+        Subgraph(name="score", graph_module=torch.fx.GraphModule({}, score_graph)),
+        Subgraph(name="mask", graph_module=torch.fx.GraphModule({}, mask_graph)),
+    )
+    if not supported:
+        return f"this torch build cannot run FlashAttention-4 with a nontrivial mask in backward ({reason})"
+    return None
+
+
 def flash_backend_unavailable_reason(device: torch.device) -> str | None:
     """Why FlexAttention cannot lower onto FlashAttention-4 here, or ``None`` if it can.
 
-    Three independent things have to hold, and each fails in its own place: the kernels
+    Four independent things have to hold, and each fails in its own place: the kernels
     (``flash_attn.cute``, from the ``flash-attn-4`` package) have to be installed, this
     torch has to carry the Inductor lowering that emits CuTeDSL for them, and the GPU has
-    to be one the kernels exist for. Torch's own ``ensure_flash_available`` covers the
-    first, its importability the second, and :func:`flash_backend_block_size` the third.
+    to be one the kernels exist for, and that lowering must support nontrivial masks
+    in backward. Torch's own ``ensure_flash_available`` covers the first, its
+    importability the second, :func:`flash_backend_block_size` the third, and
+    :func:`_flash_sparse_backward_unavailable_reason` the fourth.
 
     Torch never selects this backend on its own -- ``BACKEND="FLASH"`` is opt-in and
     *raises* when it cannot be honoured -- so choosing it automatically means answering
@@ -1239,7 +1272,7 @@ def flash_backend_unavailable_reason(device: torch.device) -> str | None:
             'the flash_attn.cute kernels are not installed; `pip install --pre "flash-attn-4[cu13]"` '
             "adds them (drop the extra on CUDA 12.x), as flex_attention_bench documents"
         )
-    return None
+    return _flash_sparse_backward_unavailable_reason()
 
 
 def resolve_flex_backend(device: torch.device, preference: str = "auto") -> FlexBackend:
