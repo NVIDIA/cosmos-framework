@@ -23,7 +23,6 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoi
 from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.utils.helper_test import RunIf
 from cosmos_framework.model.generator.mot.activation_marks import (
     MARK_OP_QUALNAME,
     enable_marking,
@@ -33,6 +32,7 @@ from cosmos_framework.model.generator.mot.activation_marks import (
     reset_marking_for_tests,
 )
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import make_selective_ac_policy
+from cosmos_framework.utils.helper_test import RunIf
 
 HEADS = 8
 KV_HEADS = 2
@@ -265,10 +265,10 @@ def test_the_attention_op_regex_covers_every_backend_that_can_be_selected() -> N
     kernel fails here instead of in a training run's memory profile. cuDNN is out of
     scope by design: it rejects varlen and every marked call site is varlen.
     """
-    from cosmos_framework.model.attention.backends import get_backend_list
     from cosmos_framework.configs.base.defaults.activation_checkpointing import (
         ATTENTION_FORWARD_OPS_REGEX,
     )
+    from cosmos_framework.model.attention.backends import get_backend_list
 
     patterns = [re.compile(pattern) for pattern in ATTENTION_FORWARD_OPS_REGEX]
 
