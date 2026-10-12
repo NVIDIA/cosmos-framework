@@ -626,3 +626,88 @@ final-test performance. Bayesian, Hyperband and DEHB still need separately
 reviewed reruns. Live validation of the newer infrastructure-recovery build and
 Hyperband-ES curve pruning remain outstanding. No jobs were restarted during
 this status review.
+
+### Focused #277 companion regression (2026-10-12)
+
+The focused AutoML change in [PR #288](https://github.com/NVIDIA/cosmos-framework/pull/288)
+is based directly on #277's head, without the broader workflow/skills migration.
+It supersedes the fork-only PR #4; #277 and #288 retain their coordinated merge
+hold. The following results validate this split itself, not just its predecessor.
+
+Runtime commit `14505ff0933dd303fc2793319cb6f8c6e95f2924` was packaged into a fresh
+Framework wheel and image. The previous Framework installation was removed before
+installation; all 854 installed Framework files and 19 core files matched the
+reviewed wheels, including absence of omitted workflow modules. A separate Python
+3.12 CPU controller imported the adapter without Torch. Package versions remain
+Framework **1.2.2** and core **1.0.0.dev0**; no release or version bump occurred.
+
+| Artifact | Identity |
+| --- | --- |
+| Framework wheel SHA256 | `c600ccb7bcff213fac5d0718eeead0bd1c126c6de0ceecec063bead0340eee34` |
+| Core wheel SHA256 | `ed279d7329de333380b9d649c541b6b75d30d9500ca42f3b3ee8c35d8ee3305f` |
+| Validation image | `nvcr.io/nvstaging/tao/cosmos-framework:automl-wts-cu128-focused-20261012` |
+| Registry digest | `sha256:a4dd7851d3af16bcc89deb6729ae1417681ed128158a06f5629ea1550595f2a9` |
+| SQSH SHA256 | `0f162751b85e480a77d99e937ee7c093d7bb4958ff792814b94c0e2ce7e0293a` |
+
+CPU conversion job **36427241** completed in 27m59s and verified the installed
+packages inside the SQSH. GPU startup used this immutable image without source
+overlays or package installation. The existing checks passed: **14 adapter tests,
+103 shared-helper tests and 28 core tests**, plus focused Ruff lint/format, skill
+discovery/validation, documentation links, import closure and whitespace checks.
+No new unit tests were added. All 41 retained Python files have identical syntax
+trees to the previously validated broader stack.
+
+Independent algorithms ran concurrently on SLURM using the same seeded WTS
+**64-training/16-validation** subset, eight GPUs per SFT stage, at most five
+cumulative optimizer steps, and one GPU per GEPA batch. The four-hour matrix
+deadline, 37 SFT-stage cap and six API-call cap were preserved. Automatic
+allocation retries were disabled.
+
+| Mode | Completed SFT stages / evaluation batches | Result |
+| --- | ---: | --- |
+| Random | 1 | COMPLETE |
+| Bayesian | 4 | COMPLETE, including GP/expected-improvement proposal |
+| BFBO | 2 | COMPLETE |
+| Hyperband | 3 | COMPLETE, including promotion |
+| Hyperband-ES | 3 | COMPLETE, including promotion |
+| BOHB | 6 | COMPLETE, including KDE proposal and promotion |
+| ASHA | 3 | COMPLETE, including promotion |
+| DEHB | 6 | COMPLETE, including differential-evolution proposal and promotion |
+| PBT | 4 | COMPLETE, including continuation and donor transfer |
+| LLM | 1 | COMPLETE |
+| Hybrid | 2 | COMPLETE |
+| Autoresearch | 2 | COMPLETE |
+| GEPA | 4 evaluation batches | COMPLETE, including live reflection and candidate evaluation |
+
+All **41 GPU allocations** reported native `COMPLETED`, exit `0:0`. All 37 SFT
+stages had native training/evaluation success, valid model/optimizer/scheduler/
+trainer DCP components, exact target iterations and all 16 evaluation records.
+Seven promotions/continuations had **56 matching rank restore receipts**; both
+PBT continuations verified optimizer configuration on all eight ranks. Every SFT
+mode produced a winner, at resource five where multi-fidelity applies. All six
+API calls completed with HTTP 200 and reported **5,997 total tokens**. The 53
+sealed input files retained their hashes, controller credential sidecars were
+removed, and no tracked allocations remained running or queued.
+
+The initial matrix **36429196** ended `FAILED`, exit `1:0`, after 38m16s because
+Bayesian, BFBO and PBT's first `sbatch` calls exceeded the existing core's
+30-second command timeout. Their unknown submission outcomes were reconciled
+through repeated queue/accounting queries on the submission host and two reachable
+peers, with no matching jobs, worker receipts or native logs. A fourth configured
+login name did not resolve. No blind resubmission occurred. Fresh searches under
+controller **36429728** used only the ten unspent stages and the original absolute
+deadline, completing in 26m11s. Final accounting again found no late jobs for the
+three original names. Original error receipts and stale ledgers were preserved;
+the aggregate failure must not be relabeled as a clean first-attempt pass.
+
+This is successful bounded algorithm verification with **manual submission
+reconciliation**, not validation of automatic submission recovery. All SFT stages
+scored 8/16 and GEPA's best validation score was also 8/16; this is not a quality
+comparison or full-data convergence result. Hyperband-ES curve pruning and live
+fault recovery remain unverified. The existing GEPA entrypoint calls the evaluator
+directly and does not emit its declared `evaluation/status.json` progress file;
+its completion was checked using worker exits, metrics and exact per-example IDs,
+not that missing signal. GEPA progress publication/no-progress monitoring remains
+a follow-up gap, not a regression introduced by this split. Independent non-author
+validation, core distribution/dependency review and release integration are still
+required before the coordinated merge.
