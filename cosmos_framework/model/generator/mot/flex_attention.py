@@ -1122,12 +1122,19 @@ def flash_backend_block_size(device: torch.device) -> tuple[int, int]:
     when the backend is in play.
 
     Raises:
-        ValueError: on pre-Hopper hardware, where the backend does not exist, or for a
-            non-CUDA device.
+        ValueError: on pre-Hopper hardware, on SM12.x where the pinned FA4 does not
+            support block-sparse attention, or for a non-CUDA device.
     """
     if device.type != "cuda":
         raise ValueError(f"The FlashAttention-4 backend needs a CUDA device, got {device}.")
     major, minor = torch.cuda.get_device_capability(device)
+    # The pinned FA4 rejects block sparsity in both SM12 forward and backward.
+    # Its dense kernels are independent of this sparse FlexAttention backend.
+    if major == 12:
+        raise ValueError(
+            f"flash-attn-4==4.0.0b24 does not support block-sparse forward/backward on sm{major}{minor}; "
+            "use the Triton backend there."
+        )
     if major >= 10:
         return (256, 128)
     if major == 9:
