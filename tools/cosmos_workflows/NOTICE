@@ -1,0 +1,6 @@
+Cosmos Framework execution helpers incorporate Apache-2.0 material from NVIDIA's
+tao-skill-bank (commit b4d3ccbe0e82143135e81c9ef705acce738980da).
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+The original license is preserved in LICENSE and individual source headers.
+The helpers are maintained here and do not require the source repository.

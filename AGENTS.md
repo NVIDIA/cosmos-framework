@@ -79,6 +79,13 @@ Agent skills (codebase navigation, env troubleshooting, inference, post-training
 
 ## Common Tasks
 
+AutoML uses the [`cosmos-automl`](./.agents/skills/cosmos-automl/SKILL.md) skill
+and native adapter under [`cosmos_framework/automl/`](./cosmos_framework/automl/).
+Read [`docs/automl.md`](./docs/automl.md) for installation, supported searches,
+GEPA prompt optimization, and validation limits. The SLURM helpers in
+[`tools/cosmos_workflows/`](./tools/cosmos_workflows/README.md) are shared
+execution assets, not a second AutoML entrypoint.
+
 ### Training
 
 | Task                     | Command                                                                                                                                                |

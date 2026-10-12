@@ -104,6 +104,7 @@ mirrored under [`.claude/skills/`](./.claude/skills) for Claude Code:
 | [`cosmos3-codebase-nav`](./.agents/skills/cosmos3-codebase-nav/SKILL.md)         | "Where is X" / "where do I change parameter Y" questions across `cosmos_framework/`. |
 | [`cosmos3-inference`](./.agents/skills/cosmos3-inference/SKILL.md)               | Running offline or online inference, parallelism, sampling parameters.               |
 | [`cosmos3-post-training`](./.agents/skills/cosmos3-post-training/SKILL.md)       | SFT post-training end-to-end: data prep, DCP conversion, launch, export.             |
+| [`cosmos-automl`](./.agents/skills/cosmos-automl/SKILL.md)                      | Reasoner hyperparameter search and GEPA prompt optimization; [setup and release status](./docs/automl.md). |
 | [`cosmos3-env-troubleshoot`](./.agents/skills/cosmos3-env-troubleshoot/SKILL.md) | Diagnosing install/runtime errors (ImportError, CUDA, Docker, checkpoint failures).  |
 
 See [`AGENTS.md`](./AGENTS.md) for the canonical repo map that agents load

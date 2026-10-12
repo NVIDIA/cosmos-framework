@@ -1,0 +1,104 @@
+# Planning template only. Resolve site, paths, hashes, recipes and parent record
+# before approval. See docs/automl-slurm.md. There is no automatic partition choice.
+search:
+  experiment_id: reasoner-slurm-search
+  algorithm: bayesian
+  seed: 42
+  objective: {metric: overall.accuracy, direction: maximize}
+  budget: {max_trials: 4, trial_timeout_seconds: 12600, total_timeout_seconds: 85500}
+  stop_on_failure: true
+  pause_after_trials: [1]
+  # Optional reviewed policy; at most two extra allocations in this search.
+  recovery:
+    max_retries_per_trial: 1
+    max_retries_total: 2
+    backoff_seconds: 30
+    cancellation_timeout_seconds: 120
+    heartbeat_timeout_seconds: 180
+    progress_timeout_seconds: 3600
+  provenance:
+    training_data: replace-with-immutable-training-data-revision
+    validation_data: replace-with-immutable-validation-data-revision
+    code_revision: replace-with-reviewed-framework-commit
+  parameters:
+    optimizer.lr: {kind: float, low: 0.000001, high: 0.0001, log: true}
+workload:
+  recipe: training.toml  # Replace with the prepared eight-rank recipe.
+  evaluation: evaluation.toml
+  cwd: /workspace
+  nproc_per_node: 8
+  # expected_validation_records: <full held-out dataset size>
+execution:
+  kind: slurm
+  python: /workspace/.venv/bin/python
+  image: /shared/images/REPLACE_IMAGE.sqsh
+  mounts: [/shared/models, /shared/datasets]
+  environment: [BASE_CHECKPOINT_PATH, NVIDIA_DRIVER_CAPABILITIES, USER, LOGNAME]
+  slurm:
+    partition: REPLACE_WITH_CONFIGURED_PARTITIONS
+    account: REPLACE_ACCOUNT
+    cpus_per_task: 64
+    gpus: 8
+    exclusive: true
+    time_limit_seconds: 14400
+    startup_timeout_seconds: 1200
+    cleanup_seconds: 600
+    poll_seconds: 30
+    image_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    template: /shared/framework/tools/cosmos_workflows/templates/slurm/singlenode.sbatch.tmpl
+    supporting_files:
+      /shared/framework/tools/cosmos_workflows/templates/slurm/singlenode.sbatch.tmpl: '0000000000000000000000000000000000000000000000000000000000000000'
+    # Add a reviewed bootstrap and its closed helper set to supporting_files.
+    # The video-QA bootstrap needs the prepared native video recipe/environment;
+    # do not attach it to the unmodified LLaVA planning recipe above.
+    record_open:
+      - /shared/controller/bin/python
+      - /shared/framework/tools/cosmos_workflows/scripts/cosmos_job_record.py
+      - open
+      - --platform
+      - slurm
+      - --image
+      - '{image}'
+      - --network-arch
+      - cosmos-automl
+      - --action
+      - trial
+      - --storage-tier
+      - A
+      - --results-dir
+      - '{trial}'
+      - --parent-job
+      - REPLACE_PARENT_JOB_RECORD
+    record_mark:
+      - /shared/controller/bin/python
+      - /shared/framework/tools/cosmos_workflows/scripts/cosmos_job_record.py
+      - mark
+      - '{id}'
+      - --state
+      - '{state}'
+      - --backend-ref
+      - '{backend_ref}'
+      - --message
+      - '{message}'
+      - --source
+      - backend-hook
+    record_retry_open:
+      - /shared/controller/bin/python
+      - /shared/framework/tools/cosmos_workflows/scripts/cosmos_job_record.py
+      - open
+      - --platform
+      - slurm
+      - --image
+      - '{image}'
+      - --network-arch
+      - cosmos-automl
+      - --action
+      - trial
+      - --storage-tier
+      - A
+      - --results-dir
+      - '{trial}'
+      - --parent-job
+      - REPLACE_PARENT_JOB_RECORD
+      - --retry-of
+      - '{retry_of}'

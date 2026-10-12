@@ -1,0 +1,40 @@
+# Planning template. Explicitly approve data disclosure before setting it true.
+prompts:
+  experiment_id: reasoner-prompts
+  seed: 42
+  seed_candidate:
+    dataset.system_prompt: Answer the multiple-choice question with its letter.
+    vision.num_frames: '8'
+  config_choices:
+    vision.num_frames: ['8', '16']
+  allow_reflection_data: false
+  max_metric_calls: 128
+  max_evaluated_examples: 512
+  max_batches: 30
+  max_candidate_proposals: 4
+  reflection_minibatch_size: 4
+  batch_timeout_seconds: 600
+  total_timeout_seconds: 21600
+  llm:
+    endpoint: https://your-reviewed-endpoint.example/v1
+    model: your-reviewed-reflection-model
+    api_key_env: AUTOML_LLM_API_KEY
+    max_calls: 4
+    max_output_tokens: 1024
+    max_prompt_chars: 24000
+workload:
+  evaluation: prompt-evaluation.toml
+  cwd: ../..
+  reflection: {annotations: /path/to/reflection.json, media_dir: /path/to/reflection-media}
+  validation: {annotations: /path/to/validation.json, media_dir: /path/to/validation-media}
+  # Optional test is scored after validation selection; omit to leave it untouched.
+  # test: {annotations: /path/to/test.json, media_dir: /path/to/test-media}
+  metric: accuracy
+  provenance:
+    checkpoint: replace-with-immutable-checkpoint-revision
+    datasets: replace-with-immutable-split-revisions
+    code: replace-with-reviewed-framework-commit
+execution:
+  kind: venv
+  python: /path/to/framework-venv/bin/python
+  gpu_devices: '0'

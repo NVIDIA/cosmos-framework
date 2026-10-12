@@ -1,0 +1,23 @@
+# Planning template, NOT a ready-to-launch workload. See docs/automl.md.
+search:
+  experiment_id: reasoner-lr-search
+  algorithm: bayesian
+  seed: 42
+  objective: {metric: overall.accuracy, direction: maximize}
+  budget: {max_trials: 4, trial_timeout_seconds: 3600, total_timeout_seconds: 14400}
+  provenance:
+    training_data: replace-with-immutable-training-data-revision
+    validation_data: replace-with-immutable-held-out-data-revision
+    code_revision: replace-with-reviewed-framework-commit
+  parameters:
+    optimizer.lr: {kind: float, low: 0.000001, high: 0.0001, log: true}
+workload:
+  recipe: training.toml
+  evaluation: evaluation.toml
+  cwd: ../..
+  nproc_per_node: 1
+execution:
+  kind: venv
+  python: /path/to/framework-venv/bin/python
+  gpu_devices: '0'
+  environment: [BASE_CHECKPOINT_PATH]

@@ -1,0 +1,32 @@
+# Planning template. No request is made by plan; review API disclosure and spend.
+search:
+  experiment_id: reasoner-llm
+  algorithm: llm
+  seed: 42
+  objective: {metric: overall.accuracy, direction: maximize}
+  budget: {max_trials: 4, trial_timeout_seconds: 3600, total_timeout_seconds: 18000}
+  parameters:
+    optimizer.lr: {kind: float, low: 0.000001, high: 0.0001, log: true}
+  llm:
+    endpoint: https://your-reviewed-endpoint.example/v1
+    model: your-reviewed-model
+    api_key_env: AUTOML_LLM_API_KEY
+    max_calls: 6
+    max_output_tokens: 1024
+    max_prompt_chars: 24000
+    timeout_seconds: 60
+    research_instructions: Optimize held-out accuracy within the approved domains.
+  provenance:
+    training_data: replace-with-immutable-training-data-revision
+    validation_data: replace-with-immutable-validation-data-revision
+    code_revision: replace-with-reviewed-framework-commit
+workload:
+  recipe: training.toml
+  evaluation: evaluation.toml
+  cwd: ../..
+  nproc_per_node: 1
+execution:
+  kind: venv
+  python: /path/to/framework-venv/bin/python
+  gpu_devices: '0'
+  environment: [BASE_CHECKPOINT_PATH]
