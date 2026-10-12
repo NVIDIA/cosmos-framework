@@ -171,6 +171,8 @@ vllm = [
 ]
 # Match nvcr.io/nvidia/pytorch:25.11-py3: https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-26-01.html
 cu128 = [
+  # FA4 CuTeDSL kernels; the cu13 extra is only needed by CUDA 13 environments.
+  "flash-attn-4==4.0.0b24",
   "flash-attn-3-nv==1.0.3+cu128.torch210; platform_machine == 'x86_64'",
   "flash-attn==2.7.4.post1+cu128.torch210; platform_machine == 'x86_64'",
   "natten==0.21.6.dev6+cu128.torch210; platform_machine == 'x86_64'",
@@ -204,6 +206,8 @@ cu128-train = [
 ]
 # Match nvcr.io/nvidia/pytorch:25.11-py3: https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-11.html
 cu130 = [
+  # Match imaginaire4's FA4 installation on both x86_64 and aarch64.
+  "flash-attn-4[cu13]==4.0.0b24",
   "flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'",
   "flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'",
   # GB300/B300 (sm_103a): use the custom build that includes sm_103a kernels (both arches).
@@ -239,6 +243,7 @@ cu130-train = [
 ]
 # torch 2.13 on CUDA 13.0. Same layout as cu130 but pinned to torch 2.13.
 cu130-torch213 = [
+  "flash-attn-4[cu13]==4.0.0b24",
   #"flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
   #"flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
   # torch2.13 build (natten 0.21.6, sm 80/86/89/90/100/103/110/120/121) — matches this group's torch/ABI.
