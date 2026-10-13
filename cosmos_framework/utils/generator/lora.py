@@ -14,6 +14,7 @@ the state-dict keys ``<path>.lora_A.weight`` and ``<path>.lora_B.weight``.
 from __future__ import annotations
 
 import math
+import re
 
 import torch
 import torch.nn as nn
@@ -65,6 +66,23 @@ class LoraInjectedLinear(nn.Linear):
         lora_out = self.lora_B(self.lora_A(x))
         return base_out + self._lora_scale * lora_out
 
+    def merged_weight(self, base: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor) -> torch.Tensor:
+        """Fold the adapter into the base weight: ``W + (alpha / r) * B @ A``.
+
+        The three tensors are passed in rather than read off ``self`` because the
+        only caller (``HFExportCallback``) has already all-gathered them out of
+        their FSDP shards — ``self.weight`` is still a per-rank ``DTensor`` at
+        that point. Only ``_lora_scale`` comes from the module, so the merge
+        stays in lockstep with :meth:`forward` if the scaling convention changes.
+
+        The accumulation runs in float32 even when the export dtype is bfloat16:
+        the delta is typically orders of magnitude smaller than the base weight,
+        so adding it in bfloat16 rounds much of it away. The result is cast back
+        to ``base``'s dtype.
+        """
+        delta = torch.mm(lora_b.to(torch.float32), lora_a.to(torch.float32))
+        return (base.to(torch.float32) + self._lora_scale * delta).to(base.dtype)
+
 
 def _target_matches(full_child_path: str, child_name: str, target: str) -> bool:
     """Return True if ``target`` selects the child at ``full_child_path``.
@@ -91,6 +109,7 @@ def _inject_lora_inplace(
     target_modules: list[str],
     rank: int,
     alpha: int,
+    exclude_path_regex: str | None = None,
 ) -> int:
     """Replace each targeted ``nn.Linear`` child in-place with ``LoraInjectedLinear``.
 
@@ -101,17 +120,63 @@ def _inject_lora_inplace(
 
     Snapshots ``named_modules()`` before mutating the tree so newly-inserted
     LoRA submodules are not re-visited.
+
+    ``exclude_path_regex`` skips any module whose dotted path matches (searched,
+    not fullmatch). Name matching alone cannot always separate two towers of a
+    VLM: Cosmos3-Edge names its LLM projections ``q_proj``/``k_proj``/``v_proj``/
+    ``o_proj`` and its SigLIP2 vision projections ``q_proj``/``k_proj``/
+    ``v_proj``/``out_proj`` — three of the four names collide. Passing
+    ``r"^model\\.visual\\."`` keeps the adapters out of the vision tower.
     """
+    exclude = re.compile(exclude_path_regex) if exclude_path_regex else None
     replaced = 0
     for parent_name, parent in list(network.named_modules()):
         for child_name, child in list(parent.named_children()):
             if not isinstance(child, nn.Linear):
                 continue
             full_child_path = f"{parent_name}.{child_name}" if parent_name else child_name
-            if any(_target_matches(full_child_path, child_name, t) for t in target_modules):
-                setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
-                replaced += 1
+            if not any(_target_matches(full_child_path, child_name, target) for target in target_modules):
+                continue
+            # Selection and exclusion are orthogonal: first select by exact leaf
+            # name or path-qualified suffix, then carve excluded subtrees out.
+            if exclude is not None and exclude.search(full_child_path):
+                continue
+            setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
+            replaced += 1
     return replaced
+
+
+def set_only_lora_trainable(network: torch.nn.Module) -> int:
+    """Make adapter tensors the only trainable parameters and return their count.
+
+    This is deliberately idempotent. VLM initialization calls it immediately
+    before optimizer construction, so a pre-existing freeze configuration can
+    neither re-enable base weights nor freeze the adapters by accident.
+    """
+    trainable_tensors = 0
+    lora_numel = 0
+    frozen_numel = 0
+    for name, param in network.named_parameters():
+        is_lora = ".lora_A." in f".{name}" or ".lora_B." in f".{name}"
+        param.requires_grad_(is_lora)
+        if is_lora:
+            trainable_tensors += 1
+            lora_numel += param.numel()
+        else:
+            frozen_numel += param.numel()
+
+    if trainable_tensors == 0:
+        raise RuntimeError(
+            "LoRA is enabled but no adapter parameters were injected; check "
+            "lora_target_modules and lora_exclude_path_regex against the backbone's module names."
+        )
+
+    log.info(
+        f"LoRA-only training: {trainable_tensors} adapter tensors / {lora_numel:,} parameters trainable, "
+        f"{frozen_numel:,} base parameters frozen "
+        f"({100 * lora_numel / max(1, lora_numel + frozen_numel):.3f}% trainable)"
+    )
+    return trainable_tensors
 
 
 def inject_lora_pre_fsdp(
@@ -120,6 +185,7 @@ def inject_lora_pre_fsdp(
     lora_rank: int,
     lora_alpha: int,
     lora_target_modules: str,
+    lora_exclude_path_regex: str | None = None,
 ) -> torch.nn.Module:
     """Inject LoRA adapters into ``network`` BEFORE FSDP wrap on meta device.
 
@@ -161,32 +227,23 @@ def inject_lora_pre_fsdp(
     if invalid_modules:
         log.warning(f"LoRA target modules not found in model: {invalid_modules}")
 
-    log.info(f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, targets={target_modules_list}")
+    log.info(
+        f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, "
+        f"targets={target_modules_list}, exclude_path_regex={lora_exclude_path_regex!r}"
+    )
 
     try:
-        replaced = _inject_lora_inplace(network, target_modules_list, lora_rank, lora_alpha)
+        replaced = _inject_lora_inplace(
+            network, target_modules_list, lora_rank, lora_alpha, exclude_path_regex=lora_exclude_path_regex
+        )
     except Exception as e:
         raise RuntimeError(f"Failed to inject LoRA adapters into model: {e}") from e
 
     if replaced == 0:
-        log.warning(f"LoRA injection replaced 0 modules — check lora_target_modules={lora_target_modules!r}")
+        raise RuntimeError(f"LoRA injection replaced 0 modules; check lora_target_modules={lora_target_modules!r}")
 
-    lora_params = 0
-    frozen_params = 0
-    for name, param in network.named_parameters():
-        if "lora_" in name:
-            param.requires_grad_(True)
-            lora_params += param.numel()
-        else:
-            param.requires_grad_(False)
-            frozen_params += param.numel()
-
-    log.info(
-        f"LoRA injection successful: {replaced} modules wrapped, "
-        f"{lora_params:,} trainable LoRA params, "
-        f"{frozen_params:,} frozen base params "
-        f"({100 * lora_params / max(1, lora_params + frozen_params):.3f}% trainable)"
-    )
+    set_only_lora_trainable(network)
+    log.info(f"LoRA injection successful: {replaced} modules wrapped")
     return network
 
 
