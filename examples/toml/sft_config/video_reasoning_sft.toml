@@ -3,10 +3,8 @@
 
 # Task-aware video reasoning SFT through the Framework-native dataset contract.
 # Required environment:
-#   COSMOS_VIDEO_TRAIN_ANNOTATIONS: JSON array of cosmos-video-reasoning-v1.0 files
-#   COSMOS_VIDEO_TRAIN_MEDIA_ROOTS: shared media root for the training annotations
+#   COSMOS_VIDEO_TRAIN_ANNOTATIONS: native or tao-vl-reason-v1.0 paths / JSON path array
 #   COSMOS_VIDEO_VAL_ANNOTATIONS: JSON array of validation files
-#   COSMOS_VIDEO_VAL_MEDIA_ROOTS: shared media root for validation
 #   VLM_SAFETENSORS_PATH: Cosmos3-Nano checkpoint
 
 [job]

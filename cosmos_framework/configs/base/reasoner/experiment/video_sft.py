@@ -108,15 +108,18 @@ def _task_aware_video_dataloader(
     annotation_env = annotation_env or f"COSMOS_VIDEO_{split.upper()}_ANNOTATIONS"
     media_env = media_env or f"COSMOS_VIDEO_{split.upper()}_MEDIA_ROOTS"
     limit_env = limit_env or f"COSMOS_VIDEO_{split.upper()}_LIMIT"
+    response_mode = "hybrid" if split == "train" else "answer"
     return L(CosmosDataLoader)(
         distributor=L(MapDistributor)(
             dataset=L(ReasoningQADataset)(
                 annotation_paths=f"${{oc.env:{annotation_env}}}",
-                media_root=f"${{oc.env:{media_env}}}",
-                response_mode="hybrid" if split == "train" else "answer",
+                media_root=f"${{oc.env:{media_env},null}}",
+                response_mode=f"${{oc.env:COSMOS_VIDEO_{split.upper()}_RESPONSE_MODE,{response_mode}}}",
                 system_prompt=f"${{oc.env:{system_prompt_env},''}}",
                 vision_kwargs={},
                 max_samples=f"${{oc.env:{limit_env},''}}",
+                sample_stride=f"${{oc.env:COSMOS_VIDEO_{split.upper()}_SAMPLE_STRIDE,1}}",
+                sample_offset=f"${{oc.env:COSMOS_VIDEO_{split.upper()}_SAMPLE_OFFSET,0}}",
             ),
             shuffle=shuffle,
             seed="${oc.env:COSMOS_DATALOADER_SEED,42}",

@@ -37,7 +37,9 @@ def _optional_positive_int(value: int | str | None) -> int | None:
     if value in (None, ""):
         return None
     parsed = int(value)
-    return parsed if parsed > 0 else None
+    if parsed <= 0:
+        raise ValueError("max_samples must be positive when provided")
+    return parsed
 
 
 class ReasoningQADataset(Dataset):
@@ -54,8 +56,8 @@ class ReasoningQADataset(Dataset):
         system_prompt: str = "",
         vision_kwargs: dict[str, Any] | None = None,
         max_samples: int | str | None = None,
-        sample_stride: int = 1,
-        sample_offset: int = 0,
+        sample_stride: int | str = 1,
+        sample_offset: int | str = 0,
     ) -> None:
         from cosmos_framework.data.reasoner.qa_dataset import ReasoningConversationDataset
 
@@ -64,10 +66,13 @@ class ReasoningQADataset(Dataset):
             media_root = parse_path_list(media_root)
         if response_mode not in {"think", "answer", "hybrid"}:
             raise ValueError(f"unsupported response_mode: {response_mode!r}")
+        sample_stride = int(sample_stride)
+        sample_offset = int(sample_offset)
         if sample_stride < 1:
             raise ValueError("sample_stride must be positive")
         if sample_offset < 0:
             raise ValueError("sample_offset must be non-negative")
+        max_samples = _optional_positive_int(max_samples)
 
         self.dataset = ReasoningConversationDataset(
             annotation_paths=paths,
@@ -79,7 +84,7 @@ class ReasoningQADataset(Dataset):
         self.response_mode = response_mode
         self.sample_stride = sample_stride
         self.sample_offset = sample_offset
-        self.max_samples = _optional_positive_int(max_samples)
+        self.max_samples = max_samples
         self.raw_length = int(getattr(self.dataset, "_raw_length"))
 
     def _subsampled_raw_length(self) -> int:

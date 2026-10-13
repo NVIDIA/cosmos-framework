@@ -32,10 +32,13 @@ Optional `COSMOS_VIDEO_TRAIN_LIMIT` and `COSMOS_VIDEO_VAL_LIMIT` bound the sampl
 
 Use `video_sft_edge.toml` with an Edge checkpoint for the corresponding Edge
 recipe. `video_reasoning_sft.toml` instead accepts the task-aware
-`cosmos-video-reasoning-v1.0` format through the native Framework dataset loader:
-set `COSMOS_VIDEO_{TRAIN,VAL}_ANNOTATIONS` to paths or JSON path arrays and
-`COSMOS_VIDEO_{TRAIN,VAL}_MEDIA_ROOTS` to a shared root or matching root array.
-It interleaves answer/reasoning training targets and validates answer targets.
+`cosmos-video-reasoning-v1.0` and DAFT `tao-vl-reason-v1.0` formats through the native
+Framework dataset loader: set `COSMOS_VIDEO_{TRAIN,VAL}_ANNOTATIONS` to paths or
+JSON path arrays. Optional `COSMOS_VIDEO_{TRAIN,VAL}_MEDIA_ROOTS` override the media
+roots with a shared root or matching root array. It interleaves answer/reasoning
+training targets and validates answer targets by default. Response modes and
+subsampling are independently configurable for each split; see
+[hybrid video reasoning SFT](../docs/training.md#hybrid-video-reasoning-sft).
 These recipes can be passed directly to `torchrun -m cosmos_framework.scripts.train
 --sft-toml=examples/toml/sft_config/<recipe>.toml` with the desired topology.
 

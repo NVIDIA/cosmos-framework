@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Dependency-free conversation records for native video-reasoning annotations.
+"""Dependency-free conversation records for native and DAFT video-reasoning annotations.
 
 The structural dataset returns chat messages through ``__len__`` and
 ``__getitem__``. Framework's map-style training adapter adds sampling and
@@ -65,7 +65,7 @@ def build_response(answer: str, reasoning: str, mode: ResponseMode) -> str:
 
 
 class ReasoningConversationDataset:
-    """Concatenated conversation dataset over one or more cosmos-video-reasoning-v1.0 files.
+    """Concatenated conversations from cosmos-video-reasoning-v1.0 or tao-vl-reason-v1.0 files.
 
     This class is **not** a ``torch.utils.data.Dataset``; downstream training
     code wraps it (typically via composition inside its own ``Dataset``
@@ -87,9 +87,10 @@ class ReasoningConversationDataset:
 
     Args:
         annotation_paths: Paths to JSON files conforming to the
-            cosmos-video-reasoning-v1.0 schema. Items are concatenated in given order.
-        media_roots: Per-file media base path. ``None`` (default) honors each
-            file's own ``media_root`` field. A single ``str`` overrides every
+            cosmos-video-reasoning-v1.0 or tao-vl-reason-v1.0 schema. Items are concatenated in given order.
+        media_roots: Per-file media base path. ``None`` (default) resolves each
+            file's ``media_root`` relative to its annotation directory, using that
+            directory when the field is absent. A single ``str`` overrides every
             file's ``media_root``. A ``list[str]`` overrides per-file and must
             match ``annotation_paths`` length.
         system_prompt: Optional system prompt prepended to each conversation.

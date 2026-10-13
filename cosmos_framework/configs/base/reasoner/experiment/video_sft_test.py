@@ -12,6 +12,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from jinja2 import Environment
 from PIL import Image
 
 from cosmos_framework.configs.base.reasoner.experiment import video_sft
@@ -28,6 +29,8 @@ from cosmos_framework.data.generator.local_datasets.reasoning_qa import (
     apply_reasoning_chat_template,
     parse_path_list,
 )
+from cosmos_framework.data.reasoner.qa_dataset import QWEN3VL_INSTRUCT_CHAT_TEMPLATE
+from cosmos_framework.utils.lazy_config import instantiate
 
 
 def _install_fake_reasoning(monkeypatch) -> list[object]:
@@ -132,6 +135,117 @@ def test_native_reasoning_response_rejects_invalid_mode() -> None:
 
     with pytest.raises(ValueError, match="Unknown response mode"):
         build_response("answer", "", "invalid")
+
+
+@pytest.mark.parametrize("response_mode", ["answer", "think", "hybrid"])
+def test_reasoning_sampling_across_daft_annotation_files(tmp_path, response_mode) -> None:
+    paths = []
+    for file_index, items in enumerate(
+        (
+            [{"video_id": "a.mp4", "question": "First?", "answer": "A", "reasoning": "Reason A"}],
+            [],
+            [
+                {"video_id": "b.mp4", "question": "Second?", "answer": "B", "reasoning": "Reason B"},
+                {"video_id": "c.mp4", "question": "Third?", "answer": "C"},
+                {"video_id": "d.mp4", "question": "Fourth?", "answer": "D", "reasoning": "Reason D"},
+            ],
+        )
+    ):
+        annotation = tmp_path / f"{file_index}.json"
+        annotation.write_text(json.dumps({"items": items}), encoding="utf-8")
+        paths.append(str(annotation))
+    dataset = ReasoningQADataset(
+        paths,
+        media_root=json.dumps(["/media/first", "/media/empty", "/media/last"]),
+        response_mode=response_mode,
+        sample_stride="2",
+        sample_offset="1",
+        max_samples="3",
+        system_prompt="Explain.",
+    )
+    answers = ["B", "D"]
+    think = ["<think>\nReason B\n</think>\n\nB", "<think>\nReason D\n</think>\n\nD"]
+    expected = {"answer": answers, "think": think, "hybrid": [answers[0], think[0], answers[1]]}
+    assert [dataset[index]["messages"][-1]["content"] for index in range(len(dataset))] == expected[response_mode]
+    assert dataset[0]["messages"][0] == {"role": "system", "content": "Explain."}
+    assert dataset[0]["messages"][1]["content"][0]["video"] == "/media/last/b.mp4"
+    for invalid_index in (-1, len(dataset)):
+        with pytest.raises(IndexError):
+            dataset[invalid_index]
+    empty = ReasoningQADataset(paths, response_mode=response_mode, sample_offset="4")
+    assert len(empty) == 0
+    with pytest.raises(IndexError):
+        empty[0]
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"max_samples": 0}, "max_samples"),
+        ({"max_samples": "-1"}, "max_samples"),
+        ({"sample_stride": "0"}, "sample_stride"),
+        ({"sample_offset": "-1"}, "sample_offset"),
+        ({"response_mode": "invalid"}, "response_mode"),
+    ],
+)
+def test_reasoning_rejects_invalid_settings_before_opening_annotations(kwargs, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        ReasoningQADataset("missing.json", **kwargs)
+
+
+@pytest.mark.parametrize("reasoning", [None, ""])
+@pytest.mark.parametrize("max_samples", [None, ""])
+def test_hybrid_missing_reasoning_keeps_both_answer_targets(tmp_path, reasoning, max_samples) -> None:
+    item = {"video_id": "clip.mp4", "question": "What?", "answer": "An answer."}
+    if reasoning is not None:
+        item["reasoning"] = reasoning
+    annotation = tmp_path / "annotation.json"
+    annotation.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+    dataset = ReasoningQADataset(str(annotation), response_mode="hybrid", max_samples=max_samples)
+    assert len(dataset) == 2
+    assert dataset[0] == dataset[1]
+    assert dataset[0]["messages"][-1]["content"] == "An answer."
+    assert dataset[0]["messages"][0]["content"][0]["video"] == str(tmp_path / "clip.mp4")
+
+
+def test_reasoning_template_preserves_exact_assistant_targets(tmp_path) -> None:
+    annotation = tmp_path / "annotation.json"
+    annotation.write_text(
+        json.dumps({"items": [{"question": "Why?", "answer": "Answer.", "reasoning": "Reason."}]}),
+        encoding="utf-8",
+    )
+    dataset = ReasoningQADataset(str(annotation), response_mode="hybrid")
+    template = Environment().from_string(QWEN3VL_INSTRUCT_CHAT_TEMPLATE)
+    for index, response in enumerate(("Answer.", "<think>\nReason.\n</think>\n\nAnswer.")):
+        rendered = template.render(messages=dataset[index]["messages"], add_generation_prompt=False)
+        assert rendered == f"<|im_start|>user\nWhy?<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>\n"
+
+
+@pytest.mark.parametrize("recipe", [cosmos_task_aware_video_reasoning, cosmos_task_aware_video_reasoning_edge])
+def test_reasoning_recipe_instantiates_split_settings_from_environment(tmp_path, monkeypatch, recipe) -> None:
+    annotation = tmp_path / "annotation.json"
+    annotation.write_text(
+        json.dumps({"items": [{"question": "Why?", "answer": "Answer.", "reasoning": "Reason."}] * 4}),
+        encoding="utf-8",
+    )
+    for split, default_mode, overridden_mode in (("train", "hybrid", "think"), ("val", "answer", "hybrid")):
+        prefix = f"COSMOS_VIDEO_{split.upper()}"
+        monkeypatch.setenv(f"{prefix}_ANNOTATIONS", str(annotation))
+        for suffix in ("MEDIA_ROOTS", "RESPONSE_MODE", "SAMPLE_STRIDE", "SAMPLE_OFFSET", "LIMIT"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
+        dataset_config = recipe[f"dataloader_{split}"]["distributor"]["dataset"]
+        default = instantiate(dataset_config)
+        assert default.response_mode == default_mode
+        assert len(default) == (8 if split == "train" else 4)
+        monkeypatch.setenv(f"{prefix}_RESPONSE_MODE", overridden_mode)
+        monkeypatch.setenv(f"{prefix}_SAMPLE_STRIDE", "2")
+        monkeypatch.setenv(f"{prefix}_SAMPLE_OFFSET", "1")
+        monkeypatch.setenv(f"{prefix}_LIMIT", "3")
+        configured = instantiate(dataset_config)
+        assert configured.response_mode == overridden_mode
+        assert len(configured) == (2 if split == "train" else 3)
+        assert configured.sample_stride == 2
+        assert configured.sample_offset == 1
 
 
 def test_media_grouped_validation_stream_is_finite_and_equally_padded() -> None:
