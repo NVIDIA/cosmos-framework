@@ -50,6 +50,14 @@ Keep this one skill entrypoint for both workflows.
   A first-trial review can use `search.pause_after_trials: [1]`; resume only
   after reviewing full-data results and timing. Pausing releases GPU resources
   but does not reset the experiment clock.
+- Supervise the native CPU allocation before the brain starts; trial retries
+  cannot handle bootstrap/import/prolog failures. Follow the SLURM guide's
+  [startup contract](../../../docs/automl-slurm.md#before-the-search-controller-starts):
+  arm the cross-node observer automatically before submission, preserve startup
+  receipts, and mark the boundary before any algorithm/API/job fan-out. Only
+  confirmed pre-fan-out infrastructure/observer failures may use approved CPU
+  startup retries. Unknown submission outcomes block replacement. A missing
+  experiment ledger is not success; report unlaunched modes as `NOT_STARTED`.
 - If the CPU allocation can expire first, review the SLURM guide's opt-in
   `--controller-max-allocations`, allocation seconds and grace in both plan and
   run. CPU handoff requeues the same CPU job and adopts existing GPU jobs; it

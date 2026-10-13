@@ -119,6 +119,62 @@ other workloads instead of claiming these checks cover them.
 
 ## Time, review boundaries and failure handling
 
+### Before the search controller starts
+
+Trial recovery and CPU handoff run inside Python. They cannot recover a failed
+batch prolog, missing interpreter, failed environment import or bootstrap that
+never reaches the search controller. The submitting process must therefore
+supervise the **native CPU job**, starting from its durable submission intent.
+Observe `squeue`/`sacct` even when no experiment ledger exists; a missing ledger
+is not proof of success or permission to submit again.
+
+The stdlib-only [startup helper](../tools/cosmos_workflows/scripts/slurm_controller_startup.py)
+wraps the CPU command and records bootstrap and child exit receipts without
+importing Framework or the engine. Give every CPU attempt a fresh shared
+directory and the same absolute experiment deadline:
+
+```bash
+python3 slurm_controller_startup.py run --attempt-dir /shared/run/startup-00 \
+  --deadline <approved-unix-deadline> -- bash /shared/run/controller-command.sh
+```
+
+An already-running external supervisor must automatically invoke `observe
+--attempt-dir /shared/run/startup-00 --job-id <native-id>` from another node.
+It acknowledges lock contention and then claim visibility in two separate,
+idempotent calls. Arm that supervisor before submission and keep it alive while
+the CPU job is queued. This is not a manual preflight to leave for the next chat
+turn. The helper times out without starting the child if the observer is absent.
+It verifies filesystem semantics, not model/GPU readiness.
+
+The child calls `fanout --attempt-dir "$AUTOML_STARTUP_ATTEMPT"` **before** any
+algorithm process, submission or paid request. That durable boundary prevents
+startup recovery from replaying a partially launched suite. The external
+supervisor may use `retry_allowed` only after matching native terminal identity,
+checking the entire workspace for existing work, and enforcing separately
+approved CPU attempt/time caps. Call `close_before_retry` under its shared
+fan-out lock before submitting the replacement; a failed/conflicting fence
+blocks recovery. Only infrastructure failures or the explicit
+observer timeout qualify; configuration/import errors, cancellation and unknown
+submission outcomes do not. Each replacement has fresh probe receipts, while
+the absolute deadline, GPU budgets and API budgets remain unchanged.
+
+The helper does not submit jobs, transport SSH, or replace the search CLI.
+The site's submitting service owns durable native-ID reconciliation, observer
+scheduling, native terminal verification, retry caps and final job-record
+updates. Keep credentials across permitted startup retries and remove them only
+after the final owned CPU allocation is confirmed terminal. Report every mode
+that never launched as `NOT_STARTED`, even if Python failed before creating its
+ledger. Never label CPU-check simulations as live cross-node validation.
+
+Use this wrapper with a **non-requeue CPU batch**. Do not wrap the bounded
+handoff template below unchanged: that template requires direct `SIGUSR1`
+delivery to the search process and a reviewed native-generation lifecycle.
+Startup attempts here are single-use, and the wrapper forwards termination,
+not handoff signals. The existing handoff template remains a separate path;
+combining the two needs an explicit bootstrap/signal/generation integration.
+
+### Experiment and allocation limits
+
 `search.budget.trial_timeout_seconds` includes training, checkpoint export and
 evaluation **after bootstrap**. Startup + trial runtime + cleanup must fit the
 allocation. The total experiment clock starts at creation and includes queue

@@ -8,6 +8,10 @@ These checkout-local assets support [AutoML on SLURM](../../docs/automl-slurm.md
 - `templates/slurm/singlenode.sbatch.tmpl` supplies the Pyxis execution envelope.
   AutoML renders it with scheduler requeue disabled and enforces its own budgets.
 - `scripts/nccl_allreduce_probe.py` checks the requested GPU topology before training.
+- `scripts/slurm_controller_startup.py` records CPU bootstrap/child failures and
+  supplies the cross-node lock observer and pre-fan-out marker. The submitting
+  service must schedule observation automatically and reconcile native terminal
+  state before any bounded startup retry; see the SLURM guide's startup contract.
 
 The search controller is `cosmos-automl`, not a workflow wrapper in this directory.
 Stage these assets from this repository, seal their hashes in the manifest, and
