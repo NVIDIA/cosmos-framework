@@ -118,6 +118,9 @@ class ReasonerPromptWorkload:
             raise ValueError("Candidate max_pixels cannot be smaller than the configured min_pixels")
 
     def plan_batch(self, candidate, items, trial, execution):
+        if execution.kind in {"kubernetes", "brev", "lepton"}:
+            if getattr(execution, execution.kind).gpus != 1:
+                raise ValueError("Managed Framework prompt batches require exactly one GPU")
         self.validate_candidate(candidate)
         typed = {name: int(value) if name.startswith("vision.") else value for name, value in candidate.items()}
         config = override(self.config, typed)

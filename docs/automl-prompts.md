@@ -63,11 +63,14 @@ cosmos-automl prompts cancel --experiment-id reasoner-prompts --workspace output
 ```
 
 Planning checks inputs and displays an example native command without GPU work,
-network requests or output files. Choose venv, Docker or SLURM explicitly as in
+network requests or output files. Choose venv, Docker, SLURM, Kubernetes, Brev or Lepton explicitly as in
 [AutoML](automl.md); each uncached batch uses the same durable job lifecycle.
 For SLURM, prepare the same image/template/record hooks but use a prompt-specific
 bootstrap, not the SFT bootstrap. Prompt evaluation uses one GPU per batch;
 allocating more does not parallelize this implementation.
+For Kubernetes/Brev/Lepton, use the [cloud execution contract](automl-platforms.md)
+with exactly one GPU. Prompt evaluation uses the same executor and persistent
+batch receipts as SFT; it does not need a separate platform integration.
 
 Review both evaluation and LLM spend:
 

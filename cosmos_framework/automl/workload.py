@@ -166,6 +166,9 @@ class SFTWorkload:
         return plan
 
     def plan(self, config: dict, trial: Path, execution: Execution) -> TrialPlan:
+        if execution.kind in {"kubernetes", "brev", "lepton"}:
+            if getattr(execution, execution.kind).gpus != self.nproc:
+                raise ValueError("Managed Framework trials require one allocated GPU per training rank")
         recipe = copy.deepcopy(config)
         recipe.setdefault("job", {}).update(project="automl", group=self.experiment_id, name=trial.name)
         recipe["job"].setdefault("wandb_mode", "disabled")

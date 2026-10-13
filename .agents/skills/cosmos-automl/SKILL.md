@@ -24,9 +24,19 @@ Keep this one skill entrypoint for both workflows.
   budget (or cumulative step fidelity), seed, immutable data/code revisions, GPU allocation, and both trial
   count/time limits. Check training/validation separation. Keep final test data
   out of the optimization loop.
-- Ask among venv, Docker and SLURM when not selected; none is a default. Images
+- Ask among supported installed venv, Docker, SLURM, Kubernetes, Brev and Lepton
+  environments when not selected; none is a default. Images
   and assets must be prepared separately with approval. Do not silently pull,
   download, increase resources, or fall back to another execution environment.
+- For Kubernetes, Brev or Lepton, read the [cloud execution guide](../../../docs/automl-platforms.md).
+  Require persistent same-path storage and cross-client POSIX locks, an explicit
+  cluster/instance/workspace identity, and reviewed GPU/image/Secret references.
+  Use one GPU per SFT rank or exactly one for GEPA. These executors do not
+  provision infrastructure or transfer data. Brev instance billing continues
+  after its container stops. Keep the CPU controller alive for queue/startup
+  cancellation; Lepton/Brev worker deadlines are not native allocation limits.
+  Native training retries are disabled; only read-only submission adoption and
+  observation retries are automatic. Live cloud GPU validation remains pending.
 - Run `cosmos-automl plan --manifest <yaml> --workspace <directory>`. This is a
   CPU-only structural check, not a full Hydra/GPU preflight. Review the actual
   native commands, resource allocation, mounts, metric, budgets and prerequisites.
@@ -40,6 +50,17 @@ Keep this one skill entrypoint for both workflows.
   A first-trial review can use `search.pause_after_trials: [1]`; resume only
   after reviewing full-data results and timing. Pausing releases GPU resources
   but does not reset the experiment clock.
+- If the CPU allocation can expire first, review the SLURM guide's opt-in
+  `--controller-max-allocations`, allocation seconds and grace in both plan and
+  run. CPU handoff requeues the same CPU job and adopts existing GPU jobs; it
+  adds no trials or LLM calls and never extends the experiment deadline.
+  `SUSPENDED` may retain an active GPU trial; it is not the `PAUSED` review gate.
+  Preserve the shared environment and credentials across allocations. Do not
+  blanket-cancel or delete the secret sidecar on every batch exit. A lost
+  requeue acknowledgement needs native observation, not another submission.
+  This requires the matching new wheel and a reviewed requeue-enabled CPU
+  wrapper; do not retrofit a queued/live matrix or claim live rollover proof
+  from the CPU simulation.
 - Obtain approval before `run ... --approve` or `resume ... --approve`.
   Approval covers the reviewed search budget, not unbounded trial retries.
 - Review the SLURM guide's bounded recovery policy and worst-case allocation

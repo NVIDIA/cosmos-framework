@@ -28,7 +28,9 @@ wheel before submission. Do not overlay an unrelated source checkout at launch.
 
 If the CPU controller needs an API key, forward only its environment-variable
 name in manifests. An approved sidecar must be mode 600, outside synced results,
-and removed after the controller terminates. Never place it in the image or PR.
+and removed after the experiment terminates. With CPU handoff enabled, keep it
+available to the bounded successor allocations; a single allocation ending is
+not experiment completion. Never place it in the image or PR.
 Bind a parent job record before submitting the controller, record its native
 job ID, and monitor `squeue`/`sacct` and logs until terminal or explicit handoff.
 Preserve existing runs and use fresh experiment IDs for a changed build.
@@ -84,8 +86,9 @@ planning template; replace every site/asset placeholder before approval.
 
 - Explicit partition(s), account, optional site QoS, CPU/GPU counts, optional
   memory, exclusivity, allocation wall time, startup cap, cleanup allowance,
-  and scheduler polling interval. Scheduler requeue remains off; bounded
-  controller retries require the explicit recovery policy below.
+  and scheduler polling interval. GPU allocation requeue remains off; bounded
+  trial retries require the explicit recovery policy below. CPU-controller
+  continuation is a separate opt-in policy, described next.
 - The existing [single-node template](../tools/cosmos_workflows/templates/slurm/singlenode.sbatch.tmpl)
   is the Pyxis step envelope. A small host-side supervisor wraps it to bound
   startup and preserve the actual step exit. It resolves granted `NumCPUs`
@@ -139,6 +142,72 @@ wall limit; configure its terminal signals and timeout in the launch envelope.
 Keep the original engine wheel for existing experiments: changing the engine
 build changes its identity even while the development version stays fixed.
 See [development version and build identity](automl.md#development-version-and-build-identity).
+
+### Bounded CPU-controller handoff
+
+There are three independent limits: each CPU controller allocation, each GPU
+trial allocation, and the overall experiment deadline. Reaching the last one
+ends the search; obtaining another CPU allocation must not restart that clock.
+Without the opt-in below, controller termination requests trial cancellation
+and records the observation. An unconfirmed native cancellation is `ERROR`,
+not proof that the GPU allocation ended. Independent worker deadlines still
+apply after controller loss.
+
+For a CPU wall limit shorter than the approved experiment, use the new core
+build's shared CLI handoff flags for **both plan and run**:
+
+```bash
+cosmos-automl plan --manifest search.yaml --workspace /shared/automl \
+  --controller-max-allocations 4 --controller-allocation-seconds 3600 \
+  --controller-grace-seconds 300
+```
+
+These example settings permit at most four controller-requested one-hour CPU
+allocations, including the initial one. They add no GPU trials, retries or LLM
+calls. Review CPU/memory resources and the original experiment deadline too;
+grace and time spent queued reduce useful controller time. For GEPA use
+`cosmos-automl prompts plan/run` with the same flags. Grace must cover an
+in-flight LLM request plus at least 60 seconds.
+
+Prepare [slurm_controller.sbatch](../examples/automl/slurm_controller.sbatch),
+replace its site placeholders, and set the documented environment variables.
+The example starts one experiment per CPU job, using `exec` so the Python
+process receives `--signal=B:USR1@300`. Review before `sbatch`; the example is
+not a ready-to-launch site configuration. It is not a supervisor for an
+existing multi-experiment matrix wrapper.
+
+Before CPU expiry, a cooperative safe point saves `SUSPENDED` and requests
+`scontrol requeue` for the **same CPU job ID**. The successor validates native
+ownership, resources, restart count, build and policy, then resumes the same
+experiment. It adopts recorded GPU jobs and reuses completed results and LLM
+receipts. `SUSPENDED` here is a brain state that may have an active GPU trial;
+it is distinct from `PAUSED`, the manual-review boundary with no active trial.
+`controller.json` records allocation generations, handoff intent and the
+original absolute deadline. No in-flight API request or submission is
+interrupted just to checkpoint midway through its durable receipt.
+
+When the CPU allocation cap is exhausted, the search stops and requests native
+cancellation. Requeue is disabled on the final permitted CPU allocation;
+scheduler-initiated restarts also consume the cap. A site administrator or
+forced prolog requeue can override user settings, so such an unexpected extra
+generation is refused rather than starting more work. SLURM's requeue rules
+are documented in [sbatch](https://slurm.schedmd.com/sbatch.html#OPT_requeue)
+and [scontrol](https://slurm.schedmd.com/scontrol.html#OPT_requeue).
+
+A lost requeue acknowledgement is recorded as `REQUEUE_UNCONFIRMED`. An actual
+native successor may resume, but the old process never repeats the requeue RPC
+or submits a replacement CPU job blindly. Inspect native state if no successor
+appears. Hard node/process loss can bypass a cooperative checkpoint; durable
+submission intents and independent GPU deadlines remain safeguards, not a
+guarantee that arbitrary paid API calls can be replayed.
+
+Use an unchanged shared interpreter, manifest, assets, credentials and workspace
+across allocations. Do not put trial cancellation or secret deletion in an
+unconditional batch `EXIT` trap. Review the underlying filesystem's cross-node
+POSIX locking before GPU fan-out. This feature does not change installed wheels
+or retrofit existing queued/running controllers. CPU operational checks cover
+handoff and adoption; live site requeue/locking and GPU continuation still need
+a separately reviewed smoke test.
 
 Pending jobs remain pending. Submission intent is durable before the scheduler
 RPC; a lost response enters automatic bounded reconciliation by unique job name

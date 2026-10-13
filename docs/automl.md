@@ -7,10 +7,39 @@ checkout, SDK, model registry or skills installation.
 AutoML tunes **reasoner SFT** against held-out native evaluation, with fixed-budget,
 multi-fidelity, population and bounded LLM controllers. **GEPA Auto-Prompter**
 optimizes evaluation prompts without training model weights. Both use the same
-local Linux venv, Docker or single-node SLURM execution lifecycle. See
+venv, Docker, SLURM, Kubernetes, Brev or Lepton execution lifecycle. See
 [algorithms](automl-algorithms.md), [prompt optimization](automl-prompts.md), and
-[SLURM execution](automl-slurm.md). This is not a general optimizer for every
+[SLURM execution](automl-slurm.md) and [cloud execution](automl-platforms.md). This is not a general optimizer for every
 Framework training/inference workflow; the workload contracts remain explicit.
+
+### Execution coverage and controller placement
+
+The original TAO runner exposes six SDK platform factories. The independent
+core implements all six without importing those SDK factories. Platform
+implementation coverage is not equivalent to live GPU validation.
+
+| Execution platform | Core support | Framework evidence / limits |
+| --- | --- | --- |
+| Docker | Implemented | Local Docker WTS GPU training/evaluation exercised. |
+| Virtualenv | Implemented | CPU lifecycle verified; not equivalent to the recorded Framework GPU matrix. |
+| SLURM | Implemented | On-cluster CPU controller submits and monitors separate single-node GPU allocations. Recorded bounded SFT/GEPA matrix results are below. |
+| Kubernetes | Implemented; live validation pending | Single-pod Jobs, explicit context/PVCs, native deadline and UID-safe suspension. |
+| Brev | Implemented; live validation pending | Docker on an existing instance, explicit daemon identity and shared/controller-local instance storage; no provisioning or teardown. |
+| Lepton | Implemented; live validation pending | Workspace Jobs API, dedicated node groups and shared NFS; worker deadlines require a live controller for queue/startup cancellation. |
+
+Controller location and workload platform are separate concerns, but the
+current implementations have locality requirements: Docker/venv share their
+controller host's filesystem, and managed adapters need the same persistent
+filesystem visible to controller and workers. See the [cloud storage contract](automl-platforms.md#controller-and-storage-contract).
+A local/service-hosted brain talking to remote SLURM through SSH still
+needs a transport and artifact/validation contract. Changing `execution.kind`
+does not provide one. An experiment's execution identity is fixed on resume;
+cross-platform migration and mixed-platform trial routing are not implemented.
+
+For SLURM CPU allocations shorter than an experiment, the opt-in
+[bounded controller handoff](automl-slurm.md#bounded-cpu-controller-handoff)
+preserves active jobs and the original deadline. This is not an implementation
+of local-to-remote orchestration or a cloud controller service.
 
 ## Installation and release status
 
