@@ -95,7 +95,11 @@ Keep this one skill entrypoint for both workflows.
   progress and correlate node events, storage errors and job logs; exclusions
   are placement safeguards, not proof of node health. Preserve failed `attempts` and use
   the successful `attempt_id` for artifacts and promotion parents. Do not upgrade
-  live controllers or old ledgers to enable recovery.
+  live controllers to enable recovery. For a stopped SLURM SFT search, the
+  [explicit cold migration](../../../docs/automl-slurm.md#explicit-cold-recovery-migration)
+  requires separate review and approval, exact old wheel, native terminal proof,
+  resolved paid receipts and unchanged budgets/deadline. Never edit identities
+  manually or reset the remaining CPU allocation cap.
 - For promotions/PBT, inspect stage counts, full-horizon scheduler, donor DCP
   state and topology. Each stage counts as a trial; partial-budget scores cannot
   win. PBT may mutate LR/weight decay, not batch/accumulation or architecture.

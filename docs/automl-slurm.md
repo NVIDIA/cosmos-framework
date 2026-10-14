@@ -259,6 +259,47 @@ Keep the original engine wheel for existing experiments: changing the engine
 build changes its identity even while the development version stays fixed.
 See [development version and build identity](automl.md#development-version-and-build-identity).
 
+### Explicit cold recovery migration
+
+Ordinary resume requires the original build. To apply a reviewed recovery fix
+to a **stopped SLURM SFT search**, install the new core wheel into a separate
+controller environment. Do not modify environments used by active controllers.
+Preserve the exact original wheel and review the changed recovery modules; the
+migration's file allowlist cannot prove semantic compatibility by itself.
+
+```bash
+cosmos-automl migrate --manifest continuation.yaml --workspace /shared/runs \
+  --from-wheel /shared/original/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl
+# Only after reviewing the migration output:
+cosmos-automl migrate --manifest continuation.yaml --workspace /shared/runs \
+  --from-wheel /shared/original/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl --approve
+```
+
+This does not launch training. It verifies the original wheel's engine hash,
+old CPU/trial ownership and terminal evidence, resolved LLM receipts, unchanged
+workload/environment and remaining original time. Only the engine's permitted
+recovery files and additive explicit node exclusions may change. Search/proposal
+code, model/data, resources and all search/retry/LLM budgets remain unchanged.
+An already-failed uncertain attempt needs a closed launch fence and no observed
+active allocation; its fence and consumed retry remain intact. Unresolved
+ownership, paid requests or active jobs block migration.
+
+Completed trials/results, configurations, failed reserved slots and attempt/API
+receipts stay in place. Partial checkpoints are not replayed. The old ledger and
+CPU history are archived in `migrations/recovery-v1.json`; `migration.json` records
+the transaction. A root stop marker requires `--acknowledge-cancel` and is archived,
+not silently ignored. Never remove attempt cancellation markers or fences. An
+interrupted transaction blocks resume; rerun the same approved migration.
+
+The resulting ledger is `SUSPENDED`. Review `plan` with the new manifest/build,
+then submit a fresh CPU batch using `resume --approve`. Preserve its previous CPU
+resource shape, wall time and grace, but set `--controller-max-allocations` to no
+more than the migration's **remaining** allocation count. Prior allocations are
+deducted, and bypassing the CPU session is rejected. The original absolute deadline
+still applies, including controller downtime. Ordinary identity checks are not
+disabled. This narrow operation does not support GEPA, other executors, arbitrary
+engine upgrades or chained migrations.
+
 ### Bounded CPU-controller handoff
 
 There are three independent limits: each CPU controller allocation, each GPU
@@ -390,7 +431,8 @@ trial rather than claiming it terminated. Verification wrappers must not turn
 this result into blanket cancellation. Use the same manifest/build when resuming;
 never clear an old fence, receipt or cancellation marker. New local core wheels
 stage the supervisor/fence helpers automatically; this core-only correction does
-not require rebuilding the training image. Historical runs are not migrated.
+not require rebuilding the training image. Historical runs are not automatically
+migrated; use the explicit cold migration above only for its supported case.
 
 `cancel --approve` requests native cancellation of owned queued/running jobs.
 Catchable controller termination also requests cancellation; uncatchable
@@ -501,7 +543,7 @@ require SLURM; local venv/Docker failure classification is not inferred.
 
 These changes require new exact local controller wheels, still core
 `1.0.0.dev0`; they do not upgrade already-running controllers or old experiment
-identities. Do not edit a live manifest/ledger or replace its installed wheel to
+identities automatically. Do not edit a live manifest/ledger or replace its installed wheel to
 enable recovery. The worker is staged from the controller; the Framework changes
 declare existing native status files, not new training-image entrypoints.
 CPU fault-injection checks are not live cluster recovery validation.
