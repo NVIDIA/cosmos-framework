@@ -74,6 +74,56 @@ dependencies before installing Framework and exercise the installed adapter's
 for training; the prepared image supplies that stack. Point Python installer
 caches at shared storage when the login home has a small quota.
 
+## Private node history and exclusions
+
+Use the user's existing private cluster records during launch review. SLURM's
+node-event history is stored in its accounting database, queried with
+`sacctmgr show event`; it is not a skill-owned faulty-node file. A site's
+private incident register can supplement it. Keep both outside the public
+repository, along with site identities and the resolved launch manifest.
+
+On the selected cluster, these are read-only queries (replace the placeholders
+with reviewed nodes and the historical time window; the end precedes launch):
+
+```bash
+TZ=UTC sacctmgr -r -n -P show event where Nodes=<node-list> \
+  Start=<history-start-UTC> End=<launch-review-UTC> \
+  Format=NodeName,Start,End,State,Reason
+scontrol show nodes -o
+```
+
+Distinguish fault events from normal provisioning and use event end times and
+repair evidence: a closed incident does not prove a node is currently faulty.
+For a failed multi-node allocation, check `sacct`'s `FailedNode`, not just its
+`NodeList`. Do not infer a block-wide exclusion from a few affected nodes.
+Review recent/repeated failures and current diagnostic comments with the user's
+exclusion policy. A conservative exclusion can remain after a closed incident
+when explicitly selected in that review; no universal expiry is imposed.
+
+Put the reviewed set in the private manifest's
+`execution.slurm.exclude_nodes` as a list of explicit node names. Expand any
+approved hostlist against current inventory first. The default is an empty
+list; shell expressions, wildcards, ranges and duplicate names are rejected.
+Record the history source, review time and selection rationale in the private
+launch review. The list is visible in `plan.identity.execution.slurm` and bound
+to the experiment identity. Run preflight checks all names against live
+inventory and fails on retired/missing names; reconcile them in a new reviewed
+configuration rather than silently dropping exclusions. Scheduler-query errors
+do not authorize running without the list.
+
+The executor emits `#SBATCH --exclude` on the actual outer batch for every SFT
+trial, promotion, retry and GEPA evaluation allocation, and records the list in
+`_slurm.json`. Its existing per-submission `sbatch --test-only` checks still
+apply. It does not automatically grow the list during an experiment or bypass
+native termination/retry-budget safeguards. GPU exclusions do not change the
+separately submitted CPU controller's placement. `SBATCH_EXCLUDE` is not a
+substitute: the executor filters scheduler environment overrides.
+
+This requires a new core controller build, still `1.0.0.dev0`; the training
+image need not change. Do not upgrade a live controller or mutate its sealed
+manifest. Existing searches keep their original placement policy; select the
+new build and exclusions when preparing a fresh experiment.
+
 ## Manifest settings
 
 Keep the native `workload.recipe`, `workload.evaluation`, `nproc_per_node`,
@@ -166,12 +216,22 @@ after the final owned CPU allocation is confirmed terminal. Report every mode
 that never launched as `NOT_STARTED`, even if Python failed before creating its
 ledger. Never label CPU-check simulations as live cross-node validation.
 
-Use this wrapper with a **non-requeue CPU batch**. Do not wrap the bounded
-handoff template below unchanged: that template requires direct `SIGUSR1`
-delivery to the search process and a reviewed native-generation lifecycle.
-Startup attempts here are single-use, and the wrapper forwards termination,
-not handoff signals. The existing handoff template remains a separate path;
-combining the two needs an explicit bootstrap/signal/generation integration.
+Use `run` with a **non-requeue CPU batch**. For bounded handoff, use `probe`
+instead: it performs the same check but returns without starting a child.
+Then mark `fanout` and **exec** the handoff CLI from the batch shell, so the
+controller directly receives SLURM's `SIGUSR1`. In that shell, trap termination
+and `USR1` to exit while bootstrap is running; never ignore an early signal.
+Use a fresh attempt directory for each native job ID and `SLURM_RESTART_COUNT`
+generation. Validate the generation against the approved allocation cap before
+probing. The external observer must watch each generation automatically.
+
+Probe success only means the storage check passed; it does not prove that the
+brain started. Preserve `fanout` before exec and use the native CLI's
+`controller.json` and experiment ledger for controller status. Never interpret
+a failed exec or missing ledger after fan-out as permission for a fresh job.
+Native handoff owns same-job restart validation; startup retry still requires
+no fan-out or work in **any** prior generation. Do not wrap the handoff CLI
+inside `run`, reuse probe receipts, or reset the absolute deadline on requeue.
 
 ### Experiment and allocation limits
 
@@ -394,9 +454,33 @@ a watchdog threshold, not a promise that every silent interval indicates failure
 Structured workload failure or a stale configured watchdog triggers cancellation
 and native reconciliation, **not immediate resubmission**. If termination cannot
 be confirmed within `cancellation_timeout_seconds` (plus in-flight bounded
-scheduler calls), the controller returns an explicit recovery-blocked error with
-the old job identity retained. It does not keep waiting indefinitely or overlap
-a replacement allocation. Worker child cleanup after SIGKILL is bounded too.
+scheduler calls), the brain stays alive and records the trial's
+`cancellation_reconciliation.state: WAITING`. It switches from active cancellation
+to read-only observation of that same allocation. SLURM `COMPLETING` still owns
+resources even when accounting already says `CANCELLED`; neither that accounting
+row nor a worker stop receipt permits an overlapping replacement.
+
+This wait uses the original experiment deadline and the approved CPU-controller
+handoff/allocation caps, not another timeout that resets on resume. Scheduler
+outages back off without ending the brain early; cooperative handoff preserves
+the pending cancellation. No trial, retry or LLM proposal is consumed while
+waiting. Confirmed native termination records `CONFIRMED` and lets the existing
+retry policy and `stop_on_failure` determine the next step. Node health is
+rechecked while the owned allocation is active so later `DOWN`/`NOT_RESPONDING`
+evidence is not lost. An already-released node's later fault is not evidence
+against the old job. Missing/conflicting native identity still blocks the search.
+User cancellation, elapsed deadline or CPU cap exhaustion still ends bounded
+monitoring; if release is unconfirmed, report `ERROR` and reconcile before resume.
+Worker child cleanup after SIGKILL is bounded too.
+
+Both heartbeats depend on shared-storage reads/writes. A hung node, driver or
+filesystem can stop publication even when training has no Python traceback.
+`heartbeat_stale` records which publisher was stale and its timestamp/age; worker
+and batch exceptions preserve numeric `error_errno` without logging secret-bearing
+exception text. Correlate these with native node events and bounded job log tails.
+A fresh heartbeat with an unchanged declared progress file is `progress_stalled`,
+not a heartbeat failure. Node exclusions reduce placement risk but do not repair
+hardware/storage or guarantee future health; do not disable watchdogs to hide it.
 
 A retry preserves the logical candidate, seed, proposal and promotion/PBT source.
 It gets a new job-record/native job ID and a sibling directory such as

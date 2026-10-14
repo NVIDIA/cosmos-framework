@@ -50,6 +50,12 @@ Keep this one skill entrypoint for both workflows.
   A first-trial review can use `search.pause_after_trials: [1]`; resume only
   after reviewing full-data results and timing. Pausing releases GPU resources
   but does not reset the experiment clock.
+- Use the user's private SLURM node-fault history when preparing new launches;
+  follow [node exclusions](../../../docs/automl-slurm.md#private-node-history-and-exclusions).
+  Review historical incidents against current inventory and seal the selected
+  names in `execution.slurm.exclude_nodes`. Keep cluster/node details outside
+  public skills and examples. Do not infer whole-block faults or permanent
+  quarantine from closed incidents, or edit a live experiment to add exclusions.
 - Supervise the native CPU allocation before the brain starts; trial retries
   cannot handle bootstrap/import/prolog failures. Follow the SLURM guide's
   [startup contract](../../../docs/automl-slurm.md#before-the-search-controller-starts):
@@ -69,14 +75,25 @@ Keep this one skill entrypoint for both workflows.
   This requires the matching new wheel and a reviewed requeue-enabled CPU
   wrapper; do not retrofit a queued/live matrix or claim live rollover proof
   from the CPU simulation.
+  Combine startup supervision with handoff using the startup helper's `probe`
+  verb, a fresh observed attempt per native job/restart generation, and `fanout`
+  before directly execing the CLI. Do not put the handoff CLI inside `run`:
+  it must receive scheduler signals itself. An early bootstrap signal must
+  stop the batch, and a missing ledger after fan-out is not retry permission.
 - Obtain approval before `run ... --approve` or `resume ... --approve`.
   Approval covers the reviewed search budget, not unbounded trial retries.
 - Review the SLURM guide's bounded recovery policy and worst-case allocation
   count in `plan`. Same-candidate retries need both per-trial and total caps;
   watchdog thresholds must accommodate native progress-report gaps and loading.
   Node failure/preemption can retry, but DRAIN alone or a bare NCCL timeout cannot.
-  Confirm termination before replacement; recovery-blocked means reconcile the
-  existing allocation, not restart the brain. Preserve failed `attempts` and use
+  Confirm termination before replacement. After the cancellation window, the new
+  core keeps the brain alive with `cancellation_reconciliation.state: WAITING`,
+  observing the same allocation within the original deadline and CPU handoff caps.
+  Do not restart a waiting brain; native confirmation enables the existing retry
+  policy or next candidate. Identity conflicts and expired limits still block.
+  For heartbeat failures, distinguish worker/batch publication from training
+  progress and correlate node events, storage errors and job logs; exclusions
+  are placement safeguards, not proof of node health. Preserve failed `attempts` and use
   the successful `attempt_id` for artifacts and promotion parents. Do not upgrade
   live controllers or old ledgers to enable recovery.
 - For promotions/PBT, inspect stage counts, full-horizon scheduler, donor DCP

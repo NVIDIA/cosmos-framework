@@ -6,6 +6,8 @@
 The external submitter must drive ``observe`` while watching native SLURM
 status, including failures before this interpreter starts. Each CPU allocation
 uses a fresh attempt directory. This helper never submits or retries a job.
+``probe`` checks storage without wrapping the controller, allowing a batch
+shell to exec the native handoff CLI with direct scheduler signal delivery.
 """
 
 import argparse
@@ -116,6 +118,7 @@ def retry_allowed(native_state, root):
 
 
 def run(root, command, deadline, probe_seconds, minimum_run_seconds):
+    """Verify startup; with no command, return to a signal-owning batch shell."""
     root.mkdir(parents=True, exist_ok=True)
     owner = identity(os.environ["SLURM_JOB_ID"])
     # Exclusive, persistent claim: native requeues/duplicate invocations cannot
@@ -137,7 +140,7 @@ def run(root, command, deadline, probe_seconds, minimum_run_seconds):
         nonlocal stop_requested
         stop_requested = True
 
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGUSR1):
         signal.signal(signum, stop)
 
     def await_receipt(name, field, until):
@@ -178,6 +181,8 @@ def run(root, command, deadline, probe_seconds, minimum_run_seconds):
             error_kind = "insufficient_time"
             raise TimeoutError("Insufficient approved time")
         save("STARTED", observer_host=observer["host"], controller_started_at=time.time())
+        if command is None:
+            return 0
         environment = {**os.environ, "AUTOML_STARTUP_ATTEMPT": str(root)}
         child = subprocess.Popen(command, env=environment, start_new_session=True)
         stopping_at = None
@@ -206,7 +211,7 @@ def run(root, command, deadline, probe_seconds, minimum_run_seconds):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("verb", choices=("run", "observe", "fanout", "status"))
+    parser.add_argument("verb", choices=("run", "probe", "observe", "fanout", "status"))
     parser.add_argument("--attempt-dir", type=Path, required=True)
     parser.add_argument("--job-id")
     parser.add_argument("--deadline", type=float)
@@ -222,7 +227,11 @@ def main():
         raise SystemExit(run(root, command, options.deadline, options.probe_seconds, options.minimum_run_seconds))
     if command:
         parser.error("Unexpected arguments")
-    if options.verb == "observe":
+    if options.verb == "probe":
+        if options.deadline is None or options.probe_seconds <= 0 or options.minimum_run_seconds < 0:
+            parser.error("probe requires an absolute deadline and valid time budgets")
+        raise SystemExit(run(root, None, options.deadline, options.probe_seconds, options.minimum_run_seconds))
+    elif options.verb == "observe":
         if not options.job_id:
             parser.error("observe requires --job-id")
         print(json.dumps(observe(root, options.job_id)))
