@@ -95,9 +95,7 @@ class VLMProcessor(RawItemProcessor):
 
     def process(self, item: dict) -> dict:
         messages = self._sharegpt_to_openai(item)
-        inputs = self._processor.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=False
-        )
+        inputs = self._processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)
         input_ids = inputs["input_ids"]
         token_mask = self._processor.add_assistant_tokens_mask(input_ids)
         labels = input_ids.clone()
@@ -155,11 +153,12 @@ class VLMCollator(BatchCollator):
         # input_ids: pad with each sample's pad_token_id.
         regular["input_ids"] = torch.stack(
             [
-                torch.cat([
-                    s["input_ids"],
-                    torch.full((max_seq_length - s["input_ids"].shape[0],),
-                               s["pad_token_id"], dtype=torch.long),
-                ])
+                torch.cat(
+                    [
+                        s["input_ids"],
+                        torch.full((max_seq_length - s["input_ids"].shape[0],), s["pad_token_id"], dtype=torch.long),
+                    ]
+                )
                 for s in samples
             ],
             dim=0,
@@ -173,11 +172,12 @@ class VLMCollator(BatchCollator):
         # labels: pad with each sample's ignore_index.
         regular["labels"] = torch.stack(
             [
-                torch.cat([
-                    s["labels"],
-                    torch.full((max_seq_length - s["labels"].shape[0],),
-                               s["ignore_index"], dtype=torch.long),
-                ])
+                torch.cat(
+                    [
+                        s["labels"],
+                        torch.full((max_seq_length - s["labels"].shape[0],), s["ignore_index"], dtype=torch.long),
+                    ]
+                )
                 for s in samples
             ],
             dim=0,
@@ -191,7 +191,7 @@ class VLMCollator(BatchCollator):
                 if isinstance(img, torch.Tensor):
                     if img.ndim == 3:
                         img = img[:, None]
-                    img = [img[:, i:i + 1] for i in range(img.shape[1])]
+                    img = [img[:, i : i + 1] for i in range(img.shape[1])]
                 ri.append(img)
             regular["raw_image"] = ri
         if any("raw_video" in s for s in samples):
@@ -206,8 +206,12 @@ class VLMCollator(BatchCollator):
         # Vision tensors: flat-concatenate on dim 0 (Qwen3-VL addresses them via
         # placeholder tokens in input_ids, not by batch position).
         vision_cat_keys = (
-            "image_grid_thw", "video_grid_thw", "second_per_grid_ts",
-            "pixel_values", "pixel_values_videos", "image_sizes",
+            "image_grid_thw",
+            "video_grid_thw",
+            "second_per_grid_ts",
+            "pixel_values",
+            "pixel_values_videos",
+            "image_sizes",
         )
         all_keys = {k for s in samples for k in s}
         for key in all_keys:

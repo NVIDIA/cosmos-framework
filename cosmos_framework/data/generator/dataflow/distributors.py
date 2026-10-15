@@ -25,9 +25,7 @@ class IterableDistributor(DataDistributor):
     def __init__(self, iterable: Any):
         self._iterable = iterable
 
-    def stream(
-        self, dp_rank: int, dp_world_size: int, worker_id: int, num_workers: int
-    ) -> Iterator[Any]:
+    def stream(self, dp_rank: int, dp_world_size: int, worker_id: int, num_workers: int) -> Iterator[Any]:
         total_streams = dp_world_size * num_workers
         my_stream = dp_rank * num_workers + worker_id
         for i, item in enumerate(self._iterable):
