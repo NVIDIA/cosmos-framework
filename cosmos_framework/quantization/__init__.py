@@ -132,7 +132,7 @@ def quantize_fp8_checkpoint(
     """Quantize a diffusers-layout Cosmos3 checkpoint to FP8 and write a drop-in dir.
 
     Mirrors the NIM ``quantize_cosmos3.py`` gen-only ``max`` path end to end:
-    load -> calibrate (real denoising) -> ModelOpt FP8 -> disable skip filter ->
+    load -> calibrate (real denoising) -> ModelOpt FP8 with skip filter ->
     export vllm-omni FP8 diffusers checkpoint -> assemble drop-in dir.
 
     ``profile`` is one of ``"t2v"``, ``"t2i"``, ``"i2v"``. ``i2v`` requires either
@@ -235,15 +235,14 @@ def quantize_fp8_checkpoint(
         use_legacy_scheduler=legacy_behavior,
     )
 
-    quant_cfg = _calib.build_quant_config(quant_algo)
     skip_filter = _calib.build_filter(
         num_gen_layers=num_gen_layers,
         quantize_language_model=quantize_language_model,
     )
+    quant_cfg = _calib.build_quant_config(model, quant_algo, skip_filter=skip_filter)
 
     print(f"[quant] format=fp8 algo={quant_algo}")
     mtq.quantize(model, quant_cfg, forward_loop)
-    mtq.disable_quantizer(model, skip_filter)
     mtq.print_quant_summary(model)
 
     staging_dir = output_dir.parent / f".quantized_transformer_{profile}.tmp"
@@ -252,6 +251,7 @@ def quantize_fp8_checkpoint(
         staging_dir,
         transformer_dir,
         mixed_precision_steps=mixed_precision_steps,
+        modelopt_config=quant_cfg,
     )
     _export.assemble_output_dir(input_dir, output_dir, staging_dir)
     write_quantization_metadata(output_dir, metadata)

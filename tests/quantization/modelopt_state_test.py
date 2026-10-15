@@ -22,7 +22,11 @@ import torch
 from modelopt.torch.opt.conversion import ApplyModeError, apply_mode, restore_from_modelopt_state
 from modelopt.torch.quantization.qtensor import QTensorWrapper
 from safetensors.torch import save_file
-from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+
+
+@pytest.fixture(autouse=True)
+def cosmos_transformers_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "packages/transformers-cosmos3"))
 
 
 @pytest.fixture
@@ -42,8 +46,10 @@ def export_modules(monkeypatch):
             monkeypatch.delitem(sys.modules, key)
 
 
-def tiny_reasoner(device="cpu"):
-    config = Qwen3VLConfig(
+def tiny_omni_config():
+    from transformers_cosmos3 import Cosmos3OmniConfig
+
+    return Cosmos3OmniConfig(
         text_config={
             "hidden_size": 16,
             "intermediate_size": 32,
@@ -66,8 +72,13 @@ def tiny_reasoner(device="cpu"):
             "deepstack_visual_indexes": [],
         },
     )
+
+
+def tiny_reasoner(device="cpu"):
+    from transformers_cosmos3 import Cosmos3ForConditionalGeneration
+
     with torch.device(device):
-        return Qwen3VLForConditionalGeneration(config).bfloat16()
+        return Cosmos3ForConditionalGeneration(tiny_omni_config()).bfloat16()
 
 
 def compressed_dit(quantize_language_model=True):
@@ -109,10 +120,10 @@ def reasoner_payload(helper, dit):
         module, _, leaf = name.rpartition(".")
         if "quantizer" in module:
             parent, _, role = module.rpartition(".")
-            mapped = helper.dit_to_reasoner_module(parent)
+            mapped = helper.dit_to_reasoner_module(parent, "cosmos3_omni")
             mapped = f"{mapped}.{role}" if mapped else None
         else:
-            mapped = helper.dit_to_reasoner_module(module)
+            mapped = helper.dit_to_reasoner_module(module, "cosmos3_omni")
         if mapped:
             payload[f"{mapped}.{leaf}"] = value
     return payload
@@ -123,7 +134,7 @@ def test_compressed_state_round_trip(export_modules, tmp_path, quantize_language
     helper, _ = export_modules
     dit, component = compressed_dit(quantize_language_model)
     original = copy.deepcopy(component)
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     state = helper.build_reasoner_modelopt_state(component, tmp_path)
     assert component == original  # metadata contains no tensor values
     path = tmp_path / "modelopt_state.pth"
@@ -156,12 +167,14 @@ def test_compressed_state_round_trip(export_modules, tmp_path, quantize_language
 def test_huggingface_load_retains_calibrated_buffers(export_modules, tmp_path):
     helper, _ = export_modules
     dit, component = compressed_dit()
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     state = helper.build_reasoner_modelopt_state(component, tmp_path)
     save_file(reasoner_payload(helper, dit), str(tmp_path / "model.safetensors"))
     torch.save(state, tmp_path / "modelopt_state.pth")
     mto.enable_huggingface_checkpointing()
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
+    from transformers_cosmos3 import Cosmos3ForConditionalGeneration
+
+    model = Cosmos3ForConditionalGeneration.from_pretrained(
         tmp_path,
         device_map="cpu",
         torch_dtype=torch.bfloat16,
@@ -176,7 +189,7 @@ def test_huggingface_load_retains_calibrated_buffers(export_modules, tmp_path):
 def test_phantom_attention_metadata_fails_strict_restore(export_modules, tmp_path):
     helper, _ = export_modules
     _, component = compressed_dit()
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     state = helper.build_reasoner_modelopt_state(component, tmp_path)
     qs = dict(state["modelopt_state_dict"])["quantize"]["metadata"]["quantizer_state"]
     # Strict restore rejects even a disabled extra entry: names must come from the graph.
@@ -189,7 +202,7 @@ def test_phantom_attention_metadata_fails_strict_restore(export_modules, tmp_pat
 def test_invalid_compressed_metadata_fails(export_modules, tmp_path, problem):
     helper, _ = export_modules
     _, component = compressed_dit()
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     if problem == "missing_mode":
         component["modelopt_state_dict"] = component["modelopt_state_dict"][:1]
     else:
@@ -205,15 +218,14 @@ def test_invalid_compressed_metadata_fails(export_modules, tmp_path, problem):
 
 def test_make_empty_reasoner_uses_local_config(export_modules, tmp_path):
     helper, _ = export_modules
-    config = tiny_reasoner().config.to_dict()
-    config["model_type"] = "cosmos3_omni"
+    config = tiny_omni_config().to_dict()
     (tmp_path / "config.json").write_text(json.dumps(config))
     model = helper.make_empty_reasoner(tmp_path)
     assert all(p.is_meta for p in model.parameters())
     assert set(dict(model.named_modules())) == set(dict(tiny_reasoner().named_modules()))
     config["model_type"] = "unknown"
     (tmp_path / "config.json").write_text(json.dumps(config))
-    with pytest.raises(ValueError, match="reasoner config"):
+    with pytest.raises(ValueError, match="Expected cosmos3_omni or cosmos3_edge"):
         helper.make_empty_reasoner(tmp_path)
 
 
@@ -230,7 +242,7 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     (source / "quantization_metadata.json").write_text('{"previous_export": true}')
     _, component = compressed_dit()
     torch.save(component, staging / "modelopt_state.pth")
-    tiny_reasoner().config.save_pretrained(source)
+    tiny_omni_config().save_pretrained(source)
     (output / "modelopt_state.pth").symlink_to(source / "modelopt_state.pth")
     (staging / "config.json").write_text(
         json.dumps({"quantization_config": {"quant_method": "modelopt", "runtime": {}}})
@@ -258,7 +270,7 @@ def test_matches_external_sot_metadata(export_modules, tmp_path):
     sot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sot)
     _, component = compressed_dit()
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     ours = helper.build_reasoner_modelopt_state(component, tmp_path)
     expected_qs = sot.get_reasoner_quantizer_state(lambda: tiny_reasoner("meta"), component)
     expected = sot.remap(component, expected_qs)
@@ -275,7 +287,7 @@ def test_dynamic_activation_has_no_placeholder(export_modules, tmp_path):
     config["quant_cfg"].append(
         {"quantizer_name": "*input_quantizer", "cfg": {"num_bits": (4, 3), "axis": None, "type": "dynamic"}}
     )
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     state = helper.build_reasoner_modelopt_state(component, tmp_path)
     qs = dict(state["modelopt_state_dict"])["quantize"]["metadata"]["quantizer_state"]
     active = qs["model.language_model.layers.0.self_attn.q_proj.input_quantizer"]
@@ -288,7 +300,7 @@ def test_root_writer_uses_export_config_and_local_architecture(export_modules, t
     dit, component = compressed_dit()
     writer = exporter.Fp8DiffusersExporter()
     dict(component["modelopt_state_dict"])["quantize"]["config"] = writer.build_quant_config_json()["modelopt_config"]
-    tiny_reasoner().config.save_pretrained(tmp_path)
+    tiny_omni_config().save_pretrained(tmp_path)
     writer.write_transformers_modelopt_state(component, tmp_path, tmp_path)
     state = torch.load(tmp_path / "modelopt_state.pth", weights_only=False)
     restored = restore_from_modelopt_state(tiny_reasoner(), modelopt_state=state)
@@ -300,25 +312,12 @@ def test_root_writer_uses_export_config_and_local_architecture(export_modules, t
 
 @pytest.mark.parametrize("quantized", [True, False])
 @pytest.mark.parametrize("flat", [True, False])
-@pytest.mark.parametrize("cosmos_config", [True, False])
-def test_cosmos_shim_loads_shards(export_modules, tmp_path, quantized, flat, cosmos_config):
+def test_cosmos_shim_loads_shards(export_modules, tmp_path, quantized, flat):
     helper, exporter = export_modules
-    transformers_cosmos3_path = Path(__file__).resolve().parents[2] / "packages/transformers-cosmos3"
-    sys.path.append(str(transformers_cosmos3_path))
-    model_path = transformers_cosmos3_path / "transformers_cosmos3/model.py"
-    spec = importlib.util.spec_from_file_location("cosmos_transformers_shim", model_path)
-    shim = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(shim)
+    from transformers_cosmos3 import Cosmos3ForConditionalGeneration
+
     dit, component = compressed_dit()
-    tiny_reasoner().config.save_pretrained(tmp_path)
-    if cosmos_config:
-        config_path = tmp_path / "config.json"
-        config = json.loads(config_path.read_text())
-        config["model_type"] = "cosmos3_omni"
-        # Real Nano labels its nested vision config qwen3_vl. Loading the root
-        # with Qwen3VLConfig incorrectly selects this as the entire config.
-        config["vision_config"]["model_type"] = "qwen3_vl"
-        config_path.write_text(json.dumps(config))
+    tiny_omni_config().save_pretrained(tmp_path)
     state = helper.build_reasoner_modelopt_state(component, tmp_path)
     transformer, vision = {}, {}
     payload = reasoner_payload(helper, dit) if quantized else tiny_reasoner().state_dict()
@@ -343,7 +342,7 @@ def test_cosmos_shim_loads_shards(export_modules, tmp_path, quantized, flat, cos
     if quantized:
         torch.save(state, tmp_path / "modelopt_state.pth")
     mto.enable_huggingface_checkpointing()
-    model = shim.Cosmos3ForConditionalGeneration.from_pretrained(
+    model = Cosmos3ForConditionalGeneration.from_pretrained(
         tmp_path,
         device_map="cpu",
         torch_dtype=torch.bfloat16,

@@ -298,8 +298,8 @@ class Fp8DiffusersExporter:
 
     quant_format = "fp8"
 
-    def build_quant_config_json(self) -> dict:
-        modelopt_config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
+    def build_quant_config_json(self, modelopt_config: dict | None = None) -> dict:
+        modelopt_config = copy.deepcopy(modelopt_config if modelopt_config is not None else mtq.FP8_DEFAULT_CFG)
         modelopt_config["algorithm"] = "max"
         modelopt_config["quant_cfg"][1]["cfg"]["fake_quant"] = False
         for name in _DIFFUSERS_MODULES_TO_NOT_CONVERT:
@@ -338,13 +338,14 @@ class Fp8DiffusersExporter:
         bf16_state_dict: dict[str, torch.Tensor],
         exported_state_dict: dict[str, torch.Tensor],
         export_dir: Path,
+        modelopt_config: dict | None = None,
     ) -> dict:
         """Write component graph state remapped from the compressed framework model."""
         component_state = _remap_framework_modelopt_state(
             state,
             bf16_state_dict=bf16_state_dict,
             exported_state_dict=exported_state_dict,
-            modelopt_config=self.build_quant_config_json()["modelopt_config"],
+            modelopt_config=self.build_quant_config_json(modelopt_config)["modelopt_config"],
         )
         torch.save(component_state, export_dir / "modelopt_state.pth")
         modes = dict(component_state["modelopt_state_dict"])
@@ -417,6 +418,7 @@ class Fp8DiffusersExporter:
         src_transformer_dir: Path,
         dtype=torch.bfloat16,
         mixed_precision_steps: int = 3,
+        modelopt_config: dict | None = None,
     ) -> None:
         from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
 
@@ -451,11 +453,13 @@ class Fp8DiffusersExporter:
             raise FileNotFoundError(f"Missing source config.json at {src_config}; cannot stamp quantization_config.")
         with open(src_config, encoding="utf-8") as f:
             config = json.load(f)
-        config["quantization_config"] = self.build_quant_config_json()
+        config["quantization_config"] = self.build_quant_config_json(modelopt_config)
         add_diffusion_step_policy(config, mixed_precision_steps)
         with open(transformer_export_dir / "config.json", "w") as f:
             json.dump(config, f, indent=4)
-        self.write_diffusers_modelopt_state(framework_modelopt_state, bf16, merged, transformer_export_dir)
+        self.write_diffusers_modelopt_state(
+            framework_modelopt_state, bf16, merged, transformer_export_dir, modelopt_config
+        )
         print(f"[export] wrote {len(merged)} tensors (fp8) to {transformer_export_dir}")
 
 
@@ -465,6 +469,7 @@ def export_quantized_transformer(
     src_transformer_dir: Path,
     dtype=torch.bfloat16,
     mixed_precision_steps: int = 3,
+    modelopt_config: dict | None = None,
 ):
     """Export the FP8-quantized DiT as a vllm-omni-loadable diffusers checkpoint dir."""
     Fp8DiffusersExporter().export(
@@ -473,6 +478,7 @@ def export_quantized_transformer(
         Path(src_transformer_dir),
         dtype=dtype,
         mixed_precision_steps=mixed_precision_steps,
+        modelopt_config=modelopt_config,
     )
 
 
