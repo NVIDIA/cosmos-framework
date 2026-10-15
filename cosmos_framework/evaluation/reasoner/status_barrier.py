@@ -3,10 +3,10 @@
 
 """Filesystem coordination for distributed Cosmos status publishers."""
 
-import hashlib
-import os
 import time
 from pathlib import Path
+
+from cosmos_framework.checkpoint.reasoner import distributed_invocation_id
 
 
 def wait_for_status_publishers(results_dir: Path, rank: int, world_size: int, timeout_seconds: int) -> None:
@@ -14,13 +14,7 @@ def wait_for_status_publishers(results_dir: Path, rank: int, world_size: int, ti
     if world_size <= 1:
         return
 
-    run_id = os.environ.get("COSMOS_RUN_ID") or os.environ.get("TORCHELASTIC_RUN_ID")
-    if not run_id or run_id == "none":
-        job_id = os.environ.get("COSMOS_JOB_ID") or os.environ.get("SLURM_JOB_ID")
-        if not job_id:
-            raise ValueError("Distributed evaluation requires COSMOS_RUN_ID or a launcher-provided job identity")
-        run_id = job_id + ":" + os.environ.get("SLURM_STEP_ID", "0")
-    marker_dir = results_dir / ".cosmos_status_barrier" / hashlib.sha256(run_id.encode()).hexdigest()[:24]
+    marker_dir = results_dir / ".cosmos_status_barrier" / distributed_invocation_id()
     marker_dir.mkdir(parents=True, exist_ok=True)
     # An old publisher marker must never satisfy a new invocation's barrier.
     with (marker_dir / f"rank_{rank}.ready").open("x") as marker:

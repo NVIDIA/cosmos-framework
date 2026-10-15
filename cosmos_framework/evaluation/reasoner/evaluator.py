@@ -253,6 +253,15 @@ class Evaluator(BaseEvaluator):
                     }
                 )
 
+        # Keep per-example predictions for skip_saved. Aggregate shard files
+        # alone cannot tell the base evaluator which assigned examples exist.
+        for output, prediction, result in zip(outputs, predictions, all_results):
+            result["full_response"] = prediction
+            path = Path(output["output_path"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps([result]) + "\n")
+            temporary.replace(path)
         results_dir = Path(outputs[0]["output_path"]).parent
         results_dir.mkdir(parents=True, exist_ok=True)
         total_shard = getattr(self, "_current_total_shard", 1)

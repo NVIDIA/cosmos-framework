@@ -271,9 +271,9 @@ class ITSEvaluator(BaseEvaluator):
         self, results_dir: Path, outputs: List[Dict[str, Any]], predictions: List[str]
     ) -> Dict[str, Any]:
         """Compute ITS directionality metrics."""
-        return self._evaluate_directionality(results_dir)
+        return self._evaluate_directionality(results_dir, [output["output_path"] for output in outputs])
 
-    def _evaluate_directionality(self, result_path: Path) -> Dict[str, Any]:
+    def _evaluate_directionality(self, result_path: Path, output_paths: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Evaluate directionality metrics from results.
 
@@ -282,7 +282,11 @@ class ITSEvaluator(BaseEvaluator):
         log.info("Computing directionality metrics...")
         self._send_status_callback("Computing directionality metrics from evaluation results...")
 
-        results = glob.glob(str(result_path / "eval_set_name" / "**" / "*.json"), recursive=True)
+        results = (
+            output_paths
+            if output_paths is not None
+            else glob.glob(str(result_path / "eval_set_name" / "**" / "*.json"), recursive=True)
+        )
         log.info(f"Found {len(results)} result files.")
         self._send_status_callback(f"Processing {len(results)} result files for metrics computation...")
 

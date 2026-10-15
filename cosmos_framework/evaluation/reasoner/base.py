@@ -16,13 +16,14 @@
 
 from __future__ import annotations
 
+import json
 import logging as log
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from cosmos_framework.checkpoint.reasoner import distributed_identity
+from cosmos_framework.checkpoint.reasoner import distributed_identity, distributed_invocation_id
 from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 from cosmos_framework.utils.workflow_status import log_workflow_status
 
@@ -283,6 +284,17 @@ class BaseEvaluator(ABC):
             results_output_dir = results_dir / Path(model_name).name / answer_type
 
         results_output_dir.mkdir(parents=True, exist_ok=True)
+        rank, world_size, _ = distributed_identity()
+        marker_dir = None
+        if world_size > 1:
+            if (total_shard, shard_id) != (world_size, rank):
+                raise ValueError("Distributed evaluation must assign exactly one shard to each rank")
+            marker_dir = results_output_dir / ".rank_status" / distributed_invocation_id()
+            marker_dir.mkdir(parents=True, exist_ok=True)
+            # Reject identity reuse; do not erase markers another rank may be
+            # publishing, or accept a previous invocation's completion.
+            with (marker_dir / f"rank_{rank}.started").open("x"):
+                pass
 
         # Under torchrun each process owns exactly one data-parallel shard and one
         # GPU.  A non-distributed invocation evaluates its requested shard.
@@ -290,6 +302,7 @@ class BaseEvaluator(ABC):
         all_outputs: List[Dict[str, Any]] = []
         all_predictions: List[str] = []
         all_losses: List[float] = []
+        reused_predictions = False
 
         for current_shard_id in shard_ids_to_run:
             # Step 1: Gather tasks for this shard
@@ -298,6 +311,8 @@ class BaseEvaluator(ABC):
                 f"Gathering evaluation tasks from dataset (shard {current_shard_id}/{total_shard})..."
             )
             inputs, outputs = self.make_tasks(results_output_dir, total_shard, current_shard_id)
+            if limit > 0:
+                inputs, outputs = inputs[:limit], outputs[:limit]
             log.info(f"Gathered {len(inputs)} tasks for shard {current_shard_id}")
 
             log_workflow_status(
@@ -316,19 +331,18 @@ class BaseEvaluator(ABC):
                 filtered_inputs = []
                 filtered_outputs = []
                 for i, o in zip(inputs, outputs):
-                    if not Path(o["output_path"]).exists():
+                    prediction = self._saved_prediction(o)
+                    if prediction is None:
                         filtered_inputs.append(i)
                         filtered_outputs.append(o)
+                    else:
+                        all_outputs.append(o)
+                        all_predictions.append(prediction)
+                        reused_predictions = True
                 inputs, outputs = filtered_inputs, filtered_outputs
                 if not inputs:
                     log.info(f"Shard {current_shard_id}: all results already saved, skipping")
                     continue
-
-            # Apply limit if specified (per-shard limit would be complex; we apply to first shard only for debugging)
-            if limit > 0 and len(inputs) > limit:
-                inputs = inputs[:limit]
-                outputs = outputs[:limit]
-                log.info(f"Limited tasks to {len(inputs)} for debugging")
 
             if not inputs:
                 continue
@@ -359,26 +373,56 @@ class BaseEvaluator(ABC):
 
             # Step 5: Save results for this shard
             log.info(f"Saving results for shard {current_shard_id}...")
-            self._current_shard_id = current_shard_id
-            self._current_total_shard = total_shard
-            self.save(outputs, predictions)
             all_outputs.extend(outputs)
             all_predictions.extend(predictions)
             all_losses.extend(losses)
 
-        if not all_outputs:
-            log.info("No tasks to evaluate - all results already exist or no data.")
-            self._send_status_callback("No tasks to evaluate - all results already exist")
-            return {"overall": {"accuracy": 0.0, "total": 0, "correct": 0}}
+        self._current_shard_id = shard_id
+        self._current_total_shard = total_shard
+        if len(all_outputs) != len(all_predictions):
+            raise ValueError("Evaluation predictions do not match the assigned tasks")
+        if all_outputs:
+            self.save(all_outputs, all_predictions)
+
+        if marker_dir is not None:
+            payload = {
+                "outputs": all_outputs,
+                "predictions": all_predictions,
+                "losses": None if reused_predictions else all_losses,
+            }
+            temporary = marker_dir / f"rank_{rank}.tmp"
+            temporary.write_text(json.dumps(payload) + "\n")
+            temporary.replace(marker_dir / f"rank_{rank}.json")
+            if rank != 0:
+                return {"overall": {"total": len(all_outputs)}}
+            deadline = time.monotonic() + int(self.eval_config.get("barrier_timeout_seconds", 14400))
+            while not all((marker_dir / f"rank_{i}.json").is_file() for i in range(world_size)):
+                if time.monotonic() >= deadline:
+                    missing = [i for i in range(world_size) if not (marker_dir / f"rank_{i}.json").is_file()]
+                    raise TimeoutError(f"Timed out waiting for evaluation ranks: {missing}")
+                time.sleep(0.1)
+            all_outputs, all_predictions, all_losses = [], [], []
+            for i in range(world_size):
+                payload = json.loads((marker_dir / f"rank_{i}.json").read_text())
+                if len(payload["outputs"]) != len(payload["predictions"]):
+                    raise ValueError(f"Rank {i} published mismatched predictions and tasks")
+                all_outputs.extend(payload["outputs"])
+                all_predictions.extend(payload["predictions"])
+                reused_predictions = reused_predictions or payload["losses"] is None
+                all_losses.extend(payload["losses"] or [])
 
         # Step 6: Compute overall metrics from all shards
         log.info("Computing evaluation metrics over full dataset...")
         self._send_status_callback("Computing evaluation metrics...")
-        metrics = self.compute_metrics(results_output_dir, all_outputs, all_predictions)
+        metrics = (
+            self.compute_metrics(results_output_dir, all_outputs, all_predictions)
+            if all_outputs
+            else {"overall": {"accuracy": 0.0, "total": 0, "correct": 0}}
+        )
 
         # Step 7: Add loss to metrics (common for all evaluators)
         # This is computed from logprobs during inference and applies to all task types
-        if all_losses:
+        if all_losses and not reused_predictions:
             avg_loss = sum(all_losses) / len(all_losses)
             if "overall" in metrics:
                 metrics["overall"]["loss"] = avg_loss
@@ -386,40 +430,29 @@ class BaseEvaluator(ABC):
                 metrics["overall"] = {"loss": avg_loss}
             log.info(f"Evaluation loss (NLL): {avg_loss:.6f}")
 
-        # Coordinate independent data-parallel ranks without creating a torch
-        # process group.  This keeps Framework checkpoint loading local to each
-        # GPU and avoids DCP treating evaluation replicas as one sharded model.
-        rank, world_size, _ = distributed_identity()
-        if world_size > 1:
-            marker_dir = results_output_dir / ".rank_status"
-            marker_dir.mkdir(parents=True, exist_ok=True)
-            (marker_dir / f"rank_{rank}.done").write_text("done\n")
-            if rank == 0:
-                timeout = int(self.eval_config.get("barrier_timeout_seconds", 14400))
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
-                    if all((marker_dir / f"rank_{i}.done").is_file() for i in range(world_size)):
-                        break
-                    time.sleep(1)
-                else:
-                    missing = [i for i in range(world_size) if not (marker_dir / f"rank_{i}.done").is_file()]
-                    raise TimeoutError(f"Timed out waiting for evaluation ranks: {missing}")
-                aggregated = self.aggregate_metrics_if_all_shards_present(results_output_dir, metrics, world_size, rank)
-                if aggregated is not None:
-                    metrics = aggregated
-            # Nonzero ranks return their local metric; only rank zero publishes
-            # the aggregate through the action/status logger.
-
         if rank == 0:
-            import json
-
-            (results_output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+            temporary = results_output_dir / ".metrics.tmp"
+            temporary.write_text(json.dumps(metrics, indent=2) + "\n")
+            temporary.replace(results_output_dir / "metrics.json")
 
         total_time = time.time() - start_time
         log.info(f"Complete evaluation pipeline finished in {total_time:.2f} seconds")
         self._send_status_callback(f"Evaluation completed successfully in {total_time:.1f} seconds")
 
         return metrics
+
+    @staticmethod
+    def _saved_prediction(output: Dict[str, Any]) -> Optional[str]:
+        """Reuse a complete prediction, not mere file existence or an empty shard."""
+        try:
+            rows = json.loads(Path(output["output_path"]).read_text())
+            if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict):
+                prediction = rows[0].get("full_response")
+                if isinstance(prediction, str):
+                    return prediction
+        except (OSError, ValueError):
+            pass
+        return None
 
     @abstractmethod
     def make_tasks(

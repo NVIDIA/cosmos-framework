@@ -19,10 +19,24 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 logger = logging.getLogger(__name__)
+
+
+def distributed_invocation_id() -> str:
+    """Identify one launch/restart, shared by independent evaluation replicas.
+
+    Direct launchers must provide a fresh COSMOS_RUN_ID for each invocation.
+    torchrun's rendezvous identity plus restart generation is already shared.
+    """
+    run_id = os.environ.get("COSMOS_RUN_ID") or os.environ.get("TORCHELASTIC_RUN_ID")
+    if not run_id or run_id == "none":
+        raise ValueError("Distributed evaluation requires a fresh COSMOS_RUN_ID or torchrun rendezvous identity")
+    identity = [run_id, os.environ.get("TORCHELASTIC_RESTART_COUNT", "0"), os.environ.get("SLURM_RESTART_COUNT", "0")]
+    return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
 
 def distributed_identity() -> tuple[int, int, int]:
@@ -70,7 +84,9 @@ def is_lora_adapter(path: str | Path) -> bool:
 
 
 def _source_fingerprint(path: Path) -> str:
-    """Fingerprint model/config/tokenizer/processor files and every weight shard."""
+    """Hash export inputs, excluding separate Framework optimizer/trainer state."""
+    if (path / "model" / ".metadata").is_file():
+        path = path / "model"
     digest = hashlib.sha256()
     included = []
     for candidate in sorted(item for item in path.rglob("*") if item.is_file()):
@@ -131,6 +147,56 @@ def _matches_marker(marker: Path, expected: dict) -> bool:
         return False
 
 
+_export_calls: dict[tuple[str, str], int] = {}
+
+
+def _coordinated_export(output: Path, request: dict, operation: Callable[[], str], timeout_seconds: int) -> str:
+    """Only rank zero reads source weights; peers await this invocation's receipt.
+
+    A cached export still needs a fresh content check by rank zero. Receipts must
+    never substitute an earlier launch's check for that verification.
+    """
+    rank, world_size, _ = distributed_identity()
+    if world_size == 1:
+        return operation()
+    invocation = distributed_invocation_id()
+    request_key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    key = (invocation, request_key)
+    sequence = _export_calls.get(key, 0)
+    _export_calls[key] = sequence + 1
+    checks = output.parent / ".cosmos_export_checks" / request_key / invocation / str(sequence)
+    checks.mkdir(parents=True, exist_ok=True)
+    # Fail closed if a launcher accidentally reuses an identity from a prior run.
+    with (checks / f"rank_{rank}.started").open("x"):
+        pass
+    receipt = checks / "verified.json"
+    if rank == 0:
+        try:
+            result = operation()
+        except Exception as error:
+            payload = {"error": f"{type(error).__name__}: {error}"}
+            temporary = receipt.with_suffix(".tmp")
+            temporary.write_text(json.dumps(payload) + "\n")
+            temporary.replace(receipt)
+            raise
+        temporary = receipt.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"result": result}) + "\n")
+        temporary.replace(receipt)
+        return result
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if receipt.is_file():
+            payload = json.loads(receipt.read_text())
+            if "error" in payload:
+                raise RuntimeError(f"Rank zero checkpoint resolution failed: {payload['error']}")
+            result = payload["result"]
+            if Path(result) != output or not is_hf_checkpoint(result):
+                raise RuntimeError(f"Invalid checkpoint verification receipt: {receipt}")
+            return result
+        time.sleep(0.2)
+    raise TimeoutError(f"Timed out waiting for rank zero to verify/export {output}")
+
+
 def ensure_hf_checkpoint(
     model_path: str,
     *,
@@ -138,6 +204,35 @@ def ensure_hf_checkpoint(
     export_dir: str | None = None,
     vit_checkpoint_path: str | None = None,
     timeout_seconds: int = 7200,
+) -> str:
+    """Return an HF export, verifying/exporting DCP content on rank zero only."""
+    path = Path(model_path).expanduser()
+    if not path.exists() or is_hf_checkpoint(path):
+        return str(path.resolve()) if path.exists() else model_path
+    path = path.resolve()
+    output = Path(export_dir).expanduser().resolve() if export_dir else _default_export_dir(path)
+    request = {
+        "checkpoint": str(path),
+        "config_file": config_file,
+        "export_dir": str(output),
+        "vit_checkpoint_path": vit_checkpoint_path,
+    }
+    return _coordinated_export(
+        output,
+        request,
+        lambda: _ensure_hf_checkpoint(
+            str(path), config_file=config_file, export_dir=str(output), vit_checkpoint_path=vit_checkpoint_path
+        ),
+        timeout_seconds,
+    )
+
+
+def _ensure_hf_checkpoint(
+    model_path: str,
+    *,
+    config_file: str | None = None,
+    export_dir: str | None = None,
+    vit_checkpoint_path: str | None = None,
 ) -> str:
     """Return an HF export path, exporting a DCP checkpoint when necessary."""
     path = Path(model_path).expanduser()
@@ -165,12 +260,9 @@ def ensure_hf_checkpoint(
     if vit_checkpoint_path and Path(vit_checkpoint_path).is_dir():
         expected["base_model_fingerprint"] = _source_fingerprint(Path(vit_checkpoint_path))
     complete_marker = output_path / ".cosmos_export_complete"
-    rank, world_size, _ = distributed_identity()
     if _export_is_complete(output_path) and _matches_marker(complete_marker, expected):
         return str(output_path)
-    if rank == 0:
-        if output_path.exists():
-            raise ValueError(f"Export destination exists without matching provenance; choose a new path: {output_path}")
+    if not output_path.exists():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         from cosmos_framework.scripts.export_vlm_dcp import export_vlm_dcp, is_vlm_training_config
 
@@ -210,14 +302,8 @@ def ensure_hf_checkpoint(
                 raise RuntimeError(f"Export did not produce a complete model at {staging}")
             (staging / complete_marker.name).write_text(json.dumps(expected) + "\n")
             staging.rename(output_path)
-    elif world_size > 1:
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            if _export_is_complete(output_path) and _matches_marker(complete_marker, expected):
-                break
-            time.sleep(2)
-        else:
-            raise TimeoutError(f"Timed out waiting for rank 0 to export {path}")
+    else:
+        raise ValueError(f"Export destination exists without matching provenance; choose a new path: {output_path}")
     return str(output_path)
 
 
@@ -238,6 +324,35 @@ def ensure_evaluation_checkpoint(
     data-parallel ranks wait for the completed, self-contained HF export.
     """
     path = Path(model_path).expanduser()
+    if path.exists() and is_lora_adapter(path):
+        output = Path(export_dir).expanduser().resolve() if export_dir else path.resolve().parent / "merged" / path.name
+        request = {
+            "adapter": str(path.resolve()),
+            "enable_lora": enable_lora,
+            "base_model_path": base_model_path,
+            "export_dir": str(output),
+        }
+        return _coordinated_export(
+            output,
+            request,
+            lambda: _ensure_adapter_checkpoint(
+                model_path, enable_lora=enable_lora, base_model_path=base_model_path, export_dir=str(output)
+            ),
+            timeout_seconds,
+        )
+    return ensure_hf_checkpoint(
+        model_path,
+        config_file=config_file,
+        export_dir=export_dir,
+        vit_checkpoint_path=vit_checkpoint_path,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _ensure_adapter_checkpoint(
+    model_path: str, *, enable_lora: bool, base_model_path: str | None, export_dir: str
+) -> str:
+    path = Path(model_path).expanduser()
     adapter = path.exists() and is_lora_adapter(path)
     if adapter and not enable_lora:
         raise ValueError(f"Model path {path} is a PEFT adapter but model.enable_lora is false.")
@@ -251,17 +366,10 @@ def ensure_evaluation_checkpoint(
             else adapter_path.parent / "merged" / adapter_path.name
         )
         complete_marker = output_path / ".cosmos_lora_merge_complete.json"
-        rank, world_size, _ = distributed_identity()
         base_path = Path(base_model_path).expanduser().resolve()
         if not base_path.is_dir():
             raise ValueError(f"PEFT base model must be a local directory: {base_path}")
         _check_output_path(output_path, adapter_path, base_path)
-        coordination_id = ":".join(
-            (
-                os.environ.get("SLURM_JOB_ID", "local"),
-                os.environ.get("SLURM_STEP_ID", os.environ.get("MASTER_PORT", "0")),
-            )
-        )
         expected_provenance = {
             "adapter_checkpoint": str(adapter_path),
             "adapter_fingerprint": _source_fingerprint(adapter_path),
@@ -269,18 +377,15 @@ def ensure_evaluation_checkpoint(
             "base_model_fingerprint": _source_fingerprint(base_path),
             "format": "merged-peft-hf",
         }
-        if rank == 0:
-            cached_provenance = None
-            if complete_marker.is_file():
-                try:
-                    cached_provenance = json.loads(complete_marker.read_text())
-                    cached_provenance.pop("coordination_id", None)
-                except (OSError, ValueError):
-                    cached_provenance = None
-            merge_complete = is_hf_checkpoint(output_path) and cached_provenance == expected_provenance
-        else:
-            merge_complete = False
-        if rank == 0 and not merge_complete:
+        cached_provenance = None
+        if complete_marker.is_file():
+            try:
+                cached_provenance = json.loads(complete_marker.read_text())
+                cached_provenance.pop("coordination_id", None)
+            except (OSError, ValueError):
+                cached_provenance = None
+        merge_complete = is_hf_checkpoint(output_path) and cached_provenance == expected_provenance
+        if not merge_complete:
             from cosmos_framework.checkpoint.lora import merge_lora_model
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,31 +400,7 @@ def ensure_evaluation_checkpoint(
                 ).resolve()
                 if merged != temporary_output.resolve() or not is_hf_checkpoint(temporary_output):
                     raise RuntimeError(f"LoRA merge did not produce a complete HF model at {temporary_output}")
-                marker_payload = {**expected_provenance, "coordination_id": coordination_id}
-                (temporary_output / complete_marker.name).write_text(json.dumps(marker_payload) + "\n")
+                (temporary_output / complete_marker.name).write_text(json.dumps(expected_provenance) + "\n")
                 temporary_output.rename(output_path)
-        if rank == 0:
-            marker_payload = {**expected_provenance, "coordination_id": coordination_id}
-            complete_marker.write_text(json.dumps(marker_payload, indent=2, sort_keys=True) + "\n")
-        elif world_size > 1:
-            deadline = time.monotonic() + timeout_seconds
-            while time.monotonic() < deadline:
-                if complete_marker.is_file() and is_hf_checkpoint(output_path):
-                    try:
-                        marker = json.loads(complete_marker.read_text())
-                        if marker.pop("coordination_id", None) == coordination_id and marker == expected_provenance:
-                            break
-                    except (OSError, ValueError):
-                        pass
-                time.sleep(2)
-            else:
-                raise TimeoutError(f"Timed out waiting for rank 0 to merge {adapter_path}")
         return str(output_path)
-
-    return ensure_hf_checkpoint(
-        model_path,
-        config_file=config_file,
-        export_dir=export_dir,
-        vit_checkpoint_path=vit_checkpoint_path,
-        timeout_seconds=timeout_seconds,
-    )
+    raise ValueError(f"Not a PEFT adapter checkpoint: {path}")

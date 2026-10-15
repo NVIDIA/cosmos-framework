@@ -225,6 +225,24 @@ trial then locates the committed DCP pointer, checks the expected iteration,
 and invokes the existing reasoner evaluator. Native checkpoint preparation
 handles DCP-to-HF export; no new exporter or inference implementation is added.
 
+The adapter invokes evaluation as a single process. The standalone reasoner
+evaluator also supports data-parallel `torchrun` launches: each rank owns one
+shard, including empty shards, and rank zero scores only predictions published
+by that invocation. Use `torchrun --standalone` (which supplies a fresh rendezvous
+identity), or export the same fresh `COSMOS_RUN_ID` to every rank before each
+launch. Do not reuse a launch identity or run concurrent evaluations into the
+same result directory. Restart generations are included in coordination paths.
+With `skip_saved`, valid saved predictions remain in the scored dataset; loss is
+omitted when reused predictions have no saved token likelihoods. Reuse a results
+directory only for the same model, dataset and evaluation configuration.
+
+DCP export and PEFT merge provenance checks read source contents on rank zero
+only; peers wait for a fresh invocation-specific verification receipt even when
+an export is cached. DCP hashing covers the model shards and metadata, not the
+separate optimizer/trainer state. Config and local base-model content hashes are
+retained. An older export whose provenance no longer matches must use a new
+export directory; the resolver never overwrites it or trusts size/mtime alone.
+
 ```bash
 cosmos-automl status --experiment-id reasoner-lr-search --workspace outputs/automl
 cosmos-automl logs --experiment-id reasoner-lr-search --workspace outputs/automl
