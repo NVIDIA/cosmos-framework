@@ -139,6 +139,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_causal_seq,
     get_full_only_seq,
     get_num_real_samples,
+    get_num_real_tokens,
     sequence_pack_from_packed_sequence,
 )
 
@@ -644,21 +645,25 @@ def multi_control_two_way_attention(
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_text, Hq*D]
 
     # ── 2. Extract unpadded full/gen tokens ──────────────────────────────────
-    full_q, full_q_offsets = get_full_only_seq(packed_query_states)
+    full_q, _ = get_full_only_seq(packed_query_states)
     full_k, _ = get_full_only_seq(packed_key_states)
     full_v, _ = get_full_only_seq(packed_value_states)
 
-    n_text = int(causal_k_offsets[-1])
-    n_full = int(full_q_offsets[-1])
+    # Read both counts off the pack rather than off the offsets tensors. `int(offsets[-1])` reads
+    # device memory, so under torch.compile it yields an unbacked symint and every slice below
+    # becomes data-dependent. That is fatal now that this path reaches cuDNN: its Inductor lowering
+    # compares the heads-first KV stride against the head dim, and for KV length `u + n` it cannot
+    # decide `128 * Max(1, u + n) > 128`. The pack already carries the same two counts as host-side
+    # ints, and they are exact rather than an approximation: `_compute_mode_indices_and_offsets`
+    # builds a mode's offsets and its index list in one pass over `split_lens`, so
+    # `offsets[-1] == len(indices) == num_<mode>_tokens`. Ulysses CP restores the full sequence on
+    # every rank before dispatch, so the batch-wide counts are the right ones here.
+    n_text, _ = get_num_real_tokens(packed_key_states)
+    _, n_full = get_num_real_tokens(packed_query_states)
 
-    # `n_full` comes from int(full_q_offsets[-1]) → an unbacked symint under
-    # torch.compile. The control ranges + noisy range partition the full/gen
-    # segment with noisy last, so `noisy_e` (a concrete int from SplitInfo) is
-    # exactly the number of valid gen tokens == n_full. Binding them lets Dynamo
-    # treat the per-segment `full_*_v[cs:ce]` slices below as concrete-length, so
-    # the in-place writes `full_out_v[cs:ce] = _sdpa(...)` don't raise
-    # data-dependent `Eq(slice_len, out_len)` guards.
-    torch._check(n_full == noisy_e)
+    # The control ranges + noisy range partition the full/gen segment with noisy last, so `noisy_e`
+    # is exactly the number of valid gen tokens.
+    assert n_full == noisy_e, f"gen stream holds {n_full} real tokens but the control split ends at {noisy_e}"
 
     # Unpad to avoid padded rows entering the softmax denominator.
     causal_k_v = causal_k[:n_text]  # [N_text, Hkv, D]
@@ -673,22 +678,17 @@ def multi_control_two_way_attention(
 
     def _sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """Maskless attention using cosmos_framework.model.attention() → [N_q, Hq*D]."""
-        # K and V are built by concatenating the SAME [text | ctrl_i | noisy]
-        # slices, so their sequence lengths are always equal. Under
-        # torch.compile (fullgraph=True) those lengths are unbacked symints
-        # (from data-dependent unpadding), and the attention frontend's
-        # `if key_shape[1] != value_shape[1]` guard (attention/checks.py) cannot
-        # be resolved symbolically. Assert the invariant so Dynamo can discharge
-        # the guard statically instead of raising a data-dependent error.
+        # K and V are built by concatenating the SAME [text | ctrl_i | noisy] slices, so their
+        # sequence lengths are always equal; the attention frontend still checks it
+        # (`key_shape[1] != value_shape[1]` in attention/checks.py). The padded stream length is a
+        # dynamic dimension under torch.compile, so state the invariants as facts rather than as
+        # plain asserts: that discharges the frontend's checks without specializing on it.
         torch._check(k.shape[0] == v.shape[0])
         n_q, n_kv = q.shape[0], k.shape[0]
 
-        # These lengths come from data-dependent unpadding, so they are unbacked
-        # symints under torch.compile. Backend validation checks require positive
-        # lengths, and cuDNN specifically rejects KV length 1. This path builds
-        # KV as [text | ctrl_i | noisy], where ctrl_i and noisy are non-empty for
-        # valid multi-control packs, so assert the stronger invariant. Without
-        # these, Dynamo cannot discharge them against unbacked symints.
+        # Backend validation requires positive lengths, and cuDNN specifically rejects KV length 1.
+        # This path builds KV as [text | ctrl_i | noisy], where ctrl_i and noisy are non-empty for
+        # valid multi-control packs, so assert the stronger invariant.
         torch._check(n_q > 0)
         torch._check(n_kv > 1)
 

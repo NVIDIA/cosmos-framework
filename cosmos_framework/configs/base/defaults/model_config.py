@@ -46,10 +46,25 @@ class DiffusionExpertConfig:
     # Enabled by default
     enable_sound_modality_embedding: bool = True
 
+    # Zero disables physical rig embeddings. When enabled, N >= 2 reserves camera IDs
+    # 0..N-2 and LiDAR ID N-1, even for camera-only inputs. N is the sensor vocabulary
+    # size for the model, not the number of sensors selected in a sample.
+    # Examples for the MADS rig (N=12, camera IDs 0..10, LiDAR ID 11):
+    # - Camera only: selecting camera 8 uses row 8; row 11 is unused.
+    # - LiDAR only: uses row 11; no vision_view_ids are needed.
+    # - Camera + LiDAR: selected cameras use their physical IDs and LiDAR uses row 11.
+    num_view_embeddings: int = 0
+
     patch_spatial: int = 2
+    # None preserves the shared camera/LiDAR/radar patch size used by existing checkpoints.
+    # An int selects square patches; (height, width) selects rectangular patches.
+    # Any is required here because OmegaConf rejects unions containing tuples.
+    lidar_patch_spatial_hw: Any = None
+    radar_patch_spatial_hw: Any = None
     max_vae_latent_side_after_patchify: int = (
         52  # Max h/w of the VAE latent after patchification; 52 -> up to ~1664px square (52*32). Was 20 (=640px).
     )
+
     # Vision/action/sound position information is always provided through
     # Qwen3VL-style 3D mRoPE attention IDs.
     enable_fps_modulation: bool = False
@@ -72,6 +87,7 @@ class DiffusionExpertConfig:
 class RectifiedFlowTrainingConfig:
     shift: Any = 5  # Training time shift. If dict, maps resolution (str) to shift value (int)
     shift_image: Any | None = None  # Image-specific shift; None inherits shift
+    shift_lidar: int | None = None  # LiDAR-only batches; None preserves the shared vision schedule
     use_dynamic_shift: bool = False  # Whether to use dynamic shifting
     train_time_image_distribution: str = "logitnormal"  # Training time distribution for images
     train_time_video_distribution: str = "logitnormal"  # Training time distribution for videos
@@ -82,6 +98,7 @@ class RectifiedFlowTrainingConfig:
     image_loss_scale: float | None = None  # If set, overrides loss_scale for images
     sound_loss_scale: float | None = None  # If set, overrides loss_scale for sound
     lidar_loss_scale: float | None = None  # If set, overrides loss_scale for lidar
+    radar_loss_scale: float | None = None  # If set, overrides loss_scale for radar
     use_discrete_rf: bool = False  # Whether to use discrete formulation of rectified flow
 
     # user: please adjust this value according to loss_scale to balance the action loss with the video loss.
@@ -110,22 +127,34 @@ class RectifiedFlowTrainingConfig:
     # False by default to preserve legacy loss magnitudes; enable for AR/DF training.
     normalize_loss_by_active: bool = False
 
-    # Sample-level (vs rank-level) loss averaging for the vision modality.
+    # None preserves the legacy strategy-dependent item mean: teacher forcing
+    # excludes fully conditioned items, other strategies include them. Set
+    # False to match the bidirectional teacher's denominator, including zero-loss
+    # control items; this is independent of per-item active-token normalization.
+    exclude_fully_conditioned_items: bool | None = None
+
+    # Loss reduction mode for all supervised modalities.
     #
-    # By default the vision loss on each rank is a mean over that rank's samples, and
+    # With "local_item_mean" (default), vision loss is a mean over each rank's items, and
     # FSDP/DDP averages gradients across ranks — so every *rank* contributes equally
-    # regardless of how many image/video samples it holds ("rank-level averaging").
-    # When ranks carry different sample counts this over-weights samples on sparse ranks.
+    # regardless of how many image/video items it holds ("rank-level averaging").
+    # When ranks carry different item counts this over-weights items on sparse ranks.
     #
-    # When True, the loss is renormalized so every *sample* contributes equally across
-    # the whole data-parallel group: each iteration all-reduces the total number of image
-    # and video samples over the DP group, and image and video losses are each normalized
-    # by their own global sample count and then summed. This counteracts the framework's
-    # rank-level gradient averaging so the effective objective is a true per-sample mean.
-    # The two independently normalized terms are weighted by the existing `image_loss_scale`
-    # (images; falls back to `loss_scale` when None) and `loss_scale` (videos), so their
-    # balance is tuned with the same knobs as the legacy rank-level path.
-    sample_level_loss_averaging: bool = False
+    # With "global_sample_mean", image/video/action/sound/LiDAR/radar losses are independently normalized
+    # by each modality's global sample count, then summed with their configured weights.
+    # This counteracts FSDP/DDP rank-level gradient averaging so every *sample*
+    # contributes equally within its modality, for homogeneous and mixed batches.
+    # Images use `image_loss_scale` (falling back to `loss_scale`), videos use
+    # `loss_scale`, and action/sound/LiDAR/radar retain their own configured loss weights.
+    # Denominators count logical samples contributing supervision, after averaging
+    # their timestep-weighted supervised item losses;
+    # neither tokens, clean controls, nor missing modalities add to those counts.
+    # Weights are never renormalized, including when a modality is globally absent.
+    # This intentional objective change applies per microbatch; gradient accumulation
+    # and independently weighted MoE auxiliary losses keep their existing semantics.
+    # Select this behavior independently of the dataloader class. "local_item_mean" preserves
+    # local rank-level averaging, including mixed image/video item weights.
+    loss_reduction_mode: Literal["local_item_mean", "global_sample_mean"] = "local_item_mean"
 
 
 @attrs.define(slots=False)
@@ -151,6 +180,18 @@ class FixedStepSamplerConfig:
     t_list: list[float] = [0.999, 0.75, 0.5, 0.25]
     # Distilled fixed-step sampling uses stochastic re-noising at each step.
     sample_type: str = "sde"
+
+
+@attrs.define(slots=False)
+class MultiviewActionConditioningConfig:
+    """Opt-in synchronized RGB targets with full frame-rate actions replicated per view.
+
+    Fixed view codes are written into padded action channels after normalization;
+    the first (reference) view must use zeros to retain single-view compatibility.
+    """
+
+    view_code_start: int
+    view_codes: list[list[float]]
 
 
 # Don't have any defaults and init only in config file.
@@ -194,6 +235,20 @@ class OmniMoTModelConfig:
     seconds, which is what puts the two sensors' latents on one mRoPE time axis.
     """
 
+    radar_state_ch: int | None = None
+    """Radar VAE latent channel count, i.e. the width of the network's radar heads.
+
+    The radar VAE is as wide as the LiDAR one (128), but the two are sized from their own
+    fields because nothing ties the two sensors' widths together.
+    """
+
+    radar_fps: float | None = None
+    """Cycle rate in Hz of radar items, the counterpart of ``lidar_fps``.
+
+    Radar cycles at 20 Hz against LiDAR's 10 Hz, and its VAE does not compress time, so
+    this is what places a radar scan on the mRoPE time axis the other streams share.
+    """
+
     net: LazyDict = None
     ema: EMAConfig = EMAConfig()
 
@@ -205,6 +260,11 @@ class OmniMoTModelConfig:
 
     # Opt in to summed CP output gradients; keep legacy scaling for existing optimizer state.
     correct_cp_gradients: bool = False
+
+    # Keep the raw CP data window on the host and release raw video CUDA inputs
+    # immediately after slot-0 tokenization. H100 multiview experiments opt in;
+    # the model default remains disabled.
+    release_cp_raw_batch_after_preprocessing: bool = False
 
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
@@ -274,6 +334,11 @@ class OmniMoTModelConfig:
     # (the maskless decomposition or a masked FlexAttention call), and under what mask.
     multiview_attention: MultiviewAttentionConfig = MultiviewAttentionConfig()
 
+    # None preserves Auto's separate action controls and control/target item roles.
+    # Opt-in batches use separate ragged RGB and full frame-rate action blocks;
+    # single-view batches in the same run keep their original dense packing.
+    multiview_action_conditioning: MultiviewActionConditioningConfig | None = None
+
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.
     # If None, all attention layers remain dense.
@@ -337,6 +402,16 @@ class OmniMoTModelConfig:
 
     # action configs
     action_gen: bool = False  # whether to use action related parameters and condition/generate action tokens
+    # Action schema consumed by the model. Legacy configs omit this field and
+    # therefore retain the historical native action contract.
+    action_schema: Literal["native", "unified_v1"] = attrs.field(
+        default="native",
+        validator=attrs.validators.in_({"native", "unified_v1"}),
+    )
+    # Schema-space normalization controls must live with the model config so
+    # consolidated checkpoints can reconstruct action postprocessing.
+    action_global_asinh: bool = False
+    action_metric_gripper: bool = False
     max_action_dim: int = 32  # maximum dimension of the action space, we need to pad the data to this dimension.
     num_embodiment_domains: int = 32  # number of action domains/types supported by the I/O projectors
     # Selects both action2llm and llm2action together so experiments cannot accidentally

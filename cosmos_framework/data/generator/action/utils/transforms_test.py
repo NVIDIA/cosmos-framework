@@ -438,16 +438,22 @@ def test_action_transform_pipeline_groups_registered_caption_postfixes() -> None
 
 
 @pytest.mark.L0
-def test_action_transform_pipeline_avoids_generic_viewpoint_with_attribute_postfixes() -> None:
+@pytest.mark.parametrize("caption", ["Open the drawer.", ""])
+@pytest.mark.parametrize("format_prompt_as_json", [False, True])
+def test_action_transform_pipeline_requires_attributes_when_semantics_enabled(
+    caption: str, format_prompt_as_json: bool
+) -> None:
     pipeline = ActionTransformPipeline(
         tokenizer_config=None,
         max_action_dim=4,
         append_action_caption_semantics=True,
         append_duration_fps_timestamps=False,
         append_resolution_info=False,
+        format_prompt_as_json=format_prompt_as_json,
     )
     data_dict = {
-        "ai_caption": "Open the drawer.",
+        "__key__": "missing-semantics-sample",
+        "ai_caption": caption,
         "video": torch.zeros(3, 17, 256, 256),  # [C,T,H,W]
         "action": torch.zeros(16, 2),  # [T,D]
         "mode": "forward_dynamics",
@@ -455,9 +461,8 @@ def test_action_transform_pipeline_avoids_generic_viewpoint_with_attribute_postf
         "viewpoint": "third_person_view",
     }
 
-    result = pipeline(data_dict, resolution="256")
-
-    assert result["ai_caption"] == "Open the drawer."
+    with pytest.raises(ValueError, match="requires action_caption_attributes.*missing-semantics-sample"):
+        pipeline(data_dict, resolution="256")
 
 
 @pytest.mark.L0

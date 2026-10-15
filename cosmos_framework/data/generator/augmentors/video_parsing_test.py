@@ -337,14 +337,14 @@ def test_full_frames_passes_pts_and_media_bound_to_audio_extraction() -> None:
     assert output is not None
     assert decoder.get_frames_at.call_args.args[0] == [0, 3, 6, 9, 12]
     call_kwargs = extract_audio_mock.call_args.kwargs
-    assert call_kwargs["video_bytes"] == b"video"
+    assert call_kwargs["audio_bytes"] == b"video"
     assert call_kwargs["start_seconds"] == pytest.approx(0.25)
     assert call_kwargs["stop_seconds"] == pytest.approx(1.55)
 
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_chunked_frames_passes_pts_and_chunk_bound_to_audio_extraction() -> None:
+def test_starting_chunk_rebases_window_relative_external_audio() -> None:
     video_fps = 10.0
     args = dict(_BASE_ARGS)
     args.update(
@@ -357,8 +357,11 @@ def test_chunked_frames_passes_pts_and_chunk_bound_to_audio_extraction() -> None
     decoder = _video_decoder_mock(num_frames=20, video_fps=video_fps, pts_offset_seconds=0.25)
     audio_chunk = torch.ones((1, 1), dtype=torch.float32)  # [C,N_audio]
     data_dict = _video_data(num_frames=20, video_fps=video_fps)
-    data_dict["chunk_start_frame"] = 2
-    data_dict["chunk_end_frame"] = 15
+    data_dict["audio_bytes"] = b"music-removed-wav"
+    data_dict["metas"]["audio_source"] = "rm_music_from_original"  # type: ignore[index]
+    data_dict["metas"]["audio_timeline_is_window_relative"] = True  # type: ignore[index]
+    data_dict["chunk_start_frame"] = 0
+    data_dict["chunk_end_frame"] = 13
 
     with (
         patch.object(video_parsing, "VideoDecoder", return_value=decoder),
@@ -367,8 +370,9 @@ def test_chunked_frames_passes_pts_and_chunk_bound_to_audio_extraction() -> None
         output = augmentor(data_dict)
 
     assert output is not None
-    assert decoder.get_frames_at.call_args.args[0] == [2, 5, 8, 11, 14]
+    assert decoder.get_frames_at.call_args.args[0] == [0, 3, 6, 9, 12]
     call_kwargs = extract_audio_mock.call_args.kwargs
-    assert call_kwargs["video_bytes"] == b"video"
-    assert call_kwargs["start_seconds"] == pytest.approx(0.45)
-    assert call_kwargs["stop_seconds"] == pytest.approx(1.75)
+    assert call_kwargs["audio_bytes"] == b"music-removed-wav"
+    assert call_kwargs["start_seconds"] == pytest.approx(0.0)
+    assert call_kwargs["stop_seconds"] == pytest.approx(1.3)
+    assert "audio_bytes" not in output

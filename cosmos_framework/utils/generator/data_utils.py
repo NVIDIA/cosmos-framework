@@ -96,7 +96,10 @@ def slice_data_batch(
 
     The ``lidar`` field is flattened the same way and follows
     ``num_lidar_items_per_sample``, since a sample's range clips need not be as
-    many as its camera clips.
+    many as its camera clips. ``radar`` follows ``num_radar_items_per_sample``
+    for the same reason: a joint camera + radar sample flattens the HD-map
+    control and radar target into two items that must stay together when the
+    sample callback draws the first sample.
 
     Args:
         data_batch: The data batch to slice.
@@ -121,6 +124,8 @@ def slice_data_batch(
     # The LiDAR stream is flattened the same way, and counts its own items.
     num_lidar_items = data_batch.get("num_lidar_items_per_sample")
     lidar_start, lidar_limit = flat_range(num_lidar_items) if num_lidar_items is not None else (start, limit)
+    num_radar_items = data_batch.get("num_radar_items_per_sample")
+    radar_start, radar_limit = flat_range(num_radar_items) if num_radar_items is not None else (start, limit)
 
     multi_item_fields = set(multi_item_fields)
 
@@ -130,6 +135,8 @@ def slice_data_batch(
             s, e = flat_start, flat_limit
         elif key == "lidar" and num_lidar_items is not None:
             s, e = lidar_start, lidar_limit
+        elif key == "radar" and num_radar_items is not None:
+            s, e = radar_start, radar_limit
         else:
             s, e = start, limit
         if isinstance(value, torch.Tensor):

@@ -16,7 +16,7 @@ import torch
 class GenerationDataClean:
     """
     Container for tokenized states and conditioning info (clean states)
-    for the multi-modal (vision, lidar, sound, action) MoT training.
+    for the multi-modal (vision, lidar, radar, sound, action) MoT training.
     Used for the VFM generation model.
     """
 
@@ -39,6 +39,20 @@ class GenerationDataClean:
     # camera clips along the latent temporal axis (camera-major), so latent_t is
     # num_views * frames_per_view. None when per-camera VAE encoding is disabled.
     num_views_per_vision_item: list[int] | None = None
+    # Physical camera IDs: one [V] integer tensor per flattened x0_tokens_vision item,
+    # in the same camera-major order as its latents. IDs come from view_indices_selection
+    # and are repeated for each control and target without renumbering selected cameras:
+    # camera 8 with one control and one target gives [tensor([8]), tensor([8])].
+    # None when rig embeddings are disabled or no RGB is present. LiDAR uses the final
+    # embedding row separately and never appears in these tensors.
+    vision_view_ids: list[torch.Tensor] | None = None
+
+    # Decomposed geometry metadata, parallel to flattened vision/LiDAR items. PRoPE
+    # carries reference-to-camera matrices; RigRoPE carries [V,T,H,W,8] spatial
+    # descriptors. These are host-prepared and never inferred inside attention.
+    camera_relative_poses_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_vision_item: list[torch.Tensor | None] | None = None
+    rigrope_features_per_lidar_item: list[torch.Tensor | None] | None = None
 
     # LiDAR (list of per-item range-view latents, flattened over samples the way
     # x0_tokens_vision is). A range clip is its own modality with its own VAE and its own
@@ -47,6 +61,14 @@ class GenerationDataClean:
     x0_tokens_lidar: list[torch.Tensor] | None = None
     fps_lidar: torch.Tensor | None = None
     num_lidar_items_per_sample: list[int] | None = None
+
+    # Radar (per-item BEV latents, flattened over samples exactly as the LiDAR items are).
+    # Radar is a third sensor stream with its own VAE and its own ~20 Hz cycle rate, so like
+    # LiDAR it never appears among the vision items.
+    raw_state_radar: list[torch.Tensor] | None = None
+    x0_tokens_radar: list[torch.Tensor] | None = None
+    fps_radar: torch.Tensor | None = None
+    num_radar_items_per_sample: list[int] | None = None
 
     # Audio (Sound)
     raw_state_sound: torch.Tensor | None = None
@@ -61,18 +83,39 @@ class GenerationDataClean:
     action_family: list[str] | None = None  # dataset names aligned with the dense action rows
     raw_action_dim: list[torch.Tensor] | None = None  # raw action dimension, used adding masks to loss calculation
     action_valid_mask: list[torch.Tensor] | None = None  # per-slot semantic validity for action loss/noise
+    # Multiview action controls: number of camera views packed camera-major into
+    # each action item. None when each action item is a standard single-view stream.
+    num_views_per_action_item: list[int] | None = None
 
     # Multi-control transfer: per-sample list of per-control weights.
     # Shape: [num_samples], each element is a list of floats (one per control stream).
     # None for non-transfer or single-control samples.
     control_weights: list[list[float]] | None = None
 
+    # Explicit image identity per logical sample. None preserves the legacy
+    # homogeneous flag and its scheduling/RNG behavior. Multiple vision items
+    # belonging to a sample inherit its identity, including image-editing controls.
+    sample_is_image: list[bool] | None = None
+    # Sparse action/audio rows retain their owning logical sample for inference
+    # slicing and batched CFG. None keeps the existing homogeneous layout.
+    action_sample_ids: list[int] | None = None
+    sound_sample_ids: list[int] | None = None
+
+    def vision_image_flags(self) -> list[bool] | None:
+        """Expand sample identities to the flattened vision-item order."""
+        if self.sample_is_image is None:
+            return None
+        counts = self.num_vision_items_per_sample or [1] * self.batch_size
+        if len(counts) != self.batch_size or len(self.sample_is_image) != self.batch_size:
+            raise ValueError("Vision ownership and image identity must match the logical batch size.")
+        return [flag for flag, count in zip(self.sample_is_image, counts, strict=True) for _ in range(count)]
+
 
 @dataclass(slots=True)
 class GenerationDataNoised:
     """Container for states after noise addition, along with other
     helper attributes for the flow-matching (gt velocity and noise)
-    for the multi-modal (vision, lidar, sound, action) MoT training.
+    for the multi-modal (vision, lidar, radar, sound, action) MoT training.
     Used for the VFM generation model.
     """
 
@@ -88,6 +131,12 @@ class GenerationDataNoised:
     xt_tokens_lidar: torch.Tensor | None = None
     vt_target_lidar: torch.Tensor | None = None
     sigmas_lidar: torch.Tensor | None = None
+
+    # Radar
+    epsilon_radar: torch.Tensor | None = None
+    xt_tokens_radar: torch.Tensor | None = None
+    vt_target_radar: torch.Tensor | None = None
+    sigmas_radar: torch.Tensor | None = None
 
     # Audio (Sound)
     epsilon_sound: torch.Tensor | None = None

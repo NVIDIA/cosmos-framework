@@ -4,6 +4,7 @@
 """Check CP output gathering against an unsharded, globally averaged objective."""
 
 import copy
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import torch.multiprocessing as mp
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
+from cosmos_framework.model.generator.mot import context_parallel_utils
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
@@ -123,4 +125,138 @@ def test_context_parallel_output_parameter_gradients(
         args=(4, cp_size, text_length, correct_cp_gradients, (tmp_path / "rendezvous").as_uri()),
         nprocs=4,
         join=True,
+    )
+
+
+def _check_interleaved_output(
+    dims: ParallelDims,
+    split_lens: list[int],
+    *,
+    correct_cp_gradients: bool,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+    check_memory: bool = False,
+    bounded_memory: bool = True,
+) -> None:
+    """Check a two-sample permutation, independent rank cotangents, and optional allocation bounds."""
+    width = 64
+    length = sum(split_lens)
+    original = (
+        torch.arange(length * width, device=device, dtype=torch.float32).reshape(length, width).to(dtype)
+    )  # [N,D]
+    positions = torch.arange(length, device=device)  # [N]
+    und_indices = torch.cat(
+        (positions[: split_lens[0]], positions[sum(split_lens[:2]) : sum(split_lens[:3])])
+    )  # [N_und]
+    gen_indices = torch.cat(
+        (positions[split_lens[0] : sum(split_lens[:2])], positions[sum(split_lens[:3]) :])
+    )  # [N_gen]
+    packed = sequence_pack_from_packed_sequence(
+        packed_sequence=original,
+        attn_modes=["causal", "full", "causal", "full"],
+        split_lens=split_lens,
+        sample_lens=[sum(split_lens[:2]), sum(split_lens[2:])],
+        packed_und_token_indexes=und_indices,
+        packed_gen_token_indexes=gen_indices,
+        full_seq_alignment=dims.cp_size,
+        causal_seq_alignment=dims.cp_size,
+    )
+    local_pack, _ = get_context_parallel_sharded_sequence(packed, positions, dims)
+    und = local_pack["causal_seq"].detach().clone().requires_grad_(True)  # [N_und_local,D]
+    gen = local_pack["full_only_seq"].detach().clone().requires_grad_(True)  # [N_gen_local,D]
+    outputs = from_mode_splits(und, gen, local_pack)
+    # A noncontiguous, rank-dependent cotangent catches wrong reduction, rank and token order.
+    cotangent = torch.arange(length * width, device=device, dtype=torch.float32).remainder_(17)  # [N*D]
+    cotangent = cotangent.reshape(width, length).T.to(dtype)  # [N,D]
+    cotangent.mul_(dims.cp_rank + 1)  # [N,D]
+    if check_memory:
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+    actual = get_context_parallel_last_hidden_state(
+        outputs, dims, correct_cp_gradients=correct_cp_gradients, bounded_memory=bounded_memory
+    )  # [N,D]
+    if check_memory:
+        torch.cuda.synchronize()
+        # One full result plus bounded communication scratch; a second full result violates this.
+        forward_extra = torch.cuda.max_memory_allocated() - baseline
+        assert (
+            forward_extra <= actual.numel() * actual.element_size() + 3 * context_parallel_utils._CP_OUTPUT_GATHER_BYTES
+        )
+    torch.testing.assert_close(actual, original, atol=0, rtol=0)
+    if check_memory:
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+    gradients = torch.autograd.grad(actual, (und, gen), cotangent)  # tuple[[N_und_local,D],[N_gen_local,D]]
+    if check_memory:
+        torch.cuda.synchronize()
+        backward_extra = torch.cuda.max_memory_allocated() - baseline
+        gradient_bytes = sum(value.numel() * value.element_size() for value in gradients)
+        assert backward_extra <= gradient_bytes + 3 * context_parallel_utils._CP_OUTPUT_GATHER_BYTES
+    factor = dims.cp_size * (dims.cp_size + 1) // 2 if correct_cp_gradients else dims.cp_rank + 1
+    expected_full = cotangent / (dims.cp_rank + 1) * factor  # [N,D]
+    for gradient, indices in zip(gradients, (und_indices, gen_indices), strict=True):
+        local_rows = gradient.shape[0]
+        offset = dims.cp_rank * local_rows
+        count = max(0, min(local_rows, indices.numel() - offset))
+        expected = torch.zeros_like(gradient)  # [N_local,D]
+        expected[:count] = expected_full[indices[offset : offset + count]]  # [count,D]
+        torch.testing.assert_close(gradient, expected, atol=0, rtol=0)
+
+
+def _compare_interleaved_gradients(rank: int, rendezvous: str) -> None:
+    torch.set_num_threads(1)
+    dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=4)
+    try:
+        dims = ParallelDims(world_size=4, dp_shard=4, dp_replicate=1, cp=2)
+        dims.build_meshes("cpu")
+        context_parallel_utils._CP_OUTPUT_GATHER_BYTES = 1024
+        for bounded_memory in (False, True):
+            for correction in (False, True):
+                for lengths in ([3, 5, 2, 7], [0, 5, 0, 7], [3, 0, 2, 0]):
+                    _check_interleaved_output(
+                        dims,
+                        lengths,
+                        correct_cp_gradients=correction,
+                        device=torch.device("cpu"),
+                        bounded_memory=bounded_memory,
+                    )
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_interleaved_output_gradients(tmp_path: Path) -> None:
+    mp.spawn(_compare_interleaved_gradients, args=((tmp_path / "rendezvous").as_uri(),), nprocs=4, join=True)
+
+
+@pytest.mark.L1
+@pytest.mark.GPU
+@pytest.mark.parametrize("correct_cp_gradients", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_context_parallel_output_memory(
+    correct_cp_gradients: bool, dtype: torch.dtype, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Require bounded native CP output/reduction memory on a four-rank launch."""
+    if not torch.cuda.is_available() or int(os.environ.get("WORLD_SIZE", "1")) != 4:
+        pytest.skip("Requires torchrun with four GPUs.")
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    if not dist.is_initialized():
+        dist.init_process_group("nccl")
+    dims = ParallelDims(world_size=4, dp_shard=4, dp_replicate=1, cp=4)
+    dims.build_meshes("cuda")
+    monkeypatch.setattr(context_parallel_utils, "_CP_OUTPUT_GATHER_BYTES", 128 * 1024)
+    # Warm collectives before measuring tensor allocations. Uneven streams retain padding coverage.
+    _check_interleaved_output(
+        dims, [3, 5, 2, 7], correct_cp_gradients=correct_cp_gradients, device=torch.device("cuda"), dtype=dtype
+    )
+    _check_interleaved_output(
+        dims,
+        [4095, 8193, 4094, 8195],
+        correct_cp_gradients=correct_cp_gradients,
+        device=torch.device("cuda"),
+        dtype=dtype,
+        check_memory=True,
     )

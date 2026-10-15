@@ -1003,6 +1003,11 @@ class VLMModel(ImaginaireModel):
             # of the optimized objective (weighted CE or MoE auxiliary terms).
             "loss_numerator": loss_stats.token_ce_sum,
             "loss_denominator": loss_stats.valid_token_count,
+            "per_sample_token_ce_sum": loss_stats.per_sample_token_ce_sum,
+            "per_sample_valid_token_count": loss_stats.per_sample_valid_token_count,
+            "per_sample_objective_numerator": loss_stats.per_sample_objective_numerator,
+            "per_sample_objective_weight": loss_stats.per_sample_objective_denominator,
+            "global_objective_weight": loss_stats.global_objective_denominator,
         }
         if backward_loss is not loss:
             output["_backward_loss"] = backward_loss
@@ -1048,5 +1053,10 @@ class VLMModel(ImaginaireModel):
             "val_n_valid_tokens": stats.valid_token_count,
             "loss_numerator": stats.token_ce_sum,
             "loss_denominator": stats.valid_token_count,
+            "per_sample_token_ce_sum": stats.per_sample_token_ce_sum,
+            "per_sample_valid_token_count": stats.per_sample_valid_token_count,
+            "per_sample_objective_numerator": stats.per_sample_objective_numerator,
+            "per_sample_objective_weight": stats.per_sample_objective_denominator,
+            "global_objective_weight": stats.global_objective_denominator,
         }
         return output, loss

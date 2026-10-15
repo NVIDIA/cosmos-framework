@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Interactive network adapter for teacher-forcing multiview FlexAttention."""
+"""Interactive network adapter for multiview replay attention."""
 
 from __future__ import annotations
 
@@ -9,24 +9,12 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+import attrs
 import torch
 from torch.utils.hooks import RemovableHandle
 
-from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
-    Cosmos3VFMNetwork,
-    _multiview_caption_mask_items,
-    _multiview_sensor_mask_items,
-)
-from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
-from cosmos_framework.data.generator.sequence_packing import PackedSequence
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_causal_seq,
-    get_full_only_seq,
-)
-from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     MULTIVIEW_TRANSFER_AR_CURRENT_ROLES,
     MultiviewTransferARMemoryLayout,
@@ -34,6 +22,27 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     build_teacher_forcing_block_mask,
     build_teacher_forcing_multiview_flex_metadata,
 )
+from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
+    Cosmos3VFMNetwork,
+    _multiview_caption_mask_items,
+    _multiview_sensor_mask_items,
+)
+from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
+from cosmos_framework.model.generator.mot.maskless_attention import build_replay_maskless_plan
+from cosmos_framework.model.generator.mot.multiview_action_attention import (
+    build_multiview_action_attention_plan,
+)
+from cosmos_framework.model.generator.utils.rolling_kv.rolling_replay import (
+    RollingReplayRequest,
+    build_rolling_replay_metadata,
+)
+from cosmos_framework.data.generator.sequence_packing import PackedSequence
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_causal_seq,
+    get_full_only_seq,
+)
+from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
 def build_interactive_multiview_mask_items(
@@ -86,12 +95,15 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
     _teacher_forcing_mask_hook: RemovableHandle
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig | None
     teacher_forcing_frames_per_chunk: int
+    teacher_forcing_maskless: bool = False
+    teacher_forcing_multiview_threeway: bool = False
 
     def __init__(self, language_model: torch.nn.Module, config: Any) -> None:
         super().__init__(language_model=language_model, config=config)
         self._active_packed_seq = None
         self.teacher_forcing_replay_policy = None
         self.teacher_forcing_frames_per_chunk = 1
+        self.teacher_forcing_maskless = False
         self._teacher_forcing_mask_hook = self.language_model.register_forward_pre_hook(
             self._replace_teacher_forcing_mask,
             with_kwargs=True,
@@ -108,15 +120,35 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         packed_seq = self._active_packed_seq
         if packed_seq is None:
             return None
+        if self.teacher_forcing_multiview_threeway:
+            if not getattr(packed_seq, "multiview_action_conditioning", False):
+                return None
+            assert packed_seq.vision is not None
+            attention_meta = kwargs["attention_mask"]
+            gen, _ = get_full_only_seq(args[0])  # [N_gen_local,H,D]
+            attention_meta.multiview_action_attention_plan = build_multiview_action_attention_plan(
+                packed_seq.vision.token_shapes, packed_seq.num_action_tokens_per_supertoken, gen.device
+            )
+            return args, kwargs
         ar_metadata = getattr(packed_seq, "multiview_transfer_ar_metadata", None)
+        rolling_request = getattr(packed_seq, "rolling_replay_request", None)
         teacher_forcing_pass = getattr(packed_seq, "teacher_forcing_pass", None)
-        if ar_metadata is None and teacher_forcing_pass is None:
+        joint_cache = getattr(packed_seq, "joint_ar_cache", None)
+        if ar_metadata is None and teacher_forcing_pass is None and rolling_request is None:
             return None
         teacher_forcing_replay_policy = self.teacher_forcing_replay_policy
         if not isinstance(teacher_forcing_replay_policy, TeacherForcingReplayPolicyConfig):
             raise TypeError("Interactive teacher forcing requires a TeacherForcingReplayPolicyConfig.")
-        if self.flex_backend is None:
+        if self.flex_backend is None and not self.teacher_forcing_maskless:
             raise ValueError("Interactive teacher forcing requires a resolved FlexAttention backend.")
+        # Metadata is independent of spatial scope. Use the same-view metadata
+        # builder for maskless joint inputs; the Flex-only cross-sensor frame-index
+        # restriction does not apply to the maskless midpoint buckets.
+        metadata_policy = (
+            attrs.evolve(teacher_forcing_replay_policy, multiview_attention_scope="same_view")
+            if self.teacher_forcing_maskless
+            else teacher_forcing_replay_policy
+        )
         attention_meta = kwargs.get("attention_mask")
         if not isinstance(attention_meta, SplitInfo) or attention_meta.is_three_way:
             raise ValueError("Interactive multiview teacher forcing requires two-way SplitInfo metadata.")
@@ -131,7 +163,30 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
             local_und_seq_len=causal_seq.shape[0],
             parallel_dims=self.parallel_dims,
         )
-        if ar_metadata is not None:
+        if rolling_request is not None:
+            if not isinstance(rolling_request, RollingReplayRequest):
+                raise TypeError("Rolling replay requires a RollingReplayRequest.")
+            if ar_metadata is not None or teacher_forcing_pass is not None:
+                raise ValueError("Rolling replay cannot be combined with another replay request.")
+            sensor_items = build_interactive_multiview_mask_items(
+                packed_seq,
+                lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+                condition_masks=rolling_request.condition_masks,
+            )
+            flex_metadata = build_rolling_replay_metadata(
+                request=rolling_request,
+                seq_len=global_gen_seq_len,
+                full_q_offsets=full_q_offsets,
+                sensor_mask_items=sensor_items,
+                caption_mask_items=_multiview_caption_mask_items(packed_seq),
+                device=full_only_seq.device,
+                num_und=global_und_seq_len,
+                causal_offsets=causal_offsets,
+                policy=metadata_policy,
+            )
+            if rolling_request.prompt_layout is not None:
+                rolling_request.prompt_layout.install_document_offsets(input_pack, global_und_seq_len)
+        elif ar_metadata is not None:
             if not isinstance(ar_metadata, dict):
                 raise TypeError("Multiview transfer AR metadata must be a dictionary.")
             memory_layout = ar_metadata.get("memory_layout")
@@ -152,13 +207,14 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                     f"Multiview transfer AR current_role must be one of {MULTIVIEW_TRANSFER_AR_CURRENT_ROLES}, "
                     f"got {current_role!r}."
                 )
+            sensor_items = build_interactive_multiview_mask_items(
+                packed_seq,
+                lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+            )
             flex_metadata = build_multiview_transfer_ar_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                sensor_mask_items=build_interactive_multiview_mask_items(
-                    packed_seq,
-                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
-                ),
+                sensor_mask_items=sensor_items,
                 caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
@@ -167,7 +223,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 frames_per_view=frames_per_view,
                 frames_per_chunk=frames_per_chunk,
                 current_role=current_role,
-                teacher_forcing_replay_policy=teacher_forcing_replay_policy,
+                teacher_forcing_replay_policy=metadata_policy,
                 memory_layout=memory_layout,
             )
         elif teacher_forcing_pass is not None:
@@ -189,31 +245,55 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_vision", None)
             if original_masks is None:
                 raise ValueError("Flex teacher forcing requires the original sensor condition masks.")
+            sensor_items = build_interactive_multiview_mask_items(
+                packed_seq,
+                lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+                condition_masks=original_masks,
+            )
             flex_metadata = build_teacher_forcing_multiview_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                sensor_mask_items=build_interactive_multiview_mask_items(
-                    packed_seq,
-                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
-                    condition_masks=original_masks,
-                ),
+                sensor_mask_items=sensor_items,
                 caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
                 frames_per_chunk=self.teacher_forcing_frames_per_chunk,
-                pass_kind=teacher_forcing_pass,
-                teacher_forcing_replay_policy=teacher_forcing_replay_policy,
+                # The "noisy" builder produces:
+                #   [text labels | current input labels | replay-cache labels].
+                # Persistent K/V uses a different history layout, so use the "clean"
+                # builder to produce only:
+                #   [text labels | current chunk labels].
+                # Below, augment_metadata adds labels for the persistent cache:
+                #   [text labels | current chunk labels | persistent-cache labels],
+                # and sets current target roles according to the actual noisy/clean pass.
+                pass_kind="clean" if joint_cache is not None else teacher_forcing_pass,
+                teacher_forcing_replay_policy=metadata_policy,
                 materialized_target_frame_ranges=materialized_target_frame_ranges,
                 clean_memory_seq_len=(
                     int(getattr(packed_seq, "teacher_forcing_selected_clean_target_padded_capacity", 0))
-                    if teacher_forcing_pass == "noisy"
+                    if teacher_forcing_pass == "noisy" and joint_cache is None
                     else 0
                 ),
             )
         else:
             return None
 
+        if self.teacher_forcing_maskless:
+            if joint_cache is not None:
+                flex_metadata = joint_cache.augment_metadata(
+                    flex_metadata,
+                    sensor_items,
+                    self.teacher_forcing_frames_per_chunk,
+                    noisy=teacher_forcing_pass == "noisy",
+                )
+            flex_metadata = replace(flex_metadata, teacher_forcing_replay_policy=teacher_forcing_replay_policy)
+            setattr(attention_meta, "replay_maskless_plan", build_replay_maskless_plan(flex_metadata, sensor_items))
+            # The marked replay dispatch must consume this plan, never the base
+            # bidirectional plan that was constructed before the pre-hook.
+            attention_meta.multiview_maskless = None
+            return args, kwargs
+        assert self.flex_backend is not None
         attention_meta.flex_block_mask = build_teacher_forcing_block_mask(
             flex_metadata,
             full_only_seq.device,
@@ -233,6 +313,18 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         previous_packed_seq = self._active_packed_seq
         self._active_packed_seq = packed_seq
         try:
+            if self.teacher_forcing_multiview_threeway and getattr(packed_seq, "multiview_action_conditioning", False):
+                kwargs["bounded_cp_output_gather"] = True
+            if (
+                self.teacher_forcing_maskless
+                and video_temporal_causal is not False
+                and (
+                    getattr(packed_seq, "teacher_forcing_pass", None) is not None
+                    or getattr(packed_seq, "multiview_transfer_ar_metadata", None) is not None
+                    or getattr(packed_seq, "rolling_replay_request", None) is not None
+                )
+            ):
+                kwargs["bounded_cp_output_gather"] = True
             return super().forward(
                 packed_seq=packed_seq,
                 memory=memory,

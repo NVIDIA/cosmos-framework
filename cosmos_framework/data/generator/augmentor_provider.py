@@ -811,6 +811,7 @@ def get_video_augmentor_v3_json_caption(
     caption_key: str = "caption",
     natural_language_caption: bool = False,
     append_audio_caption: bool = False,
+    audio_caption_separator: str = "\n\nAudio description: ",
     **kwargs: object,
 ) -> dict[str, object]:
     """Build a video augmentation pipeline for JSON-captioned, chunked video datasets.
@@ -858,6 +859,9 @@ def get_video_augmentor_v3_json_caption(
         natural_language_caption: Emit the selected chunk caption as text.
         append_audio_caption: Append a decoded audio caption to natural-language
             text before duration and resolution metadata.
+        audio_caption_separator: Text between video and audio captions. Use
+            "\n\n" for midtraining captions whose speech/music/event sections
+            already have their own labels. Only used with append_audio_caption.
         **kwargs: Additional keyword arguments forwarded via ``conditioning_config``,
             ``uniform_conditioning``, ``temporal_compression_factor``.
 
@@ -1027,7 +1031,7 @@ def get_video_augmentor_v3_json_caption(
             args={
                 "audio_caption_key": "caption_audio",
                 "sound_key": "sound",
-                "separator": "\n\nAudio description: ",
+                "separator": audio_caption_separator,
             },
         )
         augmentors["duration_fps_timestamps"] = duration_fps_timestamps

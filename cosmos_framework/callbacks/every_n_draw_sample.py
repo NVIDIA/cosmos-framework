@@ -45,9 +45,9 @@ class WandbAnimation(NamedTuple):
 
 
 # What a clip is previewed as in W&B: one still grid, one panel per sampled
-# frame, or an animation of every frame.
+# frame, an animation of every frame, or direct interactive point-cloud media.
 WandbClipPreview = Literal["grid", "frames", "animation"]
-WandbMedia = str | dict[str, str | WandbAnimation] | WandbAnimation
+WandbMedia = str | WandbAnimation | list[wandb.Object3D] | dict[str, "WandbMedia"]
 
 
 def resize_image(image: torch.Tensor, size: int = 1024) -> torch.Tensor:
@@ -292,10 +292,10 @@ def _decode_transfer_pixel_row(
 ) -> torch.Tensor | None:  # [V,C,F,H,W] or None
     """Decode one latent into a host-side pixel row without display conversion.
 
-    ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample passes
-    ``model.decode_lidar`` for range clips because the two streams have separate VAEs.
-    LiDAR callers pass ``decode_per_view=False``: V0 and V1 are both 1x temporal on a
-    single range view, not 4x camera-major WAN clips.
+    ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample
+    passes ``model.decode_lidar`` for those clips because the streams have
+    separate VAEs. LiDAR callers pass ``decode_per_view=False``: the rangemap
+    is 1x temporal on a single view, not 4x camera-major WAN clips.
     """
     decode = decode if decode is not None else model.decode
     if decode_per_view is None:
@@ -565,6 +565,10 @@ def _add_wandb_media(
 ) -> None:
     if media is None:
         return
+    if isinstance(media, list):
+        if media:
+            info[key_prefix] = media
+        return
     if isinstance(media, WandbAnimation):
         info[key_prefix] = wandb.Video(media.path, caption=f"{caption} | {media.num_frames} frames")
         return
@@ -703,6 +707,24 @@ def _synchronize_context_parallel_sampling_batch(
     return synchronized_batch
 
 
+def prepare_training_sampling_batch(
+    model: Any,
+    data_batch: dict[str, Any],
+) -> dict[str, Any]:
+    """Move raw video in the selected sampling batch to CUDA without CP collectives.
+
+    Move video to CUDA regardless of tensor size, CP configuration, or whether
+    it is already normalized floating-point data. Preserve dtype and the
+    preprocessing flag, and leave the caller's host media references unchanged.
+    """
+    sampling_batch = data_batch
+    video_key = getattr(model, "input_video_key", "video")
+    if video_key in sampling_batch:
+        sampling_batch = dict(sampling_batch)
+        sampling_batch[video_key] = misc.to(sampling_batch[video_key], device="cuda")  # nested [B,C,T,H,W]
+    return sampling_batch
+
+
 def _replica_identity(model: Any, rank: int) -> tuple[int, bool]:
     """Return this rank's sample-replica index and whether it owns that replica.
 
@@ -747,6 +769,13 @@ class EveryNDrawSample(EveryN):
         use_negative_prompt (bool, optional): whether to use negative prompt. Defaults to False.
         fps (int, optional): frames per second when saving the video. Defaults to 16.
         wandb_log_image_size (int, optional): max side length for W&B JPEG/GIF previews. Defaults to 1024.
+        log_lidar_point_clouds (bool, optional): also log separate real/generated LiDAR point-cloud panels. Defaults to True.
+        point_cloud_max_frames (int | None, optional): preview scans per row, starting at the first generated scan.
+            None keeps all scans, including labelled conditioning inputs. Defaults to 3.
+        point_cloud_max_points (int, optional): points per cloud, at most 300000. Defaults to 300000.
+        point_cloud_color_by (str, optional): BEV height colors or grayscale intensity. Defaults to "height".
+        point_cloud_include_conditioned_frames (bool, optional): sample across the full clip, including labelled
+            conditioning inputs, when bounding the preview scan count. Defaults to False.
     """
 
     def __init__(
@@ -898,6 +927,7 @@ class EveryNDrawSample(EveryN):
             context = nullcontext
 
         data_batch = _synchronize_context_parallel_sampling_batch(model, data_batch, self.n_viz_sample)
+        data_batch = prepare_training_sampling_batch(model, data_batch)
 
         tag = "ema" if self.is_ema else "reg"
         sample_counter = getattr(trainer, "sample_counter", iteration)
@@ -958,18 +988,25 @@ class EveryNDrawSample(EveryN):
         if distributed.is_rank0() and wandb.run:
             sample_counter = getattr(trainer, "sample_counter", iteration)
             data_type = "image" if model.is_image_batch(data_batch) else "video"
+            image_flags = data_batch.get("sample_is_image")
+            if image_flags and any(image_flags) and not all(image_flags):
+                data_type = "mixed"
+            media_caption = f"{sample_counter}"
+            if image_flags is not None:
+                sources = data_batch.get("dataset_name", [])
+                media_caption += " | sources: " + ", ".join(str(source) for source in sources)
             tag += f"_{data_type}"
             info = {
                 "trainer/global_step": iteration,
                 "sample_counter": sample_counter,
             }
             if self.do_x0_prediction:
-                _add_wandb_media(info, f"{self.name}/{tag}_x0", x0_img_fp, f"{sample_counter}")
+                _add_wandb_media(info, f"{self.name}/{tag}_x0", x0_img_fp, media_caption)
                 # convert mse_loss to a dict
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
 
-            _add_wandb_media(info, f"{self.name}/{tag}_sample", sample_img_fp, f"{sample_counter}")
+            _add_wandb_media(info, f"{self.name}/{tag}_sample", sample_img_fp, media_caption)
             wandb.log(
                 info,
                 step=iteration,
@@ -1005,6 +1042,24 @@ class EveryNDrawSample(EveryN):
         if plans and not getattr(plans[0], "has_lidar", False):
             generation_batch.pop("lidar", None)
             generation_batch.pop("num_lidar_items_per_sample", None)
+        if plans and not getattr(plans[0], "has_radar", False):
+            generation_batch.pop("radar", None)
+            generation_batch.pop("num_radar_items_per_sample", None)
+        # Conditioning dropout deliberately keeps the dense action carrier and its metadata in
+        # the training batch while the selected plan turns action off. Remove that inactive
+        # carrier before inference so the packer sees action metadata only for action items.
+        if plans and not getattr(plans[0], "has_action", False):
+            for key in (
+                "action",
+                "action_raw",
+                "domain_id",
+                "raw_action_dim",
+                "action_valid_mask",
+                "action_processing_record",
+                "conditioning_fps_action",
+                "num_views_per_action_item",
+            ):
+                generation_batch.pop(key, None)
         # Preserve an explicit caller-provided prompt. Otherwise restore the exact prompt recorded
         # by the training tokenizer before train-sample inference re-tokenizes the raw caption.
         text_system_prompt = generation_batch.pop(TEXT_SYSTEM_PROMPT_KEY, None)

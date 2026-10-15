@@ -131,6 +131,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
             max_image_token_length="${data_setting.qwen_max_image_token_length}",
             custom_system_prompt="${data_setting.custom_system_prompt}",
             strip_original_system_prompt="${data_setting.strip_original_system_prompt}",
+            data_stats_writer_enabled="${data_setting.data_stats_writer_enabled}",
             video_temporal_mode="${data_setting.qwen_video_temporal_mode}",
             video_timestamp_mode="${data_setting.video_timestamp_mode}",
             text_only=False,

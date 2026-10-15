@@ -10,6 +10,7 @@ from cosmos_framework.model.generator.mot.parallelize_unified_mot import (
     apply_ac_to_module,
     parallelize_unified_mot,
 )
+from cosmos_framework.utils.generator.activation_offloading import offload_checkpoint_inputs
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 
@@ -84,6 +85,32 @@ def apply_ac(model: torch.nn.Module, config: ActivationCheckpointingConfig) -> N
         setattr(model, attr, apply_ac_to_module(module, config))
 
 
+def _validate_multiview_window_activation_checkpointing(
+    model: torch.nn.Module,
+    config: ActivationCheckpointingConfig,
+) -> None:
+    """Reject active marked-only selective checkpointing for temporal-window attention."""
+    model_config = getattr(model, "config", None)
+    multiview_config = getattr(model_config, "multiview_attention_config", None)
+    mask_config = getattr(multiview_config, "mask", None)
+    if mask_config is None or config.mode != "selective" or not config.save_only_marked_ops:
+        return
+
+    window_names = (
+        "sensor_to_sensor_window",
+        "sensor_to_control_window",
+        "control_to_control_window",
+        "control_to_sensor_window",
+    )
+    configured_windows = [name for name in window_names if getattr(mask_config, name, None) is not None]
+    if configured_windows:
+        raise NotImplementedError(
+            "Selective activation checkpointing with save_only_marked_ops=True is not yet implemented for "
+            f"multiview temporal windows ({', '.join(configured_windows)}). Set "
+            "model.config.activation_checkpointing.save_only_marked_ops=False when using temporal windows."
+        )
+
+
 def parallelize_vfm_network(
     model: torch.nn.Module,
     parallel_dims: ParallelDims | None,
@@ -120,6 +147,8 @@ def parallelize_vfm_network(
             parameters; the module must already hold its parameters in ``reduce_dtype``
             when this is called, since each FSDP unit records their dtype as it is built.
     """
+    _validate_multiview_window_activation_checkpointing(model, ac_config)
+
     model.attention_io_layout = attention_io_layout
     if parallel_dims is not None and parallel_dims.cp_enabled:
         model.parallel_dims = parallel_dims
@@ -136,6 +165,14 @@ def parallelize_vfm_network(
 
     if compile_config.enabled and compile_config.compiled_region == "all":
         model = apply_compile(model, compile_config)
+
+    if ac_config.mode != "none" and ac_config.offload_to_cpu:
+        for attr in _AC_MODULE_ATTRS:
+            module = getattr(model, attr, None)
+            if module is not None:
+                offload_checkpoint_inputs(
+                    module, min_cgroup_memory_free_fraction=ac_config.min_cgroup_memory_free_fraction
+                )
 
     if parallel_dims is not None and parallel_dims.dp_enabled:
         # Same mesh as the per-block wrapping in ``parallelize_unified_mot.apply_fsdp`` (see

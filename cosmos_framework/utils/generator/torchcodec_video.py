@@ -14,7 +14,6 @@ import numpy as np
 import torch
 import torchcodec
 from torchcodec.decoders import VideoDecoder
-from torchcodec.transforms import Resize
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO
 
@@ -67,6 +66,13 @@ def _build_decoder(
     if output_dtype != torch.uint8:
         kwargs["output_dtype"] = output_dtype
     if resize_size is not None:
+        try:
+            from torchcodec.transforms import Resize
+        except ImportError as error:
+            raise ImportError(
+                f"Installed torchcodec {_torchcodec_version()} does not provide torchcodec.transforms.Resize. "
+                "Upgrade torchcodec to use resize_size."
+            ) from error
         kwargs["transforms"] = [Resize(resize_size)]
     try:
         return VideoDecoder(normalized_source, **kwargs)

@@ -12,8 +12,8 @@ from typing import Any
 import torch
 from loguru import logger as log
 
-from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.model.generator.utils.kv_cache import ARMemoryState
+from cosmos_framework.data.generator.sequence_packing import PackedSequence
 
 NUM_CUDA_GRAPH_WARMUP_FORWARDS: int = 2
 

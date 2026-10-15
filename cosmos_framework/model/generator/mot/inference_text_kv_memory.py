@@ -5,7 +5,7 @@
 
 Caches understanding (text) K/V from the first denoising forward and reuses
 them on later steps within the same request. Intentionally self-contained in
-``cosmos3`` — does not import ``cosmos_framework.data.generator.sequence_packing``.
+``cosmos3`` — does not import ``projects.cosmos3.interactive``.
 
 Supports single-sample packs (dense attention) and multi-sample packs such as
 batched CFG (cond+uncond as B=2) via varlen attention with per-sample isolation.

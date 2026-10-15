@@ -32,19 +32,35 @@ class ActionSlotLossStats:
     sample_count: torch.Tensor
 
 
+@dataclass
+class FlowMatchingLossItems:
+    """Optional differentiable output for sample-aware supervised reductions.
+
+    Logging uses the helper's existing unweighted return value. Training reducers
+    must use ``weighted_losses``, which includes per-frame timestep weights.
+    ``valid`` excludes items with no supervised elements, including fully masked
+    action channels. The legacy scalar reduction and logging outputs are unchanged.
+    """
+
+    weighted_losses: torch.Tensor | None = None  # [N_items]
+    valid: torch.Tensor | None = None  # [N_items]
+
+
 def compute_flow_matching_loss(
     pred: list[torch.Tensor],
     target: list[torch.Tensor],
     condition_mask: list[torch.Tensor],
     timesteps: torch.Tensor,
     has_valid_tokens: bool,
-    rectified_flow: RectifiedFlow,
+    rectified_flow: RectifiedFlow | list[RectifiedFlow],
     tensor_kwargs_fp32: dict,
     raw_action_dim: list[torch.Tensor] | None = None,
     action_valid_mask: list[torch.Tensor] | None = None,
     normalize_by_active: bool = False,
     exclude_fully_conditioned_items: bool = False,
     action_slot_stats: ActionSlotLossStats | None = None,
+    item_losses: FlowMatchingLossItems | None = None,
+    time_axis: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute flow matching loss for a modality.
 
@@ -76,6 +92,10 @@ def compute_flow_matching_loss(
             samples from diluting the generated target loss.
         action_slot_stats: Optional collector for detached normalized per-sample
             losses over the canonical unified Action slots.
+        item_losses: Optional collector for differentiable timestep-weighted item
+            losses and supervision validity. Does not change the legacy reduction.
+        time_axis: Temporal axis of the conditioning mask. The new reduction uses
+            axis 1 for [C,T] sound predictions; default 0 preserves legacy weighting.
 
     Returns:
         tuple: A tuple containing two elements:
@@ -85,6 +105,9 @@ def compute_flow_matching_loss(
     if not has_valid_tokens:
         # Dummy loss to maintain backward graph consistency across ranks
         dummy_loss = 0.0 * sum(p.sum() for p in pred)
+        if item_losses is not None:
+            item_losses.weighted_losses = torch.stack([p.sum() * 0.0 for p in pred])  # [N_items]
+            item_losses.valid = torch.zeros(len(pred), dtype=torch.bool, device=dummy_loss.device)  # [N_items]
         return dummy_loss, dummy_loss.unsqueeze(0)  # make per-instance loss 1-D
 
     # condition_mask[i] is T-first with trailing singletons: [T,1,1] vision, [T,1] action.
@@ -92,8 +115,9 @@ def compute_flow_matching_loss(
     per_instance_losses = []
     per_instance_weighted_losses = []
     has_noisy_items: list[torch.Tensor] = []
+    has_supervised_items: list[torch.Tensor] = []
     for i in range(len(pred)):
-        T_i = condition_mask[i].shape[0]
+        T_i = condition_mask[i].shape[time_axis]
         sqerr_i = (pred[i] - target[i]) ** 2  # vision:[C,T,H,W]  action/sound:[T,D]
         noisy_mask_i = 1.0 - condition_mask[i]  # vision:[T,1,1]  action/sound:[T,1]
         has_noisy_items.append(torch.any(noisy_mask_i != 0))  # []
@@ -106,6 +130,11 @@ def compute_flow_matching_loss(
                 raise ValueError(f"action_valid_mask width {slot_mask_i.shape[-1]} < action width {sqerr_i.shape[-1]}")
             slot_mask_i = slot_mask_i[:, : sqerr_i.shape[-1]]
             sqerr_i = sqerr_i * slot_mask_i
+        if item_losses is not None:
+            valid_i = torch.any(noisy_mask_i != 0) & (sqerr_i.numel() > 0)  # []
+            if slot_mask_i is not None:
+                valid_i = valid_i & torch.any(slot_mask_i != 0)  # []
+            has_supervised_items.append(valid_i)
         if normalize_by_active:
             active_channels = slot_mask_i.sum() if slot_mask_i is not None else sqerr_i.numel() // noisy_mask_i.numel()
             active_count = (noisy_mask_i.sum() * active_channels).clamp(min=1)
@@ -120,8 +149,11 @@ def compute_flow_matching_loss(
             per_instance_losses.append((sqerr_i * noisy_mask_i).mean())  # []
 
         ts_i = timesteps[i, :T_i] if timesteps.dim() > 1 else timesteps[i]  # DF:[T_i]  TF:[1]
-        tw_i = rectified_flow.train_time_weight(ts_i, tensor_kwargs_fp32)  # DF:[T_i]  TF:[1]
-        tw_i = tw_i.reshape(-1, *([1] * (condition_mask[i].ndim - 1)))  # vision:[T_i,1,1]  action/sound:[T_i,1]
+        flow_i = rectified_flow[i] if isinstance(rectified_flow, list) else rectified_flow
+        tw_i = flow_i.train_time_weight(ts_i, tensor_kwargs_fp32)  # DF:[T_i]  TF:[1]
+        weight_shape = [1] * condition_mask[i].ndim
+        weight_shape[time_axis] = -1
+        tw_i = tw_i.reshape(weight_shape)  # vision:[T_i,1,1]  action:[T_i,1]  sound:[1,T_i]
         weighted_sqerr_i = sqerr_i * tw_i * noisy_mask_i
         if normalize_by_active or slot_mask_i is not None:
             per_instance_weighted_losses.append(weighted_sqerr_i.sum() / active_count)
@@ -155,6 +187,9 @@ def compute_flow_matching_loss(
 
     per_instance_loss = torch.stack(per_instance_losses)  # [B]
     per_instance_weighted_loss = torch.stack(per_instance_weighted_losses)  # [B]
+    if item_losses is not None:
+        item_losses.weighted_losses = per_instance_weighted_loss  # [B]
+        item_losses.valid = torch.stack(has_supervised_items)  # [B]
     if exclude_fully_conditioned_items:
         active_item_mask = torch.stack(has_noisy_items).to(
             device=per_instance_weighted_loss.device,

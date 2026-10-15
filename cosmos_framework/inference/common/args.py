@@ -482,8 +482,7 @@ class CheckpointType(StrEnum):
         transformer_path = path / "transformer"
         has_root_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
         has_diffusers_hf_weights = (path / "model_index.json").is_file() and (
-            any(transformer_path.glob("*.safetensors"))
-            or any(transformer_path.glob("*.safetensors.index.json"))
+            any(transformer_path.glob("*.safetensors")) or any(transformer_path.glob("*.safetensors.index.json"))
         )
         has_hf_weights = has_root_hf_weights or has_diffusers_hf_weights
         if has_hf_weights:
@@ -957,7 +956,7 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models
     (https://arxiv.org/abs/2602.18993). Autoregressive and KV-cache generation
     bypass the cache automatically. Quantized inference (ModelOpt FP8 checkpoints,
-    ``--quantization-method`` mxfp8/nvfp4) keeps the cache off and logs a warning.
+    ``--quantization-method`` mxfp8/nvfp4) follows the same cache setting.
     """
     diffusion_cache_thresh: float | None = None
     """Accumulated relative-L1 threshold (``diffusion_cache_thresh``), shared by the

@@ -29,6 +29,14 @@ def obtain_image_size(data_dict: dict, input_keys: list) -> tuple[int, int]:
     return width, height
 
 
+def obtain_aspect_ratio(data_dict: dict) -> str:
+    """Read the bucket label from WebDataset metadata or a decoded sample."""
+    if "__url__" in data_dict and "aspect_ratio" in data_dict["__url__"].meta.opts:
+        return data_dict["__url__"].meta.opts["aspect_ratio"]
+    else:  # Non-webdataset format
+        return data_dict["aspect_ratio"]
+
+
 def obtain_augmentation_size(data_dict: dict, augmentor_cfg: dict) -> Union[int, tuple]:
     r"""Function for obtaining size of the augmentation.
     When dealing with multi-aspect ratio dataloaders, we need to
@@ -42,10 +50,7 @@ def obtain_augmentation_size(data_dict: dict, augmentor_cfg: dict) -> Union[int,
     Returns:
         aug_size (int): Size of augmentation
     """
-    if "__url__" in data_dict and "aspect_ratio" in data_dict["__url__"].meta.opts:
-        aspect_ratio = data_dict["__url__"].meta.opts["aspect_ratio"]
-    else:  # Non-webdataset format
-        aspect_ratio = data_dict["aspect_ratio"]
+    aspect_ratio = obtain_aspect_ratio(data_dict)
     if "_res_size_map" in data_dict:
         return data_dict["_res_size_map"][aspect_ratio]
     return augmentor_cfg["size"][aspect_ratio]

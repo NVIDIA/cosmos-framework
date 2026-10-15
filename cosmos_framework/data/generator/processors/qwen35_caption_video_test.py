@@ -157,7 +157,7 @@ def test_qwen35_framewise_decoder_preserves_exact_source_timestamps(processor: Q
         video_temporal_mode="framewise",
     )
     assert decoded is not None
-    frames = tensor_to_pil_images(decoded["videos"])
+    frames = tensor_to_pil_images(decoded["videos"], channels_first=True)
     source_indices = decoded["source_frames_indices"]
     assert len(frames) == len(source_indices)
 

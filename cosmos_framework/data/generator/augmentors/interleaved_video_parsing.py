@@ -4,16 +4,19 @@
 import math
 import random
 from collections.abc import Callable
+from functools import partial
 from typing import Optional
 
 import numpy as np
 import omegaconf
 import torch
+import torchvision.transforms.functional as transforms_F
 from einops import rearrange
 from torchcodec.decoders import VideoDecoder
 from torchvision.transforms.v2 import Resize, UniformTemporalSubsample
 
-from cosmos_framework.data.imaginaire.webdataset.augmentors.image.misc import obtain_augmentation_size
+from cosmos_framework.data.imaginaire.webdataset.augmentors.image.misc import obtain_aspect_ratio, obtain_augmentation_size
+from cosmos_framework.data.imaginaire.webdataset.augmentors.image.resize import AspectRatioFilterStats, ResizeToSize
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.augmentors.video_parsing import VideoParsingWithFullFrames
 
@@ -118,6 +121,14 @@ def _apply_post_decode_transforms(
     return frames
 
 
+class ControlResizeConfigurationError(ValueError):
+    """A configured transfer control has no supported direct-resize policy."""
+
+
+class AspectRatioRejected(ValueError):
+    """A decoded clip exceeds the configured stretch limit and should be skipped."""
+
+
 class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
     """Decode RGB and precomputed control videos with one shared v3 frame plan.
 
@@ -133,8 +144,65 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
         self.input_keys = input_keys
         self.control_video_keys = input_keys[2:]
         self.min_stride_key = self.args.get("min_stride_key", "_full_frames_min_stride")
+        self.aspect_ratio_stats: AspectRatioFilterStats = AspectRatioFilterStats()
+        if self.args.get("direct_resize") is not None:
+            for control_video_key in self.control_video_keys:
+                if control_video_key != "persisted_control":
+                    self._control_resize_modality({}, control_video_key)
 
-    def _build_rgb_decode_transform(self, data_dict: dict, meta_dict: dict) -> list[Resize] | None:
+    @staticmethod
+    def _control_resize_modality(data_dict: dict, control_video_key: str) -> str:
+        if control_video_key == "persisted_control":
+            modality = data_dict.get("_selected_control_modality")
+            if not isinstance(modality, str) or modality not in {"depth", "seg"}:
+                raise ControlResizeConfigurationError(
+                    "Direct resize for 'persisted_control' requires _selected_control_modality "
+                    f"to be 'depth' or 'seg', got {modality!r}."
+                )
+            return modality
+        # Match DataDictMerger's transfer-key recognition and depth precedence.
+        if isinstance(control_video_key, str):
+            if "depth" in control_video_key:
+                return "depth"
+            if "segmentation" in control_video_key:
+                return "seg"
+        raise ControlResizeConfigurationError(
+            f"Direct resize has no policy for control key {control_video_key!r}. "
+            "Expected a key containing 'depth' or 'segmentation', or 'persisted_control' "
+            "with an explicit selected modality."
+        )
+
+    def _validate_control_resize_configuration(self, data_dict: dict) -> None:
+        if self.args.get("direct_resize") is not None:
+            for control_video_key in self.control_video_keys:
+                self._control_resize_modality(data_dict, control_video_key)
+
+    def _build_rgb_decode_transform(self, data_dict: dict, meta_dict: dict) -> _PostDecodeTransforms:
+        direct_resize = self.args.get("direct_resize")
+        if direct_resize is not None:
+            aspect_ratio = obtain_aspect_ratio(data_dict)
+            target_size = obtain_augmentation_size(data_dict, direct_resize)
+            resize_args = {**direct_resize, "size": {aspect_ratio: target_size}, "log_aspect_ratio_stats": False}
+            if "_res_max_aspect_ratio_distortion" in data_dict:
+                resize_args["max_aspect_ratio_distortion"] = data_dict["_res_max_aspect_ratio_distortion"]
+            resize = ResizeToSize(input_keys=["video"], args=resize_args)
+            first_batch = True
+
+            def resize_rgb(frames: torch.Tensor) -> torch.Tensor:  # frames/returns: [T,C,H,W]
+                nonlocal first_batch
+                # Validate actual decoded dimensions before the first batch is resized.
+                output = resize({"video": frames, "aspect_ratio": aspect_ratio})
+                if first_batch and resize_args.get("max_aspect_ratio_distortion") is not None:
+                    # The decode loop can resize many batches; count each clip once.
+                    self.aspect_ratio_stats.record(
+                        aspect_ratio, (int(target_size[0]), int(target_size[1])), output is not None
+                    )
+                first_batch = False
+                if output is None:
+                    raise AspectRatioRejected("Decoded RGB aspect ratio exceeds the allowed resize distortion.")
+                return output["video"]  # [T,C,H_target,W_target]
+
+            return [resize_rgb]
         if not self.perform_resize:
             return None
 
@@ -151,6 +219,24 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
             f"Resize error. orig {(orig_w, orig_h)} desire {img_size} compute {target_size}"
         )
         return [Resize(target_size)]
+
+    def _build_control_decode_transform(self, data_dict: dict, control_video_key: str) -> _PostDecodeTransforms:
+        direct_resize = self.args.get("direct_resize")
+        if direct_resize is None:
+            return None
+        modality = self._control_resize_modality(data_dict, control_video_key)
+        target_size = obtain_augmentation_size(data_dict, direct_resize)
+        assert isinstance(target_size, (tuple, list, omegaconf.listconfig.ListConfig))
+        width, height = map(int, target_size)
+        interpolation = {
+            "depth": transforms_F.InterpolationMode.BILINEAR,
+            "seg": transforms_F.InterpolationMode.NEAREST,
+        }[modality]
+        return [
+            partial(
+                transforms_F.resize, size=(height, width), interpolation=interpolation, antialias=modality == "depth"
+            )
+        ]
 
     def _sample_frame_indices(self, decoder_len: int, min_stride_override: int | None = None) -> tuple[list[int], int]:
         min_stride = int(min_stride_override) if min_stride_override is not None else self.min_stride
@@ -180,26 +266,62 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
         self,
         video: bytes,
         frame_indices: list[int],
-        transforms: list[Resize] | None = None,
+        transforms: _PostDecodeTransforms = None,
         output_dtype: torch.dtype = torch.uint8,
     ) -> torch.Tensor:  # returns [C,T,H,W]
+        direct_resize = self.args.get("direct_resize") is not None
         video_decoder, post_decode_transforms = _create_video_decoder(
             video,
             self.seek_mode,
             self.video_decode_num_threads,
-            transforms,
+            None if direct_resize else transforms,
             output_dtype,
         )
+        if direct_resize:
+            # TorchCodec only supports bilinear decoder resizing. Keep the requested
+            # kernel after any legacy dtype conversion, operating on bounded batches.
+            post_decode_transforms = [*(post_decode_transforms or []), *(transforms or [])] or None
         try:
-            frame_batch = video_decoder.get_frames_at(frame_indices)
-            frames = frame_batch.data  # [T,C,H,W]
-            frames = _apply_post_decode_transforms(frames, post_decode_transforms)  # [T,C,H,W]
+            if post_decode_transforms is None:
+                frame_batch = video_decoder.get_frames_at(frame_indices)
+                frames = frame_batch.data  # [T,C,H,W]
+            else:
+                if not frame_indices:
+                    raise ValueError("Cannot transform an empty video frame plan.")
+                resized_frames: torch.Tensor | None = None  # [T,C,Htarget,Wtarget]
+                chunk_start = 0
+                chunk_size = 1
+                while chunk_start < len(frame_indices):
+                    chunk_indices = frame_indices[chunk_start : chunk_start + chunk_size]
+                    frame_batch = video_decoder.get_frames_at(chunk_indices)
+                    source_frames = frame_batch.data  # [Tc,C,H,W]
+                    if resized_frames is None:
+                        # Probe one decoded frame before choosing a batch size. The
+                        # float32 estimate also covers legacy uint8 conversion/resize.
+                        frame_working_bytes = source_frames.numel() * max(4, source_frames.element_size())
+                        chunk_size = max(1, min(8, 32 * 1024**2 // frame_working_bytes))
+                    transformed_frames = _apply_post_decode_transforms(
+                        source_frames, post_decode_transforms
+                    )  # [Tc,C,Htarget,Wtarget]
+                    if resized_frames is None:
+                        resized_frames = transformed_frames.new_empty(
+                            (len(frame_indices), *transformed_frames.shape[1:])
+                        )  # [T,C,Htarget,Wtarget]
+                    chunk_end = chunk_start + len(chunk_indices)
+                    resized_frames[chunk_start:chunk_end].copy_(transformed_frames)  # [Tc,C,Htarget,Wtarget]
+                    # Release native frames before decoding the next batch, including
+                    # the FrameBatch reference that owns the original tensor.
+                    del frame_batch, source_frames, transformed_frames
+                    chunk_start = chunk_end
+                assert resized_frames is not None
+                frames = resized_frames  # [T,C,Htarget,Wtarget]
             frames = frames.permute(1, 0, 2, 3)  # [C,T,H,W]
         finally:
             del video_decoder
         return frames  # [C,T,H,W]
 
     def __call__(self, data_dict: dict) -> dict | None:
+        self._validate_control_resize_configuration(data_dict)
         try:
             meta_dict = data_dict[self.meta_key]
             video = data_dict[self.video_key]
@@ -248,6 +370,8 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
                 return None
 
             video_frames = self._decode_frames_at(video, frame_indices, rgb_transform)  # [C,T,H,W]
+        except AspectRatioRejected:
+            return None
         except Exception as e:
             log.warning(
                 f"Failed to decode RGB video. url: {data_dict['__url__']}, key: {data_dict['__key__']}, error: {e}",
@@ -272,7 +396,10 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
 
         for control_video_key, control_video in control_videos.items():
             try:
-                control_frames = self._decode_frames_at(control_video, frame_indices)  # [C,T,H,W]
+                control_transform = self._build_control_decode_transform(data_dict, control_video_key)
+                control_frames = self._decode_frames_at(control_video, frame_indices, control_transform)  # [C,T,H,W]
+            except ControlResizeConfigurationError:
+                raise
             except Exception as e:
                 log.warning(
                     f"Failed to decode {control_video_key}. "
@@ -331,11 +458,14 @@ class VideoTransferAlignedLegacyChunkParsing(VideoTransferAlignedFullFramesParsi
         video: bytes,
         control_videos: dict[str, bytes],
         frame_indices: list[int],
-        rgb_transform: list[Resize] | None,
+        rgb_transform: _PostDecodeTransforms,
+        data_dict: dict,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         video_frames = self._decode_frames_at(video, frame_indices, rgb_transform)  # [C,T,H,W]
         control_frames_by_key = {
-            control_video_key: self._decode_frames_at(control_video, frame_indices)  # [C,T,H,W]
+            control_video_key: self._decode_frames_at(
+                control_video, frame_indices, self._build_control_decode_transform(data_dict, control_video_key)
+            )  # [C,T,H,W]
             for control_video_key, control_video in control_videos.items()
         }
         return video_frames, control_frames_by_key
@@ -353,6 +483,7 @@ class VideoTransferAlignedLegacyChunkParsing(VideoTransferAlignedFullFramesParsi
         return video_frames, control_frames_by_key
 
     def __call__(self, data_dict: dict) -> dict | None:
+        self._validate_control_resize_configuration(data_dict)
         try:
             meta_dict = data_dict[self.meta_key]
             video = data_dict[self.video_key]
@@ -444,8 +575,12 @@ class VideoTransferAlignedLegacyChunkParsing(VideoTransferAlignedFullFramesParsi
 
             try:
                 video_frames, control_frames_by_key = self._decode_all_streams_at(
-                    video, control_videos, frame_indices, rgb_transform
+                    video, control_videos, frame_indices, rgb_transform, data_dict
                 )  # [C,T,H,W]
+            except AspectRatioRejected:
+                return None
+            except ControlResizeConfigurationError:
+                raise
             except Exception as e:
                 log.warning(
                     f"Failed to decode aligned video streams. "
@@ -562,6 +697,7 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
         return frame_indices[:num_video_frames], stride
 
     def __call__(self, data_dict: dict) -> dict | None:
+        self._validate_control_resize_configuration(data_dict)
         try:
             meta_dict = data_dict[self.meta_key]
             video = data_dict[self.video_key]
@@ -629,6 +765,8 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
                 return None
 
             video_frames = self._decode_frames_at(video, frame_indices, rgb_transform)  # [C,T,H,W]
+        except AspectRatioRejected:
+            return None
         except Exception as e:
             log.warning(
                 f"Failed to decode RGB video. url: {data_dict['__url__']}, key: {data_dict['__key__']}, error: {e}",
@@ -653,7 +791,10 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
 
         for control_video_key, control_video in control_videos.items():
             try:
-                control_frames = self._decode_frames_at(control_video, frame_indices)  # [C,T,H,W]
+                control_transform = self._build_control_decode_transform(data_dict, control_video_key)
+                control_frames = self._decode_frames_at(control_video, frame_indices, control_transform)  # [C,T,H,W]
+            except ControlResizeConfigurationError:
+                raise
             except Exception as e:
                 log.warning(
                     f"Failed to decode {control_video_key}. "
@@ -801,7 +942,7 @@ class VideoTransferAlignedSelectedControlParsing(VideoTransferAlignedChunkedFram
         self,
         video: bytes,
         frame_indices: list[int],
-        transforms: list[Resize] | None = None,
+        transforms: _PostDecodeTransforms = None,
         output_dtype: torch.dtype = torch.uint8,
     ) -> torch.Tensor:  # returns [C,T,H,W]
         if video is getattr(self, "_depth_control_video", None):
@@ -811,7 +952,12 @@ class VideoTransferAlignedSelectedControlParsing(VideoTransferAlignedChunkedFram
     def __call__(self, data_dict: dict) -> dict | None:
         modality = data_dict.get("_selected_control_modality")
         control_bytes: bytes | None = None
-        if modality not in {"edge", "blur", "depth", "seg"}:
+        if not isinstance(modality, str) or modality not in {"edge", "blur", "depth", "seg"}:
+            if self.args.get("direct_resize") is not None:
+                raise ControlResizeConfigurationError(
+                    "Selected-control direct resize requires _selected_control_modality to be "
+                    f"'edge', 'blur', 'depth', or 'seg', got {modality!r}."
+                )
             log.warning(f"Unknown selected transfer modality {modality!r}.", rank0_only=False)
             return None
         persisted = modality in self._PERSISTED_MODALITIES

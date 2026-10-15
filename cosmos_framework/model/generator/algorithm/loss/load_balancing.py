@@ -31,7 +31,7 @@ def _scale_rank_sample_mean(
         device_mesh,
     )  # [num_layers]
     # FSDP averages gradients over the mesh, so pre-multiply by the mesh size.
-    # This is analogous to OmniMoTModel._sample_level_loss_scale.
+    # This also counteracts gradient averaging in the supervised per-modality sample means.
     pre_fsdp_sample_scale = (
         device_mesh.size() * local_sample_count_per_layer / global_sample_count_per_layer.clamp_min(1)
     )  # [num_layers]

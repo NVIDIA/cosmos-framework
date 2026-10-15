@@ -11,11 +11,14 @@ mask and ``attention_test`` for the folds.
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
+from cosmos_framework.utils.lazy_config import LazyCall, instantiate
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     AttentionScope,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
+    TemporalWindow,
 )
 from cosmos_framework.model.generator.mot.flex_attention import triton_backend_block_size
 from cosmos_framework.model.generator.mot.multiview_attention import resolve_multiview_backend
@@ -50,22 +53,134 @@ def test_resolve_multiview_backend_auto_never_takes_the_folds() -> None:
 
 
 @pytest.mark.L0
-def test_resolve_multiview_backend_auto_takes_a_mask_when_the_config_rules_maskless_out() -> None:
-    """The verdict changes nothing under "auto", which was taking a mask either way."""
+def test_resolve_multiview_backend_auto_keeps_a_mask_with_a_window() -> None:
+    """Supporting windows does not change auto's preference for exact masked attention."""
     backend, _ = resolve_multiview_backend(
-        torch.device("cpu"), "auto", config=_config("decomposed", decomposed_temporal_window_seconds=0.4)
+        torch.device("cpu"), "auto", config=_config("decomposed", decomposed_temporal_window_seconds=(-0.4, 0.0))
     )
 
     assert backend == "flex_triton"
 
 
 @pytest.mark.L0
-def test_resolve_multiview_backend_demanding_maskless_reports_why_the_config_rules_it_out() -> None:
-    """Pinning "maskless" and silently getting a mask would train a different distribution."""
-    with pytest.raises(ValueError, match="asks for the maskless folds, but decomposed_temporal_window_seconds"):
-        resolve_multiview_backend(
-            torch.device("cpu"), "maskless", config=_config("decomposed", decomposed_temporal_window_seconds=0.4)
-        )
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [(0.0, 0.0), (-0.1, 0.0), (-0.4, 0.0), (-1.0, 0.0), (-0.4, 0.4), (-0.4, 0.2)])
+@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
+def test_maskless_accepts_temporal_window(window: TemporalWindow, deduplicate_cross_view: bool) -> None:
+    """Pinning maskless must preserve its requested counting mode rather than fall back."""
+    config = _config("decomposed", decomposed_temporal_window_seconds=window)
+    config.deduplicate_cross_view = deduplicate_cross_view
+    assert maskless_unavailable_reason(config) is None
+    backend, geometry = resolve_multiview_backend(torch.device("cpu"), "maskless", config=config)
+    assert backend == "maskless"
+    assert geometry is None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [None, 0, 0.4, 1, (-0.4, 0.0), (-0.4, 0.4), (-0.4, 0.2)])
+def test_temporal_window_config_roundtrips_through_yaml(window: TemporalWindow | float | None) -> None:
+    config = LazyCall(MultiviewAttentionMaskConfig)(decomposed_temporal_window_seconds=window)
+    restored = instantiate(OmegaConf.create(OmegaConf.to_yaml(config)))
+    expected = (-window, 0.0) if isinstance(window, (int, float)) else window
+    assert restored.decomposed_temporal_window_seconds == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [None, 0, 0.4, 1, (-0.4, 0.0), (-0.2, 0.2), (-0.4, 0.2)])
+def test_temporal_window_structured_config_roundtrips(window: TemporalWindow | float | None) -> None:
+    # Production configs embed attrs instances, not only LazyCall dictionaries.
+    # OmegaConf validates every field annotation here, including unused defaults.
+    config = OmegaConf.structured(MultiviewAttentionConfig(), flags={"allow_objects": True})
+    config = OmegaConf.merge(config, {"mask": {"decomposed_temporal_window_seconds": window}})
+    restored = OmegaConf.to_object(OmegaConf.merge(config, OmegaConf.create(OmegaConf.to_yaml(config))))
+    expected = (-window, 0.0) if isinstance(window, (int, float)) else window
+    assert restored.mask.decomposed_temporal_window_seconds == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [(0.1, -0.1), (-0.4, float("nan")), (-float("inf"), 0.0), (-0.4,), (-0.4, 0.0, 0.4)])
+def test_temporal_window_rejects_invalid_bounds(window: tuple[float, ...]) -> None:
+    with pytest.raises(ValueError, match="decomposed_temporal_window_seconds"):
+        _config("decomposed", decomposed_temporal_window_seconds=window)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("window", [-0.1, float("nan"), float("inf")])
+def test_temporal_window_rejects_invalid_legacy_config(window: float) -> None:
+    with pytest.raises(ValueError, match="legacy scalar must be finite and non-negative"):
+        _config("decomposed", decomposed_temporal_window_seconds=window)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("window", [(-8, 8), (-16, 0)])
+def test_attention_accepts_supported_neighborhood_windows(window: tuple[int, int]) -> None:
+    """Centered ``(-N, N)`` and past-looking ``(-N, 0)`` windows are supported."""
+    config = _config("decomposed", sensor_to_sensor_window=window)
+
+    assert maskless_unavailable_reason(config) is None
+    assert resolve_multiview_backend(torch.device("cpu"), "maskless", config=config) == ("maskless", None)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "sensor_to_sensor_window",
+        "sensor_to_control_window",
+        "control_to_control_window",
+        "control_to_sensor_window",
+    ),
+)
+def test_frame_window_experiment_overrides_accept_two_integer_lists(field_name: str) -> None:
+    """Each directional edge accepts the same two-bound list representation."""
+    mask = MultiviewAttentionMaskConfig(**{field_name: [-8, 8]})
+
+    assert getattr(mask, field_name) == (-8, 8)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("-8:+8", "must be null or a two-integer list"),  # String instead of a sequence.
+        ("full", "must be null or a two-integer list"),  # String instead of None.
+        ([-8], "needs exactly two bounds"),  # Missing the upper bound.
+        ([-8, 8.0], "bounds must be integers"),  # Float upper bound.
+        ([8, -8], "lower bound must not exceed"),  # Reversed interval.
+    ],
+)
+def test_frame_window_experiment_overrides_reject_malformed_values(value: object, message: str) -> None:
+    """Malformed values fail with an error that identifies the violated contract."""
+    with pytest.raises((TypeError, ValueError), match=message):
+        MultiviewAttentionMaskConfig(sensor_to_control_window=value)
+
+
+@pytest.mark.L0
+def test_attention_rejects_unsupported_asymmetric_neighborhood_window() -> None:
+    # (-12, 3) is a valid inclusive temporal window, but the current NATTEN call
+    # can describe a neighborhood only with its size and a causal flag. That
+    # represents centered (-N, N) and causal (-N, 0) windows, not a window with
+    # an independently shifted anchor. Reject it instead of silently attending
+    # to a different set of frames.
+    config = _config("decomposed", sensor_to_sensor_window=(-12, 3))
+
+    assert "not centered" in str(maskless_unavailable_reason(config))
+    with pytest.raises(ValueError, match="not centered"):
+        resolve_multiview_backend(torch.device("cpu"), "maskless", config=config)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("backend", ["auto", "flex_triton", "flex_flash"])
+def test_flex_attention_rejects_temporal_frame_windows(backend: str) -> None:
+    """Every FlexAttention selection fails rather than silently ignoring a window."""
+    config = _config("decomposed", sensor_to_control_window=(-4, 4))
+
+    with pytest.raises(NotImplementedError, match="not implemented for FlexAttention"):
+        resolve_multiview_backend(torch.device("cpu"), backend, config=config)
 
 
 @pytest.mark.L0
@@ -171,3 +286,14 @@ def test_demanding_maskless_without_control_attends_sensor_is_served() -> None:
     assert backend == "maskless"
     # The folds build no mask, so they carry no block geometry -- with the flag off as without.
     assert geometry is None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_exact_maskless_is_explicit_and_cannot_be_ignored_by_flex() -> None:
+    config = _config("decomposed")
+    config.deduplicate_cross_view = True
+    assert resolve_multiview_backend(torch.device("cpu"), "maskless", config=config) == ("maskless", None)
+    for preference in ("auto", "flex_triton", "flex_flash"):
+        with pytest.raises(ValueError, match="requires backend='maskless'"):
+            resolve_multiview_backend(torch.device("cpu"), preference, config=config)

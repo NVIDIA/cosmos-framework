@@ -7,6 +7,7 @@ Based on projects/cosmos/ar/v1/configs/registry.py
 
 from hydra.core.config_store import ConfigStore
 
+from cosmos_framework.callbacks.data_stats_writer import DataStatsWriterCallback
 from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
 from cosmos_framework.callbacks.grad_clip import GradClip
 from cosmos_framework.callbacks.hf_export import HFExportCallback
@@ -49,7 +50,7 @@ def register_callbacks():
         ),
         # Observe the full accumulated gradient once per update, before clipping.
         loss_spike_rollback=L(LossSpikeRollback)(enabled=False),  # use model + optimizer
-        grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False),  # use model
+        grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False, error_if_nonfinite=False),  # use model
         learning_rate_logger=L(LearningRateLogger)(every_n=10),
         low_precision=L(LowPrecisionCallback)(
             update_iter=1,
@@ -71,6 +72,9 @@ def register_callbacks():
             ),
             creds_path=None,
             flush_every_n_batches=100,
+        ),
+        data_stats_writer=L(DataStatsWriterCallback)(
+            enabled="${data_setting.data_stats_writer_enabled}",
         ),
         # nvtx=L(NVTXCallback)(synchronize=True),
     )

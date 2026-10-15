@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Autoregressive sequence packing for framewise and chunkwise AR generation."""
+"""Interactive temporal-causal packing for autoregressive generation and replay training."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 import torch
 
+from cosmos_framework.configs.base.defaults.model_config import MultiviewActionConditioningConfig
 from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import (
@@ -15,6 +17,132 @@ from cosmos_framework.data.generator.sequence_packing import (
     SequencePlan,
     pack_input_sequence,
 )
+from cosmos_framework.data.generator.sequence_packing.packers import uses_single_timestep
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequenceBuilder
+from cosmos_framework.data.generator.sequence_packing.temporal_causal import pack_supertokens_temporal_causal
+
+
+def pack_multiview_action_temporal_causal(
+    plans: list[SequencePlan],
+    text_tokens: list[list[int]],
+    data: GenerationDataClean,
+    timesteps: torch.Tensor,
+    *,
+    config: MultiviewActionConditioningConfig,
+    special_tokens: dict[str, int],
+    patch_spatial: int,
+    temporal_factor: int,
+    temporal_margin: int,
+    reset_spatial_ids: bool,
+    enable_fps_modulation: bool,
+    base_fps: float,
+) -> PackedSequence:
+    """Pack one synchronized robot clip, reusing the single-view causal supertokens.
+
+    Camera-major views may have different spatial grids: head uses the 480p
+    bucket, wrists use 256p. Each view has [null, V0], [a1..a4, V1], ...;
+    all views reset to the same mRoPE clock. Actions remain clean inputs.
+    """
+    if data.batch_size != 1 or len(plans) != 1 or len(text_tokens) != 1:
+        raise ValueError("Robot multiview temporal-causal packing requires one logical clip per batch.")
+    plan = plans[0]
+    if (
+        not plan.has_text
+        or not plan.has_vision
+        or not plan.has_action
+        or plan.has_sound
+        or plan.has_lidar
+        or plan.has_radar
+    ):
+        raise ValueError("Robot multiview temporal-causal packing supports text, RGB, and conditioned actions only.")
+    if timesteps.is_cuda:
+        raise ValueError("Temporal-causal packing timesteps must remain on CPU.")
+    assert data.x0_tokens_vision is not None and data.x0_tokens_action is not None
+    num_views = (data.num_vision_items_per_sample or [1])[0]
+    if num_views not in (1, len(config.view_codes)) or len(data.x0_tokens_vision) != num_views:
+        raise ValueError("Robot temporal-causal packing expects a single head view or the configured synchronized rig.")
+    latent_t = data.x0_tokens_vision[0].shape[2]
+    action = data.x0_tokens_action[0]
+    rows_per_view = (latent_t - 1) * temporal_factor
+    if (
+        any(view.shape[2] != latent_t for view in data.x0_tokens_vision)
+        or action.ndim != 2
+        or action.shape[0] != num_views * rows_per_view
+    ):
+        raise ValueError("Every view must retain all frame-rate actions aligned to T+1 observations.")
+    vision_fps = float(data.fps_vision[0]) if data.fps_vision is not None else base_fps
+    action_fps = float(data.fps_action[0]) if data.fps_action is not None else vision_fps
+    timestep_row = timesteps[0]
+    input_timestep: float | torch.Tensor = (
+        float(timestep_row.item()) if timestep_row.numel() == 1 else timestep_row.flatten()
+    )
+    builder = PackedSequenceBuilder(uses_single_timestep=uses_single_timestep(timesteps))
+    builder._mrope_reset_spatial = reset_spatial_ids
+    builder.begin_sample(0)
+    builder.pack_text_tokens(
+        text_tokens[0],
+        special_tokens,
+        has_generation=True,
+        use_float_positions=enable_fps_modulation,
+    )
+    builder.advance_mrope_temporal_offset(temporal_margin)
+    temporal_offset = builder.mrope_temporal_offset
+    generation_start = builder.current_seq_index
+    # Never pass OmegaConf containers to Torch: their probing can retain caller
+    # frames (and training tensors) until cyclic GC.
+    codes = action.new_tensor([list(code) for code in config.view_codes])
+    domains: list[torch.Tensor] | None = [] if data.action_domain_id is not None else None
+    for view_id, vision in enumerate(data.x0_tokens_vision):
+        builder.set_mrope_temporal_offset(temporal_offset)
+        real_actions = action[view_id * rows_per_view : (view_id + 1) * rows_per_view].clone()
+        start = config.view_code_start
+        real_actions[:, start : start + codes.shape[1]] = codes[view_id]
+        _, null_prefix = pack_supertokens_temporal_causal(
+            builder,
+            vision,
+            real_actions,
+            plan.condition_frame_indexes_vision,
+            input_timestep,
+            patch_spatial,
+            temporal_factor,
+            action.shape[1],
+            vision_fps=vision_fps,
+            action_fps=action_fps,
+            enable_fps_modulation=enable_fps_modulation,
+            base_fps=base_fps,
+        )
+        assert null_prefix and builder.vision is not None and builder.action is not None
+        # The null action's physical channels stay zero, but its fixed code still
+        # identifies the view at V0. The head code is exactly zero, as in single view.
+        builder.action.tokens[-1][:temporal_factor, start : start + codes.shape[1]] = codes[view_id]
+        builder.vision.seconds_per_frame.append(temporal_factor / vision_fps)
+        builder.action.seconds_per_frame.append(1.0 / action_fps)
+        if domains is not None:
+            assert data.action_domain_id is not None
+            domain = data.action_domain_id[0].reshape(-1)
+            if domain.numel() not in (1, action.shape[0]):
+                raise ValueError("Action domains must be scalar or have one ID per real frame-rate action.")
+            domains.append(
+                domain if domain.numel() == 1 else domain[view_id * rows_per_view : (view_id + 1) * rows_per_view]
+            )
+    builder.null_action_supertokens = True
+    builder.num_action_tokens_per_supertoken = temporal_factor
+    builder.finish_sample(builder.current_seq_index - generation_start, builder.current_seq_index)
+    packed = builder.finalize(
+        replace(
+            data,
+            num_vision_items_per_sample=[num_views],
+            num_views_per_vision_item=[1] * num_views,
+            num_views_per_action_item=[1] * num_views,
+            action_domain_id=domains,
+            raw_action_dim=data.raw_action_dim * num_views if data.raw_action_dim is not None else None,
+            action_valid_mask=data.action_valid_mask * num_views if data.action_valid_mask is not None else None,
+        )
+    )
+    # Dynamic replay metadata is copied by make_teacher_forcing_clean_pack and
+    # keeps the generic interactive multiview helpers opt-in for this layout.
+    setattr(packed, "multiview_action_conditioning", True)
+    return packed
 
 
 def resolve_text_system_prompt(data_batch: dict[str, Any]) -> Any:

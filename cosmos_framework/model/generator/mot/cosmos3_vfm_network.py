@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import dataclasses
 import math
 from collections.abc import Sequence
 from typing import List, Tuple
 
+import attrs
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -13,8 +15,13 @@ from transformers.modeling_utils import PreTrainedModel
 from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
 from cosmos_framework.configs.base.defaults.multiview_attention import (
+    CaptionAccess,
     MultiviewAttentionConfig,
     ResolvedBackend,
+    RigRopeChannels,
+    RigRopeMissingGeometry,
+    TemporalWindow,
+    load_temporal_window,
 )
 from cosmos_framework.model.generator.mot.action_io_projector import (
     ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -22,6 +29,10 @@ from cosmos_framework.model.generator.mot.action_io_projector import (
     build_action_io_projector,
 )
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
+from cosmos_framework.model.generator.mot.camera_relative_pose import (
+    build_camera_relative_pose_plan,
+    prope_pair_channels,
+)
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
@@ -34,23 +45,35 @@ from cosmos_framework.model.generator.mot.flex_attention import (
 )
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
 from cosmos_framework.model.generator.mot.multiview_attention import (
+    is_single_camera_pack,
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
     resolve_multiview_backend,
+    validate_multiview_pack,
 )
 from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
     MultiviewMasklessPlan,
     build_multiview_maskless_plan,
+    cross_view_passes,
+    rigrope_local_head_masks,
+)
+from cosmos_framework.model.generator.mot.rigrope import RopeRigPE, resize_rig_features, spread_over_even_pairs
+from cosmos_framework.model.generator.utils.camera_relative_pose import (
+    invert_affine_transform,
+    invert_rigid_transform,
 )
 from cosmos_framework.model.generator.utils.memory import MemoryState
+from cosmos_framework.model.generator.utils.rig_view_embedding import add_view_embeddings
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    from_all_seq,
     get_caption_seq_offsets,
     get_causal_seq,
     get_full_only_seq,
 )
+from cosmos_framework.utils.generator.spatial_patch import normalize_spatial_patch_hw
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -64,12 +87,14 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         latent_downsample_factor=8,
         latent_channel_size=16,
         lidar_latent_channel_size=None,
+        radar_latent_channel_size=None,
         max_latent_h=32,
         max_latent_w=32,
         max_latent_t=32,
         enable_fps_modulation=False,
         enable_vision_modality_embeddings: bool = False,
         enable_media_modality_embedding: bool = False,
+        num_view_embeddings: int = 0,
         enable_action_modality_embedding: bool = True,
         enable_sound_modality_embedding: bool = True,
         base_fps=24,
@@ -78,9 +103,11 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         interpolate_pos=False,
         timestep_shift=1.0,
         timestep_scale=0.001,
+        timestep_range: float = 1.0,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
         multiview_attention_config: MultiviewAttentionConfig | None = None,
+        multiview_action_conditioning: bool = False,
         action_dim=32,
         num_embodiment_domains=32,
         action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -93,21 +120,33 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
         enable_input_bias: bool = True,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
+        radar_patch_spatial_hw: int | tuple[int, int] | None = None,
         **kwargs,
     ):
         self.vision_gen = vision_gen
         self.sound_gen = sound_gen
         self.vlm_config = vlm_config
         self.latent_patch_size = latent_patch_size
+        self.lidar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            latent_patch_size if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+        )
+        self.radar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            latent_patch_size if radar_patch_spatial_hw is None else radar_patch_spatial_hw
+        )
         self.latent_downsample_factor = latent_downsample_factor
         self.latent_channel_size = latent_channel_size
         self.lidar_latent_channel_size = lidar_latent_channel_size
+        self.radar_latent_channel_size = radar_latent_channel_size
         self.max_latent_h = max_latent_h
         self.max_latent_w = max_latent_w
         self.max_latent_t = max_latent_t
         self.enable_fps_modulation = enable_fps_modulation
         self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
         self.enable_media_modality_embedding = enable_media_modality_embedding
+        if num_view_embeddings < 0 or num_view_embeddings == 1:
+            raise ValueError("Rig embeddings need camera IDs and a final LiDAR ID")
+        self.num_view_embeddings: int = num_view_embeddings
         self.enable_action_modality_embedding = enable_action_modality_embedding
         self.enable_sound_modality_embedding = enable_sound_modality_embedding
         if self.enable_vision_modality_embeddings and self.enable_media_modality_embedding:
@@ -120,12 +159,41 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.interpolate_pos = interpolate_pos
         self.timestep_shift = timestep_shift
         self.timestep_scale = timestep_scale
+        self.timestep_range = timestep_range
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
         # One object rather than five fields flattened out of it: the mask reads its scope and
         # window, the folds read all of it through ``maskless_unavailable_reason``, and a copy of
         # each on this config could disagree with the other.
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
+        self.multiview_action_conditioning = multiview_action_conditioning
+        # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
+        # the attrs converter. Restore every field a config saved before it existed lacks --
+        # the legacy counting default, the geometry and band settings, all off by default --
+        # and normalize durations here, before building attention.
+        default_attention_config = MultiviewAttentionConfig()
+        for field in attrs.fields(MultiviewAttentionConfig):
+            if not hasattr(self.multiview_attention_config, field.name):
+                setattr(self.multiview_attention_config, field.name, getattr(default_attention_config, field.name))
+        mask_config = self.multiview_attention_config.mask
+        mask_config.decomposed_temporal_window_seconds = load_temporal_window(
+            mask_config.decomposed_temporal_window_seconds
+        )
+        if not hasattr(mask_config, "decomposed_temporal_window_includes_first_frame"):
+            mask_config.decomposed_temporal_window_includes_first_frame = False
+        attention_config = self.multiview_attention_config
+        if multiview_action_conditioning and (
+            getattr(attention_config, "geometry_position_encoding", "baseline") != "baseline"
+            or getattr(attention_config, "maskless_cross_view_band_radius", 0) != 0
+            or getattr(attention_config, "maskless_cross_view_include_frame_zero", False)
+            or getattr(attention_config, "maskless_cross_view_band_keys", "all_views") != "all_views"
+        ):
+            # Action conditioning builds its own maskless plan, which carries no camera geometry
+            # and no cross-view band, so these settings would otherwise be silently ignored.
+            raise ValueError(
+                "Multiview action conditioning supports neither RigRoPE/PRoPE geometry nor cross-view bands; "
+                "keep geometry_position_encoding='baseline' and the default maskless_cross_view_band_* settings."
+            )
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -199,6 +267,56 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # under it mid-run.
         self.flex_backend: FlexBackend | None = None
         self.multiview_backend: ResolvedBackend | None = None
+        self.rigrope: RopeRigPE | None = None
+        self.rigrope_kv_heads: int | None = None
+        geometry_mode = config.multiview_attention_config.geometry_position_encoding
+        if geometry_mode != "baseline":
+            if (
+                config.joint_attn_implementation != "multiview"
+                or config.multiview_attention_config.backend != "maskless"
+                or config.multiview_attention_config.mask.attention_scope != "decomposed"
+            ):
+                raise ValueError(
+                    f"{geometry_mode} requires multiview decomposed maskless attention; "
+                    "Flex and other attention scopes are unsupported"
+                )
+            if geometry_mode in ("prope", "prope_cross_view") and self.head_dim % 8:
+                raise ValueError("PRoPE requires head_dim divisible by 8")
+            if config.multiview_attention_config.rigrope_channels == "even_pairs":
+                if geometry_mode != "rigrope_cross_view":
+                    raise ValueError("rigrope_channels='even_pairs' applies to rigrope_cross_view only")
+                if self.head_dim % 8:
+                    raise ValueError("Even-pair RigRoPE requires head_dim divisible by 8")
+            if geometry_mode == "prope_cross_view":
+                if config.multiview_attention_config.rigrope_missing_geometry == "mrope":
+                    # The heads' PRoPE channels drop mRoPE for every posed sample, so a sample
+                    # without poses keeps them unrotated (identity pose) rather than switching
+                    # those channels back to mRoPE.
+                    raise ValueError(
+                        "prope_cross_view requires rigrope_missing_geometry 'error', 'no_rotation' or 'time_only'"
+                    )
+                self.rigrope_kv_heads = _rigrope_kv_heads(
+                    config.multiview_attention_config.rigrope_head_fraction, self.num_kv_heads
+                )
+            if geometry_mode == "rigrope_cross_view":
+                multiview_config = config.multiview_attention_config
+                if (
+                    multiview_config.rigrope_missing_geometry == "time_only"
+                    and not multiview_config.rigrope_include_time
+                ):
+                    # Posed samples would then rotate by rays alone while unposed ones rotate by
+                    # time, so the same heads would read one channel two ways.
+                    raise ValueError("rigrope_missing_geometry='time_only' requires rigrope_include_time=True")
+                # Even pairs take a half-width table, which keeps every descriptor component at
+                # half the frequencies rather than dropping components.
+                self.rigrope = RopeRigPE(
+                    self.head_dim // 2 if multiview_config.rigrope_channels == "even_pairs" else self.head_dim,
+                    max_freq_exponent=multiview_config.rigrope_max_freq_exponent,
+                    min_freq_exponent=multiview_config.rigrope_min_freq_exponent,
+                )
+                self.rigrope_kv_heads = _rigrope_kv_heads(
+                    config.multiview_attention_config.rigrope_head_fraction, self.num_kv_heads
+                )
         if config.joint_attn_implementation == "multiview":
             # The device is only read for the GPU architecture the FlashAttention-4 block size
             # follows from, which is the same for every device in this process, so the local one
@@ -214,10 +332,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )
             if self.multiview_backend == "maskless":
                 log.info(
-                    "Multiview attention is the maskless three-pass decomposition "
+                    "Multiview attention uses maskless decomposition "
                     f"(backend={multiview.backend!r} -> 'maskless') under scope "
                     f"{multiview.mask.attention_scope!r} with "
-                    f"control_attends_sensor={multiview.mask.control_attends_sensor}. It builds "
+                    f"control_attends_sensor={multiview.mask.control_attends_sensor}, "
+                    f"deduplicate_cross_view={multiview.deduplicate_cross_view}, "
+                    f"decomposed_temporal_window_seconds={multiview.mask.decomposed_temporal_window_seconds}, "
+                    "decomposed_temporal_window_includes_first_frame="
+                    f"{multiview.mask.decomposed_temporal_window_includes_first_frame}. It builds "
                     "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
                     "whatever padding the pack has."
                 )
@@ -232,6 +354,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if config.vision_gen:
             self.latent_patch_size = config.latent_patch_size
+            self.lidar_patch_spatial_hw: tuple[int, int] = config.lidar_patch_spatial_hw
+            self.radar_patch_spatial_hw: tuple[int, int] = config.radar_patch_spatial_hw
             self.timestep_shift = config.timestep_shift
             self.timestep_scale = config.timestep_scale
             self.latent_downsample = config.latent_downsample_factor * config.latent_patch_size
@@ -245,17 +369,35 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.time_embedder = TimestepEmbedder(self.hidden_size, bias=_input_bias)
             self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size, bias=_input_bias)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
+            if config.num_view_embeddings:
+                self.rig_view_embed: nn.Embedding = nn.Embedding(config.num_view_embeddings, self.hidden_size)
 
             # LiDAR is its own modality: a range clip enters and leaves the sequence through
             # its own pair of projections, the way action and sound do. Its VAE is wider than
             # the camera's (128 vs 48), and these two matrices are what that costs -- a patch
-            # count follows T, H and W, not channels, so the streams agree on everything else
-            # and share the grid packing, patchify and timestep machinery below.
+            # count follows T, H and W, not channels. Each stream can choose its patch size
+            # while sharing the grid packing, patchify and timestep machinery below.
             self.lidar_latent_channel = config.lidar_latent_channel_size
             if self.lidar_latent_channel is not None:
-                self.lidar_patch_latent_dim = self.latent_patch_size**2 * self.lidar_latent_channel
+                self.lidar_patch_latent_dim = (
+                    self.lidar_patch_spatial_hw[0] * self.lidar_patch_spatial_hw[1] * self.lidar_latent_channel
+                )
                 self.lidar2llm = nn.Linear(self.lidar_patch_latent_dim, self.hidden_size, bias=_input_bias)
                 self.llm2lidar = nn.Linear(self.hidden_size, self.lidar_patch_latent_dim)
+
+            # Radar BEV is a third sensor stream, standing to the sequence exactly as LiDAR
+            # does: its own VAE (128 channels, as wide as the LiDAR one) and so its own pair
+            # of projections. Its clock differs -- radar cycles at ~20 Hz against LiDAR's 10
+            # and the camera's 30, and its VAE does not compress time -- but a rate reaches
+            # attention through the pack's ``seconds_per_frame``, not through a parameter.
+            # Its DiT patch follows the camera's unless a recipe sets ``radar_patch_spatial_hw``.
+            self.radar_latent_channel = config.radar_latent_channel_size
+            if self.radar_latent_channel is not None:
+                self.radar_patch_latent_dim = (
+                    self.radar_patch_spatial_hw[0] * self.radar_patch_spatial_hw[1] * self.radar_latent_channel
+                )
+                self.radar2llm = nn.Linear(self.radar_patch_latent_dim, self.hidden_size, bias=_input_bias)
+                self.llm2radar = nn.Linear(self.hidden_size, self.radar_patch_latent_dim)
             if config.enable_vision_modality_embeddings:
                 self.image_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
                 self.video_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
@@ -290,7 +432,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.config.vision_gen or self.config.action_gen or self.config.sound_gen:
             self.time_embedder._init_weights(buffer_device=buffer_device)
 
+        if self.rigrope is not None:
+            # Its frequency table is a non-persistent buffer, so neither materialization nor a
+            # checkpoint load fills it in.
+            self.rigrope.reset_parameters(device=buffer_device)
+
         if self.config.vision_gen:
+            if self.config.num_view_embeddings:
+                torch.nn.init.zeros_(self.rig_view_embed.weight)  # [V,D]
             std = 1.0 / math.sqrt(self.patch_latent_dim)
             torch.nn.init.trunc_normal_(self.vae2llm.weight, std=std, a=-3 * std, b=3 * std)
             if self.config.enable_input_bias:
@@ -311,6 +460,18 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                     torch.nn.init.zeros_(self.lidar2llm.bias)
                 torch.nn.init.trunc_normal_(self.llm2lidar.weight, std=std, a=-3 * std, b=3 * std)
                 torch.nn.init.zeros_(self.llm2lidar.bias)
+
+            if self.radar_latent_channel is not None:
+                # As for LiDAR above, and named separately for the same reason: ``std`` below
+                # is still the llm2vae one the modality embeddings read.
+                radar_in_std = 1.0 / math.sqrt(self.radar_patch_latent_dim)
+                torch.nn.init.trunc_normal_(
+                    self.radar2llm.weight, std=radar_in_std, a=-3 * radar_in_std, b=3 * radar_in_std
+                )
+                if self.config.enable_input_bias:
+                    torch.nn.init.zeros_(self.radar2llm.bias)
+                torch.nn.init.trunc_normal_(self.llm2radar.weight, std=std, a=-3 * std, b=3 * std)
+                torch.nn.init.zeros_(self.llm2radar.bias)
 
             if self.config.enable_vision_modality_embeddings:
                 torch.nn.init.trunc_normal_(self.image_modality_embed, std=std, a=-3 * std, b=3 * std)
@@ -431,13 +592,20 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         """Whether this network carries the LiDAR stream's own projections."""
         return self.config.vision_gen and self.lidar_latent_channel is not None
 
+    @property
+    def radar_gen(self) -> bool:
+        """Whether this network carries the radar stream's own projections."""
+        return self.config.vision_gen and self.radar_latent_channel is not None
+
     def patchify_and_pack_latents(
         self,
         tokens_vision: torch.Tensor,
         token_shapes_vision: Sequence[tuple[int, ...]],
         latent_channel: int | None = None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> tuple[torch.Tensor, List[Tuple[int, int, int]]]:
-        p = self.latent_patch_size
+        patch = self.latent_patch_size if patch_size is None else patch_size
+        ph, pw = normalize_spatial_patch_hw(patch)
         # One channel count per call: the caller passes its stream's width, since patches of
         # different widths cannot pack into one tensor.
         latent_channel = self.latent_channel if latent_channel is None else latent_channel
@@ -453,11 +621,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             _, t_actual, h_actual, w_actual = latent.shape
             original_latent_shapes.append((t_actual, h_actual, w_actual))
 
-            # Compute padded dimensions (must be divisible by p)
-            h_padded = ((h_actual + p - 1) // p) * p
-            w_padded = ((w_actual + p - 1) // p) * p
+            # Compute padded dimensions (must be divisible by each patch side)
+            h_padded = ((h_actual + ph - 1) // ph) * ph
+            w_padded = ((w_actual + pw - 1) // pw) * pw
 
-            # Zero-pad if dimensions are not divisible by p
+            # Zero-pad if dimensions are not divisible by their patch sides
             if h_padded != h_actual or w_padded != w_actual:
                 padded = torch.zeros(
                     (latent_channel, t_actual, h_padded, w_padded),
@@ -468,15 +636,15 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 latent = padded  # [C,T,H_padded,W_padded]
 
             # Compute number of patches after padding
-            h_patches = h_padded // p
-            w_patches = w_padded // p
+            h_patches = h_padded // ph
+            w_patches = w_padded // pw
 
             # Patchify
             latent = latent.reshape(
-                latent_channel, t_actual, h_patches, p, w_patches, p
-            )  # [C,T,h_patches,p,w_patches,p]
+                latent_channel, t_actual, h_patches, ph, w_patches, pw
+            )  # [C,T,h_patches,ph,w_patches,pw]
             latent = torch.einsum("cthpwq->thwpqc", latent).reshape(
-                -1, p * p * latent_channel
+                -1, ph * pw * latent_channel
             )  # [T*h_patches*w_patches,patch_latent_dim]
             packed_latent.append(latent)
 
@@ -491,8 +659,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         noisy_frame_indexes_vision: list[torch.Tensor],
         original_latent_shapes: List[Tuple[int, int, int]] | None = None,
         latent_channel: int | None = None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> list[torch.Tensor]:
-        p = self.latent_patch_size
+        patch = self.latent_patch_size if patch_size is None else patch_size
+        ph, pw = normalize_spatial_patch_hw(patch)
         # One channel count per call, as in ``patchify_and_pack_latents``.
         latent_channel = self.latent_channel if latent_channel is None else latent_channel
         unpatchified_latents = []
@@ -504,13 +674,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if original_latent_shapes is not None:
                 t_orig, h_orig, w_orig = original_latent_shapes[i]
                 # Compute padded dimensions used during patchify
-                h_padded = ((h_orig + p - 1) // p) * p
-                w_padded = ((w_orig + p - 1) // p) * p
-                h_patches = h_padded // p
-                w_patches = w_padded // p
+                h_padded = ((h_orig + ph - 1) // ph) * ph
+                w_padded = ((w_orig + pw - 1) // pw) * pw
+                h_patches = h_padded // ph
+                w_patches = w_padded // pw
             else:
                 # Fallback: use token shapes directly (assumes no padding was needed)
-                t_orig, h_orig, w_orig = t_c, h_c * p, w_c * p
+                t_orig, h_orig, w_orig = t_c, h_c * ph, w_c * pw
                 h_patches, w_patches = h_c, w_c
 
             # noisy_frame_indexes_vision is a list of tensors, each with shape (T,),
@@ -529,14 +699,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 end_idx = start_idx + num_patches
                 # Extract patches for this latent
                 latent_patches = packed_mse_preds[start_idx:end_idx]  # [num_patches,patch_latent_dim]
-                # Reshape back to [t_n, h_patches, w_patches, p, p, channels]
+                # Reshape back to [t_n, h_patches, w_patches, ph, pw, channels]
                 latent_patches = latent_patches.reshape(
-                    t_n, h_patches, w_patches, p, p, latent_channel
-                )  # [T_n,h_patches,w_patches,p,p,C]
+                    t_n, h_patches, w_patches, ph, pw, latent_channel
+                )  # [T_n,h_patches,w_patches,ph,pw,C]
                 # Invert the einsum operation: "thwpqc->cthpwq"
-                latent = torch.einsum("thwpqc->cthpwq", latent_patches)  # [C,T_n,h_patches,p,w_patches,p]
+                latent = torch.einsum("thwpqc->cthpwq", latent_patches)  # [C,T_n,h_patches,ph,w_patches,pw]
                 # Reshape back to [channels, t_n, h_padded, w_padded]
-                latent = latent.reshape(latent_channel, t_n, h_patches * p, w_patches * p)  # [C,T_n,H_padded,W_padded]
+                latent = latent.reshape(
+                    latent_channel, t_n, h_patches * ph, w_patches * pw
+                )  # [C,T_n,H_padded,W_padded]
 
                 # Crop to original dimensions (unpad the zeros)
                 latent = latent[:, :, :h_orig, :w_orig]  # [C,T_n,H_orig,W_orig]
@@ -767,6 +939,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         """
         if self.config.enable_vision_modality_embeddings:
             modality_embed = self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
+            if packed_seq.vision_is_image is not None and packed_seq.vision is not None:
+                shapes = packed_seq.vision.token_shapes
+                if len(packed_seq.vision_is_image) != len(shapes):
+                    raise ValueError("Image identities must match the packed vision items.")
+                flags = torch.tensor(packed_seq.vision_is_image, device=packed_sequence.device, dtype=torch.long)  # [I]
+                lengths = torch.tensor([t * h * w for t, h, w in shapes], device=flags.device)  # [I]
+                embeddings = torch.stack((self.video_modality_embed, self.image_modality_embed))  # [2,H]
+                modality_embed = embeddings[flags].repeat_interleave(lengths, dim=0)  # [N_vision,H]
         elif self.config.enable_media_modality_embedding:
             modality_embed = self.media_modality_embed
         else:
@@ -779,6 +959,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             latent_channel=self.latent_channel,
             modality_embed=modality_embed,
             target_dtype=target_dtype,
+            view_ids=packed_seq.vision_view_ids,
         )
 
     def _encode_lidar(
@@ -790,8 +971,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         """Project LiDAR range-view tokens and fill into packed_sequence.
 
         Same treatment as the vision stream, through the LiDAR VAE's own width and its own
-        pair of projections. No modality embedding: the two streams already differ by their
-        projections and by where mRoPE puts them.
+        pair of projections. No separate modality embedding: the two streams already differ
+        by their projections and by where mRoPE puts them. An optional rig embedding uses
+        the final physical sensor ID for both LiDAR controls and targets.
         """
         return self._encode_grid_stream(
             packed_seq,
@@ -799,8 +981,33 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_sequence,
             vae2llm=self.lidar2llm,
             latent_channel=self.lidar_latent_channel,
+            patch_size=self.lidar_patch_spatial_hw,
+            modality_embed=self.rig_view_embed.weight[-1] if self.config.num_view_embeddings else None,  # [D]
+            target_dtype=target_dtype,
+        )
+
+    def _encode_radar(
+        self,
+        packed_seq: PackedSequence,
+        packed_sequence: torch.Tensor,
+        target_dtype: torch.dtype,
+    ) -> List[Tuple[int, int, int]] | None:
+        """Project radar BEV tokens and fill into packed_sequence.
+
+        A BEV clip is a grid latent like a range clip, so it takes the same treatment as the
+        LiDAR stream, through the radar VAE's own width and its own pair of projections. No
+        modality embedding, for the reason LiDAR has none: the streams already differ by their
+        projections and by where mRoPE puts them.
+        """
+        return self._encode_grid_stream(
+            packed_seq,
+            packed_seq.radar,
+            packed_sequence,
+            vae2llm=self.radar2llm,
+            latent_channel=self.radar_latent_channel,
             modality_embed=None,
             target_dtype=target_dtype,
+            patch_size=self.radar_patch_spatial_hw,
         )
 
     def _encode_grid_stream(
@@ -813,11 +1020,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         latent_channel: int,
         modality_embed: torch.Tensor | None,
         target_dtype: torch.dtype,
+        patch_size: int | tuple[int, int] | None = None,
+        view_ids: list[torch.Tensor] | None = None,  # one [V] tensor per RGB item
     ) -> List[Tuple[int, int, int]] | None:
         """Patchify, project and scatter one stream of VAE latent grids.
 
-        Shared by the vision and LiDAR streams so a second grid modality cannot drift from
-        the first on patchification, timestep embedding or where its tokens land.
+        Shared by the vision, LiDAR and radar streams so a second or third grid modality
+        cannot drift from the first on patchification, timestep embedding or where its
+        tokens land.
 
         Returns:
             Original latent shapes before padding, for unpadding during decode, or ``None``
@@ -836,11 +1046,23 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         assert isinstance(modality.mse_loss_indexes, torch.Tensor)
 
         packed_patches, original_latent_shapes = self.patchify_and_pack_latents(
-            modality.tokens, modality.token_shapes, latent_channel=latent_channel
+            modality.tokens, modality.token_shapes, latent_channel=latent_channel, patch_size=patch_size
         )  # [total_patches,patch_latent_dim]
         packed_tokens = vae2llm(packed_patches.to(target_dtype))  # [total_patches,hidden_size]
+        if self.config.num_view_embeddings and modality is packed_seq.vision:
+            if view_ids is None:
+                raise ValueError("RGB tokens require physical view IDs when rig embeddings are enabled")
+            # Fresh projection output: no consumer needs the pre-offset values.
+            packed_tokens = add_view_embeddings(
+                packed_tokens, modality.token_shapes, view_ids, self.rig_view_embed
+            )  # [total_patches,hidden_size]
         if modality_embed is not None:
-            packed_tokens = packed_tokens + modality_embed.view(1, -1)  # [total_patches,hidden_size]
+            if modality_embed.ndim == 2:
+                # The linear output is not saved for backward. Reuse its buffer
+                # so per-token identities do not add another full hidden-state allocation.
+                packed_tokens.add_(modality_embed)  # [total_patches,hidden_size]
+            else:
+                packed_tokens = packed_tokens + modality_embed  # [total_patches,hidden_size]
 
         if modality.mse_loss_indexes.numel() > 0:
             timesteps = modality.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames]
@@ -887,6 +1109,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )
         )
 
+        if getattr(packed_seq, "vision_is_image", None) is not None and self.config.enable_vision_modality_embeddings:
+            # A vision-less rank must still reach both enabled image/video
+            # embeddings when another rank has camera supervision.
+            embedding_probe = 0.0 * (self.image_modality_embed.sum() + self.video_modality_embed.sum())  # []
+            output_dict["preds_vision"][0] = output_dict["preds_vision"][0] + embedding_probe  # [1,C,T,H,W]
+
     def _decode_lidar(
         self,
         packed_seq: PackedSequence,
@@ -903,7 +1131,29 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 llm2vae=self.llm2lidar,
                 latent_channel=self.lidar_latent_channel,
                 patch_latent_dim=self.lidar_patch_latent_dim,
+                patch_size=self.lidar_patch_spatial_hw,
                 original_latent_shapes=original_latent_shapes,
+            )
+        )
+
+    def _decode_radar(
+        self,
+        packed_seq: PackedSequence,
+        last_hidden_state: torch.Tensor,
+        output_dict: dict,
+        original_latent_shapes: List[Tuple[int, int, int]] | None = None,
+    ) -> None:
+        """Decode radar tokens from hidden states and update output_dict."""
+        output_dict.update(
+            preds_radar=self._decode_grid_stream(
+                packed_seq.radar,
+                last_hidden_state,
+                vae2llm=self.radar2llm,
+                llm2vae=self.llm2radar,
+                latent_channel=self.radar_latent_channel,
+                patch_latent_dim=self.radar_patch_latent_dim,
+                original_latent_shapes=original_latent_shapes,
+                patch_size=self.radar_patch_spatial_hw,
             )
         )
 
@@ -917,6 +1167,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         latent_channel: int,
         patch_latent_dim: int,
         original_latent_shapes: List[Tuple[int, int, int]] | None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> list[torch.Tensor]:
         """Read one stream's noisy patches back out of the hidden states.
 
@@ -958,6 +1209,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             noisy_frame_indexes_vision=modality.noisy_frame_indexes,
             original_latent_shapes=original_latent_shapes,
             latent_channel=latent_channel,
+            patch_size=patch_size,
         )
 
     def _encode_action(
@@ -1178,6 +1430,19 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # list of [C,T] per sample
             output_dict.update(preds_sound=preds_sound)
 
+    def _rigrope_head_masks(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """This rank's query and KV heads that use RigRoPE, or ``None`` when every head does."""
+        if self.rigrope_kv_heads is None:
+            return None
+        cp_rank, cp_size = 0, 1
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            cp_group = self.parallel_dims.cp_mesh.get_group()
+            cp_rank = torch.distributed.get_rank(cp_group)
+            cp_size = torch.distributed.get_world_size(cp_group)
+        return rigrope_local_head_masks(
+            self.num_heads, self.num_kv_heads, self.rigrope_kv_heads, cp_rank=cp_rank, cp_size=cp_size, device=device
+        )
+
     def _prepare_multiview_attention(
         self,
         packed_seq: PackedSequence,
@@ -1196,19 +1461,137 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.multiview_backend is None:
             return
 
+        if getattr(self.config, "multiview_action_conditioning", False):
+            counts = packed_seq.num_vision_items_per_sample
+            if counts is None:
+                # Preserve dense attention for the unchanged single-view streams
+                # mixed into an opt-in run; their existing action block is unchanged.
+                return
+            if (
+                self.multiview_backend != "maskless"
+                or packed_seq.num_action_tokens_per_supertoken != 0
+                or packed_seq.vision is None
+                or packed_seq.action is None
+                or packed_seq.sound is not None
+                or packed_seq.lidar is not None
+                or packed_seq.radar is not None
+            ):
+                raise ValueError("Multiview action conditioning requires RGB/action blocks and maskless attention.")
+            config = self.config.multiview_attention_config
+            full_seq, _ = get_full_only_seq(input_pack)
+            shapes: list[tuple[int, int, int]] = []
+            rates: list[float] = []
+            view_axis: list[int] = []
+            frame_offsets: list[int] = []
+            items_per_sample: list[int] = []
+            factor = self.config.temporal_compression_factor_vision
+            if len(packed_seq.action.token_shapes) != len(counts):
+                raise ValueError("Multiview packs require one camera-major action payload per sample.")
+            vision_cursor = 0
+            for sample, num_views in enumerate(counts):
+                view_shapes = packed_seq.vision.token_shapes[vision_cursor : vision_cursor + num_views]
+                view_rates = packed_seq.vision.seconds_per_frame[vision_cursor : vision_cursor + num_views]
+                latent_t = view_shapes[0][0]
+                if any(shape[0] != latent_t for shape in view_shapes) or packed_seq.action.token_shapes[sample] != (
+                    num_views * (latent_t - 1) * factor,
+                ):
+                    raise ValueError("Multiview action blocks must retain every frame-rate action for every view.")
+                shapes.extend((t, h, w) for t, h, w in view_shapes)
+                rates.extend(view_rates)
+                view_axis.extend(range(num_views))
+                frame_offsets.extend([0] * num_views)
+                # The action block stays separate. Describe its full frame-rate
+                # rows in latent-sized groups, sharing each RGB view's attention
+                # identity. Match pack_supertokens_temporal_causal's [null, V0],
+                # [actions[0:factor], V1], ... alignment, but omit its null prefix.
+                # The first real action group therefore starts at latent frame 1.
+                if latent_t > 1:
+                    shapes.extend([(latent_t - 1, 1, factor)] * num_views)
+                    rates.extend(view_rates)
+                    view_axis.extend(range(num_views))
+                    frame_offsets.extend([1] * num_views)
+                items_per_sample.append(num_views * (2 if latent_t > 1 else 1))
+                vision_cursor += num_views
+            caption_access: list[CaptionAccess] = ["all_captions"] * len(shapes)
+            # All RGB items are synchronized targets, not Auto's prefix controls/
+            # last target. Conditioned actions join the same view/time groups;
+            # their clean inputs do not make them separate control-image streams.
+            attention_meta.multiview_maskless = build_multiview_maskless_plan(
+                [1] * len(shapes),
+                shapes,
+                device=full_seq.device,
+                seconds_per_frame=rates,
+                frame_offsets=frame_offsets,
+                items_per_sample=items_per_sample,
+                is_control=[False] * len(shapes),
+                view_axis=view_axis,
+                caption_access=caption_access,
+                padded_gen_tokens=full_seq.shape[0],
+                attention_scope=config.mask.attention_scope,
+                deduplicate_cross_view=config.deduplicate_cross_view,
+                decomposed_temporal_window_seconds=config.mask.decomposed_temporal_window_seconds,
+            )
+            return
+
         # No pathway check here: ``multiview_backend`` is non-None exactly when
         # ``joint_attn_implementation == "multiview"``, so the two cannot disagree.
         # natten_metadata_list is always None here (only the three-way packer builds it).
         if self.natten_parameter_list:
             raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
 
-        if packed_seq.action is not None or packed_seq.sound is not None:
-            raise ValueError(
-                "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
-            )
+        # The multiview mask cannot describe a sound stream: its items carry a
+        # ``(frame, view)`` grid that a sound latent has no place in, and the mask rejects
+        # a pack whose GEN tokens it cannot all account for. Leaving the mask unbuilt sends
+        # the pack to dense attention, which is what the single-view Super streams trained
+        # under before they were mixed with multiview ones.
+        #
+        # For a single-camera pack with no control stream that is an equivalence rather
+        # than an approximation: ``same_view`` holds for every pair, so the whole sensor
+        # square is admitted, ``is_control`` is empty so no control rule narrows anything,
+        # and the sample-level caption is readable from every view. Dense within-sample
+        # attention is the same connectivity.
+        #
+        # Both exclusions are load-bearing. A genuinely multiview pack would lose its view
+        # scoping silently, and a pack carrying controls would have its control edges
+        # widened, since the mask confines them to their own view.
+        if packed_seq.sound is not None:
+            if not (packed_seq.action is None and is_single_camera_pack(packed_seq)):
+                raise ValueError(
+                    "Multiview FlexAttention supports vision/LiDAR/radar/action batches, not sound. "
+                    "Only a single-camera sound pack with no action stream falls back to dense "
+                    "attention; this one carries "
+                    + ("an action stream." if packed_seq.action is not None else "more than one camera.")
+                )
+            return
 
-        if packed_seq.vision is None and packed_seq.lidar is None:
-            raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+        # Under the maskless backend a single-camera pack is one more exact dense case. Every
+        # sample then owns one same-view group, and the plan slices it out of the cross-instant
+        # fold because its instant groups would be subsets of that group, so the folds reduce to
+        # attention within the sample. A control item -- an action item, or a camera item that
+        # conditions the next one on its stream -- joins the camera's only group, which gives its
+        # queries the camera rows' connectivity only while ``control_attends_sensor`` is set; off
+        # it, the folds withhold the target's tokens from a control query and dense would not.
+        # A single-camera pack has no LiDAR or radar stream, so those two are the only controls.
+        # Skipping the fold and its gen->und merge matters for the image and single-view Action
+        # streams of a mixed recipe, while true multiview packs still take the folds below.
+        # Every geometry mode acts only between cameras, so a single-camera pack needs no poses.
+        carries_control = packed_seq.action is not None or any(
+            int(count) > 1 for count in packed_seq.num_vision_items_per_sample or []
+        )
+        if (
+            self.multiview_backend == "maskless"
+            and is_single_camera_pack(packed_seq)
+            and (not carries_control or self.config.multiview_attention_config.mask.control_attends_sensor)
+        ):
+            return
+
+        if packed_seq.action is not None and packed_seq.vision is None:
+            raise ValueError("Multiview FlexAttention requires a vision generation stream for action controls.")
+        if packed_seq.action is not None and (packed_seq.lidar is not None or packed_seq.radar is not None):
+            raise ValueError("Multiview FlexAttention does not support joint LiDAR/radar and action-control batches.")
+
+        if packed_seq.vision is None and packed_seq.lidar is None and packed_seq.radar is None:
+            raise ValueError("Multiview FlexAttention needs a vision or LiDAR or radar generation stream.")
 
         # Before anything is built from the captions -- the mask's items, the folds' plan --
         # because which layout the pack is in decides how every one of its tokens is keyed
@@ -1218,6 +1601,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         sensor_mask_items = _multiview_sensor_mask_items(
             packed_seq,
             lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+            radar_attends_captions=self.config.multiview_attention_config.mask.radar_attends_captions,
         )
         caption_mask_items = _multiview_caption_mask_items(packed_seq)
         if caption_mask_items is not None and get_caption_seq_offsets(input_pack) is None:
@@ -1247,8 +1631,55 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
                 attention_scope=self.config.multiview_attention_config.mask.attention_scope,
                 control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+                cross_view_band_radius=self.config.multiview_attention_config.maskless_cross_view_band_radius,
+                include_frame_zero=self.config.multiview_attention_config.maskless_cross_view_include_frame_zero,
+                cross_view_band_keys=self.config.multiview_attention_config.maskless_cross_view_band_keys,
+                sensor_to_sensor_window=self.config.multiview_attention_config.mask.sensor_to_sensor_window,
+                sensor_to_control_window=self.config.multiview_attention_config.mask.sensor_to_control_window,
+                control_to_control_window=self.config.multiview_attention_config.mask.control_to_control_window,
+                control_to_sensor_window=self.config.multiview_attention_config.mask.control_to_sensor_window,
                 device=input_pack["full_only_seq"].device,
+                geometry_position_encoding=self.config.multiview_attention_config.geometry_position_encoding,
+                prope_intrinsics=self.config.multiview_attention_config.prope_intrinsics,
+                rigrope=self.rigrope,
+                rigrope_missing_geometry=self.config.multiview_attention_config.rigrope_missing_geometry,
+                rigrope_time_scale_s=self.config.multiview_attention_config.rigrope_time_scale_s,
+                rigrope_head_masks=self._rigrope_head_masks(input_pack["full_only_seq"].device),
+                rigrope_channels=self.config.multiview_attention_config.rigrope_channels,
+                deduplicate_cross_view=self.config.multiview_attention_config.deduplicate_cross_view,
+                decomposed_temporal_window_seconds=(
+                    self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
+                ),
+                decomposed_temporal_window_includes_first_frame=(
+                    self.config.multiview_attention_config.mask.decomposed_temporal_window_includes_first_frame
+                ),
             )
+            geometry_mode = self.config.multiview_attention_config.geometry_position_encoding
+            if (
+                geometry_mode in ("rigrope_cross_view", "prope_cross_view")
+                and not attention_meta.multiview_maskless.cross_view_empty
+            ):
+                positions = packed_seq.position_ids
+                cos, sin = self.language_model.model.rotary_emb(
+                    input_pack["full_only_seq"],
+                    position_ids=positions.unsqueeze(0) if positions.ndim == 1 else positions.unsqueeze(1),
+                )
+                pair_split = (
+                    geometry_mode == "prope_cross_view"
+                    or self.config.multiview_attention_config.rigrope_channels == "even_pairs"
+                )
+                if pair_split and cos.shape[-1] != self.head_dim:
+                    # PRoPE and even-pair RigRoPE take whole split-half pairs (i, i + head_dim/2);
+                    # partial rotary pairs channels within its own rotary span instead.
+                    raise ValueError(
+                        f"{geometry_mode} on split-half pairs requires full-head mRoPE; "
+                        f"rotary spans {cos.shape[-1]} of {self.head_dim}"
+                    )
+                attention_meta.multiview_maskless = dataclasses.replace(
+                    attention_meta.multiview_maskless,
+                    mrope_cos=get_full_only_seq(from_all_seq(cos.squeeze(0), input_pack))[0],
+                    mrope_sin=get_full_only_seq(from_all_seq(sin.squeeze(0), input_pack))[0],
+                )
             return
 
         # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
@@ -1290,6 +1721,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         memory: MemoryState | None = None,
         video_temporal_causal: bool | None = None,
         correct_cp_gradients: bool = False,
+        bounded_cp_output_gather: bool = False,
     ) -> dict:
         """
         Forward pass for Cosmos3VFMNetwork.
@@ -1303,11 +1735,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             video_temporal_causal: Per-call attention-mode override; ``None``
                 (default) uses the config-selected ``self.video_temporal_causal``.
             correct_cp_gradients: Sum CP output gradients before FSDP/DDP averaging.
+            bounded_cp_output_gather: Opt causal replay into bounded gathering;
+                bidirectional calls always retain the default gather.
 
         Returns:
             dict with keys:
                 - "preds_vision": list[Tensor[C,T,H,W]], one per sample.
                 - "preds_lidar": Velocity predictions for LiDAR tokens (if the LiDAR stream is configured).
+                - "preds_radar": Velocity predictions for radar tokens (if the radar stream is configured).
                 - "preds_action": Velocity predictions for action tokens (if action_gen).
                 - "preds_sound": Velocity predictions for sound tokens (if sound_gen).
                 - "last_hidden_state": Last hidden state from the transformer.
@@ -1323,12 +1758,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # encode vision tokens
         original_latent_shapes: List[Tuple[int, int, int]] | None = None
         original_latent_shapes_lidar: List[Tuple[int, int, int]] | None = None
+        original_latent_shapes_radar: List[Tuple[int, int, int]] | None = None
         if self.config.vision_gen:
             original_latent_shapes = self._encode_vision(packed_seq, packed_sequence, target_dtype)
 
         # encode lidar tokens
         if self.lidar_gen:
             original_latent_shapes_lidar = self._encode_lidar(packed_seq, packed_sequence, target_dtype)
+
+        # encode radar tokens
+        if self.radar_gen:
+            original_latent_shapes_radar = self._encode_radar(packed_seq, packed_sequence, target_dtype)
 
         # encode action tokens
         if self.config.action_gen:
@@ -1355,6 +1795,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             all_gen_indexes.append(packed_seq.vision.sequence_indexes)
         if packed_seq.lidar is not None and isinstance(packed_seq.lidar.sequence_indexes, torch.Tensor):
             all_gen_indexes.append(packed_seq.lidar.sequence_indexes)
+        if packed_seq.radar is not None and isinstance(packed_seq.radar.sequence_indexes, torch.Tensor):
+            all_gen_indexes.append(packed_seq.radar.sequence_indexes)
         if packed_seq.action is not None and isinstance(packed_seq.action.sequence_indexes, torch.Tensor):
             all_gen_indexes.append(packed_seq.action.sequence_indexes)
         if packed_seq.sound is not None and isinstance(packed_seq.sound.sequence_indexes, torch.Tensor):
@@ -1494,6 +1936,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_outputs=packed_outputs,
             parallel_dims=sequence_shard_parallel_dims,
             correct_cp_gradients=correct_cp_gradients,
+            bounded_memory=bounded_cp_output_gather and use_video_temporal_causal,
         )  # [N_total,hidden_size]
         output_dict = dict()
 
@@ -1504,6 +1947,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # decode lidar tokens
         if self.lidar_gen:
             self._decode_lidar(packed_seq, last_hidden_state, output_dict, original_latent_shapes_lidar)
+
+        # decode radar tokens
+        if self.radar_gen:
+            self._decode_radar(packed_seq, last_hidden_state, output_dict, original_latent_shapes_radar)
 
         # decode action tokens
         if self.config.action_gen:
@@ -1593,13 +2040,30 @@ def _multiview_maskless_geometry(
     gen_seq_len: int,
     attention_scope: str,
     control_attends_sensor: bool,
+    cross_view_band_radius: int = 0,
+    include_frame_zero: bool = False,
+    cross_view_band_keys: str = "all_views",
+    sensor_to_sensor_window: tuple[int, int] | None = None,
+    sensor_to_control_window: tuple[int, int] | None = None,
+    control_to_control_window: tuple[int, int] | None = None,
+    control_to_sensor_window: tuple[int, int] | None = None,
     device: torch.device,
+    geometry_position_encoding: str = "baseline",
+    prope_intrinsics: bool = False,
+    rigrope: RopeRigPE | None = None,
+    rigrope_missing_geometry: RigRopeMissingGeometry = "error",
+    rigrope_time_scale_s: float = 1.0,
+    rigrope_head_masks: tuple[torch.Tensor, torch.Tensor] | None = None,
+    rigrope_channels: RigRopeChannels = "all",
+    deduplicate_cross_view: bool = False,
+    decomposed_temporal_window_seconds: TemporalWindow | None = None,
+    decomposed_temporal_window_includes_first_frame: bool = False,
 ) -> MultiviewMasklessPlan:
     """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
 
     ``None`` only when the config did not ask for the decomposition, which is what keeps the
     FlexAttention mask. With the flag on, a batch the decomposition cannot serve raises rather
-    than quietly taking the mask instead: the two are deliberately different attention -- the
+    than quietly taking the mask instead: the legacy folds are deliberately different attention -- the
     sensor passes overlap on the query's own (view, frame) cell and the mask does not -- so a
     fallback would train a distribution the config did not ask for, and would do it per pack,
     so a run could alternate between the two between steps with nothing to show for it but
@@ -1610,18 +2074,21 @@ def _multiview_maskless_geometry(
 
     Every condition below is one the decomposition cannot express, not a preference, and each
     raises with the layout that tripped it. They are all properties of the *batch*: what the
-    config rules out -- its scope, a temporal window -- is settled once by
+    config rules out -- unsupported scopes or invalid window bounds -- is settled once by
     ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
     here. ``control_attends_sensor`` is not among those: the folds express both answers, so it is
     passed down as a description of the attention rather than tested as a condition.
 
-    * at most one sensor item per stream per sample, beside its control item, and no action or
-      sound. A camera item, a range item, or one of each: a joint sample is served by
-      quantising both streams' capture times onto the camera's frame grid, so the two need not
-      share a frame index. A control item ahead of either is served too -- it joins its
-      target's view groups, and ``control_attends_sensor`` decides whether that group is one
-      varlen segment or two. A *third* item on one stream is an image-editing layout, which
-      this path does not serve.
+    * at most one sensor item per stream per sample, beside its control item, plus at most one
+      camera-pose action control, and no sound. A camera item, a range item, a radar item, or
+      one of each: a joint sample is served by quantising every stream's capture times onto the
+      camera's frame grid, or comparing capture times directly when a temporal window is
+      enabled. They need not share a frame index. A control item ahead of any of them is served
+      too -- it joins its target's view groups, and ``control_attends_sensor`` decides whether
+      that group is one varlen segment or two. A *third* item on one stream is an image-editing
+      layout, which this path does not serve. An action control joins its camera's view groups
+      the same way, so it needs exactly one camera item to target and no range or BEV stream
+      beside it, which is what the mask requires of it too.
     * per-view captions are served, but only alongside the pack's per-caption boundaries: the
       gen->und pass then keys each *view's* GEN tokens against the caption written for that
       view -- and a range clip against every caption of its sample, since a sweep fuses the rig
@@ -1636,10 +2103,11 @@ def _multiview_maskless_geometry(
     Args:
         packed_seq: the batch, which is what carries the item and caption structure.
         sensor_mask_items: the same items the mask is described with, in the same order -- the
-            packer's, its vision items then its LiDAR ones per sample. Taken rather than
-            rebuilt, for the reason ``caption_mask_items`` is: what each item is to its sample's
-            captions (:data:`CaptionAccess`) is one fact about the batch, and the two backends
-            working it out separately is how the folds came to ignore
+            packer's, its vision items then its LiDAR ones then its radar ones per sample, and
+            its action control last.
+            Taken rather than rebuilt, for the reason ``caption_mask_items`` is: what each item
+            is to its sample's captions (:data:`CaptionAccess`) is one fact about the batch, and
+            the two backends working it out separately is how the folds came to ignore
             ``lidar_attends_captions`` while the mask honoured it.
         caption_mask_items: the batch's caption layout, or ``None`` where every sample packs a
             single caption. Taken rather than recomputed: the caller derives it for the mask
@@ -1655,7 +2123,35 @@ def _multiview_maskless_geometry(
             with it on a same-view group is one pass over itself, with it off that pass splits in
             two. A batch marking no control item is the same attention either way, and the plan
             builder refuses one that marks a control item without being told.
+        cross_view_band_radius: ``maskless_cross_view_band_radius``, the instants either side of
+            a query's that its cross-view pass keys.
+        include_frame_zero: ``maskless_cross_view_include_frame_zero``.
+        cross_view_band_keys: ``maskless_cross_view_band_keys``.
         device: where the plan's index tensors belong, i.e. where the batch will attend.
+        geometry_position_encoding: the cross-view geometry mode the plan carries tables for.
+        prope_intrinsics: whether the PRoPE poses fold in intrinsics (``lift(K) @ T``), which
+            makes them affine rather than rigid, so they take a general inverse.
+        rigrope: the RigRoPE angle module, required by ``"rigrope_cross_view"``.
+        rigrope_missing_geometry: what the cross-view pass does for a multiview item without
+            RigRoPE features: fail the batch (``"error"``), keep mRoPE on every head
+            (``"mrope"``), apply no rotation on the RigRoPE heads (``"no_rotation"``),
+            which zero features give, or rotate those heads by capture time alone
+            (``"time_only"``); see ``MultiviewAttentionConfig``. ``"prope_cross_view"`` reads
+            ``"no_rotation"`` and ``"time_only"`` alike as an identity transform.
+        rigrope_time_scale_s: seconds per unit of the descriptors' time channel, for posed and
+            ``"time_only"`` items alike.
+        rigrope_head_masks: this rank's query and KV heads that use RigRoPE (or, under
+            ``"prope_cross_view"``, PRoPE), from
+            :func:`~...multiview_maskless_attention.rigrope_local_head_masks`; ``None`` for all.
+        rigrope_channels: ``"even_pairs"`` when ``rigrope`` is a half-width table for the even
+            split-half pairs, whose odd pairs then keep mRoPE; ``"all"`` for a full-width one.
+        deduplicate_cross_view: use disjoint rectangles, counting each key once.
+        decomposed_temporal_window_seconds: optional (start, end) cross-view window
+            relative to the query's capture time; (-N, 0) gives a past-only window.
+            Works in both counting modes; without deduplication, own-view sensor keys
+            inside the window are counted twice. Same-view/caption attention stays intact.
+        decomposed_temporal_window_includes_first_frame: also admit each sample's first frame
+            on the other views for every query time, beside the window.
 
     Returns:
         The batch's plan. Asked only of a run that resolved to the folds, so there is no "did
@@ -1665,38 +2161,65 @@ def _multiview_maskless_geometry(
         ValueError: when this batch cannot be served by the folds.
     """
     num_samples = len(packed_seq.sample_lens)
-    vision, lidar = packed_seq.vision, packed_seq.lidar
-    if vision is None and lidar is None:
+    vision, lidar, radar, action = packed_seq.vision, packed_seq.lidar, packed_seq.radar, packed_seq.action
+    if vision is None and lidar is None and radar is None:
         raise ValueError(
-            f"{_MASKLESS_REFUSAL}it carries neither a vision nor a LiDAR generation stream, so "
-            "there is no sensor grid to fold." + _MASKLESS_REFUSAL_TAIL
+            f"{_MASKLESS_REFUSAL}it carries neither a vision, a LiDAR nor a radar generation "
+            "stream, so there is no sensor grid to fold." + _MASKLESS_REFUSAL_TAIL
         )
 
-    # Items per sample, per stream, in the order the packer lays a sample down: its vision items
-    # then its LiDAR ones. ``None`` means one item of that stream per sample, which is what the
-    # counts record for every batch that is not image-editing or transfer.
+    # Items per sample, per stream, in the order the packer lays a sample down: its vision items,
+    # then its LiDAR ones, then its radar ones. ``None`` means one item of that stream per sample,
+    # which is what the counts record for every batch that is not image-editing or transfer.
     vision_counts = (packed_seq.num_vision_items_per_sample or [1] * num_samples) if vision else [0] * num_samples
     lidar_counts = (packed_seq.num_lidar_items_per_sample or [1] * num_samples) if lidar else [0] * num_samples
-    if len(vision_counts) != num_samples or len(lidar_counts) != num_samples:
+    radar_counts = (packed_seq.num_radar_items_per_sample or [1] * num_samples) if radar else [0] * num_samples
+    if len(vision_counts) != num_samples or len(lidar_counts) != num_samples or len(radar_counts) != num_samples:
         raise ValueError(
-            f"{_MASKLESS_REFUSAL}it records {len(vision_counts)} vision and "
-            f"{len(lidar_counts)} LiDAR item counts for {num_samples} samples." + _MASKLESS_REFUSAL_TAIL
+            f"{_MASKLESS_REFUSAL}it records {len(vision_counts)} vision, "
+            f"{len(lidar_counts)} LiDAR and {len(radar_counts)} radar item counts for "
+            f"{num_samples} samples." + _MASKLESS_REFUSAL_TAIL
+        )
+    # The action stream's counts, resolved the way the mask resolves them: at most one control
+    # per sample, an item count the packed stream agrees with, and no LiDAR or radar beside it.
+    # In ``forward`` the mask builder has already run this on the same pack, so it is called
+    # again for the resolved lists rather than to re-check them, and the defaults stay in one
+    # place. Ahead of the per-stream counts because an action control with no camera to target
+    # is the more specific account of a sample that also owns no sensor item.
+    action_metadata = validate_multiview_pack(packed_seq)
+    action_counts = action_metadata.counts_per_sample
+    views_per_action_item = action_metadata.views_per_item
+    if any(count and vision_count != 1 for count, vision_count in zip(action_counts, vision_counts)):
+        # A transfer sample's two camera items share their view groups already, so an action
+        # control beside them would have two targets to condition and the plan one to give it.
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}an action control needs exactly one target vision item; "
+            f"vision counts are {list(vision_counts)} and action counts are {list(action_counts)}."
+            + _MASKLESS_REFUSAL_TAIL
         )
     # At most one sensor item per stream per sample beside its control item, and at least one
-    # item overall. A sample owning a camera item beside a range item is the joint case: the two
-    # sensors run at different rates, so the plan quantises both onto the camera's frame grid by
-    # capture time. The *second* item on a stream is that stream's control item, which the folds
-    # serve; a third is an image-editing layout, which this path does not -- ``control_weights``
-    # catches most of those and this catches the rest.
-    if any(v > 2 or r > 2 or v + r < 1 for v, r in zip(vision_counts, lidar_counts)):
+    # item overall. A sample owning a camera item beside a range item or a radar item is the
+    # joint case: the sensors run at different rates, so the plan quantises each onto the
+    # camera's frame grid by capture time. The *second* item on a stream is that stream's
+    # control item, which the folds serve; a third is an image-editing layout, which this path
+    # does not -- ``control_weights`` catches most of those and this catches the rest.
+    if any(
+        cam > 2 or rng > 2 or bev > 2 or cam + rng + bev < 1
+        for cam, rng, bev in zip(vision_counts, lidar_counts, radar_counts)
+    ):
         raise ValueError(
             f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
-            f"lidar={list(lidar_counts)}. Each sample takes at most one item per stream beside "
-            "its control item, and at least one overall; more is an image-editing layout this "
-            "path does not serve." + _MASKLESS_REFUSAL_TAIL
+            f"lidar={list(lidar_counts)}, radar={list(radar_counts)}. Each sample takes at most "
+            "one target item per stream beside that stream's control item, and at least one "
+            "overall; more is an image-editing layout this path does not serve." + _MASKLESS_REFUSAL_TAIL
         )
 
-    views_per_vision_item = packed_seq.num_views_per_vision_item or []
+    views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
+    if vision is not None and not views_per_vision_item:
+        # One view per item, as _multiview_sensor_mask_items reads the same pack: only a
+        # multiview dataset writes the counts, so a pack without them is single-camera by
+        # construction -- a single-view stream mixed into a multiview recipe.
+        views_per_vision_item = [1] * len(vision.token_shapes)
     if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
         # Camera items need the per-camera VAE metadata to say where one view's frames end.
         raise ValueError(
@@ -1711,9 +2234,11 @@ def _multiview_maskless_geometry(
     items_per_sample: list[int] = []
     is_control: list[bool] = []
     view_axis: list[int] = []
-    vision_cursor = lidar_cursor = 0
-    for vision_count, lidar_count in zip(vision_counts, lidar_counts):
-        items_per_sample.append(vision_count + lidar_count)
+    vision_cursor = lidar_cursor = radar_cursor = action_cursor = 0
+    for vision_count, lidar_count, radar_count, action_count in zip(
+        vision_counts, lidar_counts, radar_counts, action_counts
+    ):
+        items_per_sample.append(vision_count + lidar_count + radar_count + action_count)
         # The camera item first, which is the order the packer lays a sample down and the order
         # the plan anchors on: a joint sample quantises capture time onto its *first* item's
         # frame grid, so anchoring on the camera keeps its tokens on the frame indices a
@@ -1742,14 +2267,37 @@ def _multiview_maskless_geometry(
             is_control.append(index < lidar_count - 1)
             view_axis.append(1)
             lidar_cursor += 1
+        for index in range(radar_count):
+            assert radar is not None
+            # A BEV clip covers the scene around the rig rather than one of its cameras, so it
+            # is one "view", as a sweep is -- but on a third axis: a radar frame and a sweep
+            # are no more the same view than either is a camera's, and the two sensors cycle
+            # at 20 Hz and 10 Hz, so they do not even share an instant.
+            num_views.append(1)
+            token_shapes.append(tuple(radar.token_shapes[radar_cursor]))  # type: ignore[arg-type]
+            rates.append(float(radar.seconds_per_frame[radar_cursor]))
+            is_control.append(index < radar_count - 1)
+            view_axis.append(2)
+            radar_cursor += 1
+        for _index in range(action_count):
+            assert action is not None
+            # A trajectory per camera, laid view-outer like the camera item it conditions, so it
+            # sits on the cameras' axis and each view's run joins that view's group. It is last
+            # in its sample, as the packer lays it, so it never becomes the anchor.
+            num_views.append(views_per_action_item[action_cursor])
+            token_shapes.append(_mask_item_token_shape(tuple(action.token_shapes[action_cursor])))  # type: ignore[arg-type]
+            rates.append(float(action.seconds_per_frame[action_cursor]) if action.seconds_per_frame else 1.0)
+            is_control.append(True)
+            view_axis.append(0)
+            action_cursor += 1
 
     # The divisibility of each latent_t by its view count is checked by SensorMaskItem, which the
     # caller built for these same items before reaching here, and again by the plan builder.
     # Captions as (view_id, num_tokens) per sample, the two parallel lists the packer records.
     # None keeps the gen->und pass on its per-sample form, which is what a single caption wants.
     # Flattened in the same order this walked the items above -- per sample, its vision items
-    # then its LiDAR ones -- which is the order the packer lays a sample down and the order
-    # _multiview_sensor_mask_items builds in. The count check is what holds the two together.
+    # then its LiDAR ones then its radar ones -- which is the order the packer lays a sample down
+    # and the order _multiview_sensor_mask_items builds in. The count check holds the two together.
     caption_accesses = [item.caption_access for sample_items in sensor_mask_items for item in sample_items]
     if len(caption_accesses) != len(num_views):
         raise ValueError(
@@ -1764,7 +2312,7 @@ def _multiview_maskless_geometry(
         if caption_mask_items is not None
         else None
     )
-    return build_multiview_maskless_plan(
+    plan = build_multiview_maskless_plan(
         num_views,
         token_shapes,
         device=device,
@@ -1775,15 +2323,241 @@ def _multiview_maskless_geometry(
         view_axis=view_axis,
         captions=captions,
         attention_scope=attention_scope,
+        deduplicate_cross_view=deduplicate_cross_view,
+        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
+        decomposed_temporal_window_includes_first_frame=decomposed_temporal_window_includes_first_frame,
+        sensor_to_sensor_window=sensor_to_sensor_window,
+        sensor_to_control_window=sensor_to_control_window,
+        control_to_control_window=control_to_control_window,
+        control_to_sensor_window=control_to_sensor_window,
         # The items' own account of themselves, which the mask is built from too. A
         # "no_captions" item's group takes an empty run of captions under the per-view layout
         # and leaves the gen->und pass under the sample-level one.
         caption_access=caption_accesses,
+        cross_view_band_radius=cross_view_band_radius,
+        include_frame_zero=include_frame_zero,
+        cross_view_band_keys=cross_view_band_keys,
         # The stream's padded length, which only the built pack knows: the plan's partitions
         # cover the padding rather than stopping at the batch's real tokens, so that the folds
         # and the pack share one set of coordinates.
         padded_gen_tokens=gen_seq_len,
     )
+    if geometry_position_encoding == "prope":
+        if packed_seq.lidar is not None or packed_seq.action is not None:
+            raise ValueError("PRoPE is camera-only in decomposed attention")
+        if plan.cross_view_kv_gather is not None or plan.cross_view_partitions:
+            # The camera-relative pose pass replaces the cross-view pass and its key runs.
+            raise ValueError(
+                "PRoPE does not support the maskless cross-view band, deduplicate_cross_view or "
+                "decomposed_temporal_window_seconds"
+            )
+        camera_poses = packed_seq.camera_relative_poses_per_vision_item
+        # Single-camera items keep the ordinary partition, so only multiview items need poses.
+        if camera_poses is None or any(
+            poses is None and views > 1 for poses, views in zip(camera_poses, plan.num_views, strict=True)
+        ):
+            raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+        plan = dataclasses.replace(
+            plan,
+            camera_relative_pose=build_camera_relative_pose_plan(plan, camera_poses, projective=prope_intrinsics),
+        )
+    elif geometry_position_encoding == "prope_cross_view":
+        if packed_seq.lidar is not None:
+            raise ValueError("Decomposed cross-view PRoPE does not support LiDAR")
+        if rigrope_missing_geometry == "mrope":
+            raise ValueError("prope_cross_view requires rigrope_missing_geometry 'error', 'no_rotation' or 'time_only'")
+        assert packed_seq.vision is not None
+        vision_items = len(packed_seq.vision.token_shapes)
+        camera_poses = packed_seq.camera_relative_poses_per_vision_item
+        if camera_poses is None and rigrope_missing_geometry != "error":
+            camera_poses = [None] * vision_items
+        if camera_poses is None or len(camera_poses) != vision_items:
+            raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+        # Plan items run per sample, its vision items then its camera-pose action items, which
+        # take the identity: the cross-view pass never reads their rows.
+        plan_poses: list[tuple[torch.Tensor | None, bool]] = []
+        vision_cursor = 0
+        for vision_count, action_count in zip(vision_counts, action_counts, strict=True):
+            for _ in range(vision_count):
+                plan_poses.append((camera_poses[vision_cursor], True))
+                vision_cursor += 1
+            plan_poses.extend((None, False) for _ in range(action_count))
+        if len(plan_poses) != len(plan.token_shapes):
+            raise ValueError("PRoPE pose traversal did not cover every packed item")
+        transforms = []
+        target_token_ranges = []
+        token_cursor = 0
+        for (poses, is_vision), shape, views, control in zip(
+            plan_poses, plan.token_shapes, plan.num_views, plan.is_control, strict=True
+        ):
+            num_tokens = math.prod(shape)
+            if is_vision and not control:
+                target_token_ranges.append((token_cursor, token_cursor + num_tokens))
+            token_cursor += num_tokens
+            if poses is None:
+                if is_vision and rigrope_missing_geometry == "error" and views != 1:
+                    raise ValueError("PRoPE requires valid camera geometry for every multiview item")
+                # Single-view samples never enter the cross-view gather, and a multiview sample
+                # without geometry keeps its PRoPE channels unrotated: the identity transform.
+                transforms.append(torch.eye(4, device=device).expand(num_tokens, 4, 4))  # [N,4,4]
+                continue
+            frames = shape[0] // views
+            if poses.shape != (views, frames, 4, 4):
+                raise ValueError(f"PRoPE poses {tuple(poses.shape)} do not match {views} views of {shape}")
+            # Tokens are view-outer, frame, then spatial-innermost, as the poses are laid out.
+            transforms.append(
+                poses.to(device=device, dtype=torch.float32)
+                .reshape(views * frames, 4, 4)
+                .repeat_interleave(shape[1] * shape[2], dim=0)
+            )  # [V*F*S,4,4]
+        reference_to_camera = torch.cat(transforms)  # [N_real,4,4]
+        if reference_to_camera.shape[0] != plan.num_gen_tokens:
+            raise ValueError("PRoPE transforms do not cover real generation tokens")
+        if packed_seq.action is not None:
+            # Checked once per plan, so the attention layers need not sync on it per layer.
+            is_target = torch.zeros(plan.num_gen_tokens, dtype=torch.bool, device=device)  # [N_gen]
+            for start, end in target_token_ranges:
+                is_target[start:end] = True
+            for cross_pass in cross_view_passes(plan):
+                for gather in (cross_pass.gather, cross_pass.kv_gather):
+                    if not bool(is_target[gather].all()):
+                        raise ValueError("The PRoPE cross-view pass must read target camera tokens only")
+        padding = torch.eye(4, device=device).expand(gen_seq_len - plan.num_gen_tokens, 4, 4)
+        reference_to_camera = torch.cat([reference_to_camera, padding])  # [N_gen,4,4]
+        invert = invert_affine_transform if prope_intrinsics else invert_rigid_transform
+        plan = dataclasses.replace(
+            plan,
+            prope_reference_to_camera=reference_to_camera,
+            prope_camera_to_reference=invert(reference_to_camera),  # [N_gen,4,4]
+            rigrope_q_heads=None if rigrope_head_masks is None else rigrope_head_masks[0],  # [H_local] bool
+            rigrope_k_heads=None if rigrope_head_masks is None else rigrope_head_masks[1],  # [H_kv_local] bool
+        )
+    elif geometry_position_encoding == "rigrope_cross_view":
+        if rigrope is None:
+            raise ValueError("RigRoPE module was not initialized")
+        if packed_seq.lidar is not None:
+            raise ValueError("Decomposed cross-view RigRoPE does not support LiDAR")
+        # Camera-pose action items may follow a sample's vision item; the cross-view pass never
+        # reads their rows, so they take zero descriptors.
+        assert packed_seq.vision is not None
+        vision_items = len(packed_seq.vision.token_shapes)
+        features = packed_seq.rigrope_features_per_vision_item
+        if features is None and rigrope_missing_geometry != "error":
+            features = [None] * vision_items
+        if features is None or len(features) != vision_items:
+            raise ValueError("RigRoPE requires valid calibrated geometry for every multiview item")
+        descriptors = []
+        has_geometry = []
+        rate_known = packed_seq.vision.seconds_per_frame_known or [True] * vision_items
+        # Plan items run per sample, its vision items then its action items, while features and
+        # rate_known index vision items alone.
+        plan_items: list[tuple[torch.Tensor | None, int, bool]] = []
+        vision_cursor = 0
+        for vision_count, action_count in zip(vision_counts, action_counts, strict=True):
+            for _ in range(vision_count):
+                plan_items.append((features[vision_cursor], vision_cursor, True))
+                vision_cursor += 1
+            plan_items.extend((None, -1, False) for _ in range(action_count))
+        if len(plan_items) != len(plan.token_shapes):
+            raise ValueError("RigRoPE descriptor traversal did not cover every packed item")
+        target_token_ranges: list[tuple[int, int]] = []
+        token_cursor = 0
+        for (feature, vision_index, is_vision), shape, views, rate, control in zip(
+            plan_items, plan.token_shapes, plan.num_views, plan.seconds_per_frame, plan.is_control, strict=True
+        ):
+            num_tokens = math.prod(shape)
+            if is_vision and not control:
+                target_token_ranges.append((token_cursor, token_cursor + num_tokens))
+            token_cursor += num_tokens
+            has_geometry.append(torch.full((num_tokens,), feature is not None, device=device, dtype=torch.bool))
+            if not is_vision:
+                descriptors.append(torch.zeros(num_tokens, 8, device=device, dtype=torch.float32))  # [N_action,8]
+                continue
+            if feature is None and rigrope_missing_geometry == "error" and views != 1:
+                raise ValueError("RigRoPE requires valid calibrated geometry for every multiview item")
+            known = rate_known[vision_index]
+            if feature is None:
+                if rigrope_missing_geometry == "time_only" and views > 1 and not known:
+                    # Its ``seconds_per_frame`` is the packer's 1.0 placeholder, several times a
+                    # real latent step, which this mode would read as seconds.
+                    raise ValueError(
+                        "RigRoPE time_only needs the fps of every multiview item without geometry; "
+                        "this item was packed without one"
+                    )
+                # Single-view samples never enter the cross-view gather, so their rows are unread.
+                # A multiview sample's zero features rotate by zero angles, which is the
+                # ``"no_rotation"`` state; ``"mrope"`` masks them back to mRoPE by ``rigrope_valid``,
+                # and ``"time_only"`` fills in the time channel alone.
+                descriptor = torch.zeros(num_tokens, 8, device=device, dtype=torch.float32)  # [N,8]
+                if rigrope_missing_geometry == "time_only":
+                    # The time channel alone, in latent-frame steps of ``seconds_per_frame`` from
+                    # the item's first frame -- the spacing a posed sample's capture times take --
+                    # laid out view-outer, frame, then spatial like the packed tokens.
+                    frames, spatial = shape[0] // views, shape[1] * shape[2]
+                    times = torch.arange(frames, device=device, dtype=torch.float32) * rate  # [F]
+                    descriptor[:, 7] = times.repeat_interleave(spatial).repeat(views)  # [V*F*S]
+                descriptors.append(descriptor)
+                continue
+            if feature.shape[0] != views or shape[0] % views:
+                raise ValueError(f"RigRoPE features {tuple(feature.shape)} do not match {views} views of {shape}")
+            # Token shapes stack views on the latent time axis; features keep one grid per view.
+            resized = resize_rig_features(feature, (shape[0] // views, shape[1], shape[2]))  # [V,T,H,W,8]
+            descriptors.append(resized.reshape(-1, 8).to(device=device, dtype=torch.float32))
+        coords = torch.cat(descriptors)
+        if coords.shape[0] != plan.num_gen_tokens:
+            raise ValueError("RigRoPE descriptors do not cover real generation tokens")
+        if packed_seq.action is not None:
+            # Checked once per plan, so the attention layers need not sync on it per layer.
+            is_target = torch.zeros(plan.num_gen_tokens, dtype=torch.bool, device=device)  # [N_gen]
+            for start, end in target_token_ranges:
+                is_target[start:end] = True
+            for cross_pass in cross_view_passes(plan):
+                for gather in (cross_pass.gather, cross_pass.kv_gather):
+                    if not bool(is_target[gather].all()):
+                        raise ValueError("The RigRoPE cross-view pass must read target camera tokens only")
+        coords = torch.nn.functional.pad(coords, (0, 0, 0, gen_seq_len - coords.shape[0]))
+        if rigrope_time_scale_s != 1.0:
+            coords = torch.cat([coords[:, :7], coords[:, 7:] / rigrope_time_scale_s], dim=-1)  # [N_gen,8]
+        angles = rigrope(coords).reshape(gen_seq_len, -1)
+        rigrope_pairs = None
+        if rigrope_channels == "even_pairs":
+            angles = spread_over_even_pairs(angles)  # [N_gen,D]
+            rigrope_pairs = prope_pair_channels(angles.shape[-1], angles.device)  # [D] bool
+        plan = dataclasses.replace(
+            plan,
+            rigrope_pairs=rigrope_pairs,
+            rigrope_cos=angles.cos(),
+            rigrope_sin=angles.sin(),
+            rigrope_valid=(
+                torch.nn.functional.pad(torch.cat(has_geometry), (0, gen_seq_len - plan.num_gen_tokens))
+                if rigrope_missing_geometry == "mrope"
+                else None
+            ),  # [N_gen] bool
+            rigrope_q_heads=None if rigrope_head_masks is None else rigrope_head_masks[0],  # [H_local] bool
+            rigrope_k_heads=None if rigrope_head_masks is None else rigrope_head_masks[1],  # [H_kv_local] bool
+        )
+    elif geometry_position_encoding != "baseline":
+        raise ValueError(f"Unknown geometry_position_encoding={geometry_position_encoding!r}")
+    return plan
+
+
+def _rigrope_kv_heads(head_fraction: float, num_kv_heads: int) -> int | None:
+    """Return how many leading KV head groups use RigRoPE, ``None`` for every group."""
+    kv_heads = head_fraction * num_kv_heads
+    if not math.isclose(kv_heads, round(kv_heads)) or round(kv_heads) < 1:
+        raise ValueError(
+            f"rigrope_head_fraction={head_fraction} must select a whole number of the {num_kv_heads} KV head groups"
+        )
+    return None if round(kv_heads) == num_kv_heads else round(kv_heads)
+
+
+def _mask_item_token_shape(token_shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Return the token shape FlexAttention can describe for a packed modality item."""
+    if len(token_shape) == 1:
+        return (token_shape[0], 1, 1)
+    if len(token_shape) == 3:
+        return token_shape
+    raise ValueError(f"Multiview FlexAttention cannot describe token_shape={token_shape}.")
 
 
 def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[CaptionMaskItem]] | None:
@@ -1820,12 +2594,22 @@ def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[Capti
 
 
 def _multiview_sensor_mask_items(
-    packed_seq: PackedSequence, *, lidar_attends_captions: bool = True
+    packed_seq: PackedSequence,
+    *,
+    lidar_attends_captions: bool = True,
+    radar_attends_captions: bool = True,
 ) -> list[list[SensorMaskItem]]:
-    """Describe each sample to the multiview mask as its vision items, then its LiDAR items.
+    """Describe each sample to the multiview mask in packed generation order.
 
-    The packer lays a sample out in exactly that order, so walking the two streams sample by
-    sample reproduces the packed order the mask assumes.
+    A pack that records no per-camera view counts is read as one camera per item. Only a
+    multiview dataset writes those counts, via ``enable_per_camera_vae_encoding``, so their
+    absence says the pack is single-view rather than that a recipe forgot something -- which
+    is what lets a recipe mix single-view Super streams into a multiview run without
+    declaring it anywhere.
+
+    The packer lays a sample out as vision items, LiDAR items, radar items, then action
+    items, so walking the streams sample by sample reproduces the packed order the mask
+    assumes.
 
     LiDAR items take a view offset past the cameras. A range clip is not one of the rig's
     views, and the offset is what keeps the rules that match on view from pairing a camera
@@ -1840,13 +2624,32 @@ def _multiview_sensor_mask_items(
     default ``"camera"`` either way, which is also what says the per-view captions have to cover
     their views and not the sweep's.
 
-    Control items are marked per stream, not per sample: within each of the two streams,
-    every item but the last is a control item conditioning the one that follows it, which
-    is the same convention the packer uses when it forces those items fully clean
+    Radar items take a view offset past the LiDAR one, for the same reason LiDAR takes one past
+    the cameras and one step further: a BEV clip is neither one of the rig's views nor the
+    sweep, and the three sensors run at 30 fps, 10 Hz and 20 Hz, so two of them sharing a view
+    id would have the view rules pair latents captured at different instants. They read the
+    captions as a sweep does -- ``"all_captions"``, or ``"no_captions"`` under
+    ``radar_attends_captions=False``.
+
+    Vision, LiDAR and radar control items are marked per stream, not per sample: within each
+    of those three streams, every item but the last is a control item conditioning the one
+    that follows it, which is the same convention the packer uses when it forces those items
+    fully clean
     (``packers.py``). Doing it per stream is what keeps a camera item's position from
     deciding whether a LiDAR item is control, and vice versa. A stream contributing a
     single item per sample -- every T2V/I2V/V2V batch, and either stream of a one-item-each
     joint pack -- marks nothing, so ``flex_attention``'s control rules stay unreachable.
+
+    Action items are the exception: the dense action item is always a same-view control stream
+    for the corresponding vision item, so it is marked ``is_control=True`` even when there is
+    one action item per sample. Like every control item, it reaches its view at every frame,
+    so no frame alignment between action steps and vision latents is needed here.
+
+    A sample may own no action item while another in the same pack does, which is what a
+    multiview stream looks like when only some of its rows ship camera-pose sidecars. The
+    samples without one are described by their vision items alone, so their tokens are
+    masked exactly as they are in an action-free pack; the packer's per-sample action
+    counts are what says which sample each packed action item belongs to.
 
     Each item's ``seconds_per_frame`` comes from ``ModalityData.seconds_per_frame``, the real
     time between two of that item's latent frames (``sequence.py``'s ``_pack_grid_tokens``).
@@ -1857,8 +2660,13 @@ def _multiview_sensor_mask_items(
     num_samples = len(packed_seq.sample_lens)
     vision = packed_seq.vision
     lidar = packed_seq.lidar
-    if vision is None and lidar is None:
-        raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+    radar = packed_seq.radar
+    action = packed_seq.action
+    # Before any of the pack is read: every stream combination this cannot describe is
+    # rejected here, and the action stream's optional per-item lists come back resolved.
+    action_metadata = validate_multiview_pack(packed_seq)
+    action_counts = action_metadata.counts_per_sample
+    views_per_action_item = action_metadata.views_per_item
 
     # None means every sample owns exactly one vision item (standard T2V/I2V);
     # multi-item samples (image editing, transfer) carry explicit counts. A
@@ -1870,15 +2678,12 @@ def _multiview_sensor_mask_items(
         vision_counts = packed_seq.num_vision_items_per_sample or [1] * num_samples
         views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
         if not views_per_vision_item:
-            if lidar is None:
-                raise ValueError(
-                    "Multiview FlexAttention requires per-camera VAE metadata; "
-                    "enable enable_per_camera_vae_encoding on the dataset."
-                )
-            # A pack carrying both streams cannot hold that metadata: it is written by the
-            # camera-major uint8 encode path, which a range clip never takes. Such a pack is
-            # single-camera by construction, so one view per item is the grid the mask needs,
-            # and the only thing it needs the count for.
+            # One view per item, for two populations that reach here for the same reason.
+            # A pack carrying a second sensor cannot hold the counts: they are written by the
+            # camera-major uint8 encode path, which neither a range clip nor a BEV clip takes.
+            # A single-view stream does not hold them either, only a multiview dataset
+            # writing them at all. Both are single-camera by construction, and one view per
+            # item is the grid the mask needs -- the only thing it wants the counts for.
             views_per_vision_item = [1] * sum(vision_counts)
 
     lidar_counts = [0] * num_samples
@@ -1887,17 +2692,31 @@ def _multiview_sensor_mask_items(
     # Step past the widest camera item so no LiDAR item can land on a camera's view.
     lidar_view_offset = max(views_per_vision_item, default=0)
 
+    radar_counts = [0] * num_samples
+    if radar is not None:
+        radar_counts = packed_seq.num_radar_items_per_sample or [1] * num_samples
+    # Every LiDAR item of a sample shares the one view above, so one more step clears the
+    # stream entirely and leaves the three sensors pairwise disjoint on the view axis. A pack
+    # without LiDAR takes no step for it, so a camera + radar pack numbers its radar exactly as
+    # a camera + LiDAR pack numbers its sweeps, and a radar-only pack stays on view 0.
+    radar_view_offset = lidar_view_offset + (1 if lidar is not None else 0)
+
     sensor_mask_items: list[list[SensorMaskItem]] = []
     vision_cursor = 0
     lidar_cursor = 0
+    radar_cursor = 0
+    action_cursor = 0
     for sample_idx in range(num_samples):
         sample_items: list[SensorMaskItem] = []
-        num_vision, num_lidar = vision_counts[sample_idx], lidar_counts[sample_idx]
+        num_vision = vision_counts[sample_idx]
+        num_lidar = lidar_counts[sample_idx]
+        num_radar = radar_counts[sample_idx]
+        num_action = action_counts[sample_idx]
         if vision is not None:
             for item_in_stream in range(num_vision):
                 sample_items.append(
                     SensorMaskItem(
-                        token_shape=vision.token_shapes[vision_cursor],
+                        token_shape=_mask_item_token_shape(vision.token_shapes[vision_cursor]),
                         condition_mask=vision.condition_mask[vision_cursor],
                         num_views=views_per_vision_item[vision_cursor],
                         view_offset=0,
@@ -1912,7 +2731,7 @@ def _multiview_sensor_mask_items(
             for item_in_stream in range(num_lidar):
                 sample_items.append(
                     SensorMaskItem(
-                        token_shape=lidar.token_shapes[lidar_cursor],
+                        token_shape=_mask_item_token_shape(lidar.token_shapes[lidar_cursor]),
                         condition_mask=lidar.condition_mask[lidar_cursor],
                         num_views=1,
                         view_offset=lidar_view_offset,
@@ -1925,6 +2744,41 @@ def _multiview_sensor_mask_items(
                     )
                 )
                 lidar_cursor += 1
+        if radar is not None:
+            for item_in_stream in range(num_radar):
+                sample_items.append(
+                    SensorMaskItem(
+                        token_shape=_mask_item_token_shape(radar.token_shapes[radar_cursor]),
+                        condition_mask=radar.condition_mask[radar_cursor],
+                        num_views=1,
+                        view_offset=radar_view_offset,
+                        is_control=item_in_stream < num_radar - 1,
+                        seconds_per_frame=radar.seconds_per_frame[radar_cursor],
+                        # A BEV clip is not one of the rig's cameras either: it covers the
+                        # scene around the whole rig, so it reads every camera's caption --
+                        # or, cut off from the text, none.
+                        caption_access="all_captions" if radar_attends_captions else "no_captions",
+                    )
+                )
+                radar_cursor += 1
+        if action is not None:
+            for _item_in_stream in range(num_action):
+                sample_items.append(
+                    SensorMaskItem(
+                        token_shape=_mask_item_token_shape(action.token_shapes[action_cursor]),
+                        condition_mask=action.condition_mask[action_cursor],
+                        num_views=views_per_action_item[action_cursor],
+                        view_offset=0,
+                        is_control=True,
+                        seconds_per_frame=(
+                            action.seconds_per_frame[action_cursor] if action.seconds_per_frame else 1.0
+                        ),
+                        # An action control conditions one camera, so it reads that camera's
+                        # caption rather than the rig's -- the same access its target takes.
+                        caption_access="camera",
+                    )
+                )
+                action_cursor += 1
         sensor_mask_items.append(sample_items)
     return sensor_mask_items
 

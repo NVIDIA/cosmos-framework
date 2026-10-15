@@ -52,19 +52,27 @@ def test_compiled_timestep_embedder_reuses_precomputed_frequencies() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required to exercise the compiled CUDA Graph path")
 
-    embedder = TimestepEmbedder(hidden_size=8, frequency_embedding_size=6).cuda()
-    embedder._init_weights(buffer_device=torch.device("cuda"))
-    frequency_data_ptr = embedder._timestep_frequencies.data_ptr()
-    timesteps = torch.tensor([0.25, 1.0], device="cuda", dtype=torch.float32)  # [N]
-    compiled_embedder = torch.compile(embedder, mode="reduce-overhead", fullgraph=True)
+    # Eager and compiled linear kernels may use different reduced-precision
+    # algorithms when TF32 is enabled globally. Compare at full FP32 precision
+    # while preserving the caller's setting.
+    original_precision = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision("highest")
+    try:
+        embedder = TimestepEmbedder(hidden_size=8, frequency_embedding_size=6).cuda()
+        embedder._init_weights(buffer_device=torch.device("cuda"))
+        frequency_data_ptr = embedder._timestep_frequencies.data_ptr()
+        timesteps = torch.tensor([0.25, 1.0], device="cuda", dtype=torch.float32)  # [N]
+        compiled_embedder = torch.compile(embedder, mode="reduce-overhead", fullgraph=True)
 
-    compiled_outputs: list[torch.Tensor] = []
-    for _ in range(2):
-        torch.compiler.cudagraph_mark_step_begin()
-        actual = compiled_embedder(timesteps).clone()  # [N,hidden_size]
-        compiled_outputs.append(actual)
-    expected = embedder(timesteps)  # [N,hidden_size]
+        compiled_outputs: list[torch.Tensor] = []
+        for _ in range(2):
+            torch.compiler.cudagraph_mark_step_begin()
+            actual = compiled_embedder(timesteps).clone()  # [N,hidden_size]
+            compiled_outputs.append(actual)
+        expected = embedder(timesteps)  # [N,hidden_size]
 
-    assert embedder._timestep_frequencies.data_ptr() == frequency_data_ptr
-    torch.testing.assert_close(compiled_outputs[1], compiled_outputs[0], rtol=0, atol=0)
-    torch.testing.assert_close(compiled_outputs[1], expected)
+        assert embedder._timestep_frequencies.data_ptr() == frequency_data_ptr
+        torch.testing.assert_close(compiled_outputs[1], compiled_outputs[0], rtol=0, atol=0)
+        torch.testing.assert_close(compiled_outputs[1], expected)
+    finally:
+        torch.set_float32_matmul_precision(original_precision)

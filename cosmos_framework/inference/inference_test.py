@@ -64,45 +64,44 @@ def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.Mon
     )
 
 
-def test_diffusion_cache_is_disabled_by_default_for_modelopt_fp8_model(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("enabled", [False, True])
+def test_diffusion_cache_respects_setting_for_modelopt_fp8_model(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
     from cosmos_framework.inference import inference
 
     install, warning = _patch_cache_install(monkeypatch)
     pipe = SimpleNamespace(model=_modelopt_fp8_model())
 
-    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args())
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args(diffusion_cache=enabled))
 
-    install.assert_not_called()
-    warning.assert_called_once()
-    assert "diffusion cache" in warning.call_args.args[0].lower()
-    assert "modelopt-fp8" in warning.call_args.args[0]
+    if enabled:
+        install.assert_called_once_with(pipe=pipe, enabled=True, sample_args_list=[], config_overrides=None)
+    else:
+        install.assert_not_called()
+    warning.assert_not_called()
 
 
-def test_diffusion_cache_is_disabled_by_default_for_runtime_quantization(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("quantization_method", ["mxfp8", "nvfp4"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_diffusion_cache_respects_setting_for_runtime_quantization(
+    monkeypatch: pytest.MonkeyPatch, quantization_method: str, enabled: bool
+) -> None:
     from cosmos_framework.inference import inference
 
     install, warning = _patch_cache_install(monkeypatch)
     pipe = SimpleNamespace(model=_bf16_model())
 
     inference.OmniInference._maybe_install_diffusion_cache(
-        pipe, _diffusion_cache_setup_args(quantization_method="nvfp4")
+        pipe,
+        _diffusion_cache_setup_args(quantization_method=quantization_method, diffusion_cache=enabled),
     )
 
-    install.assert_not_called()
-    warning.assert_called_once()
-    assert "nvfp4" in warning.call_args.args[0]
-
-
-def test_diffusion_cache_warns_when_already_off_for_quantized_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cosmos_framework.inference import inference
-
-    install, warning = _patch_cache_install(monkeypatch)
-    pipe = SimpleNamespace(model=_modelopt_fp8_model())
-
-    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args(diffusion_cache=False))
-
-    install.assert_not_called()
-    warning.assert_called_once()
+    if enabled:
+        install.assert_called_once_with(pipe=pipe, enabled=True, sample_args_list=[], config_overrides=None)
+    else:
+        install.assert_not_called()
+    warning.assert_not_called()
 
 
 def test_diffusion_cache_unchanged_for_unquantized_model(monkeypatch: pytest.MonkeyPatch) -> None:

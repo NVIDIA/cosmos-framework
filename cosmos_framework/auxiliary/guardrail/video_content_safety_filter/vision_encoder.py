@@ -25,6 +25,9 @@ class SigLIPEncoder(torch.nn.Module):
         """Encode an image into a feature vector."""
         with torch.no_grad():
             inputs = self.processor(images=input_img, return_tensors="pt").to(self.device, dtype=self.dtype)
-            image_features = self.model.get_image_features(**inputs)
-            image_features /= image_features.norm(dim=-1, keepdim=True)
+            model_output = self.model.get_image_features(**inputs)
+            image_features = getattr(model_output, "pooler_output", model_output)  # [B,D]
+            if not isinstance(image_features, torch.Tensor):
+                raise TypeError("SigLIP image encoder did not return pooled tensor features")
+            image_features = torch.nn.functional.normalize(image_features, dim=-1)  # [B,D]
         return image_features

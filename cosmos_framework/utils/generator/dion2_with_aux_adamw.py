@@ -90,6 +90,7 @@ the optimizer step becomes a step-time bottleneck.
 """
 
 import math
+import re
 from collections.abc import Callable, Iterable
 from typing import ParamSpec, TypeVar
 
@@ -152,6 +153,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     - Submatrix selection: only orthogonalize top-k rows/columns
     - Error feedback: maintains momentum for unselected parts
     - Megabatched processing: handles world_size * K same-shape params per redistribution
+    - Optional DION2 Hyperball (DION2H) updates with fixed Frobenius radii
 
     Parameter precision: every parameter must be FP32, which
     :meth:`add_param_group` enforces. Both the DION2 and the auxiliary AdamW update
@@ -191,6 +193,12 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         max_moe_expert_ns_matrices: Maximum total number of [E, H, I] expert matrices
             per NS call across K layers. K = max(1, value // (3 * E_local)). 0 (default)
             means K=1 (one layer per NS call). Requires split_expert_gate_up=True.
+        dion2_hyperball: Whether to wrap every DION2 matrix update in Hyperball normalization/retraction.
+        dion2_hyperball_exact_lr_conversion: Whether to preserve the actual
+            orthogonalized-update norm and apply vanilla DION2 LR scaling before retraction.
+        dion2_hyperball_skip_patterns: Regexes that keep matching DION2 matrices on
+            vanilla DION2 while Hyperball is enabled for the remaining matrices.
+        hyperball_eps: Epsilon used for Hyperball update and weight normalization.
     """
 
     def __init__(
@@ -215,6 +223,10 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         split_expert_gate_up: bool = False,
         batch_split_expert_ns: bool = False,
         max_moe_expert_ns_matrices: int = 0,
+        dion2_hyperball: bool = False,
+        dion2_hyperball_exact_lr_conversion: bool = False,
+        dion2_hyperball_skip_patterns: tuple[str, ...] | None = None,
+        hyperball_eps: float = 1e-8,
         **kwargs: object,
     ) -> None:
         if "dion2_megabatch_width" in kwargs:
@@ -251,6 +263,22 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         validate_split_expert_ns_config(split_expert_gate_up, batch_split_expert_ns, fraction=fraction)
         if max_moe_expert_ns_matrices < 0:
             raise ValueError(f"max_moe_expert_ns_matrices must be >= 0, got {max_moe_expert_ns_matrices}")
+        if not isinstance(dion2_hyperball, bool):
+            raise TypeError(f"dion2_hyperball must be a bool, got {dion2_hyperball!r}")
+        if not isinstance(dion2_hyperball_exact_lr_conversion, bool):
+            raise TypeError(
+                f"dion2_hyperball_exact_lr_conversion must be a bool, got {dion2_hyperball_exact_lr_conversion!r}"
+            )
+        if dion2_hyperball_exact_lr_conversion and not dion2_hyperball:
+            raise ValueError("DION2H LR conversion requires dion2_hyperball=True")
+        if dion2_hyperball_skip_patterns and not dion2_hyperball:
+            raise ValueError("dion2_hyperball_skip_patterns requires dion2_hyperball=True")
+        if isinstance(hyperball_eps, bool) or not isinstance(hyperball_eps, (int, float)):
+            raise TypeError(f"hyperball_eps must be a positive number, got {hyperball_eps!r}")
+        if not math.isfinite(hyperball_eps) or hyperball_eps <= 0:
+            raise ValueError(f"hyperball_eps must be finite and positive, got {hyperball_eps!r}")
+        if dion2_hyperball and fraction != 1.0:
+            raise ValueError("DION2 Hyperball currently requires fraction=1.0")
 
         # Only the capturable update is implemented: lr and the per-group step are held as
         # device tensors and dispatched to TE's multi_tensor_adam_capturable. The factory in
@@ -266,7 +294,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self.muon_momentum = muon_momentum
         self.muon_lr_scale = muon_lr_scale
         # Shape -> LR scaling ratio; see _get_adjusted_lr_ratio.
-        self._adjusted_lr_ratios: dict[tuple[int, ...], float] = {}
+        self._adjusted_lr_ratios: dict[tuple[tuple[int, ...], bool], float] = {}
         self.ns_steps = ns_steps
         self.nesterov = nesterov
         self.fraction = fraction
@@ -278,6 +306,11 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self.split_expert_gate_up = split_expert_gate_up
         self.batch_split_expert_ns = batch_split_expert_ns
         self.max_moe_expert_ns_matrices = max_moe_expert_ns_matrices
+        self.dion2_hyperball = dion2_hyperball
+        self.dion2_hyperball_exact_lr_conversion = dion2_hyperball_exact_lr_conversion
+        self.dion2_hyperball_skip_patterns = tuple(dion2_hyperball_skip_patterns or ())
+        self._dion2_hyperball_skip_res = [re.compile(pattern) for pattern in self.dion2_hyperball_skip_patterns]
+        self.hyperball_eps = float(hyperball_eps)
 
         # Name substrings that route stacked MoE expert params ([E, M, N]) to the
         # DION2 side (each expert slice orthogonalized). Empty = experts stay on
@@ -312,6 +345,10 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # inspect parameter names. Batch membership is frozen when batches are built.
         self._shared_expert_gate_up_param_ids: set[int] = set()
         self._split_shared_gate_up_batch_ids: set[int] = set()
+        self._hyperball_param_ids: set[int] = set()
+        self._hyperball_classification_frozen = False
+        self._hyperball_dense_batch_ids: set[int] = set()
+        self._dense_owner_radii: dict[int, torch.Tensor] = {}
         # Split-expert pair tracking (gate_up + down pairs for multi-layer NS batching).
         self._split_expert_pairs: list[tuple[nn.Parameter, nn.Parameter]] = []
         self._split_expert_param_ids: set[int] = set()
@@ -346,7 +383,19 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self._param_group_map: dict[int, dict] = {}
         self._adamw_param_ids: set[int] = set()
 
-        log.info(f"Dion2WithAuxAdamW capturable: {capturable}")
+        if dion2_hyperball and not dion2_hyperball_exact_lr_conversion:
+            dion2_lr_rule = "effective_ratio=1.0 (direct Hyperball; muon_lr_scale ignored)"
+            if self.dion2_hyperball_skip_patterns:
+                dion2_lr_rule += "; Hyperball-skipped matrices use vanilla DION2 scaling"
+        else:
+            dion2_lr_rule = f"effective_ratio={muon_lr_scale} * sqrt(max(M,N))"
+        log.info(
+            f"Dion2WithAuxAdamW capturable: {capturable} "
+            f"dion2_hyperball: {dion2_hyperball} "
+            f"dion2_hyperball_exact_lr_conversion: {dion2_hyperball_exact_lr_conversion} "
+            f"dion2_hyperball_skip_patterns: {self.dion2_hyperball_skip_patterns} "
+            f"dion2_lr_rule: {dion2_lr_rule}"
+        )
 
     def add_param_group(self, param_group: dict) -> None:
         """Register a param group, rejecting any parameter that is not FP32.
@@ -401,7 +450,9 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self.dion2_params = [p for p in orthogonalizable if p.ndim == 2]
         self.stacked_dion2_params = [p for p in orthogonalizable if p.ndim >= 3]
 
+        self._hyperball_classification_frozen = False
         self._freeze_shared_expert_gate_up_params()
+        self._freeze_hyperball_params()
 
         # Sort by size for load balancing
         self.dion2_params = sorted(self.dion2_params, key=lambda x: x.numel(), reverse=True)
@@ -525,13 +576,20 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         """
         self._dion2_batches = []
         self._split_shared_gate_up_batch_ids = set()
+        self._hyperball_dense_batch_ids = set()
+        self._dense_owner_radii = {}
 
-        # Step 1: Group params by global shape and dtype (identical on all ranks).
-        shape_groups: dict[tuple[tuple[int, ...], torch.dtype, bool], list[nn.Parameter]] = {}
+        # Step 1: Group by global shape, dtype, NS layout, and update geometry.
+        # Split shared-expert and Hyperball-excluded parameters must each occupy
+        # homogeneous owner batches.
+        shape_groups: dict[tuple[tuple[int, ...], torch.dtype, bool, bool], list[nn.Parameter]] = {}
         for p in self.dion2_params:
-            # Split shared-expert gate/up params must occupy their own redistribution
-            # batches so every full matrix received by a rank has the same NS layout.
-            group_key = (tuple(p.shape), p.dtype, self._is_shared_expert_gate_up(p))
+            group_key = (
+                tuple(p.shape),
+                p.dtype,
+                self._is_shared_expert_gate_up(p),
+                self._uses_hyperball(p),
+            )
             if group_key not in shape_groups:
                 shape_groups[group_key] = []
             shape_groups[group_key].append(p)
@@ -553,6 +611,11 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 raise RuntimeError("DION2 dense batch mixed split and unsplit shared-expert gate/up parameters")
             if split_shared_gate_up:
                 self._split_shared_gate_up_batch_ids.add(id(batch))
+            uses_hyperball = self._uses_hyperball(batch[0])
+            if any(self._uses_hyperball(p) != uses_hyperball for p in batch[1:]):
+                raise RuntimeError("DION2 dense batch mixed Hyperball and vanilla-DION2 parameters")
+            if uses_hyperball:
+                self._hyperball_dense_batch_ids.add(id(batch))
 
         # Log batch info
         num_shape_groups = len(shape_groups)
@@ -567,7 +630,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 f"{padded_batches} need padding)"
             )
             # Log shape group details
-            for (shape, dtype, split_shared_gate_up), params in shape_groups.items():
+            for (shape, dtype, split_shared_gate_up, uses_hyperball), params in shape_groups.items():
                 natural_width = math.ceil(len(params) / self._world_size)
                 effective_width = self._dion2_group_megabatch_width(len(params))
                 group_capacity = self._world_size * effective_width
@@ -575,7 +638,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 padded_slots = (-len(params)) % self._world_size
                 log.info(
                     f"  Shape {shape}, dtype={dtype}, split_shared_gate_up={split_shared_gate_up}: "
-                    f"{len(params)} params, "
+                    f"hyperball={uses_hyperball}: {len(params)} params, "
                     f"natural_width={natural_width}, effective_width={effective_width}, "
                     f"capacity={group_capacity}, {rounds} rounds, {padded_slots} padded slots"
                 )
@@ -619,23 +682,318 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         """Per-group weight decay for ``p`` (honors disable_weight_decay_for_1d_params)."""
         return self._param_group_map[id(p)]["weight_decay"]
 
-    def _get_adjusted_lr(self, param_shape: tuple[int, ...], base_lr: float | torch.Tensor) -> float | torch.Tensor:
-        """Compute adjusted learning rate based on parameter matrix size and the
-        owning param-group's base lr."""
-        return base_lr * self._get_adjusted_lr_ratio(param_shape)  # [] when base_lr is a tensor
+    def _uses_hyperball(self, p: nn.Parameter) -> bool:
+        """Return whether a DION2-routed parameter receives Hyperball wrapping."""
+        # Optimizer objects created by older code do not carry the Hyperball
+        # attributes. Treat their missing flag as the original vanilla-DION2 mode.
+        if not getattr(self, "dion2_hyperball", False):
+            return False
+        if not self._hyperball_classification_frozen:
+            self._freeze_hyperball_params()
+        return id(p) in self._hyperball_param_ids
 
-    def _get_adjusted_lr_ratio(self, param_shape: tuple[int, ...]) -> float:
+    def _freeze_hyperball_params(self) -> None:
+        """Resolve regex-based Hyperball eligibility once, outside optimizer steps."""
+        if self._hyperball_classification_frozen:
+            return
+        candidates = (*self.dion2_params, *self.stacked_dion2_params)
+        if self.dion2_hyperball:
+            self._hyperball_param_ids = {
+                id(p)
+                for p in candidates
+                if not any(pattern.search(self.param_to_name.get(p, "")) for pattern in self._dion2_hyperball_skip_res)
+            }
+        else:
+            self._hyperball_param_ids = set()
+        self._hyperball_classification_frozen = True
+
+    def _dion2_wd_for(self, p: nn.Parameter) -> float:
+        """Return DION2-side weight decay, disabled for Hyperball parameters."""
+        return 0.0 if self._uses_hyperball(p) else self._wd_for(p)
+
+    def _get_adjusted_lr(self, param_shape: tuple[int, ...], base_lr: float | torch.Tensor) -> float | torch.Tensor:
+        """Return vanilla DION2 scaling for the generic expert-helper fallback.
+
+        Live DION2 expert updates use ``_get_adjusted_lr_for_param`` below. This
+        shape-only callback must not infer per-parameter Hyperball eligibility
+        from the optimizer-wide flag.
+        """
+        return base_lr * self._get_adjusted_lr_ratio(param_shape, use_hyperball=False)  # [] when base_lr is a tensor
+
+    def _get_adjusted_lr_for_param(
+        self,
+        p: nn.Parameter,
+        param_shape: tuple[int, ...],
+        base_lr: float | torch.Tensor,
+    ) -> float | torch.Tensor:
+        """Return the adjusted LR for one potentially Hyperball-excluded matrix."""
+        return base_lr * self._get_adjusted_lr_ratio(param_shape, use_hyperball=self._uses_hyperball(p))
+
+    def _get_adjusted_lr_ratio(self, param_shape: tuple[int, ...], *, use_hyperball: bool) -> float:
         """Compute the shape-dependent scalar applied to the base learning rate.
 
         Memoized: this depends only on the shape and ``muon_lr_scale``, both fixed for
         the run, but the MoE megabatch path asks for it once per matrix per step.
         """
-        ratio = self._adjusted_lr_ratios.get(param_shape)
+        cache_key = (param_shape, use_hyperball)
+        ratio = self._adjusted_lr_ratios.get(cache_key)
         if ratio is None:
-            A, B = param_shape[:2]
-            ratio = self.muon_lr_scale * math.sqrt(max(A, B))
-            self._adjusted_lr_ratios[param_shape] = ratio
+            if use_hyperball and not self.dion2_hyperball_exact_lr_conversion:
+                # Hyperball normalizes the DION2 direction to the fixed parameter
+                # radius, so its group LR is already the complete step-size coefficient.
+                ratio = 1.0
+            else:
+                A, B = param_shape[:2]
+                ratio = self.muon_lr_scale * math.sqrt(max(A, B))
+            self._adjusted_lr_ratios[cache_key] = ratio
         return ratio
+
+    def _local_dion2_weight(self, p: nn.Parameter) -> torch.Tensor:
+        """Return the local FP32 weight used by DION2H."""
+        return get_local_tensor_if_DTensor(p)
+
+    def _dense_local_logical_sumsq(self, p: nn.Parameter) -> torch.Tensor:
+        """Return local squared-norm contributions for one or two logical matrices."""
+        local_weight = self._local_dion2_weight(p).float()
+        if not self._is_shared_expert_gate_up(p):
+            return local_weight.square().sum().reshape(1)
+
+        logical_rows = p.shape[0] // 2
+        if not isinstance(p, DTensor) or self._world_size == 1 or self._shard_tensor_dim != 0:
+            return torch.stack([half.square().sum() for half in local_weight.chunk(2, dim=0)])
+
+        # Shard(0) follows torch.chunk semantics: every non-tail shard has the
+        # ceiling chunk size, while the final non-empty shard may be shorter.
+        # Intersect this rank's global row interval with each logical [I,H] half
+        # without materializing the full fused [2I,H] matrix.
+        chunk_rows = math.ceil(p.shape[0] / self._world_size)
+        local_start = min(p.shape[0], self._device_rank * chunk_rows)
+        local_end = local_start + local_weight.shape[0]
+        contributions = []
+        for logical_start, logical_end in ((0, logical_rows), (logical_rows, 2 * logical_rows)):
+            owned_start = max(local_start, logical_start)
+            owned_end = min(local_end, logical_end)
+            if owned_start >= owned_end:
+                contributions.append(local_weight.new_zeros(()))
+            else:
+                contributions.append(local_weight[owned_start - local_start : owned_end - local_start].square().sum())
+        return torch.stack(contributions)
+
+    def _dense_hyperball_radius(self, p: nn.Parameter) -> torch.Tensor:
+        """Return and validate the radius state for a dense logical matrix."""
+        radius = self._hyperball_radius(p)
+        expected_shape = (2,) if self._is_shared_expert_gate_up(p) else ()
+        if tuple(radius.shape) != expected_shape:
+            name = self.param_to_name.get(p, "unknown")
+            raise ValueError(
+                f"DION2H checkpoint radius shape {tuple(radius.shape)} is incompatible with dense "
+                f"parameter '{name}'; expected {expected_shape}. Split shared-expert gate/up "
+                "radii cannot be recovered from a legacy combined radius."
+            )
+        return radius
+
+    def _maybe_init_hyperball_radii(self) -> None:
+        """Initialize fixed FP32 Frobenius radii from pre-update weights.
+
+        Dense DTensor radii are global logical-matrix norms, computed in one
+        vector all-reduce over the FSDP shard group. Stacked experts are sharded
+        only on the expert axis, so every local expert matrix is complete and its
+        radius is communication-free. Existing checkpointed radii are preserved.
+        """
+        if not getattr(self, "dion2_hyperball", False):
+            return
+
+        missing_dense = [
+            p for p in self.dion2_params if self._uses_hyperball(p) and "hyperball_radius" not in self.state[p]
+        ]
+        if missing_dense:
+            logical_counts = [2 if self._is_shared_expert_gate_up(p) else 1 for p in missing_dense]
+            local_sumsq = torch.cat([self._dense_local_logical_sumsq(p) for p in missing_dense])
+            if isinstance(missing_dense[0], DTensor) and self._world_size > 1:
+                if self._process_group is None:
+                    raise RuntimeError("DION2H global radius initialization requires the FSDP shard process group")
+                dist.all_reduce(local_sumsq, op=dist.ReduceOp.SUM, group=self._process_group)
+            radii = local_sumsq.sqrt()
+            if torch.any(radii == 0).item():
+                raise ValueError("DION2H requires non-zero initial dense logical-matrix norms; found zero radius")
+            offset = 0
+            for p, logical_count in zip(missing_dense, logical_counts, strict=True):
+                param_radii = radii[offset : offset + logical_count]
+                offset += logical_count
+                if logical_count == 1:
+                    param_radii = param_radii[0]
+                self.state[p]["hyperball_radius"] = param_radii.detach().float().clone()
+
+            # Direct-mode owner radii depend on initialized/checkpointed state.
+            self._dense_owner_radii.clear()
+
+        for p in self.stacked_dion2_params:
+            if not self._uses_hyperball(p):
+                continue
+            state = self.state[p]
+            if "hyperball_radius" in state:
+                continue
+            local_weight = self._local_dion2_weight(p)
+            is_split_gate_up = (
+                self.split_expert_gate_up
+                and id(p) in self._split_expert_param_ids
+                and "gate_up_proj" in self.param_to_name.get(p, "")
+            )
+            if is_split_gate_up:
+                gate_weight, up_weight = local_weight.float().chunk(2, dim=-1)
+                radii = torch.stack(
+                    [gate_weight.norm(dim=(-2, -1)), up_weight.norm(dim=(-2, -1))],
+                    dim=-1,
+                )
+            else:
+                radii = local_weight.float().norm(dim=(-2, -1))
+            if torch.any(radii == 0).item():
+                zero_experts = torch.nonzero(radii == 0, as_tuple=False).tolist()
+                name = self.param_to_name.get(p, "unknown")
+                raise ValueError(
+                    f"DION2H requires non-zero initial expert-matrix norms; "
+                    f"zero radius for '{name}' local logical matrix indices {zero_experts}"
+                )
+            radii = radii.detach().float().clone()
+            if isinstance(p, DTensor):
+                # The logical radius state has one value per global expert. Keep
+                # the expert-axis sharding metadata so distributed checkpointing
+                # saves/reshards distinct rank-local radii instead of mistaking
+                # them for replicated [local_E] optimizer state.
+                radius_shape = torch.Size([p.shape[0], 2]) if is_split_gate_up else torch.Size([p.shape[0]])
+                radius_stride = (2, 1) if is_split_gate_up else (1,)
+                state["hyperball_radius"] = DTensor.from_local(
+                    radii,
+                    device_mesh=p.device_mesh,
+                    placements=p.placements,
+                    run_check=False,
+                    shape=radius_shape,
+                    stride=radius_stride,
+                )
+            else:
+                state["hyperball_radius"] = radii
+
+    def _hyperball_radius(self, p: nn.Parameter) -> torch.Tensor:
+        """Return the local FP32 radius tensor for a DION2H parameter."""
+        radius = self.state[p].get("hyperball_radius")
+        if radius is None:
+            raise RuntimeError("DION2H radius was not initialized before the optimizer update")
+        return get_local_tensor_if_DTensor(radius).float()
+
+    def _stacked_hyperball_radius(self, p: nn.Parameter, logical_index: int | None) -> torch.Tensor:
+        """Return per-expert radii for one stacked logical matrix."""
+        radii = self._hyperball_radius(p)
+        if logical_index is None:
+            if radii.ndim != 1:
+                name = self.param_to_name.get(p, "unknown")
+                raise ValueError(
+                    f"DION2H checkpoint radius shape {tuple(radii.shape)} is incompatible with "
+                    f"unsplit expert parameter '{name}'; expected [local_experts]"
+                )
+            return radii
+        if radii.ndim != 2 or radii.shape[-1] != 2:
+            name = self.param_to_name.get(p, "unknown")
+            raise ValueError(
+                f"DION2H checkpoint radius shape {tuple(radii.shape)} is incompatible with split "
+                f"gate/up parameter '{name}'; expected [local_experts, 2]. Resume with "
+                f"split_expert_gate_up=False or intentionally reinitialize optimizer radii."
+            )
+        return radii[:, logical_index]
+
+    def _normalize_hyperball_update(
+        self,
+        update: torch.Tensor,
+        radius: torch.Tensor,
+        norm_dims: tuple[int, ...],
+    ) -> torch.Tensor:
+        """Return the FP32 Hyperball update in direct or exact DION2 LR units.
+
+        Direct-angular mode targets Frobenius norm ``R``. Exact conversion preserves
+        the actual Newton-Schulz output magnitude; the caller applies vanilla DION2's
+        ``muon_lr_scale * sqrt(max(M,N))`` LR.
+        The auxiliary AdamW LR is unchanged in every mode.
+        """
+        update_fp32 = update.float()
+        if self.dion2_hyperball_exact_lr_conversion:
+            return update_fp32
+        update_norm = update_fp32.norm(dim=norm_dims, keepdim=True).clamp_min(self.hyperball_eps)
+        radius_shape = tuple(radius.shape) + (1,) * len(norm_dims)
+        target_norm = radius
+        return update_fp32 * (target_norm.reshape(radius_shape) / update_norm)
+
+    def _normalize_dense_hyperball_update(
+        self,
+        update: torch.Tensor,
+        radius: torch.Tensor,
+        *,
+        split_shared_gate_up: bool,
+    ) -> torch.Tensor:
+        """Normalize dense direct-mode updates per logical matrix."""
+        if not split_shared_gate_up:
+            return self._normalize_hyperball_update(update, radius, (-2, -1))
+        logical_shape = (*update.shape[:-2], 2, update.shape[-2] // 2, update.shape[-1])
+        logical_update = update.reshape(logical_shape)
+        return self._normalize_hyperball_update(logical_update, radius, (-2, -1)).reshape_as(update)
+
+    def _scale_dense_hyperball_weight(
+        self,
+        p: nn.Parameter,
+        local_weight: torch.Tensor,
+        radii: torch.Tensor,
+        global_norms: torch.Tensor,
+    ) -> None:
+        """Scale one local dense shard to one or two fixed global radii."""
+        factors = radii / global_norms
+        if not self._is_shared_expert_gate_up(p):
+            local_weight.mul_(factors)
+            return
+        if not isinstance(p, DTensor) or self._world_size == 1 or self._shard_tensor_dim != 0:
+            logical_weight = local_weight.reshape(2, p.shape[0] // 2, local_weight.shape[-1])
+            logical_weight.mul_(factors.view(2, 1, 1))
+            return
+
+        logical_rows = p.shape[0] // 2
+        chunk_rows = math.ceil(p.shape[0] / self._world_size)
+        local_start = min(p.shape[0], self._device_rank * chunk_rows)
+        local_end = local_start + local_weight.shape[0]
+        for logical_index, (logical_start, logical_end) in enumerate(
+            ((0, logical_rows), (logical_rows, 2 * logical_rows))
+        ):
+            owned_start = max(local_start, logical_start)
+            owned_end = min(local_end, logical_end)
+            if owned_start < owned_end:
+                local_weight[owned_start - local_start : owned_end - local_start].mul_(factors[logical_index])
+
+    def _dense_owner_radii_for_batch(
+        self,
+        batch: list[nn.Parameter],
+        batch_capacity: int,
+        effective_width: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Return cached radii for the complete matrices owned by this NS rank."""
+        batch_id = id(batch)
+        cached = self._dense_owner_radii.get(batch_id)
+        if cached is not None:
+            return cached
+        radii = [self._dense_hyperball_radius(p).to(device=device) for p in batch]
+        zero_radius = torch.zeros_like(radii[0], device=device)
+        radii.extend(zero_radius for _ in range(batch_capacity - len(batch)))
+        all_radii = torch.stack(radii)
+        owner_start = self._device_rank * effective_width
+        owner_radii = all_radii[owner_start : owner_start + effective_width]
+        self._dense_owner_radii[batch_id] = owner_radii
+        return owner_radii
+
+    def _stacked_hyperball_radius_or_none(
+        self,
+        p: nn.Parameter,
+        logical_index: int | None,
+    ) -> torch.Tensor | None:
+        """Return local logical radii, or ``None`` for vanilla-DION2 exclusions."""
+        if not self._uses_hyperball(p):
+            return None
+        return self._stacked_hyperball_radius(p, logical_index)
 
     def _matches_shared_expert_gate_up_name(self, p: nn.Parameter) -> bool:
         """Whether ``p`` has the configured shared-expert gate/up name."""
@@ -669,7 +1027,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         shape = tuple(p.shape)
         if self._is_shared_expert_gate_up(p):
             shape = (shape[0] // 2, shape[1])
-        return self._get_adjusted_lr_ratio(shape)
+        return self._get_adjusted_lr_ratio(shape, use_hyperball=self._uses_hyperball(p))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -679,6 +1037,8 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        # Initialize DION2H radii from restored FP32 weights before any update.
+        self._maybe_init_hyperball_radii()
         # Params are split into three disjoint buckets at init (see
         # categorize_params) and each is updated by a different function below:
         #   1. self.dion2_params    (dense 2D linears)     -> _step_dion2
@@ -711,6 +1071,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             return
 
         moe_megabatches = self._moe_megabatches if self.split_expert_gate_up else None
+        uses_hyperball = getattr(self, "dion2_hyperball", False)
 
         step_stacked_expert_params(
             self.stacked_dion2_params,
@@ -728,10 +1089,14 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             ns_steps=self.ns_steps,
             batch_split_expert_ns=self.batch_split_expert_ns,
             base_lr_for=self._base_lr_for,
-            weight_decay_for=self._wd_for,
+            weight_decay_for=self._dion2_wd_for,
             adjusted_lr_for=self._get_adjusted_lr,
+            adjusted_lr_for_param=self._get_adjusted_lr_for_param,
             moe_megabatches=moe_megabatches,
             profile_phases=self.dion2_profile_phases,
+            hyperball_radius_for=self._stacked_hyperball_radius_or_none if uses_hyperball else None,
+            normalize_hyperball_updates=(uses_hyperball and not self.dion2_hyperball_exact_lr_conversion),
+            hyperball_eps=getattr(self, "hyperball_eps", 1e-8),
         )
 
     def _create_moe_megabatches(self) -> None:
@@ -757,6 +1122,38 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
 
         for batch in self._dion2_batches:
             self._process_dion2_batch(batch)
+
+        # Single-device batches retract immediately after their trial update. The
+        # distributed path first applies every returned shard, then retracts all
+        # active logical matrices with one batched global-norm collective.
+        if (
+            getattr(self, "dion2_hyperball", False)
+            and isinstance(self.dion2_params[0], DTensor)
+            and self._world_size > 1
+        ):
+            self._retract_dense_hyperball_params()
+
+    def _retract_dense_hyperball_params(self) -> None:
+        """Retract active sharded dense matrices to their fixed global radii."""
+        active_params = [p for p in self.dion2_params if p.grad is not None and self._uses_hyperball(p)]
+        if not active_params:
+            return
+        if self._process_group is None:
+            raise RuntimeError("DION2H dense retraction requires the FSDP shard process group")
+
+        local_weights = [self._local_dion2_weight(p) for p in active_params]
+        logical_counts = [2 if self._is_shared_expert_gate_up(p) else 1 for p in active_params]
+        local_sumsq = torch.cat([self._dense_local_logical_sumsq(p) for p in active_params])
+        dist.all_reduce(local_sumsq, op=dist.ReduceOp.SUM, group=self._process_group)
+        global_norms = local_sumsq.sqrt().clamp_min(self.hyperball_eps)
+
+        offset = 0
+        for p, local_weight, logical_count in zip(active_params, local_weights, logical_counts, strict=True):
+            param_norms = global_norms[offset : offset + logical_count]
+            offset += logical_count
+            if logical_count == 1:
+                param_norms = param_norms[0]
+            self._scale_dense_hyperball_weight(p, local_weight, self._dense_hyperball_radius(p), param_norms)
 
     def _run_dion2_phase(
         self,
@@ -857,7 +1254,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             p = batch[i]
             local_param = p._local_tensor  # local parameter shard
             base_lr = self._base_lr_for(p)
-            wd = self._wd_for(p)
+            wd = self._dion2_wd_for(p)
             adjusted_lr_ratio = self._get_adjusted_lr_ratio_for_param(p)
             local_params.append(local_param)
             active_indices.append(i)
@@ -981,7 +1378,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         for i in range(actual_batch_size):
             p = batch[i]
             state = self.state[p]
-            if len(state) == 0:
+            if "momentum_buffer" not in state:
                 state["momentum_buffer"] = torch.zeros_like(p).float()  # [M,N]
             if p.grad is None:
                 active.append(False)
@@ -1048,6 +1445,29 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             local_matrices,
             split_shared_gate_up=split_shared_gate_up,
         )
+        # Optimizers restored from code predating Hyperball do not have the
+        # classification cache. Preserve their vanilla-DION2 behavior without
+        # touching the missing attribute; current Hyperball optimizers still
+        # require and use the cache built by ``_create_dion2_batches``.
+        batch_uses_hyperball = getattr(self, "dion2_hyperball", False) and id(batch) in self._hyperball_dense_batch_ids
+        if batch_uses_hyperball and not self.dion2_hyperball_exact_lr_conversion:
+            # Exact mode preserves the NS output unchanged. Checking it here is
+            # also an optimization: owner-local radii are needed only to
+            # normalize direct-mode updates, so exact mode need not assemble them.
+            # Shard(0) splits the padded W*K parameter axis into contiguous
+            # effective_width chunks, so the shard-local rank selects the radii
+            # corresponding to the complete matrices it owns for NS.
+            owner_radii = self._dense_owner_radii_for_batch(
+                batch,
+                batch_capacity,
+                effective_width,
+                ortho_p.device,
+            )
+            ortho_p = self._normalize_dense_hyperball_update(
+                ortho_p,
+                owner_radii,
+                split_shared_gate_up=split_shared_gate_up,
+            ).to(torch.bfloat16)
         del local_matrices
 
         # Step 5: backward all-to-all -- re-shard the data axis, then unstack.
@@ -1086,9 +1506,10 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
 
             grad = get_local_tensor_if_DTensor(p.grad)
             param = get_local_tensor_if_DTensor(p)
+            uses_hyperball = self._uses_hyperball(p)
 
             state = self.state[p]
-            if len(state) == 0:
+            if "momentum_buffer" not in state:
                 state["momentum_buffer"] = torch.zeros_like(p).float()
 
             mom = get_local_tensor_if_DTensor(state["momentum_buffer"])
@@ -1124,16 +1545,31 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 submatrix.unsqueeze(0),
                 split_shared_gate_up=self._is_shared_expert_gate_up(p),
             )[0]
+            if uses_hyperball:
+                ortho = self._normalize_dense_hyperball_update(
+                    ortho,
+                    self._dense_hyperball_radius(p),
+                    split_shared_gate_up=self._is_shared_expert_gate_up(p),
+                )
 
             # Get adjusted LR / wd from the owning param-group.
             base_lr = self._base_lr_for(p)
-            wd = self._wd_for(p)
+            wd = self._dion2_wd_for(p)
             adjusted_lr = base_lr * self._get_adjusted_lr_ratio_for_param(p)
 
-            # Apply weight decay
+            # Apply weight decay and update directly to the FP32 parameter.
             param.mul_(1 - base_lr * wd)
-            # Apply update to selected indices
             self._apply_submatrix_update(param, ortho, indices, adjusted_lr, select_dim=-2)
+            if uses_hyperball:
+                trial_norms = self._dense_local_logical_sumsq(p).sqrt().clamp_min(self.hyperball_eps)
+                if not self._is_shared_expert_gate_up(p):
+                    trial_norms = trial_norms[0]
+                self._scale_dense_hyperball_weight(
+                    p,
+                    param,
+                    self._dense_hyperball_radius(p),
+                    trial_norms,
+                )
 
     def _select_submatrix(
         self,
@@ -1331,6 +1767,23 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         makes FP32 -- so the moments and the momentum buffer come back FP32 whatever
         precision the checkpoint stored them in.
         """
+        # ``Optimizer.load_state_dict`` casts floating optimizer-state tensors to
+        # the parameter dtype. Preserve fixed FP32 radii across that conversion;
+        # otherwise loading a BF16 model would permanently quantize its sphere.
+        saved_radii: dict[nn.Parameter, torch.Tensor] = {}
+        saved_state = state_dict.get("state", {})
+        for saved_group, current_group in zip(state_dict.get("param_groups", []), self.param_groups, strict=True):
+            for saved_param_id, current_param in zip(
+                saved_group.get("params", []), current_group["params"], strict=True
+            ):
+                saved_param_state = saved_state.get(saved_param_id, {})
+                if "hyperball_radius" in saved_param_state:
+                    saved_radius = saved_param_state["hyperball_radius"]
+                    # Preserve a stacked expert radius DTensor as a DTensor: its
+                    # global shape and Shard(0) placement are what allow DCP to
+                    # restore or reshard the per-expert values correctly.
+                    saved_radii[current_param] = saved_radius.detach().float().clone()
+
         super().load_state_dict(state_dict)
 
         for group in self.param_groups:
@@ -1349,3 +1802,9 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # categorize_params now points at the discarded dicts -- the DION2 and AdamW
         # updates would read a pre-resume lr / weight_decay that no scheduler updates.
         self._param_group_map = {id(p): group for group in self.param_groups for p in group["params"]}
+
+        for p, radius in saved_radii.items():
+            local_device = get_local_tensor_if_DTensor(p).device
+            self.state[p]["hyperball_radius"] = radius.to(device=local_device, dtype=torch.float32)
+        if getattr(self, "dion2_hyperball", False):
+            self._dense_owner_radii = {}

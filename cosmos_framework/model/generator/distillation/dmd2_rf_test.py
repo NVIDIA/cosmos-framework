@@ -343,6 +343,7 @@ def test_build_net_lora_override_controls_injection_and_initialization(
     model.config.lora_rank = 8
     model.config.lora_alpha = 16
     model.config.lora_target_modules = "q_proj_moe_gen"
+    model.config.multiview_action_conditioning = None
     model.vlm_config = MagicMock()
     model.tokenizer_vision_gen = MagicMock()
     model.parallel_dims = MagicMock()

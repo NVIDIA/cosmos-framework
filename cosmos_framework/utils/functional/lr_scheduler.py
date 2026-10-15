@@ -217,7 +217,8 @@ class WSDScheduler:
         warm_up_steps: Number of linear warmup steps.
         total_steps: Total training steps (warmup + stable + decay).
         decay_steps: Number of decay steps at the end.
-        decay_type: Decay curve shape — ``"cosine"`` or ``"linear"``.
+        decay_type: Decay curve shape — ``"cosine"``, ``"linear"``, or
+            ``"one_minus_sqrt"`` for :math:`1-\\sqrt{x}`.
         f_start: LR multiplier at step 0.
         f_max: LR multiplier during the stable phase.
         f_min: LR multiplier after decay completes.
@@ -242,8 +243,8 @@ class WSDScheduler:
         decay_type: str = "cosine",
         verbosity_interval: int = 0,
     ):
-        if decay_type not in ("cosine", "linear"):
-            raise ValueError(f"decay_type must be 'cosine' or 'linear' now, got '{decay_type}'")
+        if decay_type not in ("cosine", "linear", "one_minus_sqrt"):
+            raise ValueError(f"decay_type must be 'cosine', 'linear', or 'one_minus_sqrt', got '{decay_type}'")
         self.warm_up_steps = warm_up_steps
         self.total_steps = total_steps
         self.decay_steps = decay_steps
@@ -276,8 +277,10 @@ class WSDScheduler:
             t = (n - self.stable_end) / self.decay_steps
             if self.decay_type == "cosine":
                 f = self.f_min + 0.5 * (self.f_max - self.f_min) * (1 + np.cos(t * np.pi))
-            else:  # linear
+            elif self.decay_type == "linear":
                 f = self.f_max + (self.f_min - self.f_max) * t
+            else:  # one_minus_sqrt
+                f = self.f_min + (self.f_max - self.f_min) * (1 - np.sqrt(t))
         else:
             # Past total_steps: hold at f_min
             f = self.f_min

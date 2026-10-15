@@ -10,9 +10,12 @@ from typing import Any, cast
 import pytest
 import torch
 import torch.distributed as dist
+from torch._dynamo.decorators import mark_unbacked
+from torch.distributed.device_mesh import init_device_mesh
+from torch.utils.checkpoint import checkpoint
 
-from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer
-from cosmos_framework.utils import distributed
+from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer, StepBatch
+from cosmos_framework.utils import distributed, misc
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.model.generator.mot.attention import (
@@ -25,9 +28,9 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     context_parallel_attention,
     get_context_parallel_sharded_sequence,
 )
-
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
+from cosmos_framework.model.generator.utils.memory import MemoryValue
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     build_sequence_plans_from_data_batch,
@@ -47,6 +50,10 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
+# isort: split
+
+# isort: split
+# isort: split
 
 
 class _CountingIterator:
@@ -91,6 +98,121 @@ def test_context_parallel_window_fetches_once_per_cp_size(monkeypatch: pytest.Mo
 
     assert observed == [10, 10, 20, 20]
     assert dataloader_iter.fetch_count == 2
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_fetch_is_release_unaware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_fetch_data_batch always returns the window batch, even in release mode.
+
+    Release-specific routing (prepared batch selection, host retention) is
+    handled by _next_step_batch; _fetch_data_batch is a pure fetch + window
+    advance with no release awareness.
+    """
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    raw_video = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)  # [B,C,T,H,W]
+    host_batch = {"video": raw_video, "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+
+    first_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert not stop
+    assert first_batch is host_batch
+    assert trainer._cp_data_window.batch is host_batch
+
+    model._cp_window_slot = 1
+
+    # Slot 1: _fetch_data_batch returns the window batch (not the prepared batch).
+    second_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert not stop
+    assert second_batch is host_batch
+    assert dataloader_iter.fetch_count == 1
+    assert not trainer._cp_data_window.active
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_routes_release_mode_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """StepBatch encapsulates host retention, CUDA transfer, and callback merging."""
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    raw_video = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)
+    host_batch = {"video": raw_video, "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+    # Stub CUDA transfer to identity (CPU-only test).
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    # Slot 0: owner slot — StepBatch.training is the (mock-transferred) batch,
+    # pre-step callback returns it directly, host_raw is captured.
+    step0, stop = trainer._next_step_batch(model, dataloader_iter)
+    assert not stop
+    assert isinstance(step0, StepBatch)
+    assert step0._is_fetch_slot
+    assert step0._host_raw is host_batch
+    assert step0.callback_pre_step is step0.training
+
+    # Simulate the model trimming raw tensors and storing the prepared batch.
+    prepared = {"packed_tokens": torch.ones(1, 4), "dataset_name": "prepared"}
+    trainer._cp_data_window.store_prepared_batch(prepared)
+    model._cp_window_slot = 1
+
+    # Slot 1: non-owner — StepBatch returns the prepared batch, callbacks merge host.
+    step1, stop = trainer._next_step_batch(model, dataloader_iter)
+    assert not stop
+    assert isinstance(step1, StepBatch)
+    assert not step1._is_fetch_slot
+    assert step1.training is prepared
+    cb = step1.callback_post_step
+    assert cb["video"] is raw_video
+    assert cb["packed_tokens"] is prepared["packed_tokens"]
+    assert cb["dataset_name"] == "prepared"
+    assert dataloader_iter.fetch_count == 1
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_non_cp_returns_step_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without CP, _next_step_batch wraps a simple fetch + CUDA transfer."""
+    trainer = object.__new__(ImaginaireTrainer)
+    trainer._cp_data_window = ContextParallelDataWindow()
+    model = SimpleNamespace(parallel_dims=None)
+    batch = {"x": torch.tensor([1.0])}
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    step, stop = trainer._next_step_batch(model, iter([batch]))
+    assert not stop
+    assert isinstance(step, StepBatch)
+    assert step._is_fetch_slot
+    assert step._host_raw is None
+    assert step.training is batch
+    assert step.callback_pre_step is step.training
+    assert step.callback_post_step is step.training
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_next_step_batch_finalize_stores_prepared_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """StepBatch.finalize() stores the prepared batch at slot 0 in release mode."""
+    trainer, model = _make_window_trainer(cp_size=2)
+    model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
+    host_batch = {"video": torch.zeros(1), "dataset_name": "host"}
+    dataloader_iter = _CountingIterator([host_batch])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+    monkeypatch.setattr(misc, "to", lambda data, **kw: data)
+
+    step, _ = trainer._next_step_batch(model, dataloader_iter)
+    assert trainer._cp_data_window.prepared_batch is None
+    step.finalize()
+    assert trainer._cp_data_window.prepared_batch is step.training
 
 
 @pytest.mark.L0
@@ -1153,6 +1275,89 @@ def test_sample_lbl_hsdp_weighting_matches_global_sample_mean() -> None:
     dist.barrier()
 
 
+@pytest.mark.L0
+@pytest.mark.parametrize("gen_tokens,kv_heads", [(17, 16), (17, 2), (64, 2)])
+@pytest.mark.parametrize("full_ac", [False, True])
+def test_cp_memory_unbacked_cache_gradients(
+    monkeypatch: pytest.MonkeyPatch, gen_tokens: int, kv_heads: int, full_ac: bool
+) -> None:
+    """Compile real CP cache extraction without specializing its padded stream lengths."""
+    if not torch.cuda.is_available() or int(os.environ.get("WORLD_SIZE", "1")) != 4:
+        pytest.skip("Requires four distributed CUDA ranks.")
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    if not dist.is_initialized():
+        dist.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (4,))
+    monkeypatch.setattr(torch.fx.experimental._config, "use_duck_shape", False)
+    torch.compiler.reset()
+    torch.manual_seed(47 + dist.get_rank())
+    und_tokens = 11
+    tokens = torch.randn(und_tokens + gen_tokens, 16, 8, device="cuda")  # [U+G,16,8]
+    metadata, mask, _ = build_packed_sequence(
+        "two_way",
+        packed_sequence=tokens,
+        attn_modes=["causal", "full"],
+        split_lens=[und_tokens, gen_tokens],
+        sample_lens=[und_tokens + gen_tokens],
+        packed_und_token_indexes=cast(torch.LongTensor, torch.arange(und_tokens, device="cuda")),  # [U]
+        packed_gen_token_indexes=cast(
+            torch.LongTensor, torch.arange(und_tokens, und_tokens + gen_tokens, device="cuda")
+        ),  # [G]
+        num_heads=16,
+        head_dim=8,
+        num_layers=1,
+        cp_world_size=4,
+        full_seq_alignment=4,
+        causal_seq_alignment=4,
+    )
+    assert isinstance(mask, SplitInfo)
+    memory = MemoryValue()
+
+    def attention(
+        q: SequencePack, k: SequencePack, v: SequencePack, attention_mask: SplitInfo, **kwargs: Any
+    ) -> tuple[SequencePack, None]:
+        # Isolate the CP exchange and cache boundary from the attention kernel itself.
+        und = q["causal_seq"] + k["causal_seq"] + v["causal_seq"]  # [U_padded,4,8]
+        gen = q["full_only_seq"] + k["full_only_seq"] + v["full_only_seq"]  # [G_padded,4,8]
+        return from_mode_splits(und, gen, q), None
+
+    def forward(und: torch.Tensor, gen: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        # Inputs: [U_padded/4,16,8], [G_padded/4,16,8]. Outputs include both streams and real-token caches.
+        q = from_mode_splits(und, gen, metadata, is_sharded=True)
+        k = from_mode_splits(
+            (und * 2)[:, :kv_heads], (gen * 2)[:, :kv_heads], metadata, is_sharded=True
+        )  # [U_padded/4,H_KV,8], [G_padded/4,H_KV,8]
+        v = from_mode_splits(
+            (und * 3)[:, :kv_heads], (gen * 3)[:, :kv_heads], metadata, is_sharded=True
+        )  # [U_padded/4,H_KV,8], [G_padded/4,H_KV,8]
+        result, stored = context_parallel_attention(
+            mesh, q, k, v, mask, attention_function=attention, memory_value=memory
+        )
+        assert stored is not None
+        return (result["causal_seq"], result["full_only_seq"], *stored)  # CP streams and [1,S,H_KV_local,8] caches
+
+    def wrapped(und: torch.Tensor, gen: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        # Inputs and outputs have the same shapes as forward.
+        return checkpoint(forward, und, gen, use_reentrant=False) if full_ac else forward(und, gen)
+
+    inputs = [
+        torch.randn(metadata[key].shape[0] // 4, 16, 8, device="cuda", requires_grad=True)
+        for key in ("causal_seq", "full_only_seq")
+    ]  # [U_padded/4,16,8], [G_padded/4,16,8]
+    reference = [value.detach().clone().requires_grad_() for value in inputs]  # same input shapes
+    expected = forward(*reference)  # CP streams and four cache tensors
+    torch.stack([value.square().mean() for value in expected]).sum().backward()  # scalar loss
+    for value in inputs:
+        mark_unbacked(value, 0)
+    actual = torch.compile(wrapped, fullgraph=True, dynamic=True)(*inputs)  # CP streams and four cache tensors
+    torch.stack([value.square().mean() for value in actual]).sum().backward()  # scalar loss
+    for actual_value, expected_value in zip(actual, expected):  # matching output shapes
+        torch.testing.assert_close(actual_value, expected_value, rtol=1e-5, atol=1e-5)
+    for actual_value, expected_value in zip(inputs, reference):  # matching input shapes
+        torch.testing.assert_close(actual_value.grad, expected_value.grad, rtol=1e-5, atol=1e-5)
+    dist.barrier()
+
+
 def _multiview_maskless_cp_case(
     samples: list[tuple[int, int, int]],
     *,
@@ -1161,6 +1366,8 @@ def _multiview_maskless_cp_case(
     cp_size: int,
     device: torch.device,
     parallel_dims: ParallelDims,
+    deduplicate_cross_view: bool = False,
+    temporal_window_seconds: tuple[float, float] | None = None,
 ) -> None:
     """Run one multiview batch through the decomposition at CP=1 and at ``cp_size``, and compare.
 
@@ -1236,6 +1443,9 @@ def _multiview_maskless_cp_case(
         view_axis=[0] * (items_per_sample * len(samples)),
         captions=([list(enumerate(sample_lens)) for sample_lens in caption_lens] if caption_lens is not None else None),
         padded_gen_tokens=int(get_full_only_seq(packs[0])[0].shape[0]),
+        deduplicate_cross_view=deduplicate_cross_view,
+        decomposed_temporal_window_seconds=temporal_window_seconds,
+        seconds_per_frame=[2 / 15] * (items_per_sample * len(samples)) if temporal_window_seconds is not None else None,
     )
 
     def _mask() -> SplitInfo:
@@ -1285,7 +1495,10 @@ def _multiview_maskless_cp_case(
         torch.testing.assert_close(_gathered(get_gen_seq(local_pack).grad), reference_grad, rtol=0, atol=0)
 
 
-def test_context_parallel_multiview_maskless():
+@pytest.mark.L1
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires real GPU attention and merge kernels")
+def test_context_parallel_multiview_maskless() -> None:
     """The decomposition under context parallelism is the decomposition without it.
 
     Three layouts, because they take different paths through the plan: one sample of one item,
@@ -1310,6 +1523,45 @@ def test_context_parallel_multiview_maskless():
         [(3, 4, 16), (2, 6, 8), (1, 5, 24)], items_per_sample=2, per_view_captions=False, **case
     )
     _multiview_maskless_cp_case([(3, 4, 18), (2, 6, 8)], items_per_sample=1, per_view_captions=True, **case)
+    _multiview_maskless_cp_case(
+        [(7, 4, 21), (1, 3, 6)],
+        items_per_sample=1,
+        per_view_captions=True,
+        deduplicate_cross_view=True,
+        **case,
+    )
+    _multiview_maskless_cp_case(
+        [(3, 4, 18), (2, 3, 8)],
+        items_per_sample=2,
+        per_view_captions=True,
+        deduplicate_cross_view=True,
+        **case,
+    )
+    for deduplicate_cross_view in (True, False):
+        _multiview_maskless_cp_case(
+            [(11, 5, 21), (1, 3, 6)],
+            items_per_sample=1,
+            per_view_captions=True,
+            deduplicate_cross_view=deduplicate_cross_view,
+            temporal_window_seconds=(-0.2, 0.2),
+            **case,
+        )
+        _multiview_maskless_cp_case(
+            [(7, 5, 21), (1, 3, 6)],
+            items_per_sample=1,
+            per_view_captions=True,
+            deduplicate_cross_view=deduplicate_cross_view,
+            temporal_window_seconds=(-0.4, 0.0),
+            **case,
+        )
+        _multiview_maskless_cp_case(
+            [(3, 5, 18), (2, 4, 8)],
+            items_per_sample=2,
+            per_view_captions=True,
+            deduplicate_cross_view=deduplicate_cross_view,
+            temporal_window_seconds=(-0.4, 0.0),
+            **case,
+        )
     dist.barrier()
 
 

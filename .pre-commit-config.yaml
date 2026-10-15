@@ -18,7 +18,7 @@ repos:
       - id: markdown-toc-creator
         args: ["--config=ci/.markdown-toc-creator.toml"]
   - repo: https://github.com/rvben/rumdl-pre-commit
-    rev: v0.1.62
+    rev: v0.2.78
     hooks:
       - id: rumdl-fmt
   - repo: https://github.com/pre-commit/pre-commit-hooks
