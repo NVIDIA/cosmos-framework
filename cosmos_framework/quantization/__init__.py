@@ -27,6 +27,7 @@ from .checkpoint_io import (
     save_sharded_safetensors,
 )
 from .metadata import collect_quantization_metadata, write_quantization_metadata
+from .model_utils import temporary_fuse_named_linears
 
 FP8_E4M3_MAX = 448.0
 
@@ -242,7 +243,10 @@ def quantize_fp8_checkpoint(
     quant_cfg = _calib.build_quant_config(model, quant_algo, skip_filter=skip_filter)
 
     print(f"[quant] format=fp8 algo={quant_algo}")
-    mtq.quantize(model, quant_cfg, forward_loop)
+    with temporary_fuse_named_linears(
+        model, r"net\.language_model\.model\.layers\.(\d+)\.self_attn$", "qkv_proj", ["q_proj", "k_proj", "v_proj"]
+    ):
+        mtq.quantize(model, quant_cfg, forward_loop)
     mtq.print_quant_summary(model)
 
     staging_dir = output_dir.parent / f".quantized_transformer_{profile}.tmp"
