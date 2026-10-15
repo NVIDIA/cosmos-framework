@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Existing xdof_yam/domain 16, one four-GPU GB200 node.
+[job]
+task = "vfm"
+experiment = "failuregen_yam_eef_fd_id"
+project = "cosmos3_yam"
+group = "fd_id"
+name = "${oc.env:YAM_RUN_NAME}"
+wandb_mode = "disabled"
+
+[model]
+precision = "bfloat16"
+
+[model.parallelism]
+data_parallel_shard_degree = 4
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree = 1
+
+[model.activation_checkpointing]
+mode = "selective"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[checkpoint]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 100

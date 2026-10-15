@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: OpenMDW-1.1 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="456" viewBox="0 0 1360 456" role="img" aria-labelledby="title description">
+  <title id="title">FailureGen: transfer recorded failure motion into a host scene</title>
+  <desc id="description">A successful host supplies the initial camera observation and nominal motion. A failure donor supplies recorded motion. FailureGen combines the motion, and a post-trained Cosmos forward-dynamics model generates a video from the host observation, transferred actions, and neutral task text. Inspect the video to determine the observed outcome.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8" fill="#536575"/></marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #23313d; }
+      .heading { font-size: 23px; font-weight: 700; }
+      .body { font-size: 20px; }
+      .note { font-size: 18px; fill: #526575; }
+      .flow { fill: none; stroke: #536575; stroke-width: 2.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1360" height="456" rx="18" fill="#ffffff"/>
+  <text x="34" y="39" font-size="26" font-weight="700">FailureGen workflow</text>
+
+  <rect x="34" y="80" width="250" height="120" rx="14" fill="#eef6fc" stroke="#bbd5e8"/>
+  <text x="56" y="114" class="heading">Host</text>
+  <text x="56" y="145" class="body">Successful recording</text>
+  <text x="56" y="177" class="note">Scene + nominal motion</text>
+
+  <rect x="34" y="270" width="250" height="120" rx="14" fill="#fff2ee" stroke="#edc7b9"/>
+  <text x="56" y="304" class="heading">Donor</text>
+  <text x="56" y="335" class="body">Recorded failure</text>
+  <text x="56" y="367" class="note">Failure-associated motion</text>
+
+  <rect x="374" y="270" width="250" height="120" rx="14" fill="#f3f0fc" stroke="#cfc4ec"/>
+  <text x="398" y="306" class="heading">Transfer motion</text>
+  <text x="398" y="338" class="body">Align and blend</text>
+  <text x="398" y="369" class="note">Keep the host context</text>
+
+  <rect x="756" y="80" width="260" height="310" rx="14" fill="#f1f7e9" stroke="#bfd49e"/>
+  <text x="780" y="157" class="heading">Cosmos FD</text>
+  <text x="780" y="188" class="body">Post-trained model</text>
+  <line x1="780" y1="209" x2="992" y2="209" stroke="#bfd49e"/>
+  <text x="780" y="243" class="body">Initial observation</text>
+  <text x="780" y="277" class="body">Transferred actions</text>
+  <text x="780" y="311" class="body">Neutral task text</text>
+  <text x="780" y="361" class="note">Predict the continuation</text>
+
+  <rect x="1110" y="80" width="220" height="310" rx="14" fill="#f5f7f9" stroke="#cfd8df"/>
+  <rect x="1141" y="118" width="158" height="96" rx="9" fill="#ffffff" stroke="#a9bac8" stroke-width="2"/>
+  <path d="M1206,140 L1206,190 L1241,165 Z" fill="#536575"/>
+  <text x="1134" y="255" class="heading">Generated video</text>
+  <text x="1134" y="290" class="body">Inspect the motion</text>
+  <text x="1134" y="321" class="body">and actual outcome</text>
+  <text x="1134" y="361" class="note">Label after review</text>
+
+  <path d="M284,115 H756" class="flow"/>
+  <text x="435" y="101" class="note">Initial camera observation</text>
+  <path d="M284,173 H326 V292 H374" class="flow"/>
+  <text x="339" y="224" class="note">Host motion</text>
+  <path d="M284,350 H374" class="flow"/>
+  <path d="M624,330 H756" class="flow"/>
+  <path d="M1016,235 H1110" class="flow"/>
+
+  <text x="34" y="433" class="note">The donor supplies motion, not pixels. Cosmos generates the visual response in the host scene.</text>
+</svg>

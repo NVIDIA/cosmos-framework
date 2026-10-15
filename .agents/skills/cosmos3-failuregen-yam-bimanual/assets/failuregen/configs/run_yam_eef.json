@@ -1,0 +1,499 @@
+{
+  "version": 1,
+  "families": [
+    {
+      "id": "handover_drop_eval_ep1",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 1,
+      "donor_split": "train",
+      "donor_start": 13.4,
+      "event_start": 14.4
+    },
+    {
+      "id": "pickup_slip_eval_ep2",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 2,
+      "donor_split": "train",
+      "donor_start": 10.8,
+      "event_start": 11.6
+    },
+    {
+      "id": "pickup_miss_eval_ep7",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 7,
+      "donor_split": "train",
+      "donor_start": 8.8,
+      "event_start": 9.8
+    },
+    {
+      "id": "pickup_slip_eval_ep9",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 9,
+      "donor_split": "train",
+      "donor_start": 8.6,
+      "event_start": 9.6
+    },
+    {
+      "id": "pickup_miss_eval_ep14",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 14,
+      "donor_split": "train",
+      "donor_start": 11.0,
+      "event_start": 12
+    },
+    {
+      "id": "pickup_miss_eval_ep15",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 15,
+      "donor_split": "train",
+      "donor_start": 5.4,
+      "event_start": 6.4
+    },
+    {
+      "id": "pickup_miss_eval_ep33",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 33,
+      "donor_split": "train",
+      "donor_start": 7.4,
+      "event_start": 8.4
+    },
+    {
+      "id": "pickup_slip_eval_ep37",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 37,
+      "donor_split": "train",
+      "donor_start": 6.0,
+      "event_start": 7
+    },
+    {
+      "id": "pickup_miss_eval_ep40",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 40,
+      "donor_split": "train",
+      "donor_start": 7.2,
+      "event_start": 8.2
+    },
+    {
+      "id": "handover_drop_eval_ep42",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 42,
+      "donor_split": "train",
+      "donor_start": 10.6,
+      "event_start": 11.6
+    },
+    {
+      "id": "pickup_miss_eval_ep44",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 44,
+      "donor_split": "train",
+      "donor_start": 10.2,
+      "event_start": 11.2
+    },
+    {
+      "id": "pickup_slip_eval_ep47",
+      "label": "pickup_slip",
+      "phase": "move_to_handover",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.6,
+      "event_end_margin_s": 0.6,
+      "donor_episode": 47,
+      "donor_split": "train",
+      "donor_start": 8.0,
+      "event_start": 8.4
+    },
+    {
+      "id": "handover_drop_eval_ep48",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 48,
+      "donor_split": "train",
+      "donor_start": 11.8,
+      "event_start": 12.8
+    },
+    {
+      "id": "pickup_miss_eval_ep50",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 50,
+      "donor_split": "train",
+      "donor_start": 9.6,
+      "event_start": 10.6
+    },
+    {
+      "id": "pickup_miss_eval_ep51",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 51,
+      "donor_split": "train",
+      "donor_start": 5.0,
+      "event_start": 6
+    },
+    {
+      "id": "pickup_slip_eval_ep54",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 54,
+      "donor_split": "train",
+      "donor_start": 9.4,
+      "event_start": 9.8
+    },
+    {
+      "id": "handover_drop_eval_ep57",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 57,
+      "donor_split": "train",
+      "donor_start": 11.4,
+      "event_start": 12.4
+    },
+    {
+      "id": "handover_drop_eval_ep58",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 58,
+      "donor_split": "train",
+      "donor_start": 11.4,
+      "event_start": 12.4
+    },
+    {
+      "id": "pickup_slip_eval_ep61",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 61,
+      "donor_split": "train",
+      "donor_start": 8.6,
+      "event_start": 9.4
+    },
+    {
+      "id": "pickup_slip_eval_ep64",
+      "label": "pickup_slip",
+      "phase": "move_to_handover",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.6,
+      "event_end_margin_s": 0.6,
+      "donor_episode": 64,
+      "donor_split": "train",
+      "donor_start": 6.6,
+      "event_start": 7.6
+    },
+    {
+      "id": "handover_drop_eval_ep65",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 65,
+      "donor_split": "train",
+      "donor_start": 9.8,
+      "event_start": 10.8
+    },
+    {
+      "id": "handover_drop_eval_ep68",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 68,
+      "donor_split": "train",
+      "donor_start": 10.2,
+      "event_start": 11.2
+    },
+    {
+      "id": "pickup_slip_eval_ep69",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 69,
+      "donor_split": "train",
+      "donor_start": 6.2,
+      "event_start": 7.2
+    },
+    {
+      "id": "handover_drop_eval_ep71",
+      "label": "handover_drop",
+      "phase": "handover",
+      "arms": [
+        "left",
+        "right"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "start",
+      "event_offset_s": 1.8,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 71,
+      "donor_split": "train",
+      "donor_start": 9.8,
+      "event_start": 10.8
+    },
+    {
+      "id": "pickup_slip_eval_ep73",
+      "label": "pickup_slip",
+      "phase": "lift_extract",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 73,
+      "donor_split": "train",
+      "donor_start": 7.4,
+      "event_start": 7.8
+    },
+    {
+      "id": "pickup_miss_eval_ep75",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 75,
+      "donor_split": "train",
+      "donor_start": 5.0,
+      "event_start": 6
+    },
+    {
+      "id": "pickup_miss_eval_ep77",
+      "label": "pickup_miss",
+      "phase": "pick_grasp",
+      "arms": [
+        "left"
+      ],
+      "score_arm": "left",
+      "chunks": 1,
+      "preferred_cycle": 0,
+      "event_anchor": "end",
+      "event_offset_s": -0.0,
+      "event_end_margin_s": 0.0,
+      "donor_episode": 77,
+      "donor_split": "train",
+      "donor_start": 8.0,
+      "event_start": 9
+    }
+  ]
+}
