@@ -26,7 +26,7 @@ def _harness(**kwargs):
 def _step(model, optimizer, scheduler, callback, grad_scale):
     for parameter in model.parameters():
         parameter.grad = torch.full_like(parameter, grad_scale)
-    callback.on_after_backward(model)
+    callback.on_before_optimizer_step(model, optimizer, scheduler, None)
     optimizer.step()
     callback.on_before_zero_grad(model, optimizer, scheduler)
     scheduler.step()
@@ -36,7 +36,7 @@ def _step(model, optimizer, scheduler, callback, grad_scale):
 def _step_at(model, optimizer, scheduler, callback, grad_scale, iteration):
     for parameter in model.parameters():
         parameter.grad = torch.full_like(parameter, grad_scale)
-    callback.on_after_backward(model, iteration=iteration)
+    callback.on_before_optimizer_step(model, optimizer, scheduler, None, iteration=iteration)
     optimizer.step()
     callback.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
     scheduler.step()
@@ -127,7 +127,7 @@ def test_baseline_does_not_chase_a_deteriorating_run():
     for _ in range(60):
         for parameter in model.parameters():
             parameter.grad = torch.full_like(parameter, 0.05)
-        callback.on_after_backward(model)
+        callback.on_before_optimizer_step(model, optimizer, scheduler, None)
         callback.on_before_zero_grad(model, optimizer, scheduler)
 
     inflated = callback._baseline()

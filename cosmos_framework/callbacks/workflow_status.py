@@ -77,12 +77,16 @@ class _WorkflowStatusWriter:
             status_file.write(json.dumps(payload, default=str) + "\n")
 
 
-def write_early_failure(error: BaseException) -> bool:
+def write_early_failure(error: BaseException, *, phase: str = "preflight_or_initialization") -> bool:
     """Write a terminal Cosmos record before the callback/config exists.
 
     The orchestration layer supplies ``COSMOS_STATUS_FILE`` for direct launches,
     or the normal Cosmos job/result variables. No implicit host path is used.
     """
+    if int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0"))) != 0:
+        return False
+    if getattr(error, "_cosmos_status_reported", False):
+        return False
     status_path = os.environ.get("COSMOS_STATUS_FILE")
     if not status_path:
         job_id = os.environ.get("COSMOS_JOB_ID")
@@ -99,9 +103,10 @@ def write_early_failure(error: BaseException) -> bool:
     _WorkflowStatusWriter(status_path).write(
         status="FAILURE",
         verbosity="ERROR",
-        message=f"Cosmos Framework training failed before callback initialization: {error}",
-        data={"phase": "preflight_or_initialization", "error_type": type(error).__name__},
+        message=f"Cosmos Framework training failed during {phase}: {error}",
+        data={"phase": phase, "error_type": type(error).__name__},
     )
+    setattr(error, "_cosmos_status_reported", True)
     return True
 
 
@@ -143,6 +148,7 @@ class WorkflowStatusCallback(Callback):
         self._validation_local_denominators: list[torch.Tensor] = []
         self._train_loss_numerator = 0.0
         self._train_loss_denominator = 0
+        self._train_batches = 0
         self.last_training_loss: float | None = None
         self.last_validation_loss: float | None = None
 
@@ -273,17 +279,26 @@ class WorkflowStatusCallback(Callback):
         return global_numerator / max(global_denominator, 1), global_numerator, global_denominator
 
     @staticmethod
-    def _reduce_accumulator(numerator: float, denominator: int) -> tuple[float, int]:
-        device = "cuda" if dist.is_available() and dist.is_initialized() else "cpu"
-        values = torch.tensor([numerator, float(denominator)], dtype=torch.float64, device=device)
+    def _reduce_accumulator(numerator: float | torch.Tensor, denominator: int | torch.Tensor) -> tuple[float, int]:
+        initialized = dist.is_available() and dist.is_initialized()
+        device = "cuda" if initialized and dist.get_backend() == "nccl" else "cpu"
+        values = torch.stack(
+            [
+                torch.as_tensor(numerator, dtype=torch.float64, device=device),
+                torch.as_tensor(denominator, dtype=torch.float64, device=device),
+            ]
+        )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(values, op=dist.ReduceOp.SUM)
         return float(values[0].item()), int(values[1].item())
 
     def on_train_start(self, model: Any, iteration: int = 0) -> None:
+        if not self.enabled:
+            return
         self._train_start_time = time.monotonic()
         self._train_loss_numerator = 0.0
         self._train_loss_denominator = 0
+        self._train_batches = 0
         writer = self._get_writer()
         if writer is not None:
             writer.write(
@@ -297,6 +312,8 @@ class WorkflowStatusCallback(Callback):
             log.info(f"Cosmos status will be logged to {writer.filename}")
 
     def on_training_step_start(self, model: Any, data: dict[str, Any], iteration: int = 0) -> None:
+        if not self.enabled:
+            return
         self._step_start_time = time.monotonic()
 
     def on_training_step_batch_end(
@@ -307,9 +324,14 @@ class WorkflowStatusCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
+        if not self.enabled:
+            return
         numerator, denominator = self._local_token_stats(loss, data_batch, output_batch)
-        self._train_loss_numerator += float(numerator.item())
-        self._train_loss_denominator += int(denominator.item())
+        # Keep bounded scalar accumulators on device; do not synchronize each
+        # micro-batch merely to collect the final training metric.
+        self._train_loss_numerator = self._train_loss_numerator + numerator.to(dtype=torch.float64)
+        self._train_loss_denominator = self._train_loss_denominator + denominator
+        self._train_batches += 1
 
     def on_training_step_end(
         self,
@@ -319,6 +341,8 @@ class WorkflowStatusCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
+        if not self.enabled:
+            return
         interval = int(self.config.trainer.logging_iter) * self.logging_interval
         if iteration % interval != 0:
             return
@@ -350,6 +374,8 @@ class WorkflowStatusCallback(Callback):
         )
 
     def on_validation_start(self, model: Any, dataloader_val: Any, iteration: int = 0) -> None:
+        if not self.enabled:
+            return
         self._validation_batches = 0
         self._validation_loss_numerator = 0.0
         self._validation_loss_denominator = 0
@@ -372,6 +398,8 @@ class WorkflowStatusCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
+        if not self.enabled:
+            return
         local_numerator, local_denominator = self._local_token_stats(loss, data_batch, output_batch)
         self._validation_local_numerators.append(local_numerator)
         self._validation_local_denominators.append(local_denominator)
@@ -404,6 +432,8 @@ class WorkflowStatusCallback(Callback):
             log.info(f"Validation {self._epoch_label(iteration)}, batch {batch_progress} - Loss: {average_loss:.6f}")
 
     def on_validation_end(self, model: Any, iteration: int = 0) -> None:
+        if not self.enabled:
+            return
         if self._validation_local_numerators:
             # Preserve the historical Python-float accumulation order exactly,
             # while replacing one CUDA synchronization per scalar per batch
@@ -452,6 +482,8 @@ class WorkflowStatusCallback(Callback):
         log.info(f"Validation loss ({self._epoch_label(iteration)}): {self.last_validation_loss:.6f}")
 
     def on_save_checkpoint_success(self, iteration: int = 0, elapsed_time: float = 0) -> None:
+        if not self.enabled:
+            return
         checkpoint_path = None
         checkpoint_root = Path(self.config.job.path_local) / "checkpoints"
         latest = checkpoint_root / "latest_checkpoint.txt"
@@ -478,8 +510,14 @@ class WorkflowStatusCallback(Callback):
             )
 
     def on_train_end(self, model: Any, iteration: int = 0) -> None:
+        if not self.enabled:
+            return
         numerator, denominator = self._reduce_accumulator(self._train_loss_numerator, self._train_loss_denominator)
         if denominator == 0:
+            _, batches = self._reduce_accumulator(0.0, self._train_batches)
+            if batches == 0:
+                log.warning("No training batches ran in this invocation; no training-loss KPI was written")
+                return
             raise RuntimeError("Cosmos metric collection observed zero valid training labels")
         self.last_training_loss = numerator / denominator
         writer = self._get_writer()
@@ -528,3 +566,4 @@ class WorkflowStatusCallback(Callback):
                 message=f"{self._component_name()} training failed: {error}",
                 data={"component": self._component_name(), "error_type": type(error).__name__},
             )
+            setattr(error, "_cosmos_status_reported", True)

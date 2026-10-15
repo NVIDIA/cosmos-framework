@@ -671,7 +671,10 @@ class TrainerConfig(BaseModel):
     num_epochs: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Number of complete training epochs. Requires steps_per_epoch and takes priority over max_iter.",
+        description=(
+            "Number of complete training epochs. Requires steps_per_epoch and takes priority over max_iter. "
+            "scheduler.cycle_lengths must cover the resulting optimizer-step horizon."
+        ),
     )
     steps_per_epoch: Optional[int] = Field(
         default=None,

@@ -110,6 +110,12 @@ class ImaginaireTrainer:
             if self.steps_per_epoch is not None and self.num_epochs is not None
             else int(config.trainer.max_iter)
         )
+        cycle_lengths = getattr(config.scheduler, "cycle_lengths", None)
+        if self.num_epochs is not None and cycle_lengths and sum(cycle_lengths) < self.max_iterations:
+            raise ValueError(
+                "scheduler.cycle_lengths must cover trainer.num_epochs * trainer.steps_per_epoch; "
+                "update the learning-rate schedule when changing the epoch horizon"
+            )
         if int(getattr(config.checkpoint, "save_freq_in_epoch", 0)) > 0 and self.steps_per_epoch is None:
             raise ValueError("checkpoint.save_freq_in_epoch requires trainer.num_epochs and trainer.steps_per_epoch")
         if int(getattr(config.trainer, "validation_freq_in_epoch", 0)) > 0 and self.steps_per_epoch is None:
@@ -348,12 +354,12 @@ class ImaginaireTrainer:
             maybe_enable_nsys_profiling(self.config, global_step=iteration) as nsys_profiler,
         ):
             while True:
-                if iteration >= self.config.trainer.max_iter:
+                if iteration >= self.max_iterations:
                     break
                 dataloader_train_iter = iter(dataloader_train)
                 while True:
-                    # If max_iter is reached, exit the training loop before loading the nex batch
-                    if iteration >= self.config.trainer.max_iter:
+                    # Stop at the effective epoch/iteration horizon before fetching another batch.
+                    if iteration >= self.max_iterations:
                         _end_training = True
                         break
                     self.callbacks.on_before_dataloading(iteration)
@@ -376,10 +382,6 @@ class ImaginaireTrainer:
                         break
                     finally:
                         self.callbacks.on_after_dataloading(iteration)
-                    # If max_iter is reached, exit the training loop.
-                    if iteration >= self.max_iterations:
-                        _end_training = True
-                        break
                     # Move all tensors in the data batch to GPU device.
                     data_batch = misc.to(data_batch, device="cuda")
                     # Keep the CUDA copy for later slots in the CP data window.

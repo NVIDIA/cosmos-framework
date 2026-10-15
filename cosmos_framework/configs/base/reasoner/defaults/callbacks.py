@@ -47,10 +47,9 @@ def register_callbacks():
         param_count=L(ParamCount)(  # use model
             save_s3="${upload_reproducible_setup}",
         ),
-        grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False),  # use model
-        # Registered after grad_clip only for readability; the guard reads the gradient
-        # norm in on_after_backward, which runs before any clipping regardless of order.
+        # Observe the full accumulated gradient once per update, before clipping.
         loss_spike_rollback=L(LossSpikeRollback)(enabled=False),  # use model + optimizer
+        grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False),  # use model
         learning_rate_logger=L(LearningRateLogger)(every_n=10),
         low_precision=L(LowPrecisionCallback)(
             update_iter=1,

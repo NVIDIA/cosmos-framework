@@ -34,6 +34,7 @@ from collections import deque
 from typing import Any
 
 import torch
+import torch.distributed as dist
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
@@ -77,11 +78,11 @@ class LossSpikeRollback(Callback):
 
     Hooks used, and why each:
 
-    ``on_after_backward``
-        Reads the gradient norm BEFORE :class:`~cosmos_framework.callbacks.grad_clip.GradClip`
-        rescales it. Clipping compresses every spike down to ``clip_norm``, so a norm read
-        after clipping carries no signal at all. This hook is the last point at which the
-        true magnitude is still visible, regardless of the order callbacks are registered in.
+    ``on_before_optimizer_step``
+        Reads the complete accumulated gradient once per optimizer update. Register
+        this callback before GradClip so detection sees the unclipped global norm.
+        Native DTensor norm reduction preserves shard/replica semantics; a final
+        rank-wide consensus keeps every rollback and learning-rate decision aligned.
 
     ``on_before_zero_grad``
         Runs immediately AFTER the optimizer step, so restoring here undoes the damaging
@@ -163,19 +164,31 @@ class LossSpikeRollback(Callback):
         return min(median, self.baseline_inflation_cap * self._healthy_baseline)
 
     @torch.no_grad()
-    def on_after_backward(self, model: "ImaginaireModel", iteration: int = 0) -> None:
+    def on_before_optimizer_step(
+        self,
+        model: "ImaginaireModel",
+        optimizer: Any,
+        scheduler: Any,
+        grad_scaler: Any,
+        iteration: int = 0,
+    ) -> None:
         if not self.enabled:
             return
-        total_sq = 0.0
-        for parameter in model.parameters():
-            if parameter.requires_grad and parameter.grad is not None:
-                grad = parameter.grad
-                # DTensor under FSDP: reduce to the local shard's contribution. The
-                # baseline is a ratio against this same quantity, so a consistently
-                # partial norm still detects a spike.
-                grad = grad.to_local() if hasattr(grad, "to_local") else grad
-                total_sq += float(grad.detach().float().pow(2).sum())
-        grad_norm = total_sq**0.5
+        from cosmos_framework.callbacks.grad_clip import _group_params_by_mesh, _total_norm_by_mesh
+
+        parameters = [p for p in model.parameters() if p.requires_grad and p.grad is not None]
+        if not parameters:
+            raise RuntimeError("Enabled loss-spike guard requires gradients at the optimizer-step boundary")
+        norm, _ = _total_norm_by_mesh(_group_params_by_mesh(parameters), foreach=True)
+        # Do not mutate/unscale gradients here; the optimizer owns that operation.
+        # Removing the current AMP scale keeps the historical baseline comparable.
+        norm = norm / (grad_scaler.get_scale() if grad_scaler is not None else 1.0)
+        norm = torch.nan_to_num(norm, nan=float("inf"), posinf=float("inf"), neginf=float("inf"))
+        if dist.is_available() and dist.is_initialized():
+            # Norms are already reduced across DTensor shard dimensions. MAX is
+            # consensus across replicas/stages, not a second sum of those shards.
+            dist.all_reduce(norm, op=dist.ReduceOp.MAX)
+        grad_norm = float(norm.item())
 
         if not (grad_norm == grad_norm) or grad_norm in (float("inf"), float("-inf")):
             self._pending_reason = f"non-finite gradient norm ({grad_norm})"

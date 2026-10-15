@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-import importlib.util
+from importlib.metadata import PackageNotFoundError, version
 
 from hydra.core.config_store import ConfigStore
 
@@ -71,9 +71,13 @@ signemo_vl_2b = PolicyConfig(
 # explicit attention mask, so Edge must not inherit it. Prefer flash-attn-2
 # where its wheels exist (x86); fall back to SDPA elsewhere (e.g. aarch64).
 # An explicit attn_implementation in the experiment TOML still wins.
-_EDGE_ATTN_IMPLEMENTATION = (
-    "flash_attention_2" if importlib.util.find_spec("flash_attn") is not None else "sdpa"
-)
+try:
+    # FA4 also owns the flash_attn namespace. Check the FA2 distribution without
+    # importing a CUDA extension or initializing CUDA while composing configs.
+    _HAS_FLASH_ATTN_2 = version("flash_attn").split(".", 1)[0] == "2"
+except PackageNotFoundError:
+    _HAS_FLASH_ATTN_2 = False
+_EDGE_ATTN_IMPLEMENTATION = "flash_attention_2" if _HAS_FLASH_ATTN_2 else "sdpa"
 
 cosmos3_edge_reasoner = PolicyConfig(
     backbone=VLMConfig(model_name="nvidia/Cosmos3-Edge"),

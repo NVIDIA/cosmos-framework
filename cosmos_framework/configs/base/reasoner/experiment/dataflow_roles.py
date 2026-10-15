@@ -257,18 +257,23 @@ class _ProcessedVideoCacheProxy:
         self._inflight = {}
 
     @staticmethod
-    def _identity(videos: Any) -> tuple | None:
-        frames: list[tuple[int, tuple[int, int], str]] = []
+    def _frames(videos: Any) -> tuple:
+        frames = []
 
         def collect(value: Any) -> None:
             if isinstance(value, Image.Image):
-                frames.append((id(value), value.size, value.mode))
+                frames.append(value)
             elif isinstance(value, (list, tuple)):
                 for item in value:
                     collect(item)
 
         collect(videos)
-        return tuple(frames) if frames else None
+        return tuple(frames)
+
+    @classmethod
+    def _identity(cls, videos: Any) -> tuple | None:
+        frames = cls._frames(videos)
+        return tuple((id(frame), frame.size, frame.mode) for frame in frames) if frames else None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         videos = kwargs.get("videos", args[0] if args else None)
@@ -289,7 +294,7 @@ class _ProcessedVideoCacheProxy:
                             flush=True,
                         )
                         self._hit_attested = True
-                    return deepcopy(cached)
+                    return deepcopy(cached[0])
                 inflight = self._inflight.get(key)
                 if inflight is None:
                     inflight = threading.Event()
@@ -305,7 +310,9 @@ class _ProcessedVideoCacheProxy:
             output = self._processor(*args, **kwargs)
             canonical = deepcopy(output)
             with self._lock:
-                self._entries[key] = canonical
+                # Keep every keyed frame alive until eviction. Otherwise a new
+                # video can reuse its object addresses and receive old pixels.
+                self._entries[key] = (canonical, self._frames(videos))
                 self._entries.move_to_end(key)
                 while len(self._entries) > self.capacity:
                     self._entries.popitem(last=False)

@@ -8,6 +8,7 @@
 #   VLM_SAFETENSORS_PATH (Cosmos3-Nano converted to Qwen3-VL safetensors)
 # This checked-in recipe is a 10-step-per-epoch smoke run. Set
 # trainer.steps_per_epoch to the distributed update count for a production dataset.
+# Set scheduler.cycle_lengths to cover num_epochs * steps_per_epoch as well.
 
 [job]
 task       = "vlm"

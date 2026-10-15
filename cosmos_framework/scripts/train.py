@@ -226,6 +226,11 @@ def launch(config: Config, args: argparse.Namespace) -> None:
         )
     except BaseException as error:
         trainer.callbacks.on_exception(error)
+        from cosmos_framework.callbacks.workflow_status import write_early_failure
+
+        # The callback may be disabled. Publish a rank-zero fallback only if
+        # this exception has not already been reported, with its actual phase.
+        write_early_failure(error, phase="training")
         raise
 
 

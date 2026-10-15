@@ -3,7 +3,7 @@
 
 """Cosmos3-Edge attention default must match the platform's kernels."""
 
-import importlib.util
+from importlib.metadata import PackageNotFoundError, version
 
 from cosmos_framework.configs.base.reasoner.defaults.vlm_policy import cosmos3_edge_reasoner
 
@@ -15,5 +15,9 @@ def test_edge_policy_never_defaults_to_cosmos_adapter():
 
 
 def test_edge_policy_matches_flash_attn_availability():
-    expected = "flash_attention_2" if importlib.util.find_spec("flash_attn") else "sdpa"
+    try:
+        installed = version("flash_attn").split(".", 1)[0] == "2"
+    except PackageNotFoundError:
+        installed = False
+    expected = "flash_attention_2" if installed else "sdpa"
     assert cosmos3_edge_reasoner.attn_implementation == expected

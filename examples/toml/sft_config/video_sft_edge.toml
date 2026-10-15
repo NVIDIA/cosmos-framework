@@ -4,6 +4,7 @@
 # Video-conversation SFT on the native Cosmos3-Edge reasoner checkpoint.
 # This checked-in recipe is a 10-step-per-epoch smoke run. Set
 # trainer.steps_per_epoch to the distributed update count for a production dataset.
+# Set scheduler.cycle_lengths to cover num_epochs * steps_per_epoch as well.
 
 [job]
 task       = "vlm"
@@ -14,7 +15,7 @@ name       = "cosmos_video_conversation_edge"
 wandb_mode = "disabled"
 
 [model]
-attn_implementation = "flash_attention_2"
+# Inherit the policy's FA2/SDPA availability check. Explicit overrides still win.
 precision = "bfloat16"
 
 [model.backbone]

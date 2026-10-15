@@ -230,10 +230,14 @@ class MediaGroupedMapDistributor(MapDistributor):
 
     @staticmethod
     def _assign_groups(dataset: Any, total_streams: int) -> list[list[int]]:
+        if total_streams <= 0:
+            raise ValueError("total_streams must be positive")
         n = len(dataset)
+        if n == 0:
+            return [[] for _ in range(total_streams)]
         per_stream = (n + total_streams - 1) // total_streams
         padded = list(range(n))
-        padded.extend(padded[: per_stream * total_streams - n])
+        padded.extend(index % n for index in range(per_stream * total_streams - n))
 
         groups: OrderedDict[str, list[int]] = OrderedDict()
         for index in padded:
