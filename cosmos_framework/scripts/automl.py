@@ -11,7 +11,12 @@ def main() -> None:
     except ModuleNotFoundError as exc:
         if exc.name not in {"automl_core", "automl_core.cli"}:
             raise
-        raise SystemExit("Install the optional AutoML dependencies: pip install 'cosmos-framework[automl]'") from exc
+        raise SystemExit(
+            "AutoML requires the separately supplied nvidia-automl-core 1.0.0.dev0 wheel. "
+            "Install that wheel into this Python environment first, then install "
+            "cosmos-framework[automl,reasoner-eval]. See docs/automl.md for the local-wheel "
+            "installation workflow (including uv run --no-sync)."
+        ) from exc
     if len(sys.argv) > 1 and sys.argv[1] == "prompts":
         from cosmos_framework.automl.prompts import load
 

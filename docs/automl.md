@@ -12,20 +12,20 @@ venv, Docker, SLURM, Kubernetes, Brev or Lepton execution lifecycle. See
 [SLURM execution](automl-slurm.md) and [cloud execution](automl-platforms.md). This is not a general optimizer for every
 Framework training/inference workflow; the workload contracts remain explicit.
 
-### Execution coverage and controller placement
+## Execution coverage and controller placement
 
 The original TAO runner exposes six SDK platform factories. The independent
 core implements all six without importing those SDK factories. Platform
 implementation coverage is not equivalent to live GPU validation.
 
-| Execution platform | Core support | Framework evidence / limits |
-| --- | --- | --- |
-| Docker | Implemented | Local Docker WTS GPU training/evaluation exercised. |
-| Virtualenv | Implemented | CPU lifecycle verified; not equivalent to the recorded Framework GPU matrix. |
-| SLURM | Implemented | On-cluster CPU controller submits and monitors separate single-node GPU allocations. Recorded bounded SFT/GEPA matrix results are below. |
-| Kubernetes | Implemented; live validation pending | Single-pod Jobs, explicit context/PVCs, native deadline and UID-safe suspension. |
-| Brev | Implemented; live validation pending | Docker on an existing instance, explicit daemon identity and shared/controller-local instance storage; no provisioning or teardown. |
-| Lepton | Implemented; live validation pending | Workspace Jobs API, dedicated node groups and shared NFS; worker deadlines require a live controller for queue/startup cancellation. |
+| Execution platform | Core support                         | Framework evidence / limits                                                                                                              |
+| ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Docker             | Implemented                          | Local Docker WTS GPU training/evaluation exercised.                                                                                      |
+| Virtualenv         | Implemented                          | CPU lifecycle verified; not equivalent to the recorded Framework GPU matrix.                                                             |
+| SLURM              | Implemented                          | On-cluster CPU controller submits and monitors separate single-node GPU allocations. Recorded bounded SFT/GEPA matrix results are below. |
+| Kubernetes         | Implemented; live validation pending | Single-pod Jobs, explicit context/PVCs, native deadline and UID-safe suspension.                                                         |
+| Brev               | Implemented; live validation pending | Docker on an existing instance, explicit daemon identity and shared/controller-local instance storage; no provisioning or teardown.      |
+| Lepton             | Implemented; live validation pending | Workspace Jobs API, dedicated node groups and shared NFS; worker deadlines require a live controller for queue/startup cancellation.     |
 
 Controller location and workload platform are separate concerns, but the
 current implementations have locality requirements: Docker/venv share their
@@ -69,11 +69,30 @@ above, then replace just that package with `pip install --force-reinstall --no-d
 /path/to/cosmos_framework-1.2.2-py3-none-any.whl`. The wheelhouse is not an offline
 mirror of third-party dependencies.
 
-A bare index install and normal `uv` lock resolution do not automatically find
-these local wheels. The checked-in lock does not yet include the unpublished
-core dependency. A distributable dependency location and refreshed resolver lock
-remain a release gate; no source checkout or machine-specific wheel path is
-silently added to work around it.
+A bare index install cannot find the unpublished core. The repository's `uv`
+configuration explicitly excludes **only `nvidia-automl-core`** from its managed
+resolution while delivery remains local-wheel-only. This lets ordinary Framework
+setup and CI resolve without a private checkout; it does **not** install AutoML.
+The wheel metadata still declares the core requirement for the AutoML extras.
+A distributable core location and removal of this development exception remain
+a release gate.
+
+For a `uv`-managed Framework checkout, sync first, then install the supplied core
+wheel into that environment (include `[prompts]` for GEPA):
+
+```bash
+uv sync --all-extras --group=cu128-train
+uv pip install --no-config --python .venv/bin/python '/path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl[prompts]'
+uv pip check --python .venv/bin/python
+uv run --no-sync cosmos-automl --help
+```
+
+The install command's `--no-config` bypasses the project's development exclusion
+for this explicitly supplied wheel. Use `uv run --no-sync` or the environment's
+executable directly for AutoML.
+An exact `uv sync` removes separately installed packages; reinstall the supplied
+wheel afterward. No source checkout or machine-specific wheel path is recorded
+in the project's lock file.
 
 ### Development version and build identity
 
@@ -345,13 +364,13 @@ each experiment remained sequential. GEPA used a single GPU per evaluation batch
 All 26 submitted SFT stages and four GEPA batches completed, but the matrix
 controller correctly reported failure because nine modes did not finish:
 
-| Modes | Observed outcome |
-| --- | --- |
-| Random, Bayesian, BFBO | Completed their smoke budgets; Bayesian reached its guided GP proposal |
+| Modes                                          | Observed outcome                                                                                   |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Random, Bayesian, BFBO                         | Completed their smoke budgets; Bayesian reached its guided GP proposal                             |
 | Hyperband, Hyperband-ES, BOHB, ASHA, DEHB, PBT | Initial stages passed; the adapter rejected the first promotion/continuation before GPU submission |
-| BOHB, DEHB proposal branches | KDE and differential-evolution candidates passed before the promotion failure |
-| LLM, hybrid, autoresearch | Structured API request/response failed; only autoresearch's training baseline completed |
-| GEPA | Completed four evaluation batches, one real remote reflection request and candidate evaluation |
+| BOHB, DEHB proposal branches                   | KDE and differential-evolution candidates passed before the promotion failure                      |
+| LLM, hybrid, autoresearch                      | Structured API request/response failed; only autoresearch's training baseline completed            |
+| GEPA                                           | Completed four evaluation batches, one real remote reflection request and candidate evaluation     |
 
 The six promotion failures shared an adapter bug: it rejected zero-length
 rank-local scheduler shards even though Framework's DCP writer deduplicates
@@ -399,14 +418,14 @@ seed 42, eight GPUs per stage, maximum five cumulative optimizer steps, and
 at most four independent algorithms concurrently. Controller **36106826**
 completed in **44m07s**, with native `COMPLETED`, exit `0:0`:
 
-| Mode | Completed stages | Successful promotions/continuations |
-| --- | ---: | ---: |
-| Hyperband | 3 | 1 |
-| Hyperband-ES | 3 | 1 |
-| BOHB | 6 | 1 |
-| ASHA | 3 | 1 |
-| DEHB | 6 | 1 |
-| PBT | 4 | 2 |
+| Mode         | Completed stages | Successful promotions/continuations |
+| ------------ | ---------------: | ----------------------------------: |
+| Hyperband    |                3 |                                   1 |
+| Hyperband-ES |                3 |                                   1 |
+| BOHB         |                6 |                                   1 |
+| ASHA         |                3 |                                   1 |
+| DEHB         |                6 |                                   1 |
+| PBT          |                4 |                                   2 |
 
 All **25 GPU jobs** completed with exit `0:0`, native training `SUCCESS`, exact
 target-step DCPs and evaluation of all 16 validation records. All seven
@@ -479,11 +498,11 @@ The exact discarded responses from October 6 cannot be recovered.
 
 The corrected **0.2.1 client** then passed all three proposal paths:
 
-| Mode | API calls | Verified result |
-| --- | ---: | --- |
-| LLM | 1 | In-domain candidate passed native Framework recipe validation |
-| Hybrid | 1 | Approved BFBO phase and generated candidate passed validation |
-| Autoresearch | 2 | Candidate proposal, domain/workload checks and prescreen selection passed |
+| Mode         | API calls | Verified result                                                           |
+| ------------ | --------: | ------------------------------------------------------------------------- |
+| LLM          |         1 | In-domain candidate passed native Framework recipe validation             |
+| Hybrid       |         1 | Approved BFBO phase and generated candidate passed validation             |
+| Autoresearch |         2 | Candidate proposal, domain/workload checks and prescreen selection passed |
 
 All four corrected requests returned HTTP 200, finish reason `stop`, and bare
 JSON objects using explicit JSON-output mode. Provider-reported usage across
@@ -507,11 +526,11 @@ training records, 16 validation questions, five LoRA steps). The reviewed budget
 was one LLM trial, two hybrid phases and two autoresearch trials, with at most
 five API calls; no image rebuild, automatic retries or full-data training occurred.
 
-| Mode | First GPU job | Observed result |
-| --- | --- | --- |
-| LLM | 36214489 | Structured proposal passed; five training steps succeeded; evaluation canceled |
-| Hybrid | 36214490 | First BFBO phase proposal passed; five training steps succeeded; evaluation canceled |
-| Autoresearch | 36214485 | Fresh baseline completed five training steps; evaluation canceled before proposal/prescreen |
+| Mode         | First GPU job | Observed result                                                                             |
+| ------------ | ------------- | ------------------------------------------------------------------------------------------- |
+| LLM          | 36214489      | Structured proposal passed; five training steps succeeded; evaluation canceled              |
+| Hybrid       | 36214490      | First BFBO phase proposal passed; five training steps succeeded; evaluation canceled        |
+| Autoresearch | 36214485      | Fresh baseline completed five training steps; evaluation canceled before proposal/prescreen |
 
 All three controllers raised `subprocess.TimeoutExpired` when native `squeue`
 queries exceeded the executor's **30-second scheduler-command timeout**. This
@@ -625,11 +644,11 @@ The three structured-controller smokes completed native training, checkpoint
 export and held-out evaluation on eight GPUs per trial, with 64 training records,
 16 validation questions and five LoRA steps:
 
-| Mode | Completed trials | Native GPU jobs | API calls |
-| --- | ---: | --- | ---: |
-| LLM | 1 | 36216399 | 1 |
-| Hybrid | 2 | 36216406, 36216671 | 2 |
-| Autoresearch | 2 | 36216357, 36216678 | 2 |
+| Mode         | Completed trials | Native GPU jobs    | API calls |
+| ------------ | ---------------: | ------------------ | --------: |
+| LLM          |                1 | 36216399           |         1 |
+| Hybrid       |                2 | 36216406, 36216671 |         2 |
+| Autoresearch |                2 | 36216357, 36216678 |         2 |
 
 All five GPU jobs reported `COMPLETED`, exit `0:0`, and all scores tied at 8/16.
 The five API calls reported 3,551 total tokens. This establishes bounded workflow
@@ -640,17 +659,17 @@ records**, eight GPUs per stage, and a full budget of **695 optimizer steps**.
 Every completed winner evaluated all 2,676 validation records. Counts below are
 successful logical trials/stages versus the approved cap; promotions also count.
 
-| Mode | Successful / approved | Final search state | Best full-budget validation |
-| --- | ---: | --- | --- |
-| Random | 1 / 1 | COMPLETE | 2355 / 2676 (88.00%) |
-| BFBO, separately approved retry | 2 / 2 | COMPLETE | 2355 / 2676 (88.00%) |
-| Hyperband-ES | 3 / 3 | COMPLETE | 2357 / 2676 (88.08%) |
-| ASHA | 3 / 3 | COMPLETE | 2357 / 2676 (88.08%) |
-| PBT | 4 / 4 | COMPLETE | 2357 / 2676 (88.08%) |
-| BOHB | 6 / 6 | COMPLETE | 2364 / 2676 (88.34%) |
-| Bayesian | 1 / 4 | ERROR | 2355 / 2676 (88.00%), from the completed first trial |
-| Hyperband | 1 / 3 | ERROR | No full-budget result |
-| DEHB | 3 / 6 | ERROR | No full-budget result |
+| Mode                            | Successful / approved | Final search state | Best full-budget validation                          |
+| ------------------------------- | --------------------: | ------------------ | ---------------------------------------------------- |
+| Random                          |                 1 / 1 | COMPLETE           | 2355 / 2676 (88.00%)                                 |
+| BFBO, separately approved retry |                 2 / 2 | COMPLETE           | 2355 / 2676 (88.00%)                                 |
+| Hyperband-ES                    |                 3 / 3 | COMPLETE           | 2357 / 2676 (88.08%)                                 |
+| ASHA                            |                 3 / 3 | COMPLETE           | 2357 / 2676 (88.08%)                                 |
+| PBT                             |                 4 / 4 | COMPLETE           | 2357 / 2676 (88.08%)                                 |
+| BOHB                            |                 6 / 6 | COMPLETE           | 2364 / 2676 (88.34%)                                 |
+| Bayesian                        |                 1 / 4 | ERROR              | 2355 / 2676 (88.00%), from the completed first trial |
+| Hyperband                       |                 1 / 3 | ERROR              | No full-budget result                                |
+| DEHB                            |                 3 / 6 | ERROR              | No full-budget result                                |
 
 Bayesian's second allocation **36219715** reported NCCL collective errors and
 eventually `TIMEOUT` after four hours; training last reported 600/695 steps.
@@ -688,13 +707,13 @@ reviewed wheels, including absence of omitted workflow modules. A separate Pytho
 3.12 CPU controller imported the adapter without Torch. Package versions remain
 Framework **1.2.2** and core **1.0.0.dev0**; no release or version bump occurred.
 
-| Artifact | Identity |
-| --- | --- |
-| Framework wheel SHA256 | `c600ccb7bcff213fac5d0718eeead0bd1c126c6de0ceecec063bead0340eee34` |
-| Core wheel SHA256 | `ed279d7329de333380b9d649c541b6b75d30d9500ca42f3b3ee8c35d8ee3305f` |
-| Validation image | `nvcr.io/nvstaging/tao/cosmos-framework:automl-wts-cu128-focused-20261012` |
-| Registry digest | `sha256:a4dd7851d3af16bcc89deb6729ae1417681ed128158a06f5629ea1550595f2a9` |
-| SQSH SHA256 | `0f162751b85e480a77d99e937ee7c093d7bb4958ff792814b94c0e2ce7e0293a` |
+| Artifact               | Identity                                                                   |
+| ---------------------- | -------------------------------------------------------------------------- |
+| Framework wheel SHA256 | `c600ccb7bcff213fac5d0718eeead0bd1c126c6de0ceecec063bead0340eee34`         |
+| Core wheel SHA256      | `ed279d7329de333380b9d649c541b6b75d30d9500ca42f3b3ee8c35d8ee3305f`         |
+| Validation image       | `nvcr.io/nvstaging/tao/cosmos-framework:automl-wts-cu128-focused-20261012` |
+| Registry digest        | `sha256:a4dd7851d3af16bcc89deb6729ae1417681ed128158a06f5629ea1550595f2a9`  |
+| SQSH SHA256            | `0f162751b85e480a77d99e937ee7c093d7bb4958ff792814b94c0e2ce7e0293a`         |
 
 CPU conversion job **36427241** completed in 27m59s and verified the installed
 packages inside the SQSH. GPU startup used this immutable image without source
@@ -710,21 +729,21 @@ cumulative optimizer steps, and one GPU per GEPA batch. The four-hour matrix
 deadline, 37 SFT-stage cap and six API-call cap were preserved. Automatic
 allocation retries were disabled.
 
-| Mode | Completed SFT stages / evaluation batches | Result |
-| --- | ---: | --- |
-| Random | 1 | COMPLETE |
-| Bayesian | 4 | COMPLETE, including GP/expected-improvement proposal |
-| BFBO | 2 | COMPLETE |
-| Hyperband | 3 | COMPLETE, including promotion |
-| Hyperband-ES | 3 | COMPLETE, including promotion |
-| BOHB | 6 | COMPLETE, including KDE proposal and promotion |
-| ASHA | 3 | COMPLETE, including promotion |
-| DEHB | 6 | COMPLETE, including differential-evolution proposal and promotion |
-| PBT | 4 | COMPLETE, including continuation and donor transfer |
-| LLM | 1 | COMPLETE |
-| Hybrid | 2 | COMPLETE |
-| Autoresearch | 2 | COMPLETE |
-| GEPA | 4 evaluation batches | COMPLETE, including live reflection and candidate evaluation |
+| Mode         | Completed SFT stages / evaluation batches | Result                                                            |
+| ------------ | ----------------------------------------: | ----------------------------------------------------------------- |
+| Random       |                                         1 | COMPLETE                                                          |
+| Bayesian     |                                         4 | COMPLETE, including GP/expected-improvement proposal              |
+| BFBO         |                                         2 | COMPLETE                                                          |
+| Hyperband    |                                         3 | COMPLETE, including promotion                                     |
+| Hyperband-ES |                                         3 | COMPLETE, including promotion                                     |
+| BOHB         |                                         6 | COMPLETE, including KDE proposal and promotion                    |
+| ASHA         |                                         3 | COMPLETE, including promotion                                     |
+| DEHB         |                                         6 | COMPLETE, including differential-evolution proposal and promotion |
+| PBT          |                                         4 | COMPLETE, including continuation and donor transfer               |
+| LLM          |                                         1 | COMPLETE                                                          |
+| Hybrid       |                                         2 | COMPLETE                                                          |
+| Autoresearch |                                         2 | COMPLETE                                                          |
+| GEPA         |                      4 evaluation batches | COMPLETE, including live reflection and candidate evaluation      |
 
 All **41 GPU allocations** reported native `COMPLETED`, exit `0:0`. All 37 SFT
 stages had native training/evaluation success, valid model/optimizer/scheduler/

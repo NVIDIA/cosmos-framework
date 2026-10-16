@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
 # Planning template. Replace assets/interpreter; review stages before launch.
 search:
   experiment_id: reasoner-hyperband

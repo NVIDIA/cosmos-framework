@@ -7,20 +7,20 @@ declared parameter domains, recorded native jobs and bounded sequential executio
 
 ## Capabilities
 
-| Manifest value | Proposal/allocation behavior | Additional contract |
-| --- | --- | --- |
-| `random` | Seeded independent domain sampling | Fixed training budget |
-| `bayesian` | GP + expected improvement; three successful random observations first | Fixed training budget |
-| `bfbo` | RBF GP + decaying UCB with local penalization | Fixed training budget |
-| `hyperband` | Successive halving over multiple brackets | Cumulative step fidelity and native DCP resume |
-| `hyperband_es` | Hyperband plus confidence-guarded power-law curve pruning between stages | Enough rung observations and a full-budget peer; otherwise no curve pruning |
-| `bohb` | Hyperband with good/bad KDE (TPE-style) proposals | Same-resource observations; sparse/singular KDE explicitly falls back to random |
-| `asha` | Promotion quotas without a synchronous bracket barrier | Same fidelity contract; executor still runs one stage at a time |
-| `dehb` | Hyperband with DE/rand/1 and binomial crossover | Same-resource successful population; random warmup |
-| `pbt` | Periodic population exploit/explore, donor checkpoint continuation and perturbation | LR/weight-decay axes only, fixed topology/batch/accumulation |
-| `llm` | Structured, domain-validated candidate proposals | Reviewed endpoint/model and request/token budget |
-| `hybrid` | Bounded numerical phases with narrowed domains, selected by an LLM or explicit research program | Phase allowlist/budgets; fidelity if any allowed phase needs it |
-| `autoresearch` | Base-recipe baseline, bounded proposals, local validation, LLM prescreen, measured keep/discard | Base values inside domains; two LLM requests per post-baseline trial |
+| Manifest value | Proposal/allocation behavior                                                                    | Additional contract                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `random`       | Seeded independent domain sampling                                                              | Fixed training budget                                                           |
+| `bayesian`     | GP + expected improvement; three successful random observations first                           | Fixed training budget                                                           |
+| `bfbo`         | RBF GP + decaying UCB with local penalization                                                   | Fixed training budget                                                           |
+| `hyperband`    | Successive halving over multiple brackets                                                       | Cumulative step fidelity and native DCP resume                                  |
+| `hyperband_es` | Hyperband plus confidence-guarded power-law curve pruning between stages                        | Enough rung observations and a full-budget peer; otherwise no curve pruning     |
+| `bohb`         | Hyperband with good/bad KDE (TPE-style) proposals                                               | Same-resource observations; sparse/singular KDE explicitly falls back to random |
+| `asha`         | Promotion quotas without a synchronous bracket barrier                                          | Same fidelity contract; executor still runs one stage at a time                 |
+| `dehb`         | Hyperband with DE/rand/1 and binomial crossover                                                 | Same-resource successful population; random warmup                              |
+| `pbt`          | Periodic population exploit/explore, donor checkpoint continuation and perturbation             | LR/weight-decay axes only, fixed topology/batch/accumulation                    |
+| `llm`          | Structured, domain-validated candidate proposals                                                | Reviewed endpoint/model and request/token budget                                |
+| `hybrid`       | Bounded numerical phases with narrowed domains, selected by an LLM or explicit research program | Phase allowlist/budgets; fidelity if any allowed phase needs it                 |
+| `autoresearch` | Base-recipe baseline, bounded proposals, local validation, LLM prescreen, measured keep/discard | Base values inside domains; two LLM requests per post-baseline trial            |
 
 The original engine exposed the eleven modes other than standalone `random`.
 It did not expose standalone grid search or standalone TPE; BOHB contains the

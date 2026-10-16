@@ -28,7 +28,8 @@ repos:
       - id: check-executables-have-shebangs
         exclude: /_src/
       - id: check-shebang-scripts-are-executable
-        exclude: /_src/
+        # Rendered templates carry a shebang but are not directly executable.
+        exclude: /_src/|\.tmpl$
   - repo: local
     hooks:
       - id: uv-lock
