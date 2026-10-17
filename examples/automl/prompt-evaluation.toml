@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+# Native evaluation template: use a prepared fixed checkpoint, not trial SFT output.
+[task]
+type = "mcq"
+
+[dataset]
+# The adapter supplies batch-local annotations and absolute media references.
+system_prompt = "Answer the multiple-choice question with its letter."
+
+[model]
+model_name = "/path/to/prepared-hf-reasoner"
+dtype = "bfloat16"
+max_length = 16384
+enable_lora = false
+
+[evaluation]
+answer_type = "letter"
+batch_size = 1
+skip_saved = false
+
+[vision]
+video_decoder = "torchcodec-cuda-on-demand"
+decoder_device = "cuda"
+num_frames = 8
+min_pixels = 200704
+max_pixels = 1003520
+
+[generation]
+max_tokens = 64
+temperature = 0.0
+max_retries = 1
+
+[metrics]
+names = []

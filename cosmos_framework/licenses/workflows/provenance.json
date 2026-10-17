@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "runtime_sources": {
+    "cosmos-actions": {
+      "commit": "5cd9a79e5352c49dd96acfbe372873b6b4ed95ba",
+      "source_worktree_dirty": true
+    },
+    "cosmos-rl": {
+      "commit": "219d8e8cf5a6ab34db548f460644150ab5536936",
+      "source_worktree_dirty": false
+    }
+  },
+  "runtime_implementations": [
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/configs/__init__.py",
+      "destination": "cosmos_framework/evaluation/reasoner/configs/__init__.py",
+      "source_sha256": "7dc25c7fa4cb7fa2126ff855a860b8e27d5edf4bc827723f2223f103efaec227"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/its_evaluator.py",
+      "destination": "cosmos_framework/evaluation/reasoner/its_evaluator.py",
+      "source_sha256": "ffc0f4357625bf6a107c85c290dd455cbbd4daefdc492053766be7d5c3bd550f"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/metropolis_sgd_evaluator.py",
+      "destination": "cosmos_framework/evaluation/reasoner/metropolis_sgd_evaluator.py",
+      "source_sha256": "1c50712892fcb166cef45f5952e6b82c91e51dc6b94a1a73c41adc18b45618a4"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/__init__.py",
+      "destination": "cosmos_framework/evaluation/reasoner/__init__.py",
+      "source_sha256": "4f85b660538b5a3af4317b3702e3e6555f6b350baf2a064d29b2b80df88b3851"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/base.py",
+      "destination": "cosmos_framework/evaluation/reasoner/base.py",
+      "source_sha256": "91020f955318768180b090e9e7402733b0c93bdd1143c78b1494cd909a3dd997"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/metrics/metropolis_sgd_metrics.py",
+      "destination": "cosmos_framework/evaluation/reasoner/metrics/metropolis_sgd_metrics.py",
+      "source_sha256": "d819a2ec4e545227d8b20cac7c40d3d8b2d252b4a4e316f650ca00f0bf115920"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/metrics/task_accuracy.py",
+      "destination": "cosmos_framework/evaluation/reasoner/metrics/task_accuracy.py",
+      "source_sha256": "8e8a9e4a2133657834af4c22f86a3cf108678cd5440caf7b844e01581e8b8aa6"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/metrics/text_metrics.py",
+      "destination": "cosmos_framework/evaluation/reasoner/metrics/text_metrics.py",
+      "source_sha256": "4ab90f47e2ebb5202038fe7823100ddc4df39d14970faa8ef43c66dc43d553fd"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/metrics/binary_classification.py",
+      "destination": "cosmos_framework/evaluation/reasoner/metrics/binary_classification.py",
+      "source_sha256": "4d2751670f96d15d9aa59eb09d80fa4a5217598cb380bd3055ee32eb6236e673"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/evaluate.py",
+      "destination": "cosmos_framework/evaluation/reasoner/evaluate.py",
+      "source_sha256": "397fbc89a958e5cd24cd90e1b881ddae8e0ef4c794ba562a303d2326d0c05489"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/evaluator.py",
+      "destination": "cosmos_framework/evaluation/reasoner/evaluator.py",
+      "source_sha256": "a79c80fb5f2c3a6d75f04c6e782084adf1846300243721d8c25468af6fbe4f99"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/sharding.py",
+      "destination": "cosmos_framework/evaluation/reasoner/sharding.py",
+      "source_sha256": "22d760d0ba6c1c16b6061b04752a82b2ed254c062a9173953e4890310f29cf9d"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/evaluation/status_barrier.py",
+      "destination": "cosmos_framework/evaluation/reasoner/status_barrier.py",
+      "source_sha256": "6dc02c175938e9f7dcb27dba2561488d1349f652c8fed81d13395597bea1bcf4"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/framework/runtime.py",
+      "destination": "cosmos_framework/inference/reasoner/runtime.py",
+      "source_sha256": "215c4b375e352f5367b15f43594141b169cffdfb989ceadfc0f2850b00280e28"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/framework/checkpoints.py",
+      "destination": "cosmos_framework/checkpoint/reasoner.py",
+      "source_sha256": "b2caa2a6e9eea382e6b33f8c1fd41663fc49b8591cfb0ff07cae7ade623a55c6"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/utils/framework_torchcodec_video.py",
+      "destination": "cosmos_framework/inference/reasoner/framework_torchcodec_video.py",
+      "source_sha256": "d1c0c84edc874d578eafaed14390913d2fc014b2fa25e505658f04483daa1b46"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/utils/video_pixel_bounds.py",
+      "destination": "cosmos_framework/inference/reasoner/video_pixel_bounds.py",
+      "source_sha256": "29f35e2db8616441225bf3b7166257c955c12e5a748d51a83d15f0a99d678759"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/utils/pynv_video_reader.py",
+      "destination": "cosmos_framework/inference/reasoner/pynv_video_reader.py",
+      "source_sha256": "6ce068829178c1c80bfb4fc1d2b03e73274a875ed0b9c2b33daf67806158451a"
+    },
+    {
+      "repository": "cosmos-actions",
+      "source": "cosmos_rl/utils/lora_utils.py",
+      "destination": "cosmos_framework/checkpoint/lora.py",
+      "source_sha256": "d81505b87771d1fd68422899abf16e143dcd2a317a3da6964cc07ad53e630ce9"
+    },
+    {
+      "repository": "cosmos-rl",
+      "source": "cosmos_rl/utils/system_pyav_video_reader.py",
+      "destination": "cosmos_framework/inference/reasoner/system_pyav_video_reader.py",
+      "source_sha256": "a1b03b60eed0c02792dd5be0684a658d3e9deb333e4bc5e8265de31a5630ef06"
+    }
+  ]
+}

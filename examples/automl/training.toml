@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+# Planning example based on the native LLaVA map-style recipe. Replace with
+# your prepared reasoner recipe before approving a search. Its preset selects
+# the LLaVA training dataset; this file is not a generic dataset intake API.
+[job]
+task = "vlm"
+experiment = "pre_exp012_llava_ov_mapstyle_dataloader"
+wandb_mode = "disabled"
+upload_reproducible_setup = false
+
+[model]
+lora_enabled = false
+
+[model.backbone]
+model_name = "Qwen/Qwen3-VL-8B-Instruct"
+
+[model.parallelism]
+data_parallel_shard_degree = 1
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree = 1
+cfg_parallel_shard_degree = 1
+
+[optimizer]
+lr = 0.00001
+weight_decay = 0.1
+
+[scheduler]
+cycle_lengths = [100]
+warm_up_steps = [10]
+
+[trainer]
+max_iter = 100
+grad_accum_iter = 1
+
+[checkpoint]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 100
+dcp_async_mode_enabled = false
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length = 16000

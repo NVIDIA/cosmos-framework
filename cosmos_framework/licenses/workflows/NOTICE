@@ -1,0 +1,10 @@
+Cosmos Framework reasoner evaluation and checkpoint utilities incorporate
+Apache-2.0 material from NVIDIA Cosmos action utilities and Cosmos-RL.
+Exact revisions, original paths, and original-file SHA256 values are recorded
+in provenance.json.
+
+Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+The original Apache-2.0 license is preserved in LICENSE. Individual source
+headers remain authoritative. Python implementations in cosmos_framework use
+the repository's OpenMDW-1.1 license. Original-source attribution and license
+text are retained here for provenance.

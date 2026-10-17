@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+# Native reasoner evaluator input. Replace dataset paths and sampling settings
+# with those for your held-out task. Paths resolve from workload.cwd.
+[task]
+type = "mcq"
+
+[dataset]
+annotation_path = "/path/to/held-out-mcq.json"
+media_dir = "/path/to/media"
+system_prompt = "Answer the multiple-choice question with its letter."
+
+[model]
+dtype = "bfloat16"
+max_length = 16384
+# model_name/config_file/export_dir are supplied from this trial's native DCP.
+
+[evaluation]
+answer_type = "letter"
+seed = 42
+batch_size = 1
+limit = -1
+skip_saved = false
+
+[vision]
+video_decoder = "torchcodec-cuda-on-demand"
+decoder_device = "cuda"
+num_frames = 8
+min_pixels = 200704
+max_pixels = 1003520
+
+[generation]
+max_tokens = 64
+temperature = 0.0
+max_retries = 1
+
+[metrics]
+names = []
