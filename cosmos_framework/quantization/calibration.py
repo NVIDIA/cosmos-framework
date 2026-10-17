@@ -211,7 +211,7 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
     )
 
 
-def build_quant_config(algo: str = "max") -> dict:
+def build_quant_config(model, algo: str = "max", skip_filter=None) -> dict:
     """FP8 quant config for the requested calibration algorithm.
 
     Only per-tensor ``max`` (the production recipe) is wired up here; the NIM
@@ -220,6 +220,9 @@ def build_quant_config(algo: str = "max") -> dict:
     cfg = copy.deepcopy(QUANT_CONFIGS["fp8"])
     if algo != "max":
         raise ValueError(f"cookbook supports --quant-algo max only, got {algo!r}")
+    for name, _ in model.named_modules():
+        if skip_filter is not None and skip_filter(name):
+            cfg["quant_cfg"].append({"quantizer_name": name + "*", "enable": False})
     return cfg
 
 
@@ -241,7 +244,7 @@ def build_filter(
     """Return ``module_name -> True`` if its quantizers should be disabled."""
     tokens = [_BASE_SKIP_TOKENS_NO_LM if quantize_language_model else _BASE_SKIP_TOKENS]
     if skip_generation_quant:
-        tokens.append(r"gen_layers\.")
+        tokens.append(r"moe_gen")
     pattern = re.compile(r".*(" + "|".join(tokens) + r").*")
 
     def filter_func(name: str) -> bool:

@@ -93,6 +93,15 @@ def resolve_checkpoint_path(model_name_or_path: str) -> Path:
         return Path(snapshot_download(model_name_or_path))
 
 
+def _materialize_reasoner_visual_encoder(model) -> None:
+    """Build a lazy reasoner vision tower before ModelOpt records the module graph."""
+    language_model = getattr(getattr(model, "net", None), "language_model", None)
+    ensure_vision_tower = getattr(language_model, "_ensure_vision_tower", None)
+    if callable(ensure_vision_tower):
+        print("[quant] materializing lazy reasoner visual encoder")
+        ensure_vision_tower()
+
+
 def load_transformer(model_name_or_path: str):
     """Load the Cosmos3 model through the supported ``OmniInference`` path."""
     input_dir = resolve_checkpoint_path(model_name_or_path)
@@ -112,6 +121,7 @@ def load_transformer(model_name_or_path: str):
         guardrails=False,
     ).build_setup(world_size=1, local_world_size=1)
     inference = OmniInference.create(setup_args)
+    _materialize_reasoner_visual_encoder(inference.model)
     return inference.model, transformer_dir
 
 
