@@ -24,6 +24,14 @@ For an existing run, inspect and preserve its original environment/build instead
 of reinstalling the latest branch head. Source selection does not authorize
 upgrading a live controller or migrating a stopped experiment.
 
+Follow the [fresh-machine checklist](../../../docs/automl.md#fresh-machine-reproducibility-checklist):
+record Framework/core commits, the actual installed inventory, data/model
+identities and reviewed recipe/budgets. Preflight the evaluator and checkpoint
+export as well as training. Prefer local POSIX workspaces for local runs; shared
+storage needs concurrent atomic-read/replacement and locking checks. Report
+dependency warnings accurately; a successful training smoke is not a clean
+full-environment dependency check.
+
 Reuse **cosmos3-setup** for environment preparation and
 **cosmos3-post-training** for a prepared reasoner recipe and dataset/checkpoint
 compatibility. AutoML starts from that explicit recipe, not a guessed model ID.
@@ -77,6 +85,10 @@ Keep this one skill entrypoint for both workflows.
   confirmed pre-fan-out infrastructure/observer failures may use approved CPU
   startup retries. Unknown submission outcomes block replacement. A missing
   experiment ledger is not success; report unlaunched modes as `NOT_STARTED`.
+  Use the guide's persistent observer service, verify `ready` before submission,
+  and register every acknowledged CPU job with its remaining allocation cap.
+  One-shot ticks or chat polling do not cover later requeue generations. The
+  watcher never replaces unknown submissions or extends the original deadline.
 - If the CPU allocation can expire first, review the SLURM guide's opt-in
   `--controller-max-allocations`, allocation seconds and grace in both plan and
   run. CPU handoff requeues the same CPU job and adopts existing GPU jobs; it
@@ -144,8 +156,16 @@ Keep this one skill entrypoint for both workflows.
   A `scheduler_unavailable` observation is not a failed trial: the controller
   retries read-only SLURM queries within the original deadline. Do not wrap a
   transient status error in blanket cancellation or restart a paid request.
+  Timed-out read-only preflight checks also wait within the original limits;
+  inspect `_scheduler_check.json`. A fully sealed, unsubmitted candidate can
+  continue across handoff; an attempted submission still requires reconciliation.
   If cancellation is unconfirmed, reconcile native jobs and worker receipts;
   neither a stale ledger nor a stop marker proves that GPUs have been released.
+  A local venv controller can exit while its worker continues. Reconcile both
+  before restarting; never upgrade its environment while workers are active.
+  Same-host venv cold migration is a separately approved, terminal-worker-only
+  operation preserving results, inventory, remaining budgets and deadline; see
+  [local recovery](../../../docs/automl.md#results-monitoring-and-recovery).
 - Hand off `best.json`, the winning native TOML, DCP and held-out metrics, or
   report that no trial succeeded. Do not call validation improvement final test
   performance or describe fixture checks as GPU end-to-end verification.

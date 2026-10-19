@@ -234,6 +234,50 @@ Use a fresh attempt directory for each native job ID and `SLURM_RESTART_COUNT`
 generation. Validate the generation against the approved allocation cap before
 probing. The external observer must watch each generation automatically.
 
+#### Persistent observer service
+
+Use [slurm_controller_watch.py](../tools/cosmos_workflows/scripts/slurm_controller_watch.py)
+on an approved always-on host with the same shared storage and native SLURM
+commands, **outside the CPU allocations it observes**. It automatically selects
+`<attempt-base>/<job-id>-g<Restarts>` for each owned running job. Scheduler outages
+retry read-only; the registry, deadline and observations survive process restarts.
+The watcher never submits, requeues, cancels, or authorizes replacement jobs.
+
+Before submitting CPU controllers:
+
+```bash
+python3 /shared/tools/slurm_controller_watch.py init \
+  --state-dir /shared/run/observer --deadline <original-unix-deadline>
+# Review/install slurm_observer.service on the approved service host first.
+systemctl --user start slurm_observer.service
+python3 /shared/tools/slurm_controller_watch.py ready --state-dir /shared/run/observer
+```
+
+Replace paths in the [user-service template](../examples/automl/slurm_observer.service).
+It restarts the watcher after unexpected exits; the watcher exits normally at the
+original deadline. The user manager must survive logout and the whole run. User
+lingering, login-node residency and service-host availability are site prerequisites,
+not settings to enable implicitly. Occasional `tick` calls or `nohup` alone are not
+a supervised service. `ready` requires a fresh heartbeat **and** a held observer
+lock. Stage the watcher and its sibling startup helper together; both are stdlib-only.
+
+After an acknowledged CPU submission, register its exact ID:
+
+```bash
+python3 /shared/tools/slurm_controller_watch.py register \
+  --state-dir /shared/run/observer --job-id <native-id> \
+  --attempt-base /shared/run/startup --max-allocations <remaining-approved-cap>
+```
+
+Use that attempt base and original deadline in the reviewed
+[CPU batch template](../examples/automl/slurm_controller.sbatch). Register every
+acknowledged controller, including cold continuations; native requeues need no
+manual registration. A lost submission reply still needs the submitter's native-ID
+reconciliation, not a guessed ID or replacement. Registered entries and the deadline
+are immutable. The submitting service still owns terminal monitoring and startup
+retry policy; this watcher supplies the cross-node handshake, not another search
+controller. Restart it on the same host; moving hosts mid-handshake fails closed.
+
 Probe success only means the storage check passed; it does not prove that the
 brain started. Preserve `fanout` before exec and use the native CLI's
 `controller.json` and experiment ledger for controller status. Never interpret
@@ -306,8 +350,13 @@ resource shape, wall time and grace, but set `--controller-max-allocations` to n
 more than the migration's **remaining** allocation count. Prior allocations are
 deducted, and bypassing the CPU session is rejected. The original absolute deadline
 still applies, including controller downtime. Ordinary identity checks are not
-disabled. This narrow operation does not support GEPA, other executors, arbitrary
-engine upgrades or chained migrations.
+disabled. A previously migrated, stopped SFT search requires explicit
+`--continue-migration` with its **current exact wheel**. Each transaction retains
+its predecessor in `migrations/recovery-v<N>.json`, validates CPU history against
+the preceding remaining envelope, and deducts allocations again; it never restores
+the initial cap. Unacknowledged native handoffs still require reconciliation,
+including CPU generations that failed before entering Python. This narrow operation
+does not support GEPA, other executors or arbitrary engine upgrades.
 
 ### Bounded CPU-controller handoff
 
@@ -405,6 +454,27 @@ Inspect native status before resuming with the same engine/identity; never erase
 cancellation markers or automatically submit a replacement.
 
 ### Submission reconciliation
+
+Timed-out read-only preparation checks are separate from uncertain submissions.
+The controller retries cluster/node/partition checks, batch syntax checks and
+`sbatch --test-only`, backing off up to 300 seconds within the original deadline
+and CPU handoff envelope. `_scheduler_check.json` identifies the operation,
+timeout and `WAITING`/`COMPLETE` state without saving argv, stderr or credentials.
+Nonzero exits, invalid configuration, ownership conflicts and record-hook errors
+are not silently classified as transient scheduler timeouts.
+
+Before submission, the core seals the complete staged attempt's files. A handoff
+during these checks resumes **that reserved candidate** after checking the seal,
+open launch fence, owner, absence of worker/stop receipts and unchanged deadline.
+It does not repeat a proposal or consume a training retry. Older or incomplete
+staging cannot be replayed automatically. The preflight clock is durable even
+before the first ledger is created. The CPU session also retries timed-out native
+identity reads before search startup; unverified ownership still stops safely
+when its bounded preparation time expires.
+
+Once `submission_attempted` is recorded, only the uncertain-submission protocol
+below applies. Failures after the ledger opens now persist an explicit terminal
+error and cleanup observation instead of leaving a stale `RUNNING` ledger.
 
 `execution.slurm.submission_reconcile_seconds` defaults to **120** (1–900).
 A timeout, transport/exit error or invalid `sbatch` acknowledgement keeps the

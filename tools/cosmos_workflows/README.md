@@ -12,6 +12,10 @@ These checkout-local assets support [AutoML on SLURM](../../docs/automl-slurm.md
   supplies the cross-node lock observer and pre-fan-out marker. The submitting
   service must schedule observation automatically and reconcile native terminal
   state before any bounded startup retry; see the SLURM guide's startup contract.
+- `scripts/slurm_controller_watch.py` persistently observes registered CPU jobs
+  and each native restart generation. Run it as an independently supervised,
+  deadline-bounded service; its `ready` check gates submission. It never launches
+  or replaces jobs. See `examples/automl/slurm_observer.service` at repository root.
 
 The search controller is `cosmos-automl`, not a workflow wrapper in this directory.
 Stage these assets from this repository, seal their hashes in the manifest, and

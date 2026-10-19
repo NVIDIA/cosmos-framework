@@ -21,7 +21,7 @@ implementation coverage is not equivalent to live GPU validation.
 | Execution platform | Core support                         | Framework evidence / limits                                                                                                              |
 | ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Docker             | Implemented                          | Local Docker WTS GPU training/evaluation exercised.                                                                                      |
-| Virtualenv         | Implemented                          | CPU lifecycle verified; not equivalent to the recorded Framework GPU matrix.                                                             |
+| Virtualenv         | Implemented                          | Fresh-environment WTS/H100 training and evaluation passed after explicit controller recovery; see the bounded verification below.        |
 | SLURM              | Implemented                          | On-cluster CPU controller submits and monitors separate single-node GPU allocations. Recorded bounded SFT/GEPA matrix results are below. |
 | Kubernetes         | Implemented; live validation pending | Single-pod Jobs, explicit context/PVCs, native deadline and UID-safe suspension.                                                         |
 | Brev               | Implemented; live validation pending | Docker on an existing instance, explicit daemon identity and shared/controller-local instance storage; no provisioning or teardown.      |
@@ -195,6 +195,41 @@ in the image or export it and include its name in `execution.environment`.
 Also verify that the non-root container has a valid user identity (for example,
 forward `USER` and `LOGNAME`) and writable per-trial caches.
 
+### Fresh-machine reproducibility checklist
+
+For a new run, preserve a small provenance bundle alongside the reviewed manifest:
+
+- Framework commit, its `uv.lock`, selected CUDA group, Python version and full
+  installed package inventory. For a non-editable training installation, use
+  `uv sync --frozen --all-extras --group=cu128-train --no-editable` (or the
+  matching CUDA group), then install the selected core as above. Record the core
+  commit and `engine_build`, plus wheel hashes or the immutable container digest.
+- The actual training/evaluation TOMLs, seed, search domains and trial/time caps.
+  Preserve dataset split/content revisions and model checkpoint identity;
+  recipe paths and record counts alone do not reproduce their contents.
+- Required environment variable **names**, decoder/export prerequisites and
+  session-local library setup. Keep credentials out of the bundle. For CUDA 12,
+  consult the [TorchCodec NPP setup](setup.md#torchcodec-cannot-find-cuda-12-npp)
+  when the host does not expose matching libraries. Declare required exported
+  variable names, such as `LD_PRELOAD`, in `execution.environment` too.
+- A writable workspace with capacity for every trial's checkpoints and exports.
+  Prefer local POSIX storage for local venv runs. Shared storage must pass
+  concurrent atomic-replacement/read checks as well as locking and fsync checks;
+  a single successful write is not sufficient.
+
+Run the install/dependency checks, `cosmos-automl --help` and CPU-only `plan`
+before approving a small GPU run. Verify training, checkpoint export and the
+selected evaluator, not just imports. Keep the run environment unchanged until
+its controller and workers are terminal. Neither the optional engine nor private
+datasets/checkpoints are bundled into Framework; a new user supplies assets and
+paths, not another developer's checkout or credentials.
+
+The recorded Python 3.13 CUDA training installation reports a `pip check` warning:
+`jupyter-compare-view==0.2.4` declares Python `<3.13`. This notebook-only dependency
+was unused by the bounded training/evaluation smoke below; its metadata conflict
+is not resolved by installing AutoML. Do not describe the full environment's
+dependency check as passing or silently change its Python/dependency pins.
+
 ## Prepare and review
 
 Start with [reasoner.yaml](../examples/automl/reasoner.yaml),
@@ -348,6 +383,26 @@ changing algorithm history, promotion lineage or paid proposal counts. Review
 the extra allocation caps in `plan`. An `attempt_id` can differ from the logical
 trial `id`; `attempts` preserves failed executions and their native identities.
 Unconfirmed cancellation blocks replacement rather than creating duplicate work.
+
+For shared-storage receipt/ledger reads, the core retries only transient `EIO`,
+`ESTALE` and `ETIMEDOUT`, reopening up to five times with 0.75 seconds of total
+backoff. It does not replay training, submissions or paid requests. Persistent
+errors and malformed receipts still stop safely. A dead CPU controller can leave
+a GPU worker running; check both native process/job identity and worker receipts
+before interpreting a ledger's last `RUNNING` state or starting a replacement.
+
+Ordinary resume requires the original build. A stopped same-host venv SFT search
+can use `cosmos-automl migrate --manifest <manifest> --workspace <workspace>
+--from-wheel <exact-original.whl>` to review a narrow recovery-build continuation;
+`--approve` applies it, and a separately approved `resume` continues the search.
+All old workers and command processes must first be terminal on their recorded
+host/boot. Completed-but-unrecorded results must be reconciled with the original
+build before changing it. Preserve the interpreter, package inventory, data,
+completed results, remaining trials and original absolute deadline. Never install
+a new wheel into an environment used by active workers, edit sealed identities,
+or use a fresh experiment to disguise a retry. This migration does not support
+GEPA, Docker or cloud runs; see the [SLURM migration contract](automl-slurm.md#explicit-cold-recovery-migration)
+for scheduler-owned continuations.
 
 ## Scope and checks
 
@@ -886,3 +941,49 @@ does not require a training-image rebuild; no existing cluster controller was
 upgraded. The earlier GPU results used the earlier core hash and do not validate
 this new build. The separate GEPA progress-file gap above remains open, as do
 the core distribution/dependency review and coordinated merge gates.
+
+### Controller startup and restart assets
+
+The checkout now supplies the [persistent observer service](automl-slurm.md#persistent-observer-service)
+and a CPU batch template that probes every native restart generation before
+starting the controller. An initial one-shot handshake cannot cover a later
+requeue. The observer must be independently supervised on an approved host; it
+does not submit or replace jobs, authorize retries, or extend the deadline.
+
+The core also retries timed-out read-only scheduler preparation checks and
+continues a fully sealed, unsubmitted candidate across a bounded CPU handoff.
+An attempted submission still uses the separate reconciliation/fencing protocol.
+These controller paths were checked with CPU subprocesses and a simulated
+scheduler; this is not live cross-node SLURM recovery or service-deployment proof.
+
+### Fresh-venv WTS verification (2026-10-19)
+
+A fresh, non-editable Python 3.13 CUDA 12.8 environment ran native Framework
+AutoML on Cosmos3-Nano-VLM with 64 WTS training records and 16 disjoint held-out
+questions. Two random-search candidates each completed five LoRA steps on eight
+H100 GPUs, DCP-to-HF export and single-GPU evaluation. Both scored **8/16 (50%)**.
+The approved limits were 30 minutes per trial and two hours for the search, with
+no automatic training retries or paid LLM calls.
+
+This was a **pass after explicit controller recovery**, not an uninterrupted
+run. A transient shared-drive `EIO` stopped the CPU controller during the first
+trial's evaluation while its worker continued. The original build collected that
+completed result; a reviewed cold migration then resumed the corrected build.
+Both trials finished within the original deadline, with no repeated training,
+additional trial slots or budget reset. The resumed controller exited normally.
+
+The corrected core's `engine_build` is
+`cdfb7731512119c1b27db079fb34cda24b4b3506a7a8beef225894a375aaeca2`;
+its distribution version remains **0.1.0**. A separate real shared-drive stress
+probe recovered 86 transient read errors without escaping a logical read, and a
+two-launch CPU dummy workflow verified stopped-controller continuation, result
+preservation, unchanged deadlines and rejection of increased budgets. Existing
+core tests passed; no new repository unit tests or package-version bumps were
+introduced.
+
+The notebook dependency warning above remains. Transformers also emitted a
+tokenizer-regex warning while loading Qwen3-VL; tokenizer files/settings were not
+changed. This bounded random-search result establishes training/export/evaluation
+execution after recovery, **not** full-data accuracy, all-algorithm qualification,
+or automatic recovery from persistent storage failures. Private asset paths and
+run receipts are not part of the public installation instructions.

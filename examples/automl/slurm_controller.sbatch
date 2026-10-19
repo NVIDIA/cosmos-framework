@@ -20,6 +20,21 @@ set -euo pipefail
 : "${AUTOML_MANIFEST:?Set the sealed, absolute shared manifest path}"
 : "${AUTOML_WORKSPACE:?Set the absolute shared experiment workspace}"
 : "${AUTOML_CONTROLLER_MAX_ALLOCATIONS:?Set the reviewed CPU allocation cap}"
+: "${AUTOML_STARTUP_HELPER:?Set the sealed shared slurm_controller_startup.py path}"
+: "${AUTOML_STARTUP_BASE:?Set the shared startup directory registered with the observer}"
+: "${AUTOML_DEADLINE:?Set the original absolute experiment deadline}"
+
+# The independent observer service must already be ready before sbatch and have
+# this native job registered afterwards. Every requeue gets fresh probe receipts.
+# Do not wrap the CLI in the startup helper's run verb: signals must reach it.
+trap 'exit 75' TERM HUP INT USR1
+generation=${SLURM_RESTART_COUNT:-0}
+[[ "$generation" =~ ^[0-9]+$ && "$AUTOML_CONTROLLER_MAX_ALLOCATIONS" =~ ^[1-9][0-9]*$ ]]
+(( generation < AUTOML_CONTROLLER_MAX_ALLOCATIONS ))
+export AUTOML_STARTUP_ATTEMPT="$AUTOML_STARTUP_BASE/${SLURM_JOB_ID}-g${generation}"
+"$AUTOML_CONTROLLER_PYTHON" "$AUTOML_STARTUP_HELPER" probe \
+    --attempt-dir "$AUTOML_STARTUP_ATTEMPT" --deadline "$AUTOML_DEADLINE" \
+    --probe-seconds 600 --minimum-run-seconds 600
 
 # One experiment owns this CPU job. The verified successor automatically resumes
 # its ledger; do not clear outputs or switch manifests on SLURM_RESTART_COUNT.
@@ -32,8 +47,10 @@ esac
 
 # exec makes Python the batch process receiving B:USR1. Do not add an EXIT trap
 # that cancels trials or removes credentials needed by a successor allocation.
+"$AUTOML_CONTROLLER_PYTHON" "$AUTOML_STARTUP_HELPER" fanout --attempt-dir "$AUTOML_STARTUP_ATTEMPT"
+trap - TERM HUP INT USR1
 exec "$AUTOML_CONTROLLER_PYTHON" -m cosmos_framework.scripts.automl \
-    "${workflow[@]}" run --manifest "$AUTOML_MANIFEST" \
+    "${workflow[@]}" "${AUTOML_ACTION:-run}" --manifest "$AUTOML_MANIFEST" \
     --workspace "$AUTOML_WORKSPACE" --approve \
     --controller-max-allocations "$AUTOML_CONTROLLER_MAX_ALLOCATIONS" \
     --controller-allocation-seconds 3600 --controller-grace-seconds 300
