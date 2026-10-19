@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
 """Fuse sibling linears for calibration, then unfuse for a stock HF checkpoint.
 
 vLLM fuses QKV (and Super/Nano gate/up) at runtime and shares one activation
