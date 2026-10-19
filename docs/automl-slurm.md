@@ -1,6 +1,6 @@
 # AutoML on SLURM
 
-The local core wheel provides a single-node SLURM executor. The controller
+The core package provides a single-node SLURM executor. The controller
 runs on a CPU node **on the cluster**, with `sbatch`, `squeue`, `sacct`,
 `scontrol`, `scancel`, `srun`, a compatible Python environment, and shared
 storage. It submits one GPU allocation per candidate, waits, collects the
@@ -51,17 +51,23 @@ allocation identity and GPU visibility belong to the scheduler. Forward
 `NVIDIA_DRIVER_CAPABILITIES` by name after exporting `compute,utility,video`
 for CUDA video decoding; credentials, if needed, are names only as well.
 
-The CPU controller needs the Framework and core wheels plus their planning
+The CPU controller needs the Framework and core packages plus their planning
 dependencies, not GPU training packages. Verify its Python version/imports,
 native scheduler CLIs, and shared interpreter path on compute nodes. Do not
 assume the system Python or the interpreter inside the training image is a
 suitable host-side controller environment.
 
-For an isolated planning-only controller, install the core wheel with its
-dependencies, then the Framework wheel with `--no-deps`:
+For an isolated planning-only controller, install the core from the selected
+source revision with its dependencies, then the Framework wheel with `--no-deps`.
+Use `main` by default or the user's explicit development branch, as described in
+[source installation](automl.md#installation-from-source). Resolve and record the
+commit during preparation, never reinstall from a moving branch at job startup:
 
 ```bash
-python -m pip install /shared/wheels/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl
+AUTOML_CORE_REF=main  # Or the selected development branch / recorded commit SHA.
+python -m pip install \
+  "nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core" \
+  'nvidia-automl-core==0.1.0'
 python -m pip install --no-deps /shared/wheels/cosmos_framework-1.2.2-py3-none-any.whl
 python -m cosmos_framework.scripts.automl --help
 ```
@@ -73,6 +79,9 @@ dependencies before installing Framework and exercise the installed adapter's
 `plan` command outside both source checkouts. Never use this limited environment
 for training; the prepared image supplies that stack. Point Python installer
 caches at shared storage when the login home has a small quota.
+For GEPA controllers, also install `gepa==0.1.2` before verifying imports; the
+planning-only `--no-deps` Framework install does not install its extras. A wheel
+built from the recorded core revision remains an alternative for offline nodes.
 
 ## Private node history and exclusions
 
@@ -119,7 +128,7 @@ native termination/retry-budget safeguards. GPU exclusions do not change the
 separately submitted CPU controller's placement. `SBATCH_EXCLUDE` is not a
 substitute: the executor filters scheduler environment overrides.
 
-This requires a new core controller build, still `1.0.0.dev0`; the training
+This requires a core controller build with node-exclusion support; the training
 image need not change. Do not upgrade a live controller or mutate its sealed
 manifest. Existing searches keep their original placement policy; select the
 new build and exclusions when preparing a fresh experiment.
@@ -257,7 +266,7 @@ The controller's own allocation must leave time for shutdown before its hard
 wall limit; configure its terminal signals and timeout in the launch envelope.
 Keep the original engine wheel for existing experiments: changing the engine
 build changes its identity even while the development version stays fixed.
-See [development version and build identity](automl.md#development-version-and-build-identity).
+See [source revision, package version and build identity](automl.md#source-revision-package-version-and-build-identity).
 
 ### Explicit cold recovery migration
 
@@ -541,9 +550,9 @@ retries, count conservatively toward `max_evaluated_examples`. Reflection API ca
 are never retried by this mechanism. Automatic infrastructure retries currently
 require SLURM; local venv/Docker failure classification is not inferred.
 
-These changes require new exact local controller wheels, still core
-`1.0.0.dev0`; they do not upgrade already-running controllers or old experiment
-identities automatically. Do not edit a live manifest/ledger or replace its installed wheel to
+These changes require a controller build with bounded recovery support; selecting
+a new source revision does not upgrade already-running controllers or old experiment
+identities automatically. Do not edit a live manifest/ledger or replace its installed package to
 enable recovery. The worker is staged from the controller; the Framework changes
 declare existing native status files, not new training-image entrypoints.
 CPU fault-injection checks are not live cluster recovery validation.

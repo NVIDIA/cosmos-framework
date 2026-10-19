@@ -1730,6 +1730,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+automl-prompts = [
+    { name = "gepa" },
+]
 guardrail = [
     { name = "better-profanity" },
     { name = "nltk" },
@@ -2062,6 +2065,7 @@ requires-dist = [
     { name = "ftfy", marker = "extra == 'train'" },
     { name = "futureproof", marker = "extra == 'train'" },
     { name = "fvcore", marker = "extra == 'train'" },
+    { name = "gepa", marker = "extra == 'automl-prompts'", specifier = "==0.1.2" },
     { name = "glfw", marker = "extra == 'train'" },
     { name = "gradio", marker = "extra == 'serve'" },
     { name = "h5py", marker = "extra == 'train'" },
@@ -2092,8 +2096,8 @@ requires-dist = [
     { name = "multi-storage-client", extras = ["boto3", "google-cloud-storage", "fsspec", "observability-otel", "vault"], marker = "extra == 'train'", specifier = "==0.44.0" },
     { name = "ninja", marker = "extra == 'train'" },
     { name = "nltk", marker = "extra == 'guardrail'" },
-    { name = "nvidia-automl-core", marker = "extra == 'automl'", specifier = "==1.0.0.dev0" },
-    { name = "nvidia-automl-core", extras = ["prompts"], marker = "extra == 'automl-prompts'", specifier = "==1.0.0.dev0" },
+    { name = "nvidia-automl-core", marker = "extra == 'automl'", specifier = "==0.1.0" },
+    { name = "nvidia-automl-core", marker = "extra == 'automl-prompts'", specifier = "==0.1.0" },
     { name = "nvidia-cudnn-frontend" },
     { name = "nvidia-dali-cuda120", marker = "extra == 'train'" },
     { name = "nvidia-ml-py" },
@@ -4005,6 +4009,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/91/f6/e73969782a2ecec280f8a176f2476149dd9dba69d5f8779ec6108a7721e6/gast-0.7.0.tar.gz", hash = "sha256:0bb14cd1b806722e91ddbab6fb86bba148c22b40e7ff11e248974e04c8adfdae", size = 33630, upload-time = "2025-11-29T15:30:05.266Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/33/f1c6a276de27b7d7339a34749cc33fa87f077f921969c47185d34a887ae2/gast-0.7.0-py3-none-any.whl", hash = "sha256:99cbf1365633a74099f69c59bd650476b96baa5ef196fec88032b00b31ba36f7", size = 22966, upload-time = "2025-11-29T15:30:03.983Z" },
+]
+
+[[package]]
+name = "gepa"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/2d/9521c2b94bc4c95a81bfb483278cd3fbd1c4261f228638cb7844c84293da/gepa-0.1.2.tar.gz", hash = "sha256:1587e7081d3e321d7739785f00ba0bc27509dcc7ca4e75546d0210e1c292410c", size = 317051, upload-time = "2026-07-14T12:07:00.216Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/81/33e455d043926f95356f19f43b6e371a895708e067726071f0b5b1b05205/gepa-0.1.2-py3-none-any.whl", hash = "sha256:9ccf1e8353ec6d5d606a5aabd7a9ed75a86be5024371584646abc7d532321eb3", size = 273524, upload-time = "2026-07-14T12:06:58.865Z" },
 ]
 
 [[package]]

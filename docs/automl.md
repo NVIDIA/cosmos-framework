@@ -41,74 +41,130 @@ For SLURM CPU allocations shorter than an experiment, the opt-in
 preserves active jobs and the original deadline. This is not an implementation
 of local-to-remote orchestration or a cloud controller service.
 
-## Installation and release status
+## Installation from source
 
-The independently built `nvidia-automl-core` 1.0.0.dev0 wheel must be supplied by the
-maintainer: **this change does not publish it to an index**. Install the wheel
-first, then install the extra into your already-prepared Framework environment:
+The default source is **`main` in [NVIDIA-TAO/tao-automl](https://github.com/NVIDIA-TAO/tao-automl)**,
+specifically `packages/automl-core`. A named development branch is an explicit
+override, not a fallback. Installers fetch and build this independent package;
+users do not need a pre-existing TAO checkout, TAO application/SDK, or a publicly
+published wheel. Git, repository access, and access to the package's build/runtime
+dependencies are required. Configure Git authentication separately if needed;
+do not embed credentials in the source URL.
 
-```bash
-python -m pip install /path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl
-python -m pip install -e '.[automl,reasoner-eval]'
-cosmos-automl --help
-```
+The repository contains two distributions: its root package is
+`nvidia-tao-automl` (the TAO application), while `packages/automl-core` builds
+`nvidia-automl-core` (the engine imported by Framework as `automl_core`). The
+[PyPI TAO application](https://pypi.org/project/nvidia-tao-automl/) is not a
+replacement for this core package. Preserve the selected source's declared
+package name and version; do not rename it or substitute the TAO application's
+release number. Framework's extras must match the core's distribution metadata.
 
-The core is maintained in `tao-automl/packages/automl-core` and built independently;
-that is a maintainer source location, not a consumer installation prerequisite.
-Current delivery is **local wheels only**. To install a supplied Framework wheel
-instead of an editable checkout, install the core wheel above, then:
+The following commands run from a prepared Framework checkout. Source selection
+is for a **new environment or new experiment**. Do not update the controller of
+a running or resumable experiment just because a branch has advanced.
 
-```bash
-python -m pip install '/path/to/cosmos_framework-1.2.2-py3-none-any.whl[automl,reasoner-eval]'
-python -m pip check
-cosmos-automl --help
-```
-
-If Framework 1.2.2 is already installed from a different build, resolve the extras
-above, then replace just that package with `pip install --force-reinstall --no-deps
-/path/to/cosmos_framework-1.2.2-py3-none-any.whl`. The wheelhouse is not an offline
-mirror of third-party dependencies.
-
-A bare index install cannot find the unpublished core. The repository's `uv`
-configuration explicitly excludes **only `nvidia-automl-core`** from its managed
-resolution while delivery remains local-wheel-only. This lets ordinary Framework
-setup and CI resolve without a private checkout; it does **not** install AutoML.
-The wheel metadata still declares the core requirement for the AutoML extras.
-A distributable core location and removal of this development exception remain
-a release gate.
-
-For a `uv`-managed Framework checkout, sync first, then install the supplied core
-wheel into that environment (include `[prompts]` for GEPA):
+### Default: main
 
 ```bash
+AUTOML_CORE_REF=main
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+
+# Prepare Framework first; choose the CUDA group appropriate for your machine.
 uv sync --all-extras --group=cu128-train
-uv pip install --no-config --python .venv/bin/python '/path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl[prompts]'
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
 uv pip check --python .venv/bin/python
 uv run --no-sync cosmos-automl --help
 ```
 
-The install command's `--no-config` bypasses the project's development exclusion
-for this explicitly supplied wheel. Use `uv run --no-sync` or the environment's
-executable directly for AutoML.
-An exact `uv sync` removes separately installed packages; reinstall the supplied
-wheel afterward. No source checkout or machine-specific wheel path is recorded
-in the project's lock file.
+The version constraint matches the committed core package metadata and Framework's
+AutoML extras; a branch declaring an incompatible version fails resolution rather
+than weakening that requirement. `--reinstall-package` refreshes this selected
+package even when another commit has the same package version. It does not
+request reinstallation of the entire training stack.
 
-### Development version and build identity
+Framework's `uv` configuration excludes **only `nvidia-automl-core`** from managed
+resolution so ordinary setup/CI does not require a source installation or select
+a development branch for you. `--no-config` makes the explicit installation above
+honor the source requirement instead of that exclusion. Use `uv run --no-sync`
+or `.venv/bin/cosmos-automl` afterward. An exact `uv sync` removes the separately
+installed core; reinstall the **recorded commit**, not a newer branch head, if
+repairing an existing experiment's environment.
 
-AutoML is in its initial **v1 development phase**, not a released package series.
-Keep `nvidia-automl-core` at **`1.0.0.dev0`** throughout the port. Bug fixes and local
-wheel builds do not increment the patch version or development counter. Change
-the package version only as part of an explicitly approved release; building a
-local validation wheel is not a release. Cosmos Framework's existing package
-version remains **1.2.2**, independent of the AutoML development label.
+### Install from a named development branch
 
-Store each build in a separate immutable wheelhouse directory and record its
-wheel SHA256 and source revision. Do not overwrite an earlier same-named wheel.
-When intentionally selecting another same-version wheel for a new environment
-or run, install the exact supplied artifact; an existing installation may require
-`pip install --force-reinstall --no-deps /path/to/the/wheel.whl` after resolving
-dependencies. A package version alone does not identify a development build.
+Set the actual branch name in the same repository, including any `/` separators:
+
+```bash
+AUTOML_CORE_REF='codex/repository-neutral-automl'  # Replace with your development branch.
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
+uv pip check --python .venv/bin/python
+uv run --no-sync cosmos-automl --help
+```
+
+The branch must contain `packages/automl-core/pyproject.toml`. A nonexistent or
+inaccessible branch, missing package, or incompatible version is an installation
+error; do not silently switch to another branch. Skill-driven setup asks whether
+to use `main` or a user-supplied development branch before a new installation.
+Manual CLI setup uses the variable above and does not prompt interactively.
+
+### Pip-only installation
+
+In a prepared environment without a previous core installation, use the same
+`AUTOML_CORE_REF` / `AUTOML_CORE_SOURCE` selection (`main` by default):
+
+```bash
+AUTOML_CORE_REF=main  # Or the explicitly selected development branch.
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+python -m pip install "$AUTOML_CORE_SOURCE" -e '.[automl,reasoner-eval]'
+python -m pip check
+cosmos-automl --help
+```
+
+For GEPA, select `.[automl-prompts,reasoner-eval]` instead. That Framework extra
+declares `gepa==0.1.2` directly, so it also works with source branches that do not
+declare the core's optional `prompts` extra. A supplied Framework wheel may
+replace the editable requirement with `/path/to/cosmos_framework.whl[automl,reasoner-eval]`
+(using its actual filename). When switching same-version core builds, use a new
+environment or the targeted `uv --reinstall-package` command above; do not assume
+an already-satisfied version means the selected source was installed.
+
+### Source revision, package version and build identity
+
+Branches move. After installation, record the resolved commit and engine hash:
+
+```bash
+python - <<'PY'
+import json
+from importlib.metadata import distribution
+from automl_core import build_fingerprint
+
+package = distribution("nvidia-automl-core")
+origin = json.loads(package.read_text("direct_url.json") or "{}")
+vcs = origin.get("vcs_info", {})
+print("package_version:", package.version)
+print("requested_revision:", vcs.get("requested_revision"))
+print("source_commit:", vcs.get("commit_id"))
+print("engine_build:", build_fingerprint())
+PY
+```
+
+Use the target environment's Python (for example `.venv/bin/python`). Put the
+resolved core commit in the run's provenance. For a source reinstall, set
+`AUTOML_CORE_REF` to that full commit SHA and reconstruct `AUTOML_CORE_SOURCE`;
+the same install commands then reproduce the core source selection. A Git commit
+does not freeze third-party dependencies, datasets, or training images; preserve
+those separately. For offline deployment or cold migration, retain an immutable
+wheel built from the same commit and record its SHA256. Source installation does
+not remove the migration protocol's requirement for the exact original wheel.
+
+The current core **distribution metadata is `0.1.0`**; Framework remains `1.2.2`.
+Installing a branch or building a local wheel is not a release and does not require
+a version bump. A package version alone does not identify a development build.
 
 New SFT and GEPA identities include `engine_build`, a SHA256 fingerprint of the
 installed core's relative Python file names and contents. Identical source and
@@ -311,7 +367,7 @@ by scheduler-query timeouts during evaluation. Hyperband-ES curve pruning and
 completed GPU searches driven by those structured controllers remain verification
 gaps; these checks do not establish model quality or validate a production search.
 
-Run adapter tests with an installed core wheel (no GPU imports required):
+Run adapter tests with the selected core installed (no GPU imports required):
 
 ```bash
 python -m pytest -o addopts='' --confcutdir=tests/automl tests/automl

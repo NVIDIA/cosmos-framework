@@ -12,10 +12,11 @@ def main() -> None:
         if exc.name not in {"automl_core", "automl_core.cli"}:
             raise
         raise SystemExit(
-            "AutoML requires the separately supplied nvidia-automl-core 1.0.0.dev0 wheel. "
-            "Install that wheel into this Python environment first, then install "
-            "cosmos-framework[automl,reasoner-eval]. See docs/automl.md for the local-wheel "
-            "installation workflow (including uv run --no-sync)."
+            "AutoML requires nvidia-automl-core. Install packages/automl-core from "
+            "NVIDIA-TAO/tao-automl (main by default, or your selected development branch) "
+            "into this Python environment, then install cosmos-framework[automl,reasoner-eval]. "
+            "See docs/automl.md#installation-from-source for source-install commands, "
+            "compatible versions, and uv run --no-sync. No published wheel is required."
         ) from exc
     if len(sys.argv) > 1 and sys.argv[1] == "prompts":
         from cosmos_framework.automl.prompts import load

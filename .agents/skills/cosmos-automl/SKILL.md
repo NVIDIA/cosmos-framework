@@ -6,10 +6,23 @@ description: Optimize Cosmos Framework reasoner SFT hyperparameters or evaluatio
 # Cosmos Framework AutoML
 
 Read [docs/automl.md](../../../docs/automl.md) before planning a search. It owns
-the installation/release prerequisites, manifest contract, result semantics
+the installation prerequisites, manifest contract, result semantics
 and current limits. Use the native `cosmos-automl` CLI; do not call a TAO runner
-or introduce model/runtime selection. The engine is an optional wheel, not a
-source-checkout dependency.
+or introduce model/runtime selection. Install the optional engine from the
+`packages/automl-core` subdirectory of `NVIDIA-TAO/tao-automl`; no TAO application,
+SDK, persistent source checkout, or publicly published wheel is required.
+
+Before a new installation, ask: **"Use AutoML core from `tao-automl/main`, or
+do you want a development branch from that repository? If so, which branch?"**
+Use `main` unless the user selects another branch; if they already supplied a
+branch, confirm that selection without asking again. Follow the
+[source-install instructions](../../../docs/automl.md#installation-from-source),
+including the named-branch override. Do not substitute a development branch
+when the selected source is unavailable. Record the resolved commit, installed
+package version and `engine_build`; a branch name alone is not a build identity.
+For an existing run, inspect and preserve its original environment/build instead
+of reinstalling the latest branch head. Source selection does not authorize
+upgrading a live controller or migrating a stopped experiment.
 
 Reuse **cosmos3-setup** for environment preparation and
 **cosmos3-post-training** for a prepared reasoner recipe and dataset/checkpoint
@@ -145,8 +158,9 @@ searches also passed bounded GPU smokes. Six of nine full-data numerical/populat
 searches completed; Bayesian, Hyperband and DEHB did not complete their approved
 budgets. Live infrastructure recovery and Hyperband-ES curve pruning remain
 unverified; smoke success is not production-scale or model-quality validation.
-Keep the core at `1.0.0.dev0` during the port; local builds are not releases.
-Use wheel hashes and `engine_build` to distinguish builds, not version bumps.
+Use the core package version required by Framework's extras (currently `0.1.0`);
+source installs and local builds are not releases. Use resolved Git commits,
+wheel hashes when applicable, and `engine_build` to distinguish builds, not version bumps.
 Preserve exact old wheels/manifests for paused searches; changed builds fail resume
 identity checks even when package versions match.
 Route ordinary training/evaluation to the existing skills, and do not infer
