@@ -173,11 +173,18 @@ bash examples/launch_sft_action_policy_libero_10_edge.sh    # HSDP 2x8, as the N
 **One 8-GPU node:** set `data_parallel_replicate_degree = 1` and
 `grad_accum_iter = 2` in the TOML; the global batch stays 2048.
 
-**Validated so far:** a 50-iteration single-node smoke run (8× RTX PRO 6000
-Blackwell 96 GB, replicate 1, grad_accum 2, global batch 2048) trained at about
-79 s/iteration; loss went from 15.3 (iteration 1) to 3.6 (iteration 50) and the
-DCP checkpoint saved. A full 2000-iteration run and the closed-loop libero_10
-success rate have not been measured for Edge yet.
+**Validated:**
+
+- Smoke run: 50 iterations on one node (8× RTX PRO 6000 Blackwell 96 GB,
+  replicate 1, grad_accum 2, global batch 2048) at about 79 s/iteration; loss
+  went from 15.3 (iteration 1) to 3.6 (iteration 50) and the DCP checkpoint saved.
+- Full run: 2000 iterations of this recipe (same experiment, learning rate,
+  schedule and global batch 2048) on 4× RTX PRO 6000 Blackwell 96 GB with
+  shard 4, replicate 1, grad_accum 4; final loss 0.90.
+- Closed loop: `iter_000002000` evaluated as in section 3 (50 trials per task,
+  8 envs, seed 0) succeeded in **407/500 = 81.4 %** of libero_10 episodes.
+  Per task 0-9: 17, 49, 49, 49, 44, 46, 39, 46, 25, 43 of 50. This is one
+  training run and one evaluation seed, so run-to-run spread is not measured.
 
 **Outside the Docker image:** the data loader decodes LIBERO's AV1 videos with
 `torchcodec`, which dlopens NPP and FFmpeg shared libraries that the container
