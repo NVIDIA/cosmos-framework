@@ -20,6 +20,7 @@ import modelopt.torch.quantization as mtq
 import pytest
 import torch
 from modelopt.torch.opt.conversion import ApplyModeError, apply_mode, restore_from_modelopt_state
+from modelopt.torch.quantization.nn import TensorQuantizer
 from modelopt.torch.quantization.qtensor import QTensorWrapper
 from safetensors.torch import save_file
 
@@ -79,6 +80,102 @@ def tiny_reasoner(device="cpu"):
 
     with torch.device(device):
         return Cosmos3ForConditionalGeneration(tiny_omni_config()).bfloat16()
+
+
+def tiny_edge_config():
+    from cosmos_framework.model.generator.reasoner.cosmos3_edge.configuration_cosmos3_edge import Cosmos3EdgeConfig
+
+    return Cosmos3EdgeConfig(
+        text_config={
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "head_dim": 8,
+            "vocab_size": 32,
+            "rope_parameters": {"rope_type": "default", "mrope_section": [1, 1, 2], "rope_theta": 10000},
+        },
+        vision_config={
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "patch_size": 2,
+        },
+        projector_config={"input_hidden_size": 16, "merger_intermediate_size": 32, "out_hidden_size": 16},
+    )
+
+
+def tiny_edge():
+    from cosmos_framework.model.generator.reasoner.cosmos3_edge.modeling_cosmos3_edge import (
+        Cosmos3EdgeForConditionalGeneration,
+    )
+
+    return Cosmos3EdgeForConditionalGeneration(tiny_edge_config()).bfloat16()
+
+
+EDGE_PROJECTIONS = {
+    "layers.0.self_attn.to_q": "model.language_model.layers.0.mixer.q_proj",
+    "layers.0.self_attn.to_k": "model.language_model.layers.0.mixer.k_proj",
+    "layers.0.self_attn.to_v": "model.language_model.layers.0.mixer.v_proj",
+    "layers.0.self_attn.to_out": "model.language_model.layers.0.mixer.o_proj",
+    "layers.0.mlp.up_proj": "model.language_model.layers.1.mixer.up_proj",
+    "layers.0.mlp.down_proj": "model.language_model.layers.1.mixer.down_proj",
+}
+
+
+def compressed_edge_dit():
+    torch.manual_seed(0)
+    baseline = tiny_edge()
+    dit = torch.nn.Module()
+    for flat, native in EDGE_PROJECTIONS.items():
+        parent = dit
+        *parts, leaf = flat.split(".")
+        for part in parts:
+            if part not in parent._modules:
+                parent.add_module(part, torch.nn.Module())
+            parent = parent._modules[part]
+        parent.add_module(leaf, copy.deepcopy(baseline.get_submodule(native)))
+    config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
+    dit = apply_mode(dit, [("quantize", config)])
+    for index, name in enumerate(EDGE_PROJECTIONS):
+        module = dit.get_submodule(name)
+        module.input_quantizer.amax = torch.tensor(3.5 + index)
+        module.weight_quantizer.amax = module.weight.detach().float().abs().max()
+    mtq.compress(dit)
+    return dit, mto.modelopt_state(dit)
+
+
+def test_edge_export_strict_restore_and_weight_load(export_modules, tmp_path):
+    helper, _ = export_modules
+    dit, component = compressed_edge_dit()
+    tiny_edge_config().save_pretrained(tmp_path)
+    state = helper.build_reasoner_modelopt_state(component, tmp_path)
+    active = dict(state["modelopt_state_dict"])["real_quantize"]["metadata"]["q_tensor_state"]
+    assert set(active) == set(EDGE_PROJECTIONS.values())
+    path = tmp_path / "modelopt_state.pth"
+    torch.save(state, path)
+    state = torch.load(path, weights_only=False)
+    restored = restore_from_modelopt_state(tiny_edge(), modelopt_state=state)
+    payload = tiny_edge().state_dict()
+    for flat, native in EDGE_PROJECTIONS.items():
+        payload.update(
+            {f"{native}.{key}": value.clone() for key, value in dit.get_submodule(flat).state_dict().items()}
+        )
+    restored.load_state_dict(payload, strict=True)
+    for index, (flat, native) in enumerate(EDGE_PROJECTIONS.items()):
+        module = restored.get_submodule(native)
+        assert isinstance(module.weight, QTensorWrapper)
+        assert module.weight.get_state()["quantized_data.dtype"] == torch.float8_e4m3fn
+        torch.testing.assert_close(module.input_quantizer.amax, torch.tensor(3.5 + index))
+        expected = dit.get_submodule(flat).state_dict()
+        actual = module.state_dict()
+        assert actual.keys() == expected.keys()
+        for key, value in expected.items():
+            assert actual[key].dtype == value.dtype, f"{native}.{key}"
+            torch.testing.assert_close(actual[key].float(), value.float(), rtol=0, atol=0, msg=f"{native}.{key}")
+    assert not any(t.is_meta for t in list(restored.parameters()) + list(restored.buffers()))
 
 
 def compressed_dit(quantize_language_model=True):
@@ -144,6 +241,11 @@ def test_compressed_state_round_trip(export_modules, tmp_path, quantize_language
     restored.load_state_dict(reasoner_payload(helper, dit), strict=True)
     active = dict(state["modelopt_state_dict"])["real_quantize"]["metadata"]["q_tensor_state"]
     assert bool(active) == quantize_language_model
+    config = dict(state["modelopt_state_dict"])["quantize"]["config"]
+    configured = apply_mode(tiny_reasoner(), [("quantize", config)])
+    for name, module in configured.named_modules():
+        if isinstance(module, TensorQuantizer) and name.rpartition(".")[0] not in active:
+            assert not module.is_enabled, name
     for name, module in restored.named_modules():
         if not hasattr(module, "input_quantizer"):
             continue
