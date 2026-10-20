@@ -80,6 +80,10 @@ Keep this one skill entrypoint for both workflows.
 - Supervise the native CPU allocation before the brain starts; trial retries
   cannot handle bootstrap/import/prolog failures. Follow the SLURM guide's
   [startup contract](../../../docs/automl-slurm.md#before-the-search-controller-starts):
+  when startup recovery is required, explicitly configure `AUTOML_STARTUP_HELPER`,
+  its registered attempt base and the original deadline. Leaving the helper unset
+  preserves the direct-CLI launch path, but does not supply bootstrap validation
+  or pre-controller recovery; do not claim those checks ran. For the supervised path,
   arm the cross-node observer automatically before submission, preserve startup
   receipts, and mark the boundary before any algorithm/API/job fan-out. Only
   confirmed pre-fan-out infrastructure/observer failures may use approved CPU

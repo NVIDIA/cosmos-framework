@@ -180,6 +180,23 @@ other workloads instead of claiming these checks cover them.
 
 ### Before the search controller starts
 
+Cross-node startup probing is **opt-in** in
+[slurm_controller.sbatch](../examples/automl/slurm_controller.sbatch): leave
+`AUTOML_STARTUP_HELPER` unset for the original direct-CLI launch path. It needs
+only `AUTOML_CONTROLLER_PYTHON`, `AUTOML_MANIFEST`, `AUTOML_WORKSPACE`, and
+`AUTOML_CONTROLLER_MAX_ALLOCATIONS`; no startup observer, base directory, or
+separate deadline variable is required. The search/controller limits still apply,
+but this mode does not provide cross-node bootstrap validation or automatic
+recovery for failures before the controller starts. Monitor native CPU state
+through the site's existing submission service.
+
+To enable the supervised path below, additionally set `AUTOML_STARTUP_HELPER`
+to the sealed shared helper path, `AUTOML_STARTUP_BASE` to the registered shared
+attempt base, and `AUTOML_DEADLINE` to the original absolute Unix deadline.
+Once opted in, missing settings or an absent observer fail closed; there is no
+fallback to an unprobed launch. Use this path when startup recovery is part of
+the reviewed launch policy.
+
 Trial recovery and CPU handoff run inside Python. They cannot recover a failed
 batch prolog, missing interpreter, failed environment import or bootstrap that
 never reaches the search controller. The submitting process must therefore
@@ -233,6 +250,12 @@ and `USR1` to exit while bootstrap is running; never ignore an early signal.
 Use a fresh attempt directory for each native job ID and `SLURM_RESTART_COUNT`
 generation. Validate the generation against the approved allocation cap before
 probing. The external observer must watch each generation automatically.
+The batch template diagnoses invalid restart/allocation values and exhausted
+caps before installing signal traps or running helpers. Bootstrap signals and
+helper failures exit with a diagnostic and status 2, not `EX_TEMPFAIL` (75).
+They do not request native requeue; the external supervisor still owns terminal
+reconciliation and approved startup retries. Site-enforced restarts can still
+occur, but an out-of-budget generation cannot probe or start the controller.
 
 #### Persistent observer service
 
@@ -386,6 +409,10 @@ in-flight LLM request plus at least 60 seconds.
 
 Prepare [slurm_controller.sbatch](../examples/automl/slurm_controller.sbatch),
 replace its site placeholders, and set the documented environment variables.
+`AUTOML_WORKFLOW` is `sft` (default) or `prompts`; `AUTOML_ACTION` is `run`
+(default) or `resume` for a reviewed continuation. Other actions are rejected
+before any probe or approved CLI invocation. Startup probing remains optional
+as described [above](#before-the-search-controller-starts).
 The example starts one experiment per CPU job, using `exec` so the Python
 process receives `--signal=B:USR1@300`. Review before `sbatch`; the example is
 not a ready-to-launch site configuration. It is not a supervisor for an

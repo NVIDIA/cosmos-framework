@@ -51,6 +51,17 @@ published wheel. Git, repository access, and access to the package's build/runti
 dependencies are required. Configure Git authentication separately if needed;
 do not embed credentials in the source URL.
 
+Framework requires **`nvidia-automl-core==0.1.0`**. The source repository is public,
+but your environment must still be able to reach it and read the selected revision.
+If access is unavailable, obtain a reviewed `nvidia_automl_core-0.1.0-*.whl` from
+your project maintainer and install it into the controller environment instead.
+Record its SHA256 and originating source commit; do not substitute the TAO
+application package. Neither a `main` nor a development-branch name is an immutable
+build: [record the resolved commit and engine hash](#source-revision-package-version-and-build-identity)
+after a new installation, and pin that full commit (or retain the exact wheel)
+for reproduction and existing experiments. Source access failures are not permission
+to change branches or replace an existing controller environment.
+
 The repository contains two distributions: its root package is
 `nvidia-tao-automl` (the TAO application), while `packages/automl-core` builds
 `nvidia-automl-core` (the engine imported by Framework as `automl_core`). The
