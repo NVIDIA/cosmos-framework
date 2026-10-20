@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1 import LidarTokenizerV1Interface
 
 __all__ = [
     "LidarTokenizerV1Interface",

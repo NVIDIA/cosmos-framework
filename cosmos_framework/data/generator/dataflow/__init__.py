@@ -12,14 +12,25 @@ from cosmos_framework.data.generator.dataflow.base import (
     RawItemProcessor,
     SampleBatcher,
 )
-from cosmos_framework.data.generator.dataflow.batchers import PoolPackingBatcher, SequentialPackingBatcher, SimpleBatcher
+from cosmos_framework.data.generator.dataflow.batchers import (
+    ContiguousBatcher,
+    PoolPackingBatcher,
+    SequentialPackingBatcher,
+    SimpleBatcher,
+)
 from cosmos_framework.data.generator.dataflow.collators import DefaultBatchCollator, VFMListCollator
-from cosmos_framework.data.generator.dataflow.distributors import IterableDistributor, MapDistributor, MixtureDistributor, RankPartitionedDistributor
+from cosmos_framework.data.generator.dataflow.distributors import (
+    IterableDistributor,
+    MapDistributor,
+    MixtureDistributor,
+    RankPartitionedDistributor,
+)
 from cosmos_framework.data.generator.dataflow.loader import CosmosDataLoader, JointCosmosDataLoader
 from cosmos_framework.data.generator.dataflow.processors import IdentityProcessor
 
 __all__ = [
     "BatchCollator",
+    "ContiguousBatcher",
     "CosmosDataLoader",
     "JointCosmosDataLoader",
     "DataDistributor",

@@ -15,6 +15,8 @@ from cosmos_framework.data.generator.dataflow.base import SampleBatcher
 class SimpleBatcher(SampleBatcher):
     """Fixed-size batching — stock DataLoader behavior. Never needs sample_size."""
 
+    preserves_source_order = True
+
     def __init__(self, batch_size: int, drop_last: bool = False):
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size}")
@@ -30,6 +32,47 @@ class SimpleBatcher(SampleBatcher):
                 buf = []
         if buf and not self.drop_last:
             yield buf
+
+
+class ContiguousBatcher(SimpleBatcher):
+    """Resume-safe fixed-size batches with the VLM ``max_batch_size`` API.
+
+    Unlike pool packing, this batcher never reorders the map-style distributor
+    stream. The final sample position therefore remains an exact checkpoint
+    cursor for multi-sample batches.
+    """
+
+    def __init__(
+        self,
+        max_batch_size: int = 1,
+        max_tokens: int | None = None,
+        drop_last: bool = False,
+    ):
+        if max_tokens is not None and int(max_tokens) < 1:
+            raise ValueError("max_tokens must be positive when configured")
+        self.max_batch_size = max_batch_size
+        # Unlike PoolPackingBatcher, this is a per-sample sequence ceiling.
+        # The fixed contiguous batch size remains authoritative so the global
+        # batch and optimizer-update count do not change with token lengths.
+        self.max_tokens = int(max_tokens) if max_tokens is not None else None
+        super().__init__(batch_size=max_batch_size, drop_last=drop_last)
+
+    def batches(self, samples: Iterator[dict]) -> Iterator[list[dict]]:
+        if self.max_tokens is None:
+            yield from super().batches(samples)
+            return
+
+        def checked() -> Iterator[dict]:
+            for sample in samples:
+                input_ids = sample.get("input_ids")
+                if input_ids is not None and len(input_ids) > self.max_tokens:
+                    raise ValueError(
+                        "contiguous batch sample exceeds max_tokens: "
+                        f"{len(input_ids)} > {self.max_tokens}"
+                    )
+                yield sample
+
+        yield from super().batches(checked())
 
 
 class _Modality(Enum):
@@ -197,6 +240,8 @@ class SequentialPackingBatcher(SampleBatcher):
     sound params).
     """
 
+    preserves_source_order = True
+
     def __init__(
         self,
         max_sequence_length: Optional[int] = None,
@@ -234,6 +279,7 @@ class SequentialPackingBatcher(SampleBatcher):
         #   - list of ints        → len(text_token_ids)
         #   - 2-D tensor [1,S]    → shape[1]  (mirrors original .shape[1] branch)
         import torch as _torch
+
         text_token_ids = sample["text_token_ids"]
         if isinstance(text_token_ids, list):
             if len(text_token_ids) > 0 and isinstance(text_token_ids[0], _torch.Tensor):

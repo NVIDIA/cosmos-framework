@@ -114,7 +114,7 @@ class IterSpeed(EveryN):
     ) -> None:
         if self.hit_counter < self.hit_thres:
             log.info(
-                f"Iteration {iteration}: "
+                f"[RANK {log.RANK}] Iteration {iteration}: "
                 f"Hit counter: {self.hit_counter + 1}/{self.hit_thres} | "
                 f"Loss: {loss.detach().item():.4f} | "
                 f"Time: {time.time() - self.last_hit_time:.2f}s",

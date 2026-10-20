@@ -23,6 +23,7 @@ ______________________________________________________________________
   - [Dependency Issue](#dependency-issue)
   - [Python Issue](#python-issue)
   - [CUDA Issue](#cuda-issue)
+    - [TorchCodec Cannot Find CUDA 12 NPP](#torchcodec-cannot-find-cuda-12-npp)
 
 ______________________________________________________________________
 
@@ -325,3 +326,26 @@ sudo apt-get install -y --no-install-recommends cuda-toolkit-<cuda_major_version
 ```
 
 Alternatively, use the [Docker container](#docker-container).
+
+#### TorchCodec Cannot Find CUDA 12 NPP
+
+With `cu128` or `cu128-train`, `import torchcodec` can fail with
+`libnppicc.so.12: cannot open shared object file` when the host only exposes
+another CUDA major version. The environment already installs `nvidia-npp-cu12`,
+but its wheel directory is not necessarily on the system linker's search path.
+Do not substitute a CUDA 13 library for a CUDA 12 library.
+
+For a session-local workaround, use the matching libraries from the active
+environment. This also works when a launch script clears `LD_LIBRARY_PATH`:
+
+```shell
+source .venv/bin/activate
+COSMOS_NPP_LIBDIR="$(python -c 'from importlib.metadata import distribution; print(distribution("nvidia-npp-cu12").locate_file("nvidia/npp/lib"))')"
+export LD_PRELOAD="$COSMOS_NPP_LIBDIR/libnppc.so.12:$COSMOS_NPP_LIBDIR/libnppicc.so.12"
+LD_LIBRARY_PATH= python -c 'import torch; import torchcodec; print(torchcodec.__version__)'
+```
+
+Apply this only to the CUDA 12 environment that needs it. After the run, unset
+`LD_PRELOAD` and `COSMOS_NPP_LIBDIR` (or restore their previous values if set).
+This does not install or replace system CUDA libraries. A matching CUDA 12
+container or toolkit, as described above, is the alternative.

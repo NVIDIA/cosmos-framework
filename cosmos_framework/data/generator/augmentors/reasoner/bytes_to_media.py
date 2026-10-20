@@ -17,16 +17,17 @@ import torch
 from PIL import Image, UnidentifiedImageError
 from torchcodec.decoders import AudioDecoder, VideoDecoder
 
+from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.data.generator.reasoner.video_decoder_qwen import VideoTemporalMode, _video_decoder_qwen_func
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.reasoner.video_decoder_qwen import VideoTemporalMode, _video_decoder_qwen_func
-from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
 from cosmos_framework.utils.generator.source_video_timing import (
     SOURCE_VIDEO_TIMING_KEY,
     require_source_pts_processor,
     validate_source_video_timing,
     validate_video_timestamp_mode,
 )
+from cosmos_framework.utils.generator.torchcodec_video import probe_video
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
 from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY
 
@@ -168,7 +169,7 @@ class BytesToMedia(Augmentor):
     ) -> float | None:
         """Probe the effective video duration in seconds used for proportional budget allocation."""
         try:
-            metadata = VideoDecoder(video_bytes, num_ffmpeg_threads=self.video_decoder_params["num_threads"]).metadata
+            metadata = probe_video(video_bytes, num_threads=self.video_decoder_params["num_threads"])
             frame_count = (
                 max(end_frame - start_frame, 0)
                 if start_frame is not None and end_frame is not None

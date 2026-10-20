@@ -13,7 +13,7 @@ authors = [
 ]
 description = "Cosmos-Framework: Cosmos3 World Foundation Model (WFM)"
 requires-python = ">=3.10,<3.14"
-license = {text = "OpenMDW-1.1"}
+license = {text = "OpenMDW-1.1 AND Apache-2.0"}
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: GPU :: NVIDIA CUDA",
@@ -34,6 +34,7 @@ dependencies = [
   "hydra-core",
   "imageio-ffmpeg",
   "imageio",
+  "iopath>=0.1.10",
   "loguru",
   "msgpack",
   "nvidia-cudnn-frontend",
@@ -51,6 +52,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+automl = ["nvidia-automl-core==1.0.0.dev0"]
+automl-prompts = ["nvidia-automl-core[prompts]==1.0.0.dev0"]
+reasoner-eval = [
+  "attrs",
+  "evaluate",
+  "matplotlib",
+  "peft",
+  "pillow>=12.2.0",
+  "qwen-vl-utils",
+  "rouge-score",
+  "seaborn",
+  "toml",
+]
 guardrail = [
   "better-profanity",
   "nltk",
@@ -85,7 +99,6 @@ train = [
   "fvcore",
   "glfw",
   "h5py",
-  "iopath>=0.1.10",
   "imagecodecs",
   "ipycanvas",
   "ipyevents",
@@ -94,6 +107,7 @@ train = [
   "kornia",
   "lerobot",
   "librosa",
+  "liger-kernel>=0.8.3,<0.9",
   "lpips",
   "lz4",
   "matplotlib",
@@ -149,6 +163,10 @@ train = [
   "zarr",
 ]
 
+
+[project.scripts]
+cosmos-automl = "cosmos_framework.scripts.automl:main"
+cosmos-reasoner-evaluate = "cosmos_framework.evaluation.reasoner.evaluate:main"
 
 [dependency-groups]
 dev = [
@@ -322,6 +340,12 @@ repository = "https://github.com/NVIDIA/cosmos-framework"
 
 [tool.uv]
 required-version = ">=0.11.3"
+# Development delivery of the optional AutoML engine is by independently built
+# local wheel, not an index. Keep its published extra requirements above intact,
+# but leave that engine out of the repository's uv-managed environment. Install
+# the supplied wheel explicitly after sync; use uv run --no-sync for AutoML.
+# Remove this exception once the core has an approved distribution location.
+exclude-dependencies = ["nvidia-automl-core"]
 conflicts = [
   [
     {group = "cu128"},

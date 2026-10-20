@@ -14,7 +14,7 @@ from cosmos_framework.data.generator.processors.cosmos3_edge_processing import i
 from cosmos_framework.data.generator.processors.nemotron3densevl_processor import Nemotron3DenseVLProcessor
 from cosmos_framework.data.generator.processors.nemotronvl_processor import NemotronVLProcessor
 from cosmos_framework.data.generator.processors.qwen3vl_nemo_chat_processor import Qwen3VLNemoChatProcessor
-from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor, _is_local_qwen35_snapshot
 from cosmos_framework.model.generator.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
 from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
 
@@ -104,16 +104,6 @@ def _download_llm_tokenizer(
         cache_dir=cache_dir,
         s3_prefix=_LLM_S3_PREFIX,
     )
-
-
-def _is_local_qwen35_snapshot(path: str) -> bool:
-    """Recognize pinned Qwen3.5 snapshots whose directory name is only a revision."""
-    config_path = os.path.join(path, "config.json")
-    if not os.path.isfile(config_path):
-        return False
-    with open(config_path) as config_file:
-        config = json.load(config_file)
-    return config.get("model_type") in {"qwen3_5", "qwen3_5_moe"}
 
 
 def build_processor(

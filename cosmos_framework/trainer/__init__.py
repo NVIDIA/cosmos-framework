@@ -13,9 +13,13 @@ import torch
 import torch.distributed as dist
 import torch.utils.data
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.context_managers import distributed_init
-from cosmos_framework.utils.profiling import maybe_enable_memory_snapshot, maybe_enable_nsys_profiling, maybe_enable_profiling
+from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.profiling import (
+    maybe_enable_memory_snapshot,
+    maybe_enable_nsys_profiling,
+    maybe_enable_profiling,
+)
 
 try:
     from megatron.core import parallel_state
@@ -25,12 +29,11 @@ except ImportError:
     USE_MEGATRON = False
 
 
-from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
+from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.utils.misc import StragglerDetectorV2
-
 
 
 @dataclass
@@ -240,6 +243,27 @@ class ImaginaireTrainer:
         """
         super().__init__()
         self.config = config
+        steps_per_epoch = getattr(config.trainer, "steps_per_epoch", None)
+        num_epochs = getattr(config.trainer, "num_epochs", None)
+        self.steps_per_epoch = int(steps_per_epoch) if steps_per_epoch else None
+        self.num_epochs = int(num_epochs) if num_epochs else None
+        if (self.steps_per_epoch is None) != (self.num_epochs is None):
+            raise ValueError("trainer.steps_per_epoch and trainer.num_epochs must be configured together")
+        self.max_iterations = (
+            self.steps_per_epoch * self.num_epochs
+            if self.steps_per_epoch is not None and self.num_epochs is not None
+            else int(config.trainer.max_iter)
+        )
+        cycle_lengths = getattr(config.scheduler, "cycle_lengths", None)
+        if self.num_epochs is not None and cycle_lengths and sum(cycle_lengths) < self.max_iterations:
+            raise ValueError(
+                "scheduler.cycle_lengths must cover trainer.num_epochs * trainer.steps_per_epoch; "
+                "update the learning-rate schedule when changing the epoch horizon"
+            )
+        if int(getattr(config.checkpoint, "save_freq_in_epoch", 0)) > 0 and self.steps_per_epoch is None:
+            raise ValueError("checkpoint.save_freq_in_epoch requires trainer.num_epochs and trainer.steps_per_epoch")
+        if int(getattr(config.trainer, "validation_freq_in_epoch", 0)) > 0 and self.steps_per_epoch is None:
+            raise ValueError("trainer.validation_freq_in_epoch requires trainer.num_epochs and trainer.steps_per_epoch")
         self._validation_iterator: Iterator[Any] | None = None
         # Set up the distributed computing environment.
         with distributed_init():
@@ -543,12 +567,12 @@ class ImaginaireTrainer:
             maybe_enable_nsys_profiling(self.config, global_step=iteration) as nsys_profiler,
         ):
             while True:
-                if iteration >= self.config.trainer.max_iter:
+                if iteration >= self.max_iterations:
                     break
                 dataloader_train_iter = iter(dataloader_train)
                 while True:
-                    # If max_iter is reached, exit the training loop before loading the nex batch
-                    if iteration >= self.config.trainer.max_iter:
+                    # Stop at the effective epoch/iteration horizon before fetching another batch.
+                    if iteration >= self.max_iterations:
                         _end_training = True
                         break
                     self.callbacks.on_before_dataloading(iteration)
@@ -601,8 +625,27 @@ class ImaginaireTrainer:
                     # Do the following when an actual optimizer (update) step has been made.
                     iteration += 1
                     # Save checkpoint.
-                    if iteration % self.config.checkpoint.save_iter == 0:
-                        self.checkpointer.save(model, optimizer, scheduler, grad_scaler, iteration=iteration)
+                    completed_epoch = (
+                        iteration // self.steps_per_epoch
+                        if self.steps_per_epoch and iteration % self.steps_per_epoch == 0
+                        else None
+                    )
+                    save_freq_in_epoch = int(getattr(self.config.checkpoint, "save_freq_in_epoch", 0))
+                    epoch_save_due = bool(
+                        completed_epoch is not None
+                        and save_freq_in_epoch > 0
+                        and completed_epoch % save_freq_in_epoch == 0
+                    )
+                    iter_save_due = save_freq_in_epoch == 0 and iteration % self.config.checkpoint.save_iter == 0
+                    if epoch_save_due or iter_save_due:
+                        self.checkpointer.save(
+                            model,
+                            optimizer,
+                            scheduler,
+                            grad_scaler,
+                            iteration=iteration,
+                            epoch=completed_epoch if epoch_save_due else None,
+                        )
                     self.callbacks.on_training_step_end(
                         model,
                         step_batch.callback_post_step,
@@ -614,7 +657,16 @@ class ImaginaireTrainer:
                     # validation or the next training step. Callback-owned references remain valid.
                     del output_batch, loss
                     # Validation.
-                    if self.config.trainer.run_validation and iteration % self.config.trainer.validation_iter == 0:
+                    validation_freq_in_epoch = int(getattr(self.config.trainer, "validation_freq_in_epoch", 0))
+                    epoch_validation_due = bool(
+                        completed_epoch is not None
+                        and validation_freq_in_epoch > 0
+                        and completed_epoch % validation_freq_in_epoch == 0
+                    )
+                    iter_validation_due = (
+                        validation_freq_in_epoch == 0 and iteration % self.config.trainer.validation_iter == 0
+                    )
+                    if self.config.trainer.run_validation and (epoch_validation_due or iter_validation_due):
                         self.validate(model, dataloader_val, iteration=iteration)
                     # This iteration is successful; reset the timeout signal.
                     signal.alarm(self.config.trainer.timeout_period)
@@ -631,8 +683,24 @@ class ImaginaireTrainer:
         log.success("Done with training.")
         if sm_carveout:
             torch._C._set_sm_carveout_experimental(None)
-        if iteration % self.config.checkpoint.save_iter != 0:
-            self.checkpointer.save(model, optimizer, scheduler, grad_scaler, iteration=iteration)
+        final_epoch = (
+            iteration // self.steps_per_epoch
+            if self.steps_per_epoch and iteration % self.steps_per_epoch == 0
+            else None
+        )
+        save_freq_in_epoch = int(getattr(self.config.checkpoint, "save_freq_in_epoch", 0))
+        final_already_saved = (
+            final_epoch is not None and save_freq_in_epoch > 0 and final_epoch % save_freq_in_epoch == 0
+        ) or (save_freq_in_epoch == 0 and iteration % self.config.checkpoint.save_iter == 0)
+        if not final_already_saved:
+            self.checkpointer.save(
+                model,
+                optimizer,
+                scheduler,
+                grad_scaler,
+                iteration=iteration,
+                epoch=final_epoch if save_freq_in_epoch > 0 else None,
+            )
         self.callbacks.on_train_end(model, iteration=iteration)
         self.checkpointer.finalize()
         distributed.barrier()

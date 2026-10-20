@@ -13,6 +13,7 @@ ______________________________________________________________________
     - [Overriding the defaults](#overriding-the-defaults)
   - [Option B: raw `torchrun`](#option-b-raw-torchrun)
 - [Outputs](#outputs)
+- [Hybrid video reasoning SFT](#hybrid-video-reasoning-sft)
 - [Export checkpoint to Hugging Face safetensors](#export-checkpoint-to-hugging-face-safetensors)
   - [ViT / vision tower (Cosmos3-Edge)](#vit--vision-tower-cosmos3-edge)
 - [Convert to Diffusers](#convert-to-diffusers)
@@ -342,6 +343,82 @@ Outputs land under `$IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/`:
 1. `wandb/`, `wandb_id.txt`: Wandb run files — only present when `[job].wandb_mode` is `online` or `offline`.
 
 The shorthand `$RUN_DIR` used in the rest of this page refers to `$IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>`. For example, with `IMAGINAIRE_OUTPUT_ROOT=outputs/train` and the `vision_sft_nano` recipe, `$RUN_DIR` is `outputs/train/cosmos3/sft/vision_sft_nano`.
+
+## Hybrid video reasoning SFT
+
+The `video_reasoning_sft.toml` recipe accepts existing DAFT `tao-vl-reason-v1.0`
+annotations directly through Framework's native dataset loader. It also accepts
+the equivalent `cosmos-video-reasoning-v1.0` records. No dataset conversion or
+`nvidia-tao-daft` runtime installation is needed. Each JSON object contains an
+`items` array with `question`, `answer`, optional `reasoning`, and `video_id` fields:
+
+```json
+{
+  "items": [
+    {
+      "video_id": "clip.mp4",
+      "question": "Why does the car stop?",
+      "answer": "The light is red.",
+      "reasoning": "The car approaches a red traffic light."
+    }
+  ]
+}
+```
+
+Set annotation paths independently for training and validation. A single path
+or a JSON array of paths is accepted; multiple files are concatenated in order.
+For example, with a staged Cosmos3-Nano VLM safetensors checkpoint:
+
+```shell
+export VLM_SAFETENSORS_PATH=/checkpoints/cosmos3-nano-vlm
+export COSMOS_VIDEO_TRAIN_ANNOTATIONS='["/data/train-bcq.json", "/data/train-mcq.json"]'
+export COSMOS_VIDEO_VAL_ANNOTATIONS=/data/val.json
+export COSMOS_VIDEO_TRAIN_MEDIA_ROOTS=/data/videos
+export COSMOS_VIDEO_VAL_MEDIA_ROOTS=/data/videos
+export COSMOS_VIDEO_TRAIN_RESPONSE_MODE=hybrid
+export COSMOS_VIDEO_VAL_RESPONSE_MODE=answer
+
+torchrun --nproc-per-node=4 -m cosmos_framework.scripts.train \
+  --sft-toml=examples/toml/sft_config/video_reasoning_sft.toml \
+  -- trainer.seed=42
+```
+
+Media roots may be a shared path or a JSON array matching the annotation paths.
+When omitted, Framework resolves an annotation's `media_root` relative to its
+JSON directory, or uses that directory if the field is absent. The older
+Cosmos-RL DAFT hook uses the annotation directory when no explicit root is given,
+ignoring an embedded `media_root`; supply explicit roots to preserve those paths.
+These video recipes do not support `image_id` records.
+
+Each split accepts these settings (`TRAIN` or `VAL` replaces `{SPLIT}`):
+
+| Environment variable                 | Meaning                                                            | Default                                        |
+| ------------------------------------ | ------------------------------------------------------------------ | ---------------------------------------------- |
+| `COSMOS_VIDEO_{SPLIT}_RESPONSE_MODE` | `answer`, `think`, or `hybrid`                                     | `hybrid` for training; `answer` for validation |
+| `COSMOS_VIDEO_{SPLIT}_SAMPLE_STRIDE` | Select every Nth raw item; positive integer                        | `1`                                            |
+| `COSMOS_VIDEO_{SPLIT}_SAMPLE_OFFSET` | Start at this raw index; non-negative integer                      | `0`                                            |
+| `COSMOS_VIDEO_{SPLIT}_LIMIT`         | Maximum exposed samples after response expansion; positive integer | Unset (unlimited)                              |
+| `COSMOS_VIDEO_SYSTEM_PROMPT`         | Optional system message for both splits                            | Empty                                          |
+
+`answer` targets contain the answer alone. `think` targets contain
+`<think>\n{reasoning}\n</think>\n\n{answer}`, falling back to the answer if
+reasoning is absent or empty. `hybrid` exposes two targets per selected raw item,
+interleaved as answer, think, answer, think, matching the Cosmos-RL DAFT hook.
+Stride and offset apply before expansion; the limit applies afterward and may
+end on an unpaired answer when odd. An offset past the input produces no samples.
+For example, stride `2`, offset `1`, and limit `3` expose the answer and think
+targets for raw item `1`, then the answer target for raw item `3`.
+
+The reasoning processor applies the Qwen3-VL Instruct chat template to preserve
+explicit think tags and avoid an injected empty think block. Loss masking trains
+assistant tokens, including supplied reasoning, while ignoring prompt tokens.
+Framework uses its native TorchCodec video processor and lifecycle/checkpoint
+callbacks; this migration preserves the response/sampling contract, not the
+Cosmos-RL decoder implementation. Adjust frame/pixel budgets and the smoke
+recipe's training schedule for your workload; its fixed optimizer-step budget
+does not automatically double in hybrid mode. The Edge experiment is
+`cosmos_task_aware_video_reasoning_edge` and uses the same dataset settings; use
+an Edge checkpoint and its corresponding model and token budgets.
 
 ## Export checkpoint to Hugging Face safetensors
 

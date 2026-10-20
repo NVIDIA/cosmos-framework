@@ -26,8 +26,8 @@ The images selected by the sampler are unchanged.
 
 This matches Qwen's TorchCodec/Decord index/FPS convention. It is distinct from
 using decoder presentation timestamps (PTS): those can differ on variable-rate
-video. The optional crop-relative `source_pts` policy is documented in
-[Video timestamp policies](../../docs/reasoner/source_video_timestamps.md). <!-- rumdl-disable-line MD057 -->
+video. The optional crop-relative `source_pts` policy is validated in
+[source_video_timing.py](../../../utils/generator/source_video_timing.py).
 
 Existing manually supplied frames without source metadata retain their local
 frame-sequence/FPS fallback. Other processor families retain their existing decoder
