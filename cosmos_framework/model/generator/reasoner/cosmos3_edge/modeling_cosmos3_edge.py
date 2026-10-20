@@ -19,6 +19,7 @@ State-dict keys are contractual (safetensors loader, freeze regex
 from __future__ import annotations
 
 import contextlib
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Tuple, Union
 
@@ -28,6 +29,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import ACT2FN
+from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
@@ -49,6 +51,40 @@ from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.vision_siglip
 )
 
 logger = logging.get_logger(__name__)
+
+_EDGE_ROOT_MODULES = {
+    "visual": "model.visual",
+    "projector": "model.projector",
+    "embed_tokens": "model.language_model.embeddings",
+    "norm": "model.language_model.norm_f",
+}
+_EDGE_LAYER_MODULES = {
+    "input_layernorm": (0, "norm"),
+    "post_attention_layernorm": (1, "norm"),
+    "self_attn.to_q": (0, "mixer.q_proj"),
+    "self_attn.to_k": (0, "mixer.k_proj"),
+    "self_attn.to_v": (0, "mixer.v_proj"),
+    "self_attn.to_out": (0, "mixer.o_proj"),
+    "mlp.up_proj": (1, "mixer.up_proj"),
+    "mlp.down_proj": (1, "mixer.down_proj"),
+}
+
+
+def edge_flat_to_native_key(name: str) -> str | None:
+    """Map a flat Diffusers Edge key to the native alternating text graph."""
+    for source, target in _EDGE_ROOT_MODULES.items():
+        if name == source or name.startswith(f"{source}."):
+            return target + name[len(source) :]
+    if not name.startswith("layers."):
+        return None
+    layer, separator, path = name.removeprefix("layers.").partition(".")
+    if not separator or not layer.isdigit():
+        return None
+    index = int(layer)
+    for source, (offset, target) in _EDGE_LAYER_MODULES.items():
+        if path == source or path.startswith(f"{source}."):
+            return f"model.language_model.layers.{2 * index + offset}.{target}{path[len(source) :]}"
+    return None
 
 
 class Cosmos3EdgeRMSNorm(nn.Module):
@@ -714,6 +750,28 @@ class Cosmos3EdgeForConditionalGeneration(Cosmos3EdgePreTrainedModel, Generation
 
     _tied_weights_keys = ["lm_head.weight"]
     config_class = Cosmos3EdgeConfig
+
+    @classmethod
+    def from_pretrained(
+        cls, pretrained_model_name_or_path: Any, *args: Any, **kwargs: Any
+    ) -> "Cosmos3EdgeForConditionalGeneration":
+        config = kwargs.get("config")
+        if not isinstance(config, PretrainedConfig):
+            # Inspect the layer count without consuming HF's config overrides
+            # or the revision/subfolder options also needed to locate weights.
+            config_kwargs = {key: value for key, value in kwargs.items() if key != "config"}
+            config = cls.config_class.from_pretrained(
+                config if config is not None else pretrained_model_name_or_path, **config_kwargs
+            )
+        flat_modules = list(_EDGE_ROOT_MODULES)
+        flat_modules.extend(
+            f"layers.{index}.{module}"
+            for index in range(config.text_config.num_hidden_layers)
+            for module in _EDGE_LAYER_MODULES
+        )
+        mapping = {rf"^{re.escape(module)}\.(.*)$": rf"{edge_flat_to_native_key(module)}.\1" for module in flat_modules}
+        mapping.update(kwargs.pop("key_mapping", None) or {})
+        return super().from_pretrained(pretrained_model_name_or_path, *args, key_mapping=mapping, **kwargs)
 
     def __init__(self, config: Cosmos3EdgeConfig) -> None:
         super().__init__(config)
