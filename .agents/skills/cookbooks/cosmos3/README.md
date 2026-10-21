@@ -14,9 +14,7 @@ backend you want to run and follow that one section.
 | [Transformers](#transformers) | Hugging Face Transformers inference | Reasoner |
 | [vLLM](#vllm) | OpenAI-compatible reasoning server (image/video understanding) | Reasoner |
 | [vLLM-Omni](#vllm-omni) | OpenAI-compatible generation server (image/video/audio/action/transfer) | Generator (Audiovisual, Action, **Transfer**), Simulation ([Transfer-Auto](simulation/auto/auto.md), [Sim-Auto](simulation/auto/run_sim_auto_with_vllm_omni.ipynb), [Sim-Transfer](simulation/transfer/transfer.md#vllm-omni)) |
-| [Cosmos3 Certified NIM](#cosmos3-certified-nim) | Prebuilt NGC container serving either the Generator (image/video/action/transfer) or the Reasoner from one image | Reasoner, Generator (Audiovisual, Action, Transfer) |
-| [Reasoner NIM](#reasoner-nim) | Prebuilt OpenAI-compatible reasoning server (image/video understanding); no venv | Reasoner |
-| [Generator NIM](#generator-nim) | Prebuilt NGC container serving the Cosmos3 Generator for Text-to-Video and Image-to-Video inference | Generator (Audiovisual) |
+| [Cosmos3 NIM](#cosmos3-nim) | Prebuilt NGC container serving either the Generator (image/video/action/transfer) or the Reasoner from one image | Reasoner, Generator (Audiovisual, Action, Transfer) |
 
 ## Prerequisites
 
@@ -36,9 +34,9 @@ backend you want to run and follow that one section.
   To disable the guardrail, set `enable_safety_checker=False` (Diffusers),
   `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` or `use_guardrails: false` through
   `extra_params` (TensorRT-LLM), `guardrails: false` (vLLM-Omni
-  `extra_params`/`extra_args`), or `--no-guardrails` (Cosmos Framework). For Generator NIM set environment variables `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0`.
-- NIMs don't need Hugging Face access; instead, an NGC API key is required
-  (used as `NGC_API_KEY`). You can generate one on [build.nvidia.com](https://build.nvidia.com/) or [NGC](https://catalog.ngc.nvidia.com/), then run `docker login nvcr.io` once (username `$oauthtoken`, password = your key). This repository uses the Reasoner NIM image `nvcr.io/nim/nvidia/cosmos3-reasoner` and the Generator NIM image `nvcr.io/nim/nvidia/cosmos3-generator`.
+  `extra_params`/`extra_args`), or `--no-guardrails` (Cosmos Framework). For the Cosmos3 NIM Generator, set `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0 NIM_ENABLE_SIGLIP_GUARDRAILS=0`.
+- The NIM doesn't need Hugging Face access; instead, an NGC API key is required
+  (used as `NGC_API_KEY`). You can generate one on [build.nvidia.com](https://build.nvidia.com/) or [NGC](https://catalog.ngc.nvidia.com/), then run `docker login nvcr.io` once (username `$oauthtoken`, password = your key). This repository uses the Cosmos3 NIM image `nvcr.io/nim/nvidia/cosmos3:2.1.0` for both the Generator and the Reasoner.
 - For the Cosmos Framework backend: access to `git@github.com:NVIDIA/cosmos-framework.git`.
 - Enough local disk for the venv/image, the uv cache, and the model cache. Nano
   downloads plus CUDA dependencies can take tens of GiB.
@@ -778,7 +776,7 @@ Ensure the server has enough GPUs for the product of enabled degrees
 
 ## NIM
 
-Prebuilt NGC containers for Cosmos3. Like vLLM-Omni, NIM runs from Docker, so
+A prebuilt NGC container for Cosmos3. Like vLLM-Omni, NIM runs from Docker, so
 there is no venv or `--torch-backend` to manage. Unlike the Hugging Face based
 backends, NIM authenticates with an NGC API key instead of a Hugging Face token
 (see [Prerequisites](#prerequisites)).
@@ -790,10 +788,10 @@ export NGC_API_KEY=<your_key>
 echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
 ```
 
-Each NIM below exposes readiness at `GET /v1/health/ready` after model
+The NIM exposes readiness at `GET /v1/health/ready` after model
 download, engine initialization, and warmup complete.
 
-### Cosmos3 Certified NIM
+### Cosmos3 NIM
 
 A single prebuilt container that serves **either** runtime — one runtime per
 container, chosen at launch with `NIM_MODEL_TYPE`:
@@ -810,6 +808,7 @@ Start the Nano Generator runtime:
 export NGC_API_KEY=<your_key>
 export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
 mkdir -p "$LOCAL_NIM_CACHE"
+chmod -R 777 "$LOCAL_NIM_CACHE" 2>/dev/null || true
 
 docker run -d --name cosmos3-generator \
   --gpus '"device=0"' \
@@ -827,99 +826,18 @@ docker run -d --name cosmos3-generator \
 ```
 
 Set `NIM_MODEL_TYPE=reasoner` for the Reasoner runtime. `NIM_MODEL_VARIANT`
-selects the checkpoint: `nano` or `super` for either runtime, plus
-`nano-droid`, `super-t2i`, `super-t2i-4step`, `super-i2v`, and
-`super-i2v-4step` for the Generator. On DGX Spark/GB10 and Jetson AGX Thor, the
-Reasoner also needs `NIM_GPU_MEMORY_UTILIZATION` set explicitly.
+selects the checkpoint: `nano` or `super` for either runtime, `edge` for the
+Reasoner, plus `edge-droid` (experimental), `nano-droid`, `super-t2i`,
+`super-t2i-4step`, `super-i2v`, and `super-i2v-4step` for the Generator. On DGX
+Spark/GB10 and Jetson AGX Thor, the Reasoner defaults to a 0.70
+`NIM_GPU_MEMORY_UTILIZATION` share of unified memory.
 
-The [Cosmos3 Certified NIM cookbook](nim/README.md) is the full guide —
+The [Cosmos3 NIM cookbook](nim/README.md) is the full guide —
 [deployment](nim/deployment.md), [support matrix](nim/support-matrix.md),
 [configuration](nim/configuration.md), and [API reference](nim/api-reference.md),
 with worked examples for [generation](nim/generation.md),
 [action](nim/action.md), [transfer](nim/transfer.md), and
 [reasoning](nim/reasoning.md).
-
-### Reasoner NIM
-
-A prebuilt container that serves the Reasoner over an OpenAI-compatible API for
-image and video understanding.
-
-Start a Nano Reasoner server (publishes the API on port 8000; the first run
-downloads the model into `~/.cache/nim`):
-
-```bash
-export NGC_API_KEY=<your_key>
-
-docker run --runtime=nvidia --gpus all \
-  --shm-size=32GB \
-  -e NGC_API_KEY="$NGC_API_KEY" \
-  -e NIM_MODEL_SIZE=nano \
-  -v ~/.cache/nim:/opt/nim/.cache \
-  -u $(id -u) \
-  -p 8000:8000 \
-  nvcr.io/nim/nvidia/cosmos3-reasoner:1.7.0
-```
-
-For **Cosmos3-Super-Reasoner** (the larger model), set `-e NIM_MODEL_SIZE=super`.
-The container serves `nvidia/cosmos3-nano-reasoner` (or
-`nvidia/cosmos3-super-reasoner`); pass that exact name as the request `model`, or
-resolve it dynamically with `client.models.list()`.
-
-### Generator NIM
-
-A prebuilt container that serves **Cosmos3-Generator Text-to-Video and Image-to-Video
-only** through `POST /v1/infer`. The NIM infers mode from the request fields:
-non-empty `prompt` with no `image` means Text-to-Video; `image` provided means Image-to-Video. The
-response is JSON with a base64-encoded MP4 in `b64_video`.
-
-It does **not** expose text-to-image, video-to-video, sound/audio generation,
-action modes, or transfer controls. Use vLLM-Omni or Cosmos Framework for those
-broader Generator workflows.
-
-Start a Nano Generator server (default `NIM_MODEL_SIZE=nano`, `NIM_PRECISION=fp8`,
-`NIM_PERF_PROFILE=latency`):
-
-```bash
-export NGC_API_KEY=<your_key>
-export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
-mkdir -p "$LOCAL_NIM_CACHE"
-chmod -R 777 "$LOCAL_NIM_CACHE" 2>/dev/null || true
-
-docker run --runtime=nvidia --gpus all \
-  --shm-size=32GB \
-  --ulimit nofile=65536:65536 \
-  -e NGC_API_KEY="$NGC_API_KEY" \
-  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
-  -p 8000:8000 \
-  nvcr.io/nim/nvidia/cosmos3-generator:1.0.0
-```
-
-For **Cosmos3-Super Generator**, add `-e NIM_MODEL_SIZE=super`. Other selection
-knobs:
-
-| Env var | Values | Default | Use |
-| --- | --- | --- | --- |
-| `NIM_MODEL_SIZE` | `nano`, `super` | `nano` | Selects 8B Nano or 32B Super |
-| `NIM_PRECISION` | `bf16`, `fp8`, `nvfp4` | `fp8` | Selects precision; `nvfp4` requires Blackwell |
-| `NIM_PERF_PROFILE` | `latency`, `throughput` | `latency` | Optimizes profile selection objective |
-| `NIM_TAGS_SELECTOR` | comma-separated `key=value` filters | unset | Advanced profile pinning, e.g. `model_size=super,nim_tp=2` |
-
-A quick T2V smoke test:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8000/v1/infer \
-  -H 'Accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "prompt": "A humanoid robot walks through a futuristic warehouse, inspecting shelves of mechanical components.",
-    "seed": 42,
-    "guidance_scale": 6.0,
-    "steps": 35,
-    "resolution": "256",
-    "num_output_frames": 25,
-    "fps": 24.0
-  }' | jq -r '.b64_video' | base64 -d > /tmp/cosmos3_generator_nim_t2v.mp4
-```
 
 ## Verify the environment
 

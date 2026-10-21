@@ -142,15 +142,38 @@ example resolves the model dynamically
 
 ### Quickstart
 
-Set up the environment: [NIM setup](../README.md#nim). That launches the
-prebuilt [Cosmos 3 Reasoner NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/cosmos3-reasoner)
-container, which serves the same OpenAI-compatible chat-completions API as the
-vLLM path on port 8000 — without the vLLM/CUDA setup. You can also try this same
-NIM interactively in your browser on the
+Set up the environment: [NIM setup](../README.md#cosmos3-nim). The
+Cosmos3 NIM serves the Reasoner through the same OpenAI-compatible
+chat-completions API as the vLLM path on port 8000, without the vLLM/CUDA
+setup. You can also try this same NIM interactively in your browser on the
 [cosmos3-nano-reasoner build page](https://build.nvidia.com/nvidia/cosmos3-nano-reasoner).
+Launch it with `NIM_MODEL_TYPE=reasoner`:
 
-Once the server is up, query it with the OpenAI client (the served model name is
-`nvidia/cosmos3-nano-reasoner`, or `nvidia/cosmos3-super-reasoner` for Super):
+```bash
+export NGC_API_KEY=<your_key>
+export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
+mkdir -p "$LOCAL_NIM_CACHE"
+chmod -R 777 "$LOCAL_NIM_CACHE" 2>/dev/null || true
+
+docker run -d --name cosmos3-reasoner \
+  --gpus '"device=0"' \
+  --shm-size 16g \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  --ulimit nofile=65536:65536 \
+  -p 8000:8000 \
+  -e NGC_API_KEY \
+  -e NIM_MODEL_TYPE=reasoner \
+  -e NIM_MODEL_VARIANT=nano \
+  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
+  nvcr.io/nim/nvidia/cosmos3:2.1.0
+```
+
+For Super, Edge, and unified-memory systems such as DGX Spark, refer to
+[Launch Reasoner](../nim/deployment.md#launch-reasoner) and
+[Deploy Edge Models](../nim/deployment.md#deploy-edge-models). Once the server
+is up, query it with the OpenAI client and resolve the served model name
+dynamically:
 
 ```python
 import base64
@@ -163,9 +186,10 @@ mime = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
 image_url = f"data:{mime};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
 
 client = openai.OpenAI(api_key="not-used", base_url="http://127.0.0.1:8000/v1")
+model = client.models.list().data[0].id
 
 response = client.chat.completions.create(
-    model="nvidia/cosmos3-nano-reasoner",
+    model=model,
     messages=[
         {
             "role": "user",
@@ -184,22 +208,9 @@ print(response.choices[0].message.content)
 Video inputs use the `video_url` content type and accept `media_io_kwargs`
 frame-sampling controls through `extra_body`
 (`{"media_io_kwargs": {"video": {"fps": 4.0}}}`). See the
-[Cosmos Reason 3 NIM API reference](https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/cosmos-reason3/api.html)
-for the full request reference.
-
-### Notebook walkthrough
-
-[`run_with_nim.ipynb`](./run_with_nim.ipynb) is the NIM counterpart to the vLLM
-notebook: it launches the NIM container, waits for readiness, and then runs the
-same image and video examples — detailed captioning, VQA, temporal localization,
-embodied reasoning, common-sense reasoning, 2D grounding, describe-anything,
-action CoT trajectories, driving scenes, physical-plausibility, and situation
-understanding. Because the container does not see the host filesystem, local
-assets are sent as base64 data URIs; video frame sampling is controlled with
-`media_io_kwargs` while spatial resolution is controlled with
-`mm_processor_kwargs`. Each example resolves the served model dynamically
-(`client.models.list()`), so the prompts work unchanged for both the `nano` and
-`super` sizes.
+[Cosmos3 NIM reasoning guide](../nim/reasoning.md) for the full request
+reference, the Responses API, structured output, and a runnable task catalog
+under [`nim/examples/`](../nim/examples).
 
 ## Run with Transformers
 
