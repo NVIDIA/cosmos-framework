@@ -27,11 +27,11 @@ Download the [Sim-Transfer release](https://huggingface.co/nvidia/Cosmos3-Nano-S
 the matching [Nano text tokenizer](https://huggingface.co/nvidia/Cosmos3-Nano/tree/e59a53c25979a090fa8706c9acc0c254a6e89b92/text_tokenizer)
 and the [Wan video VAE](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B/blob/921dbaf3f1674a56f47e83fb80a34bac8a8f203e/Wan2.2_VAE.pth).
 
-The commands use immutable revisions and your Hugging Face login:
+The commands use your Hugging Face login:
 
 ```bash
 export SIM_TRANSFER_CHECKPOINT="$(hf download nvidia/Cosmos3-Nano-Sim-Transfer \
-  --revision 23b7738403e9b183eeecdec7e351324e8c00b613 --exclude 'assets/*')"
+  --revision main --exclude 'assets/*')"
 export SIM_TRANSFER_TOKENIZER_SNAPSHOT="$(hf download nvidia/Cosmos3-Nano \
   --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --include 'text_tokenizer/*')"
 export SIM_TRANSFER_TEXT_TOKENIZER="$SIM_TRANSFER_TOKENIZER_SNAPSHOT/text_tokenizer"
@@ -197,7 +197,7 @@ for coupled settings. Use a separate output destination for each changed request
 
 ## Run example1 long rollout
 
-Use [HF example1](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/23b7738403e9b183eeecdec7e351324e8c00b613/assets/sample_data/example1)
+Use [HF example1](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/main/assets/sample_data/example1)
 only for long-rollout inference with depth or segmentation. Its controls contain
 600 frames at 30 FPS and 384 × 384. The 480-tier model canvas is 640 × 640.
 The preparation step extracts the `prompt` string from its upsampled JSON
@@ -208,7 +208,7 @@ the example2 workflow remains available:
 
 ```bash
 SIM_TRANSFER_LONG_SNAPSHOT="$(hf download nvidia/Cosmos3-Nano-Sim-Transfer \
-  --revision 23b7738403e9b183eeecdec7e351324e8c00b613 --include 'assets/sample_data/example1/*')"
+  --revision main --include 'assets/sample_data/example1/*')"
 SIM_TRANSFER_LONG_OUTPUT="${SIM_TRANSFER_LONG_OUTPUT:?Choose a destination for the example1 rollout}"
 python "$SIM_TRANSFER_SKILL/scripts/prepare_hf_sample.py" \
   --example example1 \

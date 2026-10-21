@@ -61,7 +61,7 @@ Use the [Framework environment and model assets](framework-runtime.md), native
 and [native training index](../post-training/references/data-contract.md#local-training-index).
 Run commands from the matching Cosmos Framework checkout.
 
-The [shared example scene](reference-scene.md) provides a pinned HF download,
+The [shared example scene](reference-scene.md) provides an HF download,
 checksum instructions, the local layout and a shared training index. Its data
 revision is separate from the compatible model snapshots required below.
 

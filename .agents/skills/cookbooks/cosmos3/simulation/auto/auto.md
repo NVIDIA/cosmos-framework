@@ -184,9 +184,9 @@ run-to-run variation.
 vLLM-Omni serves the exported model through the OpenAI-compatible Videos
 API using the `vllm/vllm-omni:cosmos3` Docker image. The examples use maskless Multiview
 attention, joint LiDAR encoding and decoding, and asynchronous numeric output, with
-`nvidia/Cosmos3-Nano-Transfer-Auto` revision `b8dcc2f70421e31db86d1b81d194c791d65eaad2`.
+`nvidia/Cosmos3-Nano-Transfer-Auto` revision `main`.
 The examples' inputs come from the shared daytime sample in the same model repository,
-`assets/sample_data` at revision `b8dcc2f70421e31db86d1b81d194c791d65eaad2`: one scene recorded by
+`assets/sample_data` at revision `main`: one scene recorded by
 seven synchronized cameras, each with an RGB video, a WSM control, and a caption, all 1280×720 with
 300 frames at 30 FPS. The notebook downloads them into the Hugging Face cache and verifies them
 against the sample's `SHA256SUMS`; set `AUTO_SAMPLE_ROOT` to use a local copy. The
@@ -273,7 +273,7 @@ docker run --rm --gpus '"device=0"' --ipc=host \
   -w /app/vllm-omni \
   vllm/vllm-omni:cosmos3 \
   vllm serve nvidia/Cosmos3-Nano-Transfer-Auto \
-    --revision b8dcc2f70421e31db86d1b81d194c791d65eaad2 \
+    --revision main \
     --omni --model-class-name Cosmos3MultiviewPipeline \
     --diffusion-compile-granularity regional --no-diffusion-compile-dynamic \
     --no-guardrails \

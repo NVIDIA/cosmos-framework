@@ -28,7 +28,7 @@ Ordinary SFT of the final distilled student is not the workflow documented here.
 - An allocation sized for the selected topology, and new output directories.
 
 The shared [reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md)
-provides a pinned HF download of `daytime_scene` and its native training index.
+provides an HF download of `daytime_scene` and its native training index.
 It is a format example, not a training corpus. Use
 [Transfer-Auto data preparation](../../cosmos3-nano-transfer-auto/post-training/SKILL.md#prepare-a-local-training-bundle)
 to create the same local format. Then apply the

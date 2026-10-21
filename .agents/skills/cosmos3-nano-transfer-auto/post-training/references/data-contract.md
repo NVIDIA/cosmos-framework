@@ -78,7 +78,7 @@ Use a consistent clip ID matching the index, and actual camera-clock source IDs
 (0,3,6,... for aligned regular 30/10 Hz data). Do not renumber missing sweeps
 as if they were present. Use the projection described below, not arbitrary image
 indices. The [reference scene](../../shared/reference-scene.md) shows the concrete
-filenames and native index, with a pinned HF download and checksum instructions.
+filenames and native index, with an HF download and checksum instructions.
 
 Run `cosmos_framework.data.generator.local_simulation.auto_bundle` as shown in
 the [post-training skill](../SKILL.md#prepare-a-local-training-bundle). It writes

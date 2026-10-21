@@ -8,7 +8,7 @@ Cosmos Framework or vLLM-Omni.
 
 ## Choose your starting point
 
-- **Try model inference:** use the [published daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data).
+- **Try model inference:** use the [published daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/main/assets/sample_data).
   Its WSM controls are already rendered; no renderer setup is needed.
 - **Render your own scenario:** supply scene geometry, object tracks, calibration
   and poses. Follow the [conversion skill](skills/scenario-to-rds-hq/SKILL.md),

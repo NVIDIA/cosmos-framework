@@ -9,13 +9,13 @@ The scene and original `captions/` files come from the released
 
 ## Get the scene
 
-Download the [daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data)
+Download the [daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/main/assets/sample_data)
 from the Transfer-Auto **model repository**. Both models use these same assets:
 
 - Repository: `nvidia/Cosmos3-Nano-Transfer-Auto`
 - Repository type: `model`
 - Subdirectory: `assets/sample_data`
-- Immutable sample revision: `b8dcc2f70421e31db86d1b81d194c791d65eaad2`
+- Sample revision: `main`
 
 With the Hugging Face CLI available in your Framework environment, choose a local
 download directory outside the repository. If repository access requires it,
@@ -23,7 +23,7 @@ accept the model's access terms and authenticate with `hf auth login` first.
 
 ```bash
 export AUTO_SAMPLE_DOWNLOAD_DIR=/path/to/your/auto-example
-export AUTO_SAMPLE_REVISION=b8dcc2f70421e31db86d1b81d194c791d65eaad2
+export AUTO_SAMPLE_REVISION=main
 hf download nvidia/Cosmos3-Nano-Transfer-Auto \
   --repo-type model --revision "$AUTO_SAMPLE_REVISION" \
   --include 'assets/sample_data/*' \

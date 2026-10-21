@@ -7,7 +7,7 @@ LiDAR targets, HD-map range controls, and timing/calibration evidence.
 
 The [shared reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md)
 provides the seven-camera `daytime_scene` assets, native index and inference
-requests. Follow its pinned HF download and checksum instructions. One scene is
+requests. Follow its HF download and checksum instructions. One scene is
 a format example, not a sufficient dataset for assessing generalization.
 
 Prefer its `captions_with_timestamp/` variant when preparing post-training data:

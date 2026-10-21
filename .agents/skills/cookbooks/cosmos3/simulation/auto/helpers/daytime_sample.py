@@ -21,7 +21,7 @@ from helpers.lidar_rangemap import convert_control
 from helpers.wsm_helpers import caption_window
 
 SAMPLE_REPO = "nvidia/Cosmos3-Nano-Transfer-Auto"
-SAMPLE_REVISION = "b8dcc2f70421e31db86d1b81d194c791d65eaad2"
+SAMPLE_REVISION = "main"
 SAMPLE_PREFIX = "assets/sample_data"
 SAMPLE_SCENE = "daytime_scene"
 SAMPLE_CAMERAS = CAMERA_ORDER[:7]
@@ -62,7 +62,7 @@ def verify_sample(root: Path) -> Path:
 
 
 def fetch_sample(local_root: str | Path | None = None) -> Path:
-    """Return a verified sample root: ``local_root`` if given, else a pinned Hugging Face download.
+    """Return a verified sample root: ``local_root`` if given, else a Hugging Face download.
 
     Downloads inputs, both caption styles and native requests, but no model weights
     or recorded LiDAR targets. Later runs reuse the Hugging Face cache.

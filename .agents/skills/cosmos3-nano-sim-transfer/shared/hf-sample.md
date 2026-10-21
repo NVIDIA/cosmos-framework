@@ -1,12 +1,12 @@
 # Download the Hugging Face examples
 
 Download the examples from [Cosmos3-Nano-Sim-Transfer](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer)
-at revision `23b7738403e9b183eeecdec7e351324e8c00b613`.
+at revision `main`.
 
 | Example                                                                                                                                       | Source width × height | Frames / FPS | Use                                                                                     |
 | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------ | --------------------------------------------------------------------------------------- |
-| [example2](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/23b7738403e9b183eeecdec7e351324e8c00b613/assets/sample_data/example2) | 1920 × 1080           | 121 / 30     | Default for prompting, data preparation, Stage 0–3 training and four-modality inference |
-| [example1](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/23b7738403e9b183eeecdec7e351324e8c00b613/assets/sample_data/example1) | 384 × 384             | 600 / 30     | Long-rollout depth and segmentation walkthrough                                         |
+| [example2](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/main/assets/sample_data/example2) | 1920 × 1080           | 121 / 30     | Default for prompting, data preparation, Stage 0–3 training and four-modality inference |
+| [example1](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/main/assets/sample_data/example1) | 384 × 384             | 600 / 30     | Long-rollout depth and segmentation walkthrough                                         |
 
 Each HF folder contains five files: source RGB, depth, segmentation, a plain-text
 prompt and an upsampled prompt JSON. Use `example2` for the complete workflow.
@@ -22,7 +22,7 @@ training inputs and generated results. Choose a fresh directory; rerunning
 preparation replaces its request JSON files and `training.jsonl`.
 
 ```bash
-export SIM_TRANSFER_ASSET_REVISION="23b7738403e9b183eeecdec7e351324e8c00b613"
+export SIM_TRANSFER_ASSET_REVISION="main"
 export SIM_TRANSFER_DATA_ROOT="$(hf download nvidia/Cosmos3-Nano-Sim-Transfer \
   --revision "$SIM_TRANSFER_ASSET_REVISION" --include 'assets/sample_data/example2/*')"
 export SIM_TRANSFER_SAMPLE_ID="example2"

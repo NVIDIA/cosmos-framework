@@ -44,7 +44,7 @@ in the same Bash session:
 ### Prepare the input
 
 The preparation step uses `nvidia/Cosmos3-Nano-Sim-Transfer` revision
-`23b7738403e9b183eeecdec7e351324e8c00b613`. It writes these requests using the
+`main`. It writes these requests using the
 saved upsampled caption:
 
 | Request under `$SIM_TRANSFER_OUTPUT/requests/` | Input |
@@ -137,7 +137,7 @@ The [notebook](run_transfer_with_vllm_omni.ipynb) includes shared setup, input
 previews, generation, and video playback.
 
 The vLLM-Omni recipe uses `nvidia/Cosmos3-Nano-Sim-Transfer` at revision
-`23b7738403e9b183eeecdec7e351324e8c00b613`, which supports all four control
+`main`, which supports all four control
 modalities. The commands below keep this model revision and use the
 `vllm/vllm-omni:cosmos3` Docker image shared by all Simulation notebooks.
 
@@ -170,7 +170,7 @@ docker run --rm --gpus '"device=0"' --ipc=host \
   -w /app/vllm-omni \
   vllm/vllm-omni:cosmos3 \
   vllm serve nvidia/Cosmos3-Nano-Sim-Transfer \
-    --revision 23b7738403e9b183eeecdec7e351324e8c00b613 \
+    --revision main \
     --omni --model-class-name Cosmos3NanoSimTransferPipeline \
     --deploy-config vllm_omni/deploy/cosmos3_nano_sim_transfer.yaml \
     --no-guardrails \
@@ -192,7 +192,7 @@ pip install huggingface_hub requests
 ```
 
 From the Cosmos Framework checkout root on the server host, run the following
-Python code. It downloads the pinned HF inputs into the mounted checkout and
+Python code. It downloads the HF inputs into the mounted checkout and
 saves one MP4 per control modality:
 
 ```python
@@ -203,7 +203,7 @@ import requests
 from huggingface_hub import snapshot_download
 
 MODEL_ID = "nvidia/Cosmos3-Nano-Sim-Transfer"
-ASSET_REVISION = "23b7738403e9b183eeecdec7e351324e8c00b613"
+ASSET_REVISION = "main"
 BASE_URL = "http://127.0.0.1:8000"
 OUTPUT_DIR = Path("outputs/vllm_omni/transfer")
 INPUT_DIR = Path(".agents/skills/cookbooks/cosmos3/simulation/outputs/vllm_omni/transfer/inputs").resolve()

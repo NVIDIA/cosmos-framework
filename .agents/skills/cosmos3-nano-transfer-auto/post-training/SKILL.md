@@ -53,7 +53,7 @@ entry=(
 Read the [data contract](references/data-contract.md) for sensor meaning and the
 [parameter guide](references/parameter-guide.md) before changing training settings.
 Keep user assets outside the repository. The
-[reference scene](../shared/reference-scene.md) provides a pinned HF download,
+[reference scene](../shared/reference-scene.md) provides an HF download,
 the `daytime_scene` assets and a shared native training index. Use it as a format
 reference, then prepare a diverse corpus of your own recordings.
 
