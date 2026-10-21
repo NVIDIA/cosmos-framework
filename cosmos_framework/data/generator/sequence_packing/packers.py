@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,63 @@ def _get_optional_fps(
     if isinstance(fps_value, torch.Tensor):
         return float(fps_value.item())
     return float(fps_value)
+
+
+def validate_cross_view_fps(
+    sequence_plans: list[SequencePlan],
+    gen_data_clean: GenerationDataClean,
+    *,
+    require_single_view: bool = False,
+    separate_camera_items: bool = False,
+) -> None:
+    """Require real capture clocks for cross-view attention or same-view windows.
+
+    Call before packing replaces absent FPS with a fallback clock. Single-view,
+    single-sensor samples have no cross-view edges and need no capture clock here
+    unless ``require_single_view`` is set for a same-view window measured in seconds.
+    Control items share their target's view groups, so item count alone does not
+    make a sample cross-view. Set ``separate_camera_items`` only for the action
+    conditioning layout with one RGB item per camera, rather than control/target
+    items. Sensor FPS remains indexed by sample, not by vision item. Same-view
+    windows also require action-control FPS, indexed by action item.
+    """
+    vision_cursor = 0
+    action_cursor = 0
+    for sample_idx, plan in enumerate(sequence_plans):
+        action_idx = action_cursor
+        action_cursor += int(plan.has_action)
+        vision_views = 0
+        if plan.has_vision:
+            num_items = (
+                gen_data_clean.num_vision_items_per_sample[sample_idx]
+                if gen_data_clean.num_vision_items_per_sample is not None
+                else 1
+            )
+            if separate_camera_items:
+                vision_views = num_items
+            else:
+                vision_views = (
+                    max(gen_data_clean.num_views_per_vision_item[vision_cursor : vision_cursor + num_items], default=0)
+                    if gen_data_clean.num_views_per_vision_item is not None
+                    else 1
+                )
+            vision_cursor += num_items
+        if not require_single_view and vision_views + int(plan.has_lidar) + int(plan.has_radar) <= 1:
+            continue
+        for modality, present, fps_values, fps_idx in (
+            ("vision", plan.has_vision, gen_data_clean.fps_vision, sample_idx),
+            ("lidar", plan.has_lidar, gen_data_clean.fps_lidar, sample_idx),
+            ("radar", plan.has_radar, gen_data_clean.fps_radar, sample_idx),
+            ("action", require_single_view and plan.has_action, gen_data_clean.fps_action, action_idx),
+        ):
+            if not present:
+                continue
+            fps = _get_optional_fps(fps_values, fps_idx)
+            if fps is None or fps <= 0 or not math.isfinite(fps):
+                raise ValueError(
+                    "Multiview attention requires positive, finite "
+                    f"fps_{modality} for sample {sample_idx}; got {fps!r}."
+                )
 
 
 def resolve_item_condition_frames(

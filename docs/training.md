@@ -223,7 +223,7 @@ python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
 
 ## Step 3 — Run training
 
-**Weights & Biases (optional):** every recipe TOML defaults to `job.wandb_mode = "disabled"`. To log a run to W&B, flip that field to `"online"` in the TOML and export `WANDB_API_KEY` in your environment before launching.
+**Weights & Biases (optional):** training recipes default to `job.wandb_mode = "disabled"`. To log a run to W&B, set `wandb_mode = "online"` under `[job]` in the TOML (or pass `job.wandb_mode=online` as a command-line override) and export `WANDB_API_KEY` in your environment before launching.
 
 ### Option A (recommended): the paired launch shell
 

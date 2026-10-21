@@ -2,19 +2,26 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import torch
-from torch.distributed.tensor import DTensor, Partial
+from torch.distributed.tensor import DTensor, Partial, Replicate
 from torch.distributed.tensor.device_mesh import DeviceMesh
 
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata
 
 
-def _sum_over_mesh(local_tensor: torch.Tensor, device_mesh: DeviceMesh) -> torch.Tensor:
-    """Sum a local tensor over a device mesh while preserving autograd."""
-    return DTensor.from_local(
+def _sum_over_mesh(
+    local_tensor: torch.Tensor,
+    device_mesh: DeviceMesh,
+    *,
+    correct_gradients: bool = False,
+) -> torch.Tensor:
+    """Sum a local tensor over a device mesh with optional summed replica gradients."""
+    replicated = DTensor.from_local(
         local_tensor,
         device_mesh=device_mesh,
         placements=[Partial()] * device_mesh.ndim,
-    ).full_tensor()
+    ).redistribute(placements=[Replicate()] * device_mesh.ndim)
+    grad_placements = [Partial()] * device_mesh.ndim if correct_gradients else None
+    return replicated.to_local(grad_placements=grad_placements)
 
 
 def _scale_rank_sample_mean(
@@ -41,6 +48,8 @@ def _scale_rank_sample_mean(
 def _aggregate_sample_lbl_stats(
     lbl_metadata: LBLMetadata,
     context_parallel_mesh: DeviceMesh | None,
+    *,
+    correct_cp_gradients: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return sample LBL statistics aggregated over sequence-sharded CP.
 
@@ -85,6 +94,7 @@ def _aggregate_sample_lbl_stats(
     cp_sample_router_prob_sum_per_expert = _sum_over_mesh(
         local_sample_router_prob_sum_per_expert,
         context_parallel_mesh,
+        correct_gradients=correct_cp_gradients,
     )  # [num_layers,num_samples,num_experts]
     return cp_sample_num_tokens_per_expert, cp_sample_num_tokens, cp_sample_router_prob_sum_per_expert
 
@@ -95,6 +105,7 @@ def compute_load_balancing_loss(
     method: str,
     device_mesh: DeviceMesh | None,
     context_parallel_mesh: DeviceMesh | None = None,
+    correct_cp_gradients: bool = False,
 ) -> torch.Tensor | None:
     """
     Compute the load balancing loss. We compute the load balancing loss
@@ -121,6 +132,8 @@ def compute_load_balancing_loss(
             the "global" method and valid sample counts for the "sample" method.
         context_parallel_mesh: Sequence-sharded context-parallel mesh. Sample statistics
             are summed over this mesh before computing the loss.
+        correct_cp_gradients: Sum gradients from the replicated sample-level loss
+            over the context-parallel mesh before FSDP/DDP averages parameter gradients.
 
     Returns:
         The load balancing loss. None if lbl_metadata is None or coeff is None.
@@ -134,6 +147,7 @@ def compute_load_balancing_loss(
             _aggregate_sample_lbl_stats(
                 lbl_metadata,
                 context_parallel_mesh,
+                correct_cp_gradients=correct_cp_gradients,
             )
         )  # [num_layers,num_samples,num_experts], [num_layers,num_samples,1], [num_layers,num_samples,num_experts]
 

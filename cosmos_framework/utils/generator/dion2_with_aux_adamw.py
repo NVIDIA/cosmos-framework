@@ -1706,8 +1706,9 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 group["step"] = torch.tensor([1], dtype=torch.int32, device=device)
 
             # An LR scheduler may have written a plain float into the group.
-            if not isinstance(group["lr"], torch.Tensor):
-                group["lr"] = torch.tensor(group["lr"], dtype=torch.float32, device=device)
+            # DCP state initialization can temporarily substitute a CPU tensor.
+            # TE's capturable kernel requires an FP32 LR on the parameter's device.
+            group["lr"] = torch.as_tensor(group["lr"], dtype=torch.float32, device=device)
 
             lr = group["lr"]
             wd = group["weight_decay"]

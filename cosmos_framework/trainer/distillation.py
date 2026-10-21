@@ -9,13 +9,13 @@ from typing import cast
 import torch
 from loguru import logger as log
 
-from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.distillation.optimizer import (
     PhaseOptimizer,
     PhaseScheduler,
     iter_torch_optimizers,
 )
+from cosmos_framework.trainer import ImaginaireTrainer
+from cosmos_framework.utils import distributed
 
 __all__: tuple[str, ...] = ("DistillationTrainer",)
 
@@ -89,6 +89,7 @@ class DistillationTrainer(ImaginaireTrainer):
                 "fwd", self.config.trainer.straggler_detection.analyze_forward
             ):
                 closures = list(closure_fn(data, iteration))
+        self.callbacks.on_after_forward(iteration=iteration)
         if len(closures) == 0:
             raise RuntimeError(f"{type(model).__name__}.training_step_closures yielded no closures.")
 
@@ -97,6 +98,7 @@ class DistillationTrainer(ImaginaireTrainer):
         should_sync_grad = grad_accum_iter == self.config.trainer.grad_accum_iter - 1
         for _closure_name, closure, is_last_closure in closures:
             with _sync_grad_for_closure(model_ddp, should_sync_grad and is_last_closure):
+                self.callbacks.on_before_forward(iteration=iteration)
                 with self.training_timer("forward"):
                     with self.straggler_detector.profile_section(
                         "fwd", self.config.trainer.straggler_detection.analyze_forward
@@ -127,6 +129,7 @@ class DistillationTrainer(ImaginaireTrainer):
                     self.callbacks.on_before_optimizer_step(
                         model, optimizer, scheduler, grad_scaler, iteration=iteration
                     )
+                    model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
                     self._optimizer_step(model, optimizer, scheduler, grad_scaler, iteration=iteration)
                     self.callbacks.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
                     model.on_before_zero_grad(optimizer, scheduler, iteration=iteration)
@@ -149,6 +152,8 @@ class DistillationTrainer(ImaginaireTrainer):
         key = self._optimizer_key(model, iteration)
         optimizer.step(key, grad_scaler)
         scheduler.step(key)
+        # Match the completed-iteration counter used by callbacks and checkpoints.
+        log.info("Iteration {}, distillation optimizer phase: {}", iteration + 1, key)
 
     def _zero_grad(self, model: torch.nn.Module, optimizer: PhaseOptimizer, iteration: int) -> None:
         key = self._optimizer_key(model, iteration)
@@ -207,8 +212,14 @@ class DistillationTrainer(ImaginaireTrainer):
 
     @staticmethod
     def _uses_group_step(optimizer: torch.optim.Optimizer) -> bool:
-        """Return whether the optimizer keeps the step counter on each param group."""
-        return hasattr(optimizer, "param_groups_master") and hasattr(optimizer, "capturable")
+        """Return whether the optimizer keeps the step counter on each param group.
+
+        The marker is a ``capturable`` *attribute*: our TE-fused family (FusedAdam,
+        MuonWithAuxAdamW, Dion2WithAuxAdamW) sets one and stores the step on the group,
+        whereas ``torch.optim`` keeps ``capturable`` in the param groups and the step in
+        the per-param state.
+        """
+        return hasattr(optimizer, "capturable")
 
     @staticmethod
     def _optimizer_zero_like(param: torch.nn.Parameter, force_fp32: bool) -> torch.Tensor:

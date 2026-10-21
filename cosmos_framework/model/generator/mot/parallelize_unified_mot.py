@@ -12,7 +12,7 @@ design (``torchtitan/distributed/activation_checkpoint.py``):
 """
 
 import re
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn as nn
@@ -34,12 +34,12 @@ from torch.utils.checkpoint import (
 
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
+from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.model.generator.mot.activation_marks import enable_marking, is_mark_op
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_attention
 from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.utils.generator.activation_offloading import (
     checkpoint_with_flattened_inputs,
     offload_checkpoint_inputs,
@@ -389,12 +389,51 @@ def _wrap_forward_with_unbacked_pack(forward: Callable) -> Callable:
     return wrapped
 
 
+def _route_transfer_compiled_forward(
+    block: nn.Module,
+    forward: Callable,
+    *,
+    dynamic: bool,
+    transfer_options: dict[str, Any],
+) -> Callable:
+    """Keep the ordinary compiled module as owner; cache Transfer's callable separately.
+
+    Both callables use the same original block and parameters. Only the ordinary
+    OptimizedModule is registered, so FSDP still owns one module and state dict.
+    Selection uses call metadata rather than changing shared module attributes.
+    """
+    transfer_forward: Callable | None = None
+
+    def routed(*args: Any, **kwargs: Any) -> Any:
+        nonlocal transfer_forward
+        memory_value = kwargs.get("memory_value", args[4] if len(args) > 4 else None)
+        if (
+            getattr(memory_value, "preserve_transfer_numerics", False)
+            and not block.training
+            and not torch.is_grad_enabled()
+        ):
+            if transfer_forward is None:
+                # Keep this wrapper in the closure, never in the module tree.
+                transfer_block = torch.compile(
+                    block,
+                    fullgraph=True,
+                    dynamic=dynamic,
+                    options=transfer_options or None,
+                )
+                assert isinstance(transfer_block, nn.Module), "Transfer compilation must retain its module wrapper"
+                transfer_forward = transfer_block.forward
+            return transfer_forward(*args, **kwargs)
+        return forward(*args, **kwargs)
+
+    return routed
+
+
 def apply_compile(model: nn.Module, config: CompileConfig) -> None:
     """
     Apply torch.compile to each TransformerBlock, which makes compilation efficient due to
     repeated structure. Alternatively one can compile the whole model (after applying DP).
     """
-    compile_options = {}
+    compile_options: dict[str, Any] = {}
     if config.max_autotune_pointwise:
         compile_options["max_autotune_pointwise"] = True
     if config.coordinate_descent_tuning:
@@ -407,24 +446,36 @@ def apply_compile(model: nn.Module, config: CompileConfig) -> None:
     # into the kernels, so forward scope forces ``dynamic=False`` (as the post-saturation static
     # compile already does).
     forward_scope_capture = config.use_cuda_graphs and config.cuda_graph_scope == "forward"
+    block_graphs = config.use_cuda_graphs and config.cuda_graph_scope == "block"
+    transfer_options = dict(compile_options)
+    if config.use_cuda_graphs:
+        if block_graphs:
+            transfer_options.update(torch._inductor.list_mode_options("reduce-overhead"))
+        transfer_options["emulate_precision_casts"] = True
     for layer_id, block in model.model.layers.named_children():
-        block = torch.compile(
+        compiled_block = torch.compile(
             block,
             fullgraph=True,
             dynamic=False if forward_scope_capture else config.compile_dynamic,
-            # Forward-scope capture wraps the whole AR forward in one explicit graph; inductor's
-            # per-block CUDA-graph trees cannot nest inside it, so they are only used for "block".
-            mode="reduce-overhead" if (config.use_cuda_graphs and config.cuda_graph_scope == "block") else None,
+            # Keep the ordinary model's original compilation settings.
+            mode="reduce-overhead" if block_graphs else None,
             options=compile_options or None,
         )
+        assert isinstance(compiled_block, nn.Module), "Compiling a decoder block must retain its module wrapper"
+        compiled_block.forward = _route_transfer_compiled_forward(
+            block,
+            compiled_block.forward,
+            dynamic=False if forward_scope_capture else config.compile_dynamic,
+            transfer_options=transfer_options,
+        )
+        block = compiled_block
         # Instance-attribute override, not a subclass/wrapper module: OptimizedModule already
         # installs ``forward`` as an instance attribute (see torch._dynamo.eval_frame), so this
         # replaces only the call path and leaves module structure (children, state_dict) untouched.
         #
-        # Skipping the wrapper entirely, rather than gating inside it, is what makes
-        # ``mark_unbacked=False`` a true restoration of the pre-marking behavior: the block is then
-        # the compiled module itself, with no extra frame between it and the caller. This is also
-        # the only place the marking is installed, so the flag disables it everywhere.
+        # Skipping the marking wrapper entirely, rather than gating inside it, ensures
+        # ``mark_unbacked=False`` leaves the input dimensions unmarked. Request routing above
+        # does not inspect or mark tensor dimensions. This is the only place marking is installed.
         if config.mark_unbacked:
             block.forward = _wrap_forward_with_unbacked_pack(block.forward)
         model.model.layers.register_module(layer_id, block)

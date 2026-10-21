@@ -24,6 +24,7 @@ from cosmos_framework.utils.helper_test import RunIf
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot import parallelize_vfm_network as module
+from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import apply_ac
 
@@ -60,6 +61,36 @@ class _StubVFM(nn.Module):
         for layer in self.trunk:
             hidden_states = torch.utils.checkpoint.checkpoint(layer, hidden_states, use_reentrant=False)
         return hidden_states
+
+
+class _TimestepEmbeddingHarness(nn.Module):
+    """Minimal owner for exercising the production chunking method."""
+
+    def __init__(self, chunk_size: int | None) -> None:
+        super().__init__()
+        self.time_embedder = _RecordingTimestepEmbedder(hidden_size=8, frequency_embedding_size=6)
+        self.config = SimpleNamespace(timestep_embedding_chunk_size=chunk_size)
+        self._packed_seq = SimpleNamespace(uses_single_timestep=False)
+
+    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
+        return Cosmos3VFMNetwork._embed_packed_timesteps(
+            self,  # type: ignore[arg-type]
+            timesteps,
+            self._packed_seq,  # type: ignore[arg-type]
+            torch.bfloat16,
+        )
+
+
+class _RecordingTimestepEmbedder(TimestepEmbedder):
+    """Record the largest FP32 MLP input exercised in forward or recompute."""
+
+    def __init__(self, hidden_size: int, frequency_embedding_size: int) -> None:
+        super().__init__(hidden_size=hidden_size, frequency_embedding_size=frequency_embedding_size)
+        self.row_counts: list[int] = []
+
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        self.row_counts.append(t.shape[0])
+        return super().forward(t)
 
 
 def _build(device: str = "cpu", **kwargs) -> _StubVFM:
@@ -99,6 +130,47 @@ def test_tolerates_a_network_without_a_time_embedder() -> None:
     model = _build(with_time_embedder=False)
     apply_ac(model, _config("full"))
     assert not hasattr(model, "time_embedder")
+
+
+@pytest.mark.CPU
+@pytest.mark.parametrize("mode", ["full", "selective"])
+def test_checkpointed_timestep_chunks_match_unchunked_output_and_gradients(mode: str) -> None:
+    """Chunk boundaries must change peak storage, not training numerics."""
+    torch.manual_seed(0)
+    baseline = _TimestepEmbeddingHarness(chunk_size=None)
+    chunked = _TimestepEmbeddingHarness(chunk_size=3)
+    chunked.load_state_dict(baseline.state_dict())
+    apply_ac(baseline, _config(mode))
+    apply_ac(chunked, _config(mode))
+
+    baseline_timesteps = torch.linspace(0.0, 1.0, steps=8, requires_grad=True)
+    chunked_timesteps = baseline_timesteps.detach().clone().requires_grad_(True)
+    expected = baseline(baseline_timesteps)
+    actual = chunked(chunked_timesteps)
+    upstream_gradient = torch.linspace(-1.0, 1.0, steps=actual.numel()).reshape_as(actual).to(actual.dtype)
+    expected.backward(upstream_gradient)
+    actual.backward(upstream_gradient)
+
+    assert actual.dtype == torch.bfloat16
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(chunked_timesteps.grad, baseline_timesteps.grad)
+    assert max(baseline.time_embedder.row_counts) == 8
+    assert max(chunked.time_embedder.row_counts) == 3
+    expected_gradients = {name: parameter.grad for name, parameter in baseline.named_parameters()}
+    actual_gradients = {name: parameter.grad for name, parameter in chunked.named_parameters()}
+    assert actual_gradients.keys() == expected_gradients.keys()
+    for name, expected_gradient in expected_gradients.items():
+        actual_gradient = actual_gradients[name]
+        assert actual_gradient is not None
+        assert expected_gradient is not None
+        torch.testing.assert_close(actual_gradient, expected_gradient)
+
+
+@pytest.mark.CPU
+@pytest.mark.parametrize("chunk_size", [0, -1, True, 1.5])
+def test_network_config_rejects_invalid_timestep_embedding_chunk_size(chunk_size: object) -> None:
+    with pytest.raises(ValueError, match="timestep_embedding_chunk_size must be a positive integer or None"):
+        Cosmos3VFMNetworkConfig(timestep_embedding_chunk_size=chunk_size)  # type: ignore[arg-type]
 
 
 @pytest.mark.CPU

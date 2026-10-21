@@ -1,0 +1,9 @@
+# `roles/env/` is the Env-as-source subpackage (DESIGN §1.3), not a virtualenv.
+# Override the repo-root `env/` ignore so its sources are tracked.
+!roles/env/
+!roles/env/**
+roles/env/**/__pycache__/
+
+# Local Ray runtime and benchmark output.
+.ray256/
+benchmark_logs/

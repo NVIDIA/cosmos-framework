@@ -693,11 +693,11 @@ class JointARCache:
     JointChunkMemory owns the actual per-layer K/V buffers.
 
     Each layer's K and V buffers have shape [1,S,H_kv/CP,D], where S is the allocated
-    RGB+LiDAR token capacity, including unwritten slots.
+    RGB and optional LiDAR token capacity, including unwritten slots.
     Storage along S and its matching metadata are ordered as follows::
 
-        K/V slots:      [ RGB control | RGB target | LiDAR control | LiDAR target ]
-        Metadata slots: [ RGB control | RGB target | LiDAR control | LiDAR target ]
+        K/V slots:      [ RGB control | RGB target | optional LiDAR control/target ]
+        Metadata slots: [ RGB control | RGB target | optional LiDAR control/target ]
                               same slot index identifies the same token
 
         Within each RGB item:   [view 0: frames_0,frame_1..][view 1: ...]...
@@ -718,21 +718,22 @@ class JointARCache:
 
     def __init__(self, reference: PackedSequence, num_layers: int) -> None:
         self.reference = reference
-        assert reference.vision is not None and reference.lidar is not None
+        assert reference.vision is not None
         views = reference.num_views_per_vision_item
         assert views is not None
-        if len(reference.vision.token_shapes) != 2 or len(reference.lidar.token_shapes) != 2 or len(views) != 2:
-            raise ValueError("Joint AR cache requires one control and one target item for each of RGB and LiDAR.")
+        if len(reference.vision.token_shapes) != 2 or len(views) != 2:
+            raise ValueError("Joint AR cache requires one RGB control and one RGB target item.")
         rgb_control_shape, rgb_target_shape = reference.vision.token_shapes
-        lidar_control_shape, lidar_target_shape = reference.lidar.token_shapes
-        # Cache order is RGB control, RGB target, LiDAR control, LiDAR target.
+        # Cache order is RGB control, RGB target, then optional LiDAR control/target.
         # RGB items have per-item camera counts; LiDAR has no camera-view axis.
-        items = (
+        items = [
             (rgb_control_shape, views[0]),
             (rgb_target_shape, views[1]),
-            (lidar_control_shape, 1),
-            (lidar_target_shape, 1),
-        )
+        ]
+        if reference.lidar is not None:
+            if len(reference.lidar.token_shapes) != 2:
+                raise ValueError("Joint AR cache requires one LiDAR control and one LiDAR target item when present.")
+            items.extend((shape, 1) for shape in reference.lidar.token_shapes)
         self.item_layouts = []
         capacity = 0
         for (total_frames, height, width), num_views in items:
@@ -769,7 +770,10 @@ class JointARCache:
         for modality_name, frame_ids in (("vision", rgb_frames), ("lidar", lidar_frames)):
             modality = getattr(pack, modality_name)
             original = getattr(self.reference, modality_name)
-            assert modality is not None and original is not None
+            if original is None:
+                assert modality is None and not frame_ids
+                continue
+            assert modality is not None
             current_offset = original_offset = 0
             for local_item, (total_frames, height, width) in enumerate(original.token_shapes):
                 item = local_item + (0 if modality_name == "vision" else 2)
@@ -804,6 +808,55 @@ class JointARCache:
                 current_offset += length
                 original_offset += total_frames * spatial
         setattr(pack, "joint_ar_cache", self)
+
+    def populate_replay_memory(
+        self,
+        pack: PackedSequence,
+        memory: TeacherForcingMemoryState,
+        *,
+        empty_num_kv_heads: int | None = None,
+    ) -> None:
+        """Select clean target history for a full-prefix student gradient forward.
+
+        Prefix packing shortens each camera's frame stride. Map its selected GEN
+        rows back to the full rollout's slots, preserving the CP-local head axis.
+        The usual noisy replay mask excludes same/future-chunk clean targets;
+        their values (including the unwritten final chunk) are never consumed.
+        Controls and conditioned targets stay in the differentiable noisy pass.
+        """
+        selected = memory.selected_clean_gen_token_indexes  # [S_clean]
+        assert selected is not None and pack.vision is not None
+        assert memory.selected_clean_gen_padded_capacity == selected.numel()
+        shapes = list(pack.vision.token_shapes)
+        if pack.lidar is not None:
+            shapes.extend(pack.lidar.token_shapes)
+        cache_indexes = torch.zeros_like(selected)  # [S_clean]
+        prefix_offset = 0
+        for (base, views, full_frames, spatial), (frames, height, width) in zip(self.item_layouts, shapes, strict=True):
+            assert height * width == spatial and frames % views == 0
+            prefix_view_tokens = frames // views * spatial
+            local = selected - prefix_offset  # [S_clean]
+            in_item = (local >= 0) & (local < frames * spatial)  # [S_clean]
+            mapped = base + (local // prefix_view_tokens) * full_frames * spatial + local % prefix_view_tokens
+            # mapped: [S_clean]
+            cache_indexes = torch.where(in_item, mapped, cache_indexes)  # [S_clean]
+            prefix_offset += frames * spatial
+        values: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for cached in self.memory.cache:
+            if cached is None:
+                # A one-chunk rollout never commits history. All selected rows
+                # belong to that current chunk and are masked out during replay.
+                assert self.metadata is None
+                empty = pack.vision.tokens[0].new_zeros(
+                    (1, selected.numel(), empty_num_kv_heads or memory.num_kv_heads, memory.head_dim)
+                )  # [1,S_clean,H_kv/CP,D]
+                values.append((empty, empty))
+            else:
+                key, value = cached  # each [1,S_full,H_kv/CP,D]
+                indexes = cache_indexes.to(key.device)  # [S_clean]
+                values.append((key.index_select(1, indexes), value.index_select(1, indexes)))
+                # each [1,S_clean,H_kv/CP,D]
+        memory.load_clean_gen_kv(values)
 
     def augment_metadata(
         self,
@@ -932,22 +985,41 @@ def _validate_persistent_chunks(chunks: list[JointARChunk], vision_condition: in
     Persistent K/V reuses stored clean history instead of rebuilding it through replay,
     but cannot currently handle:
 
-    1. A causal chunk missing RGB or LiDAR frames; both sensors must be present.
+    1. A causal chunk missing frames from a sensor present elsewhere in the clip.
+       Whole-stream LiDAR dropout is supported; RGB must always be present.
     2. User-provided RGB/LiDAR target conditioning extending beyond the first
-       causal chunk. Later conditioned queries may read earlier noisy target
-       representations in replay; substituting stored clean K/V is not equivalent.
+       chunk containing generated targets. Later conditioned queries may read
+       earlier noisy target representations in replay; substituting stored clean
+       K/V is not equivalent. Conditioning within the first generated chunk is safe.
 
     For either case, use the replay K/V mechanism by setting joint_ar_use_persistent_kv=False.
     This check raises rather than silently falling back to replay.
     """
-    if any(not chunk.vision_frames or not chunk.lidar_frames for chunk in chunks):
+    has_lidar = any(chunk.lidar_frames for chunk in chunks)
+    if not chunks or any(not chunk.vision_frames or (has_lidar and not chunk.lidar_frames) for chunk in chunks):
         raise ValueError(
-            "Persistent joint K/V currently requires both sensors (RGB and LiDAR) in every causal chunk. "
+            "Persistent joint K/V requires RGB and every present sensor in every causal chunk. "
             "Use the replay K/V mechanism: set joint_ar_use_persistent_kv=False."
         )
-    if vision_condition > chunks[0].vision_prefix_end or lidar_condition > chunks[0].lidar_prefix_end:
+    first_generated_step = next(
+        (
+            chunk.step
+            for chunk in chunks
+            if any(frame >= vision_condition for frame in chunk.vision_frames)
+            or any(frame >= lidar_condition for frame in chunk.lidar_frames)
+        ),
+        None,
+    )
+    if first_generated_step is not None and any(
+        chunk.step > first_generated_step
+        and (
+            any(frame < vision_condition for frame in chunk.vision_frames)
+            or any(frame < lidar_condition for frame in chunk.lidar_frames)
+        )
+        for chunk in chunks
+    ):
         raise ValueError(
-            "Persistent joint K/V currently supports target conditioning only in the first causal chunk; "
+            "Persistent joint K/V supports target conditioning only through the first generated chunk; "
             "later conditioning can read noisy replay history. Use the replay K/V mechanism: "
             "set joint_ar_use_persistent_kv=False."
         )
@@ -987,19 +1059,23 @@ def _build_replay_branch(
     plans: list[SequencePlan],
     data: GenerationDataClean,
     text_tokens: list[list[int]],
+    *,
+    persistent_cache: JointARCache | None = None,
 ) -> tuple[PackedSequence, TeacherForcingMemoryState]:
     """Use the actual joint training clean/noisy passes, including caption isolation."""
     pack = host._pack_input_sequence(plans, text_tokens, data, torch.zeros(1, dtype=torch.float32))  # timestep: [1]
     pack.to_cuda()
     host._cast_generated_tokens_to_precision(pack)
     host._validate_teacher_forcing_pack(pack)
-    # Replay recomputes clean K/V for the complete causal prefix.
+    # Replay recomputes clean K/V for the complete causal prefix unless the
+    # student's no-grad rollout already captured the same clean target history.
     memory = host._build_clean_tf_cache(
         net=host.net,
         packed_sequence=pack,
         gen_data_clean=data,
         memory_info={},
         detach_clean_kv=True,
+        **({"persistent_cache": persistent_cache} if persistent_cache is not None else {}),
     )
     return pack, memory
 
@@ -1218,16 +1294,25 @@ def iter_robot_multiview_action_ar(
 def _current_chunk_data(
     data: GenerationDataClean,
     vision_target: torch.Tensor,  # [1,Cv,V*Tv,Hv,Wv]
-    lidar_target: torch.Tensor,  # [1,Cl,Tl,Hl,Wl]
+    lidar_target: torch.Tensor | None,  # [1,Cl,Tl,Hl,Wl] or None
     num_views: int,
     chunk: JointARChunk,
 ) -> GenerationDataClean:
     """Materialize only this shared-clock chunk, keeping control/target pairing."""
-    assert data.x0_tokens_vision is not None and data.x0_tokens_lidar is not None
+    assert data.x0_tokens_vision is not None
     frames = vision_target.shape[2] // num_views
     if data.temporal_positions_vision is not None:
         raise ValueError("Joint AR currently requires the training latent-index temporal positions")
     indexes = [view * frames + frame for view in range(num_views) for frame in chunk.vision_frames]
+    lidar = None
+    if data.x0_tokens_lidar is not None:
+        assert lidar_target is not None
+        lidar = [
+            data.x0_tokens_lidar[0][:, :, list(chunk.lidar_frames)],
+            lidar_target[:, :, list(chunk.lidar_frames)],
+        ]  # each [1,Cl,C_lidar,Hl,Wl]
+    else:
+        assert lidar_target is None
     return replace(
         data,
         raw_state_vision=None,
@@ -1236,10 +1321,7 @@ def _current_chunk_data(
             data.x0_tokens_vision[0][:, :, indexes],
             vision_target[:, :, indexes],
         ],  # each [1,Cv,V*C_rgb,Hv,Wv]
-        x0_tokens_lidar=[
-            data.x0_tokens_lidar[0][:, :, list(chunk.lidar_frames)],
-            lidar_target[:, :, list(chunk.lidar_frames)],
-        ],  # each [1,Cl,C_lidar,Hl,Wl]
+        x0_tokens_lidar=lidar,
     )
 
 
@@ -1267,13 +1349,12 @@ def _build_persistent_branch(
     ]
     pack = host._pack_input_sequence(local_plans, text, data, torch.zeros(1))  # timestep: [1]
     host._validate_teacher_forcing_pack(pack)
-    assert pack.vision is not None and pack.lidar is not None
-    original_masks = [
-        mask.clone() for modality in (pack.vision, pack.lidar) for mask in modality.condition_mask
-    ]  # list of [V*C,1,1]
+    assert pack.vision is not None
+    modalities = [pack.vision] if pack.lidar is None else [pack.vision, pack.lidar]
+    original_masks = [mask.clone() for modality in modalities for mask in modality.condition_mask]  # list of [V*C,1,1]
     cache.prepare(pack, chunk.vision_frames, chunk.lidar_frames)
     if clean:
-        for modality in (pack.vision, pack.lidar):
+        for modality in modalities:
             mark_modality_as_clean_condition(modality)
     pack.teacher_forcing_pass = "clean" if clean else "noisy"
     pack.teacher_forcing_original_condition_masks_sensors = original_masks

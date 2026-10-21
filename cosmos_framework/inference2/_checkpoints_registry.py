@@ -256,6 +256,21 @@ def register_checkpoints():
         ),
     )
 
+    register_checkpoint(
+        CheckpointConfig(
+            uuid=uuid4().hex,
+            name="LiDAR/vae",
+            s3=CheckpointFileS3(
+                uri="s3://bucket/pretrained/tokenizers/lidar/diffusion_pytorch_model.safetensors",
+            ),
+            hf=CheckpointFileHf(
+                repository="nvidia/Cosmos3-Nano-Transfer-Auto",
+                revision="main",
+                filename="lidar_vae/diffusion_pytorch_model.safetensors",
+            ),
+        ),
+    )
+
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {
     # Created using 'convert_model_to_dcp'

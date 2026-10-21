@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
+import tomllib
 from pydantic import ValidationError
 
-from cosmos_framework.configs.toml_config.sft_config import SFTExperimentConfig
+from cosmos_framework.configs.toml_config.sft_config import JobConfig, SFTExperimentConfig
 from cosmos_framework.configs.toml_config.toml_config_helper import build_hydra_overrides
 
 # Representative payload: scalars, a nested sub-table, and an array-of-tables.
@@ -25,6 +27,53 @@ _CUSTOM_PAYLOAD = {
         {"path": "/data/b", "weight": 2.0},
     ],
 }
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_wandb_defaults_are_opt_in() -> None:
+    from cosmos_framework.utils.config import JobConfig as RuntimeJobConfig
+
+    assert RuntimeJobConfig().wandb_mode == "disabled"
+    assert JobConfig(task="vfm", experiment="vision_sft_nano").wandb_mode == "disabled"
+    for mode in ("online", "offline"):
+        assert RuntimeJobConfig(wandb_mode=mode).wandb_mode == mode
+        assert JobConfig(task="vfm", experiment="vision_sft_nano", wandb_mode=mode).wandb_mode == mode
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+@pytest.mark.parametrize(
+    "recipe", sorted((_REPO_ROOT / "examples/toml/sft_config").glob("*.toml")), ids=lambda p: p.name
+)
+def test_shipped_sft_recipes_disable_wandb(recipe: Path) -> None:
+    with recipe.open("rb") as stream:
+        job = JobConfig.model_validate(tomllib.load(stream)["job"])
+    assert job.wandb_mode == "disabled"
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+@pytest.mark.parametrize(
+    "launcher", ["launch_sft_llava_ov_mapstyle_dataloader.sh", "launch_sft_vision_nano_cosmosdataloader.sh"]
+)
+def test_launchers_preserve_toml_wandb_choice(launcher: str) -> None:
+    # Capture the wrapper's overrides without sourcing the common launcher or starting training.
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source() { printf "%s\\n" "${TAIL_OVERRIDES[@]}"; }; builtin source "$1"',
+            "_",
+            str(_REPO_ROOT / "examples" / launcher),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert not any(arg.startswith("job.wandb_mode=") for arg in result.stdout.splitlines())
 
 
 # --------------------------------------------------------------------------- #

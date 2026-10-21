@@ -18,5 +18,8 @@ jobs:
           lfs: true
       - uses: actions/setup-python@v6
       - uses: astral-sh/setup-uv@v7
+        with:
+          # Keep in step with [tool.uv].constraint-dependencies in pyproject.toml.
+          version: "0.11.29"
       - run: uvx pre-commit@4.5.1 run -a -c ci/.pre-commit-config-base.yaml
       - run: uvx pre-commit@4.5.1 run -a

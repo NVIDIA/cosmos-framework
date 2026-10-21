@@ -1,0 +1,265 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "cosmos3-posttrain"
+version = "0.0.0"
+description = "Reproducible Python environment for Cosmos3 post-training"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  # Cosmos Framework runtime baseline, mirrored from commit a43d75716a45cd5390ef08badf0bd4cf1f7a23f0.
+  # This project consumes the dependency contract, not the cosmos-framework package.
+  "accelerate",
+  "av",
+  "cattrs",
+  "diffusers>=0.39.0",
+  "einops",
+  "hydra-core",
+  "imageio",
+  "imageio-ffmpeg",
+  "loguru",
+  "msgpack",
+  "nvidia-cudnn-frontend",
+  "nvidia-ml-py",
+  "obstore",
+  "omegaconf",
+  "pydantic",
+  "requests",
+  "scipy",
+  "termcolor",
+  # Keep this range aligned with the selected vLLM wheel metadata. Before
+  # upgrading vLLM, inspect its Requires-Dist entries for Transformers and
+  # update this constraint and the lock together.
+  "transformers>=4.57.6,<6",
+  "tyro",
+  "uv==0.11.29",
+  "websockets",
+  # Dependencies used by the posttrain runtime but not the Cosmos Framework base install.
+  "attrs==25.4.0",
+  "boto3",
+  "datasets==4.6.1",
+  "fvcore==0.1.5.post20221221",
+  "iopath==0.1.10",
+  "matplotlib",
+  "multi-storage-client==0.44.0",
+  "numpy>=2.0.0,<2.3",
+  "pandas==2.2.3",
+  "pillow==12.2.0",
+  "qwen-vl-utils==0.0.14",
+  "pyyaml==6.0.3",
+  "ray[default]==2.56.1",
+  "safetensors==0.8.0",
+  "sentencepiece",
+  "tqdm==4.67.3",
+  "wandb==0.25.0",
+  "webdataset",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "pytest-xdist>=3.8.0",
+]
+# Preserve the existing RL default; opt in with --no-group transformers4 --group sft.
+transformers4 = ["transformers==4.57.6"]
+sft = ["transformers==5.8.1", "torchcodec==0.11.0", "torchvision==0.26.0", "trimesh"]
+# Each Docker runtime group selects its exact vLLM wheel here so uv locks the
+# matching CUDA dependency metadata even though Docker installs the verified
+# wheel separately. vLLM 0.23.0 pins Torch 2.11 and remains compatible with the
+# default Posttrain Transformers 4.57.6 pin; SFT explicitly selects 5.8.1.
+cu128-runtime = [
+  "natten==0.21.6+torch2110cu128",
+  "vllm @ https://wheels.vllm.ai/0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665/vllm-0.23.0%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "vllm @ https://wheels.vllm.ai/0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665/vllm-0.23.0%2Bcu129-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torch==2.11.0+cu128",
+  "torchaudio==2.11.0+cu128",
+  "torchvision==0.26.0+cu128",
+  "nvidia-cublas-cu12==12.8.4.1",
+  "nvidia-cuda-cupti-cu12==12.8.90",
+  "nvidia-cuda-nvrtc-cu12==12.8.93",
+  "nvidia-cuda-runtime-cu12==12.8.90",
+  "nvidia-cudnn-cu12==9.19.0.56",
+  "nvidia-cufft-cu12==11.3.3.83",
+  "nvidia-cufile-cu12==1.13.1.3",
+  "nvidia-curand-cu12==10.3.9.90",
+  "nvidia-cusolver-cu12==11.7.3.90",
+  "nvidia-cusparse-cu12==12.5.8.93",
+  "nvidia-cusparselt-cu12==0.7.1",
+  "nvidia-nccl-cu12==2.28.9",
+  "nvidia-nvjitlink-cu12==12.8.93",
+  "nvidia-nvshmem-cu12==3.4.5",
+  "nvidia-nvtx-cu12==12.8.90",
+  "triton==3.6.0",
+  "cuda-bindings==12.9.4",
+  "cuda-python==12.9.4",
+  "cupy-cuda12x==13.6.0",
+  "fastrlock==0.8.3",
+  "ray[default]==2.56.1",
+]
+cu130-runtime = [
+  "natten==0.21.6+torch2110cu130",
+  "vllm @ https://wheels.vllm.ai/0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665/vllm-0.23.0-cp38-abi3-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "vllm @ https://wheels.vllm.ai/0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665/vllm-0.23.0-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torch==2.11.0+cu130",
+  "torchaudio==2.11.0+cu130",
+  "torchvision==0.26.0+cu130",
+  "nvidia-cublas==13.1.0.3",
+  "nvidia-cuda-cupti==13.0.85",
+  "nvidia-cuda-nvrtc==13.0.88",
+  "nvidia-cuda-runtime==13.0.96",
+  "nvidia-cudnn-cu13==9.19.0.56",
+  "nvidia-cufft==12.0.0.61",
+  "nvidia-cufile==1.15.1.6",
+  "nvidia-curand==10.4.0.35",
+  "nvidia-cusolver==12.0.4.66",
+  "nvidia-cusparse==12.6.3.3",
+  "nvidia-cusparselt-cu13==0.8.0",
+  "nvidia-nccl-cu13==2.28.9",
+  "nvidia-nvjitlink==13.0.88",
+  "nvidia-nvshmem-cu13==3.4.5",
+  "nvidia-nvtx==13.0.85",
+  "triton==3.6.0",
+  "cuda-bindings==13.0.3",
+  "cuda-python==13.0.3",
+  "cupy-cuda13x==13.6.0",
+  "fastrlock==0.8.3",
+  "ray[default]==2.56.1",
+]
+# This group describes the platform shared by all posttrain algorithms. The
+# nvcr.io/nvidia/pytorch:25.09-py3 base image is CUDA 13.0 on aarch64; a different
+# CUDA/arch target gets a separate group. It intentionally does not reuse
+# packages/cosmos3's cu130 group: that group follows the 25.11 image, while this
+# environment follows the Cosmos Framework dependency baseline on the 25.09 image.
+cu130-aarch64 = [
+  "natten==0.21.6+torch2110cu130; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "vllm @ https://wheels.vllm.ai/0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665/vllm-0.23.0-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torch==2.11.0+cu130; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torchaudio==2.11.0+cu130; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torchvision==0.26.0+cu130; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Keep the CUDA wheel closure explicit. PyTorch's cu130 index metadata does not
+  # reliably expose this complete set to uv: https://github.com/astral-sh/uv/issues/14237
+  "nvidia-cublas==13.1.0.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cuda-cupti==13.0.85; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cuda-nvrtc==13.0.88; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cuda-runtime==13.0.96; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cudnn-cu13==9.19.0.56; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cufft==12.0.0.61; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cufile==1.15.1.6; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-curand==10.4.0.35; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cusolver==12.0.4.66; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cusparse==12.6.3.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-cusparselt-cu13==0.8.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-nccl-cu13==2.28.9; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-npp==13.0.0.50; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-nvjitlink==13.0.88; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-nvshmem-cu13==3.4.5; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nvidia-nvtx==13.0.85; sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+# GR00T-N1.7 (operator GR00T validation documentation): the `cu130-aarch64` platform plus the dependency closures of
+# vLLM-Omni 2d0b1d8a and Isaac-GR00T 51d4c89. Those two are NOT declared here: install them
+# after `uv sync` with `uv pip install --python <venv> --no-deps` (the operator runtime contract),
+# so their closures are reproduced below; the two resulting version deviations (diffusers,
+# accelerate) are recorded there too. Re-check them whenever the vLLM-Omni commit moves.
+#
+# GR00T retains the Transformers 4 baseline and cannot select the SFT group.
+# vLLM >=0.24.0 needs transformers>=5.5.3, which Isaac-GR00T cannot take.
+gr00t-cu130-aarch64 = [
+  { include-group = "cu130-aarch64" },
+  "transformers==4.57.6",
+  # vLLM-Omni requirements/{common,cuda}.txt entries the baseline does not already
+  # satisfy (diffusers/accelerate deviate deliberately; see the operator runtime contract).
+  "aenum==3.1.16; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "cache-dit==1.3.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "fa3-fwd==0.0.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "janus>=1.0.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "onnxruntime>=1.23.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "soundfile>=0.13.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "torchsde>=0.2.6; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "x-transformers>=2.12.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Audio path only and the one sdist (builds numba/tiktoken); kept so the venv
+  # matches vLLM-Omni's declared closure. Drop this line first if its build blocks.
+  "openai-whisper>=20250625; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Isaac-GR00T's closure at its pinned versions, minus the torch/transformers/
+  # diffusers/numpy pins the baseline overrides. `dm-tree` is load-bearing:
+  # gr00t/model/gr00t_n1d7/gr00t_n1d7.py does `import tree` at module scope.
+  "albumentations==1.4.18; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "dm-tree; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "gymnasium==1.2.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "jsonlines==4.0.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "lmdb==1.7.5; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "msgpack-numpy==0.4.8; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "peft==0.17.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Deliberately omitted from Isaac-GR00T's list:
+  #   onnx/onnxscript/tensorrt-cu13(-libs) -- deployment export path, ~2 GB, never entered.
+  #   flash-attn==2.8.3 -- wheel built against Torch 2.9; GR00T falls back to sdpa.
+  #   torchcodec==0.8.0 -- no linux/aarch64 wheel on PyPI; LeRobot video decoding only.
+]
+nixl-cu130-aarch64 = [
+  { include-group = "cu130-aarch64" },
+  "cuda-bindings==13.0.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "cuda-python==13.0.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "cupy-cuda13x==13.6.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "fastrlock==0.8.3; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nixl==1.3.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "nixl-cu13==1.3.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.11.29"
+default-groups = ["dev", "transformers4"]
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+conflicts = [
+  [{ group = "transformers4" }, { group = "sft" }],
+  [{ group = "gr00t-cu130-aarch64" }, { group = "sft" }],
+  [
+    { group = "cu128-runtime" },
+    { group = "cu130-runtime" },
+  ],
+  [
+    { group = "cu128-runtime" },
+    { group = "cu130-aarch64" },
+  ],
+  [
+    { group = "cu128-runtime" },
+    { group = "nixl-cu130-aarch64" },
+  ],
+]
+override-dependencies = [
+  # NIXL backends are installed separately after selecting one Docker CUDA flavor.
+  "nixl-cu12; sys_platform == 'never'",
+  "numpy>=2.0.0,<2.3",
+  "pynvml; sys_platform == 'never'",
+]
+
+[tool.uv.sources]
+natten = { index = "natten" }
+torch = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+# SFT preprocessing is CPU-only. PyPI's x86 wheel requires CUDA/NPP even to load;
+# the CPU wheel avoids that dependency. Version 0.11 has no aarch64 CPU wheel.
+torchcodec = { index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }
+
+[[tool.uv.index]]
+name = "natten"
+url = "https://whl.natten.org"
+explicit = true
+format = "flat"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl"
+explicit = true

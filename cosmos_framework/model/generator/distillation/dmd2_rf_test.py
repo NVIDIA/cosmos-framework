@@ -4,6 +4,7 @@
 """Unit tests for DMD2RFModel."""
 
 import inspect
+from functools import partial
 from types import (
     SimpleNamespace,
 )
@@ -14,10 +15,13 @@ import pytest
 import torch
 
 from cosmos_framework.utils.flags import Device
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.model.generator.distillation.common_loss import variational_score_distillation_loss
 from cosmos_framework.model.generator.distillation import dmd2_rf as dmd2_rf_module
-from cosmos_framework.model.generator.distillation.dmd2_rf import DMD2RFModel
+from cosmos_framework.model.generator.distillation.dmd2_rf import (
+    DMD2RFModel,
+    _generated_vision_item_indices,
+)
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 
 
@@ -93,18 +97,6 @@ def test_does_not_inherit_removed_legacy_wrapper():
     # The legacy wrapper is not part of the public DMD2RFModel hierarchy.
     mro_names = [cls.__name__ for cls in DMD2RFModel.__mro__]
     assert "Cosmos3InteractiveModel" not in mro_names
-
-
-@pytest.mark.L0
-def test_clip_grad_norm_defined_in_dmd2():
-    # clip_grad_norm_ must be defined directly on DMD2RFModel, not inherited from OmniMoTModel.
-    assert "clip_grad_norm_" in DMD2RFModel.__dict__
-
-
-@pytest.mark.L0
-def test_on_before_zero_grad_defined_in_dmd2():
-    # on_before_zero_grad must be defined directly on DMD2RFModel, not inherited from OmniMoTModel.
-    assert "on_before_zero_grad" in DMD2RFModel.__dict__
 
 
 @pytest.mark.L0
@@ -223,6 +215,18 @@ def test_training_only_nets_stay_out_of_inference_state_dict():
 
 
 @pytest.mark.L0
+def test_inference_mode_skips_train_time_student_warm_start():
+    """Inference loads the requested checkpoint, not the train-time student warm start."""
+    init_src = inspect.getsource(DMD2RFModel.__init__)
+    setup_src = inspect.getsource(DMD2RFModel.set_up_model)
+
+    assert 'getattr(config.parallelism, "enable_inference_mode", False)' in init_src
+    assert "not is_inference_mode and not config.load_student_pretrained_weights" in init_src
+    assert 'getattr(self.config.parallelism, "enable_inference_mode", False)' in setup_src
+    assert "if not is_inference_mode and self.config.load_student_pretrained_weights:" in setup_src
+
+
+@pytest.mark.L0
 @pytest.mark.parametrize("teacher_negative_prompt", ["", "low quality video"])
 def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teacher_negative_prompt: str) -> None:
     model = MagicMock()
@@ -239,6 +243,8 @@ def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teache
     model.tensor_kwargs_fp32 = {"dtype": torch.float32, "device": "cpu"}
     model.vlm_config = SimpleNamespace(use_system_prompt=False)
     model.vlm_tokenizer = object()
+    model._vlm_configs_by_net = {"teacher": model.vlm_config}
+    model._vlm_tokenizers_by_net = {"teacher": model.vlm_tokenizer}
 
     gen_data_student = SimpleNamespace(
         batch_size=1,
@@ -246,6 +252,7 @@ def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teache
         x0_tokens_vision=[torch.full((1, 1, 1, 1), 0.2)],
         x0_tokens_action=None,
         x0_tokens_sound=None,
+        num_vision_items_per_sample=None,
     )
     packed_student = SimpleNamespace(
         action=None,
@@ -263,6 +270,7 @@ def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teache
         {"preds_vision": [torch.zeros(1, 1, 1, 1)]},
     )
     model._get_train_noise_level_vision.return_value = (torch.full((1, 1), 0.5), torch.full((1, 1), 0.5))
+    model._sample_critic_noise_level = partial(DMD2RFModel._sample_critic_noise_level, model)
     model._action_sigmas_from_full.return_value = None
     model._sound_sigmas_from_full.return_value = None
     model._add_noise_to_input.return_value = gen_data_noised
@@ -294,7 +302,7 @@ def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teache
     with patch.object(dmd2_rf_module, "tokenize_caption", side_effect=fake_tokenize_caption) as tokenize_mock:
         output_batch, loss = DMD2RFModel.training_step_generator(
             model,
-            input_text_indexes=[[101]],
+            input_text_indexes_by_net={"student": [[101]], "teacher": [[101]], "fake_score": [[101]]},
             sequence_plans=[MagicMock()],
             gen_data_clean=SimpleNamespace(batch_size=1),
             data_resolutions=["480"],
@@ -312,6 +320,98 @@ def test_teacher_cfg_negative_prompt_is_tokenized_for_uncond_teacher_pass(teache
     assert pack_calls[0].args[3] == [[101]]
     assert pack_calls[1].args[3] == [[101]]
     assert pack_calls[2].args[3] == [tokenized_negative_prompt]
+
+
+@pytest.mark.L0
+def test_training_step_generator_vsd_uses_generated_transfer_items_only() -> None:
+    """Transfer controls are flat vision items but must not enter VSD reduction."""
+    model = MagicMock()
+    model.config = SimpleNamespace(
+        action_gen=False,
+        loss_scale_sid=1.0,
+        sound_gen=False,
+        teacher_guidance=1.0,
+        vsd_gradient_space="x0",
+        vsd_loss_reduction="mean",
+    )
+    model.parallel_dims = None
+    model.tensor_kwargs_fp32 = {"dtype": torch.float32, "device": "cpu"}
+
+    x0_tokens_vision = [
+        torch.full((1, 1, 1, 1), 0.0),
+        torch.full((1, 1, 1, 1), 1.0),
+        torch.full((1, 1, 1, 1), 2.0),
+        torch.full((1, 1, 1, 1), 3.0),
+    ]  # list of [C,T,H,W]
+    gen_data_student = SimpleNamespace(
+        batch_size=2,
+        is_image_batch=False,
+        x0_tokens_vision=x0_tokens_vision,
+        x0_tokens_action=None,
+        x0_tokens_sound=None,
+        num_vision_items_per_sample=[2, 2],
+    )
+    packed_student = SimpleNamespace(
+        action=None,
+        sound=None,
+        vision=SimpleNamespace(
+            condition_mask=[
+                torch.ones(1, 1, 1),
+                torch.zeros(1, 1, 1),
+                torch.ones(1, 1, 1),
+                torch.zeros(1, 1, 1),
+            ]
+        ),
+    )
+    gen_data_noised = SimpleNamespace(
+        sigmas_vision=[torch.full((1, 1, 1), 0.5) for _ in range(4)],
+        xt_tokens_vision=[torch.full((1, 1, 1, 1), 0.4) for _ in range(4)],
+    )
+    model._gen_data_from_student.return_value = (
+        gen_data_student,
+        packed_student,
+        torch.zeros(2, 1),
+        {"preds_vision": [torch.zeros(1, 1, 1, 1) for _ in range(4)]},
+    )
+    model._get_train_noise_level_vision.return_value = (torch.full((2, 1), 0.5), torch.full((2, 1), 0.5))
+    model._sample_critic_noise_level = partial(DMD2RFModel._sample_critic_noise_level, model)
+    model._action_sigmas_from_full.return_value = None
+    model._sound_sigmas_from_full.return_value = None
+    model._add_noise_to_input.return_value = gen_data_noised
+    model._pack_and_denoise.side_effect = [
+        {"preds_vision": [torch.full((1, 1, 1, 1), 0.1) for _ in range(4)]},
+        {"preds_vision": [torch.full((1, 1, 1, 1), 0.2) for _ in range(4)]},
+    ]
+    fake_x0 = [torch.full((1, 1, 1, 1), 0.3 + item_idx) for item_idx in range(4)]  # list of [C,T,H,W]
+    teacher_x0 = [torch.full((1, 1, 1, 1), 0.6 + item_idx) for item_idx in range(4)]  # list of [C,T,H,W]
+    model._velocity_to_x0.side_effect = [fake_x0, teacher_x0]
+
+    with patch.object(
+        dmd2_rf_module, "variational_score_distillation_loss", return_value=torch.tensor(5.0)
+    ) as loss_mock:
+        output_batch, loss = DMD2RFModel.training_step_generator(
+            model,
+            input_text_indexes_by_net={"student": [[], []], "teacher": [[], []], "fake_score": [[], []]},
+            sequence_plans=[MagicMock(), MagicMock()],
+            gen_data_clean=SimpleNamespace(batch_size=2),
+            data_resolutions=["480", "480"],
+            num_vision_tokens_per_sample=[1, 1],
+            iteration=7,
+        )
+
+    torch.testing.assert_close(loss, torch.tensor(5.0))
+    torch.testing.assert_close(output_batch["vsd_loss"], torch.tensor(5.0))
+    loss_mock.assert_called_once()
+    selected_gen_data, selected_teacher_x0, selected_fake_x0 = loss_mock.call_args.args[:3]
+    assert selected_gen_data[0] is x0_tokens_vision[1]
+    assert selected_gen_data[1] is x0_tokens_vision[3]
+    assert selected_teacher_x0[0] is teacher_x0[1]
+    assert selected_teacher_x0[1] is teacher_x0[3]
+    assert selected_fake_x0[0] is fake_x0[1]
+    assert selected_fake_x0[1] is fake_x0[3]
+    selected_masks = loss_mock.call_args.kwargs["loss_mask"]
+    assert len(selected_masks) == 2
+    assert all(torch.equal(mask, torch.ones(1, 1, 1)) for mask in selected_masks)
 
 
 @pytest.mark.L0
@@ -339,11 +439,11 @@ def test_build_net_lora_override_controls_injection_and_initialization(
 ) -> None:
     model = MagicMock(spec=OmniMoTModel)
     model.config = MagicMock()
+    model.config.multiview_action_conditioning = None
     model.config.lora_enabled = config_lora_enabled
     model.config.lora_rank = 8
     model.config.lora_alpha = 16
     model.config.lora_target_modules = "q_proj_moe_gen"
-    model.config.multiview_action_conditioning = None
     model.vlm_config = MagicMock()
     model.tokenizer_vision_gen = MagicMock()
     model.parallel_dims = MagicMock()
@@ -426,6 +526,7 @@ def _make_gen_data(
     gd.raw_state_vision = [MagicMock(), MagicMock()]
     gd.x0_tokens_vision = [torch.zeros(4, 1, 2, 2), torch.zeros(4, 1, 2, 2)]
     gd.fps_vision = [24.0, 24.0]
+    gd.temporal_positions_vision = [torch.arange(1), torch.arange(1)]
     gd.num_vision_items_per_sample = num_vision_items or [1, 1]
     if with_sound:
         gd.raw_state_sound = [MagicMock(), MagicMock()]
@@ -539,6 +640,7 @@ def test_pack_and_denoise_forwards_num_vision_items():
     _, call_kwargs = model._pack_input_sequence.call_args
     proxy = call_kwargs.get("gen_data_clean") or model._pack_input_sequence.call_args.args[2]
     assert proxy.num_vision_items_per_sample == [2, 2]
+    assert proxy.temporal_positions_vision is gen_data.temporal_positions_vision
 
 
 
@@ -549,6 +651,7 @@ def test_pack_and_denoise_forwards_num_vision_items():
 def test_gen_data_from_student_forwards_num_vision_items():
     """num_vision_items_per_sample must be forwarded in the proxy inside _forward_simulation."""
     model = MagicMock()
+    model.parallel_dims = None  # disable CP broadcast path in tests
     model.tensor_kwargs = {"dtype": torch.float32, "device": "cpu"}
     model.config.rectified_flow_inference_config.num_train_timesteps = 1000
 
@@ -574,7 +677,7 @@ def test_gen_data_from_student_forwards_num_vision_items():
 
     gen_data = _make_gen_data(num_vision_items=[2, 2])
 
-    DMD2RFModel._forward_simulation(
+    gen_data_student, _, _, _ = DMD2RFModel._forward_simulation(
         model,
         input_text_indexes=[[], []],
         sequence_plans=[MagicMock(), MagicMock()],
@@ -584,6 +687,7 @@ def test_gen_data_from_student_forwards_num_vision_items():
     _, call_kwargs = model._pack_input_sequence.call_args
     proxy = call_kwargs.get("gen_data_clean") or model._pack_input_sequence.call_args.args[2]
     assert proxy.num_vision_items_per_sample == [2, 2]
+    assert gen_data_student.temporal_positions_vision is gen_data.temporal_positions_vision
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +700,7 @@ def _make_student_model(*, action_gen: bool = False, sound_gen: bool = False) ->
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataNoised
 
     model = MagicMock()
+    model.parallel_dims = None  # disable CP broadcast path in tests
     model.tensor_kwargs = {"dtype": torch.float32, "device": "cpu"}
     model.tensor_kwargs_fp32 = {"dtype": torch.float32, "device": "cpu"}
     model.config.rectified_flow_inference_config.num_train_timesteps = 1000
@@ -674,6 +779,42 @@ def test_gen_data_from_student_returns_4_tuple():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.L0
+def test_generated_vision_item_indices_selects_last_transfer_item_per_sample() -> None:
+    assert _generated_vision_item_indices(None, 3) == [0, 1, 2]
+    assert _generated_vision_item_indices([2, 2], 4) == [1, 3]
+    assert _generated_vision_item_indices([3, 1], 4) == [2, 3]
+    with pytest.raises(ValueError, match="must sum"):
+        _generated_vision_item_indices([2, 2], 3)
+    with pytest.raises(ValueError, match="positive"):
+        _generated_vision_item_indices([2, 0], 2)
+
+
+@pytest.mark.L0
+def test_vision_noise_sampling_metadata_uses_transfer_target_token_counts() -> None:
+    model = MagicMock()
+    model.config.resolution = "480"
+    gen_data_clean = SimpleNamespace(
+        batch_size=2,
+        num_vision_items_per_sample=[2, 2],
+        x0_tokens_vision=[
+            torch.zeros(1, 1, 1, 2, 2),
+            torch.zeros(1, 1, 2, 2, 2),
+            torch.zeros(1, 1, 3, 2, 2),
+            torch.zeros(1, 1, 4, 2, 2),
+        ],
+    )
+
+    resolutions, num_tokens = DMD2RFModel._get_vision_noise_sampling_metadata(
+        model,
+        data_batch={},
+        gen_data_clean=gen_data_clean,
+    )
+
+    assert resolutions == ["480", "480"]
+    assert num_tokens == [8, 16]
+
+
 def _make_critic_model(*, action_gen: bool = False) -> MagicMock:
     """Build a model mock wired up for training_step_critic tests."""
     model = MagicMock()
@@ -689,6 +830,7 @@ def _make_critic_model(*, action_gen: bool = False) -> MagicMock:
     model._gen_data_from_student.return_value = (gen_data_student, packed_student, torch.zeros(2, 1), {})
 
     model._get_train_noise_level_vision.return_value = (torch.zeros(2, 1), torch.zeros(2, 1))
+    model._sample_critic_noise_level = partial(DMD2RFModel._sample_critic_noise_level, model)
     model._add_noise_to_input.return_value = _make_gen_data_noised()
 
     out_fake = {"preds_vision": [torch.zeros(4, 1, 2, 2), torch.zeros(4, 1, 2, 2)]}
@@ -701,13 +843,61 @@ def _make_critic_model(*, action_gen: bool = False) -> MagicMock:
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("cp_enabled", [False, True])
+def test_critic_noise_preserves_pre_rollout_counts_and_cp_broadcast(cp_enabled: bool) -> None:
+    model = object.__new__(DMD2RFModel)
+    torch.nn.Module.__init__(model)
+    group = object()
+    model.parallel_dims = (
+        SimpleNamespace(cp_enabled=True, cp_mesh=SimpleNamespace(get_group=lambda: group)) if cp_enabled else None
+    )
+    gen_data = SimpleNamespace(
+        batch_size=2,
+        is_image_batch=False,
+        x0_tokens_vision=[torch.empty(1, 2, frames, 2, 2) for frames in (1, 3, 2, 7)],  # list of [1,C,T,H,W]
+    )
+    raw_timesteps = torch.arange(12.0).reshape(3, 4)[:, ::2].T  # [B,T_vis], noncontiguous
+    raw_sigmas = raw_timesteps / 20  # [B,T_vis]
+    model._get_train_noise_level_vision = MagicMock(return_value=(raw_timesteps, raw_sigmas))
+
+    with (
+        patch.object(torch.distributed, "get_global_rank", return_value=7) as global_rank,
+        patch.object(torch.distributed, "broadcast") as broadcast,
+    ):
+        timesteps, sigmas = model._sample_critic_noise_level(
+            gen_data, ["480", "720"], [101, 203], [1, 3]
+        )  # [B,T_vis] each
+
+    model._get_train_noise_level_vision.assert_called_once_with(
+        batch_size=2,
+        is_image_batch=False,
+        num_vision_latent_frames=[3, 7],
+        resolutions=["480", "720"],
+        num_tokens=[101, 203],
+    )
+    torch.testing.assert_close(timesteps, raw_timesteps, rtol=0, atol=0)
+    torch.testing.assert_close(sigmas, raw_sigmas, rtol=0, atol=0)
+    if cp_enabled:
+        global_rank.assert_called_once_with(group, 0)
+        assert broadcast.call_count == 2
+        for call, tensor in zip(broadcast.call_args_list, (timesteps, sigmas), strict=True):
+            assert call.args[0] is tensor and tensor.is_contiguous()
+            assert call.kwargs == {"src": 7, "group": group}
+    else:
+        global_rank.assert_not_called()
+        broadcast.assert_not_called()
+        assert timesteps is raw_timesteps and sigmas is raw_sigmas
+
+
+@pytest.mark.L0
 def test_training_step_critic_calls_compute_flow_matching_loss_with_normalize_by_active():
     """_compute_flow_matching_loss must be called with normalize_by_active=True in critic."""
     model = _make_critic_model()
 
     DMD2RFModel.training_step_critic(
         model,
-        input_text_indexes=[[], []],
+        input_text_indexes_by_net={"student": [[], []], "teacher": [[], []], "fake_score": [[], []]},
         sequence_plans=[MagicMock(), MagicMock()],
         gen_data_clean=MagicMock(),
         data_resolutions=["480", "480"],
@@ -722,6 +912,53 @@ def test_training_step_critic_calls_compute_flow_matching_loss_with_normalize_by
     model._compute_flow_matching_loss.assert_called_once()
     call_kwargs = model._compute_flow_matching_loss.call_args.kwargs
     assert call_kwargs.get("normalize_by_active") is True
+
+
+@pytest.mark.L0
+def test_training_step_critic_reduces_transfer_loss_over_generated_items_only() -> None:
+    """Transfer controls are flat vision items but must not dilute fake-score loss."""
+    model = _make_critic_model()
+    gen_data_student = _make_gen_data(num_vision_items=[2, 2])
+    gen_data_student.x0_tokens_vision = [
+        torch.zeros(4, 1, 2, 2),
+        torch.zeros(4, 1, 2, 2),
+        torch.zeros(4, 1, 2, 2),
+        torch.zeros(4, 1, 2, 2),
+    ]  # list of [C,T,H,W]
+    packed_student = _make_packed_sequence()
+    packed_student.vision.condition_mask = [
+        torch.ones(1, 1, 1),
+        torch.zeros(1, 1, 1),
+        torch.ones(1, 1, 1),
+        torch.zeros(1, 1, 1),
+    ]  # list of [T,1,1]
+    model._gen_data_from_student.return_value = (gen_data_student, packed_student, torch.zeros(2, 1), {})
+    model._pack_and_denoise.return_value = {
+        "preds_vision": [
+            torch.zeros(4, 1, 2, 2),
+            torch.zeros(4, 1, 2, 2),
+            torch.zeros(4, 1, 2, 2),
+            torch.zeros(4, 1, 2, 2),
+        ]
+    }
+    model._compute_flow_matching_loss.return_value = (
+        torch.tensor(0.0),
+        torch.tensor([0.0, 2.0, 0.0, 4.0]),
+    )
+
+    output_batch, total_loss = DMD2RFModel.training_step_critic(
+        model,
+        input_text_indexes_by_net={"student": [[], []], "teacher": [[], []], "fake_score": [[], []]},
+        sequence_plans=[MagicMock(), MagicMock()],
+        gen_data_clean=MagicMock(),
+        data_resolutions=["480", "480"],
+        num_vision_tokens_per_sample=[4, 4],
+        iteration=0,
+    )
+
+    torch.testing.assert_close(total_loss, torch.tensor(3.0))
+    torch.testing.assert_close(output_batch["fake_score_loss"], torch.tensor(3.0))
+    torch.testing.assert_close(output_batch["flow_matching_loss_vision_per_instance"], torch.tensor([2.0, 4.0]))
 
 
 
@@ -814,6 +1051,57 @@ def test_sample_student_sigma_returns_float32():
 
     sigma = DMD2RFModel._sample_student_sigma(model, batch_size=2)
     assert sigma.dtype == torch.float32
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("simulation_mode", ["forward", "forward_random"])
+def test_forward_simulation_broadcasts_sampled_sigma(simulation_mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    model = object.__new__(DMD2RFModel)
+    model.config = SimpleNamespace(simulation_mode=simulation_mode)
+    model.parallel_dims = object()
+    sampled_sigma = torch.tensor([[0.75], [0.25]])
+    model._sample_student_sigma = MagicMock(return_value=sampled_sigma)
+    model._sample_random_student_sigma = MagicMock(return_value=sampled_sigma)
+    gen_data_clean = SimpleNamespace(batch_size=2)
+    broadcast_calls: list[tuple[list[torch.Tensor], object]] = []
+
+    def fake_broadcast(tensors: list[torch.Tensor], parallel_dims: object) -> None:
+        broadcast_calls.append((tensors, parallel_dims))
+        raise RuntimeError("stop after broadcast")
+
+    monkeypatch.setattr(dmd2_rf_module, "context_parallel_broadcast_tensor_list", fake_broadcast)
+
+    with pytest.raises(RuntimeError, match="stop after broadcast"):
+        DMD2RFModel._forward_simulation(model, [], [], gen_data_clean)
+
+    assert len(broadcast_calls) == 1
+    broadcast_tensors, broadcast_parallel_dims = broadcast_calls[0]
+    assert broadcast_tensors == [sampled_sigma]
+    assert broadcast_parallel_dims is model.parallel_dims
+    if simulation_mode == "forward_random":
+        model._sample_random_student_sigma.assert_called_once_with(2)
+        model._sample_student_sigma.assert_not_called()
+    else:
+        model._sample_student_sigma.assert_called_once_with(2)
+        model._sample_random_student_sigma.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# variational_score_distillation_loss with loss_mask
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+def test_sample_random_student_sigma_shape_range_and_dtype():
+    """forward_random student sigma is continuous, not sampled from t_list."""
+    model = MagicMock()
+    model.tensor_kwargs_fp32 = {"dtype": torch.float32, "device": "cpu"}
+
+    sigma = DMD2RFModel._sample_random_student_sigma(model, batch_size=128)  # [B,1]
+    assert sigma.shape == (128, 1)
+    assert sigma.dtype == torch.float32
+    assert torch.all(sigma >= 0.0)
+    assert torch.all(sigma < 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1214,17 @@ def test_simulation_mode_accepts_backward():
 
 
 @pytest.mark.L0
+def test_simulation_mode_accepts_forward_random():
+    """DMD2RFConfig accepts simulation_mode='forward_random' without error."""
+    import attrs
+
+    from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2RFConfig
+
+    cfg = attrs.evolve(DMD2RFConfig(), simulation_mode="forward_random")
+    assert cfg.simulation_mode == "forward_random"
+
+
+@pytest.mark.L0
 def test_backward_grad_steps_default():
     """DMD2RFConfig.backward_grad_steps defaults to 1."""
     from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2RFConfig
@@ -955,6 +1254,25 @@ def test_gen_data_from_student_dispatches_forward():
     """_gen_data_from_student must call _forward_simulation when simulation_mode='forward'."""
     model = MagicMock()
     model.config.simulation_mode = "forward"
+    model._forward_simulation.return_value = ("gd", "packed", torch.zeros(2, 1), {})
+
+    DMD2RFModel._gen_data_from_student(
+        model,
+        input_text_indexes=[[], []],
+        sequence_plans=[MagicMock(), MagicMock()],
+        gen_data_clean=MagicMock(),
+        iteration=0,
+    )
+
+    model._forward_simulation.assert_called_once()
+    model._backward_simulation.assert_not_called()
+
+
+@pytest.mark.L0
+def test_gen_data_from_student_dispatches_forward_random():
+    """_gen_data_from_student must call _forward_simulation when simulation_mode='forward_random'."""
+    model = MagicMock()
+    model.config.simulation_mode = "forward_random"
     model._forward_simulation.return_value = ("gd", "packed", torch.zeros(2, 1), {})
 
     DMD2RFModel._gen_data_from_student(

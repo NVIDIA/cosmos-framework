@@ -31,9 +31,8 @@ class CompileConfig:
     # Whether torch.compile should generate symbolic-shape (dynamic) kernels
     # (maps to ``torch.compile(dynamic=...)``).  Defaults to True for training,
     # which sees varying shapes across batches (sequence length, CP sharding, ...);
-    # specializing would recompile continuously.  See ParallelismOverrides in
-    # packages/cosmos3/cosmos3/common/args.py for the inference-side rationale
-    # (where dynamic=False is preferred for stable AR shapes).
+    # specializing would recompile continuously. Inference prefers dynamic=False
+    # for stable autoregressive shapes; see inference/common/args.py.
     compile_dynamic: bool = True
 
     # Whether to use CUDA graphs for faster inference. This option does not work during training.

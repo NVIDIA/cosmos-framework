@@ -28,21 +28,37 @@ from omegaconf import OmegaConf
 from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
-from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
+from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TEACHER_FORCING_KV_IMPLEMENTATIONS,
     TeacherForcingKVImplementation,
     TeacherForcingReplayPolicyConfig,
 )
 from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
+from cosmos_framework.data.generator.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+)
+from cosmos_framework.data.generator.sequence_packing.autoregressive import (
+    pack_input_sequence_autoregressive,
+    pack_input_sequence_autoregressive_batch,
+    pack_multiview_action_temporal_causal,
+    resolve_text_system_prompt,
+)
+from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.data.generator.sequence_packing.packers import (
+    make_teacher_forcing_clean_pack,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
-from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
     build_interactive_multiview_mask_items,
 )
+from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.maskless_attention import require_gapped_replay
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
@@ -57,6 +73,7 @@ from cosmos_framework.model.generator.mot.post_saturation.static_compile import 
     validate_ar_static_und_cache_lengths,
 )
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
+from cosmos_framework.model.generator.utils.action_stream import ARHistorySnapshot, StreamedActionChunk
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.frustum_retrieval import FrustumHistorySelector
 from cosmos_framework.model.generator.utils.kv_cache import (
@@ -68,6 +85,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.multiview_ar import (
+    JointARCache,
     MultiviewTransferARBackend,
     generate_multiview_transfer_ar_chunk,
     iter_robot_multiview_action_ar,
@@ -75,23 +93,15 @@ from cosmos_framework.model.generator.utils.multiview_ar import (
     sample_joint_transfer_ar,
 )
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
-from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan, build_sequence_plans_from_data_batch
-from cosmos_framework.data.generator.sequence_packing.autoregressive import (
-    pack_input_sequence_autoregressive,
-    pack_input_sequence_autoregressive_batch,
-    pack_multiview_action_temporal_causal,
-    resolve_text_system_prompt,
-)
-from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
-from cosmos_framework.data.generator.sequence_packing.packers import (
-    make_teacher_forcing_clean_pack,
-)
-from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
 _ARBranch = Literal["conditional", "unconditional"]
 _ARBranchRunner = Callable[[PackedSequence, torch.Tensor, torch.Tensor, _ARBranch], torch.Tensor]
 _TEACHER_FORCING_REPLAY_STRATEGIES: tuple[str, ...] = ("teacher_forcing", "teacher_forcing_dcm")
+
+# Framed-caption capacity chosen for long multi-caption rollouts with headroom; configurable for
+# other datasets, and used only for static-compile padding, never media positions.
+_DEFAULT_ROLLING_STATIC_CAPTION_MAX_TOKENS: int = 576
 
 
 class GaussianBellTrainTimeWeight:
@@ -200,6 +210,7 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
     rolling_prompt_context_before: int = 0
     rolling_prompt_context_after: int = 0
     rolling_media_text_extent: int | None = None
+    rolling_static_caption_max_tokens: int = _DEFAULT_ROLLING_STATIC_CAPTION_MAX_TOKENS
     rolling_media_rope_scale: float = 1.0
     # Rephase only reads of the initial singleton media keys at a capped age
     # relative to the chunk's earliest sensor timestamp. Stored K/V and physical
@@ -427,7 +438,10 @@ def _validate_attention_sink_config(kv_cache_inference_size: int | None, attenti
 def _resolve_teacher_forcing_replay_policy(value: Any) -> TeacherForcingReplayPolicyConfig:
     """Canonicalize LazyConfig policy values and revalidate all policy invariants."""
     if OmegaConf.is_config(value):
-        value = OmegaConf.to_object(value)
+        # ``to_object`` preserves an unstructured exported mapping as another
+        # DictConfig.  Convert to plain containers so public checkpoints take
+        # the same typed-construction path as in-process LazyConfig values.
+        value = OmegaConf.to_container(value, resolve=True)
     if isinstance(value, dict):
         # Drop lazy-config serializer metadata before construction. A config that has been
         # round-tripped through an exported checkpoint carries a "_type" marker alongside
@@ -589,7 +603,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         video_temporal_causal = self.config.video_temporal_causal
         joint_attn_implementation = self.config.joint_attn_implementation
         attention_scope = self.config.multiview_attention.mask.attention_scope
-        decomposed_temporal_window_seconds = self.config.multiview_attention.mask.decomposed_temporal_window_seconds
+        cross_view_temporal_bounds = self.config.multiview_attention.mask.cross_view_temporal_window.bounds
         multiview_backend = self.config.multiview_attention.backend
         maskless_replay = (
             video_temporal_causal and self._get_teacher_forcing_kv_implementation() == "multiview_maskless_kv"
@@ -621,12 +635,15 @@ class OmniMoTCausalModel(OmniMoTModel):
             self.config.multiview_attention.mask.attention_scope = replay_policy.multiview_attention_scope
             # Replay's duration is past-only; preserve it as signed bounds in the base config.
             window_seconds = replay_policy.decomposed_temporal_window_seconds
-            self.config.multiview_attention.mask.decomposed_temporal_window_seconds = (
+            self.config.multiview_attention.mask.cross_view_temporal_window.bounds = (
                 None if window_seconds is None else (-window_seconds, 0.0)
             )
             if maskless_replay:
                 self.config.multiview_attention.backend = "maskless"
-                self.config.multiview_attention.mask.decomposed_temporal_window_seconds = None
+                # Core's bidirectional geometry has no sliding-window fold.
+                # Replay replaces that geometry with its own same-instant
+                # visibility plan before decoder execution.
+                self.config.multiview_attention.mask.cross_view_temporal_window.bounds = None
         try:
             if robot_threeway:
                 # Core's fixed-code validator is coupled to bidirectional
@@ -652,7 +669,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             self.config.video_temporal_causal = video_temporal_causal
             self.config.joint_attn_implementation = joint_attn_implementation
             self.config.multiview_attention.mask.attention_scope = attention_scope
-            self.config.multiview_attention.mask.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
+            self.config.multiview_attention.mask.cross_view_temporal_window.bounds = cross_view_temporal_bounds
             self.config.multiview_attention.backend = multiview_backend
 
         if uses_interactive_network:
@@ -1138,8 +1155,10 @@ class OmniMoTCausalModel(OmniMoTModel):
         gen_data_clean: GenerationDataClean,
         memory_info: dict,
         detach_clean_kv: bool,
+        *,
+        persistent_cache: JointARCache | None = None,
     ) -> TeacherForcingMemoryState:
-        """Build replayed clean K/V for one denoiser network."""
+        """Build clean replay memory, optionally reusing a detached joint rollout."""
         clean_target_indexes: torch.Tensor | None = None
         if self._uses_multiview_replay_kv():
             if packed_sequence.vision is None or packed_sequence.num_views_per_vision_item is None:
@@ -1179,6 +1198,20 @@ class OmniMoTCausalModel(OmniMoTModel):
             detach_clean_kv=detach_clean_kv,
             selected_clean_gen_token_indexes=clean_target_indexes,
         )
+        if persistent_cache is not None:
+            if not detach_clean_kv or not getattr(net, "teacher_forcing_maskless", False):
+                raise ValueError("Persistent clean replay requires detached maskless teacher forcing.")
+            # Match the joint rollout's policy contract at this lower-level entry point.
+            # Global controls can change an earlier target's clean K/V as the prefix grows.
+            if tf_memory.teacher_forcing_replay_policy.control_visibility != "causal":
+                raise ValueError("Persistent clean replay requires causal control visibility.")
+            # Replicated attention keeps all KV heads; sequence-sharded attention
+            # stores the post-Ulysses CP-local heads. This matters before the first commit.
+            empty_num_kv_heads = (
+                net.num_kv_heads if self.config.attention_io_layout == "replicated" else tf_memory.num_kv_heads
+            )
+            persistent_cache.populate_replay_memory(packed_sequence, tf_memory, empty_num_kv_heads=empty_num_kv_heads)
+            return tf_memory
         clean_pack = make_teacher_forcing_clean_pack(packed_sequence)
         if self._uses_multiview_replay_kv():
             clean_pack.teacher_forcing_pass = "clean"
@@ -1380,6 +1413,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             return tf_state
 
         use_ar_rolling: bool = memory_info.get("use_ar_rolling", False)
+        preserve_transfer_numerics = memory_info.get("preserve_transfer_numerics", False) is True
         post_saturation_static_compile: bool = memory_info.get("post_saturation_static_compile", False)
         coarse_cuda_graph: bool = memory_info.get("coarse_cuda_graph", False)
         stage_gen_cache_writes: bool = memory_info.get("stage_gen_cache_writes", False)
@@ -1419,6 +1453,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     num_action_tokens_per_supertoken=packed_seq.num_action_tokens_per_supertoken,
                     null_action_supertokens=packed_seq.null_action_supertokens,
                     for_cuda_graphs=True,
+                    preserve_transfer_numerics=preserve_transfer_numerics,
                     num_kv_heads=self.net.num_kv_heads,
                     head_dim=self.net.head_dim,
                     write_gen_cache=write_gen_cache,
@@ -1436,6 +1471,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 vision_token_shapes=vision_token_shapes,
                 num_action_tokens_per_supertoken=packed_seq.num_action_tokens_per_supertoken,
                 null_action_supertokens=packed_seq.null_action_supertokens,
+                preserve_transfer_numerics=preserve_transfer_numerics,
                 num_kv_heads=self.net.num_kv_heads if replicated_attention_io_cp or coarse_cuda_graph else None,
                 head_dim=self.net.head_dim if replicated_attention_io_cp or coarse_cuda_graph else None,
                 write_gen_cache=write_gen_cache,
@@ -1528,6 +1564,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         per-sample prompt and generation histories remain isolated by variable-
         length attention metadata.
         """
+        preserve_transfer_numerics = data_batch.get("_preserve_transfer_numerics", False) is True
         if num_frames < 1:
             raise ValueError(f"num_frames must be positive, got {num_frames}")
         batch_size = len(seeds)
@@ -1626,140 +1663,131 @@ class OmniMoTCausalModel(OmniMoTModel):
             else None
         )
 
-        fps_value = data_batch.get("fps")
-        if isinstance(fps_value, torch.Tensor):
-            fps_vision_list = [float(value) for value in fps_value.cpu().tolist()]
-        elif isinstance(fps_value, list):
-            fps_vision_list = [float(value) for value in fps_value]
-        else:
-            fps_vision_list = [24.0] * batch_size
-        if len(fps_vision_list) != batch_size:
-            raise ValueError(f"Expected {batch_size} FPS values, got {len(fps_vision_list)}")
-        gen_data_clean = GenerationDataClean(
-            batch_size=batch_size,
-            is_image_batch=False,
-            fps_vision=torch.tensor(fps_vision_list, dtype=torch.float32),  # [B]
-        )
-
-        tcf = int(self.tokenizer_vision_gen.temporal_compression_factor or 4)
-        patch_size = int(self.config.diffusion_expert_config.patch_spatial)
-        video_temporal_causal = bool(self.config.video_temporal_causal)
-        enable_fps_modulation = bool(self.config.diffusion_expert_config.enable_fps_modulation)
-        base_fps = float(self.config.diffusion_expert_config.base_fps)
-        control_chunks = iter(control_latent_chunks)
-        seeds = list(seeds)
-        row_position_base = [0] * batch_size  # per-row mRoPE frame clock origin (episode start)
-        transfer_history_cache_idx = 0
-        transfer_history_sink_tokens = 0
-        transfer_history_control_max_tokens: int | None = None
-        transfer_history_target_max_tokens: int | None = None
-
-        for chunk_start, chunk_end in _iter_ar_chunk_ranges(0, num_frames, chunk_size):
-            chunk_len = chunk_end - chunk_start
-            try:
-                step = next(control_chunks)
-            except StopIteration as error:
-                raise ValueError(f"Missing streamed control chunk for frames [{chunk_start}, {chunk_end})") from error
-            reset_rows: tuple[int, ...] = ()
-            if isinstance(step, StreamingTransferStep):
-                reset_rows = tuple(step.reset_rows)
-                control_latent = step.control.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
-                if reset_rows:
-                    if not use_ar_rolling_path:
-                        raise ValueError("Per-row episode restarts require the compiled CUDA-graph AR path")
-                    if chunk_start == 0:
-                        raise ValueError("Rows cannot restart at the first step; they start fresh there already")
-                    if step.seeds is not None and len(step.seeds) != len(reset_rows):
-                        raise ValueError(f"Expected {len(reset_rows)} seeds for the reset rows, got {len(step.seeds)}")
-                    for position, row in enumerate(reset_rows):
-                        if row < 0 or row >= batch_size:
-                            raise IndexError(f"reset row {row} outside [0, {batch_size})")
-                        row_position_base[row] = chunk_start
-                        if step.seeds is not None:
-                            seeds[row] = int(step.seeds[position])
-                    for cache_list in (dual_kv_cache, dual_kv_cache_uncond or []):
-                        for cache in cache_list:
-                            cache.gen_cache.reset_rows(reset_rows, at_frame_idx=transfer_history_cache_idx)
+        try:
+            fps_value = data_batch.get("fps")
+            if isinstance(fps_value, torch.Tensor):
+                fps_vision_list = [float(value) for value in fps_value.cpu().tolist()]
+            elif isinstance(fps_value, list):
+                fps_vision_list = [float(value) for value in fps_value]
             else:
-                control_latent = step.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
-            row_positions = [chunk_start - base for base in row_position_base]  # per-row episode-local frame
-            if control_latent.ndim != 5 or control_latent.shape[0] != batch_size:
-                raise ValueError(
-                    f"Expected control latent [B,C,T,H,W] with B={batch_size}, got {tuple(control_latent.shape)}"
-                )
-            if control_latent.shape[2] != chunk_len:
-                raise ValueError(
-                    f"Control chunk [{chunk_start}, {chunk_end}) has latent length {control_latent.shape[2]}"
-                )
-
-            if chunk_start == 0 and transfer_window is not None:
-                latent_h, latent_w = control_latent.shape[-2:]
-                patch_h = (latent_h + patch_size - 1) // patch_size
-                patch_w = (latent_w + patch_size - 1) // patch_size
-                tokens_per_frame = patch_h * patch_w
-                recent_past_frames = transfer_window - self.config.attention_sink_size - 1
-                transfer_history_sink_tokens = 2 * self.config.attention_sink_size * tokens_per_frame
-                transfer_history_control_max_tokens = 2 * recent_past_frames * tokens_per_frame
-                transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * tokens_per_frame
-
-            include_text = transfer_history_cache_idx == 0
-            self._seed_frame_into_kv_cache(
-                frame_latent=control_latent,
-                frame_idx=transfer_history_cache_idx,
-                position_frame_idx=row_positions,
-                dual_kv_cache=dual_kv_cache,
-                dual_kv_cache_uncond=dual_kv_cache_uncond,
-                cond_text_tokens=cond_text_tokens if include_text else None,
-                uncond_text_tokens=uncond_text_tokens if include_text else None,
-                cond_cached_text_offset=cond_cached_text_offsets,
-                uncond_cached_text_offset=uncond_cached_text_offsets,
-                curr_action_latent=None,
-                action_domain_id=None,
-                gen_data_clean=gen_data_clean,
-                fps_vision_list=fps_vision_list,
-                fps_action_list=[24.0] * batch_size,
-                seed=seeds,
-                cfg_active=cfg_active,
-                cfgp_enabled=False,
-                tcf=tcf,
-                patch_size=patch_size,
-                action_dim=self.config.max_action_dim,
-                video_tc=video_temporal_causal,
-                enable_fps_mod=enable_fps_modulation,
-                base_fps=base_fps,
-                modality_margin=margin,
-                condition_frame_indexes_vision=list(range(chunk_len)),
-                transfer_history_sink_tokens=transfer_history_sink_tokens,
-                transfer_history_max_tokens=transfer_history_control_max_tokens,
-                batched_ar=True,
-                use_ar_rolling_path=use_ar_rolling_path,
+                fps_vision_list = [24.0] * batch_size
+            if len(fps_vision_list) != batch_size:
+                raise ValueError(f"Expected {batch_size} FPS values, got {len(fps_vision_list)}")
+            gen_data_clean = GenerationDataClean(
+                batch_size=batch_size,
+                is_image_batch=False,
+                fps_vision=torch.tensor(fps_vision_list, dtype=torch.float32),  # [B]
             )
-            transfer_history_cache_idx += 1
 
-            noise_rows = []
-            for sample_idx, seed in enumerate(seeds):
-                generator = torch.Generator(device=control_latent.device).manual_seed(seed + row_positions[sample_idx])
-                noise_row = torch.empty_like(control_latent[sample_idx]).normal_(generator=generator)  # [C,T,H,W]
-                noise_rows.append(noise_row)
-            curr_vision_latent = torch.stack(noise_rows, dim=0)  # [B,C,T,H,W]
-            packed_seq = pack_input_sequence_autoregressive_batch(
-                vision_latent=curr_vision_latent,
-                text_tokens=None,
-                timestep=0.0,
-                fps_vision=fps_vision_list,
-                special_tokens=self.llm_special_tokens,
-                latent_patch_size=patch_size,
-                condition_frame_indexes_vision=[],
-                frame_idx=row_positions,
-                temporal_compression_factor=tcf,
-                video_temporal_causal=video_temporal_causal,
-                enable_fps_modulation=enable_fps_modulation,
-                base_fps=base_fps,
-                cached_text_offsets=cond_cached_text_offsets,
-                unified_3d_mrope_temporal_modality_margin=margin,
-            )
-            packed_seq_uncond = (
-                pack_input_sequence_autoregressive_batch(
+            tcf = int(self.tokenizer_vision_gen.temporal_compression_factor or 4)
+            patch_size = int(self.config.diffusion_expert_config.patch_spatial)
+            video_temporal_causal = bool(self.config.video_temporal_causal)
+            enable_fps_modulation = bool(self.config.diffusion_expert_config.enable_fps_modulation)
+            base_fps = float(self.config.diffusion_expert_config.base_fps)
+            control_chunks = iter(control_latent_chunks)
+            seeds = list(seeds)
+            row_position_base = [0] * batch_size  # per-row mRoPE frame clock origin (episode start)
+            transfer_history_cache_idx = 0
+            transfer_history_sink_tokens = 0
+            transfer_history_control_max_tokens: int | None = None
+            transfer_history_target_max_tokens: int | None = None
+
+            for chunk_start, chunk_end in _iter_ar_chunk_ranges(0, num_frames, chunk_size):
+                chunk_len = chunk_end - chunk_start
+                try:
+                    step = next(control_chunks)
+                except StopIteration as error:
+                    raise ValueError(
+                        f"Missing streamed control chunk for frames [{chunk_start}, {chunk_end})"
+                    ) from error
+                reset_rows: tuple[int, ...] = ()
+                if isinstance(step, StreamingTransferStep):
+                    reset_rows = tuple(step.reset_rows)
+                    control_latent = step.control.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+                    if reset_rows:
+                        if not use_ar_rolling_path:
+                            raise ValueError("Per-row episode restarts require the compiled CUDA-graph AR path")
+                        if chunk_start == 0:
+                            raise ValueError("Rows cannot restart at the first step; they start fresh there already")
+                        if step.seeds is not None and len(step.seeds) != len(reset_rows):
+                            raise ValueError(
+                                f"Expected {len(reset_rows)} seeds for the reset rows, got {len(step.seeds)}"
+                            )
+                        for position, row in enumerate(reset_rows):
+                            if row < 0 or row >= batch_size:
+                                raise IndexError(f"reset row {row} outside [0, {batch_size})")
+                            row_position_base[row] = chunk_start
+                            if step.seeds is not None:
+                                seeds[row] = int(step.seeds[position])
+                        for cache_list in (dual_kv_cache, dual_kv_cache_uncond or []):
+                            for cache in cache_list:
+                                cache.gen_cache.reset_rows(reset_rows, at_frame_idx=transfer_history_cache_idx)
+                else:
+                    control_latent = step.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+                row_positions = [chunk_start - base for base in row_position_base]  # per-row episode-local frame
+                if control_latent.ndim != 5 or control_latent.shape[0] != batch_size:
+                    raise ValueError(
+                        f"Expected control latent [B,C,T,H,W] with B={batch_size}, got {tuple(control_latent.shape)}"
+                    )
+                if control_latent.shape[2] != chunk_len:
+                    raise ValueError(
+                        f"Control chunk [{chunk_start}, {chunk_end}) has latent length {control_latent.shape[2]}"
+                    )
+
+                if chunk_start == 0 and transfer_window is not None:
+                    latent_h, latent_w = control_latent.shape[-2:]
+                    patch_h = (latent_h + patch_size - 1) // patch_size
+                    patch_w = (latent_w + patch_size - 1) // patch_size
+                    tokens_per_frame = patch_h * patch_w
+                    recent_past_frames = transfer_window - self.config.attention_sink_size - 1
+                    transfer_history_sink_tokens = 2 * self.config.attention_sink_size * tokens_per_frame
+                    transfer_history_control_max_tokens = 2 * recent_past_frames * tokens_per_frame
+                    transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * tokens_per_frame
+
+                include_text = transfer_history_cache_idx == 0
+                self._seed_frame_into_kv_cache(
+                    frame_latent=control_latent,
+                    frame_idx=transfer_history_cache_idx,
+                    position_frame_idx=row_positions,
+                    dual_kv_cache=dual_kv_cache,
+                    dual_kv_cache_uncond=dual_kv_cache_uncond,
+                    cond_text_tokens=cond_text_tokens if include_text else None,
+                    uncond_text_tokens=uncond_text_tokens if include_text else None,
+                    cond_cached_text_offset=cond_cached_text_offsets,
+                    uncond_cached_text_offset=uncond_cached_text_offsets,
+                    curr_action_latent=None,
+                    action_domain_id=None,
+                    gen_data_clean=gen_data_clean,
+                    fps_vision_list=fps_vision_list,
+                    fps_action_list=[24.0] * batch_size,
+                    seed=seeds,
+                    cfg_active=cfg_active,
+                    cfgp_enabled=False,
+                    tcf=tcf,
+                    patch_size=patch_size,
+                    action_dim=self.config.max_action_dim,
+                    video_tc=video_temporal_causal,
+                    enable_fps_mod=enable_fps_modulation,
+                    base_fps=base_fps,
+                    modality_margin=margin,
+                    condition_frame_indexes_vision=list(range(chunk_len)),
+                    transfer_history_sink_tokens=transfer_history_sink_tokens,
+                    transfer_history_max_tokens=transfer_history_control_max_tokens,
+                    batched_ar=True,
+                    use_ar_rolling_path=use_ar_rolling_path,
+                    preserve_transfer_numerics=preserve_transfer_numerics,
+                )
+                transfer_history_cache_idx += 1
+
+                noise_rows = []
+                for sample_idx, seed in enumerate(seeds):
+                    generator = torch.Generator(device=control_latent.device).manual_seed(
+                        seed + row_positions[sample_idx]
+                    )
+                    noise_row = torch.empty_like(control_latent[sample_idx]).normal_(generator=generator)  # [C,T,H,W]
+                    noise_rows.append(noise_row)
+                curr_vision_latent = torch.stack(noise_rows, dim=0)  # [B,C,T,H,W]
+                packed_seq = pack_input_sequence_autoregressive_batch(
                     vision_latent=curr_vision_latent,
                     text_tokens=None,
                     timestep=0.0,
@@ -1772,86 +1800,113 @@ class OmniMoTCausalModel(OmniMoTModel):
                     video_temporal_causal=video_temporal_causal,
                     enable_fps_modulation=enable_fps_modulation,
                     base_fps=base_fps,
-                    cached_text_offsets=uncond_cached_text_offsets,
+                    cached_text_offsets=cond_cached_text_offsets,
                     unified_3d_mrope_temporal_modality_margin=margin,
                 )
-                if cfg_active
-                else None
-            )
-            denoised_chunk = self.generate_next_frame(
-                packed_seq=packed_seq,
-                packed_seq_uncond=packed_seq_uncond,
-                curr_vision_latent=curr_vision_latent,
-                curr_action_latent=None,
-                cond_text_tokens=cond_text_tokens,
-                uncond_text_tokens=uncond_text_tokens,
-                gen_data_clean=gen_data_clean,
-                dual_kv_cache=dual_kv_cache,
-                dual_kv_cache_uncond=dual_kv_cache_uncond,
-                frame_idx=row_positions,
-                cache_frame_idx=transfer_history_cache_idx,
-                num_frames=num_frames,
-                guidance=guidance,
-                num_steps=num_steps,
-                shift=shift,
-                seed=seeds,
-                normalize_cfg=normalize_cfg,
-                sampler_mode=sampler_mode,
-                distilled_num_steps=distilled_num_steps,
-                fps_vision_list=fps_vision_list,
-                fps_action_list=[24.0] * batch_size,
-                use_ar_rolling_path=use_ar_rolling_path,
-                transfer_history_sink_tokens=transfer_history_sink_tokens,
-                transfer_history_max_tokens=transfer_history_target_max_tokens,
-                batched_ar=True,
-            )  # [B,C,chunk_len,H,W]
-            if on_clean_vision_chunk is not None:
-                on_clean_vision_chunk(denoised_chunk)
-
-            for local_idx in range(chunk_len):
-                frame_idx = chunk_start + local_idx
-                if frame_idx < num_frames - 1:
-                    frame_latent = denoised_chunk[:, :, local_idx : local_idx + 1].to(
-                        **self.tensor_kwargs
-                    )  # [B,C,1,H,W]
-                    self._seed_frame_into_kv_cache(
-                        frame_latent=frame_latent,
-                        frame_idx=transfer_history_cache_idx,
-                        position_frame_idx=[frame_idx - base for base in row_position_base],
-                        dual_kv_cache=dual_kv_cache,
-                        dual_kv_cache_uncond=dual_kv_cache_uncond,
-                        cond_text_tokens=None,
-                        uncond_text_tokens=None,
-                        cond_cached_text_offset=cond_cached_text_offsets,
-                        uncond_cached_text_offset=uncond_cached_text_offsets,
-                        curr_action_latent=None,
-                        action_domain_id=None,
-                        gen_data_clean=gen_data_clean,
-                        fps_vision_list=fps_vision_list,
-                        fps_action_list=[24.0] * batch_size,
-                        seed=seeds,
-                        cfg_active=cfg_active,
-                        cfgp_enabled=False,
-                        tcf=tcf,
-                        patch_size=patch_size,
-                        action_dim=self.config.max_action_dim,
-                        video_tc=video_temporal_causal,
-                        enable_fps_mod=enable_fps_modulation,
+                packed_seq_uncond = (
+                    pack_input_sequence_autoregressive_batch(
+                        vision_latent=curr_vision_latent,
+                        text_tokens=None,
+                        timestep=0.0,
+                        fps_vision=fps_vision_list,
+                        special_tokens=self.llm_special_tokens,
+                        latent_patch_size=patch_size,
+                        condition_frame_indexes_vision=[],
+                        frame_idx=row_positions,
+                        temporal_compression_factor=tcf,
+                        video_temporal_causal=video_temporal_causal,
+                        enable_fps_modulation=enable_fps_modulation,
                         base_fps=base_fps,
-                        modality_margin=margin,
-                        transfer_history_sink_tokens=transfer_history_sink_tokens,
-                        transfer_history_max_tokens=transfer_history_target_max_tokens,
-                        batched_ar=True,
-                        use_ar_rolling_path=use_ar_rolling_path,
+                        cached_text_offsets=uncond_cached_text_offsets,
+                        unified_3d_mrope_temporal_modality_margin=margin,
                     )
-                    transfer_history_cache_idx += 1
-                yield {"vision": denoised_chunk[:, :, local_idx : local_idx + 1]}  # [B,C,1,H,W]
+                    if cfg_active
+                    else None
+                )
+                denoised_chunk = self.generate_next_frame(
+                    packed_seq=packed_seq,
+                    packed_seq_uncond=packed_seq_uncond,
+                    curr_vision_latent=curr_vision_latent,
+                    curr_action_latent=None,
+                    cond_text_tokens=cond_text_tokens,
+                    uncond_text_tokens=uncond_text_tokens,
+                    gen_data_clean=gen_data_clean,
+                    dual_kv_cache=dual_kv_cache,
+                    dual_kv_cache_uncond=dual_kv_cache_uncond,
+                    frame_idx=row_positions,
+                    cache_frame_idx=transfer_history_cache_idx,
+                    num_frames=num_frames,
+                    guidance=guidance,
+                    num_steps=num_steps,
+                    shift=shift,
+                    seed=seeds,
+                    normalize_cfg=normalize_cfg,
+                    sampler_mode=sampler_mode,
+                    distilled_num_steps=distilled_num_steps,
+                    fps_vision_list=fps_vision_list,
+                    fps_action_list=[24.0] * batch_size,
+                    use_ar_rolling_path=use_ar_rolling_path,
+                    preserve_transfer_numerics=preserve_transfer_numerics,
+                    transfer_history_sink_tokens=transfer_history_sink_tokens,
+                    transfer_history_max_tokens=transfer_history_target_max_tokens,
+                    batched_ar=True,
+                )  # [B,C,chunk_len,H,W]
+                if on_clean_vision_chunk is not None:
+                    on_clean_vision_chunk(denoised_chunk)
 
-        try:
-            extra_chunk = next(control_chunks)  # [B,C,T,H,W]
-        except StopIteration:
-            return
-        raise ValueError(f"Received an extra streamed control chunk with shape {tuple(extra_chunk.shape)}")
+                for local_idx in range(chunk_len):
+                    frame_idx = chunk_start + local_idx
+                    if frame_idx < num_frames - 1:
+                        frame_latent = denoised_chunk[:, :, local_idx : local_idx + 1].to(
+                            **self.tensor_kwargs
+                        )  # [B,C,1,H,W]
+                        self._seed_frame_into_kv_cache(
+                            frame_latent=frame_latent,
+                            frame_idx=transfer_history_cache_idx,
+                            position_frame_idx=[frame_idx - base for base in row_position_base],
+                            dual_kv_cache=dual_kv_cache,
+                            dual_kv_cache_uncond=dual_kv_cache_uncond,
+                            cond_text_tokens=None,
+                            uncond_text_tokens=None,
+                            cond_cached_text_offset=cond_cached_text_offsets,
+                            uncond_cached_text_offset=uncond_cached_text_offsets,
+                            curr_action_latent=None,
+                            action_domain_id=None,
+                            gen_data_clean=gen_data_clean,
+                            fps_vision_list=fps_vision_list,
+                            fps_action_list=[24.0] * batch_size,
+                            seed=seeds,
+                            cfg_active=cfg_active,
+                            cfgp_enabled=False,
+                            tcf=tcf,
+                            patch_size=patch_size,
+                            action_dim=self.config.max_action_dim,
+                            video_tc=video_temporal_causal,
+                            enable_fps_mod=enable_fps_modulation,
+                            base_fps=base_fps,
+                            modality_margin=margin,
+                            transfer_history_sink_tokens=transfer_history_sink_tokens,
+                            transfer_history_max_tokens=transfer_history_target_max_tokens,
+                            batched_ar=True,
+                            use_ar_rolling_path=use_ar_rolling_path,
+                            preserve_transfer_numerics=preserve_transfer_numerics,
+                        )
+                        transfer_history_cache_idx += 1
+                    yield {"vision": denoised_chunk[:, :, local_idx : local_idx + 1]}  # [B,C,1,H,W]
+
+            try:
+                extra_chunk = next(control_chunks)  # [B,C,T,H,W]
+            except StopIteration:
+                return
+            raise ValueError(f"Received an extra streamed control chunk with shape {tuple(extra_chunk.shape)}")
+        finally:
+            # Request lifetime, not Python object lifetime, owns pooled KV slots.
+            # Compiler hooks or exception tracebacks can retain the cache objects.
+            # Keep pooled storage addresses stable, but release this request's
+            # claims on exhaustion, close(), or a failed generation.
+            for caches in (dual_kv_cache, dual_kv_cache_uncond or []):
+                for cache in caches:
+                    cache.reset()
 
     def _reset_ar_forward_cuda_graph_runtime_for_generation(self) -> None:
         """Validate the whole-forward CUDA-graph scope and drop last generation's captures."""
@@ -1897,8 +1952,9 @@ class OmniMoTCausalModel(OmniMoTModel):
         on_clean_vision_chunk: Callable[[torch.Tensor], None] | None = None,
         has_negative_prompt: bool = False,
         frustum_geometry: dict[str, Any] | None = None,
+        on_kv_cache_update: Callable[[ARHistorySnapshot], None] | None = None,
         **kwargs,
-    ) -> Generator[dict[str, Any], torch.Tensor | None, None]:
+    ) -> Generator[dict[str, Any], torch.Tensor | StreamedActionChunk | None, None]:
         """
         Generate video frames autoregressively (AR) with KV caching.
 
@@ -1966,13 +2022,25 @@ class OmniMoTCausalModel(OmniMoTModel):
             frustum_geometry: Optional RGB-frame OpenCV camera geometry. Enables
                 configurable sink/retrieved/recent history (default 8/32/32).
                 Requires eager single-view inference with an unbounded archive;
-                see ``docs/frustum_kv_retrieval.md`` for the JSON contract.
+                see ``docs/inference_bimanual.md`` for the JSON contract.
 
         Yields:
             dict payloads with:
                 - ``"vision"``: one logical latent frame, shape ``(1, C, 1, H, W)`` for
                   single-view generation or ``(1, C, V, H, W)`` for multiview transfer.
                 - ``"action"``: action latents (``forward_dynamics`` only).
+
+            In ``forward_dynamics``, resume the conditioned-prefix yield with
+            ``.send(actions)`` to stream controls instead of using preloaded actions.
+            Each control tensor must have shape ``(chunk_size * tcf, D)``. Streaming
+            yields the complete generated chunk, ``(1, C, chunk_size, H, W)``, so
+            the caller observes its result before sending the next control chunk.
+            Close the iterator to end the stream and release its KV allocations.
+            A ``StreamedActionChunk`` additionally supplies scalar or per-action-row
+            domain IDs for this chunk, independent of the preloaded clip length.
+
+            ``on_kv_cache_update`` receives populated history frame IDs after
+            clean-cache refresh. It inspects actual K/V entries, not output counts.
         """
         valid_modes = [
             "text2image",
@@ -1988,6 +2056,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         if sampler_mode not in ("rf", "distilled"):
             raise ValueError(f"sampler_mode must be 'rf' or 'distilled', got {sampler_mode!r}")
+        if on_kv_cache_update is not None and (mode != "forward_dynamics" or frustum_geometry is not None):
+            raise ValueError("KV history instrumentation requires forward_dynamics without frustum retrieval")
         if frustum_geometry is not None:
             if mode not in ("image2video", "forward_dynamics"):
                 raise ValueError("Frustum retrieval supports single-view image2video/forward_dynamics only")
@@ -2086,6 +2156,9 @@ class OmniMoTCausalModel(OmniMoTModel):
         if vision_items is None:
             raise ValueError(f"{mode} AR inference requires vision latents")
         is_transfer = mode == "video_transfer"
+        # The RGB-control frontend sets this per-request marker after validating
+        # edge/blur/depth/seg. Other modes and multiview dispatch never opt in.
+        preserve_transfer_numerics = is_transfer and data_batch.get("_preserve_transfer_numerics", False) is True
         generation_vision_item_idx = 0
         if is_transfer:
             replay_policy = self._get_teacher_forcing_replay_policy()
@@ -2298,320 +2371,326 @@ class OmniMoTCausalModel(OmniMoTModel):
             else None
         )
 
-        # Step 4: Convert FPS tensors to list[float] for packing functions
-        fps_vision_list = gen_data_clean.fps_vision.tolist() if gen_data_clean.fps_vision is not None else [24.0]
-        fps_action_list = gen_data_clean.fps_action.tolist() if gen_data_clean.fps_action is not None else [24.0]
-        action_domain_id = OmniMoTCausalModel._first_action_domain_id(gen_data_clean)
-        raw_action_dim = OmniMoTCausalModel._first_raw_action_dim(gen_data_clean)
+        try:
+            # Step 4: Convert FPS tensors to list[float] for packing functions
+            fps_vision_list = gen_data_clean.fps_vision.tolist() if gen_data_clean.fps_vision is not None else [24.0]
+            fps_action_list = gen_data_clean.fps_action.tolist() if gen_data_clean.fps_action is not None else [24.0]
+            action_domain_id = OmniMoTCausalModel._first_action_domain_id(gen_data_clean)
+            raw_action_dim = OmniMoTCausalModel._first_raw_action_dim(gen_data_clean)
 
-        # Step 5: Initialize storage for generated frames
-        packed_seq = None  # Will be created for frame 0
-        packed_seq_uncond = None  # Will be created when cfg_active
-        next_streamed_action: torch.Tensor | None = None
+            # Step 5: Initialize storage for generated frames
+            packed_seq = None  # Will be created for frame 0
+            packed_seq_uncond = None  # Will be created when cfg_active
+            next_streamed_action: torch.Tensor | StreamedActionChunk | None = None
 
-        # Step 6: Determine starting frame and initial vision latent based on mode.
-        prefix_vision_latents: list[tuple[int, torch.Tensor]] = []
-        if mode in ("text2image", "text2video"):
-            start_frame = 0
-            has_action = False
-            initial_vision_latent = None  # No vision yet
-        elif mode == "text2video_action_conditioned":
-            start_frame = 0
-            has_action = True
-            initial_vision_latent = None  # Frame 0 is generated with null action slots.
-        elif mode == "video_transfer":
-            start_frame = 0
-            has_action = False
-            initial_vision_latent = None  # Target frame 0 is generated after control chunk 0 is cached.
-        elif mode == "image2video":
-            has_action = False
-            if prefix_frame_count is not None:
-                condition_frame_indexes = condition_frame_indexes[:num_frames]
-            expected_prefix = list(range(len(condition_frame_indexes)))
-            if condition_frame_indexes != expected_prefix:
-                raise ValueError(
-                    "image2video AR inference only supports contiguous prefix conditioning from frame 0; "
-                    f"got condition_frame_indexes_vision={condition_frame_indexes}."
-                )
-            if condition_frame_indexes[-1] >= num_frames:
-                raise ValueError(
-                    f"condition_frame_indexes_vision={condition_frame_indexes} exceeds latent frame count {num_frames}."
-                )
-            start_frame = len(condition_frame_indexes)
-            for prefix_frame_idx in condition_frame_indexes:
-                prefix_vision_latent = gen_data_clean.x0_tokens_vision[0][
-                    :, :, prefix_frame_idx : prefix_frame_idx + 1
-                ].to(**self.tensor_kwargs)  # [1,C,1,H,W]
-                prefix_vision_latents.append((prefix_frame_idx, prefix_vision_latent))
-                if on_clean_vision_chunk is not None:
-                    on_clean_vision_chunk(prefix_vision_latent)
-                yield {"vision": prefix_vision_latent}  # Emit conditioned prefix frames immediately for streaming
-            initial_vision_latent = prefix_vision_latents[0][1]  # [1,C,1,H,W]
-        elif mode == "forward_dynamics":
-            start_frame = 1
-            has_action = True
-            initial_vision_latent = gen_data_clean.x0_tokens_vision[0][:, :, 0:1, :, :].to(
-                **self.tensor_kwargs
-            )  # [1,C,1,H,W]
-            prefix_vision_latents.append((0, initial_vision_latent))
-            if on_clean_vision_chunk is not None:
-                on_clean_vision_chunk(initial_vision_latent)
-            # Emit conditioned frame 0 immediately. If the caller resumes with
-            # .send(action), this switches to streaming; if it resumes with
-            # next()/.send(None), the preloaded action file is used.
-            next_streamed_action = yield {"vision": initial_vision_latent}
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-        # next() resumes this yield with None, so None means "use preloaded
-        # actions"; only an actual sent tensor switches the generator to
-        # indefinite streaming.
-        streaming_actions = next_streamed_action is not None
-        if has_action and not streaming_actions and gen_data_clean.x0_tokens_action is None:
-            raise ValueError(
-                "forward_dynamics and text2video_action_conditioned modes require either preloaded action data "
-                "or sent action tensors"
-            )
-
-        # Common packing params (reused across all pack_input_sequence_autoregressive calls)
-        _tcf: int = self.tokenizer_vision_gen.temporal_compression_factor or 4
-        frustum_selector: FrustumHistorySelector | None = None
-        retrieval_caches = dual_kv_cache + (dual_kv_cache_uncond or [])
-        if frustum_geometry is not None:
-            if streaming_actions:
-                raise ValueError("Frustum retrieval requires a preloaded camera trajectory, not streamed actions")
-            frustum_selector = FrustumHistorySelector.from_rgb_geometry(
-                frustum_geometry, num_frames, _tcf, fps_vision_list[0]
-            )
-        _patch_size: int = self.config.diffusion_expert_config.patch_spatial
-        _action_dim: int = self.config.max_action_dim
-        _video_tc: bool = self.config.video_temporal_causal
-        _enable_fps_mod: bool = self.config.diffusion_expert_config.enable_fps_modulation
-        _base_fps: float = float(self.config.diffusion_expert_config.base_fps)
-        transfer_history_sink_tokens = 0
-        transfer_history_control_max_tokens: int | None = None
-        transfer_history_target_max_tokens: int | None = None
-        if transfer_sliding_window_size is not None:
-            transfer_latent_h = vision_items[0].shape[-2]
-            transfer_latent_w = vision_items[0].shape[-1]
-            # Cosmos3VFMNetwork zero-pads non-divisible latent grids before
-            # patchifying. Count those padding patches because they occupy KV
-            # sequence positions (720p: 45x80 latents -> 23x40 patches).
-            transfer_patch_h = (transfer_latent_h + _patch_size - 1) // _patch_size
-            transfer_patch_w = (transfer_latent_w + _patch_size - 1) // _patch_size
-            transfer_tokens_per_frame = transfer_patch_h * transfer_patch_w
-            recent_past_frames = transfer_sliding_window_size - self.config.attention_sink_size - 1
-            transfer_history_sink_tokens = 2 * self.config.attention_sink_size * transfer_tokens_per_frame
-            # Before C_t is cached, retain complete recent (C_j, R_j) pairs.
-            transfer_history_control_max_tokens = 2 * recent_past_frames * transfer_tokens_per_frame
-            # R_t additionally sees its aligned current control C_t.
-            transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * transfer_tokens_per_frame
-        transfer_history_cache_idx = 0
-
-        # Step 7: Prefill KV cache with text + conditioned prefix frames (image2video / forward_dynamics only).
-        # For text2video (start_frame=0) the AR loop seeds the cache at frame_idx=0.
-        # For modes where start_frame>0, the AR loop never sees the clean prefix, so we must run
-        # forward passes here to store text K/V and prefix vision K/V before the loop begins.
-        # The prefill always takes the dynamic-shape ``ARMemoryState`` path.
-        # The compile + CG region is the AR loop at frame >= 1, which uses the
-        # static-shape ``ARMemoryState(for_cuda_graphs=True)``.  Frame 0 is
-        # one-shot, so static-shape constraints aren't needed
-        if mode in ("image2video", "forward_dynamics"):
-            assert initial_vision_latent is not None
-            for prefix_frame_idx, prefix_vision_latent in prefix_vision_latents:
-                if frustum_selector is not None:
-                    prefix_history = frustum_selector.select(prefix_frame_idx)
-                    for cache in retrieval_caches:
-                        cache.gen_cache.select_history(prefix_frame_idx, prefix_history)
-                include_text = prefix_frame_idx == 0
-                self._seed_frame_into_kv_cache(
-                    frame_latent=prefix_vision_latent,
-                    frame_idx=prefix_frame_idx,
-                    use_ar_rolling_path=use_ar_rolling_path,
-                    dual_kv_cache=dual_kv_cache,
-                    dual_kv_cache_uncond=dual_kv_cache_uncond,
-                    cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
-                    uncond_text_tokens=uncond_text_tokens[0] if (uncond_text_tokens and include_text) else None,
-                    cond_cached_text_offset=cond_cached_text_offset,
-                    uncond_cached_text_offset=uncond_cached_text_offset,
-                    curr_action_latent=None,
-                    action_domain_id=(
-                        OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
-                    ),
-                    gen_data_clean=gen_data_clean,
-                    fps_vision_list=fps_vision_list,
-                    fps_action_list=fps_action_list,
-                    seed=seed,
-                    cfg_active=cfg_active,
-                    cfgp_enabled=cfgp_enabled,
-                    tcf=_tcf,
-                    patch_size=_patch_size,
-                    action_dim=_action_dim,
-                    video_tc=_video_tc,
-                    enable_fps_mod=_enable_fps_mod,
-                    base_fps=_base_fps,
-                    modality_margin=_margin,
-                )
-
-        # Step 8: AR Generation Loop (chunkwise; chunk_size == 1 is framewise).
-        # Chunks follow the training partition [1, C, C, ...] in absolute latent-
-        # frame index: frame 0 is its own singleton chunk, then C-frame chunks.
-        # Each chunk's frames are denoised jointly -- attention_AR_gen_only uses
-        # is_causal=False over the current unit, so the chunk's tokens attend
-        # bidirectionally among themselves and fully to all previously generated
-        # clean frames in the KV cache (strictly-earlier chunks), matching the
-        # chunkwise teacher-forcing receptive field.
-        # Streaming runs until the caller closes the generator (framewise only).
-        if streaming_actions and chunk_size > 1:
-            raise ValueError(
-                "Chunkwise AR inference (teacher_forcing_frames_per_chunk > 1) does not support streamed "
-                "actions; use a preloaded action file or chunk_size == 1."
-            )
-        chunk_iter = (
-            ((_f, _f + 1) for _f in itertools.count(start_frame))
-            if streaming_actions and has_action
-            else _iter_ar_chunk_ranges(start_frame, num_frames, chunk_size)
-        )
-        for chunk_start, chunk_end in chunk_iter:
-            chunk_len = chunk_end - chunk_start
-            retrieved_history: list[int] = []
-            if frustum_selector is not None:
-                # Score once per chunk, then reuse across layers, CFG branches,
-                # and all denoising steps. Positions remain absolute frame IDs.
-                retrieved_history = frustum_selector.select(chunk_start, chunk_end)
-                for cache in retrieval_caches:
-                    cache.gen_cache.select_history(chunk_start, retrieved_history)
-                if not dist.is_initialized() or dist.get_rank() == 0:
-                    log.info(f"[Frustum KV] frames [{chunk_start}, {chunk_end}): history={retrieved_history}")
-            if is_transfer:
-                include_text = transfer_history_cache_idx == 0
-                control_latent = vision_items[0][:, :, chunk_start:chunk_end].to(
+            # Step 6: Determine starting frame and initial vision latent based on mode.
+            prefix_vision_latents: list[tuple[int, torch.Tensor]] = []
+            if mode in ("text2image", "text2video"):
+                start_frame = 0
+                has_action = False
+                initial_vision_latent = None  # No vision yet
+            elif mode == "text2video_action_conditioned":
+                start_frame = 0
+                has_action = True
+                initial_vision_latent = None  # Frame 0 is generated with null action slots.
+            elif mode == "video_transfer":
+                start_frame = 0
+                has_action = False
+                initial_vision_latent = None  # Target frame 0 is generated after control chunk 0 is cached.
+            elif mode == "image2video":
+                has_action = False
+                if prefix_frame_count is not None:
+                    condition_frame_indexes = condition_frame_indexes[:num_frames]
+                expected_prefix = list(range(len(condition_frame_indexes)))
+                if condition_frame_indexes != expected_prefix:
+                    raise ValueError(
+                        "image2video AR inference only supports contiguous prefix conditioning from frame 0; "
+                        f"got condition_frame_indexes_vision={condition_frame_indexes}."
+                    )
+                if condition_frame_indexes[-1] >= num_frames:
+                    raise ValueError(
+                        f"condition_frame_indexes_vision={condition_frame_indexes} exceeds latent frame count {num_frames}."
+                    )
+                start_frame = len(condition_frame_indexes)
+                for prefix_frame_idx in condition_frame_indexes:
+                    prefix_vision_latent = gen_data_clean.x0_tokens_vision[0][
+                        :, :, prefix_frame_idx : prefix_frame_idx + 1
+                    ].to(**self.tensor_kwargs)  # [1,C,1,H,W]
+                    prefix_vision_latents.append((prefix_frame_idx, prefix_vision_latent))
+                    if on_clean_vision_chunk is not None:
+                        on_clean_vision_chunk(prefix_vision_latent)
+                    yield {"vision": prefix_vision_latent}  # Emit conditioned prefix frames immediately for streaming
+                initial_vision_latent = prefix_vision_latents[0][1]  # [1,C,1,H,W]
+            elif mode == "forward_dynamics":
+                start_frame = 1
+                has_action = True
+                initial_vision_latent = gen_data_clean.x0_tokens_vision[0][:, :, 0:1, :, :].to(
                     **self.tensor_kwargs
-                )  # [1,C,chunk_len,H,W]
-                self._seed_frame_into_kv_cache(
-                    frame_latent=control_latent,
-                    frame_idx=transfer_history_cache_idx,
-                    position_frame_idx=chunk_start,
-                    dual_kv_cache=dual_kv_cache,
-                    dual_kv_cache_uncond=dual_kv_cache_uncond,
-                    cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
-                    uncond_text_tokens=uncond_text_tokens[0] if (uncond_text_tokens and include_text) else None,
-                    cond_cached_text_offset=cond_cached_text_offset,
-                    uncond_cached_text_offset=uncond_cached_text_offset,
-                    curr_action_latent=None,
-                    action_domain_id=None,
-                    gen_data_clean=gen_data_clean,
-                    fps_vision_list=fps_vision_list,
-                    fps_action_list=fps_action_list,
-                    seed=seed,
-                    cfg_active=cfg_active,
-                    cfgp_enabled=cfgp_enabled,
-                    tcf=_tcf,
-                    patch_size=_patch_size,
-                    action_dim=_action_dim,
-                    video_tc=_video_tc,
-                    enable_fps_mod=_enable_fps_mod,
-                    base_fps=_base_fps,
-                    modality_margin=_margin,
-                    # Cache idx 0 (text + first control) stays dynamic inside the
-                    # seed; every later control seed shares the static-shape path.
-                    use_ar_rolling_path=use_ar_rolling_path,
-                    condition_frame_indexes_vision=list(range(chunk_len)),
-                    transfer_history_sink_tokens=transfer_history_sink_tokens,
-                    transfer_history_max_tokens=transfer_history_control_max_tokens,
-                )
-                transfer_history_cache_idx += 1
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                log.info(f"[AR inference] frames [{chunk_start}, {chunk_end}) / {num_frames}")
-            # Action prefix for the chunk (forward_dynamics): latent frame f is
-            # driven by action a_{f-1}, so concatenate a_{chunk_start-1}..a_{chunk_end-2}
-            # (tcf tokens each) into one (chunk_len*tcf, D) prefix.
-            if has_action and chunk_start > 0:
-                if streaming_actions:
-                    # chunk_len == 1 under streaming (chunk_size > 1 is rejected above).
-                    if next_streamed_action is None:
-                        raise ValueError(f"Missing streamed action tensor for frame_idx={chunk_start}")
-                    if tuple(next_streamed_action.shape) != (_tcf, _action_dim):
-                        raise ValueError(
-                            f"Expected streamed action tensor shape {(_tcf, _action_dim)}, "
-                            f"got {tuple(next_streamed_action.shape)}"
-                        )
-                    curr_action_latent = next_streamed_action.to(
-                        device=self.tensor_kwargs["device"],
-                        dtype=torch.float32,
-                    )  # [tcf,D]
-                else:
-                    assert gen_data_clean.x0_tokens_action is not None
-                    # x0_tokens_action is a dense list; batch_size==1 so take the single entry and slice.
-                    curr_action_latent = gen_data_clean.x0_tokens_action[0][
-                        (chunk_start - 1) * _tcf : (chunk_end - 1) * _tcf, :
-                    ].to(**self.tensor_kwargs)  # a_{chunk_start-1}..a_{chunk_end-2}; [chunk_len*tcf, D]
-                curr_action_domain_id = OmniMoTCausalModel._slice_action_domain_id(
-                    action_domain_id,
-                    (chunk_start - 1) * _tcf,
-                    (chunk_end - 1) * _tcf,
-                )
+                )  # [1,C,1,H,W]
+                prefix_vision_latents.append((0, initial_vision_latent))
+                if on_clean_vision_chunk is not None:
+                    on_clean_vision_chunk(initial_vision_latent)
+                # Emit conditioned frame 0 immediately. If the caller resumes with
+                # .send(action), this switches to streaming; if it resumes with
+                # next()/.send(None), the preloaded action file is used.
+                next_streamed_action = yield {"vision": initial_vision_latent}
             else:
-                curr_action_latent = None
-                curr_action_domain_id = (
-                    OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
+                raise ValueError(f"Unknown mode: {mode}")
+
+            # next() resumes this yield with None, so None means "use preloaded
+            # actions"; only an actual sent tensor switches the generator to
+            # indefinite streaming.
+            streaming_actions = next_streamed_action is not None
+            if has_action and not streaming_actions and gen_data_clean.x0_tokens_action is None:
+                raise ValueError(
+                    "forward_dynamics and text2video_action_conditioned modes require either preloaded action data "
+                    "or sent action tensors"
                 )
 
-            # Initialize the whole chunk with noise: [1, C, chunk_len, H, W].
-            _ref0 = vision_items[generation_vision_item_idx][:, :, 0:1, :, :].to(**self.tensor_kwargs)  # [1,C,1,H,W]
-            _g = torch.Generator(device=_ref0.device).manual_seed(seed + chunk_start)
-            curr_vision_latent = torch.empty(
-                (1, _ref0.shape[1], chunk_len, _ref0.shape[3], _ref0.shape[4]),
-                device=_ref0.device,
-                dtype=_ref0.dtype,
-            ).normal_(generator=_g)  # [1,C,chunk_len,H,W]
+            # Common packing params (reused across all pack_input_sequence_autoregressive calls)
+            _tcf: int = self.tokenizer_vision_gen.temporal_compression_factor or 4
+            frustum_selector: FrustumHistorySelector | None = None
+            retrieval_caches = dual_kv_cache + (dual_kv_cache_uncond or [])
+            if frustum_geometry is not None:
+                if streaming_actions:
+                    raise ValueError("Frustum retrieval requires a preloaded camera trajectory, not streamed actions")
+                frustum_selector = FrustumHistorySelector.from_rgb_geometry(
+                    frustum_geometry, num_frames, _tcf, fps_vision_list[0]
+                )
+            _patch_size: int = self.config.diffusion_expert_config.patch_spatial
+            _action_dim: int = self.config.max_action_dim
+            _video_tc: bool = self.config.video_temporal_causal
+            _enable_fps_mod: bool = self.config.diffusion_expert_config.enable_fps_modulation
+            _base_fps: float = float(self.config.diffusion_expert_config.base_fps)
+            transfer_history_sink_tokens = 0
+            transfer_history_control_max_tokens: int | None = None
+            transfer_history_target_max_tokens: int | None = None
+            if transfer_sliding_window_size is not None:
+                transfer_latent_h = vision_items[0].shape[-2]
+                transfer_latent_w = vision_items[0].shape[-1]
+                # Cosmos3VFMNetwork zero-pads non-divisible latent grids before
+                # patchifying. Count those padding patches because they occupy KV
+                # sequence positions (720p: 45x80 latents -> 23x40 patches).
+                transfer_patch_h = (transfer_latent_h + _patch_size - 1) // _patch_size
+                transfer_patch_w = (transfer_latent_w + _patch_size - 1) // _patch_size
+                transfer_tokens_per_frame = transfer_patch_h * transfer_patch_w
+                recent_past_frames = transfer_sliding_window_size - self.config.attention_sink_size - 1
+                transfer_history_sink_tokens = 2 * self.config.attention_sink_size * transfer_tokens_per_frame
+                # Before C_t is cached, retain complete recent (C_j, R_j) pairs.
+                transfer_history_control_max_tokens = 2 * recent_past_frames * transfer_tokens_per_frame
+                # R_t additionally sees its aligned current control C_t.
+                transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * transfer_tokens_per_frame
+            transfer_history_cache_idx = 0
 
-            # Per-frame pack: only project Q/K/V for the new frame, not the whole
-            # history.  Drop caption tokens for every frame >= 1 — the
-            # dynamic-shape ``ARMemoryState`` (eager / compile-no-CG) and the
-            # static-shape ``ARMemoryState(for_cuda_graphs=True)`` (compile + CG)
-            # both read und K/V from the cache populated at frame 0.  Removing
-            # the und tokens from the pack at frame >= 1 also keeps the und
-            # length at 0 inside the gen-only branch of
-            # ``MoTDecoderLayer.forward``, so RoPE shapes stay constant across
-            # frames.  When text is omitted, pre-seed the mRoPE offset
-            # (cached_text_offset) so vision Q matches the cached und K; when
-            # text is in the pack (frame 0), pass None so the pack itself
-            # advances the offset through text + margin.
-            include_text_in_pack = chunk_start == 0 and not is_transfer
-            _cond_pack_text = cond_text_tokens[0] if (cond_text_tokens and include_text_in_pack) else None
-            packed_seq = pack_input_sequence_autoregressive(
-                vision_latent=curr_vision_latent,
-                action_latent=curr_action_latent,
-                text_tokens=_cond_pack_text,
-                timestep=0.0,
-                fps_vision=fps_vision_list,
-                fps_action=fps_action_list if curr_action_latent is not None else None,
-                special_tokens=self.llm_special_tokens,
-                latent_patch_size=_patch_size,
-                condition_frame_indexes_vision=[],
-                condition_frame_indexes_action=[],
-                frame_idx=chunk_start,
-                temporal_compression_factor=_tcf,
-                video_temporal_causal=_video_tc,
-                action_dim=_action_dim,
-                enable_fps_modulation=_enable_fps_mod,
-                base_fps=_base_fps,
-                cached_text_offset=None if _cond_pack_text is not None else cond_cached_text_offset,
-                unified_3d_mrope_temporal_modality_margin=_margin,
-                force_action_tokens=_video_tc and self.config.action_gen,
-                action_domain_id=curr_action_domain_id,
-                raw_action_dim=raw_action_dim,
+            # Step 7: Prefill KV cache with text + conditioned prefix frames (image2video / forward_dynamics only).
+            # For text2video (start_frame=0) the AR loop seeds the cache at frame_idx=0.
+            # For modes where start_frame>0, the AR loop never sees the clean prefix, so we must run
+            # forward passes here to store text K/V and prefix vision K/V before the loop begins.
+            # The prefill always takes the dynamic-shape ``ARMemoryState`` path.
+            # The compile + CG region is the AR loop at frame >= 1, which uses the
+            # static-shape ``ARMemoryState(for_cuda_graphs=True)``.  Frame 0 is
+            # one-shot, so static-shape constraints aren't needed
+            if mode in ("image2video", "forward_dynamics"):
+                assert initial_vision_latent is not None
+                for prefix_frame_idx, prefix_vision_latent in prefix_vision_latents:
+                    if frustum_selector is not None:
+                        prefix_history = frustum_selector.select(prefix_frame_idx)
+                        for cache in retrieval_caches:
+                            cache.gen_cache.select_history(prefix_frame_idx, prefix_history)
+                    include_text = prefix_frame_idx == 0
+                    self._seed_frame_into_kv_cache(
+                        frame_latent=prefix_vision_latent,
+                        frame_idx=prefix_frame_idx,
+                        use_ar_rolling_path=use_ar_rolling_path,
+                        preserve_transfer_numerics=preserve_transfer_numerics,
+                        dual_kv_cache=dual_kv_cache,
+                        dual_kv_cache_uncond=dual_kv_cache_uncond,
+                        cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
+                        uncond_text_tokens=uncond_text_tokens[0] if (uncond_text_tokens and include_text) else None,
+                        cond_cached_text_offset=cond_cached_text_offset,
+                        uncond_cached_text_offset=uncond_cached_text_offset,
+                        curr_action_latent=None,
+                        action_domain_id=(
+                            OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
+                        ),
+                        gen_data_clean=gen_data_clean,
+                        fps_vision_list=fps_vision_list,
+                        fps_action_list=fps_action_list,
+                        seed=seed,
+                        cfg_active=cfg_active,
+                        cfgp_enabled=cfgp_enabled,
+                        tcf=_tcf,
+                        patch_size=_patch_size,
+                        action_dim=_action_dim,
+                        video_tc=_video_tc,
+                        enable_fps_mod=_enable_fps_mod,
+                        base_fps=_base_fps,
+                        modality_margin=_margin,
+                    )
+
+            def report_history(next_frame_idx: int) -> None:
+                if on_kv_cache_update is not None:
+                    on_kv_cache_update(
+                        ARHistorySnapshot(
+                            next_frame_idx=next_frame_idx,
+                            conditional=tuple(
+                                c.gen_cache.retained_frame_indices(next_frame_idx) for c in dual_kv_cache
+                            ),
+                            unconditional=tuple(
+                                c.gen_cache.retained_frame_indices(next_frame_idx) for c in dual_kv_cache_uncond or []
+                            ),
+                        )
+                    )
+
+            report_history(start_frame)
+
+            # Step 8: AR Generation Loop (chunkwise; chunk_size == 1 is framewise).
+            # Chunks follow the training partition [1, C, C, ...] in absolute latent-
+            # frame index: frame 0 is its own singleton chunk, then C-frame chunks.
+            # Each chunk's frames are denoised jointly -- attention_AR_gen_only uses
+            # is_causal=False over the current unit, so the chunk's tokens attend
+            # bidirectionally among themselves and fully to all previously generated
+            # clean frames in the KV cache (strictly-earlier chunks), matching the
+            # chunkwise teacher-forcing receptive field.
+            # Streaming runs until the caller closes the generator. Receive one
+            # complete control chunk for each jointly denoised generation unit.
+            chunk_iter = (
+                ((_f, _f + chunk_size) for _f in itertools.count(start_frame, chunk_size))
+                if streaming_actions and has_action
+                else _iter_ar_chunk_ranges(start_frame, num_frames, chunk_size)
             )
+            for chunk_start, chunk_end in chunk_iter:
+                chunk_len = chunk_end - chunk_start
+                retrieved_history: list[int] = []
+                if frustum_selector is not None:
+                    # Score once per chunk, then reuse across layers, CFG branches,
+                    # and all denoising steps. Positions remain absolute frame IDs.
+                    retrieved_history = frustum_selector.select(chunk_start, chunk_end)
+                    for cache in retrieval_caches:
+                        cache.gen_cache.select_history(chunk_start, retrieved_history)
+                    if not dist.is_initialized() or dist.get_rank() == 0:
+                        log.info(f"[Frustum KV] frames [{chunk_start}, {chunk_end}): history={retrieved_history}")
+                if is_transfer:
+                    include_text = transfer_history_cache_idx == 0
+                    control_latent = vision_items[0][:, :, chunk_start:chunk_end].to(
+                        **self.tensor_kwargs
+                    )  # [1,C,chunk_len,H,W]
+                    self._seed_frame_into_kv_cache(
+                        frame_latent=control_latent,
+                        frame_idx=transfer_history_cache_idx,
+                        position_frame_idx=chunk_start,
+                        dual_kv_cache=dual_kv_cache,
+                        dual_kv_cache_uncond=dual_kv_cache_uncond,
+                        cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
+                        uncond_text_tokens=uncond_text_tokens[0] if (uncond_text_tokens and include_text) else None,
+                        cond_cached_text_offset=cond_cached_text_offset,
+                        uncond_cached_text_offset=uncond_cached_text_offset,
+                        curr_action_latent=None,
+                        action_domain_id=None,
+                        gen_data_clean=gen_data_clean,
+                        fps_vision_list=fps_vision_list,
+                        fps_action_list=fps_action_list,
+                        seed=seed,
+                        cfg_active=cfg_active,
+                        cfgp_enabled=cfgp_enabled,
+                        tcf=_tcf,
+                        patch_size=_patch_size,
+                        action_dim=_action_dim,
+                        video_tc=_video_tc,
+                        enable_fps_mod=_enable_fps_mod,
+                        base_fps=_base_fps,
+                        modality_margin=_margin,
+                        # Cache idx 0 (text + first control) stays dynamic inside the
+                        # seed; every later control seed shares the static-shape path.
+                        use_ar_rolling_path=use_ar_rolling_path,
+                        preserve_transfer_numerics=preserve_transfer_numerics,
+                        condition_frame_indexes_vision=list(range(chunk_len)),
+                        transfer_history_sink_tokens=transfer_history_sink_tokens,
+                        transfer_history_max_tokens=transfer_history_control_max_tokens,
+                    )
+                    transfer_history_cache_idx += 1
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    log.info(f"[AR inference] frames [{chunk_start}, {chunk_end}) / {num_frames}")
+                # Action prefix for the chunk (forward_dynamics): latent frame f is
+                # driven by action a_{f-1}, so concatenate a_{chunk_start-1}..a_{chunk_end-2}
+                # (tcf tokens each) into one (chunk_len*tcf, D) prefix.
+                if has_action and chunk_start > 0:
+                    streamed_domains = None
+                    if streaming_actions:
+                        if next_streamed_action is None:
+                            raise ValueError(f"Missing streamed action tensor for frame_idx={chunk_start}")
+                        if isinstance(next_streamed_action, StreamedActionChunk):
+                            streamed_action = next_streamed_action.actions
+                            streamed_domains = next_streamed_action.domain_ids
+                            if streamed_domains.dtype != torch.long or (
+                                streamed_domains.ndim != 0 and tuple(streamed_domains.shape) != (chunk_len * _tcf,)
+                            ):
+                                raise ValueError("Streamed domain IDs must be int64 scalar or one ID per action row")
+                            if bool((streamed_domains < 0).any()) or bool(
+                                (streamed_domains >= self.config.num_embodiment_domains).any()
+                            ):
+                                raise ValueError("Streamed domain ID is outside the model's embedding range")
+                        else:
+                            streamed_action = next_streamed_action
+                        if tuple(streamed_action.shape) != (chunk_len * _tcf, _action_dim):
+                            raise ValueError(
+                                f"Expected streamed action tensor shape {(chunk_len * _tcf, _action_dim)}, "
+                                f"got {tuple(streamed_action.shape)}"
+                            )
+                        curr_action_latent = streamed_action.to(
+                            device=self.tensor_kwargs["device"],
+                            dtype=torch.float32,
+                        )  # [chunk_len*tcf,D]
+                    else:
+                        assert gen_data_clean.x0_tokens_action is not None
+                        # x0_tokens_action is a dense list; batch_size==1 so take the single entry and slice.
+                        curr_action_latent = gen_data_clean.x0_tokens_action[0][
+                            (chunk_start - 1) * _tcf : (chunk_end - 1) * _tcf, :
+                        ].to(**self.tensor_kwargs)  # a_{chunk_start-1}..a_{chunk_end-2}; [chunk_len*tcf, D]
+                    curr_action_domain_id = (
+                        streamed_domains.to(device=self.tensor_kwargs["device"])
+                        if streamed_domains is not None
+                        else OmniMoTCausalModel._slice_action_domain_id(
+                            action_domain_id,
+                            (chunk_start - 1) * _tcf,
+                            (chunk_end - 1) * _tcf,
+                        )
+                    )
+                else:
+                    curr_action_latent = None
+                    curr_action_domain_id = (
+                        OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
+                    )
 
-            # Pack unconditional frame when CFG is active. Same text_tokens gating
-            # as the conditional pack above.
-            if cfg_active:
-                _uncond_pack_text = uncond_text_tokens[0] if (uncond_text_tokens and include_text_in_pack) else None
-                packed_seq_uncond = pack_input_sequence_autoregressive(
+                # Initialize the whole chunk with noise: [1, C, chunk_len, H, W].
+                _ref0 = vision_items[generation_vision_item_idx][:, :, 0:1, :, :].to(
+                    **self.tensor_kwargs
+                )  # [1,C,1,H,W]
+                _g = torch.Generator(device=_ref0.device).manual_seed(seed + chunk_start)
+                curr_vision_latent = torch.empty(
+                    (1, _ref0.shape[1], chunk_len, _ref0.shape[3], _ref0.shape[4]),
+                    device=_ref0.device,
+                    dtype=_ref0.dtype,
+                ).normal_(generator=_g)  # [1,C,chunk_len,H,W]
+
+                # Per-frame pack: only project Q/K/V for the new frame, not the whole
+                # history.  Drop caption tokens for every frame >= 1 — the
+                # dynamic-shape ``ARMemoryState`` (eager / compile-no-CG) and the
+                # static-shape ``ARMemoryState(for_cuda_graphs=True)`` (compile + CG)
+                # both read und K/V from the cache populated at frame 0.  Removing
+                # the und tokens from the pack at frame >= 1 also keeps the und
+                # length at 0 inside the gen-only branch of
+                # ``MoTDecoderLayer.forward``, so RoPE shapes stay constant across
+                # frames.  When text is omitted, pre-seed the mRoPE offset
+                # (cached_text_offset) so vision Q matches the cached und K; when
+                # text is in the pack (frame 0), pass None so the pack itself
+                # advances the offset through text + margin.
+                include_text_in_pack = chunk_start == 0 and not is_transfer
+                _cond_pack_text = cond_text_tokens[0] if (cond_text_tokens and include_text_in_pack) else None
+                packed_seq = pack_input_sequence_autoregressive(
                     vision_latent=curr_vision_latent,
                     action_latent=curr_action_latent,
-                    text_tokens=_uncond_pack_text,
+                    text_tokens=_cond_pack_text,
                     timestep=0.0,
                     fps_vision=fps_vision_list,
                     fps_action=fps_action_list if curr_action_latent is not None else None,
@@ -2625,145 +2704,187 @@ class OmniMoTCausalModel(OmniMoTModel):
                     action_dim=_action_dim,
                     enable_fps_modulation=_enable_fps_mod,
                     base_fps=_base_fps,
-                    cached_text_offset=None if _uncond_pack_text is not None else uncond_cached_text_offset,
+                    cached_text_offset=None if _cond_pack_text is not None else cond_cached_text_offset,
                     unified_3d_mrope_temporal_modality_margin=_margin,
                     force_action_tokens=_video_tc and self.config.action_gen,
                     action_domain_id=curr_action_domain_id,
                     raw_action_dim=raw_action_dim,
                 )
 
-            # Denoise the whole chunk jointly.
-            assert packed_seq is not None
-            denoised_chunk = self.generate_next_frame(
-                packed_seq=packed_seq,
-                packed_seq_uncond=packed_seq_uncond,
-                curr_vision_latent=curr_vision_latent,
-                curr_action_latent=curr_action_latent,
-                cond_text_tokens=cond_text_tokens[0] if cond_text_tokens else [],
-                uncond_text_tokens=uncond_text_tokens[0] if uncond_text_tokens else [],
-                gen_data_clean=gen_data_clean,
-                dual_kv_cache=dual_kv_cache,
-                dual_kv_cache_uncond=dual_kv_cache_uncond,
-                frame_idx=chunk_start,
-                cache_frame_idx=transfer_history_cache_idx if is_transfer else chunk_start,
-                num_frames=num_frames,
-                guidance=guidance,
-                num_steps=num_steps,
-                shift=shift,
-                seed=seed,
-                normalize_cfg=normalize_cfg,
-                sampler_mode=sampler_mode,
-                distilled_num_steps=distilled_num_steps,
-                fps_vision_list=fps_vision_list,
-                fps_action_list=fps_action_list,
-                use_ar_rolling_path=use_ar_rolling_path,
-                transfer_history_sink_tokens=transfer_history_sink_tokens,
-                transfer_history_max_tokens=transfer_history_target_max_tokens,
-            )
-            if on_clean_vision_chunk is not None:
-                on_clean_vision_chunk(denoised_chunk)
-
-            # Refresh the KV cache with each clean denoised frame of the chunk so
-            # subsequent chunks attend through in-distribution K/V. The sampler left
-            # the cache holding proj(x_{t_final}) + time_embed(t_final), which training
-            # never saw on a context frame; without this refresh downstream chunks
-            # would attend through a perturbed v_N and collapse to noise.
-            # K/V are token-wise projections (independent of attention), so a
-            # per-frame seed forward over a single clean frame stores the correct
-            # per-frame K/V; seed in increasing frame order. Under TF/none the seed
-            # uses the clean frame with σ=0 condition-mask semantics; under DF it
-            # injects σ_small noise (matching the denoise-loop K/V layout).
-            # Skip the global last frame (no downstream reader). For
-            # image2video / forward_dynamics, the singleton prefix frames are
-            # seeded by the Step 7 prefill and the loop starts past them.
-            for _local_i in range(chunk_len):
-                _f = chunk_start + _local_i
-                if not (streaming_actions or _f < num_frames - 1):
-                    continue
-                # Sampler returns fp32; cast to bf16 so vae2llm matches the model graph.
-                _frame_latent = denoised_chunk[:, :, _local_i : _local_i + 1].to(**self.tensor_kwargs)  # [1,C,1,H,W]
-                _seed_action: torch.Tensor | None = None
-                _seed_action_domain_id: torch.Tensor | None = None
-                if has_action and _f > 0:
-                    if streaming_actions:
-                        _seed_action = curr_action_latent  # [tcf,D] (chunk_len == 1 under streaming)
-                    else:
-                        assert gen_data_clean.x0_tokens_action is not None
-                        _seed_action = gen_data_clean.x0_tokens_action[0][(_f - 1) * _tcf : _f * _tcf, :].to(
-                            **self.tensor_kwargs
-                        )  # a_{_f-1}; [tcf,D]
-                    _seed_action_domain_id = OmniMoTCausalModel._slice_action_domain_id(
-                        action_domain_id,
-                        (_f - 1) * _tcf,
-                        _f * _tcf,
+                # Pack unconditional frame when CFG is active. Same text_tokens gating
+                # as the conditional pack above.
+                if cfg_active:
+                    _uncond_pack_text = uncond_text_tokens[0] if (uncond_text_tokens and include_text_in_pack) else None
+                    packed_seq_uncond = pack_input_sequence_autoregressive(
+                        vision_latent=curr_vision_latent,
+                        action_latent=curr_action_latent,
+                        text_tokens=_uncond_pack_text,
+                        timestep=0.0,
+                        fps_vision=fps_vision_list,
+                        fps_action=fps_action_list if curr_action_latent is not None else None,
+                        special_tokens=self.llm_special_tokens,
+                        latent_patch_size=_patch_size,
+                        condition_frame_indexes_vision=[],
+                        condition_frame_indexes_action=[],
+                        frame_idx=chunk_start,
+                        temporal_compression_factor=_tcf,
+                        video_temporal_causal=_video_tc,
+                        action_dim=_action_dim,
+                        enable_fps_modulation=_enable_fps_mod,
+                        base_fps=_base_fps,
+                        cached_text_offset=None if _uncond_pack_text is not None else uncond_cached_text_offset,
+                        unified_3d_mrope_temporal_modality_margin=_margin,
+                        force_action_tokens=_video_tc and self.config.action_gen,
+                        action_domain_id=curr_action_domain_id,
+                        raw_action_dim=raw_action_dim,
                     )
-                elif has_action:
-                    _seed_action_domain_id = OmniMoTCausalModel._null_action_domain_id(action_domain_id)
-                if frustum_selector is not None:
-                    # Refresh is framewise even for chunk2 denoising. Include
-                    # already-finalized frames of this chunk, never future ones.
-                    refresh_history = retrieved_history + list(range(chunk_start, _f))
-                    for cache in retrieval_caches:
-                        cache.gen_cache.select_history(_f, refresh_history)
-                self._seed_frame_into_kv_cache(
-                    frame_latent=_frame_latent,
-                    frame_idx=transfer_history_cache_idx if is_transfer else _f,
-                    position_frame_idx=_f,
+
+                # Denoise the whole chunk jointly.
+                assert packed_seq is not None
+                denoised_chunk = self.generate_next_frame(
+                    packed_seq=packed_seq,
+                    packed_seq_uncond=packed_seq_uncond,
+                    curr_vision_latent=curr_vision_latent,
+                    curr_action_latent=curr_action_latent,
+                    cond_text_tokens=cond_text_tokens[0] if cond_text_tokens else [],
+                    uncond_text_tokens=uncond_text_tokens[0] if uncond_text_tokens else [],
+                    gen_data_clean=gen_data_clean,
                     dual_kv_cache=dual_kv_cache,
                     dual_kv_cache_uncond=dual_kv_cache_uncond,
-                    cond_text_tokens=(
-                        cond_text_tokens[0] if (cond_text_tokens and _f == 0 and not is_transfer) else None
-                    ),
-                    uncond_text_tokens=(
-                        uncond_text_tokens[0] if (uncond_text_tokens and _f == 0 and not is_transfer) else None
-                    ),
-                    cond_cached_text_offset=cond_cached_text_offset,
-                    uncond_cached_text_offset=uncond_cached_text_offset,
-                    curr_action_latent=_seed_action,
-                    action_domain_id=_seed_action_domain_id,
-                    gen_data_clean=gen_data_clean,
+                    frame_idx=chunk_start,
+                    cache_frame_idx=transfer_history_cache_idx if is_transfer else chunk_start,
+                    num_frames=num_frames,
+                    guidance=guidance,
+                    num_steps=num_steps,
+                    shift=shift,
+                    seed=seed,
+                    normalize_cfg=normalize_cfg,
+                    sampler_mode=sampler_mode,
+                    distilled_num_steps=distilled_num_steps,
                     fps_vision_list=fps_vision_list,
                     fps_action_list=fps_action_list,
-                    seed=seed,
-                    cfg_active=cfg_active,
-                    cfgp_enabled=cfgp_enabled,
-                    tcf=_tcf,
-                    patch_size=_patch_size,
-                    action_dim=_action_dim,
-                    video_tc=_video_tc,
-                    enable_fps_mod=_enable_fps_mod,
-                    base_fps=_base_fps,
-                    modality_margin=_margin,
                     use_ar_rolling_path=use_ar_rolling_path,
+                    preserve_transfer_numerics=preserve_transfer_numerics,
                     transfer_history_sink_tokens=transfer_history_sink_tokens,
                     transfer_history_max_tokens=transfer_history_target_max_tokens,
                 )
-                if is_transfer:
-                    transfer_history_cache_idx += 1
+                if on_clean_vision_chunk is not None:
+                    on_clean_vision_chunk(denoised_chunk)
 
-            # Yield each latent frame of the chunk individually so the caller can
-            # decode and offload it incrementally instead of materializing the full
-            # latent video on GPU first.
-            for _local_i in range(chunk_len):
-                _f = chunk_start + _local_i
-                _frame_out = denoised_chunk[:, :, _local_i : _local_i + 1]  # [1,C,1,H,W]
-                if has_action:
-                    if streaming_actions:
-                        _action_out: torch.Tensor | None = curr_action_latent
-                    elif _f > 0:
-                        assert gen_data_clean.x0_tokens_action is not None
-                        _action_out = gen_data_clean.x0_tokens_action[0][(_f - 1) * _tcf : _f * _tcf, :].to(
-                            **self.tensor_kwargs
+                # Refresh the KV cache with each clean denoised frame of the chunk so
+                # subsequent chunks attend through in-distribution K/V. The sampler left
+                # the cache holding proj(x_{t_final}) + time_embed(t_final), which training
+                # never saw on a context frame; without this refresh downstream chunks
+                # would attend through a perturbed v_N and collapse to noise.
+                # K/V are token-wise projections (independent of attention), so a
+                # per-frame seed forward over a single clean frame stores the correct
+                # per-frame K/V; seed in increasing frame order. Under TF/none the seed
+                # uses the clean frame with σ=0 condition-mask semantics; under DF it
+                # injects σ_small noise (matching the denoise-loop K/V layout).
+                # Skip the global last frame (no downstream reader). For
+                # image2video / forward_dynamics, the singleton prefix frames are
+                # seeded by the Step 7 prefill and the loop starts past them.
+                for _local_i in range(chunk_len):
+                    _f = chunk_start + _local_i
+                    if not (streaming_actions or _f < num_frames - 1):
+                        continue
+                    # Sampler returns fp32; cast to bf16 so vae2llm matches the model graph.
+                    _frame_latent = denoised_chunk[:, :, _local_i : _local_i + 1].to(
+                        **self.tensor_kwargs
+                    )  # [1,C,1,H,W]
+                    _seed_action: torch.Tensor | None = None
+                    _seed_action_domain_id: torch.Tensor | None = None
+                    if has_action and _f > 0:
+                        if streaming_actions:
+                            _seed_action = curr_action_latent[_local_i * _tcf : (_local_i + 1) * _tcf]
+                        else:
+                            assert gen_data_clean.x0_tokens_action is not None
+                            _seed_action = gen_data_clean.x0_tokens_action[0][(_f - 1) * _tcf : _f * _tcf, :].to(
+                                **self.tensor_kwargs
+                            )  # a_{_f-1}; [tcf,D]
+                        _seed_action_domain_id = OmniMoTCausalModel._slice_action_domain_id(
+                            curr_action_domain_id if streaming_actions else action_domain_id,
+                            _local_i * _tcf if streaming_actions else (_f - 1) * _tcf,
+                            (_local_i + 1) * _tcf if streaming_actions else _f * _tcf,
                         )
-                    else:
-                        _action_out = None
-                    payload = {"vision": _frame_out, "action": _action_out}
-                else:
-                    payload = {"vision": _frame_out}
+                    elif has_action:
+                        _seed_action_domain_id = OmniMoTCausalModel._null_action_domain_id(action_domain_id)
+                    if frustum_selector is not None:
+                        # Refresh is framewise even for chunk2 denoising. Include
+                        # already-finalized frames of this chunk, never future ones.
+                        refresh_history = retrieved_history + list(range(chunk_start, _f))
+                        for cache in retrieval_caches:
+                            cache.gen_cache.select_history(_f, refresh_history)
+                    self._seed_frame_into_kv_cache(
+                        frame_latent=_frame_latent,
+                        frame_idx=transfer_history_cache_idx if is_transfer else _f,
+                        position_frame_idx=_f,
+                        dual_kv_cache=dual_kv_cache,
+                        dual_kv_cache_uncond=dual_kv_cache_uncond,
+                        cond_text_tokens=(
+                            cond_text_tokens[0] if (cond_text_tokens and _f == 0 and not is_transfer) else None
+                        ),
+                        uncond_text_tokens=(
+                            uncond_text_tokens[0] if (uncond_text_tokens and _f == 0 and not is_transfer) else None
+                        ),
+                        cond_cached_text_offset=cond_cached_text_offset,
+                        uncond_cached_text_offset=uncond_cached_text_offset,
+                        curr_action_latent=_seed_action,
+                        action_domain_id=_seed_action_domain_id,
+                        gen_data_clean=gen_data_clean,
+                        fps_vision_list=fps_vision_list,
+                        fps_action_list=fps_action_list,
+                        seed=seed,
+                        cfg_active=cfg_active,
+                        cfgp_enabled=cfgp_enabled,
+                        tcf=_tcf,
+                        patch_size=_patch_size,
+                        action_dim=_action_dim,
+                        video_tc=_video_tc,
+                        enable_fps_mod=_enable_fps_mod,
+                        base_fps=_base_fps,
+                        modality_margin=_margin,
+                        use_ar_rolling_path=use_ar_rolling_path,
+                        preserve_transfer_numerics=preserve_transfer_numerics,
+                        transfer_history_sink_tokens=transfer_history_sink_tokens,
+                        transfer_history_max_tokens=transfer_history_target_max_tokens,
+                    )
+                    if is_transfer:
+                        transfer_history_cache_idx += 1
+
+                report_history(chunk_end)
                 if streaming_actions and has_action:
-                    next_streamed_action = yield payload
-                else:
+                    # A send resumes generation, so yield only at the boundary
+                    # where the next control chunk can actually take effect.
+                    next_streamed_action = yield {"vision": denoised_chunk, "action": curr_action_latent}
+                    continue
+
+                # Yield each latent frame of the chunk individually so the caller can
+                # decode and offload it incrementally instead of materializing the full
+                # latent video on GPU first.
+                for _local_i in range(chunk_len):
+                    _f = chunk_start + _local_i
+                    _frame_out = denoised_chunk[:, :, _local_i : _local_i + 1]  # [1,C,1,H,W]
+                    if has_action:
+                        if _f > 0:
+                            assert gen_data_clean.x0_tokens_action is not None
+                            _action_out = gen_data_clean.x0_tokens_action[0][(_f - 1) * _tcf : _f * _tcf, :].to(
+                                **self.tensor_kwargs
+                            )
+                        else:
+                            _action_out = None
+                        payload = {"vision": _frame_out, "action": _action_out}
+                    else:
+                        payload = {"vision": _frame_out}
                     yield payload
+        finally:
+            # Request lifetime, not Python object lifetime, owns pooled KV slots.
+            # Compiler hooks or exception tracebacks can retain the cache objects.
+            # Keep pooled storage addresses stable, but release this request's
+            # claims on exhaustion, close(), or a failed generation.
+            for caches in (dual_kv_cache, dual_kv_cache_uncond or []):
+                for cache in caches:
+                    cache.reset()
 
     @torch.no_grad()
     def generate_joint_samples_from_batch_autoregressive(
@@ -2941,6 +3062,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         base_fps: float,
         modality_margin: int,
         use_ar_rolling_path: bool = False,
+        preserve_transfer_numerics: bool = False,
         position_frame_idx: int | list[int] | None = None,
         condition_frame_indexes_vision: list[int] | None = None,
         transfer_history_sink_tokens: int = 0,
@@ -3083,6 +3205,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             "dual_kv_cache": dual_kv_cache,
             "use_rolling_kv_cache": False,
             "use_ar_rolling": use_ar_rolling,
+            "preserve_transfer_numerics": preserve_transfer_numerics,
             "post_saturation_static_compile": post_saturation_static_compile,
             "frame_idx": frame_idx,
             "write_gen_cache": True,
@@ -3134,6 +3257,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 "dual_kv_cache": dual_kv_cache_uncond,
                 "use_rolling_kv_cache": False,
                 "use_ar_rolling": use_ar_rolling,
+                "preserve_transfer_numerics": preserve_transfer_numerics,
                 "post_saturation_static_compile": post_saturation_static_compile,
                 "frame_idx": frame_idx,
                 "write_gen_cache": True,
@@ -3424,6 +3548,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         sampler_mode: str = "rf",
         distilled_num_steps: int | None = None,
         use_ar_rolling_path: bool = False,
+        preserve_transfer_numerics: bool = False,
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
         batched_ar: bool = False,
@@ -3574,6 +3699,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     "dual_kv_cache": branch_cache,
                     "use_rolling_kv_cache": False,
                     "use_ar_rolling": use_ar_rolling,
+                    "preserve_transfer_numerics": preserve_transfer_numerics,
                     "post_saturation_static_compile": post_saturation_static_compile,
                     "frame_idx": cache_frame_idx,
                     # Do not persist noisy current-frame K/V from intermediate

@@ -1,11 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import copy
+from datetime import timedelta
+from pathlib import Path
 from typing import cast
 
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.tensor.device_mesh import DeviceMesh
+from torch.nn.parallel import DistributedDataParallel
 
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import (
     _scale_rank_sample_mean,
@@ -152,6 +159,110 @@ def test_sample_load_balancing_averages_packed_samples_equally() -> None:
     torch.testing.assert_close(
         sample_router_prob_sum_per_expert.grad,
         torch.tensor([[[1.0, 0.0], [0.0, 1.0 / 3.0]]]),  # [num_layers,num_samples,num_experts]
+    )
+
+
+def _distributed_metadata(routing_probabilities: torch.Tensor) -> LBLMetadata:
+    """Build one-layer, one-sample router statistics from a local token shard."""
+    expert_indices = routing_probabilities.argmax(dim=-1, keepdim=True)  # [N,1]
+    sample_ids = torch.zeros(routing_probabilities.shape[0], dtype=torch.long)  # [N]
+    sample_counts, sample_tokens, sample_probability_sums = compute_sample_lbl_stats(
+        routing_probabilities,
+        expert_indices,
+        sample_ids,
+        num_samples=1,
+    )
+    return LBLMetadata(
+        num_tokens_per_expert=sample_counts.sum(dim=0, keepdim=True),  # [1,E]
+        num_tokens=sample_tokens.sum(dim=0, keepdim=True),  # [1,1]
+        mean_router_prob_per_expert=routing_probabilities.mean(dim=0, keepdim=True),  # [1,E]
+        top_k=torch.ones((1, 1), dtype=torch.long),  # [1,1]
+        sample_num_tokens_per_expert=sample_counts.unsqueeze(0),  # [1,1,E]
+        sample_num_tokens=sample_tokens.unsqueeze(0),  # [1,1,1]
+        sample_router_prob_sum_per_expert=sample_probability_sums.unsqueeze(0),  # [1,1,E]
+    )
+
+
+class _DistributedRouter(torch.nn.Module):
+    weight: torch.nn.Parameter
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(
+            torch.tensor(
+                [
+                    [0.8, -0.3, 0.2],
+                    [-0.4, 0.6, 0.1],
+                ],
+                dtype=torch.float64,
+            )
+        )
+
+    def forward(self, features: torch.Tensor) -> LBLMetadata:
+        return _distributed_metadata(torch.softmax(features @ self.weight, dim=-1))  # [N,E]
+
+
+def _distributed_cp_gradient_worker(rank: int, rendezvous: str) -> None:
+    world_size = 2
+    torch.set_num_threads(1)
+    dist.init_process_group(
+        "gloo",
+        init_method=rendezvous,
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=90),
+    )
+    try:
+        mesh = init_device_mesh("cpu", (world_size,), mesh_dim_names=("cp",))
+        logical_features = torch.tensor(
+            [[1.0, 0.2], [0.5, -0.7], [-0.2, 0.8], [0.9, -0.4]],
+            dtype=torch.float64,
+        )
+        local_features = logical_features.chunk(world_size)[rank]  # [N/CP,D]
+
+        router = _DistributedRouter()
+        reference = copy.deepcopy(router)
+        distributed_router = DistributedDataParallel(router)
+
+        for correct_cp_gradients in (False, True):
+            distributed_router.zero_grad(set_to_none=True)
+            local_loss = compute_load_balancing_loss(
+                distributed_router(local_features),
+                coeff=1.0,
+                method="sample",
+                device_mesh=mesh,
+                context_parallel_mesh=mesh,
+                correct_cp_gradients=correct_cp_gradients,
+            )
+            assert local_loss is not None
+            local_loss.backward()
+
+            reference.zero_grad(set_to_none=True)
+            expected_loss = compute_load_balancing_loss(
+                reference(logical_features),
+                coeff=1.0,
+                method="sample",
+                device_mesh=None,
+            )
+            assert expected_loss is not None
+            expected_loss.backward()
+
+            torch.testing.assert_close(local_loss, expected_loss)
+            expected_gradient = reference.weight.grad
+            assert router.weight.grad is not None and expected_gradient is not None
+            if not correct_cp_gradients:
+                expected_gradient = expected_gradient / world_size
+            torch.testing.assert_close(router.weight.grad, expected_gradient)
+    finally:
+        dist.destroy_process_group()
+
+
+def test_sample_load_balancing_corrects_cp_gradients_without_changing_loss(tmp_path: Path) -> None:
+    mp.spawn(
+        _distributed_cp_gradient_worker,
+        args=((tmp_path / "rendezvous").as_uri(),),
+        nprocs=2,
+        join=True,
     )
 
 

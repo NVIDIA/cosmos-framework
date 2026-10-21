@@ -1,0 +1,5 @@
+camera_list:
+  - front
+
+camera_to_rds_hq:
+  front: camera_front_wide_120fov

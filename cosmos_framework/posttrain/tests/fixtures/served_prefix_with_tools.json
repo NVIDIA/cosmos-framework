@@ -1,0 +1,314 @@
+{
+ "what": "The served generation prefix of the lab's serving path of record (a Responses request that carries a tools array, as Codex --thinking high does on every call) measured on the A1a test deployment: vLLM 0.24 appends <|im_start|>assistant\\n and NO <think> when tools are present, whether or not reasoning.effort / enable_thinking is set; the <think> prefill exists only for requests without tools. A training row's no-think turn therefore continues the served prefix with the student's OWN <think>\\n\\n</think>\\n\\n, so the opener's loss is necessary (knob 7 of configs/sft_qwen3_vl_moe_native.py).",
+ "recorded": {
+  "source_fixture": {
+   "path": "packages/cosmos-agentic/tests/fixtures/export_harness_sft/served_prefix_with_tools.json (local copy /path/to/shared-storage)",
+   "sha256": "abebda1e2e323ade59992b11746097267d1fa91812119bc08b2a2f6550d3c83e",
+   "by": "fix8d/01_live_prefix_record.py",
+   "started": "2026-10-02T13:59:59-07:00",
+   "requests": [
+    "V0",
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "R1",
+    "R2"
+   ]
+  },
+  "confirmed": {
+   "by": "fix_r125/T/fix3/01_prefix_record.py (3 live requests, synthetic prompt 'hello')",
+   "started": "2026-10-02T14:26:22-07:00",
+   "requests": [
+    "V0 GET /version",
+    "T3' POST /tokenize tools+enable_thinking",
+    "T1' POST /tokenize no tools+enable_thinking"
+   ],
+   "equal_to_source": true,
+   "version_endpoint": {
+    "version": "0.24.0"
+   }
+  },
+  "measurement_of_record": "review round 138 R138-01 (/path/to/shared-storage P3/P4, 21_live_probes_b.out P7/P8, 22_live_probe_developer.out P9)"
+ },
+ "deployment": {
+  "description": "A1a test deployment, SLURM job 761966 (b0-export-serve) on nvl72d411-T09, port 8000",
+  "base_url": "http://nvl72d411-T09:8000",
+  "served_model": "cosmos35-a1a-final",
+  "vllm_version": "0.24.0"
+ },
+ "grammar": {
+  "chat_template_sha256": "b61474e478dc147dcb579775e80e4bde2b96c50496b2db3eb4b1af70010bd4e1",
+  "tokenizer_json_sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7"
+ },
+ "special_ids": {
+  "<|im_start|>": 151644,
+  "assistant": 77091,
+  "\\n": 198,
+  "\\n\\n": 271,
+  "\\n\\n\\n": 1406,
+  "<think>": 151667,
+  "</think>": 151668
+ },
+ "messages": [
+  {
+   "role": "user",
+   "content": "hello"
+  }
+ ],
+ "chat_tool_as_sent": {
+  "type": "function",
+  "function": {
+   "name": "ping",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "x"
+    ]
+   }
+  }
+ },
+ "tool_as_vllm_renders_it": {
+  "type": "function",
+  "function": {
+   "name": "ping",
+   "description": null,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "x"
+    ]
+   }
+  }
+ },
+ "served_prefix_with_tools": {
+  "request": "POST /tokenize, messages + tools + add_generation_prompt + chat_template_kwargs.enable_thinking true (8d T3; T4 with false is identical)",
+  "ids": [
+   151644,
+   8948,
+   198,
+   2,
+   13852,
+   271,
+   2610,
+   1231,
+   1618,
+   825,
+   476,
+   803,
+   5746,
+   311,
+   7789,
+   448,
+   279,
+   1196,
+   3239,
+   382,
+   2610,
+   525,
+   3897,
+   448,
+   729,
+   32628,
+   2878,
+   366,
+   15918,
+   1472,
+   15918,
+   29,
+   11874,
+   9492,
+   510,
+   27,
+   15918,
+   397,
+   4913,
+   1313,
+   788,
+   330,
+   1688,
+   497,
+   330,
+   1688,
+   788,
+   5212,
+   606,
+   788,
+   330,
+   9989,
+   497,
+   330,
+   4684,
+   788,
+   845,
+   11,
+   330,
+   13786,
+   788,
+   5212,
+   1313,
+   788,
+   330,
+   1700,
+   497,
+   330,
+   13193,
+   788,
+   5212,
+   87,
+   788,
+   5212,
+   1313,
+   788,
+   330,
+   11662,
+   9207,
+   2137,
+   330,
+   6279,
+   788,
+   4383,
+   87,
+   1341,
+   3417,
+   532,
+   522,
+   15918,
+   1339,
+   2461,
+   1817,
+   729,
+   1618,
+   11,
+   470,
+   264,
+   2951,
+   1633,
+   448,
+   729,
+   829,
+   323,
+   5977,
+   2878,
+   220,
+   151657,
+   151658,
+   11874,
+   9492,
+   510,
+   151657,
+   198,
+   4913,
+   606,
+   788,
+   366,
+   1688,
+   11494,
+   8066,
+   330,
+   16370,
+   788,
+   366,
+   2116,
+   56080,
+   40432,
+   31296,
+   151658,
+   151645,
+   198,
+   151644,
+   872,
+   198,
+   14990,
+   151645,
+   198,
+   151644,
+   77091,
+   198
+  ],
+  "count": 141,
+  "text": "<|im_start|>system\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"ping\", \"description\": null, \"parameters\": {\"type\": \"object\", \"properties\": {\"x\": {\"type\": \"integer\"}}, \"required\": [\"x\"]}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
+  "generation_prefix_ids": [
+   151644,
+   77091,
+   198
+  ],
+  "generation_prefix_strings": [
+   "<|im_start|>",
+   "assistant",
+   "\n"
+  ],
+  "ends_with_think": false,
+  "responses_path_effort_adds_input_tokens": 0,
+  "responses_path_input_tokens": {
+   "effort_high": 157,
+   "no_reasoning_field": 157,
+   "measured": "fix round 8d R1 / R2 and review round 138 P4 / P7 (one synthetic tool)",
+   "eight_tools_with_wire": {
+    "effort_high": 7862,
+    "no_reasoning_field": 7862,
+    "effort_adds_input_tokens": 0,
+    "measured": "review round 142 Q3 / Q4 (/path/to/shared-storage, 2026-10-02T14:58-07:00, the same A1a deployment, vLLM 0.24.0): POST /v1/responses with the wire instructions (16,979 chars), input hello, the 8 captured Codex tools and max_output_tokens 1, with reasoning.effort high (Q3) and without the reasoning field (Q4); the first live effort-present vs effort-absent pair with the 8 tools",
+    "earlier_record": "review round 138 P3 (/path/to/shared-storage) measured the effort-present member live (7862) and compared it with the LOCAL rendering without <think> (7862), not with a live request without the effort field (review R142-02)"
+   }
+  }
+ },
+ "served_prefix_without_tools_enable_thinking": {
+  "request": "POST /tokenize, messages + add_generation_prompt + chat_template_kwargs.enable_thinking true (8d T1); the tool-less Responses path with reasoning.effort gives the same (9 -> 10 input tokens, rounds 133/134)",
+  "ids": [
+   151644,
+   872,
+   198,
+   14990,
+   151645,
+   198,
+   151644,
+   77091,
+   198,
+   151667
+  ],
+  "count": 10,
+  "generation_prefix_ids": [
+   151644,
+   77091,
+   198,
+   151667
+  ],
+  "ends_with_think": true,
+  "enable_thinking_adds_input_tokens": 1
+ },
+ "local_template_with_tools_and_enable_thinking_true": {
+  "ids_equal_T3_plus_think": true,
+  "note": "the template itself WOULD append <think> when enable_thinking is passed with tools; the server does not pass it on this path (where inside vLLM is PLAUSIBLE; the served ids are CONFIRMED)"
+ },
+ "no_think_turn": {
+  "assistant_content": "<think>\n\n</think>\n\nok",
+  "rendering": "the exporter's EMPTY THINK BLOCK <think>\\n\\n</think>\\n\\n in front of the content",
+  "row_ids_start_with_served_prefix_with_tools": true,
+  "expected_continuation_ids": [
+   151667,
+   271,
+   151668,
+   271,
+   562
+  ],
+  "expected_continuation_strings": [
+   "<think>",
+   "\n\n",
+   "</think>",
+   "\n\n",
+   "ok"
+  ],
+  "all_five_supervised_under_mask_think_opener_false": true
+ }
+}

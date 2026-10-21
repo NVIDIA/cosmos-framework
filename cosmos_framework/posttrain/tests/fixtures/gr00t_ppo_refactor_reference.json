@@ -1,0 +1,266 @@
+{
+  "recipe_identity": {
+    "partition": null,
+    "recipe": "gr00t-n1d7-libero-ppo-v2",
+    "reference_revision": "e0531f40d1d07a70bc17709b1f497767d2d1aa8d",
+    "checkpoint_revision": "2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21",
+    "num_envs": 2,
+    "control_steps": 32,
+    "execution_horizon": 16,
+    "global_minibatch": 2,
+    "microbatch": 1,
+    "seed": 1234,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "policy_clip": 0.2,
+    "dual_clip": 3.0,
+    "value_clip": 0.2,
+    "huber_delta": 10.0,
+    "value_lr": 0.0001,
+    "advantage_normalization": "actor-local-correction1-std-plus-1e-5",
+    "score_batching": "recorded-invocation-selected-row",
+    "time_limit_bootstrap": "reference-n1d7-zero",
+    "reset_on_resume": true,
+    "optimizer": {
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "decay_groups": "",
+      "eps": 1e-08,
+      "force_finite_grads": true,
+      "grad_clip_norm": 1.0,
+      "impl": "",
+      "lr": 5e-06,
+      "name": "adamw",
+      "train_keys": [],
+      "warmup_steps": 0,
+      "weight_decay": 0.01
+    }
+  },
+  "typed_config": {
+    "__dataclass_type__": "cosmos_framework.posttrain.config.gr00t_ppo.Gr00tPPOConfig",
+    "fields": {
+      "grad_accum": 1,
+      "max_steps": 800,
+      "save_every": 80,
+      "resume": "off",
+      "run_ts": "",
+      "checkpoint_format": "dcp",
+      "checkpoint_components": [
+        "model",
+        "optimizer",
+        "training_state"
+      ],
+      "save_async": false,
+      "keep_optim_last": 0,
+      "keep_model_last": 0,
+      "checkpoint_store": {
+        "__dataclass_type__": "cosmos_framework.posttrain.config.rl.CheckpointStoreConfig",
+        "fields": {
+          "backend": "local",
+          "bucket": "<checkpoint-experiments-bucket>",
+          "credentials": "credentials/<credential>.secret",
+          "prefix": ""
+        }
+      },
+      "upload": {
+        "__dataclass_type__": "cosmos_framework.posttrain.config.rl.CheckpointUploadConfig",
+        "fields": {
+          "enabled": false,
+          "bucket": "<checkpoint-experiments-bucket>",
+          "credentials": "credentials/<credential>.secret",
+          "prefix": ""
+        }
+      },
+      "export_dir": "",
+      "export_every": 0,
+      "seed": 1234,
+      "deterministic": false,
+      "optimizer": {
+        "__dataclass_type__": "cosmos_framework.posttrain.config.rl.OptimizerConfig",
+        "fields": {
+          "name": "adamw",
+          "impl": "",
+          "lr": 5e-06,
+          "weight_decay": 0.01,
+          "betas": [
+            0.9,
+            0.95
+          ],
+          "eps": 1e-08,
+          "train_keys": [],
+          "grad_clip_norm": 1.0,
+          "force_finite_grads": true,
+          "warmup_steps": 0,
+          "decay_groups": ""
+        }
+      },
+      "num_envs": 2,
+      "control_steps": 32,
+      "window_decisions": null,
+      "suite": "libero_spatial",
+      "max_episode_steps": 256,
+      "execution_horizon": 16,
+      "global_minibatch": 2,
+      "microbatch": 1,
+      "gamma": 0.99,
+      "gae_lambda": 0.95,
+      "policy_clip": 0.2,
+      "dual_clip": 3.0,
+      "value_clip": 0.2,
+      "huber_delta": 10.0,
+      "value_lr": 0.0001,
+      "backbone_buffer_dtype": null,
+      "validation": {
+        "__dataclass_type__": "cosmos_framework.posttrain.config.rl.ValidationScheduleConfig",
+        "fields": {
+          "enabled": true,
+          "before_training": true,
+          "every_steps": 80,
+          "save_checkpoint": true,
+          "checkpoint_components": [
+            "model",
+            "optimizer",
+            "training_state"
+          ],
+          "batch_size": 1,
+          "max_samples": null,
+          "seed": 0
+        }
+      },
+      "train_manifest": "",
+      "eval_manifest": "",
+      "eval_profile": "legacy_100",
+      "environment": "rlinf",
+      "baseline_reference": "",
+      "local_report": true
+    }
+  },
+  "sample_digests": [
+    "sha256:e69b2524bc9c726ed4bcd9209c9d24da356a72a120f4555f94f320b8fbe165af",
+    "sha256:496b9daacefacf61aae0d5e3e6a05fb426a76bacfede0d7358dc594254f7a1d5",
+    "sha256:c641955606acaaacccc208af7b4a4d506a6470472826c741ab5293674cc740d7",
+    "sha256:cb6fac09265c50b4e1dfa0f0f82f704fabbe043788c8fa6e65f9e0592a4669d9"
+  ],
+  "prepared_digests": [
+    "sha256:0d4ed1ebe416b620e225f59341baa1931791aa625ca7efe4b001c238a9f350c4",
+    "sha256:5402f52c3e725d925d79d12382b971a0ef606fb327c91065822e71c855953e09",
+    "sha256:a075855c24744df1057ff0e292d7585a6487a0c3e5c8d31162d385d8d5cdf03d",
+    "sha256:9b186c5ac5f3bb165b3d0f516fdcfdef949a9f64241852b5b276e110bf76d163"
+  ],
+  "receipt": {
+    "batch_id": "sha256:1572371404f79d4a2ee9d948e702b30ce445cb74936910a7ffb697b9603acb62",
+    "decisions": 4,
+    "policy_version": 0,
+    "max_logprob_delta": 0.0,
+    "initial_clip_fraction": 0.0,
+    "target_diagnostics": [
+      {
+        "sample_id": "0:0:0",
+        "old_value": -0.7553650736808777,
+        "bootstrap_value": 0.0,
+        "reward": -5.775061716824042,
+        "returns": -18.766000705670283,
+        "raw_advantage": -18.010635375976562,
+        "normalized_advantage": -1.134243369102478,
+        "terminated": false,
+        "truncated": false,
+        "window_end": false,
+        "executed_steps": 16
+      },
+      {
+        "sample_id": "0:1:0",
+        "old_value": -0.22342784702777863,
+        "bootstrap_value": 0.0,
+        "reward": -4.994929099105858,
+        "returns": -5.797818912053272,
+        "raw_advantage": -5.574390888214111,
+        "normalized_advantage": 0.4654194414615631,
+        "terminated": false,
+        "truncated": false,
+        "window_end": false,
+        "executed_steps": 16
+      },
+      {
+        "sample_id": "0:0:1",
+        "old_value": -0.9661624431610107,
+        "bootstrap_value": 0.0,
+        "reward": -13.761949971195929,
+        "returns": -13.761949971195929,
+        "raw_advantage": -12.795787811279297,
+        "normalized_advantage": -0.463462233543396,
+        "terminated": true,
+        "truncated": false,
+        "window_end": true,
+        "executed_steps": 16
+      },
+      {
+        "sample_id": "0:1:1",
+        "old_value": -0.4405236840248108,
+        "bootstrap_value": 0.0,
+        "reward": -0.8304985545860565,
+        "returns": -0.8304985545860565,
+        "raw_advantage": -0.3899748623371124,
+        "normalized_advantage": 1.1322860717773438,
+        "terminated": true,
+        "truncated": false,
+        "window_end": true,
+        "executed_steps": 16
+      }
+    ],
+    "target_metrics": {
+      "train/old_value_mean": -0.5963697619736195,
+      "train/target_return_mean": -9.789067035876386,
+      "train/raw_advantage_mean": -9.19269723445177,
+      "train/raw_advantage_std": 6.732725242209366,
+      "train/bootstrap_value_mean": 0.0,
+      "train/nonzero_reward_decisions": 4.0,
+      "train/value_explained_variance_defined": 1.0,
+      "train/value_explained_variance": 0.058356216818524986
+    }
+  },
+  "update": {
+    "optimizer_step": 2,
+    "metrics": {
+      "ratio_mean": 1.0000267028808594,
+      "policy_loss": 2.2642314434051514e-05,
+      "clip_fraction": 0.0,
+      "joint_loss": 55.918572187423706,
+      "value_loss": 55.91855023801327,
+      "policy_lr": 5e-06,
+      "policy_grad_norm": 13.245227336883545,
+      "policy_optimizer_step": 2.0
+    },
+    "optimizer_metrics": [
+      {
+        "ratio_mean": 1.0,
+        "policy_loss": -0.7988527566194534,
+        "clip_fraction": 0.0,
+        "joint_loss": 7.007627010345459,
+        "value_loss": 7.806479901075363,
+        "policy_lr": 5e-06,
+        "policy_grad_norm": 8.72231388092041,
+        "policy_optimizer_step": 1
+      },
+      {
+        "ratio_mean": 1.0000534057617188,
+        "policy_loss": 0.7988980412483215,
+        "clip_fraction": 0.0,
+        "joint_loss": 104.82951736450195,
+        "value_loss": 104.03062057495117,
+        "policy_lr": 5e-06,
+        "policy_grad_norm": 17.76814079284668,
+        "policy_optimizer_step": 2
+      }
+    ],
+    "learning_rates": {
+      "actor": 5e-06,
+      "value": 0.0001
+    },
+    "parameter_update_l2": {
+      "actor": 1.2837988711282692e-05,
+      "value": 0.0002919346177949264
+    }
+  }
+}

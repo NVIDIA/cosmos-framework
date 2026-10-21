@@ -574,10 +574,17 @@ class OptimizersContainer(Stateful):
                 )
                 self.optimizers.append(optimizer)
 
-        self._configured_weight_decay_by_param_id = {
+        self._configured_weight_decay_by_param_id: dict[int, float] = {
             id(param): float(param_group["weight_decay"])
             for optimizer in self.optimizers
             for param_group in optimizer.param_groups
+            for param in param_group["params"]
+        }
+        self._configured_eps_by_param_id: dict[int, float] = {
+            id(param): float(param_group["eps"])
+            for optimizer in self.optimizers
+            for param_group in optimizer.param_groups
+            if "eps" in param_group
             for param in param_group["params"]
         }
         log.info(f"Created {len(self.optimizers)} optimizers")
@@ -632,6 +639,19 @@ class OptimizersContainer(Stateful):
                         f"one optimizer group: {sorted(configured_values)}."
                     )
                 param_group["weight_decay"] = configured_values.pop()
+
+                configured_eps_values = {
+                    self._configured_eps_by_param_id[id(param)]
+                    for param in param_group["params"]
+                    if id(param) in self._configured_eps_by_param_id
+                }
+                if len(configured_eps_values) > 1:
+                    raise ValueError(
+                        "Checkpoint loading merged parameters with different configured epsilons into "
+                        f"one optimizer group: {sorted(configured_eps_values)}."
+                    )
+                if configured_eps_values:
+                    param_group["eps"] = configured_eps_values.pop()
 
 
 def build_optimizer(

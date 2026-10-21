@@ -1,0 +1,4 @@
+mode: "fixed"
+camera_model_resolution: [1280, 720]
+cosmos_resolution: [1280, 720]
+to_cosmos_resolution: "resize"

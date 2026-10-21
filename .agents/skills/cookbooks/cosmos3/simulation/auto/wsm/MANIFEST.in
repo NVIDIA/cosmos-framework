@@ -1,0 +1,8 @@
+include README.md LICENSE PROVENANCE.json LIDAR_PROVENANCE.json
+recursive-include cosmos_auto *.py *.json *.yaml *.tar
+recursive-include docs *.md *.png *.html *.css *.js *.cjs *.py
+recursive-include examples *.md *.tar *.py
+recursive-include skills *.md *.py *.json
+recursive-include tests *.py
+recursive-include tools *.py
+global-exclude __pycache__ *.py[cod]

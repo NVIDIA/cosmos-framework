@@ -72,7 +72,8 @@ mirror of third-party dependencies.
 A bare index install cannot find the unpublished core. The repository's `uv`
 configuration explicitly excludes **only `nvidia-automl-core`** from its managed
 resolution while delivery remains local-wheel-only. This lets ordinary Framework
-setup and CI resolve without a private checkout; it does **not** install AutoML.
+setup and CI resolve without an additional source checkout; it does **not**
+install AutoML.
 The wheel metadata still declares the core requirement for the AutoML extras.
 A distributable core location and removal of this development exception remain
 a release gate.

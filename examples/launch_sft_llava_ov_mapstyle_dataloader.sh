@@ -29,7 +29,6 @@ TAIL_OVERRIDES=(
     "data_setting.max_tokens=16000"
     "trainer.max_iter=60"
     "checkpoint.save_iter=50"
-    "job.wandb_mode=online"
     "job.name=${RUN_NAME}"
 )
 

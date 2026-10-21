@@ -253,8 +253,8 @@ def fused_weighted_cross_entropy_loss(
     """Compute the unified weighted objective without allocating [B,T,vocabulary] logits.
 
     Called inside the FSDP model forward, while the lm_head weight is gathered.
-    Each sample uses a scalar fused CE call, as in MR !11447. The denominator
-    spans the unified trainer's whole DP world, including HSDP replicas.
+    Each sample uses a scalar fused CE call. The denominator spans the unified
+    trainer's whole DP world, including HSDP replicas.
     """
     if hidden_states.ndim != 3 or labels.shape != hidden_states.shape[:2]:
         raise ValueError("Fused CE requires aligned hidden states [B,T,H] and labels [B,T]")

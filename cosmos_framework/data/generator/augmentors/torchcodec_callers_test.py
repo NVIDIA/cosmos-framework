@@ -150,7 +150,7 @@ def test_bytes_to_media_probe_duration_respects_start_end_frame(
 
 
 def test_multiview_extract_frames_resizes_torchcodec_frames(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _import_or_skip("cosmos_framework.data.generator.multiview.multiview_dataset")
+    module = _import_or_skip("cosmos_framework.data.generator.multiview.transforms")
     calls: list[tuple[object, list[int]]] = []
 
     class FakeTorchCodecVideoReader:
@@ -174,6 +174,7 @@ def test_multiview_extract_frames_resizes_torchcodec_frames(monkeypatch: pytest.
         b"video",
         [1, 3, 5],
         (8, 12),
+        align_to_tokenizer=False,
     )
 
     assert calls == [(b"video", [1, 3, 5])]
@@ -184,8 +185,8 @@ def test_multiview_extract_frames_resizes_torchcodec_frames(monkeypatch: pytest.
 
 
 def test_multiview_augmentations_defer_normalization_to_model() -> None:
-    module = _import_or_skip("cosmos_framework.data.generator.multiview.multiview_dataset")
+    module = _import_or_skip("cosmos_framework.data.generator.multiview.local_pipeline")
 
-    augmentations, _ = module.make_augmentations(module.MultiviewAugmentationConfig())
+    augmentations = module.make_auto_augmentations({})
 
-    assert "normalize" not in augmentations
+    assert not any("normalize" in type(augmentor).__name__.lower() for augmentor in augmentations)

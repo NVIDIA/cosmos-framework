@@ -7,6 +7,10 @@ import pytest
 import torch
 import torch.distributed as dist
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_gen_seq,
+)
 from cosmos_framework.model.attention import attention as full_attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.causal_attention import (
@@ -18,10 +22,6 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
 )
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import ContextParallelDispatch
 from cosmos_framework.model.generator.utils.kv_cache import ARMemoryValue, DualKVCache, TFNoisyMemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_gen_seq,
-)
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
@@ -1056,11 +1056,11 @@ def _cp_attention_ar_gen_static(
     cu_seqlens_kv_t = torch.tensor([0, real_total_kv_len], device=device, dtype=torch.int32)
     real_gen_cache_len_t = torch.tensor([real_len], device=device, dtype=torch.int32)
     max_seqlen_KV = s_und + gen_len + max_gen_cache_tokens
-    # Composite ``[und | curr | hist | pad]`` buffer; the attention writes ``curr`` in place.
+    # Composite ``[und | hist | curr | pad]`` buffer; attention places ``curr`` after real history.
     curr_room_k = gen_k_buf.new_zeros((1, gen_len, gen_k_buf.shape[2], gen_k_buf.shape[3]))
     curr_room_v = gen_v_buf.new_zeros((1, gen_len, gen_v_buf.shape[2], gen_v_buf.shape[3]))
-    kv_k_static = torch.cat([und_k_cached, curr_room_k, gen_k_buf], dim=1).contiguous()
-    kv_v_static = torch.cat([und_v_cached, curr_room_v, gen_v_buf], dim=1).contiguous()
+    kv_k_static = torch.cat([und_k_cached, gen_k_buf, curr_room_k], dim=1).contiguous()
+    kv_v_static = torch.cat([und_v_cached, gen_v_buf, curr_room_v], dim=1).contiguous()
 
     mv = ARMemoryValue(
         und_k_cached=None,
@@ -1074,7 +1074,7 @@ def _cp_attention_ar_gen_static(
         kv_k_static=kv_k_static,
         kv_v_static=kv_v_static,
         static_curr_offset=s_und,
-        static_hist_offset=s_und + gen_len,
+        static_hist_offset=s_und,
         real_gen_cache_len_t=real_gen_cache_len_t,
         cu_seqlens_q_t=cu_seqlens_q_t,
         cu_seqlens_kv_t=cu_seqlens_kv_t,

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from cosmos_framework.model.generator.distillation import common_loss as common_loss_module
+import cosmos_framework.model.generator.distillation.common_loss as common_loss_module
 from cosmos_framework.model.generator.distillation.common_loss import (
     variational_score_distillation_loss,
     variational_score_distillation_loss_from_gradient,
@@ -166,9 +166,36 @@ def test_vsd_per_instance_sum_zeroes_nan_sample_loss_and_grad(use_loss_mask: boo
 def test_public_loss_exports_are_explicit() -> None:
     assert common_loss_module.__all__ == (
         "VSDLossReduction",
+        "make_vsd_pseudo_target",
         "variational_score_distillation_loss",
         "variational_score_distillation_loss_from_gradient",
     )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_pseudo_target_is_detached_and_preserves_normalizer_precision(dtype: torch.dtype) -> None:
+    generated = torch.tensor([10.0, 1.0, 3.0], dtype=dtype, requires_grad=True)  # [3]
+    teacher = torch.zeros(3, dtype=dtype, requires_grad=True)  # [3]
+    direction = torch.full((3,), 2.0, dtype=dtype, requires_grad=True)  # [3]
+    mask = torch.tensor([0.0, 1.0, 1.0])  # [3]
+    target = common_loss_module.make_vsd_pseudo_target(
+        generated,
+        direction,
+        teacher,
+        loss_mask=mask,
+    )  # [3]
+    # Only the two generated elements enter the normalizer: mean(|1|, |3|) = 2.
+    expected_weight = torch.tensor(1.0 / (2.0 + 1e-6), dtype=dtype)  # []
+    expected = generated.detach() - direction.detach() * expected_weight  # [3]
+    torch.testing.assert_close(target, expected, rtol=0, atol=0)
+    assert not target.requires_grad
+    loss = (0.5 * (generated - target).square() * mask).sum()  # []
+    loss.backward()
+    torch.testing.assert_close(generated.grad, (generated.detach() - expected) * mask, check_dtype=False)  # [3]
+    assert teacher.grad is None
+    assert direction.grad is None
 
 
 @pytest.mark.L0

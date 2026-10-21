@@ -88,7 +88,7 @@ class DMD2RFConfig(OmniMoTModelConfig):
     # ---------------- Fixed-step sampler schedule ----------------
     # Controls the discrete sigma schedule used for student inference and for sampling
     # the training noise level in _sample_student_sigma.  See FixedStepSamplerConfig.
-    fixed_step_sampler_config: FixedStepSamplerConfig = FixedStepSamplerConfig()
+    fixed_step_sampler_config: FixedStepSamplerConfig | None = FixedStepSamplerConfig()
 
     # ---------------- Distillation / loss scheduling ----------------
     loss_scale_fake_score: float = 1.0
@@ -114,10 +114,11 @@ class DMD2RFConfig(OmniMoTModelConfig):
     warmup_critic_steps: int = 0  # Number of iterations of critic-only phase before alternating with student updates
 
     # ---------------- Student simulation mode ----------------
-    # "forward": single pass from a randomly sampled sigma (current default).
+    # "forward": single pass from sigma sampled from fixed_step_sampler_config.t_list.
+    # "forward_random": single pass from continuous random sigma.
     # "backward": multi-step rollout from a pure-noise start (t_list[0] must be 1.0)
     # over an iteration-cycled number of t_list steps, descending to sigma=0.
-    simulation_mode: Literal["forward", "backward"] = "forward"
+    simulation_mode: Literal["forward", "forward_random", "backward"] = "forward"
     # Number of trailing denoising steps in backward simulation that receive gradients.
     # 1  = only the last step (low memory, matches predict2_distill).
     # -1 = all steps (true BPTT, O(N) memory).
@@ -130,10 +131,26 @@ class DMD2RFConfig(OmniMoTModelConfig):
     student_load_from: LazyDict | None = None
     # Load teacher ckpt and copy weights into student/fake-score nets (train-time only)
     load_teacher_weights: bool = True
+    copy_teacher_weights_to_student: bool = True
+    copy_teacher_weights_to_fake_score: bool = True
+    copy_teacher_weights_to_ema: bool = True
+    load_student_pretrained_weights: bool = False
+    load_fake_score_pretrained_weights: bool = False
+    retokenize_text_for_teacher: bool = False
+    retokenize_text_for_fake_score: bool = False
 
     # ---------------- Enforcing value of certain fields upon creation of the config ----------------
     def __attrs_post_init__(self) -> None:
         assert not (self.warmup_student_steps > 0 and self.warmup_critic_steps > 0), (
             "Only one of warmup_student_steps and warmup_critic_steps can be nonzero, "
             f"got warmup_student_steps={self.warmup_student_steps}, warmup_critic_steps={self.warmup_critic_steps}"
+        )
+        assert not (self.copy_teacher_weights_to_student and self.load_student_pretrained_weights), (
+            "copy_teacher_weights_to_student and load_student_pretrained_weights are mutually exclusive."
+        )
+        assert self.copy_teacher_weights_to_student or not self.copy_teacher_weights_to_ema, (
+            "copy_teacher_weights_to_ema requires copy_teacher_weights_to_student."
+        )
+        assert not (self.copy_teacher_weights_to_fake_score and self.load_fake_score_pretrained_weights), (
+            "copy_teacher_weights_to_fake_score and load_fake_score_pretrained_weights are mutually exclusive."
         )

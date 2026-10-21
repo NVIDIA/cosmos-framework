@@ -1,0 +1,19 @@
+{
+  "cosmos3_nano_sim_bimanual": {
+    "conditioning": {
+      "emphasize_control_in_prompt": true,
+      "hints": [
+        "edge",
+        "blur",
+        "depth",
+        "seg"
+      ],
+      "mode": "control_video",
+      "no_eviction": true,
+      "share_vision_temporal_positions": true,
+      "system_prompt_id": "cosmos3_transfer_v1",
+      "transfer_control_attention_mode": "causal_control_with_rgb_history"
+    },
+    "schema_version": 1
+  }
+}

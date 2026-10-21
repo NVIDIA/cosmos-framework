@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch import nn
 
-from cosmos_framework.model.generator.reasoner.qwen3_vl_moe import moe as moe_impl
+from cosmos_framework.model.generator.moe import native as moe_impl
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_vl_moe import (
     Qwen3VLMoeTextConfig,
 )

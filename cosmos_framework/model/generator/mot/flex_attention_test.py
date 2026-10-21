@@ -21,8 +21,10 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CAPTION_SCOPE_NONE,
     CAPTION_SCOPE_SAME_VIEW,
     AttentionScope,
+    CrossViewTemporalWindowConfig,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
+    SameViewTemporalWindowConfig,
     TemporalWindow,
 )
 from cosmos_framework.model.generator.mot import flex_attention as flex_attention_module
@@ -54,6 +56,7 @@ from cosmos_framework.model.generator.mot.multiview_attention import (
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
 )
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import MultiviewMasklessPlan, cross_view_passes
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import _apply_full_ac, _apply_selective_ac
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -880,8 +883,8 @@ def test_multiview_mask_mod_noisy_scopes_cut_the_camera_grid() -> None:
 @pytest.mark.CPU
 @pytest.mark.parametrize("duration", [0, 0.1, 0.4, 1.0])
 @pytest.mark.parametrize("control_attends_sensor", [False, True])
-def test_migrated_legacy_window_preserves_attention_edges(duration: float, control_attends_sensor: bool) -> None:
-    """Compare migrated bounds against the old scalar predicate, including boundary rounding."""
+def test_explicit_past_only_window_preserves_attention_edges(duration: float, control_attends_sensor: bool) -> None:
+    """Compare explicit bounds against key age, including boundary rounding and control edges."""
     tokens = [
         dict(s=0, t=i, v=view, ts=time, noisy=i != 0, control=control)
         for view in range(2)
@@ -889,29 +892,28 @@ def test_migrated_legacy_window_preserves_attention_edges(duration: float, contr
         for i, time in enumerate([0.0, 0.1, 0.4, 1.0, 1.0 - duration - 5e-5, 1.0 - duration - 5e-3, 1.0 + 5e-5])
     ]
     tokens.append(dict(s=1, t=0, v=0, ts=1.0, noisy=True))  # A different sample must stay isolated.
-    config = MultiviewAttentionMaskConfig(decomposed_temporal_window_seconds=duration)
-    assert config.decomposed_temporal_window_seconds == (-duration, 0.0)
+    config = CrossViewTemporalWindowConfig(bounds=(-duration, 0.0))
     metadata = _metadata_from_tokens(
         tokens, seq_len=len(tokens) + 1, und_samples=[0, 0, 1], control_attends_sensor=control_attends_sensor
     )
     expected = _mask_mod_to_dense(metadata)  # [Q,K], existing all-views/control/caption rules
     query_time = metadata.timestamp[metadata.num_und :, None]  # [Q,1]
     key_time = metadata.timestamp[None, :]  # [1,K]
-    gap = query_time - key_time  # [Q,K], old scalar code used query minus key
+    gap = query_time - key_time  # [Q,K], past keys have non-negative ages relative to the query
     same_view = metadata.view_id[metadata.num_und :, None] == metadata.view_id[None, :]  # [Q,K]
     sensor_pairs = (
         ~metadata.is_control[metadata.num_und :, None]
         & ~metadata.is_control[None, :]
         & (torch.arange(metadata.seq_len)[None, :] >= metadata.num_und)
     )  # [Q,K]
-    old_scope = same_view | ((gap >= -1e-4) & (gap <= duration + 1e-4))  # [Q,K]
-    expected &= ~sensor_pairs | old_scope  # [Q,K]
-    migrated = dataclasses.replace(
+    past_only_scope = same_view | ((gap >= -1e-4) & (gap <= duration + 1e-4))  # [Q,K]
+    expected &= ~sensor_pairs | past_only_scope  # [Q,K]
+    windowed = dataclasses.replace(
         metadata,
         attention_scope="decomposed",
-        decomposed_temporal_window_seconds=config.decomposed_temporal_window_seconds,
+        decomposed_temporal_window_seconds=config.bounds,
     )
-    actual = _mask_mod_to_dense(migrated)  # [Q,K]
+    actual = _mask_mod_to_dense(windowed)  # [Q,K]
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
@@ -1840,9 +1842,9 @@ def test_multiview_maskless_geometry_supports_optional_camera_pose_actions() -> 
     # Control tokens share their target camera view groups and are excluded from the
     # cross-instant pass, exactly the all-frame control rules of the source mask.
     assert torch.diff(plan.same_view_offsets).tolist() == [2, 2, 5, 5]
-    assert plan.cross_view_gather is not None
-    assert len(plan.cross_view_gather) == 8
-    assert torch.diff(plan.cross_view_offsets).tolist() == [2, 2, 2, 2]
+    (cross_pass,) = cross_view_passes(plan)
+    assert len(cross_pass.gather) == 8
+    assert torch.diff(cross_pass.offsets).tolist() == [1] * 8
 
 
 @pytest.mark.L0
@@ -1871,11 +1873,18 @@ def test_multiview_maskless_action_plan_matches_source_flex_mask() -> None:
         group = same_gather[int(start) : int(end)]
         same[group[:, None], group] = True
     cross = torch.zeros_like(same)
-    assert plan.cross_view_gather is not None
-    assert plan.cross_view_offsets is not None
-    for start, end in zip(plan.cross_view_offsets[:-1], plan.cross_view_offsets[1:]):
-        group = plan.cross_view_gather[int(start) : int(end)]
-        cross[group[:, None], group] = True
+    for cross_pass in cross_view_passes(plan):
+        for qs, qe, ks, ke in zip(
+            cross_pass.offsets[:-1],
+            cross_pass.offsets[1:],
+            cross_pass.kv_offsets[:-1],
+            cross_pass.kv_offsets[1:],
+            strict=True,
+        ):
+            query = cross_pass.gather[int(qs) : int(qe)]  # [Nq]
+            key = cross_pass.kv_gather[int(ks) : int(ke)]  # [Nk]
+            cross[query[:, None], key] = True  # [Nq,Nk]
+    assert not torch.any(same & cross)
     fold_mask = same | cross
     pair_allowed = _multiview_pair_predicate(
         _query_stream_fields(metadata),
@@ -2088,7 +2097,26 @@ def _multiview_maskless_pack(**overrides) -> PackedSequence:
     return PackedSequence(**fields)
 
 
+def _cross_view_edges(plan: MultiviewMasklessPlan) -> set[tuple[int, int]]:
+    """Expand the small test plan's rectangles and reject duplicate directed edges."""
+    edges: set[tuple[int, int]] = set()
+    for partition in plan.cross_view_partitions:
+        for qs, qe, ks, ke in zip(
+            partition.query_offsets[:-1],
+            partition.query_offsets[1:],
+            partition.key_offsets[:-1],
+            partition.key_offsets[1:],
+            strict=True,
+        ):
+            for query in partition.query_indices[qs:qe].tolist():
+                for key in partition.key_indices[ks:ke].tolist():
+                    assert (query, key) not in edges
+                    edges.add((query, key))
+    return edges
+
+
 @pytest.mark.L0
+@pytest.mark.CPU
 @torch.no_grad()
 def test_multiview_maskless_geometry_reads_the_single_camera_item_it_accepts() -> None:
     """The accepted pack yields the item's own view count and token shape, unchanged."""
@@ -2102,7 +2130,19 @@ def test_multiview_maskless_geometry_reads_the_single_camera_item_it_accepts() -
     # the packed stream in order, so no gather is needed to reach them.
     assert plan.same_view_offsets is not None
     assert plan.same_view_gather is None
-    assert plan.cross_view_gather is not None
+    assert plan.cross_view_partitions
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@torch.no_grad()
+def test_multiview_maskless_geometry_defaults_missing_view_counts_to_one() -> None:
+    plan = _multiview_maskless_geometry_for_test(_multiview_maskless_pack(num_views_per_vision_item=None))
+
+    assert plan is not None
+    assert plan.num_views == (1,)
+    assert plan.token_shapes == ((6, 2, 3),)
+    assert not plan.cross_view_partitions
 
 
 def _rigrope_mixed_pack(features: list[torch.Tensor | None]) -> PackedSequence:
@@ -2138,7 +2178,8 @@ def test_multiview_maskless_geometry_rigrope_resizes_each_view_and_skips_single_
     torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
     torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
     # The single-view sample never enters the cross-view gather.
-    assert plan.cross_view_gather is not None and int(plan.cross_view_gather.max()) < 36
+    assert plan.cross_view_partitions
+    assert all(int(part.query_indices.max()) < 36 for part in plan.cross_view_partitions)
     assert torch.equal(plan.rigrope_sin[36:], torch.zeros(12, 8))
     assert plan.rigrope_pairs is None
 
@@ -2228,8 +2269,8 @@ def test_multiview_maskless_geometry_rigrope_interleaves_pose_actions_per_sample
     action_rows = list(range(36, 42)) + list(range(78, 84))
     torch.testing.assert_close(plan.rigrope_cos[action_rows], torch.ones(12, 8))
     torch.testing.assert_close(plan.rigrope_sin[action_rows], torch.zeros(12, 8))
-    assert plan.cross_view_gather is not None
-    assert not set(plan.cross_view_gather.tolist()) & set(action_rows)
+    assert plan.cross_view_partitions
+    assert all(not set(part.query_indices.tolist()) & set(action_rows) for part in plan.cross_view_partitions)
 
 
 @pytest.mark.L0
@@ -2248,9 +2289,10 @@ def test_multiview_maskless_geometry_rigrope_band_keys_no_pose_action_rows() -> 
         include_frame_zero=True,
     )
 
-    assert plan.rigrope_cos is not None and plan.cross_view_gather is not None
-    assert plan.cross_view_kv_gather is not None
-    assert int(plan.cross_view_gather.max()) < 36 and int(plan.cross_view_kv_gather.max()) < 36
+    assert plan.rigrope_cos is not None and plan.cross_view_partitions
+    assert all(
+        int(part.query_indices.max()) < 36 and int(part.key_indices.max()) < 36 for part in plan.cross_view_partitions
+    )
     torch.testing.assert_close(plan.rigrope_cos[36:], torch.ones(6, 16))
 
 
@@ -2273,7 +2315,8 @@ def test_multiview_maskless_geometry_rigrope_checks_features_against_their_own_v
     assert plan.rigrope_cos is not None and plan.rigrope_sin is not None
     torch.testing.assert_close(plan.rigrope_cos[:36], expected.cos())
     torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
-    assert plan.cross_view_gather is not None and int(plan.cross_view_gather.max()) < 36
+    assert plan.cross_view_partitions
+    assert all(int(part.query_indices.max()) < 36 for part in plan.cross_view_partitions)
 
 
 def _random_rigid(*shape: int) -> torch.Tensor:  # [*shape,4,4]
@@ -2325,10 +2368,10 @@ def test_multiview_maskless_geometry_prope_lays_out_poses_per_token(missing_geom
     torch.testing.assert_close(
         camera_to_reference @ reference_to_camera, torch.eye(4).expand_as(reference_to_camera), atol=1e-5, rtol=0
     )
-    assert plan.cross_view_gather is not None and plan.cross_view_kv_gather is not None
+    assert plan.cross_view_partitions
     action_rows = set(range(36, 42)) | set(range(78, 84))
-    assert not set(plan.cross_view_gather.tolist()) & action_rows
-    assert not set(plan.cross_view_kv_gather.tolist()) & action_rows
+    assert all(not set(part.query_indices.tolist()) & action_rows for part in plan.cross_view_partitions)
+    assert all(not set(part.key_indices.tolist()) & action_rows for part in plan.cross_view_partitions)
 
 
 @pytest.mark.L0
@@ -2411,7 +2454,7 @@ def test_multiview_maskless_geometry_rigrope_time_only_rotates_by_latent_frame_t
     torch.testing.assert_close(plan.rigrope_sin[:36], expected.sin())
     # Head dim 16 gives one frequency per channel, so only the time slots (7 and 15) rotate.
     assert torch.count_nonzero(expected[:, :7]) == torch.count_nonzero(expected[:, 8:15]) == 0
-    assert plan.cross_view_kv_gather is not None
+    assert plan.cross_view_partitions
 
 
 @pytest.mark.L0
@@ -2437,10 +2480,14 @@ def test_multiview_maskless_geometry_rigrope_time_only_refuses_an_unknown_fps() 
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_maskless_geometry_prope_refuses_the_cross_view_band() -> None:
+def test_multiview_maskless_geometry_prope_preserves_the_exact_cross_view_band() -> None:
     pack = _multiview_maskless_pack(camera_relative_poses_per_vision_item=[torch.eye(4).expand(3, 2, 4, 4)])
-    with pytest.raises(ValueError, match="PRoPE does not support the maskless cross-view band"):
-        _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope", cross_view_band_radius=1)
+    plan = _multiview_maskless_geometry_for_test(pack, geometry_position_encoding="prope", cross_view_band_radius=1)
+    assert plan.camera_relative_pose is not None
+    assert len(plan.camera_relative_pose.camera_passes) == len(plan.cross_view_partitions)
+    for pose_pass, partition in zip(plan.camera_relative_pose.camera_passes, plan.cross_view_partitions, strict=True):
+        torch.testing.assert_close(pose_pass.cameras.query_indices, partition.query_indices)
+        torch.testing.assert_close(pose_pass.cameras.key_indices, partition.key_indices)
 
 
 @pytest.mark.L0
@@ -2604,6 +2651,7 @@ def test_multiview_maskless_geometry_reads_a_mixed_camera_and_lidar_batch() -> N
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
 @torch.no_grad()
 def test_multiview_maskless_geometry_takes_a_joint_camera_and_lidar_sample() -> None:
     """One sample owning both streams is served by quantising capture time onto the camera grid.
@@ -2632,9 +2680,10 @@ def test_multiview_maskless_geometry_takes_a_joint_camera_and_lidar_sample() -> 
     assert plan.num_views == (1, 1)
     assert plan.token_shapes == ((4, 1, 1), (6, 1, 1))
     # 4 camera frames and 6 sweeps land on instants 0,1,2,3 and 0,1,1,2,3,4: one camera token
-    # per instant, joined by 1,2,1,1 sweeps, then a trailing instant holding only the sixth
-    # sweep, which falls past the camera clip's end.
-    assert torch.diff(plan.cross_view_offsets).tolist() == [2, 3, 2, 2, 1]
+    # per instant, joined by 1,2,1,1 sweeps. The trailing sixth sweep falls past the
+    # camera clip's end and contributes no cross-view edge.
+    camera_to_lidar = {(0, 4), (1, 5), (1, 6), (2, 7), (3, 8)}
+    assert _cross_view_edges(plan) == camera_to_lidar | {(key, query) for query, key in camera_to_lidar}
 
 
 @pytest.mark.L0
@@ -2668,6 +2717,7 @@ def test_multiview_maskless_geometry_takes_a_transfer_sample() -> None:
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
 @torch.no_grad()
 def test_multiview_maskless_geometry_takes_a_joint_transfer_sample() -> None:
     """WSM control + RGB target beside HD-map control + LiDAR target: four items, two axes."""
@@ -2691,8 +2741,17 @@ def test_multiview_maskless_geometry_takes_a_joint_transfer_sample() -> None:
     assert plan.is_control == (True, False, True, False)
     assert plan.view_axis == (0, 0, 1, 1), "Camera views and the range view are numbered apart."
     # Sensors only: the RGB target's 2 views x 2 frames and the LiDAR target's 3 sweeps, on
-    # instants 0,1,0,1 and 0,1,1 -- so two groups, of 3 and 4 tokens.
-    assert torch.diff(plan.cross_view_offsets).tolist() == [3, 4]
+    # instants 0,1,0,1 and 0,1,1. Cross-view partitions exclude same-view edges,
+    # including the pair of LiDAR sweeps that share instant 1.
+    sensor_view = {4: 0, 5: 0, 6: 1, 7: 1, 11: 2, 12: 2, 13: 2}
+    expected_edges = {
+        (query, key)
+        for instant in ({4, 6, 11}, {5, 7, 12, 13})
+        for query in instant
+        for key in instant
+        if sensor_view[query] != sensor_view[key]
+    }
+    assert _cross_view_edges(plan) == expected_edges
     # Views: each camera view holds its control and its target, and the range axis holds both
     # of its items.
     assert torch.diff(plan.same_view_offsets).tolist() == [4, 4, 6]
@@ -2793,10 +2852,7 @@ def test_multiview_maskless_geometry_supports_optional_camera_pose_actions(contr
     # cross-instant pass, which is the mask's own control rule.
     assert plan.same_view_offsets is not None
     assert torch.diff(plan.same_view_offsets).tolist() == [2, 2, 5, 5]
-    assert plan.cross_view_gather is not None
-    assert len(plan.cross_view_gather) == 8
-    assert plan.cross_view_offsets is not None
-    assert torch.diff(plan.cross_view_offsets).tolist() == [2, 2, 2, 2]
+    assert _cross_view_edges(plan) == {(0, 2), (1, 3), (2, 0), (3, 1), (4, 6), (5, 7), (6, 4), (7, 5)}
 
 
 @pytest.mark.L0
@@ -2824,12 +2880,9 @@ def test_multiview_maskless_action_plan_matches_the_flex_mask() -> None:
     for start, end in zip(plan.same_view_offsets[:-1], plan.same_view_offsets[1:]):
         group = same_gather[int(start) : int(end)]
         same[group[:, None], group] = True
-    cross = torch.zeros_like(same)
-    assert plan.cross_view_gather is not None
-    assert plan.cross_view_offsets is not None
-    for start, end in zip(plan.cross_view_offsets[:-1], plan.cross_view_offsets[1:]):
-        group = plan.cross_view_gather[int(start) : int(end)]
-        cross[group[:, None], group] = True
+    cross = torch.zeros_like(same)  # [N_gen,N_gen]
+    for query, key in _cross_view_edges(plan):
+        cross[query, key] = True  # []
     pair_allowed = _multiview_pair_predicate(
         _query_stream_fields(metadata),
         _key_stream_fields(metadata),
@@ -2860,9 +2913,9 @@ def test_exact_windowed_cross_view_pass_over_an_action_pack_matches_the_flex_mas
     plan = _multiview_maskless_geometry_for_test(
         pack,
         control_attends_sensor=control_attends_sensor,
-        deduplicate_cross_view=True,
-        decomposed_temporal_window_seconds=window,
-        decomposed_temporal_window_includes_first_frame=include_first_frame,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(
+            bounds=window, includes_first_frame=include_first_frame
+        ),
     )
     metadata = build_multiview_flex_metadata(
         gen_seq_len=plan.num_gen_tokens,
@@ -3039,15 +3092,17 @@ def test_maskless_per_camera_prope_single_camera_packs_need_no_poses(
 @pytest.mark.L0
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "control_attends_sensor,takes_folds",
+    "control_attends_sensor,sensor_window,takes_folds",
     [
-        pytest.param(True, False, id="control_reads_target"),
+        pytest.param(True, None, False, id="control_reads_target"),
         # Off the flag the camera control may not read its target, which dense would let it.
-        pytest.param(False, True, id="control_withheld_from_target"),
+        pytest.param(False, None, True, id="control_withheld_from_target"),
+        # Even with controls readable, a causal sensor window excludes future target frames.
+        pytest.param(True, (-2, 0), True, id="causal_sensor_window"),
     ],
 )
 def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_reads_the_target(
-    control_attends_sensor: bool, takes_folds: bool
+    control_attends_sensor: bool, sensor_window: tuple[int, int] | None, takes_folds: bool
 ) -> None:
     """A camera item conditioning the next one is a control even without an action stream."""
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
@@ -3075,6 +3130,7 @@ def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_r
                 mask=MultiviewAttentionMaskConfig(
                     attention_scope="decomposed",
                     control_attends_sensor=control_attends_sensor,
+                    same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_sensor_bounds=sensor_window),
                 ),
             )
         ),
@@ -3089,6 +3145,8 @@ def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_r
     )
 
     assert (attention_meta.multiview_maskless is not None) is takes_folds
+    if attention_meta.multiview_maskless is not None:
+        assert attention_meta.multiview_maskless.sensor_to_sensor_window == sensor_window
 
 
 @pytest.mark.L0
@@ -3187,6 +3245,49 @@ def _multiview_maskless_network(*, maskless_attention: bool, multiview: bool = T
         ),
     )
     return Cosmos3VFMNetwork(language_model, config)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("window", [None, (-0.4, 0.0)])
+def test_opt_in_action_conditioning_preserves_single_view_temporal_windows(window: TemporalWindow | None) -> None:
+    network = _multiview_maskless_network(maskless_attention=True)
+    network.config.multiview_action_conditioning = True
+    network.config.multiview_attention_config.mask.same_view_temporal_window.sensor_to_sensor_bounds = window
+    pack = _multiview_maskless_pack(num_vision_items_per_sample=None, num_views_per_vision_item=None)
+    assert pack.vision is not None
+    pack.vision.seconds_per_frame = [0.2]
+    attention_meta = SimpleNamespace(multiview_maskless=None)
+    full_sequence = torch.zeros(6 * 2 * 3, 1)  # [N_gen,D]
+
+    network._prepare_multiview_attention(
+        pack,
+        cast(SequencePack, {"full_only_seq": full_sequence}),
+        cast(SplitInfo, attention_meta),
+    )
+
+    if window is None:
+        assert attention_meta.multiview_maskless is None
+    else:
+        assert attention_meta.multiview_maskless is not None
+        assert attention_meta.multiview_maskless.sensor_to_sensor_window == (-2, 0)
+
+
+@pytest.mark.L0
+def test_single_camera_sound_pack_rejects_same_view_temporal_window() -> None:
+    network = _multiview_maskless_network(maskless_attention=True)
+    network.config.multiview_attention_config.mask.same_view_temporal_window.sensor_to_sensor_bounds = (-0.4, 0.0)
+    pack = _multiview_maskless_pack(
+        num_views_per_vision_item=[1],
+        sound=ModalityData(tokens=[torch.zeros(2)], token_shapes=[(2, 1, 1)]),  # tokens: list[[T]]
+    )
+    full_sequence = torch.zeros(6 * 2 * 3 + 2, 1)  # [N_gen,D]
+
+    with pytest.raises(NotImplementedError, match="Same-view temporal windows.*sound"):
+        network._prepare_multiview_attention(
+            pack,
+            cast(SequencePack, {"full_only_seq": full_sequence}),
+            cast(SplitInfo, SimpleNamespace(multiview_maskless=None)),
+        )
 
 
 @pytest.mark.L0

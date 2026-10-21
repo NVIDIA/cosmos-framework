@@ -225,8 +225,8 @@ class TestMarkUnbackedFlag:
 
     The flag exists so a run that hits a ``Could not guard on data-dependent expression`` the
     stated invariants do not cover can fall back to recompiling instead of failing. That is only
-    an escape hatch if turning it off actually leaves the compiled block unwrapped, so both
-    directions are pinned here.
+    an escape hatch if turning it off avoids marking input dimensions, so both directions
+    are pinned here independently of the request-routing wrapper.
     """
 
     @staticmethod
@@ -249,17 +249,21 @@ class TestMarkUnbackedFlag:
             block.forward = compiled_forward
             return block
 
-        with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
+        with (
+            patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile),
+            patch(
+                "cosmos_framework.model.generator.mot.parallelize_unified_mot._wrap_forward_with_unbacked_pack"
+            ) as wrap,
+        ):
             apply_compile(model, CompileConfig(enabled=True, mark_unbacked=mark_unbacked))
 
         forward = model.model.layers.get_submodule("0").forward
         if mark_unbacked:
-            # Wrapped: the marking frame sits between the caller and the compiled forward.
-            assert forward is not compiled_forward
-            assert callable(forward)
+            wrap.assert_called_once()
+            assert forward is wrap.return_value
         else:
-            # Unwrapped: the compiled forward is called directly, as it was before the marking.
-            assert forward is compiled_forward
+            wrap.assert_not_called()
+            assert callable(forward)
 
     def test_defaults_to_not_marking(self) -> None:
         # Off by default: the marking is incompatible with the DTensor all-to-all every
@@ -396,7 +400,7 @@ class TestCudaGraphScope:
     """``cuda_graph_scope`` decides whether inductor's CUDA-graph trees wrap each block.
 
     With scope "forward" the AR loop captures one explicit graph around the whole forward, and a
-    capture cannot nest the per-block graph trees, so the blocks must compile with ``mode=None``.
+    capture cannot nest the per-block graph trees, so only block scope enables their compile options.
     """
 
     @staticmethod
@@ -411,21 +415,28 @@ class TestCudaGraphScope:
         return model
 
     @pytest.mark.parametrize(
-        ("use_cuda_graphs", "scope", "expected_mode"),
-        [(True, "block", "reduce-overhead"), (True, "forward", None), (False, "block", None), (False, "forward", None)],
+        ("use_cuda_graphs", "scope", "expected_graph_trees"),
+        [(True, "block", True), (True, "forward", False), (False, "block", False), (False, "forward", False)],
     )
-    def test_block_scope_alone_uses_reduce_overhead(self, use_cuda_graphs: bool, scope: str, expected_mode) -> None:
+    def test_block_scope_alone_uses_reduce_overhead(
+        self, use_cuda_graphs: bool, scope: str, expected_graph_trees: bool
+    ) -> None:
         model = self._model_with_one_layer()
-        seen_modes: list[object] = []
+        seen_options: list[dict[str, object]] = []
 
-        def fake_compile(block, **kwargs):
-            seen_modes.append(kwargs["mode"])
+        def fake_compile(block: torch.nn.Module, **kwargs: object) -> torch.nn.Module:
+            assert kwargs["mode"] == ("reduce-overhead" if expected_graph_trees else None)
+            options = kwargs["options"] or {}
+            assert isinstance(options, dict)
+            seen_options.append(options)
             return block
 
         with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
             apply_compile(model, CompileConfig(enabled=True, use_cuda_graphs=use_cuda_graphs, cuda_graph_scope=scope))
 
-        assert seen_modes == [expected_mode]
+        assert len(seen_options) == 1
+        assert "triton.cudagraphs" not in seen_options[0]
+        assert "emulate_precision_casts" not in seen_options[0]
 
     @pytest.mark.parametrize("scope", ["block", "forward"])
     def test_forward_scope_forces_static_shapes(self, scope: str) -> None:

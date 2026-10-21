@@ -13,9 +13,20 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_num_real_tokens,
+    get_und_seq,
+    has_pad_segment,
+    set_gen_seq,
+    set_und_seq,
+    zeros_like,
+)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
@@ -77,18 +88,8 @@ from cosmos_framework.model.generator.utils.load_balancing_stats import (
     LBLMetadata,
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    from_all_seq,
-    from_und_gen_splits,
-    get_gen_seq,
-    get_num_real_tokens,
-    get_und_seq,
-    has_pad_segment,
-    set_gen_seq,
-    set_und_seq,
-    zeros_like,
-)
+from cosmos_framework.model.generator.utils.numerics import native_rms_norm
+from cosmos_framework.utils import log
 
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
@@ -521,6 +522,19 @@ def _apply_head_sharded_o_proj(
     return out
 
 
+def _apply_request_rms_norm(norm: nn.Module, value: torch.Tensor, memory_value: MemoryValue | None) -> torch.Tensor:
+    """Preserve only the current Transfer request, without changing shared norm modules."""
+    if (
+        getattr(memory_value, "preserve_transfer_numerics", False)
+        and isinstance(norm, Qwen3VLTextRMSNorm)
+        and torch.compiler.is_compiling()
+        and not norm.training
+        and not torch.is_grad_enabled()
+    ):
+        return native_rms_norm(value, norm.weight, norm.variance_epsilon)
+    return norm(value)
+
+
 class PackedAttentionMoT(nn.Module):
     """
     Dual-pathway packed attention for MoT architectures.
@@ -664,8 +678,8 @@ class PackedAttentionMoT(nn.Module):
         if torch.compiler.is_compiling():
             for head_split in (q_gen, k_gen, v_gen):
                 torch._dynamo.mark_static(head_split, 1)
-        q_gen = self.q_norm_moe_gen(q_gen)  # [N_target,num_heads,head_dim]
-        k_gen = self.k_norm_moe_gen(k_gen)  # [N_target,num_kv_heads,head_dim]
+        q_gen = _apply_request_rms_norm(self.q_norm_moe_gen, q_gen, memory_value)  # [N_target,num_heads,head_dim]
+        k_gen = _apply_request_rms_norm(self.k_norm_moe_gen, k_gen, memory_value)  # [N_target,num_kv_heads,head_dim]
         packed_cos, packed_sin = packed_position_embeddings
         q_gen_, k_gen_ = self._apply_rotary_pos_emb(
             q_gen,
@@ -761,11 +775,11 @@ class PackedAttentionMoT(nn.Module):
             for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
                 torch._dynamo.mark_static(head_split, 1)
 
-        q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
-        k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
+        q_und = _apply_request_rms_norm(self.q_norm, q_und, memory_value)  # [N_und,num_heads,head_dim]
+        k_und = _apply_request_rms_norm(self.k_norm, k_und, memory_value)  # [N_und,num_kv_heads,head_dim]
 
-        q_gen = self.q_norm_moe_gen(q_gen)  # [N_gen,num_heads,head_dim]
-        k_gen = self.k_norm_moe_gen(k_gen)  # [N_gen,num_kv_heads,head_dim]
+        q_gen = _apply_request_rms_norm(self.q_norm_moe_gen, q_gen, memory_value)  # [N_gen,num_heads,head_dim]
+        k_gen = _apply_request_rms_norm(self.k_norm_moe_gen, k_gen, memory_value)  # [N_gen,num_kv_heads,head_dim]
 
         packed_cos = packed_position_embeddings[0]
         packed_sin = packed_position_embeddings[1]
@@ -1451,10 +1465,14 @@ class MoTDecoderLayer(nn.Module):
         if target_only_no_text:
             norm_und = get_und_seq(layer_input)  # [0,hidden_size]
         else:
-            norm_und = self.input_layernorm(get_und_seq(layer_input))  # [N_und,hidden_size]
+            norm_und = _apply_request_rms_norm(
+                self.input_layernorm, get_und_seq(layer_input), memory_value
+            )  # [N_und,hidden_size]
         pack_norm_out = from_und_gen_splits(
             norm_und,
-            self.input_layernorm_moe_gen(get_gen_seq(layer_input)),  # [N_gen,hidden_size]
+            _apply_request_rms_norm(
+                self.input_layernorm_moe_gen, get_gen_seq(layer_input), memory_value
+            ),  # [N_gen,hidden_size]
             layer_input,
         )  # [N_und+N_gen,hidden_size]
 
@@ -1520,7 +1538,7 @@ class MoTDecoderLayer(nn.Module):
         if gen_only:
             # gen_only: skip und, compute gen tokens only
             ln_out_und = residual_gen.new_empty(0, residual_gen.shape[-1])
-            ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)
+            ln_out_gen = _apply_request_rms_norm(self.post_attention_layernorm_moe_gen, residual_gen, memory_value)
 
             # MASK MLP PADDING (gen only)
             _, gen_len = get_num_real_tokens(pack_attn_out)
@@ -1545,8 +1563,12 @@ class MoTDecoderLayer(nn.Module):
             mlp_out_gen_seq = residual_gen + mlp_out_gen
         else:
             # STANDARD PATH: Process both und and gen tokens
-            ln_out_und = self.post_attention_layernorm(residual_und)  # [N_und,hidden_size]
-            ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)  # [N_gen,hidden_size]
+            ln_out_und = _apply_request_rms_norm(
+                self.post_attention_layernorm, residual_und, memory_value
+            )  # [N_und,hidden_size]
+            ln_out_gen = _apply_request_rms_norm(
+                self.post_attention_layernorm_moe_gen, residual_gen, memory_value
+            )  # [N_gen,hidden_size]
 
             # MASK MLP PADDING ===============
             # NOTE: This is only need for the MoE auxiliary loss computation and to avoid

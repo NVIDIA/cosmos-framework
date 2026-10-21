@@ -26,7 +26,7 @@ from cosmos_framework.data.generator.action.utils.transforms import (
     reflection_pad_to_target,
 )
 from cosmos_framework.inference.args import ModelMode
-from cosmos_framework.inference.vision import read_media_frames
+from cosmos_framework.inference.vision import crop_media_to_content, read_media_frames
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 # Domains whose raw action width is chosen per dataset at construction time rather than
@@ -56,7 +56,12 @@ def _load_actions(
         case ModelMode.FORWARD_DYNAMICS:
             assert action_path is not None, "action_path is required for forward_dynamics mode"
             p = Path(str(action_path))
-            raw = torch.tensor(json.loads(p.read_text()), dtype=torch.float32)
+            payload = json.loads(p.read_text())
+            if isinstance(payload, dict):
+                raise ValueError(
+                    "Unified action sidecars require the matching Bimanual checkpoint with schema-5 metadata"
+                )
+            raw = torch.tensor(payload, dtype=torch.float32)
             raw_dim = int(raw.shape[-1])
             assert raw_action_dim is None or raw_dim == raw_action_dim, (
                 f"Raw action dimension from file ({raw_dim}) does not match expected dimension ({raw_action_dim})"
@@ -105,11 +110,15 @@ def build_action_batch(
     action_chunk_size: int,
     fps: int,
     resolution: str | None = None,
+    content_crop_box: tuple[int, int, int, int] | None = None,
     input_video_key: str,
     batch_size: int = 1,
     device: Any = "cuda",
+    action_domain_ids: torch.Tensor | None = None,
+    format_prompt_as_json: bool = True,
 ) -> dict:
     """Build an Action data batch from pre-loaded video and action tensors."""
+    video = crop_media_to_content(video, content_crop_box)
     target_frames = action_chunk_size + 1
     _, num_frames, h, w = video.shape
 
@@ -135,13 +144,17 @@ def build_action_batch(
         has_text=True,
     )
 
-    ai_caption = _format_prompt(
-        prompt=prompt,
-        view_point=view_point,
-        video=video_padded,
-        action=action,
-        fps=torch.tensor(fps, dtype=torch.long),
-        image_size=padded_image_size,
+    ai_caption = (
+        _format_prompt(
+            prompt=prompt,
+            view_point=view_point,
+            video=video_padded,
+            action=action,
+            fps=torch.tensor(fps, dtype=torch.long),
+            image_size=padded_image_size,
+        )
+        if format_prompt_as_json
+        else prompt.strip()
     )
 
     action_processing_record = ActionProcessingRecord(
@@ -158,7 +171,12 @@ def build_action_batch(
         "prompt": [prompt] * batch_size,
         "conditioning_fps": [torch.tensor(fps, dtype=torch.long)] * batch_size,
         "image_size": padded_image_size.unsqueeze(0).to(device=device),
-        "domain_id": [torch.tensor(get_domain_id(domain_name), dtype=torch.long)] * batch_size,
+        "domain_id": [
+            torch.tensor(get_domain_id(domain_name), dtype=torch.long)
+            if action_domain_ids is None
+            else action_domain_ids
+        ]
+        * batch_size,
         "sequence_plan": [sequence_plan] * batch_size,
     }
 
@@ -174,19 +192,64 @@ def get_action_sample_data(
     domain_name: str,
     view_point: str = "ego_view",
     resolution: str,
+    content_crop_box: tuple[int, int, int, int] | None = None,
     action_chunk_size: int,
     max_action_dim: int,
     fps: int,
     device: Any,
+    raw_action_dim: int | None = None,
+    format_prompt_as_json: bool | None = None,
 ) -> dict:
     """Load observation image/video + optional actions and build an Action inference batch."""
     domain_name = domain_name.lower().strip()
+    contract = getattr(model_config, "_bimanual_action_contract", None)
+    if contract is not None:
+        if model_mode is not ModelMode.FORWARD_DYNAMICS or action_path is None:
+            raise ValueError("The unified Bimanual checkpoint requires recorded forward-dynamics actions")
+        if max_action_dim != contract.model_action_dim:
+            raise ValueError("Model action width disagrees with the exported Bimanual action contract")
+        if raw_action_dim not in (None, contract.action_dim):
+            raise ValueError(f"This Bimanual checkpoint requires raw_action_dim={contract.action_dim}")
+        if format_prompt_as_json is True:
+            raise ValueError("The unified Bimanual checkpoint requires format_prompt_as_json=false")
+        actions, domains = contract.validate(
+            json.loads(Path(action_path).read_text()), action_count=action_chunk_size, domain_name=domain_name
+        )
+        # The sidecar is already normalized and masked. Only append zero padding.
+        action = pad_action_to_max_dim(torch.tensor(actions, dtype=torch.float32), max_action_dim)
+        if not torch.isfinite(action).all():
+            raise ValueError("Bimanual actions overflow float32")
+        frames, _ = read_media_frames(Path(vision_path), max_frames=action_chunk_size + 1)
+        return build_action_batch(
+            video=frames,
+            action=action,
+            raw_action_dim=contract.action_dim,
+            prompt=prompt,
+            view_point=view_point,
+            domain_name=domain_name,
+            model_mode=model_mode,
+            action_chunk_size=action_chunk_size,
+            fps=fps,
+            resolution=resolution,
+            content_crop_box=content_crop_box,
+            input_video_key=model_config.input_video_key,
+            batch_size=batch_size,
+            device=device,
+            action_domain_ids=torch.tensor(domains, dtype=torch.long),
+            format_prompt_as_json=False,
+        )
+
     if domain_name not in EMBODIMENT_TO_DOMAIN_ID:
         raise ValueError(
             f"invalid domain_name {domain_name!r}; expected one of {sorted(EMBODIMENT_TO_DOMAIN_ID.keys())}"
         )
 
-    raw_action_dim = EMBODIMENT_TO_RAW_ACTION_DIM.get(domain_name)
+    native_action_dim = EMBODIMENT_TO_RAW_ACTION_DIM.get(domain_name)
+    if raw_action_dim is not None and native_action_dim is not None and raw_action_dim != native_action_dim:
+        raise ValueError(
+            f"Native {domain_name} actions require {native_action_dim} values; the unified export is separate"
+        )
+    raw_action_dim = native_action_dim if native_action_dim is not None else raw_action_dim
     if raw_action_dim is None:
         if domain_name not in _PER_DATASET_ACTION_WIDTH:
             raise ValueError(
@@ -214,7 +277,9 @@ def get_action_sample_data(
         action_chunk_size=action_chunk_size,
         fps=fps,
         resolution=resolution,
+        content_crop_box=content_crop_box,
         input_video_key=model_config.input_video_key,
         batch_size=batch_size,
         device=device,
+        format_prompt_as_json=True if format_prompt_as_json is None else format_prompt_as_json,
     )

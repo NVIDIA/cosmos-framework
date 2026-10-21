@@ -6,7 +6,6 @@ import math
 from collections.abc import Sequence
 from typing import List, Tuple
 
-import attrs
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -16,12 +15,14 @@ from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     CaptionAccess,
+    CrossViewTemporalWindowConfig,
     MultiviewAttentionConfig,
     ResolvedBackend,
     RigRopeChannels,
     RigRopeMissingGeometry,
-    TemporalWindow,
-    load_temporal_window,
+    SameViewTemporalWindowConfig,
+    normalize_multiview_temporal_windows,
+    upgrade_saved_multiview_attention,
 )
 from cosmos_framework.model.generator.mot.action_io_projector import (
     ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -104,6 +105,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         timestep_shift=1.0,
         timestep_scale=0.001,
         timestep_range: float = 1.0,
+        timestep_embedding_chunk_size: int | None = None,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
         multiview_attention_config: MultiviewAttentionConfig | None = None,
@@ -160,6 +162,16 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.timestep_shift = timestep_shift
         self.timestep_scale = timestep_scale
         self.timestep_range = timestep_range
+        if timestep_embedding_chunk_size is not None and (
+            isinstance(timestep_embedding_chunk_size, bool)
+            or not isinstance(timestep_embedding_chunk_size, int)
+            or timestep_embedding_chunk_size <= 0
+        ):
+            raise ValueError(
+                "timestep_embedding_chunk_size must be a positive integer or None, "
+                f"got {timestep_embedding_chunk_size!r}"
+            )
+        self.timestep_embedding_chunk_size = timestep_embedding_chunk_size
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
         # One object rather than five fields flattened out of it: the mask reads its scope and
@@ -168,25 +180,16 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
         self.multiview_action_conditioning = multiview_action_conditioning
         # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
-        # the attrs converter. Restore every field a config saved before it existed lacks --
-        # the legacy counting default, the geometry and band settings, all off by default --
+        # the attrs converter. Bring a config saved before the current fields or window keys
+        # existed up to date -- the geometry and band settings, all off by default --
         # and normalize durations here, before building attention.
-        default_attention_config = MultiviewAttentionConfig()
-        for field in attrs.fields(MultiviewAttentionConfig):
-            if not hasattr(self.multiview_attention_config, field.name):
-                setattr(self.multiview_attention_config, field.name, getattr(default_attention_config, field.name))
-        mask_config = self.multiview_attention_config.mask
-        mask_config.decomposed_temporal_window_seconds = load_temporal_window(
-            mask_config.decomposed_temporal_window_seconds
-        )
-        if not hasattr(mask_config, "decomposed_temporal_window_includes_first_frame"):
-            mask_config.decomposed_temporal_window_includes_first_frame = False
+        upgrade_saved_multiview_attention(self.multiview_attention_config)
+        normalize_multiview_temporal_windows(self.multiview_attention_config.mask)
         attention_config = self.multiview_attention_config
         if multiview_action_conditioning and (
             getattr(attention_config, "geometry_position_encoding", "baseline") != "baseline"
             or getattr(attention_config, "maskless_cross_view_band_radius", 0) != 0
             or getattr(attention_config, "maskless_cross_view_include_frame_zero", False)
-            or getattr(attention_config, "maskless_cross_view_band_keys", "all_views") != "all_views"
         ):
             # Action conditioning builds its own maskless plan, which carries no camera geometry
             # and no cross-view band, so these settings would otherwise be silently ignored.
@@ -325,6 +328,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
             )
             multiview = config.multiview_attention_config
+            # Camera-pose controls and opt-in per-view action blocks both have maskless
+            # plans; the forward validates each batch's action and sensor layout.
             self.multiview_backend, self.flex_backend = resolve_multiview_backend(
                 device,
                 multiview.backend,
@@ -336,10 +341,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                     f"(backend={multiview.backend!r} -> 'maskless') under scope "
                     f"{multiview.mask.attention_scope!r} with "
                     f"control_attends_sensor={multiview.mask.control_attends_sensor}, "
-                    f"deduplicate_cross_view={multiview.deduplicate_cross_view}, "
-                    f"decomposed_temporal_window_seconds={multiview.mask.decomposed_temporal_window_seconds}, "
-                    "decomposed_temporal_window_includes_first_frame="
-                    f"{multiview.mask.decomposed_temporal_window_includes_first_frame}. It builds "
+                    f"cross_view_temporal_window.bounds={multiview.mask.cross_view_temporal_window.bounds}, "
+                    "cross_view_temporal_window.includes_first_frame="
+                    f"{multiview.mask.cross_view_temporal_window.includes_first_frame}. It builds "
                     "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
                     "whatever padding the pack has."
                 )
@@ -910,16 +914,27 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if packed_seq.uses_single_timestep and timesteps.numel() > 1:
             timestep = timesteps[:1]  # [1]
             with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-                timestep_embed = self.time_embedder(timestep)  # [1,hidden_size]
-            timestep_embed = timestep_embed.to(target_dtype)  # [1,hidden_size]
+                timestep_embed = self.time_embedder(timestep).to(dtype=target_dtype)  # [1,hidden_size]
             # Materialize: expand() aliases storage, and with the cast now behind us there is no
             # longer even the chance of a dtype conversion downstream to copy it, so an in-place
             # write by any caller would land on all rows at once.
             return timestep_embed.expand(timesteps.shape[0], -1).contiguous()  # [N_noisy_frames,hidden_size]
 
-        # Timesteps are computed in FP32 for numerical stability.
+        # Timesteps are computed in FP32 for numerical stability. Cast each chunk immediately
+        # after embedding so both its FP32 output and checkpoint recomputation are bounded by
+        # chunk_size. The final concatenated tensor has the same dtype and per-token computation
+        # as the old full-sequence embedding.
         with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-            return self.time_embedder(timesteps).to(target_dtype)  # [N_noisy_frames,hidden_size]
+            chunk_size = self.config.timestep_embedding_chunk_size
+            if chunk_size is None or timesteps.shape[0] <= chunk_size:
+                return self.time_embedder(timesteps).to(dtype=target_dtype)  # [N_noisy_frames,hidden_size]
+            return torch.cat(
+                [
+                    self.time_embedder(timestep_chunk).to(dtype=target_dtype)
+                    for timestep_chunk in timesteps.split(chunk_size, dim=0)
+                ],
+                dim=0,
+            )  # [N_noisy_frames,hidden_size]
 
     def _encode_vision(
         self,
@@ -1461,12 +1476,25 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.multiview_backend is None:
             return
 
-        if getattr(self.config, "multiview_action_conditioning", False):
-            counts = packed_seq.num_vision_items_per_sample
-            if counts is None:
-                # Preserve dense attention for the unchanged single-view streams
-                # mixed into an opt-in run; their existing action block is unchanged.
-                return
+        mask_config = self.config.multiview_attention_config.mask
+        same_view_window = mask_config.same_view_temporal_window
+        has_same_view_window = any(
+            bounds is not None
+            for bounds in (
+                same_view_window.sensor_to_sensor_bounds,
+                same_view_window.sensor_to_control_bounds,
+                same_view_window.control_to_control_bounds,
+                same_view_window.control_to_sensor_bounds,
+            )
+        )
+        action_conditioning = getattr(self.config, "multiview_action_conditioning", False)
+        counts = packed_seq.num_vision_items_per_sample
+        if action_conditioning and counts is None and not has_same_view_window:
+            # Preserve dense attention for the unchanged single-view streams
+            # mixed into an opt-in run; their existing action block is unchanged.
+            # Configured same-view windows instead need the ordinary geometry below.
+            return
+        if action_conditioning and counts is not None:
             if (
                 self.multiview_backend != "maskless"
                 or packed_seq.num_action_tokens_per_supertoken != 0
@@ -1526,10 +1554,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 is_control=[False] * len(shapes),
                 view_axis=view_axis,
                 caption_access=caption_access,
+                same_view_temporal_window=config.mask.same_view_temporal_window,
                 padded_gen_tokens=full_seq.shape[0],
                 attention_scope=config.mask.attention_scope,
-                deduplicate_cross_view=config.deduplicate_cross_view,
-                decomposed_temporal_window_seconds=config.mask.decomposed_temporal_window_seconds,
+                cross_view_temporal_window=config.mask.cross_view_temporal_window,
             )
             return
 
@@ -1555,6 +1583,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # scoping silently, and a pack carrying controls would have its control edges
         # widened, since the mask confines them to their own view.
         if packed_seq.sound is not None:
+            if has_same_view_window:
+                raise NotImplementedError("Same-view temporal windows are not implemented for sound packs.")
             if not (packed_seq.action is None and is_single_camera_pack(packed_seq)):
                 raise ValueError(
                     "Multiview FlexAttention supports vision/LiDAR/radar/action batches, not sound. "
@@ -1574,6 +1604,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # A single-camera pack has no LiDAR or radar stream, so those two are the only controls.
         # Skipping the fold and its gen->und merge matters for the image and single-view Action
         # streams of a mixed recipe, while true multiview packs still take the folds below.
+        # Same-view temporal windows also require the folds: dense attention would admit
+        # frames outside the configured window even when the pack has only one camera.
         # Every geometry mode acts only between cameras, so a single-camera pack needs no poses.
         carries_control = packed_seq.action is not None or any(
             int(count) > 1 for count in packed_seq.num_vision_items_per_sample or []
@@ -1581,7 +1613,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if (
             self.multiview_backend == "maskless"
             and is_single_camera_pack(packed_seq)
-            and (not carries_control or self.config.multiview_attention_config.mask.control_attends_sensor)
+            and (not carries_control or mask_config.control_attends_sensor)
+            and not has_same_view_window
         ):
             return
 
@@ -1631,14 +1664,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
                 attention_scope=self.config.multiview_attention_config.mask.attention_scope,
                 control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+                same_view_temporal_window=self.config.multiview_attention_config.mask.same_view_temporal_window,
+                device=input_pack["full_only_seq"].device,
+                cross_view_temporal_window=self.config.multiview_attention_config.mask.cross_view_temporal_window,
                 cross_view_band_radius=self.config.multiview_attention_config.maskless_cross_view_band_radius,
                 include_frame_zero=self.config.multiview_attention_config.maskless_cross_view_include_frame_zero,
                 cross_view_band_keys=self.config.multiview_attention_config.maskless_cross_view_band_keys,
-                sensor_to_sensor_window=self.config.multiview_attention_config.mask.sensor_to_sensor_window,
-                sensor_to_control_window=self.config.multiview_attention_config.mask.sensor_to_control_window,
-                control_to_control_window=self.config.multiview_attention_config.mask.control_to_control_window,
-                control_to_sensor_window=self.config.multiview_attention_config.mask.control_to_sensor_window,
-                device=input_pack["full_only_seq"].device,
                 geometry_position_encoding=self.config.multiview_attention_config.geometry_position_encoding,
                 prope_intrinsics=self.config.multiview_attention_config.prope_intrinsics,
                 rigrope=self.rigrope,
@@ -1646,13 +1677,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 rigrope_time_scale_s=self.config.multiview_attention_config.rigrope_time_scale_s,
                 rigrope_head_masks=self._rigrope_head_masks(input_pack["full_only_seq"].device),
                 rigrope_channels=self.config.multiview_attention_config.rigrope_channels,
-                deduplicate_cross_view=self.config.multiview_attention_config.deduplicate_cross_view,
-                decomposed_temporal_window_seconds=(
-                    self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
-                ),
-                decomposed_temporal_window_includes_first_frame=(
-                    self.config.multiview_attention_config.mask.decomposed_temporal_window_includes_first_frame
-                ),
             )
             geometry_mode = self.config.multiview_attention_config.geometry_position_encoding
             if (
@@ -1703,7 +1727,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_scope=self.config.multiview_attention_config.mask.attention_scope,
             control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
             decomposed_temporal_window_seconds=(
-                self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
+                self.config.multiview_attention_config.mask.cross_view_temporal_window.bounds
             ),
             sensor_mask_items=sensor_mask_items,
             caption_mask_items=caption_mask_items,
@@ -2023,12 +2047,10 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     attention_meta.control_weights = weights
 
 
-_MASKLESS_REFUSAL = "backend='maskless' is set, but this batch cannot be served by the decomposition: "
+_MASKLESS_REFUSAL = "backend resolved to 'maskless', but this batch cannot be served by the decomposition: "
 _MASKLESS_REFUSAL_TAIL = (
-    " The decomposition and the attention_scope='decomposed' mask are deliberately different"
-    " attention -- the two sensor passes overlap on the query's own (view, frame) cell -- so"
-    " falling back to the mask would train a different distribution under the same config."
-    " Move the backend off 'maskless' to use the mask, or keep this layout out of the batch."
+    " Backend selection is fixed for the run, so this batch cannot silently switch to a mask."
+    " Pin a flex_* backend to use a mask, or keep this layout out of the batch."
 )
 
 
@@ -2040,14 +2062,12 @@ def _multiview_maskless_geometry(
     gen_seq_len: int,
     attention_scope: str,
     control_attends_sensor: bool,
+    same_view_temporal_window: SameViewTemporalWindowConfig | None = None,
+    device: torch.device,
+    cross_view_temporal_window: CrossViewTemporalWindowConfig | None = None,
     cross_view_band_radius: int = 0,
     include_frame_zero: bool = False,
-    cross_view_band_keys: str = "all_views",
-    sensor_to_sensor_window: tuple[int, int] | None = None,
-    sensor_to_control_window: tuple[int, int] | None = None,
-    control_to_control_window: tuple[int, int] | None = None,
-    control_to_sensor_window: tuple[int, int] | None = None,
-    device: torch.device,
+    cross_view_band_keys: str = "other_views",
     geometry_position_encoding: str = "baseline",
     prope_intrinsics: bool = False,
     rigrope: RopeRigPE | None = None,
@@ -2055,27 +2075,20 @@ def _multiview_maskless_geometry(
     rigrope_time_scale_s: float = 1.0,
     rigrope_head_masks: tuple[torch.Tensor, torch.Tensor] | None = None,
     rigrope_channels: RigRopeChannels = "all",
-    deduplicate_cross_view: bool = False,
-    decomposed_temporal_window_seconds: TemporalWindow | None = None,
-    decomposed_temporal_window_includes_first_frame: bool = False,
 ) -> MultiviewMasklessPlan:
     """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
 
-    ``None`` only when the config did not ask for the decomposition, which is what keeps the
-    FlexAttention mask. With the flag on, a batch the decomposition cannot serve raises rather
-    than quietly taking the mask instead: the legacy folds are deliberately different attention -- the
-    sensor passes overlap on the query's own (view, frame) cell and the mask does not -- so a
-    fallback would train a distribution the config did not ask for, and would do it per pack,
-    so a run could alternate between the two between steps with nothing to show for it but
-    slightly noisier loss. Training and inference are treated alike --
+    Called only after the run selects maskless attention. A batch the decomposition cannot
+    serve raises rather than quietly switching backends per pack. Same-view and cross-view
+    partitions are disjoint, so each allowed key contributes once. Training and inference are treated alike --
     the decomposition's backward is correct (see ``multiview_maskless_attention``), so grad
     mode is not one of the conditions below, and neither is the sample count: samples may differ
     in views, frames and resolution, and the plan carries the ragged case's index tensors.
 
     Every condition below is one the decomposition cannot express, not a preference, and each
     raises with the layout that tripped it. They are all properties of the *batch*: what the
-    config rules out -- unsupported scopes or invalid window bounds -- is settled once by
-    ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
+    config rules out -- unsupported scopes or invalid window bounds -- is settled by config
+    construction and ``maskless_unavailable_reason`` before a batch arrives, so none of it is re-checked
     here. ``control_attends_sensor`` is not among those: the folds express both answers, so it is
     passed down as a description of the attention rather than tested as a condition.
 
@@ -2145,12 +2158,10 @@ def _multiview_maskless_geometry(
             :func:`~...multiview_maskless_attention.rigrope_local_head_masks`; ``None`` for all.
         rigrope_channels: ``"even_pairs"`` when ``rigrope`` is a half-width table for the even
             split-half pairs, whose odd pairs then keep mRoPE; ``"all"`` for a full-width one.
-        deduplicate_cross_view: use disjoint rectangles, counting each key once.
-        decomposed_temporal_window_seconds: optional (start, end) cross-view window
-            relative to the query's capture time; (-N, 0) gives a past-only window.
-            Works in both counting modes; without deduplication, own-view sensor keys
-            inside the window are counted twice. Same-view/caption attention stays intact.
-        decomposed_temporal_window_includes_first_frame: also admit each sample's first frame
+        cross_view_temporal_window: optional cross-view window configuration. Its bounds
+            are relative to the query's capture time; (-N, 0) gives a past-only window.
+            Own-view sensor keys are excluded from this pass. Same-view/caption attention stays intact.
+            When includes_first_frame is enabled, also admit each sample's first frame
             on the other views for every query time, beside the window.
 
     Returns:
@@ -2323,13 +2334,8 @@ def _multiview_maskless_geometry(
         view_axis=view_axis,
         captions=captions,
         attention_scope=attention_scope,
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
-        decomposed_temporal_window_includes_first_frame=decomposed_temporal_window_includes_first_frame,
-        sensor_to_sensor_window=sensor_to_sensor_window,
-        sensor_to_control_window=sensor_to_control_window,
-        control_to_control_window=control_to_control_window,
-        control_to_sensor_window=control_to_sensor_window,
+        cross_view_temporal_window=cross_view_temporal_window,
+        same_view_temporal_window=same_view_temporal_window,
         # The items' own account of themselves, which the mask is built from too. A
         # "no_captions" item's group takes an empty run of captions under the per-view layout
         # and leaves the gen->und pass under the sample-level one.
@@ -2345,12 +2351,8 @@ def _multiview_maskless_geometry(
     if geometry_position_encoding == "prope":
         if packed_seq.lidar is not None or packed_seq.action is not None:
             raise ValueError("PRoPE is camera-only in decomposed attention")
-        if plan.cross_view_kv_gather is not None or plan.cross_view_partitions:
-            # The camera-relative pose pass replaces the cross-view pass and its key runs.
-            raise ValueError(
-                "PRoPE does not support the maskless cross-view band, deduplicate_cross_view or "
-                "decomposed_temporal_window_seconds"
-            )
+        # The camera-relative pose passes transform the plan's disjoint cross-view
+        # rectangles, preserving their query/key runs and temporal bounds.
         camera_poses = packed_seq.camera_relative_poses_per_vision_item
         # Single-camera items keep the ordinary partition, so only multiview items need poses.
         if camera_poses is None or any(
@@ -2654,7 +2656,7 @@ def _multiview_sensor_mask_items(
     Each item's ``seconds_per_frame`` comes from ``ModalityData.seconds_per_frame``, the real
     time between two of that item's latent frames (``sequence.py``'s ``_pack_grid_tokens``).
     Camera and LiDAR items disagree here even on a shared frame index, since the two sensors
-    run at different rates -- what ``decomposed_temporal_window_seconds`` needs to compare the
+    run at different rates -- what ``cross_view_temporal_window.bounds`` needs to compare the
     two streams by actual capture time rather than by frame index.
     """
     num_samples = len(packed_seq.sample_lens)

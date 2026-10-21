@@ -40,7 +40,7 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 
 1. **Clone** the repository and `cd` into the project root (the directory containing `pyproject.toml`)
 2. **System deps**: `sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libx11-dev tree wget`
-3. **Install uv**: `curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env`
+3. **Install uv**: `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh && source $HOME/.local/bin/env`. Verify `uv --version` reports `0.11.29`; update an existing installation with `uv self update 0.11.29`.
 4. **Install package**: `uv sync --all-extras --group=cu130-train && source .venv/bin/activate && export LD_LIBRARY_PATH=` (use `cu128-train` on older drivers; the inference-only `cu130` / `cu128` groups omit the training extras)
 5. **Checkpoints**: auto-downloaded during inference; requires HuggingFace auth (see docs)
 6. **Verify**: `uv run --all-extras --group=cu130-train python -c "import cosmos_framework; print('ok')"`

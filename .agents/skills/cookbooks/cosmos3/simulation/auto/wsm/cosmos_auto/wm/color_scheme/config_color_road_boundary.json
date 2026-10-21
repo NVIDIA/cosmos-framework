@@ -1,0 +1,26 @@
+{
+  "other": {
+    "subtypes": ["solid_single", "dot_dashed_single", "other_marking", "other_physical"],
+    "rgb": [239, 191, 255]
+  },
+  "barrier_or_fence": {
+    "subtypes": ["barrier", "fence"],
+    "rgb": [253, 1, 232]
+  },
+  "curb": {
+    "subtypes": ["curb", "low_curb", "tall_curb"],
+    "rgb": [207, 255, 191]
+  },
+  "road_boundary": {
+    "subtypes": ["road_boundary"],
+    "rgb": [0, 159, 96]
+  },
+  "obstacle_bars": {
+    "subtypes": ["obstacle_bars"],
+    "rgb": [255, 207, 159]
+  },
+  "wall": {
+    "subtypes": ["wall"],
+    "rgb": [0, 128, 159]
+  }
+}

@@ -322,6 +322,7 @@ def load_model_from_checkpoint(
     use_cache_checkpoint: bool = False,
     cache_checkpoint_rootdir: Optional[str] = None,
     keys_to_skip_loading: list[str] | None = None,
+    load_lidar_tokenizer: bool = True,
 ) -> tuple[torch.nn.Module, Any]:
     """
     Args:
@@ -376,6 +377,9 @@ def load_model_from_checkpoint(
             substring semantics one-for-one. This option is incompatible with FSDP CPU offload,
             which requires the checkpoint load to initialize every parameter.
 
+        load_lidar_tokenizer: Keep the configured LiDAR tokenizer by default. RGB-only
+            inference disables it after config resolution, before model construction.
+
     Returns:
         The loaded model and config
     """
@@ -397,6 +401,10 @@ def load_model_from_checkpoint(
     config_module = get_config_module(config_file)
     config = importlib.import_module(config_module).make_config()
     config = override(config, ["--", f"experiment={experiment_name}"] + experiment_opts)
+    if not load_lidar_tokenizer:
+        # Joint training loaders interpolate tokenizer properties. Resolve those
+        # first, then avoid loading an unused LiDAR VAE for RGB-only inference.
+        config.model.config.lidar_tokenizer = None
 
     if parallelism_config is not None:
         for key, value in parallelism_config.items():

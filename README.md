@@ -17,6 +17,8 @@
 
 - **Training** — distributed FSDP / TP / CP / PP trainer, native DCP checkpoints with HuggingFace `safetensors` import/export, JSONL / WebDataset / LeRobot dataset adapters. Entry point: `cosmos_framework.scripts.train`. See [`docs/training.md`](./docs/training.md).
 - **Inference** — Diffusers / Transformers / vLLM backends with offline batch generation and online serving (Ray + Gradio). Entry point: `cosmos_framework.scripts.inference`. Ecosystem-facing shim libraries (lightweight standalone wrappers for downstream projects) live under [`packages/`](./packages).
+- **Policy serving** — a server-client pipeline for deploying Cosmos3 policies. See [`docs/action_policy_droid_server.md`](./docs/action_policy_droid_server.md).
+- **Post-training and RL** — supervised, preference-based, reinforcement-learning, distillation, diffusion, and embodied-policy optimization under `cosmos_framework.posttrain`. See [`docs/posttrain/`](./docs/posttrain/index.md).
 
 ## Cosmos 3
 
@@ -29,7 +31,10 @@
 - [Training (Supervised Fine-Tuning)](./docs/training.md)
   - [JSONL Dataset](./docs/dataset_jsonl.md)
 - [Inference](./docs/inference.md)
+  - [Evaluation](./docs/evaluation.md)
 - [Policy Server](./docs/action_policy_droid_server.md)
+- [Post-training and RL](./docs/posttrain/index.md)
+  - [Step-by-step container run guide](./docs/posttrain/howto/run-posttrain.md)
 - [Agent Skills](#agent-skills)
 - Reference
   - [Code Structure](./docs/code_structure.md)
@@ -44,18 +49,22 @@ For more details and alternative installation methods, see [Setup](./docs/setup.
 Install system dependencies:
 
 ```shell
-sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libx11-dev tree wget
+sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libgl1 libglib2.0-0 libx11-dev tree wget
 ```
 
-Install the package with `uv` (pick the dependency group that matches your CUDA toolkit — see [CUDA Variants](./docs/setup.md#cuda-variants)):
+Install the package with the required `uv` version, `0.11.29` (pick a dependency group supported by your driver — see [CUDA Variants](./docs/setup.md#cuda-variants)):
 
 ```shell
 # CUDA 13.0 (recommended)
 uv sync --all-extras --group=cu130-train
 # Or, for CUDA 12.8:
 # uv sync --all-extras --group=cu128-train
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
+
+Run the [GPU and media checks](./docs/setup.md#verify-the-gpu-and-media-runtime)
+before downloading weights. Preserve any CUDA compatibility libraries required
+by your driver; do not clear `LD_LIBRARY_PATH` unconditionally.
 
 If you are starting from the recommended NGC image (`nvcr.io/nvidia/pytorch:26.06-py3`), see the [one-shot quickstart](./docs/setup.md#quickstart-from-the-recommended-base-image).
 
@@ -68,6 +77,13 @@ bash examples/launch_sft_vision_nano.sh
 ```
 
 Users may adjust the GPU count to match their model and underlying hardware architecture — tune `NPROC_PER_NODE` and the parallelism degrees (DP/CP/FSDP shard) in the recipe accordingly.
+
+### Transfer-Auto and Sim-Auto
+
+- **Cosmos3-Nano-Transfer-Auto:** Start from **Cosmos3-Nano** to reproduce the training curriculum, or directly fine-tune the **released Transfer-Auto checkpoint** on your own data. See the [Transfer-Auto training skill](./.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md) for both paths.
+- **Cosmos3-Nano-Sim-Auto:** For domain or sensor adaptation, fine-tune Transfer-Auto first, then distill that adapted checkpoint through **TF → TF-dCM → SF-DMD**. See the [Sim-Auto training skill](./.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md) and [training guide](./docs/training_sim_auto.md).
+
+We recommend completing adaptation before distillation, rather than applying ordinary supervised fine-tuning (SFT) to the released distilled Sim-Auto checkpoint, to preserve its few-step generation behavior. The released Sim-Auto checkpoint can be used directly for [inference](./docs/inference_sim_auto.md).
 
 ## Inference
 
@@ -87,6 +103,35 @@ python -m cosmos_framework.scripts.inference \
 ## Policy Server
 
 See [Policy Server](./docs/action_policy_droid_server.md) for the full guide.
+
+## Post-training and RL
+
+`cosmos_framework.posttrain` provides a common runtime for offline and online post-training, from
+single-host recipes to distributed Ray execution. Start with the
+[Posttrain documentation](./docs/posttrain/index.md) or follow the
+[step-by-step container run guide](./docs/posttrain/howto/run-posttrain.md).
+
+The repository has two SFT paths. Use the main [Training](./docs/training.md) path for Cosmos3
+generator, reasoner, and policy recipes built on the framework's native configuration, checkpoint,
+and distributed-training stack. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Hugging
+Face-based models outside the Cosmos3 recipes. It currently supports Qwen text models, dense
+Qwen3.5/3.8 multimodal models, and Qwen3-VL/Qwen3-VL-MoE, with a common Hugging Face foundation for
+extending support to additional compatible models.
+
+| Algorithm    | Description                                                         | Guide                                                                                                                      |
+| ------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| DPO          | Offline preference optimization                                     | [DPO](./docs/posttrain/guides/dpo.md)                                                                                      |
+| GRPO         | Group-relative online policy optimization                           | [GRPO](./docs/posttrain/guides/grpo.md)                                                                                    |
+| PPO          | Actor-critic policy optimization, including embodied-agent training | [PPO](./docs/posttrain/guides/ppo.md) · [Embodied PPO examples](./docs/posttrain/howto/run-posttrain.md#8-embodied-ppo)    |
+| OPD          | On-policy distillation from a teacher model                         | [OPD](./docs/posttrain/guides/opd.md)                                                                                      |
+| DiffusionNFT | Online reinforcement learning for diffusion generators              | [DiffusionNFT](./docs/posttrain/guides/nft.md)                                                                             |
+| SFT          | Supervised fine-tuning                                              | —                                                                                                                          |
+
+Model integrations include Cosmos3, GR00T-N1.7, π0.5, Alpamayo through AlpaGym, Qwen and
+Qwen-VL families, and general Hugging Face text and vision-language backends. Algorithm support
+is defined by runtime and data contracts rather than a fixed model allowlist; shipped recipes
+demonstrate qualified combinations, while additional compatible models can use the documented
+model, DataPacker, reward, and simulator extension interfaces.
 
 ## Agent Skills
 
@@ -119,5 +164,6 @@ first; the skills above are referenced from there.
 | [Training](./docs/training.md)                               | Launching multi-GPU and multi-node runs; parallelism strategies; mixed precision; resuming.                                               |
 | [Inference (from a trained checkpoint)](./docs/inference.md) | Loading a trained checkpoint into one of the inference backends.                                                                          |
 | [Policy Server](./docs/action_policy_droid_server.md)        | Running the server-client pipeline for Cosmos3-Policy-DROID.                                                                              |
+| [Post-training and RL](./docs/posttrain/index.md)            | SFT, preference optimization, online RL, distillation, diffusion RL, embodied policies, and extension guides.                             |
 | [FAQ](./docs/faq.md)                                         | Troubleshooting (OOM, NCCL hangs, slow training), environment variables, and common pitfalls.                                             |
 | [AGENTS.md](./AGENTS.md) + [Agent Skills](#agent-skills)     | Repo map and task-specific `SKILL.md` files loaded automatically by AGENTS.md-aware coding agents (Claude Code, Codex CLI, Cursor, etc.). |

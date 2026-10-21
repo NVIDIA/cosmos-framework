@@ -13,9 +13,10 @@ import pydantic
 import tyro
 
 from cosmos_framework.inference.args import OmniSetupOverrides, is_reasoner_only, reasoner_only_overrides
-from cosmos_framework.inference.common.args import SampleOutputs, SetupOverrides, tyro_cli
+from cosmos_framework.inference.common.args import SampleOutputs, SetupOverrides, sample_output_dir, tyro_cli
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.utils import log
+from cosmos_framework.utils.distributed import barrier
 
 
 class InferenceArgs(pydantic.BaseModel):
@@ -31,7 +32,7 @@ class InferenceArgs(pydantic.BaseModel):
     """Setup arguments."""
 
 
-def inference(args: InferenceArgs):
+def inference(args: InferenceArgs) -> None:
     from cosmos_framework.inference.common.inference import sync_distributed_errors
 
     with sync_distributed_errors():
@@ -49,15 +50,25 @@ def inference(args: InferenceArgs):
             # Reasoner output is text, so no frames ever reach the video guardrail.
             setup_args.video_guardrail = False
             log.info("Reasoner-only inputs detected; generation-side modules will not be loaded")
+        if is_rank0():
+            # Record the resolved setup once; the recipe's checkpoint fields need not match the CLI
+            # loader arguments.
+            (setup_args.output_dir / "setup_args.json").write_text(setup_args.model_dump_json(indent=2))
         for sample_overrides in sample_overrides_list:
             assert sample_overrides.name
-            sample_overrides.output_dir = setup_args.output_dir / sample_overrides.name
+            sample_overrides.output_dir = sample_output_dir(setup_args.output_dir, sample_overrides.name)
             sample_overrides.download(sample_overrides.output_dir / "inputs")
+
+    # ``download_file`` materializes remote inputs on global rank 0; wait until they
+    # are available on the shared filesystem before other ranks validate the paths.
+    barrier()
 
     pipe = setup_args.get_inference_cls().create(setup_args)
 
     sample_args_list = []
     for overrides in sample_overrides_list:
+        # Sample preparation mutates overrides; skipped receipts must retain the request.
+        requested_args = overrides.model_dump(mode="json")
         try:
             sample_args_list.append(overrides.build_sample(model_config=pipe.model_config))
         except ValueError as e:
@@ -66,7 +77,7 @@ def inference(args: InferenceArgs):
             msg = f"Skipping sample '{overrides.name}': {e}"
             log.warning(msg)
             overrides.output_dir.mkdir(parents=True, exist_ok=True)
-            skip_output = SampleOutputs(args=overrides.model_dump(mode="json"), status="skip", message=msg)
+            skip_output = SampleOutputs(args=requested_args, status="skip", message=msg)
             (overrides.output_dir / "sample_outputs.json").write_text(skip_output.model_dump_json())
 
     pipe.generate(sample_args_list)
@@ -77,7 +88,7 @@ def inference(args: InferenceArgs):
         log.success(f"Saved benchmark to '{benchmark_file}'")
 
 
-def main():
+def main() -> None:
     args = tyro_cli(
         InferenceArgs,
         description=__doc__,

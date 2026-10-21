@@ -79,15 +79,17 @@ _INPUTS = [
 
 # Transfer (video2video, edge control) input, written to a temp file at run time
 # rather than committed under inputs/. Mirrors the cookbook
-# ``cookbooks/cosmos3/generator/transfer/specs/edge.json`` behavior — the edge
-# control hint with guidance=3.0 + control_guidance=1.5, which selects the
-# control-CFG path — but downscaled (480p / 10 steps / single 29-frame chunk)
+# ``.agents/skills/cookbooks/cosmos3/generator/transfer/specs/edge.json`` behavior
+# — the edge control hint with guidance=3.0 + control_guidance=1.5, which selects
+# the control-CFG path — but downscaled (480p / 10 steps / single 29-frame chunk)
 # for a fast smoke run. The control video is the exact same file the cookbook
-# uses, pulled from the public NVIDIA/cosmos GitHub raw URL; the prompt is a
-# compact caption of that clip (the dense cookbook caption is not needed to
-# exercise the path).
+# uses. This repository stores it in Git LFS, which the GPU workflow's checkout
+# does not fetch, so it is downloaded from the public NVIDIA/cosmos repository at
+# the commit that added it: changes to that repository's main branch cannot break
+# the download. The prompt is a compact caption of that clip (the dense cookbook
+# caption is not needed to exercise the path).
 _TRANSFER_CONTROL_URL = (
-    "https://github.com/NVIDIA/cosmos/raw/main/"
+    "https://github.com/NVIDIA/cosmos/raw/c2392d18924ac9df26d0d7c3cb6731f9926abcd2/"
     "cookbooks/cosmos3/generator/transfer/assets/edge/control_edge.mp4"
 )
 _TRANSFER_SPEC = {

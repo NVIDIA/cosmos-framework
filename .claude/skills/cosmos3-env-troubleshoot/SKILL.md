@@ -63,7 +63,7 @@ uv pip list | head -20
 3. **Reinstall uv + venv from scratch**:
 
    ```shell
-   curl -LsSf https://astral.sh/uv/install.sh | sh
+   curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
    uv python install --reinstall
    rm -rf .venv
    uv sync --all-extras --group=cu130-train --reinstall

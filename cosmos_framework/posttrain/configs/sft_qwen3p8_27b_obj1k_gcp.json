@@ -1,0 +1,30 @@
+{
+  "run": "-m cosmos_framework.posttrain.entrypoints.sft --config cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k.py",
+  "mode": "torchrun",
+  "nodes": 2,
+  "gpus_per_node": 4,
+  "account": "cosmos_base_training",
+  "partition": "batch_long",
+  "wckey": "p0",
+  "time": "7-00:00:00",
+  "timeout": 86400,
+  "submit_only": true,
+  "qos": "normal",
+  "cpus_per_task": 32,
+  "ray_port": 29500,
+  "output_root": "outputs/sft_obj1k",
+  "env": {
+    "SFT_MODEL_PATH": "/path/to/shared-storage",
+    "HF_HUB_CACHE": "/path/to/shared-storage",
+    "OMP_NUM_THREADS": "8",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "TOKENIZERS_PARALLELISM": "false"
+  },
+  "container_image": "/path/to/shared-storage",
+  "container_mounts": "/lustre:/lustre",
+  "container_name": "sft_obj1k_v2",
+  "venv": "/opt/venv/posttrain/bin/activate",
+  "no_pip": true
+}

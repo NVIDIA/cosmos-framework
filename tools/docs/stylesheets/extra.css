@@ -1,0 +1,53 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: OpenMDW-1.1
+ */
+
+/*
+ * Palette for `primary: custom` and `accent: custom` (tools/docs/mkdocs.yml).
+ * WCAG 2.x contrast ratios:
+ *   header text  #000000de on #76b900  7.6:1   (white on #76b900 is only 2.4:1)
+ *   light links  #3f6b00   on #ffffff  6.3:1,  hover #2f5200 9.0:1
+ *   dark links   #76b900   on #1e2029  6.7:1,  hover #9fd85a 9.6:1
+ */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #76b900;
+  --md-primary-fg-color--light: #8fd13f;
+  --md-primary-fg-color--dark: #5e9400;
+  --md-primary-bg-color: #000000de;
+  --md-primary-bg-color--light: #000000b3;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #2f5200;
+  --md-accent-fg-color--transparent: #2f52001a;
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: #ffffffb3;
+}
+
+[data-md-color-scheme="default"][data-md-color-primary="custom"] {
+  --md-typeset-a-color: #3f6b00;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-typeset-a-color: #76b900;
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: #9fd85a;
+  --md-accent-fg-color--transparent: #9fd85a1a;
+  --md-accent-bg-color: #000000de;
+  --md-accent-bg-color--light: #0000008a;
+}
+
+/* The Cosmos logo is detailed; the default 1.2rem makes it hard to read. */
+.md-header__button.md-logo img {
+  height: 1.6rem;
+}
+
+/* Wide tables scroll inside their own box instead of widening the page. */
+.md-typeset__scrollwrap,
+.md-typeset table:not([class]) {
+  max-width: 100%;
+  overflow-x: auto;
+}

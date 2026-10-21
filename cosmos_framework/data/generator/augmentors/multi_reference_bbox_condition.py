@@ -6,6 +6,8 @@
 Boxes use target-normalized xyxy coordinates and logical ``input_NN`` groups.
 References without boxes are retained, including pose, style, and attribute
 donors. A known empty bbox list leaves the images and prompt unchanged.
+Coordinate prompts default to integers in [0, 1000]. The normalized geometry
+stays in [0, 1]; ``normalized_01`` preserves prompts for older checkpoints.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from cosmos_framework.utils import log
 BoundingBox = tuple[float, float, float, float]
 ReferenceBBoxes = dict[str, list[BoundingBox]]
 BBoxConditionMode = Literal["none", "rendered", "coordinates"]
+BBoxCoordinateFormat = Literal["integer_1000", "normalized_01"]
 
 # Colors are indexed by the final reference position, including unboxed control
 # inputs. Layout is an additional reference and does not consume a palette slot.
@@ -113,6 +116,22 @@ def _draw_reference_number(image: Image.Image, position: tuple[int, int], index:
     draw.text((x + margin - left, y + margin - top), text, fill=text_color, font=font)
 
 
+def _format_coordinate_box(box: BoundingBox, coordinate_format: BBoxCoordinateFormat) -> str:
+    """Round half up to thousandths while keeping nonempty integer rectangles."""
+    if coordinate_format == "normalized_01":
+        return "[" + ", ".join(f"{coordinate:.6f}" for coordinate in box) + "]"
+    coordinates = [math.floor(coordinate * 1000 + 0.5) for coordinate in box]
+    # Sub-thousandth boxes can collapse after rounding. Preserve their positive
+    # extent with one integer unit, including boxes against the right/bottom edge.
+    for start, end in ((0, 2), (1, 3)):
+        if coordinates[start] == coordinates[end]:
+            if coordinates[end] < 1000:
+                coordinates[end] += 1
+            else:
+                coordinates[start] -= 1
+    return "[" + ", ".join(str(coordinate) for coordinate in coordinates) + "]"
+
+
 def build_bbox_condition(
     reference_images: list[Image.Image],
     prompt: str,
@@ -120,17 +139,23 @@ def build_bbox_condition(
     reference_keys: list[str],
     reference_bboxes: ReferenceBBoxes,
     mode: BBoxConditionMode,
+    *,
+    coordinate_format: BBoxCoordinateFormat = "integer_1000",
 ) -> tuple[list[Image.Image], str]:
     """Append a layout or coordinate section after resizing and reference shuffle.
 
     ``reference_bboxes`` is the validated result of ``parse_reference_bboxes``.
     ``reference_keys`` follows the current image order, including unboxed inputs.
     Target size is ``(width, height)``; target pixels are never used for rendering.
+    Coordinate text uses integers in [0, 1000] by default. Select
+    ``normalized_01`` for checkpoints trained with six-decimal [0, 1] text.
     """
     if mode not in ("none", "rendered", "coordinates"):
         raise ValueError(f"Unknown bbox conditioning mode: {mode!r}.")
     if mode == "none":
         return reference_images, prompt
+    if mode == "coordinates" and coordinate_format not in ("integer_1000", "normalized_01"):
+        raise ValueError(f"Unknown bbox coordinate format: {coordinate_format!r}.")
     if len(reference_images) != len(reference_keys) or len(set(reference_keys)) != len(reference_keys):
         raise ValueError("Reference images and unique reference keys must have the same length.")
     if not reference_images or len(reference_images) > MAX_BBOX_REFERENCE_IMAGES:
@@ -148,7 +173,7 @@ def build_bbox_condition(
             boxes = reference_bboxes.get(key, [])
             if not boxes:
                 continue
-            formatted = ["[" + ", ".join(f"{coordinate:.6f}" for coordinate in box) + "]" for box in boxes]
+            formatted = [_format_coordinate_box(box, coordinate_format) for box in boxes]
             coordinates = formatted[0] if len(formatted) == 1 else "[" + ", ".join(formatted) + "]"
             lines.append(f"<img-{index}>: {coordinates}")
         return reference_images, prompt + "\n\n" + "\n".join(lines)
@@ -186,12 +211,22 @@ class InjectMultiReferenceBBoxCondition(Augmentor):
     """Inject bbox conditioning after images, group keys, and prompt are shuffled."""
 
     mode: BBoxConditionMode
+    coordinate_format: BBoxCoordinateFormat
 
-    def __init__(self, mode: BBoxConditionMode, input_keys: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        mode: BBoxConditionMode,
+        input_keys: list[str] | None = None,
+        *,
+        coordinate_format: BBoxCoordinateFormat = "integer_1000",
+    ) -> None:
         super().__init__(input_keys or [])
         if mode not in ("rendered", "coordinates"):
             raise ValueError("The bbox augmentor requires rendered or coordinates mode.")
+        if coordinate_format not in ("integer_1000", "normalized_01"):
+            raise ValueError(f"Unknown bbox coordinate format: {coordinate_format!r}.")
         self.mode = mode
+        self.coordinate_format = coordinate_format
 
     def __call__(self, data_dict: dict) -> dict | None:
         try:
@@ -203,6 +238,7 @@ class InjectMultiReferenceBBoxCondition(Augmentor):
                 reference_keys=data_dict["source_reference_keys"],
                 reference_bboxes=data_dict["reference_bboxes"],
                 mode=self.mode,
+                coordinate_format=self.coordinate_format,
             )
         except (KeyError, ValueError) as error:
             log.warning(f"Skipping bbox sample {data_dict.get('__key__', 'unknown')!r}: {error}", rank0_only=False)

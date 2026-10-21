@@ -42,6 +42,7 @@ from cosmos_framework.model.generator.algorithm.loss.modality_reduction import (
 )
 from cosmos_framework.configs.base.defaults.joint_attention import JointAttnImplementation
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.configs.base.defaults.multiview_attention import upgrade_saved_multiview_attention
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
 from cosmos_framework.data.generator.action.utils.action_processing import (
     ActionProcessor,
@@ -120,6 +121,7 @@ from cosmos_framework.data.generator.sequence_packing.packers import (
     pack_multiview_action_conditioning,
     replicate_multiview_actions,
     uses_single_timestep,
+    validate_cross_view_fps,
 )
 from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
@@ -320,6 +322,9 @@ class OmniMoTModel(ImaginaireModel):
         # The largest descriptor moment magnitude of a posed item, which shows the moment unit in use.
         self._rigrope_largest_moment: float = 0.0
         self.config = config
+        # A checkpoint's saved config can predate the multiview attention fields. build_net and
+        # packing read the mask before the network would bring it up to date.
+        upgrade_saved_multiview_attention(getattr(config, "multiview_attention", None))
         log.info(f"OmniMoTModel: config {self.config}")
 
         # 0. Set up precision
@@ -579,6 +584,7 @@ class OmniMoTModel(ImaginaireModel):
                 multiview_action_conditioning=multiview_action_conditioning is not None,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 timestep_range=self.config.diffusion_expert_config.timestep_range,
+                timestep_embedding_chunk_size=self.config.timestep_embedding_chunk_size,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
                 action_io_projector_type=self.config.action_io_projector_type,
@@ -1008,6 +1014,25 @@ class OmniMoTModel(ImaginaireModel):
         """
         assert self.tokenizer_vision_gen is not None
         multiview_action_conditioning = getattr(self.config, "multiview_action_conditioning", None)
+        # Check source clocks before packing's fallback hides missing FPS.
+        if self.config.joint_attn_implementation == "multiview":
+            same_view_window = self.config.multiview_attention.mask.same_view_temporal_window
+            validate_cross_view_fps(
+                sequence_plans,
+                gen_data_clean,
+                separate_camera_items=(
+                    multiview_action_conditioning is not None and gen_data_clean.num_vision_items_per_sample is not None
+                ),
+                require_single_view=any(
+                    bounds is not None
+                    for bounds in (
+                        same_view_window.sensor_to_sensor_bounds,
+                        same_view_window.sensor_to_control_bounds,
+                        same_view_window.control_to_control_bounds,
+                        same_view_window.control_to_sensor_bounds,
+                    )
+                ),
+            )
         if multiview_action_conditioning is not None and gen_data_clean.num_vision_items_per_sample is not None:
             if skip_text_tokens or include_end_of_generation_token or initial_mrope_temporal_offset:
                 raise ValueError("Multiview action conditioning keeps sample-level text and no generation markers.")
@@ -2191,6 +2216,7 @@ class OmniMoTModel(ImaginaireModel):
                 method=self.config.lbl.method,
                 device_mesh=device_mesh,
                 context_parallel_mesh=context_parallel_mesh,
+                correct_cp_gradients=self.config.correct_cp_gradients,
             )
             if load_balancing_loss is not None:
                 total_loss += load_balancing_loss

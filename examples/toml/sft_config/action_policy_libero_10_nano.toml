@@ -12,7 +12,7 @@ experiment   = "action_policy_libero_nano"
 project      = "cosmos3_action_libero"
 group        = "action_sft"
 name         = "action_policy_libero_10_nano"
-wandb_mode   = "online"
+wandb_mode   = "disabled"
 
 [model]
 precision = "bfloat16"

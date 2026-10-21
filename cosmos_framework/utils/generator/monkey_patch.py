@@ -412,7 +412,7 @@ def patch_qwen3_vl_moe_grouped_mm_experts(model: torch.nn.Module) -> int:
       ``Qwen3VLMoeTextExpertsGroupedMm``. Those methods read ``gate_up_proj``
       ``[num_experts,hidden_size,2*moe_intermediate_size]``, ``down_proj``
       ``[num_experts,moe_intermediate_size,hidden_size]``, ``act_fn`` and ``top_k`` (the
-      expert count comes from the ``num_tokens_per_expert`` argument, not from ``self``).
+      expert count comes from the canonical expert weights).
       The HF experts module already owns the parameters and ``act_fn`` under identical
       names, so the module object is reused as-is and only ``top_k`` is attached. Nothing is
       re-parametrized: state-dict keys, the fused ``mlp.experts.*`` mapping in
@@ -455,7 +455,7 @@ def patch_qwen3_vl_moe_grouped_mm_experts(model: torch.nn.Module) -> int:
     if not transformers.__version__.startswith(_EXPECTED_TRANSFORMERS_VERSION_PREFIX):
         raise ValueError(f"monkey patching transformers version {transformers.__version__} is not supported")
 
-    # Local imports: moe_kernels imports triton at module scope, and the dense (non-MoE)
+    # Local imports: native_kernels imports triton at module scope, and the dense (non-MoE)
     # backbones must not pay that import.
     from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe import Qwen3VLMoeTextExpertsGroupedMm
     from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import (

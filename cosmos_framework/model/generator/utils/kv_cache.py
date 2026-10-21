@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as F
 
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
@@ -33,7 +34,6 @@ from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
 )
-from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 
 # See cosmos_framework/data/generator/sequence_packing/ for the canonical definition.
 SequencePack = dict[str, Any]
@@ -248,6 +248,14 @@ class KVCache:
             return frame_idx
         rolling_size = self.cache_size - self.attention_sink_size
         return self.attention_sink_size + ((frame_idx - self.attention_sink_size) % rolling_size)
+
+    def retained_frame_indices(self, next_frame_idx: int) -> tuple[int, ...]:
+        """Inspect populated history visible to the next frame, without decoding K/V."""
+        return tuple(
+            index
+            for index in self._history_frame_indices(next_frame_idx)
+            if self.k_cache[self._cache_index(index)] is not None and self.v_cache[self._cache_index(index)] is not None
+        )
 
     def _history_frame_indices(self, frame_idx: int) -> list[int]:
         """Return logical history frames in attention order for ``frame_idx``."""
@@ -766,8 +774,9 @@ class GenKVCache(KVCache):
     ) -> None:
         """Allocate the fixed-size K/V buffer used by CUDA Graph AR inference.
 
-        ``prefix_tokens`` reserves ``[und | curr]`` room ahead of the ``max_tokens`` history
-        region so the compiled block reads one contiguous ``[und | curr | hist | pad]`` buffer.
+        ``prefix_tokens`` reserves the prefix ahead of the ``max_tokens`` history workspace.
+        Ordinary AR reserves ``[und | curr]`` there; Transfer's numerical-preservation
+        path reserves only ``und`` and appends current-frame scratch after real history.
         ``batch_rows`` rows of that layout are laid end to end with a fixed row stride
         ``prefix_tokens + max_tokens`` (one row per batched sample; ``B=1`` is today's buffer).
         """
@@ -1075,7 +1084,7 @@ class GenKVCache(KVCache):
         the explicit ``history_frame_indices`` change, or the cache is invalidated
         by a store/reset.
 
-        With ``prefix_tokens`` every row is ``[und | curr | hist | pad]`` with stride
+        With ``prefix_tokens`` every row has a text prefix followed by a history workspace with stride
         ``R = prefix_tokens + max_tokens`` and the buffer is ``[1, batch_rows * R, H, D]``; the
         history of row ``r`` lives at ``r*R + prefix_tokens``.  ``und_kv`` (``[B,U,H,D]`` each,
         ``U`` = padded und length) is copied once per distinct und tensor pair into the und
@@ -1131,7 +1140,7 @@ class GenKVCache(KVCache):
                     if real_len < 0 or real_len > und_capacity:
                         raise AssertionError(f"und length {real_len} outside [0, {und_capacity}] for row {row}")
                     end = row * row_stride + und_capacity
-                    # Right-aligned: every row's current frame starts at the same offset ``U``.
+                    # Right-aligned: every row's text ends at the same offset ``U``.
                     self._static_k_buf[0, end - real_len : end].copy_(k_und[row, :real_len])  # [u_r,H,D]
                     self._static_v_buf[0, end - real_len : end].copy_(v_und[row, :real_len])  # [u_r,H,D]
                 self._static_und_key = und_key
@@ -1814,6 +1823,25 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
         num_frames, height, width = shape
         return num_frames * (self.num_action_tokens_per_supertoken + height * width)
 
+    def load_clean_gen_kv(
+        self,
+        cache: list[tuple[torch.Tensor, torch.Tensor]],  # per-layer K/V: each [1,S_clean,H_kv/CP,D]
+    ) -> None:
+        """Reuse detached, selected clean sensor K/V without running the clean pass.
+
+        This is the maskless multiview replay path: text and controls are still
+        recomputed with gradients in the full-prefix noisy forward.
+        """
+        if self.selected_clean_gen_token_indexes is None or self.target_only_no_text_pass2:
+            raise ValueError("Reusing clean K/V requires selected multiview sensor memory.")
+        if len(cache) != len(self._clean_gen_kv):
+            raise ValueError("Reused clean K/V must contain every transformer layer.")
+        for key, value in cache:  # each [1,S_clean,H_kv/CP,D]
+            if key.shape != value.shape or key.shape[1] != self.selected_clean_gen_padded_capacity:
+                raise ValueError("Reused clean K/V must match the selected replay capacity.")
+        self._clean_gen_kv = [(key.detach(), value.detach()) for key, value in cache]  # each [1,S_clean,H_kv/CP,D]
+        self.pass_number = 2
+
     def init(self, hidden_states: dict, device: torch.device) -> None:
         """Initialize replay metadata and validate the target-only GEN layout."""
         super().init(hidden_states, device)
@@ -2100,6 +2128,7 @@ class MultiviewARMemoryValue(MemoryValue):
     cached_gen_v: torch.Tensor | None  # [1,S_memory,H_kv,D] or None during prefill
     text_sink_layer: RollingTextSinkLayer | None = None
     prompt_layout: RollingPromptLayout | None = None
+    post_saturation_static_compile: bool = False
 
 
 class MultiviewARMemoryState(MemoryState):
@@ -2110,6 +2139,8 @@ class MultiviewARMemoryState(MemoryState):
     read-only; prefill/refresh states select clean GEN K/V and write them into
     either a contiguous suffix range or explicitly indexed cache slots.
     """
+
+    post_saturation_static_compile: bool = False
 
     def __init__(
         self,
@@ -2175,6 +2206,7 @@ class MultiviewARMemoryState(MemoryState):
             cached_gen_v=cached_v,
             text_sink_layer=self.text_sink_layers[layer_idx] if self.text_sink_layers is not None else None,
             prompt_layout=self.prompt_layout,
+            post_saturation_static_compile=self.post_saturation_static_compile,
         )
 
     def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
@@ -2234,19 +2266,21 @@ class ARMemoryValue(MemoryValue):
 
     The static flavor hands the block one pooled buffer per K and V,
     ``kv_k_static`` / ``kv_v_static`` ``[1, S_und + gen_len + S_hist_max, H_kv, D]``,
-    laid out ``[und | curr | hist | pad]``: the und K/V are copied in once per
-    generation, the block writes the current frame in place at
-    ``static_curr_offset`` (= ``S_und``) and the history is rebuilt outside the
-    compiled region at ``static_hist_offset`` (= ``S_und + gen_len``).  This is
-    the same token order the block used to materialise with ``cat`` every
-    forward, so attention reads identical bytes without the 81 MB copy.  For a
-    single sample ``und_k_cached`` / ``gen_k_buf_full`` stay populated as *views* of
-    that buffer (the und prefix and the ``[hist | pad]`` window of ``max_gen_tokens``),
-    so readers of the pre-composite layout see the same bytes; a hand-built value with
+    laid out ``[und | curr | hist | pad]`` by default. The current frame is written
+    at ``static_curr_offset`` (= ``S_und``), ahead of the fixed history region.
+    Transfer uses ``preserve_transfer_numerics=True`` for ``[und | hist | curr | pad]``:
+    the current frame is written just before each device-side varlen row end and
+    ``static_hist_offset`` is ``S_und`` instead. This preserves the eager token
+    order without materialising the whole sequence with ``cat`` every forward.
+    Both layouts prime und K/V once per generation and rebuild history outside
+    the compiled region. For a single sample ``und_k_cached`` / ``gen_k_buf_full``
+    stay populated as *views* of that buffer (the und prefix and the history
+    workspace of ``max_gen_tokens``), whose valid history prefix excludes mutable
+    current scratch rows. A hand-built value with
     ``kv_k_static=None`` and those two set still takes the legacy ``cat`` path in
     ``attention_AR_gen_only``.  With ``batch_size > 1``
     the buffer holds one such row per sample at stride ``static_row_stride`` (``[1, B*R, H, D]``),
-    the und of row ``r`` right-aligned to end at ``r*R + static_curr_offset``, and
+    the und of row ``r`` right-aligned to end at ``r*R + S_und``, and
     ``cu_seqlens_q_t`` / ``cu_seqlens_kv_t`` are ``[2B]``: entry ``2r`` is row ``r`` and entry
     ``2r+1`` a zero-query dummy sequence that owns the gap up to the next row (the varlen
     kernel wants adjacent sequences and skips zero-query entries).  ``B=1`` collapses to the
@@ -2268,7 +2302,7 @@ class ARMemoryValue(MemoryValue):
         frame_idx: Current frame index (0-based).
         gen_len: Number of real (unpadded) gen tokens in the current frame.
         gen_k_buf_full: ``[1, max_gen_tokens, H_kv, D]`` or ``None`` —
-            static-shape gen K buffer (real prefix + zero-padded tail).
+            static-shape gen K workspace (real history prefix + current scratch/padding).
         gen_v_buf_full: ``[1, max_gen_tokens, H_kv, D]`` or ``None`` —
             static-shape gen V buffer.
         real_gen_cache_len_t: ``int32`` tensor of shape ``[1]`` or
@@ -2296,6 +2330,9 @@ class ARMemoryValue(MemoryValue):
             static-shape buffers + varlen offsets are populated and the
             ``attention_AR_gen_only`` static-shape branch must be taken;
             ``False`` ⇒ dynamic-shape (eager / compile-no-CG / frame 0) flavor.
+        preserve_transfer_numerics: Internal RGB Transfer request policy. The
+            decoder preserves native normalization/casts; static attention also
+            preserves history/current ordering. Other requests keep their existing path.
         post_saturation_static_compile: Marks dynamic-shape AR calls whose
             visible rolling KV history has reached a fixed window length, so
             the decoder layer may route to a separate static torch.compile path.
@@ -2323,7 +2360,30 @@ class ARMemoryValue(MemoryValue):
     cu_seqlens_kv_t: torch.Tensor | None = None
     max_seqlen_KV: int = 0
     for_cuda_graphs: bool = False
+    preserve_transfer_numerics: bool = False
     post_saturation_static_compile: bool = False
+
+
+def write_current_kv_to_static_buffer(
+    k_full: torch.Tensor,
+    v_full: torch.Tensor,
+    k_curr: torch.Tensor,
+    v_curr: torch.Tensor,
+    cu_seqlens_kv: torch.Tensor,
+) -> None:
+    """Append each row's current scratch K/V after its committed history in place.
+
+    Current K/V has shape ``[B, G, H, D]``; the pooled workspace is ``[1, B*R, H, D]``.
+    Odd varlen offsets are real row ends (even entries between rows belong to
+    zero-query padding). Keeping the offsets on device lets one compiled graph
+    follow growing histories and independent row resets without host synchronization.
+    This writes only the read workspace, never the source-of-truth history cache.
+    """
+    gen_len = k_curr.shape[1]
+    starts = cu_seqlens_kv[1::2].to(torch.int64) - gen_len
+    indices = starts[:, None] + torch.arange(gen_len, device=k_full.device, dtype=torch.int64)
+    k_full.index_copy_(1, indices.flatten(), k_curr.flatten(0, 1).unsqueeze(0))
+    v_full.index_copy_(1, indices.flatten(), v_curr.flatten(0, 1).unsqueeze(0))
 
 
 class ARMemoryState(MemoryState):
@@ -2366,6 +2426,9 @@ class ARMemoryState(MemoryState):
         null_action_supertokens: When ``True``, zero out V for null
             action slots in ``write_for_layer``.
         for_cuda_graphs: Enable the static-shape ``read_for_layer`` path.
+        preserve_transfer_numerics: Internal RGB Transfer request policy, passed
+            to every decoder block in both dynamic and static memory values.
+            Defaults to the existing normalization and current-first static AR layout.
         num_kv_heads: KV head count; required when ``for_cuda_graphs=True``
             for empty-cache zero buffers at frame 0 (unused in the
             standard flow since frame 0 takes the dynamic-shape
@@ -2414,6 +2477,7 @@ class ARMemoryState(MemoryState):
         null_action_supertokens: bool = False,
         *,
         for_cuda_graphs: bool = False,
+        preserve_transfer_numerics: bool = False,
         num_kv_heads: int | None = None,
         head_dim: int | None = None,
         write_gen_cache: bool = True,
@@ -2437,6 +2501,7 @@ class ARMemoryState(MemoryState):
         self.kv_head_shard_size = kv_head_shard_size
         self._gen_len: int = 0
         self.for_cuda_graphs = for_cuda_graphs
+        self.preserve_transfer_numerics = preserve_transfer_numerics
         self.post_saturation_static_compile = post_saturation_static_compile
         self.static_und_cache_max_len = static_und_cache_max_len
         self.coarse_cuda_graph: bool = coarse_cuda_graph
@@ -2492,7 +2557,7 @@ class ARMemoryState(MemoryState):
         self._max_seqlen_KV: int = 0
         # Explicit logical history entries for the static Transfer path (None = ring-native history).
         self._static_history_indices: tuple[int, ...] | None = None
-        # ``[und | curr]`` tokens ahead of the history region in the composite static buffer.
+        # Text prefix, plus current-frame scratch for the ordinary AR layout.
         self._static_prefix_tokens: int = 0
         # Per-row physical slot plans (batched Transfer / per-row restarts); None = shared plan.
         self._static_row_slots: list[list[int]] | None = None
@@ -2586,7 +2651,9 @@ class ARMemoryState(MemoryState):
         # initialized; for safety fall back to float32 if not.
         und_k = self.dual_kv_cache[0].und_cache.k_und
         self._dtype = und_k.dtype if und_k is not None else torch.float32
-        self._static_prefix_tokens = self.dual_kv_cache[0].und_cache.cached_len + self._gen_len
+        self._static_prefix_tokens = self.dual_kv_cache[0].und_cache.cached_len + (
+            0 if self.preserve_transfer_numerics else self._gen_len
+        )
         if self.coarse_cuda_graph and self._real_gen_cache_len_t is not None:
             # Whole-forward capture: ``init()`` runs inside the recorded region.  The
             # per-frame offset values are owned by ``prepare_for_coarse_cuda_graph_replay``;
@@ -2667,7 +2734,7 @@ class ARMemoryState(MemoryState):
             cu_q_values = [0, self._gen_len]
             cu_kv_values = [0, real_total_kv_len]
         else:
-            # Row r: [pad | und_r right-aligned to r*R+U | curr at r*R+U | hist_r | pad]; entry 2r is the
+            # Row r has right-aligned text, then current/history in the selected order; entry 2r is the
             # row, entry 2r+1 the zero-query dummy that owns the gap to the next row.
             und_lens = und_cache.cached_lens if len(und_cache.cached_lens) == rows else (s_und,) * rows
             cu_q_values, cu_kv_values = [0], []
@@ -2808,6 +2875,7 @@ class ARMemoryState(MemoryState):
                     cu_seqlens_kv_t=cu_seqlens_kv_t,
                     max_seqlen_KV=max_total_kv_len,
                     for_cuda_graphs=False,
+                    preserve_transfer_numerics=self.preserve_transfer_numerics,
                     post_saturation_static_compile=True,
                 )
             return ARMemoryValue(
@@ -2821,10 +2889,11 @@ class ARMemoryState(MemoryState):
                 gen_lens=self._gen_lens,
                 und_lens=(cache.und_cache.cached_lens if cache.und_cache.is_initialized else self._current_und_lens),
                 for_cuda_graphs=False,
+                preserve_transfer_numerics=self.preserve_transfer_numerics,
                 post_saturation_static_compile=self.post_saturation_static_compile,
             )
 
-        # Static-shape branch: hand the layer one composite ``[und | curr | hist | pad]``
+        # Static-shape branch: hand the layer one composite K/V
         # buffer per K and V plus the varlen offset tensors.  Shapes and addresses are
         # constant across frames so a single CUDA-graph capture replays; the und region
         # is primed once per generation and the history region rebuilt per frame here
@@ -2837,14 +2906,15 @@ class ARMemoryState(MemoryState):
         assert self._num_kv_heads is not None
         assert self._head_dim is not None
         s_und = cache.und_cache.cached_len
-        assert s_und + self._gen_len == self._static_prefix_tokens, (
+        expected_prefix = s_und + (0 if self.preserve_transfer_numerics else self._gen_len)
+        assert expected_prefix == self._static_prefix_tokens, (
             f"static prefix mismatch: und={s_und} gen={self._gen_len} prefix={self._static_prefix_tokens}"
         )
         rows = self._batch_size
         und_lens = cache.und_cache.cached_lens if len(cache.und_cache.cached_lens) == rows else None
         kv_k_static, kv_v_static, _ = cache.gen_cache.fetch_kv_static(
             self.frame_idx,
-            self._max_gen_cache_tokens,
+            self._max_gen_cache_tokens + (self._gen_len if self.preserve_transfer_numerics else 0),
             self._tokens_per_frame,
             num_heads=self._num_kv_heads,
             head_dim=self._head_dim,
@@ -2862,7 +2932,8 @@ class ARMemoryState(MemoryState):
         torch._dynamo.mark_static(kv_k_static, 1)
         torch._dynamo.mark_static(kv_v_static, 1)
         # Legacy single-sample views of the composite buffer: the und prefix and the
-        # ``[hist | pad]`` window.  No copies; the block itself reads ``kv_k_static``.
+        # history workspace (valid history followed by current scratch/padding).
+        # No copies; the block itself reads ``kv_k_static``.
         # Batched rows keep them ``None`` (per-row right-aligned und, strided rows).
         hist_start = self._static_prefix_tokens
         hist_end = hist_start + self._max_gen_cache_tokens
@@ -2892,6 +2963,7 @@ class ARMemoryState(MemoryState):
             cu_seqlens_kv_t=self._cu_seqlens_kv_t,
             max_seqlen_KV=self._max_seqlen_KV,
             for_cuda_graphs=True,
+            preserve_transfer_numerics=self.preserve_transfer_numerics,
             post_saturation_static_compile=False,
         )
 
@@ -2955,7 +3027,8 @@ class ARMemoryState(MemoryState):
         for cache in self.dual_kv_cache:
             cache.gen_cache.fetch_kv_static(
                 frame_idx,
-                self._max_gen_cache_tokens,
+                self._max_gen_cache_tokens
+                + (self._gen_len if self.for_cuda_graphs and self.preserve_transfer_numerics else 0),
                 self._tokens_per_frame,
                 num_heads=self._num_kv_heads,
                 head_dim=self._head_dim,

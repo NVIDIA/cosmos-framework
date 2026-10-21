@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+interface:
+  display_name: "Cosmos3 Nano Sim Bimanual Troubleshooting"
+  short_description: "Diagnose single-view bimanual workflow failures"
+  default_prompt: "Use $cosmos3-nano-sim-bimanual-troubleshooting to diagnose a single-view training, inference, or evaluation failure."
