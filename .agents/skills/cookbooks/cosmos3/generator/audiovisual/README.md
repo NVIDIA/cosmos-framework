@@ -1,5 +1,8 @@
 # Cosmos3 Generator Audiovisual Examples
 
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
+
 Generate images and video (with optional audio) from text, image or video prompts with
 `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Edge`, and the published four-step
 distilled Cosmos3-Super students across Cosmos Framework, Diffusers, vLLM-Omni, TRT-LLM
