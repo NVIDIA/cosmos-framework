@@ -425,12 +425,121 @@ def _flash_attn_interface() -> ModuleType:
     return import_module("flash_attn.cute.interface")
 
 
+def _torch_replay(device: torch.device) -> bool:
+    """Whether gapped replay runs in PyTorch (:func:`_torch_varlen_fwd`): on a GPU FA4 has no
+    kernels for (sm120: RTX PRO 6000 / RTX 50 Blackwell), or with ``COSMOS_GAPPED_REPLAY_TORCH=1``.
+    Forward only: inference."""
+    import os
+
+    if os.environ.get("COSMOS_GAPPED_REPLAY_TORCH") == "1":
+        return True
+    major, minor = torch.cuda.get_device_capability(device)
+    return (major, minor) != (9, 0) and major != 10
+
+
+def _torch_varlen_fwd(
+    q: torch.Tensor,  # [N*G,H_KV,D]
+    k: torch.Tensor,  # [K_span,H_KV,D]
+    v: torch.Tensor,  # [K_span,H_KV,Dv]
+    plan: "_VarlenGather",
+    scale: float,
+    out: torch.Tensor,  # [N*G,H_KV,Dv], written on segment rows only
+    lse: torch.Tensor,  # [H_KV,N*G] FP32, written on segment rows only
+) -> None:
+    """FA4's non-causal varlen forward with ``seqused`` (what gapped replay launches), in PyTorch:
+    each segment's ``used_q`` rows attend to its ``used_k`` keys; other rows are left as they are.
+
+    The segments' used rows are gathered into one packed batch for PyTorch's FlashAttention-2
+    varlen kernel (``aten._flash_attention_forward``, which has no ``seqused_q``), and scattered
+    back. Head sizes FlashAttention-2 does not take run in FP32 matmuls."""
+    if plan.empty_q is not None:
+        out[plan.empty_q] = 0
+        lse[:, plan.empty_q] = -torch.inf
+    if plan.q is None:
+        return
+    queries, keys, values = plan.take(q, plan.q), plan.take(k, plan.k), plan.take(v, plan.k)
+    if q.shape[-1] == v.shape[-1] and q.shape[-1] <= 256 and q.dtype in (torch.float16, torch.bfloat16):
+        result, block_lse, *_ = torch.ops.aten._flash_attention_forward(
+            queries, keys, values, plan.cu_q, plan.cu_k, plan.max_q, plan.max_k, 0.0, False, False, scale=scale
+        )  # [n,H_KV,Dv], [H_KV,n]
+    else:
+        result, block_lse = _matmul_varlen_fwd(queries, keys, values, plan, scale)
+    plan.put(out, plan.q, result.to(out.dtype))
+    lse[:, plan.q] = block_lse
+
+
+class _VarlenGather:
+    """Which rows of a gapped varlen launch are used, packed for a dense varlen kernel."""
+
+    def __init__(self, cu_q: torch.Tensor, used_q: torch.Tensor, cu_k: torch.Tensor, used_k: torch.Tensor) -> None:
+        device = cu_q.device
+        qs, qn = cu_q[:-1].tolist(), used_q.tolist()
+        ks, kn = cu_k[:-1].tolist(), used_k.tolist()
+        live = [(a, n, b, m) for a, n, b, m in zip(qs, qn, ks, kn, strict=True) if n > 0 and m > 0]
+        empty = [(a, n) for a, n, m in zip(qs, qn, kn, strict=True) if n > 0 and m <= 0]
+        self.empty_q = self._rows([(a, n) for a, n in empty], device) if empty else None
+        if not live:
+            self.q = self.k = None
+            return
+        self.q = self._rows([(a, n) for a, n, _, _ in live], device)
+        self.k = self._rows([(b, m) for _, _, b, m in live], device)
+        self.cu_q = torch.tensor([0, *itertools.accumulate(n for _, n, _, _ in live)], device=device, dtype=torch.int32)
+        self.cu_k = torch.tensor([0, *itertools.accumulate(m for _, _, _, m in live)], device=device, dtype=torch.int32)
+        self.max_q = max(n for _, n, _, _ in live)
+        self.max_k = max(m for _, _, _, m in live)
+        self.lengths = [(n, m) for _, n, _, m in live]
+
+    @staticmethod
+    def _rows(ranges: list[tuple[int, int]], device: torch.device) -> slice | torch.Tensor:
+        """A slice when the ranges are back to back, else the row indexes."""
+        if all(a + n == b for (a, n), (b, _) in zip(ranges, ranges[1:])):
+            return slice(ranges[0][0], ranges[-1][0] + ranges[-1][1])
+        return torch.cat([torch.arange(a, a + n, device=device) for a, n in ranges])
+
+    @staticmethod
+    def take(tensor: torch.Tensor, rows: slice | torch.Tensor) -> torch.Tensor:
+        return tensor[rows] if isinstance(rows, slice) else tensor.index_select(0, rows)
+
+    @staticmethod
+    def put(tensor: torch.Tensor, rows: slice | torch.Tensor, values: torch.Tensor) -> None:
+        if isinstance(rows, slice):
+            tensor[rows] = values
+        else:
+            tensor.index_copy_(0, rows, values)
+
+
+def _matmul_varlen_fwd(
+    queries: torch.Tensor,  # [n,H_KV,D]
+    keys: torch.Tensor,  # [m,H_KV,D]
+    values: torch.Tensor,  # [m,H_KV,Dv]
+    plan: _VarlenGather,
+    scale: float,
+    block_rows: int = 2048,
+) -> tuple[torch.Tensor, torch.Tensor]:  # [n,H_KV,Dv], [H_KV,n] FP32
+    out = queries.new_empty((queries.shape[0], queries.shape[1], values.shape[-1]), dtype=torch.float32)
+    lse = queries.new_empty((queries.shape[1], queries.shape[0]), dtype=torch.float32)
+    q0 = k0 = 0
+    for qn, kn in plan.lengths:
+        key = keys[k0 : k0 + kn].float().transpose(0, 1)  # [H_KV,kn,D]
+        value = values[k0 : k0 + kn].float().transpose(0, 1)  # [H_KV,kn,Dv]
+        for lo in range(q0, q0 + qn, block_rows):
+            hi = min(lo + block_rows, q0 + qn)
+            scores = torch.matmul(queries[lo:hi].float().transpose(0, 1), key.transpose(1, 2)) * scale
+            block_lse = torch.logsumexp(scores, dim=-1)  # [H_KV,r]
+            out[lo:hi] = torch.matmul(torch.exp(scores - block_lse[..., None]), value).transpose(0, 1)
+            lse[:, lo:hi] = block_lse
+        q0, k0 = q0 + qn, k0 + kn
+    return out, lse
+
+
 def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     """Why gapped replay cannot run on ``device``, or ``None`` if it can."""
     if device.type != "cuda":
         return f"it needs a CUDA device, got {device}"
     if torch.version.hip is not None:
         return "it needs NVIDIA CUDA, not ROCm"
+    if _torch_replay(device):
+        return None
     major, minor = torch.cuda.get_device_capability(device)
     if (major, minor) != (9, 0) and major != 10:
         # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
@@ -599,6 +708,7 @@ class _Runtime:
     ) -> None:
         q_values: list[int] = []
         k_values: list[int] = []
+        self.torch_gathers: dict[tuple[int, int], _VarlenGather] = {}
 
         def launch(q_segments: list[tuple[int, int]], q_total: int, k_segments: list[tuple[int, int]]) -> _Launch:
             # FA4 reads segment i at start cu_seqlens[i] with length seqused[i]; cu_seqlens[-1] is the span.
@@ -844,7 +954,8 @@ def _gapped_replay_forward(
     handle: torch.Tensor,  # [1] int64 on CPU
 ) -> tuple[torch.Tensor, torch.Tensor]:  # [1,Q,H,Dv], [1,Q,H] FP32
     """Run each part's native forward and merge by FP32 log-sum-exp. Rows nothing reaches are zero."""
-    flash_attn = _flash_attn_interface()
+    torch_replay = _torch_replay(q.device)
+    flash_attn = None if torch_replay else _flash_attn_interface()
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"Query heads ({q.shape[2]}) must be a multiple of KV heads ({k.shape[2]}).")
     runtime = _runtime(handle)
@@ -866,6 +977,14 @@ def _gapped_replay_forward(
             cu_q, used_q, cu_k, used_k = runtime.segment_tensors(launch, fold)
             k_span = k_part[launch.k_lo : launch.k_hi]  # [K_span,H_KV,D]
             v_span = v_part[launch.k_lo : launch.k_hi]  # [K_span,H_KV,Dv]
+            if torch_replay:
+                # Built once per launch and fold: the segment lengths are read on the host.
+                gather = runtime.torch_gathers.get((launch.offset, fold))
+                if gather is None:
+                    gather = runtime.torch_gathers[launch.offset, fold] = _VarlenGather(cu_q, used_q, cu_k, used_k)
+                _torch_varlen_fwd(q_part, k_span, v_span, gather, dim**-0.5, out, lse)
+                del k_span, v_span
+                continue
             flash_attn._flash_attn_fwd(
                 q_part,
                 k_span,
