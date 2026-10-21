@@ -153,7 +153,7 @@ content-policy and face-privacy protections. Refer to
 Refer to [License and Notices](license.md) for the terms. This cookbook is
 licensed under the repository [LICENSE](../../../../../LICENSE). The running NIM
 serves its license at `/v1/license`. The image also contains product terms,
-notices, component licenses, and the package-modification source described in
+notices, and component licenses. Python package licenses are listed in
 [Acknowledgements](acknowledgements/README.md).
 
 The NIM is distributed as a container image through the NVIDIA NGC Catalog.

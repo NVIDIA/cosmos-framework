@@ -32,7 +32,6 @@ you deploy so the terms match your deployment:
 | `/opt/nim/MODEL_LICENSE` | Model terms |
 | `/opt/nim/NOTICE` | Product notices and contact information |
 | `/opt/nim/licenses/` | Included component licenses and notices |
-| `/usr/share/cosmos3/oss-source/` | Package-modification script, source manifest, reproduction instructions, and checksums for the removal of unused Berkeley DB adapters |
 
 ## Acknowledgements
 
