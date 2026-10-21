@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Cosmos3 NIM API Reference
+# API Reference
 
 Use this compact reference for runtime routing, the shared Generator request
 envelope, media inputs, and the common Generator response. Task-specific rules

@@ -139,7 +139,7 @@ pages and examples as their source of truth and default to read-only assistance.
 ### Operate
 
 - [Operations and Troubleshooting](operations.md)
-- [Monitoring With Prometheus and Grafana](monitoring.md)
+- [Monitoring](monitoring.md)
 - [Release Notes](release-notes.md)
 - [License and Notices](license.md)
 - [Acknowledgements](acknowledgements/README.md)

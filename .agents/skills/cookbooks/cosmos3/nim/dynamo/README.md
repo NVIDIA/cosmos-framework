@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Cosmos3 Reasoner With Dynamo
+# Dynamo Overview
 
 Refer to [Dynamo Configuration](../configuration.md#dynamo-configuration) for worker
 enablement, discovery, proxy settings, and

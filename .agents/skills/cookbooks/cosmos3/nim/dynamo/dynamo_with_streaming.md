@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Deploy Cosmos3 Reasoner With Dynamo Streaming
+# Dynamo With Streaming
 
 Use [`reasoner_with_streaming.yaml`](reasoner_with_streaming.yaml) for Chat
 Completions plus persistent video sessions over REST on NVIDIA Dynamo. The frontend and workers

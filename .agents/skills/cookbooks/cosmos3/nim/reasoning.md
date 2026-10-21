@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Reason Over Images and Video With the Cosmos3 NIM
+# Reasoning
 
 Use this page for Cosmos3 Reasoner requests through OpenAI-compatible Chat
 Completions and Responses APIs. These workflows require a running **Reasoner**

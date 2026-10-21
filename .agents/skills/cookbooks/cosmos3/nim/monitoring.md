@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Monitor the Cosmos3 NIM With Prometheus and Grafana
+# Monitoring
 
 Scrape the NIM's Prometheus metrics and chart them in Grafana. The steps apply
 to both the Generator and the Reasoner.

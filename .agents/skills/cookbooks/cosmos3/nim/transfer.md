@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Control Video Generation With Cosmos3 Transfer
+# Transfer
 
 Guide Generator output with edge, blur, depth, segmentation, or
 world-space-map (WSM) video controls: send `POST /v1/infer` with

@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Stream Video Frames With the Cosmos3 NIM Reasoner
+# Streaming Video
 
 The streaming API maintains a reasoning session across a sequence of image
 frames. Your client decodes or captures the video, sends one JPEG or PNG at a

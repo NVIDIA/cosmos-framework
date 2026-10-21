@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Deploy the Cosmos3 NIM With Helm
+# Helm Deployment
 
 Use this page to deploy the Cosmos3 NIM on Kubernetes with the shared
 `nim-wfm` Helm chart. Model selection, hardware floors, and verification are

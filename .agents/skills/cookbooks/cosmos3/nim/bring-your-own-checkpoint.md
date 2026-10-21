@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Bring Your Own Cosmos3 Checkpoint
+# Bring Your Own Checkpoint
 
 Use this page to replace the selected Generator or Reasoner checkpoint while
 preserving the Cosmos3 NIM server, profile selection, and runtime contract.

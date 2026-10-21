@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Use Cosmos3 Action Capabilities Through the Cosmos3 NIM
+# Action
 
 Send forward dynamics, policy, and inverse dynamics requests to a compatible
 **Generator** with synchronous JSON `POST /v1/infer`. The `model_mode` field

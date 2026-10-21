@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Deploy Cosmos3 Reasoner With Dynamo
+# Dynamo Deployment
 
 Run an NVIDIA Dynamo frontend with Cosmos3 Reasoner workers on Kubernetes. This
 example uses a pinned Dynamo frontend image and a Cosmos3 NIM worker image.
