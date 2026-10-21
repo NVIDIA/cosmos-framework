@@ -184,6 +184,7 @@ By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp
   - `throughput`: No context parallelism (`cp=cfgp=1`); the model is sharded across all GPUs and a single replica processes the batch. Used for batch jobs.
 - `--dp-shard-size`: Number of ranks the model is sharded over (FSDP). Defaults to all ranks (`WORLD_SIZE`).
 - `--max-num-seqs`: Maximum number of samples batched together per replica.
+- `--use-batched-cfg`: Run the two classifier-free guidance branches (conditional and unconditional) as one batched forward of size 2N instead of two sequential N-forwards. Off by default. This does not reduce the work CFG costs, so it only pays off while a single N-forward leaves the GPU underutilized — small images, short clips, low step counts. Long or high-resolution workloads already saturate the device, where it gives nothing back and raises peak activation memory, so measure your own workload before enabling it. Ignored when `--cfgp-size` is greater than 1, since CFG parallelism splits the same two branches across GPUs and takes precedence.
 
 ## Sample Arguments
 

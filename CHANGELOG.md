@@ -3,6 +3,7 @@
 ## Unreleased
 
 - New features
+  - Add `--use-batched-cfg` to run both [classifier-free guidance branches in one forward](./docs/inference.md#parallelism-arguments) on underutilized workloads.
 
 - Breaking changes
 
