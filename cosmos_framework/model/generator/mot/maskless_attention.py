@@ -51,6 +51,7 @@ import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from itertools import accumulate, pairwise
 from types import ModuleType
 from typing import Any, NamedTuple
@@ -74,7 +75,6 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _teacher_forcing_pair_predicate,
 )
 from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
-from cosmos_framework.model.generator.mot.maskless_attention_compat import sm120_gapped_forward_unavailable_reason
 
 _ACCUMULATE_BLOCK_ROWS = 32
 
@@ -436,16 +436,18 @@ def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     if (major, minor) not in ((9, 0), (12, 0)) and major != 10:
         # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
         # the segment isolation and untouched gap rows required by both paths.
-        return (
-            "it needs FlashAttention-4 on Hopper (sm90), Blackwell (sm100/sm103), "
-            f"or experimental SM120 forward replay, got sm{major}{minor}"
-        )
+        return f"it needs FlashAttention-4 on Hopper (sm90), Blackwell (sm100/sm103), or experimental SM120, got sm{major}{minor}"
     try:
-        backend = _flash_attn_interface()
+        _flash_attn_interface()
     except ImportError as error:
         return f"it needs FlashAttention-4 (flash_attn.cute.interface), which could not be imported: {error}"
     if (major, minor) == (12, 0):
-        return sm120_gapped_forward_unavailable_reason(backend)
+        # Older FA4 releases lack the invalid-work-tile fix from upstream PR #2763.
+        try:
+            if version("flash-attn-4") != "4.0.0b30":
+                return "SM120 gapped replay needs flash-attn-4==4.0.0b30 (FA4 PR #2763 invalid-tile fix)"
+        except PackageNotFoundError:
+            return "SM120 gapped replay needs flash-attn-4 distribution metadata"
     return None
 
 
@@ -850,12 +852,9 @@ def _gapped_replay_forward(
     handle: torch.Tensor,  # [1] int64 on CPU
 ) -> tuple[torch.Tensor, torch.Tensor]:  # [1,Q,H,Dv], [1,Q,H] FP32
     """Run each part's native forward and merge by FP32 log-sum-exp. Rows nothing reaches are zero."""
-    flash_attn = _flash_attn_interface()
-    # Also protect direct custom-op callers that did not run the planner's admission check.
     if torch.cuda.get_device_capability(q.device) == (12, 0):
-        reason = sm120_gapped_forward_unavailable_reason(flash_attn)
-        if reason is not None:
-            raise RuntimeError(reason)
+        require_gapped_replay(q.device)
+    flash_attn = _flash_attn_interface()
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"Query heads ({q.shape[2]}) must be a multiple of KV heads ({k.shape[2]}).")
     runtime = _runtime(handle)
