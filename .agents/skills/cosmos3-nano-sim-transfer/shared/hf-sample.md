@@ -3,8 +3,8 @@
 Download the examples from [Cosmos3-Nano-Sim-Transfer](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer)
 at revision `main`.
 
-| Example                                                                                                                                       | Source width × height | Frames / FPS | Use                                                                                     |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------ | --------------------------------------------------------------------------------------- |
+| Example                                                                                                   | Source width × height | Frames / FPS | Use                                                                                     |
+| --------------------------------------------------------------------------------------------------------- | --------------------- | ------------ | --------------------------------------------------------------------------------------- |
 | [example2](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/main/assets/sample_data/example2) | 1920 × 1080           | 121 / 30     | Default for prompting, data preparation, Stage 0–3 training and four-modality inference |
 | [example1](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/main/assets/sample_data/example1) | 384 × 384             | 600 / 30     | Long-rollout depth and segmentation walkthrough                                         |
 
