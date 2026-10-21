@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""CPU-only helpers for the Cosmos Framework and vLLM-Omni Auto notebooks."""
+"""CPU-only helpers for the Cosmos Framework, vLLM-Omni, and SGLang Auto notebooks."""
 
 from __future__ import annotations
 
@@ -87,8 +87,16 @@ def probe_video(path: Path) -> dict:
     }
 
 
-def prepare_controls(views: list[dict], base_dir: Path, output_dir: Path, frames: int, fps: float) -> list[Path]:
-    """Decode synchronized controls and trim their first window without resizing."""
+def prepare_controls(
+    views: list[dict], base_dir: Path, output_dir: Path, frames: int, fps: float, *, materialize: bool = False
+) -> list[Path]:
+    """Decode synchronized controls and trim their first window without resizing.
+
+    A control that already has ``frames`` frames is returned in place. With
+    ``materialize`` it is copied into ``output_dir`` instead, so every returned path
+    lies under ``output_dir``; a server that opens inputs by path sees only what is
+    mounted there.
+    """
     if frames < 1 or (frames - 1) % 4 or not math.isfinite(fps) or fps <= 0:
         raise ValueError("Use a positive 4k+1 camera frame count and positive finite FPS.")
     sources = [require_asset(base_dir / view["control_path"]) for view in views]
@@ -130,6 +138,10 @@ def prepare_controls(views: list[dict], base_dir: Path, output_dir: Path, frames
                 "+faststart",
                 str(target),
             )
+        elif materialize:
+            target = output_dir / f"{view['camera_key']}.mp4"
+            if not (target.exists() and target.samefile(source)):
+                shutil.copyfile(source, target)
         actual = probe_video(target)
         if any(
             actual[key] != expected
@@ -158,6 +170,30 @@ def validate_rgb_conditions(views: list[dict], base_dir: Path) -> None:
             raise ValueError(f"Cannot decode RGB first frame: {path}: {result.stderr.decode(errors='replace')}")
 
 
+def stage_conditions(views: list[dict], output_dir: Path, *, field: str = "vision_path") -> list[Path]:
+    """Copy each camera's condition file into ``output_dir`` as ``<camera_key><suffix>``.
+
+    SGLang opens inputs by path on the server, and a downloaded sample lives in the
+    client's Hugging Face cache. Staging the files under the mounted output folder
+    gives the server one absolute path that exists on both sides. The copy keeps the
+    suffix of the path named in the request: a Hugging Face snapshot entry is a
+    symlink into an extension-less blob store, and the server's video reader picks
+    its decoder by extension.
+    Every call rewrites the copies, so a changed condition is picked up even when
+    its size did not change.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for view in views:
+        named = Path(view[field])
+        source = require_asset(named)
+        target = output_dir / f"{view['camera_key']}{named.suffix}"
+        shutil.copyfile(source, target)
+        staged.append(target)
+    return staged
+
+
 def validate_lidar(path: Path, sweeps: int, *, exact: bool = False) -> dict:
     """Read numeric sweeps incrementally; never load a GPU library or normalize inputs."""
     import numpy as np
@@ -182,6 +218,59 @@ def validate_lidar(path: Path, sweeps: int, *, exact: bool = False) -> dict:
                 if not np.isin(frame[2], [0, 1]).all() or np.any(frame[:2, frame[2] == 0] != 0):
                     raise ValueError(f"Invalid masked LiDAR values in sweep {index}.")
     return {"shape": shape, "dtype": "float32", "metadata": metadata}
+
+
+def validate_sglang_lidar(path: Path, sweeps: int, *, fps: float = 10.0) -> dict:
+    """Validate SGLang's generated range map incrementally on the CPU."""
+    import numpy as np
+    from safetensors import safe_open
+
+    if sweeps < 1 or not math.isfinite(fps) or fps <= 0:
+        raise ValueError("Expected positive LiDAR sweep count and finite positive FPS.")
+    require_asset(path)
+    dtypes = {"range_m": "F32", "intensity": "F16", "validity": "U8"}
+    shape = [sweeps, 128, 1800]
+    with safe_open(path, framework="numpy") as handle:
+        if set(handle.keys()) != set(dtypes):
+            raise ValueError("SGLang LiDAR must contain range_m, intensity, and validity tensors.")
+        tensors = {name: handle.get_slice(name) for name in dtypes}
+        for name, tensor in tensors.items():
+            if tensor.get_shape() != shape or tensor.get_dtype() != dtypes[name]:
+                raise ValueError(f"Expected {name} with shape {shape} and dtype {dtypes[name]}.")
+        metadata = handle.metadata() or {}
+        try:
+            actual_fps = float(metadata["fps"])
+            min_range = float(metadata["min_range_m"])
+            max_range = float(metadata["max_range_m"])
+            invalid_range = float(metadata["invalid_range_m"])
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Missing or invalid SGLang LiDAR metadata.") from exc
+        if (
+            metadata.get("layout") != "[sweeps, beams, azimuth]"
+            or actual_fps != fps
+            or not math.isfinite(min_range)
+            or not math.isfinite(max_range)
+            or not 0 <= min_range < max_range
+            or invalid_range != 0
+        ):
+            raise ValueError(f"Unexpected SGLang LiDAR metadata: {metadata}.")
+        for index in range(sweeps):
+            ranges = tensors["range_m"][index]
+            intensity = tensors["intensity"][index]
+            validity = tensors["validity"][index]
+            if (
+                not np.isfinite(ranges).all()
+                or not np.isfinite(intensity).all()
+                or (ranges < 0).any()
+                or (intensity < 0).any()
+                or (intensity > 1).any()
+                or not np.isin(validity, [0, 1]).all()
+            ):
+                raise ValueError(f"Invalid SGLang LiDAR values in sweep {index}.")
+            valid = validity == 1
+            if (ranges[valid] <= 0).any() or (ranges[~valid] != 0).any() or (intensity[~valid] != 0).any():
+                raise ValueError(f"Invalid masked SGLang LiDAR values in sweep {index}.")
+    return {"shape": shape, "dtypes": dtypes, "metadata": metadata}
 
 
 def split_cameras(
@@ -300,8 +389,32 @@ def validate_framework_outputs(output_dir: Path, manifest: dict) -> dict:
 
 # vLLM-Omni request preparation and HTTP client.
 
-def prepare_request(manifest: dict, base_dir: Path, model: str) -> tuple[dict, list[Path]]:
-    """Translate local manifest paths to the existing multipart Videos API contract."""
+def check_model(client, expected: str | None = None) -> str:
+    """Return the served model ID from ``GET /v1/models``, requiring ``expected`` when given."""
+    response = client.get("/v1/models")
+    response.raise_for_status()
+    ids = [item["id"] for item in response.json().get("data", []) if item.get("id")]
+    if expected:
+        if expected not in ids:
+            raise ValueError(f"Expected served model {expected!r}; found {ids}.")
+        return expected
+    if len(ids) != 1:
+        raise ValueError(f"Set the expected model explicitly; server returned {ids}.")
+    return ids[0]
+
+
+def prepare_request(
+    manifest: dict, base_dir: Path, model: str, *, backend: str = "vllm_omni"
+) -> tuple[dict, list[Path]]:
+    """Build a Videos API request and its upload list.
+
+    Both backends use multipart form fields. vLLM-Omni uploads every file and
+    refers to it by a reference index; SGLang reads each file from an absolute
+    path visible to the server, so the upload list stays empty. For SGLang,
+    ``lidar.return_output`` is translated to ``lidar.decode``.
+    """
+    if backend not in ("vllm_omni", "sglang"):
+        raise ValueError(f"Unknown backend {backend!r}; use 'vllm_omni' or 'sglang'.")
     for field in ("negative_prompt", "negative_metadata_mode"):
         if manifest.get(field) is not None:
             raise ValueError(
@@ -334,19 +447,38 @@ def prepare_request(manifest: dict, base_dir: Path, model: str) -> tuple[dict, l
                 raise ValueError("Supply local paths, not upload indexes, in the input manifest.")
             if f"{role}_path" in view:
                 path = require_asset(base_dir / view.pop(f"{role}_path"))
-                view[f"{role}_reference_index"] = len(paths)
-                paths.append(path)
+                if backend == "sglang":
+                    view[f"{role}_path"] = str(path)
+                else:
+                    view[f"{role}_reference_index"] = len(paths)
+                    paths.append(path)
     if "lidar" in extra:
-        if extra["lidar"].get("return_output") is not True:
+        lidar = extra["lidar"]
+        if backend == "sglang":
+            if set(lidar) - {"control_path", "return_output", "decode"}:
+                raise ValueError("SGLang LiDAR accepts control_path and decode (or the return_output alias).")
+            decode = lidar.get("decode", lidar.get("return_output", False))
+            if not isinstance(decode, bool) or (
+                "return_output" in lidar
+                and (not isinstance(lidar["return_output"], bool) or lidar["return_output"] != decode)
+            ):
+                raise ValueError("LiDAR decode/return_output must be booleans and agree when both are supplied.")
+        elif lidar.get("return_output") is not True:
             raise ValueError("The joint walkthrough requires lidar.return_output=true.")
+        reference_suffix = "path" if backend == "sglang" else "reference_index"
         if any(
-            "vision_reference_index" not in view or "control_reference_index" not in view
+            f"vision_{reference_suffix}" not in view or f"control_{reference_suffix}" not in view
             for view in extra["multiview"]["views"]
         ):
             raise ValueError("The joint I2V example requires WSM and RGB for every camera.")
-        path = require_asset(base_dir / extra["lidar"].pop("control_path"))
-        extra["lidar"]["control_reference_index"] = len(paths)
-        paths.append(path)
+        if backend == "sglang":
+            lidar.pop("return_output", None)
+            lidar["decode"] = decode
+            lidar["control_path"] = str(require_asset(base_dir / lidar["control_path"]))
+        else:
+            path = require_asset(base_dir / lidar.pop("control_path"))
+            lidar["control_reference_index"] = len(paths)
+            paths.append(path)
     if len(paths) > 23 or any(path.stat().st_size > 512 * 1024**2 for path in paths):
         raise ValueError("Videos API accepts at most 23 files, each no larger than 512 MiB.")
     form = {
@@ -367,6 +499,11 @@ def prepare_request(manifest: dict, base_dir: Path, model: str) -> tuple[dict, l
 
 
 def _post(client, endpoint: str, form: dict, paths: list[Path]):
+    """Send multipart form fields with optional file uploads."""
+    if not paths:
+        # A None filename makes each part a regular field. Passing only data=
+        # would use URL encoding, which SGLang's Videos API does not parse.
+        return client.post(endpoint, files=[(key, (None, value)) for key, value in form.items()])
     with ExitStack() as stack:
         files = [
             (
@@ -405,7 +542,37 @@ def _download(client, url: str, path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def submit_joint(client, form: dict, paths: list[Path], output_dir: Path, *, timeout: float = 3600) -> dict:
+def submit_wsm(
+    client, form: dict, paths: list[Path], output_dir: Path, *, async_mode: bool = False, timeout: float = 3600
+) -> Path:
+    """Save the WSM video, optionally submitting and polling an async job.
+
+    For SGLang, prepare the request with backend="sglang" and set async_mode=True.
+    The call blocks until the video is saved; timeout limits async job polling.
+    """
+    path = output_dir / "multiview_camera_major.mp4"
+    if async_mode:
+        job = _submit_video_job(client, form, paths, output_dir, timeout=timeout)
+        _download(client, f"/v1/videos/{job['id']}/content", path)
+        return path
+    output_dir.mkdir(parents=True, exist_ok=True)
+    response = _post(client, "/v1/videos/sync", form, paths)
+    _check_response(response, output_dir)
+    if not response.content:
+        raise ValueError("The synchronous video response was empty.")
+    path.write_bytes(response.content)
+    return path
+
+
+def _submit_video_job(
+    client, form: dict, paths: list[Path], output_dir: Path, *, timeout: float, interval: float = 10
+) -> dict:
+    """Submit an async Videos API job and poll until it completes.
+
+    Every job response is saved as ``job.json``. A failed or cancelled job saves
+    the response as ``response_error.txt`` and raises; a polling timeout raises
+    but leaves the job running on the server.
+    """
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Polling timeout must be positive and finite.")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -417,9 +584,9 @@ def submit_joint(client, form: dict, paths: list[Path], output_dir: Path, *, tim
     print(f"Submitted {job['id']} at {client.base_url.join(job_url)}")
     while True:
         (output_dir / "job.json").write_text(json.dumps(job, indent=2) + "\n")
-        if job.get("status") == "failed":
+        if job.get("status") in {"failed", "cancelled"}:
             (output_dir / "response_error.txt").write_text(json.dumps(job, indent=2))
-            raise RuntimeError(f"Video generation failed: {job.get('error')}")
+            raise RuntimeError(f"Video generation {job['status']}: {job.get('error')}")
         _check_response(response, output_dir)
         if job.get("status") == "completed":
             break
@@ -428,18 +595,42 @@ def submit_joint(client, form: dict, paths: list[Path], output_dir: Path, *, tim
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Polling timed out; job remains at {client.base_url.join(job_url)}. See job.json.")
-        time.sleep(min(1, remaining))
+        time.sleep(min(interval, remaining))
         response = client.get(job_url, timeout=max(0.001, min(30, deadline - time.monotonic())))
         try:
             job = response.json()
         except ValueError:
             _check_response(response, output_dir)
             raise
-    if not job.get("lidar"):
+    return job
+
+
+def submit_joint(
+    client, form: dict, paths: list[Path], output_dir: Path, *, timeout: float = 3600, backend: str = "vllm_omni"
+) -> dict:
+    """Save a joint job's video and, for SGLang decode requests, its native LiDAR artifact.
+
+    vLLM-Omni returns only the LiDAR descriptor; download its numeric output from /lidar separately.
+    """
+    return_lidar = True
+    if backend == "sglang":
+        return_lidar = json.loads(form["extra_params"])["lidar"].get("decode", False)
+    job = _submit_video_job(client, form, paths, output_dir, timeout=timeout)
+    job_url = f"/v1/videos/{job['id']}"
+    if return_lidar and not job.get("lidar"):
         raise ValueError("Completed job is missing its requested LiDAR artifact; see job.json.")
+    if return_lidar and backend == "sglang" and not job["lidar"].get("files", {}).get("rangemap"):
+        raise ValueError("Completed job is missing its LiDAR rangemap file; see job.json.")
     video_path = output_dir / "multiview_camera_major.mp4"
     _download(client, job_url + "/content", video_path)
-    return {"video": video_path, "descriptor": job["lidar"], "job_id": job["id"]}
+    if backend != "sglang":
+        return {"video": video_path, "descriptor": job["lidar"], "job_id": job["id"]}
+    if not return_lidar:
+        return {"video": video_path, "lidar": None, "descriptor": None, "job_id": job["id"]}
+    lidar_path = output_dir / "multiview_camera_major.lidar.safetensors"
+    _download(client, job_url + "/content?variant=rangemap", lidar_path)
+    lidar_path.with_suffix(".json").write_text(json.dumps(job["lidar"], indent=2) + "\n")
+    return {"video": video_path, "lidar": lidar_path, "descriptor": job["lidar"], "job_id": job["id"]}
 
 
 def download_lidar(client, job: dict, output_path: Path) -> tuple[Path, dict]:
@@ -467,3 +658,19 @@ def validate_lidar_output(path: Path, descriptor: dict, sweeps: int, *, lidar_fp
         if info["metadata"].get(field) != descriptor.get(field):
             raise ValueError(f"Embedded LiDAR metadata {field!r} differs from the job descriptor.")
     return info
+
+
+def save_outputs(output_dir: Path, video: Path, cameras: dict, manifest: dict, *, lidar: dict | None = None) -> None:
+    """Write ``sample_outputs.json`` for a camera-major response split into per-camera files."""
+    summary = {
+        "camera_major_response": str(video),
+        "camera_order": list(cameras),
+        "frames_per_view": manifest["num_frames"],
+        "fps": manifest["fps"],
+        "files_by_camera": {key: str(path) for key, path in cameras.items()},
+    }
+    if lidar is not None:
+        summary["job_id"] = lidar["job_id"]
+        if lidar["lidar"] is not None:
+            summary.update(lidar_file=str(lidar["lidar"]), lidar=lidar["descriptor"])
+    (output_dir / "sample_outputs.json").write_text(json.dumps(summary, indent=2) + "\n")

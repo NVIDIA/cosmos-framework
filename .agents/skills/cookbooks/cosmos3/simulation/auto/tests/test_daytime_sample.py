@@ -1,5 +1,6 @@
 """CPU checks for the shared daytime sample requests and the LiDAR range-map conversion."""
 
+import contextlib
 import copy
 import hashlib
 import io
@@ -16,7 +17,9 @@ import numpy as np
 AUTO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AUTO_ROOT))
 
-from helpers.auto_helpers import CAMERA_ORDER, prepare_request
+from helpers.auto_helpers import (
+    CAMERA_ORDER, prepare_request, stage_conditions, submit_joint, validate_sglang_lidar,
+)
 from helpers.daytime_sample import SAMPLE_CAMERAS, read_caption, resolve_request, sample_files, verify_sample
 from helpers.lidar_rangemap import convert_control, pool_nearest_return
 
@@ -192,6 +195,182 @@ class SampleTests(unittest.TestCase):
         manifest = resolve_request(path, self.root)
         self.assertEqual((manifest["prompt"], manifest["multiview"]["views"][0]["prompt"]), ("Top", "Inline"))
         self.assertEqual(manifest["multiview"]["views"][0]["control_path"], str(self.root / "wsm.mp4"))
+
+
+class SglangRequestTests(unittest.TestCase):
+    """The SGLang branch of the shared request helpers: server-visible paths, async jobs, LiDAR artifacts."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = make_sample(Path(temporary.name).resolve())
+        converter = patch("helpers.daytime_sample.convert_control", side_effect=mock_convert)
+        converter.start()
+        self.addCleanup(converter.stop)
+        self.lidar = self.root / "prepared" / "lidar_control.safetensors"
+
+    def resolve(self, name):
+        return resolve_request(ASSET_DIR / name, self.root, caption_folder="captions", lidar_output=self.lidar)
+
+    def test_sglang_requests_carry_server_visible_paths_instead_of_uploads(self):
+        for name in ("transfer_auto_wsm.json", "transfer_auto_joint.json"):
+            with self.subTest(request=name):
+                template = json.loads((ASSET_DIR / name).read_text())
+                manifest = self.resolve(name)
+                original = copy.deepcopy(manifest)
+                form, uploads = prepare_request(manifest, self.root, "model", backend="sglang")
+                vllm_form, vllm_uploads = prepare_request(manifest, self.root, "model")
+                self.assertEqual(manifest, original)
+                self.assertEqual(uploads, [])
+                self.assertEqual(len(vllm_uploads), 15 if "lidar" in template else 7)
+                self.assertEqual(
+                    {key: value for key, value in form.items() if key != "extra_params"},
+                    {key: value for key, value in vllm_form.items() if key != "extra_params"},
+                )
+                extra = json.loads(form["extra_params"])
+                self.assertNotIn("model_mode", extra)
+                for source, view in zip(template["multiview"]["views"], extra["multiview"]["views"], strict=True):
+                    self.assertEqual([key for key in view if key.endswith("_reference_index")], [])
+                    self.assertEqual(view["prompt"], f"Daytime caption for {source['camera_key']}.")
+                    for role in ("control", "vision"):
+                        if f"{role}_path" in source:
+                            self.assertEqual(Path(view[f"{role}_path"]), self.root / source[f"{role}_path"])
+                        else:
+                            self.assertNotIn(f"{role}_path", view)
+                if "lidar" in template:
+                    self.assertEqual(extra["lidar"], {"control_path": str(self.lidar), "decode": True})
+                    self.assertEqual(extra["control_guidance"], 1)
+                else:
+                    self.assertNotIn("lidar", extra)
+
+    def test_sglang_lidar_decode_follows_return_output_and_unknown_backends_reject(self):
+        manifest = self.resolve("transfer_auto_joint.json")
+        manifest["lidar"]["return_output"] = False
+        form, _ = prepare_request(manifest, self.root, "model", backend="sglang")
+        self.assertFalse(json.loads(form["extra_params"])["lidar"]["decode"])
+        with self.assertRaisesRegex(ValueError, "return_output=true"):
+            prepare_request(manifest, self.root, "model")
+        manifest["lidar"]["decode"] = True
+        with self.assertRaisesRegex(ValueError, "agree"):
+            prepare_request(manifest, self.root, "model", backend="sglang")
+        with self.assertRaisesRegex(ValueError, "backend"):
+            prepare_request(self.resolve("transfer_auto_wsm.json"), self.root, "model", backend="trt")
+
+    def test_stage_conditions_copies_each_camera_under_its_key(self):
+        views = self.resolve("transfer_auto_joint.json")["multiview"]["views"]
+        staged = stage_conditions(views, self.root / "staged")
+        self.assertEqual([path.name for path in staged], [f"{view['camera_key']}.mp4" for view in views])
+        for view, path in zip(views, staged, strict=True):
+            self.assertEqual(path.read_bytes(), Path(view["vision_path"]).read_bytes())
+        self.assertEqual(stage_conditions(views, self.root / "staged"), staged)  # Idempotent.
+        changed = Path(views[0]["vision_path"])
+        changed.write_bytes(b"X" * changed.stat().st_size)  # Same length, different content.
+        self.assertEqual(stage_conditions(views, self.root / "staged")[0].read_bytes(), changed.read_bytes())
+        Path(views[0]["vision_path"]).unlink()
+        with self.assertRaises(FileNotFoundError):
+            stage_conditions(views, self.root / "staged-again")
+
+    def test_stage_conditions_keeps_the_request_suffix_for_snapshot_symlinks(self):
+        # A Hugging Face snapshot names files normally but symlinks them into an extension-less blob store.
+        views = self.resolve("transfer_auto_joint.json")["multiview"]["views"]
+        blobs = self.root / "blobs"
+        blobs.mkdir()
+        for index, view in enumerate(views):
+            named = Path(view["vision_path"])
+            blob = blobs / f"{index:064x}"
+            named.replace(blob)
+            named.symlink_to(blob)
+        staged = stage_conditions(views, self.root / "staged")
+        self.assertEqual([path.name for path in staged], [f"{view['camera_key']}.mp4" for view in views])
+        for view, path in zip(views, staged, strict=True):
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(path.read_bytes(), Path(view["vision_path"]).read_bytes())
+
+    def test_sglang_joint_job_downloads_the_video_and_rangemap(self):
+        import httpx
+
+        manifest = self.resolve("transfer_auto_joint.json")
+        form, uploads = prepare_request(manifest, self.root, "model", backend="sglang")
+        descriptor = {"sweeps": 67, "fps": 10.0, "files": {"rangemap": "/srv/job-1.lidar.safetensors"}}
+        polls = []
+
+        def handler(request):
+            path = request.url.path
+            if path == "/v1/videos" and request.method == "POST":
+                body = request.read()
+                self.assertIn(b'name="extra_params"', body)
+                self.assertNotIn(b'name="input_references"', body)
+                return httpx.Response(200, json={"id": "job-1", "status": "queued"})
+            if path == "/v1/videos/job-1":
+                polls.append(request.method)
+                return httpx.Response(200, json={"id": "job-1", "status": "completed", "lidar": descriptor})
+            if path == "/v1/videos/job-1/content":
+                if request.url.params.get("variant") == "rangemap":
+                    return httpx.Response(200, content=b"mock rangemap")
+                return httpx.Response(200, content=b"mock video", headers={"content-type": "video/mp4"})
+            self.fail(f"Unexpected request {request.method} {request.url}")
+
+        output_dir = self.root / "out"
+        with (
+            patch("time.sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+            httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler)) as client,
+        ):
+            result = submit_joint(client, form, uploads, output_dir, backend="sglang")
+        self.assertEqual((result["job_id"], result["descriptor"]), ("job-1", descriptor))
+        self.assertEqual(result["video"].read_bytes(), b"mock video")
+        self.assertEqual(result["lidar"].read_bytes(), b"mock rangemap")
+        self.assertEqual(json.loads(result["lidar"].with_suffix(".json").read_text()), descriptor)
+        self.assertEqual(json.loads((output_dir / "job.json").read_text())["status"], "completed")
+        self.assertEqual(polls, ["GET"])
+
+        # The vLLM-Omni contract is unchanged: uploads travel as input_references and no rangemap is fetched.
+        vllm_form, vllm_uploads = prepare_request(manifest, self.root, "model")
+        seen = []
+
+        def vllm_handler(request):
+            seen.append(request.url.path)
+            if request.method == "POST":
+                self.assertIn(b'name="input_references"', request.read())
+                return httpx.Response(200, json={"id": "job-2", "status": "completed", "lidar": descriptor})
+            return httpx.Response(200, content=b"mock video", headers={"content-type": "video/mp4"})
+
+        with (
+            patch("time.sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+            httpx.Client(base_url="http://test", transport=httpx.MockTransport(vllm_handler)) as client,
+        ):
+            result = submit_joint(client, vllm_form, vllm_uploads, self.root / "vllm")
+        self.assertEqual(result, {
+            "video": self.root / "vllm" / "multiview_camera_major.mp4", "descriptor": descriptor, "job_id": "job-2",
+        })
+        self.assertEqual(seen, ["/v1/videos", "/v1/videos/job-2/content"])
+
+    def test_validate_sglang_lidar_checks_layout_metadata_and_masked_values(self):
+        from safetensors.numpy import save_file
+
+        sweeps = 2
+        validity = np.zeros((sweeps, 128, 1800), dtype=np.uint8)
+        validity[:, :64] = 1
+        ranges = np.where(validity == 1, 12.5, 0.0).astype(np.float32)
+        intensity = np.where(validity == 1, 0.25, 0.0).astype(np.float16)
+        metadata = {
+            "layout": "[sweeps, beams, azimuth]", "fps": "10.0",
+            "min_range_m": "0.5", "max_range_m": "120.0", "invalid_range_m": "0",
+        }
+        path = self.root / "generated.safetensors"
+        save_file({"range_m": ranges, "intensity": intensity, "validity": validity}, path, metadata=metadata)
+        info = validate_sglang_lidar(path, sweeps)
+        self.assertEqual((info["shape"], info["metadata"]["fps"]), ([sweeps, 128, 1800], "10.0"))
+        with self.assertRaisesRegex(ValueError, "metadata"):
+            validate_sglang_lidar(path, sweeps, fps=30.0)
+        with self.assertRaisesRegex(ValueError, "shape"):
+            validate_sglang_lidar(path, sweeps + 1)
+        broken = ranges.copy()
+        broken[0, 0, 0] = 0.0  # A valid ray must have a positive range.
+        save_file({"range_m": broken, "intensity": intensity, "validity": validity}, path, metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "masked"):
+            validate_sglang_lidar(path, sweeps)
 
 
 class LidarRangemapTests(unittest.TestCase):

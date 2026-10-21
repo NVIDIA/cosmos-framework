@@ -8,10 +8,10 @@ spatial control video.
 
 | Model | Generates | From | Start here | Notebooks |
 | --- | --- | --- | --- | --- |
-| [Cosmos3-Nano-Sim-Bimanual](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual) | Video rollout of bimanual robot manipulation | Initial RGB frame, task description, time-aligned action trajectory | [Bimanual guide](bimanual/bimanual.md) | [Framework](bimanual/bimanual.md), [vLLM-Omni](bimanual/run_bimanual_with_vllm_omni.ipynb) |
-| [Cosmos3-Nano-Transfer-Auto](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto) | Synchronized multi-camera driving video, joint mode adds LiDAR | Per-camera WSM controls and captions, HD-map LiDAR controls for joint mode | [Auto overview](auto/README.md), [Transfer-Auto guide](auto/auto.md) | [Framework](auto/run_auto_with_cosmos_framework.ipynb), [vLLM-Omni](auto/run_auto_with_vllm_omni.ipynb) |
-| [Cosmos3-Nano-Sim-Auto](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Auto) | Same outputs as Transfer-Auto, generated chunk by chunk | Same inputs as Transfer-Auto | [Auto overview](auto/README.md) | [Framework](auto/run_sim-auto_with_cosmos_framework.ipynb), [vLLM-Omni](auto/run_sim_auto_with_vllm_omni.ipynb) |
-| [Cosmos3-Nano-Sim-Transfer](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer) | 480p video | Caption and one edge, blur, depth, or segmentation control video | [Sim-Transfer guide](transfer/transfer.md) | [Framework](transfer/transfer.md), [vLLM-Omni](transfer/run_transfer_with_vllm_omni.ipynb) |
+| [Cosmos3-Nano-Sim-Bimanual](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual) | Video rollout of bimanual robot manipulation | Initial RGB frame, task description, time-aligned action trajectory | [Bimanual guide](bimanual/bimanual.md) | [Framework](bimanual/bimanual.md), [vLLM-Omni](bimanual/run_bimanual_with_vllm_omni.ipynb), [SGLang](bimanual/run_bimanual_with_sglang.ipynb) |
+| [Cosmos3-Nano-Transfer-Auto](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto) | Synchronized multi-camera driving video, joint mode adds LiDAR | Per-camera WSM controls and captions, HD-map LiDAR controls for joint mode | [Auto overview](auto/README.md), [Transfer-Auto guide](auto/auto.md) | [Framework](auto/run_auto_with_cosmos_framework.ipynb), [vLLM-Omni](auto/run_auto_with_vllm_omni.ipynb), [SGLang](auto/run_auto_with_sglang.ipynb) |
+| [Cosmos3-Nano-Sim-Auto](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Auto) | Same outputs as Transfer-Auto, generated chunk by chunk | Same inputs as Transfer-Auto | [Auto overview](auto/README.md) | [Framework](auto/run_sim-auto_with_cosmos_framework.ipynb), [vLLM-Omni](auto/run_sim_auto_with_vllm_omni.ipynb), [SGLang](auto/run_sim-auto_with_sglang.ipynb) |
+| [Cosmos3-Nano-Sim-Transfer](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer) | 480p video | Caption and one edge, blur, depth, or segmentation control video | [Sim-Transfer guide](transfer/transfer.md) | [Framework](transfer/transfer.md), [vLLM-Omni](transfer/run_transfer_with_vllm_omni.ipynb), [SGLang](transfer/run_transfer_with_sglang.ipynb) |
 
 To drive the Auto models with your own scene, render WSM controls with
 [generate_wsm.ipynb](auto/generate_wsm.ipynb).
@@ -37,6 +37,9 @@ distilled student: a fixed four-step sampler with a rolling key/value cache.
   Bimanual and Sim-Transfer add model-specific setup steps in their guides.
 - **vLLM-Omni:** Docker with the NVIDIA Container Toolkit. All four notebooks use
   the `vllm/vllm-omni:cosmos3` image.
+- **SGLang:** Docker with the NVIDIA Container Toolkit. The four SGLang notebooks use
+  the published `lmsysorg/sglang:dev` image; the Auto and Sim-Transfer notebooks read
+  their inputs from the mounted cookbook root.
 
 If you pass `--defaults-file` to Framework inference, it **replaces** the built-in
 sampling defaults rather than merging with them. Start from the defaults file the
