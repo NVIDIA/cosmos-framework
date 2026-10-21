@@ -3,4 +3,5 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 # Acknowledgements
 
+- [2.1.0](2.1.0.md) — `nvcr.io/nim/nvidia/cosmos3:2.1.0`
 - [2.0.0](2.0.0.md) — `nvcr.io/nim/nvidia/cosmos3:2.0.0`
