@@ -823,7 +823,7 @@ docker run -d --name cosmos3-generator \
   -e NIM_MODEL_VARIANT=nano \
   -e NIM_PERF_PROFILE=latency \
   -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
-  nvcr.io/nim/nvidia/cosmos3:2.0.0
+  nvcr.io/nim/nvidia/cosmos3:2.1.0
 ```
 
 Set `NIM_MODEL_TYPE=reasoner` for the Reasoner runtime. `NIM_MODEL_VARIANT`

@@ -1,20 +1,26 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Reason over images and video with the Cosmos3 Certified NIM
+# Reason Over Images and Video With the Cosmos3 NIM
 
 Use this page for Cosmos3 Reasoner requests through OpenAI-compatible Chat
 Completions and Responses APIs. These workflows require a running **Reasoner**
-model; `/v1/infer` is a Generator endpoint and is not used here.
+model. `/v1/infer` is a Generator endpoint and is not used here. Refer to
+[Deployment](deployment.md) to select and launch a Reasoner model.
 
-See [Deployment](deployment.md) to select and launch a Reasoner model. This
-page covers Reasoner routes, media, sampling, and responses.
+The same clients work with `edge`, `nano`, and `super`. Launch Edge with the
+selectors in [Deploy Edge Models](deployment.md#deploy-edge-models).
 
-## Prepare the client and verify readiness
+For stateful reasoning over successive video frames, refer to
+[Streaming Video](streaming.md). Its [example client](streaming.md#example-client)
+is bundled in this cookbook and uses the same pinned environment and `NIM_URL`
+setting, with a flag to choose WebSocket or REST.
 
-Install the [client tooling](prerequisites.md#client-tooling). Then, from the
-repository root, enter the cookbook directory. The runnable examples use the
-pinned OpenAI Python client from the `uv` project in that directory:
+## Prepare the Client and Verify Readiness
+
+Install the [client tooling](prerequisites.md#client-tooling). The runnable
+examples use the pinned OpenAI Python client from the `uv` project in the
+cookbook directory:
 
 ```bash
 cd .agents/skills/cookbooks/cosmos3/nim
@@ -24,18 +30,16 @@ curl -fsS "$NIM_URL/v1/metadata" | python3 -m json.tool
 curl -fsS "$NIM_URL/v1/models" | python3 -m json.tool
 ```
 
-Before model discovery, confirm that metadata reports `model_type` as
-`reasoner` and `inference_endpoint` as `/v1/chat/completions`. A successful
-health check and `/v1/models` response do not by themselves prove that the URL
-reaches the Reasoner runtime.
-
-The NIM does not require a request API key on localhost, but the OpenAI client
-requires a non-empty value. Use a clearly non-secret placeholder such as
+Confirm that metadata reports `model_type` as `reasoner` and
+`inference_endpoint` as `/v1/chat/completions`. Health and `/v1/models` alone do
+not prove that the URL reaches the Reasoner. The NIM needs no API key on
+localhost, but the OpenAI client requires a non-empty placeholder such as
 `not-used`.
 
-## Discover the served model
+## Discover the Served Model
 
-Do not assume the served model ID in reusable code:
+Do not hard-code the served model ID (for example, Edge serves
+`nvidia/cosmos3-edge-reasoner`):
 
 ```python
 import requests
@@ -57,22 +61,14 @@ model = models.data[0].id
 print(model)
 ```
 
-Use metadata for runtime discovery and `/v1/models` for served-model discovery;
-do not hard-code a model ID from another image or deployment.
+## Run the Task Catalog
 
-## Run the task catalog
-
-The endpoint-independent catalog in
 [`examples/reasoner_cases.yaml`](examples/reasoner_cases.yaml) defines the
-media, prompt, sampling, output contract, native-thinking setting, and
-qualitative review criteria for every Reasoner example. Its user-prompt strings
-exactly match the runtime strings in the nearby vLLM notebook. The Python runner
-keeps the NIM-specific API adaptation in one place: it sends local media as data
-URLs, uses `media_io_kwargs` for video sampling, discovers the served model,
-consumes the final answer from `message.content`, and records whether
-prompt-requested JSON can be extracted with the standard JSON decoder.
+media, prompt, sampling, output contract, and review criteria for each case,
+and `examples/reasoner.py` sends them to the NIM.
 
-List or inspect cases without a running endpoint:
+List or inspect cases without a running endpoint. The default output is YAML,
+and `--format json` emits machine-readable output:
 
 ```bash
 uv run python examples/reasoner.py --list-cases
@@ -80,9 +76,7 @@ uv run python examples/reasoner.py --describe trajectory_2d
 uv run python examples/reasoner.py --describe trajectory_2d --format json
 ```
 
-The JSON description is suitable for tooling and AI assistants; the default
-YAML description is intended for direct reading. The catalog covers the same
-image and video task families as the general Cosmos3 Reasoner examples:
+The catalog groups its cases into these categories:
 
 | Category | Cases |
 | --- | --- |
@@ -94,90 +88,37 @@ image and video task families as the general Cosmos3 Reasoner examples:
 | Action CoT | `trajectory_2d`, `flower_trajectory_2d`, `driving_scene_action_cot` |
 | Physical and situation reasoning | `physical_plausibility`, `situation_understanding` |
 
-Run one case:
+Run one case (`--case` is a runner option, not a NIM API field):
 
 ```bash
 uv run python examples/reasoner.py --case image_caption
 ```
 
-The `--case` option belongs to this cookbook runner, not the NIM API. Every
-video case requests 4 FPS sampling. All catalog cases consume the response
-from `message.content`. Six vLLM prompt strings contain literal `<think>`
-formatting instructions. These tags are ordinary user-prompt text; text cases
-can therefore return visible tags in `message.content`, while the runner
-extracts structured final answers after a closing `</think>` tag. The service
-does not require a separate reasoning field.
-
-Running `--case all` sends all 18 requests sequentially and can take substantial
-time and resources. Use it for deliberate catalog validation, not as a first
-request:
+Every video case requests 4 frames per second (FPS) sampling, and all cases read
+the answer from `message.content`. `--case all` sends all 18 requests
+sequentially and takes substantial time. Use it for deliberate catalog
+validation, not as a first request:
 
 ```bash
 uv run python examples/reasoner.py --case all
 ```
 
-The runner checks `/v1/metadata` before model discovery and fails with an
-actionable message if `NIM_URL` reaches a Generator runtime.
+### Super BF16 Example Baseline
 
-### Super BF16 example baseline
+The catalog was validated on Super BF16 (hardware floor in the
+[Support Matrix](support-matrix.md#reasoner-profiles)) with
+`NIM_USE_DFLASH=0` and `NIM_VIDEO_PRUNING_RATE=0`. Unless a case records an
+override, it explicitly sends `temperature=0.7`, `top_p=0.8`, `top_k=20`,
+`presence_penalty=0`, and `repetition_penalty=1`. Cases also send `seed=0`
+where the vLLM notebook sets it. The runner only warns on another variant, so
+do not present an Edge or Nano result as Super-validated.
 
-The retained catalog validation baseline uses Super BF16 with target-only
-decoding and video-token pruning disabled:
+### Artifacts and Validation Boundaries
 
-```text
-NIM_USE_DFLASH=0
-NIM_VIDEO_PRUNING_RATE=0
-```
+Each run prints the answer and writes `examples/outputs/reasoner_<case>/`.
+Validation only checks that JSON parses. Review semantics yourself.
 
-The one-GPU Super BF16 configuration requires the hardware floor in the
-[support matrix](support-matrix.md#reasoner-configurations).
-After readiness, verify the selected model and profile through `/v1/metadata`
-and `/v1/manifest` before running the examples.
-
-Every catalog request explicitly sends `temperature=0.7`, `top_p=0.8`,
-`top_k=20`, `presence_penalty=0`, and `repetition_penalty=1` unless a case
-records an override. These values match the effective Super checkpoint and raw
-vLLM example defaults instead of relying on server-side default injection. The
-catalog preserves vLLM user-prompt text byte for byte while adapting media
-transport to the NIM API.
-
-Cases that set `seed=0` in the vLLM notebook retain that seed while using the
-same explicit effective sampling values as the other non-reasoning cases.
-
-Task-level quality remains case-specific and must be reviewed against the
-qualitative criteria recorded with each case. The runner warns rather than
-fails when the endpoint serves another Reasoner variant so the catalog remains
-usable for comparison; do not present a Nano result as a Super-validated
-example.
-
-### Artifacts and validation boundaries
-
-For each run, the script prints the final answer and writes an ignored
-`examples/outputs/reasoner_<case>/` directory containing:
-
-- `request.json`: the resolved case, selected model/profile, review criteria,
-  and request with the embedded media payload omitted;
-- `response.json`: the raw OpenAI client response;
-- `output.txt`: final `message.content`;
-- `output.json`: parsed output, written when JSON extraction succeeds for a
-  structured case;
-- `validation.json`: separate API, JSON-extraction, annotation, and
-  qualitative-review status;
-- `annotated.png`: best-effort normalized boxes or trajectories overlaid on
-  image cases when the parsed shape supports annotation; and
-- `report.md`: a human-readable prompt, answer, validation summary, and review
-  checklist.
-
-Format validation records whether the response contains a complete JSON value.
-It does not check JSON shape, field formats, timestamp order, coordinate bounds,
-or task semantics. Review structured output against the case's qualitative
-criteria; those criteria remain `not_performed` in `validation.json` until a
-human or application-specific review performs them.
-
-The Responses example uses the image-caption case so API transport differences
-do not multiply the task matrix.
-
-## Image reasoning with Chat Completions
+## Image Reasoning With Chat Completions
 
 Place the media item before the text instruction:
 
@@ -217,14 +158,14 @@ Run the equivalent cookbook example:
 uv run python examples/reasoner.py --case image_caption
 ```
 
-Use the OpenAI client for normal applications. For direct HTTP integration,
-inspect the active `/openapi.json` and send the same request object to
-`POST /v1/chat/completions`; keep large data URLs in a request file rather than
-shell arguments.
+For direct HTTP, send the same object to `POST /v1/chat/completions` and keep
+large data URLs in a request file, not shell arguments.
 
-## Video reasoning with Chat Completions
+## Video Reasoning With Chat Completions
 
-Use `video_url` content and pass NIM request extensions through `extra_body`:
+Use `video_url` content and pass NIM request extensions through `extra_body`.
+Input videos can be at most 3,840 pixels wide and 2,160 pixels tall, so portrait
+4K is also rejected. Larger videos return HTTP 422, so downscale them first:
 
 ```python
 import base64
@@ -262,10 +203,7 @@ Run the complete example:
 uv run python examples/reasoner.py --case video_caption
 ```
 
-Data URLs are the portable baseline. Verify public HTTP(S) media fetching and
-formats beyond the included fixtures against the deployed image before relying
-on them. A `file://` URL on the client does not identify a file inside the NIM
-container.
+Prefer data URLs. A client-side `file://` URL does not reach the container.
 
 ## Use the Responses API
 
@@ -277,86 +215,58 @@ The Responses create route is enabled unless the deployment sets
 uv run python examples/reasoner_responses.py
 ```
 
-The request uses `store=false`. Responses create requests require a non-empty
-model, apply the same `temperature`, `top_p`, and `top_k` defaults as Chat
-Completions, and map a `developer` input turn to a system instruction. An ordinary answer is
-returned as a message item and exposed by the OpenAI client through
-`response.output_text` rather than appearing only as a reasoning item.
+Requests need a non-empty model and use the Chat Completions sampling defaults.
+Read the answer from `response.output_text`. Send `store=false`, as the example does, because response storage is disabled by default.
+Retrieval, cancellation, background responses, and `previous_response_id` need
+response storage. Use Chat Completions for video.
 
-Persisted retrieval, cancellation, background responses, and
-`previous_response_id` require response storage, which is disabled by default.
-Use Chat Completions for the documented video-request workflow.
+## Final Answers, Instructions, and Tool Calls
 
-## Final answers, instructions, and tool calls
-
-The task catalog consumes responses from `message.content`. To maintain prompt
-parity, it preserves literal `<think>` formatting instructions in the six vLLM
-prompts that contain them. Those visible tags are response text and should not
-be parsed as a stable separate explanation. Responses requests use the same
-chat-template and sampling defaults while retaining their Responses-specific
-token-limit and structured-output field names.
-
-Both API styles map a `developer` turn to a system instruction. Chat
-Completions also:
-
-- enables standard OpenAI tool definitions and automatic tool choice with the
-  Hermes tool-call format; and
-- requires `top_logprobs` to be an integer or null. When `logprobs=true` and
-  `top_logprobs` is omitted, the service requests one top log probability.
-
-Check the running NIM's `/openapi.json` and the client response model before
-depending on reasoning or tool-call fields.
+Both APIs map a `developer` turn to a system instruction. Chat Completions
+supports OpenAI tool definitions with automatic tool choice in the Hermes
+format. It requires `top_logprobs` to be an integer or null. If `logprobs=true`
+and `top_logprobs` is omitted, one is requested. Some prompts ask for literal
+`<think>` tags, which appear in `message.content` as ordinary text.
 
 ## Reasoner DFlash
 
-Nano and Super Reasoner use their bundled DFlash speculative-decoding drafts by
-default. The request routes and payloads do not change. The task catalog's
-Super BF16 baseline explicitly sets `NIM_USE_DFLASH=0` and runs the selected
-target model without DFlash.
-Startup rejects DFlash for Generator or when the required variant-specific
-draft artifact is unavailable. An independent local draft path, a
-hardware-derived BF16 KV-cache default, and advanced JSON configuration are
-also supported.
+Nano and Super Reasoner use their bundled DFlash drafts by default. Set
+`NIM_USE_DFLASH=0` to run target-only. Edge has no DFlash and rejects
+`NIM_USE_DFLASH=1`. Requests do not change. Refer to
+[Speculative Decoding](configuration.md#speculative-decoding) and
+[Reasoner Checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).
 
-Compare DFlash and target-only operation for memory, latency, throughput,
-correctness, and output quality on representative requests before production
-use. See [Reasoner configuration](configuration.md#speculative-decoding) and
-[Reasoner checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).
-
-## Advanced sampling and request extensions
+## Advanced Sampling and Request Extensions
 
 The service supplies these values when omitted:
 
-| Field | Current default | Current validation |
+| Field | Current Default | Current Validation |
 | --- | ---: | --- |
 | `temperature` | 0.7 | `[0, 2]` |
 | `top_p` | 0.8 | `(0, 1]` |
 | `top_k` | 20 | `-1` or integer `>= 1` |
 
+The service does not inject a default `max_tokens`. Send `max_tokens`
+explicitly.
+
 `top_k`, `media_io_kwargs`, `structured_outputs`, guided-output fields, and
-`nvext` are request extensions. With the OpenAI client, put them explicitly in
-`extra_body`, as the video example does.
+`nvext` are request extensions. With the OpenAI client, put them in
+`extra_body`. Set video sampling per request with `media_io_kwargs`. The
+example requests 4 FPS. Video-token pruning is enabled by default at a rate of
+`0.6`, using `vidcom2` unless another method is selected. Set
+`NIM_VIDEO_PRUNING_RATE=0` or `NIM_VIDEO_PRUNING_RATE=none` to disable it.
+Media limits and pruning settings are under
+[Reasoner Configuration](configuration.md#reasoner-configuration).
 
-When the operator leaves the image and video limits unset, the NIM does not
-override the runtime's modality limits. Use request-level `media_io_kwargs` for
-workload-specific video sampling; the example requests 4 FPS. Video-token
-pruning is disabled by default. Set a rate greater than `0` to enable the
-selected pruning method, which defaults to `vidcom2`; the catalog baseline sets
-`0` explicitly. Operator-wide media limits, preprocessing, and pruning are
-documented under
-[Reasoner configuration](configuration.md#reasoner-configuration). Verify
-additional request fields against the active `/openapi.json`.
+### Text-Only Requests
 
-### Text-only requests
+This guide covers image and video input only. Validate text-only workflows
+yourself.
 
-This guide documents image- and video-conditioned Reasoner requests. Use image
-or video input with the committed examples, and validate any text-only workflow
-against the deployed service before depending on it.
+## Structured Output
 
-## Structured output
-
-Prefer the standard OpenAI `response_format` JSON-schema shape in portable
-client code:
+Prefer the standard OpenAI `response_format` JSON-schema shape. The service
+enforces it with guided decoding:
 
 ```json
 {
@@ -382,10 +292,7 @@ client code:
 }
 ```
 
-The service normalizes the standard Chat Completions `response_format` shape
-and enables guided-decoding enforcement for Reasoner output. Responses requests
-use their native
-`text.format` shape instead:
+Responses requests use the native `text.format` shape instead:
 
 ```json
 {
@@ -412,23 +319,16 @@ use their native
 }
 ```
 
-The runnable task catalog follows the vLLM prompt-constrained path by default:
-it extracts the first complete JSON value from `message.content` with the
-standard JSON decoder and records whether that succeeded. It does not check the
-shape or the field formats of the result; review the output against the case's
-qualitative criteria. Add `--guided-output` to opt into the NIM-specific JSON
-Schema path for structured cases. Do not recover structured results with a
-regular expression over prose or Markdown fences.
+By default the catalog extracts the first JSON value from `message.content`.
+Add `--guided-output` to use JSON Schema enforcement. Do not recover structured
+results with a regular expression over prose or Markdown fences.
 
-Validate the running NIM's schema in `/openapi.json`, especially when upgrading
-the OpenAI client.
+## Prompting Patterns
 
-## Prompting patterns
+All task families use the same Chat Completions endpoint. Task names do not
+select separate routes. The prompt intent for each task is as follows:
 
-The Reasoner supports several task families through the same Chat Completions
-endpoint; task names do not select separate server routes:
-
-| Task | Prompt intent |
+| Task | Prompt Intent |
 | --- | --- |
 | Captioning and VQA | Describe entities, actions, environment, or answer a focused question |
 | Temporal localization | Return timestamps or intervals for a named event |
@@ -438,12 +338,9 @@ endpoint; task names do not select separate server routes:
 | 2D grounding | Return normalized coordinates for named objects or regions |
 | Action trajectories | Return ordered normalized points or poses for a requested path |
 
-Use `response_format` when an application requires guided decoding rather than
-the catalog's prompt-constrained parity path. For 2D grounding and trajectory
-points, the existing cookbook
-convention independently normalizes each axis to `[0,1000]`, with the origin at
-the upper-left, X increasing rightward, and Y increasing downward. Convert a
-validated point to pixels with:
+For 2D grounding and trajectory points, each axis is normalized to `[0,1000]`,
+with the origin at the upper-left, X increasing rightward, and Y increasing
+downward. Convert a validated point to pixels with:
 
 ```python
 pixel_x = normalized_x / 1000 * image_width
@@ -452,29 +349,25 @@ pixel_y = normalized_y / 1000 * image_height
 
 A Reasoner next-action answer or 2D trajectory is text/JSON describing a
 semantic proposal in visual coordinates. It is not a domain-specific Generator
-Action tensor and must not be sent directly to a robot. See
-[Generator Action representations](action.md#domains-and-representations).
+Action tensor and must not be sent directly to a robot. Refer to
+[Action Domains and Representations](action.md#domains-and-representations).
 
-The catalog preserves the exact user prompts from the
-[vLLM Reasoner notebook](../reasoner/run_with_vllm.ipynb) while adapting media
-transport and structured output to the NIM API. Treat recorded answers in the
-[Reasoner Prompt Guide](../reasoner/reasoner_prompt_guide.md) as examples from
-another run, not as golden NIM output. Literal `<think>` blocks requested by
-those prompts are visible response formatting, not a guarantee that the service
-exposes a stable hidden reasoning trace; downstream logic must not depend on
-them.
+The catalog reuses the exact user prompts from the
+[vLLM Reasoner notebook](../reasoner/run_with_vllm.ipynb). Answers in the
+[Reasoner Prompt Guide](../reasoner/reasoner_prompt_guide.md) come from another
+run and are not golden NIM output.
 
 ## Errors
 
-| Status/symptom | Meaning | Action |
-| --- | --- | --- |
-| HTTP 400 | Sampling or request-shape validation commonly failed | Check model, sampling ranges, extension placement, and strict `top_logprobs` types |
-| HTTP 422 | Media validation or preprocessing commonly failed | Check data URL, media ordering, prompt media limits, and selected-image format support |
-| Chat Completions route 404 | `NIM_URL` reaches Generator or the route is absent from the selected image | Inspect `/v1/metadata`, start Reasoner, and verify the live OpenAPI document |
-| Empty/no choices | Backend did not return a normal Chat Completion | Preserve response/log details and check the selected Reasoner profile |
-| Responses route 404 | The deployment disabled Responses, the selected image does not expose it, or `NIM_URL` reaches Generator | Verify metadata first; then use Chat Completions or inspect `NIM_DISABLE_RESPONSES_ROUTE` and live OpenAPI |
-| Context or KV-cache failure | Request/media exceeded runtime limits | Reduce media sampling, token budget, concurrency, or adjust operator limits carefully |
+Reasoner requests commonly fail as follows:
 
-See [operations.md](operations.md#troubleshooting) for deployment-level
-diagnostics. To serve a local or Hugging Face Reasoner checkpoint, see
-[Bring your own checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).
+| Status/Symptom | Meaning | Action |
+| --- | --- | --- |
+| Chat Completions or Responses route 404 | `NIM_URL` reaches Generator, Responses is disabled, or the route is absent | Inspect `/v1/metadata`; start Reasoner or check `NIM_DISABLE_RESPONSES_ROUTE` |
+| HTTP 422 | Media validation or preprocessing failed | Check the data URL, media ordering, and media limits |
+
+Refer to [Reasoner Troubleshooting](operations.md#reasoner) for other errors, and
+check the [live schema](api-reference.md#errors-and-live-schema) before
+depending on additional fields. To serve a local or Hugging Face Reasoner
+checkpoint, refer to
+[Bring Your Own Checkpoint](bring-your-own-checkpoint.md#reasoner-checkpoint).

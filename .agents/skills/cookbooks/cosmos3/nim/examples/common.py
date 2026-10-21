@@ -44,6 +44,65 @@ def require_runtime(
     return metadata
 
 
+def require_streaming(nim_url: str, *, backend: str = "nim") -> dict:
+    """Check the selected serving interface and streaming before sending media."""
+    nim_url = nim_url.rstrip("/")
+    if backend not in {"nim", "dynamo"}:
+        raise ValueError("backend must be 'nim' or 'dynamo'")
+
+    if backend == "dynamo":
+        response = requests.get(f"{nim_url}/health", timeout=30)
+        response.raise_for_status()
+        health = response.json()
+        instances = health.get("instances") if isinstance(health, dict) else None
+        if not isinstance(instances, list) or not any(
+            isinstance(instance, dict)
+            and instance.get("endpoint") == "generate"
+            and instance.get("instance_id") is not None
+            for instance in instances
+        ):
+            raise RuntimeError("Dynamo /health did not report a registered generate worker.")
+        response = requests.get(f"{nim_url}/v1/models", timeout=30)
+        response.raise_for_status()
+        models = response.json()
+        entries = models.get("data") if isinstance(models, dict) else None
+        if not isinstance(entries, list) or not any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("id"), str) and entry["id"]
+            for entry in entries
+        ):
+            raise RuntimeError("Dynamo /v1/models did not report a served model.")
+    else:
+        ready = requests.get(f"{nim_url}/v1/health/ready", timeout=30)
+        ready.raise_for_status()
+        metadata = require_runtime(
+            nim_url,
+            expected_runtime="reasoner",
+            expected_endpoint="/v1/chat/completions",
+        )
+        profile_id = metadata.get("selectedModelProfileId")
+        if not isinstance(profile_id, str) or not profile_id:
+            raise RuntimeError("Verify the selected Reasoner profile before streaming.")
+
+    response = requests.get(f"{nim_url}/v1/streaming/config", timeout=30)
+    if response.status_code in (404, 501):
+        raise RuntimeError(
+            "Streaming is unavailable. Start a streaming-capable Reasoner image "
+            "with NIM_ENABLE_STREAMING=true, or update NIM_URL."
+        )
+    response.raise_for_status()
+    config = response.json()
+    if (
+        not isinstance(config, dict)
+        or not isinstance(config.get("model"), str)
+        or not config["model"]
+    ):
+        raise ValueError("/v1/streaming/config must identify the served model")
+    # Streaming can identify its model by a local path while /v1/models exposes
+    # a public alias. Session creation must use the streaming config's value.
+    return config
+
+
 def require_generator_profile(
     nim_url: str,
     *,
