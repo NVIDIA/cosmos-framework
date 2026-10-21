@@ -307,9 +307,13 @@ For Edge Reasoner, replace the model selector lines in the command in
 ```
 
 The Responses API stays enabled by default (`NIM_DISABLE_RESPONSES_ROUTE=false`).
-For streaming, also set `NIM_ENABLE_STREAMING=true` and
-`NIM_STREAMING_SPEC_METHOD=none` (refer to
-[Advanced Streaming Controls](configuration.md#advanced-streaming-controls)).
+
+> **Known issue:** With `NIM_ENABLE_STREAMING=true`, Edge Reasoner fails at
+> startup with the default `NIM_STREAMING_SPEC_METHOD=dflash`, because Edge
+> does not support DFlash. To stream with Edge, set both
+> `NIM_ENABLE_STREAMING=true` and `NIM_STREAMING_SPEC_METHOD=none`, which turns
+> off speculative decoding for streaming (refer to
+> [Advanced Streaming Controls](configuration.md#advanced-streaming-controls)).
 
 For Edge-DROID, which is
 [experimental](support-matrix.md#choose-a-model), replace the model selector

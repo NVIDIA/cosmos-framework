@@ -63,6 +63,13 @@ Image: `nvcr.io/nim/nvidia/cosmos3:2.1.0`.
 | `NIM_UNIFIED_MEMORY_HOST_RESERVE_GIB` | Removed; unified-memory systems use a fixed 70% share |
 | `NIM_QWEN3GUARD_MAX_GPU_MEMORY_GB` | Removed |
 
+### Known Issues
+
+- **Edge Reasoner streaming**: With `NIM_ENABLE_STREAMING=true`, the default
+  `NIM_STREAMING_SPEC_METHOD=dflash` fails for Edge, which does not support
+  DFlash. Set `NIM_STREAMING_SPEC_METHOD=none`. Refer to
+  [Deploy Edge Models](deployment.md#deploy-edge-models).
+
 ## 2.0.0
 
 This is the first release of the unified Cosmos3 NIM, published as
