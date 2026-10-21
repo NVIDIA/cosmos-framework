@@ -60,8 +60,8 @@ import numpy as np
 import torch
 import triton
 
-from cosmos_framework.model.attention.utils.environment import is_torch_compiling
 from cosmos_framework.configs.base.defaults.multiview_attention import temporal_window_bounds
+from cosmos_framework.model.attention.utils.environment import is_torch_compiling
 from cosmos_framework.model.generator.mot import maskless_kernels as kernels
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_PADDING,
@@ -74,6 +74,7 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _teacher_forcing_pair_predicate,
 )
 from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
+from cosmos_framework.model.generator.mot.maskless_attention_compat import sm120_gapped_forward_unavailable_reason
 
 _ACCUMULATE_BLOCK_ROWS = 32
 
@@ -432,14 +433,19 @@ def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     if torch.version.hip is not None:
         return "it needs NVIDIA CUDA, not ROCm"
     major, minor = torch.cuda.get_device_capability(device)
-    if (major, minor) != (9, 0) and major != 10:
+    if (major, minor) not in ((9, 0), (12, 0)) and major != 10:
         # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
         # the segment isolation and untouched gap rows required by both paths.
-        return f"it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103), got sm{major}{minor}"
+        return (
+            "it needs FlashAttention-4 on Hopper (sm90), Blackwell (sm100/sm103), "
+            f"or experimental SM120 forward replay, got sm{major}{minor}"
+        )
     try:
-        _flash_attn_interface()
+        backend = _flash_attn_interface()
     except ImportError as error:
         return f"it needs FlashAttention-4 (flash_attn.cute.interface), which could not be imported: {error}"
+    if (major, minor) == (12, 0):
+        return sm120_gapped_forward_unavailable_reason(backend)
     return None
 
 
@@ -845,6 +851,11 @@ def _gapped_replay_forward(
 ) -> tuple[torch.Tensor, torch.Tensor]:  # [1,Q,H,Dv], [1,Q,H] FP32
     """Run each part's native forward and merge by FP32 log-sum-exp. Rows nothing reaches are zero."""
     flash_attn = _flash_attn_interface()
+    # Also protect direct custom-op callers that did not run the planner's admission check.
+    if torch.cuda.get_device_capability(q.device) == (12, 0):
+        reason = sm120_gapped_forward_unavailable_reason(flash_attn)
+        if reason is not None:
+            raise RuntimeError(reason)
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"Query heads ({q.shape[2]}) must be a multiple of KV heads ({k.shape[2]}).")
     runtime = _runtime(handle)
@@ -912,6 +923,9 @@ def _gapped_replay_backward(
     Every launch uses the same folded query layout and segment arguments as forward.
     Rows nothing reaches are zero.
     """
+    # The SM120 forward evidence does not qualify native backward or training.
+    if torch.cuda.get_device_capability(q.device) == (12, 0):
+        raise RuntimeError("SM120 gapped replay is inference-only; backward has not been qualified.")
     flash_attn = _flash_attn_interface()
     runtime = _runtime(handle)
     q, k, v = (tensor.contiguous() for tensor in (q, k, v))  # [1,Q,H,D], [1,KV,H_KV,D], [1,KV,H_KV,Dv]
