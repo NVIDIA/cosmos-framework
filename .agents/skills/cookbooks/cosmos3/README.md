@@ -577,7 +577,7 @@ OpenAI-compatible **generation** server (image/video/audio/action/transfer) for 
 Generator cookbooks and the [Transfer-Auto](simulation/auto/auto.md),
 [Sim-Auto](simulation/auto/run_sim_auto_with_vllm_omni.ipynb), and
 [Sim-Transfer](simulation/transfer/transfer.md#vllm-omni) Simulation cookbooks. For the
-Sim-Transfer model, use its [Docker setup and server instructions](simulation/transfer/transfer.md#install-and-start-the-server)
+Sim-Transfer model, use its [Docker setup and server instructions](simulation/transfer/transfer.md#vllm-omni)
 or the [runnable notebook](simulation/transfer/run_transfer_with_vllm_omni.ipynb).
 
 For Sim-Auto, use the [dedicated notebook](simulation/auto/run_sim_auto_with_vllm_omni.ipynb)

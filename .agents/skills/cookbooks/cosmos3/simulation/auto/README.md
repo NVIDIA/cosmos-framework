@@ -28,7 +28,7 @@ client environments. Authenticate with Hugging Face and accept any required mode
 terms before downloading weights.
 
 All inference notebooks download the same pinned
-[daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/ab50792f104af5304bce8b4cb7c27c096b33e63f/assets/sample_data),
+[daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data),
 originally from [PhysicalAI-Autonomous-Vehicles](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles).
 It has seven named cameras, 300 source RGB/WSM frames at 30 FPS, and 100 LiDAR
 control sweeps at 10 Hz. It is a reference example, not a complete training dataset.

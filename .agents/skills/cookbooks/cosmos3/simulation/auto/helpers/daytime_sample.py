@@ -21,7 +21,7 @@ from helpers.lidar_rangemap import convert_control
 from helpers.wsm_helpers import caption_window
 
 SAMPLE_REPO = "nvidia/Cosmos3-Nano-Transfer-Auto"
-SAMPLE_REVISION = "ab50792f104af5304bce8b4cb7c27c096b33e63f"
+SAMPLE_REVISION = "b8dcc2f70421e31db86d1b81d194c791d65eaad2"
 SAMPLE_PREFIX = "assets/sample_data"
 SAMPLE_SCENE = "daytime_scene"
 SAMPLE_CAMERAS = CAMERA_ORDER[:7]

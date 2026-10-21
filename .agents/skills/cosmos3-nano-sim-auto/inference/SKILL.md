@@ -53,7 +53,7 @@ Transfer-Auto on your rig's paired data, then distill it into Sim-Auto.
    export from [distillation](../post-training/SKILL.md).
 2. Follow [input preparation](references/input-preparation.md). Both Auto models share
    the [reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md#get-the-scene);
-   download the [sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/ab50792f104af5304bce8b4cb7c27c096b33e63f/assets/sample_data)
+   download the [sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data)
    at the pinned revision and verify its checksums.
 3. Set `AUTO_REQUEST="$AUTO_SAMPLE_ROOT/input-sim-auto.jsonl"` for the
    reference scene, or prepare your own JSON/JSONL request using

@@ -85,13 +85,13 @@ and weights from the same snapshot.
 ## Download the shared example
 
 Transfer-Auto and Sim-Auto share one
-[published daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/ab50792f104af5304bce8b4cb7c27c096b33e63f/assets/sample_data).
+[published daytime sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data).
 It contains seven synchronized camera videos, WSM v4.0.1 controls, per-camera
 captions, LiDAR controls and targets, native inference requests, and a training
 index. Download the complete folder, preserving its relative paths:
 
 ```bash
-export AUTO_SAMPLE_REVISION=ab50792f104af5304bce8b4cb7c27c096b33e63f
+export AUTO_SAMPLE_REVISION=b8dcc2f70421e31db86d1b81d194c791d65eaad2
 hf download nvidia/Cosmos3-Nano-Transfer-Auto \
   --repo-type model --revision "$AUTO_SAMPLE_REVISION" \
   --include 'assets/sample_data/*' \

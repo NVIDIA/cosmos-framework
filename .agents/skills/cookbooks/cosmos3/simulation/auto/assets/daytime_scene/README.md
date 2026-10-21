@@ -2,7 +2,7 @@
 
 The four JSON files here are **vLLM-Omni request templates**, not bundled media.
 All Auto notebooks download inputs from the same pinned
-[Hugging Face sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/ab50792f104af5304bce8b4cb7c27c096b33e63f/assets/sample_data).
+[Hugging Face sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/b8dcc2f70421e31db86d1b81d194c791d65eaad2/assets/sample_data).
 The scene and original paragraph captions come from the released
 [PhysicalAI-Autonomous-Vehicles dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles).
 

@@ -1,6 +1,6 @@
 # Prepare the Transfer training data
 
-Use [example2 on Hugging Face](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/03efb0d86d004fdfc64ffc867dffd5de5df39826/assets/sample_data/example2)
+Use [example2 on Hugging Face](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Transfer/tree/23b7738403e9b183eeecdec7e351324e8c00b613/assets/sample_data/example2)
 for the data-loading and Stage 0–3 walkthrough. Its RGB, depth and segmentation
 videos contain 121 frames at 30 FPS and 1920 × 1080. Its structured prompt
 describes that full interval.
