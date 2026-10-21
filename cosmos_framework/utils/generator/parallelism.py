@@ -45,7 +45,7 @@ from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
 from cosmos_framework.utils import log
 
-_MAX_CP = 32
+_MAX_CP = 64
 
 
 @dataclass

@@ -76,13 +76,13 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CAPTION_ACCESSES,
     CAPTION_SCOPE_ALL,
     CAPTION_SCOPE_SAME_VIEW,
-    DECOMPOSED_TEMPORAL_WINDOW_EPS,
     FLEX_GEOMETRY_PREFERENCES,
     AttentionScope,
     CaptionAccess,
     TemporalWindow,
     resolve_caption_scope,
     temporal_window_bounds,
+    validate_temporal_window_bounds,
 )
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
     build_block_mask_from_metadata_runs,
@@ -228,7 +228,7 @@ class FlexMetadata:
         # is also built directly, and a silently narrower mask is worse than a rejected one.
         if self.attention_scope not in ATTENTION_SCOPES:
             raise ValueError(f"Unknown attention_scope {self.attention_scope!r}; expected one of {ATTENTION_SCOPES}.")
-        temporal_window_bounds(self.decomposed_temporal_window_seconds)
+        validate_temporal_window_bounds(self.decomposed_temporal_window_seconds)
 
     @property
     def q_len(self) -> int:
@@ -439,17 +439,16 @@ def _multiview_pair_predicate(
     has_temporal_window = torch.tensor(decomposed_temporal_window_seconds is not None, device=device)
     # The value is meaningless while has_temporal_window is False (the same_frame branch runs
     # instead), so 0.0 stands in rather than a sentinel that would need its own guard.
+    # timestamp is frame_id * seconds_per_frame in float32 (build_multiview_flex_metadata), so a
+    # pair that is mathematically exactly on the window boundary -- the motivating case, aligning
+    # sensors at rates like 7.5 Hz and 10 Hz -- can round a hair to either side of it. The shared
+    # temporal_window_bounds helper widens both edges of the interval by a tolerance above float32
+    # rounding noise at realistic frame counts, and well below any window worth configuring in
+    # seconds, so it only ever pulls a boundary pair back in, never admits an unrelated one.
     bounds = temporal_window_bounds(decomposed_temporal_window_seconds)
     # Separate scalar allocations keep captured storage offsets zero for FA4 lowering.
     temporal_window_start = torch.tensor(0.0 if bounds is None else bounds[0], dtype=torch.float32, device=device)  # []
     temporal_window_end = torch.tensor(0.0 if bounds is None else bounds[1], dtype=torch.float32, device=device)  # []
-    # timestamp is frame_id * seconds_per_frame in float32 (build_multiview_flex_metadata), so a
-    # pair that is mathematically exactly on the window boundary -- the motivating case, aligning
-    # sensors at rates like 7.5 Hz and 10 Hz -- can round a hair to either side of it. This
-    # widens both edges of the ``[start, end]`` interval by a tolerance well above float32
-    # rounding noise at realistic frame counts, and well below any window worth configuring in
-    # seconds, so it only ever pulls a boundary pair back in, never admits an unrelated one.
-    temporal_window_eps = torch.tensor(DECOMPOSED_TEMPORAL_WINDOW_EPS, dtype=torch.float32, device=device)  # []
 
     def pair_allowed(
         b: torch.Tensor,
@@ -475,8 +474,8 @@ def _multiview_pair_predicate(
         # The "own instant" half of decomposed: same frame index by default, or a
         # bounded gap in real capture time once a window is configured (past-only by default).
         timestamp_offset = kv_fields.timestamp[kv_idx] - q_fields.timestamp[q_idx]  # broadcast Q/K shape
-        within_temporal_window = (timestamp_offset >= temporal_window_start - temporal_window_eps) & (
-            timestamp_offset <= temporal_window_end + temporal_window_eps
+        within_temporal_window = (timestamp_offset >= temporal_window_start) & (
+            timestamp_offset <= temporal_window_end
         )  # broadcast Q/K shape
         reaches_own_instant = is_decomposed & torch.where(has_temporal_window, within_temporal_window, same_frame)
         # Sensor attention uses the same view/instant footprint for conditioning and noisy

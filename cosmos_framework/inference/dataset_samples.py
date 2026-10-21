@@ -13,7 +13,7 @@ from loguru import logger
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data.dataloader import default_collate
 
-from cosmos_framework.inference.args import OmniSampleOverrides
+from cosmos_framework.inference.args import ModelMode, OmniSampleOverrides
 from cosmos_framework.scripts.dataset_utils import set_dataset_mode
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
@@ -100,6 +100,8 @@ class _BaseSamples(Iterable[Sample]):
         sample_name = f"{self._dataset_name}/{mode}/{sample_idx}" if self._dataset_name else f"{mode}/{sample_idx}"
         sample_args = OmniSampleOverrides(
             name=sample_name,
+            # Action modes are never inferred from the sample data, so carry the iterated mode explicitly.
+            model_mode=ModelMode(mode),
             prompt=prompt,
             resolution=resolution,  # type: ignore
             raw_action_dim=sample_data.get("raw_action_dim", [None])[0],

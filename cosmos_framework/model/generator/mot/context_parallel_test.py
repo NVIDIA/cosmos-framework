@@ -17,6 +17,7 @@ from torch.utils.checkpoint import checkpoint
 from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer, StepBatch
 from cosmos_framework.utils import distributed, misc
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
+from cosmos_framework.configs.base.defaults.multiview_attention import CrossViewTemporalWindowConfig
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.model.generator.mot.attention import (
     SplitInfo,
@@ -1366,7 +1367,6 @@ def _multiview_maskless_cp_case(
     cp_size: int,
     device: torch.device,
     parallel_dims: ParallelDims,
-    deduplicate_cross_view: bool = False,
     temporal_window_seconds: tuple[float, float] | None = None,
 ) -> None:
     """Run one multiview batch through the decomposition at CP=1 and at ``cp_size``, and compare.
@@ -1443,8 +1443,7 @@ def _multiview_maskless_cp_case(
         view_axis=[0] * (items_per_sample * len(samples)),
         captions=([list(enumerate(sample_lens)) for sample_lens in caption_lens] if caption_lens is not None else None),
         padded_gen_tokens=int(get_full_only_seq(packs[0])[0].shape[0]),
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=temporal_window_seconds,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=temporal_window_seconds),
         seconds_per_frame=[2 / 15] * (items_per_sample * len(samples)) if temporal_window_seconds is not None else None,
     )
 
@@ -1527,41 +1526,35 @@ def test_context_parallel_multiview_maskless() -> None:
         [(7, 4, 21), (1, 3, 6)],
         items_per_sample=1,
         per_view_captions=True,
-        deduplicate_cross_view=True,
         **case,
     )
     _multiview_maskless_cp_case(
         [(3, 4, 18), (2, 3, 8)],
         items_per_sample=2,
         per_view_captions=True,
-        deduplicate_cross_view=True,
         **case,
     )
-    for deduplicate_cross_view in (True, False):
-        _multiview_maskless_cp_case(
-            [(11, 5, 21), (1, 3, 6)],
-            items_per_sample=1,
-            per_view_captions=True,
-            deduplicate_cross_view=deduplicate_cross_view,
-            temporal_window_seconds=(-0.2, 0.2),
-            **case,
-        )
-        _multiview_maskless_cp_case(
-            [(7, 5, 21), (1, 3, 6)],
-            items_per_sample=1,
-            per_view_captions=True,
-            deduplicate_cross_view=deduplicate_cross_view,
-            temporal_window_seconds=(-0.4, 0.0),
-            **case,
-        )
-        _multiview_maskless_cp_case(
-            [(3, 5, 18), (2, 4, 8)],
-            items_per_sample=2,
-            per_view_captions=True,
-            deduplicate_cross_view=deduplicate_cross_view,
-            temporal_window_seconds=(-0.4, 0.0),
-            **case,
-        )
+    _multiview_maskless_cp_case(
+        [(11, 5, 21), (1, 3, 6)],
+        items_per_sample=1,
+        per_view_captions=True,
+        temporal_window_seconds=(-0.2, 0.2),
+        **case,
+    )
+    _multiview_maskless_cp_case(
+        [(7, 5, 21), (1, 3, 6)],
+        items_per_sample=1,
+        per_view_captions=True,
+        temporal_window_seconds=(-0.4, 0.0),
+        **case,
+    )
+    _multiview_maskless_cp_case(
+        [(3, 5, 18), (2, 4, 8)],
+        items_per_sample=2,
+        per_view_captions=True,
+        temporal_window_seconds=(-0.4, 0.0),
+        **case,
+    )
     dist.barrier()
 
 

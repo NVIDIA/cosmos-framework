@@ -1,0 +1,52 @@
+{
+  "geometry_units": "centimeters",
+  "world_axes": "FLU",
+  "vehicle_axes": "FLU",
+  "vehicle_origin": "rear_axle_ground_projection",
+  "timestamp_units": "milliseconds",
+  "times": [0, 500, 1000],
+  "ego": {
+    "position": [[0, 0, 0], [50, 0, 0], [100, 0, 0]],
+    "quaternion_order": "wxyz",
+    "quaternion": [[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]]
+  },
+  "camera": {
+    "extrinsic": {
+      "direction": "sensor_FLU_to_vehicle_FLU",
+      "translation": [100, 0, 150],
+      "quaternion_order": "wxyz",
+      "quaternion": [1, 0, 0, 0]
+    },
+    "ray_axes": "OpenCV",
+    "model": "pinhole",
+    "fx": 400,
+    "fy": 400,
+    "cx": 320,
+    "cy": 240,
+    "width": 640,
+    "height": 480
+  },
+  "objects": [{
+    "type": "delivery_van",
+    "id": "van42",
+    "origin": "bottom_center",
+    "frame": "world",
+    "position": [[1000, 100, 0], [1050, 100, 0], [1100, 100, 0]],
+    "yaw_degrees": [0, 0, 0],
+    "dimensions_lwh": [450, 180, 160],
+    "confidence": 0.91
+  }],
+  "road_boundaries": [{
+    "label": "pavement_to_grass",
+    "frame": "world",
+    "polyline": [[0, 300, 0], [2000, 300, 0]]
+  }],
+  "traffic_signals": [{
+    "semantic": "amber",
+    "center_world": [1500, 0, 450],
+    "height": 80,
+    "width": 30,
+    "front_normal_world": [-1, 0, 0],
+    "observed_times": [0, 500, 1000]
+  }]
+}

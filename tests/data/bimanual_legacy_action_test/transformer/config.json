@@ -1,0 +1,26 @@
+{
+  "cosmos3_nano_sim_bimanual": {
+    "conditioning": {
+      "schema_version": 3,
+      "mode": "action",
+      "model_action_dim": 64,
+      "num_embodiment_domains": 32,
+      "padding": {
+        "stage": "after_normalization",
+        "value": 0.0
+      },
+      "embodiments": {
+        "agibotworld": {
+          "raw_action_dim": 29,
+          "domain_id": 15,
+          "layout": {
+            "id": "agibot_backward_framewise_rot6d_v1"
+          },
+          "normalizer": {
+            "method": "quantile_rot"
+          }
+        }
+      }
+    }
+  }
+}

@@ -11,8 +11,8 @@ import.
 """
 
 import math
-from collections.abc import Sequence
-from typing import Any, Literal, get_args
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, get_args, overload
 
 import attrs
 
@@ -79,7 +79,7 @@ def resolve_caption_scope(access: CaptionAccess, *, per_view_captions: bool) -> 
 # * ``"decomposed"``: Each camera attends to its own noisy tokens plus the same frame in
 #   every other camera, which decomposes the square into a temporal half and a spatial one.
 #   Cost is V*(FS)^2 + F*(VS)^2. Rejected on a joint camera + LiDAR pack unless
-#   ``decomposed_temporal_window_seconds`` is set: the two streams do not share a frame
+#   ``cross_view_temporal_window.bounds`` is set: the two streams do not share a frame
 #   index, but they do share real capture time, which the window compares instead.
 #
 # Read by every backend, but not the same way. A ``flex_*`` backend expresses the scope as a mask.
@@ -92,67 +92,67 @@ AttentionScope = Literal["all_views", "same_view", "decomposed"]
 # The scopes of ``AttentionScope`` at runtime, which the annotation itself is not.
 ATTENTION_SCOPES = get_args(AttentionScope)
 
-# Shared by Flex's pair predicate and maskless window planning. Capture
-# times are float32; include pairs that round just beyond either window boundary.
+# Applied by temporal_window_bounds for Flex's pair predicate and maskless window planning.
+# Capture times are float32; include pairs that round just beyond either window boundary.
 DECOMPOSED_TEMPORAL_WINDOW_EPS: float = 1e-4
 
 # Signed key-time offsets from the query, in seconds: always explicit (start, end).
 TemporalWindow = tuple[float, float]
 
 
-def temporal_window_bounds(window: TemporalWindow | None) -> tuple[float, float] | None:
+def validate_temporal_window_bounds(window: TemporalWindow | None) -> TemporalWindow | None:
     """Validate explicit (start, end) bounds, including their YAML list representation."""
     if window is None:
         return None
     if (
         not isinstance(window, Sequence)
         or len(window) != 2
-        or not all(isinstance(bound, (int, float)) and math.isfinite(bound) for bound in window)
+        or not all(
+            isinstance(bound, (int, float)) and not isinstance(bound, bool) and math.isfinite(bound) for bound in window
+        )
     ):
-        raise ValueError("decomposed_temporal_window_seconds requires two finite bounds (start, end)")
+        raise ValueError("Temporal window requires two finite bounds (start, end)")
     start, end = window
     if start > end:
-        raise ValueError("decomposed_temporal_window_seconds requires start <= end")
+        raise ValueError("Temporal window requires start <= end")
     return float(start), float(end)
 
 
-def load_temporal_window(window: TemporalWindow | float | None) -> TemporalWindow | None:
-    """Migrate legacy saved configs at construction, never inside attention code.
+@overload
+def temporal_window_bounds(window: TemporalWindow) -> TemporalWindow: ...
 
-    The old scalar N admitted keys at or before the query within N seconds.
-    Converting it to (-N, N) would silently add future keys to old checkpoints.
-    """
-    if isinstance(window, (int, float)):
-        if not math.isfinite(window) or window < 0:
-            raise ValueError("decomposed_temporal_window_seconds legacy scalar must be finite and non-negative")
-        window = (-float(window), 0.0)
-    return temporal_window_bounds(window)
+
+@overload
+def temporal_window_bounds(window: None) -> None: ...
+
+
+def temporal_window_bounds(window: TemporalWindow | None) -> TemporalWindow | None:
+    """Expand validated bounds for comparisons without changing the stored config."""
+    if window is None:
+        return None
+    start, end = window
+    return start - DECOMPOSED_TEMPORAL_WINDOW_EPS, end + DECOMPOSED_TEMPORAL_WINDOW_EPS
 
 
 # Which attention the multiview generation stream runs as.
 #
-# * ``"maskless"``: the maskless three-pass decomposition -- same view across all frames, same
-#   frame across all views, and gen->und -- merged by log-sum-exp, with no mask anywhere. See
+# * ``"maskless"``: disjoint same-view, cross-view, and gen->und partitions,
+#   merged by log-sum-exp, with no mask anywhere. See
 #   ``models.mot.multiview_maskless_attention.multiview_maskless_gen_attention``.
 # * ``"flex_flash"``: the masked FlexAttention call on FlashAttention-4 (CuTeDSL) kernels.
 # * ``"flex_triton"``: the same masked call on FlexAttention's Triton kernels. Available by
 #   construction, so it is what everything else falls back to.
-# * ``"auto"``: ``"flex_flash"`` where FA4 is available, else ``"flex_triton"``. The folds
-#   rank last and are never reached, Triton always resolving, which is what keeps "auto" a
-#   choice of kernels rather than of attention. ``"maskless"`` is opt-in, by name.
+# * ``"auto"``: ``"maskless"`` when the config supports it, then ``"flex_flash"`` where
+#   FA4 is available, else ``"flex_triton"``.
 #
-# ``"maskless"`` is NOT a faster spelling of ``mask.attention_scope="decomposed"``: its two sensor
-# passes by default overlap on the query's own ``(view, frame)`` cell, and merging double-weights it where
-# the mask counts it once -- measured ~22% apart on a small sample. It is a distinct attention
-# pattern, so it is a choice about what to train and not only about how fast to run: a
-# checkpoint trained under a mask is not one ``"maskless"`` can serve, and the reverse holds too.
-# Opting into ``deduplicate_cross_view`` removes this overlap using disjoint dense
-# cross-view segments. Without a temporal window it retains the maskless instant
-# assignment; with a window it uses Flex's directed capture-time rule.
+# Maskless cross-view segments always exclude same-view keys, so every allowed key
+# is counted once. Without a temporal window it retains midpoint-quantised instant
+# assignment; with a window it uses Flex's directed capture-time rule. Mixed-rate
+# streams therefore need an explicit window for the two backends to share their geometry.
 #
-# That is why availability here is a property of the *config* rather than of the batch, and why
-# a batch the folds cannot express raises instead of quietly taking a mask. Naming ``"maskless"``
-# fixes what a run trains for its whole duration. See ``models.mot.multiview_maskless_attention.maskless_unavailable_reason``, which owns
+# Availability here is a property of the *config* rather than of the batch. A batch the
+# selected folds cannot express raises instead of quietly taking a mask. See
+# ``models.mot.multiview_maskless_attention.maskless_unavailable_reason``, which owns
 # that verdict because every condition in it is a fact about what the folds express, and
 # ``models.mot.multiview_attention.resolve_multiview_backend``, which acts on it.
 BackendPreference = Literal["auto", "maskless", "flex_triton", "flex_flash"]
@@ -164,8 +164,7 @@ BACKEND_PREFERENCES = get_args(BackendPreference)
 ResolvedBackend = Literal["maskless", "flex_triton", "flex_flash"]
 
 # The subset of ``BackendPreference`` that names a *mask geometry*. ``"maskless"`` is absent
-# because it builds no mask: it is an attention pattern, and its padding alignments come from
-# whichever flex geometry the host admits. Callers that only ever build a mask -- the benchmark's
+# because it builds no mask and imposes no Flex padding alignment. Callers that only ever build a mask -- the benchmark's
 # flex rows, and ``flex_attention.resolve_flex_backend`` -- take this rather than the full
 # preference, so ``"maskless"`` is rejected by the type instead of at the call.
 FlexGeometryPreference = Literal["auto", "flex_triton", "flex_flash"]
@@ -173,48 +172,78 @@ FlexGeometryPreference = Literal["auto", "flex_triton", "flex_flash"]
 # The preferences of ``FlexGeometryPreference`` at runtime, which the annotation itself is not.
 FLEX_GEOMETRY_PREFERENCES = get_args(FlexGeometryPreference)
 
-TemporalFrameWindow = tuple[int, int]
+
+@attrs.define(slots=False)
+class CrossViewTemporalWindowConfig:
+    """Cross-view key capture-time bounds, in seconds relative to each query."""
+
+    # Only read under attention_scope="decomposed". Replaces that scope's temporal half --
+    # "the query's own frame index" -- with an inclusive (start, end) interval of key capture
+    # times relative to the query: start <= key_timestamp - query_timestamp <= end.
+    # Configs spell out both bounds: (-0.4, 0.0) is past-only,
+    # (-0.2, 0.2) is symmetric with 0.4 s total width, (-0.4, 0.2) is asymmetric.
+    # None (the default) keeps the frame-index form, which only agrees across sensors that share one
+    # clock; a joint camera + LiDAR pack needs a window instead; see
+    # flex_attention.build_multiview_flex_metadata and ._multiview_pair_predicate.
+    #
+    # Maskless groups queries by capture time and excludes own-view keys from the
+    # window pass, counting each key once after merging with the same-view pass.
+    # None preserves midpoint-quantised instant groups.
+    bounds: TemporalWindow | None = attrs.field(default=None, converter=validate_temporal_window_bounds)
+
+    # Also let every cross-view query read its sample's first frame (capture time 0, the given
+    # frame under I2V) on the other views, whatever the window says. It widens the window's key
+    # times rather than adding a pass, so a first frame that
+    # already sits inside the window is still counted once and own-view keys stay out. Maskless
+    # only, and only with a window: the mask has no such rule, and without a window the folds
+    # group by instant rather than comparing capture times.
+    includes_first_frame: bool = False
 
 
-def _convert_temporal_frame_window(
-    value: TemporalFrameWindow | Sequence[int] | None,
-) -> TemporalFrameWindow | None:
-    """Convert a two-integer sequence to a tuple, leaving ``None`` unchanged.
+@attrs.define(slots=False)
+class SameViewTemporalWindowConfig:
+    """Same-view sensor/control neighborhood bounds, in seconds relative to each query."""
 
-    Strings, booleans, non-integer bounds, and sequences of other lengths are
-    rejected. Bound ordering is checked by the field validator.
+    # Optional inclusive temporal windows for each same-view generation edge, in seconds.
+    # Sensor denotes the generated, non-control side for both camera and LiDAR streams.
+    # A centered (-N, N) window uses the frame neighborhood within N seconds on either
+    # side and shifts inward at sequence boundaries to preserve its width. A causal
+    # (-N, 0) window includes the current frame and frames up to N seconds earlier,
+    # clipping at the beginning of the sequence. Bounds are converted using each item's
+    # seconds_per_frame when the attention plan is built. None disables temporal
+    # windowing for that edge, so every frame in the same view is used. Cross-view
+    # same-instant attention is unchanged.
+    # A windowed sensor/control edge requires matching seconds_per_frame for that pair;
+    # independent view groups may use different clocks when their frame windows agree.
+    # Experiments using selective activation checkpointing must also override
+    # model.config.activation_checkpointing.save_only_marked_ops=False when enabling
+    # any temporal window; marked-only checkpointing is not implemented for this path.
+    sensor_to_sensor_bounds: TemporalWindow | None = attrs.field(
+        default=None, converter=validate_temporal_window_bounds
+    )
+    sensor_to_control_bounds: TemporalWindow | None = attrs.field(
+        default=None, converter=validate_temporal_window_bounds
+    )
+    control_to_control_bounds: TemporalWindow | None = attrs.field(
+        default=None, converter=validate_temporal_window_bounds
+    )
+    control_to_sensor_bounds: TemporalWindow | None = attrs.field(
+        default=None, converter=validate_temporal_window_bounds
+    )
 
-    Examples:
-        ``None`` remains ``None``.
-        ``[-8, 8]`` becomes ``(-8, 8)``.
-    """
-    if value is None:
-        return None
-    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
-        raise TypeError(
-            "A temporal frame-window experiment override must be null or a two-integer list such as [-8,8]; "
-            f"got {value!r}."
-        )
-    if len(value) != 2:
-        raise ValueError(
-            f"A temporal frame-window experiment override needs exactly two bounds, such as [-8,8]; got {value!r}."
-        )
-    if any(isinstance(bound, bool) or not isinstance(bound, int) for bound in value):
-        raise TypeError(f"Temporal frame-window bounds must be integers; got {value!r}.")
-    return value[0], value[1]
+
+def _load_cross_view_temporal_window(
+    value: CrossViewTemporalWindowConfig | Mapping[str, Any],
+) -> CrossViewTemporalWindowConfig:
+    """Construct the nested config from serialized mappings when needed."""
+    return value if isinstance(value, CrossViewTemporalWindowConfig) else CrossViewTemporalWindowConfig(**value)
 
 
-def _validate_temporal_frame_window(
-    _instance: object,
-    attribute: attrs.Attribute,
-    value: TemporalFrameWindow | None,
-) -> None:
-    """Require ordered inclusive temporal-window bounds."""
-    if value is None:
-        return
-    lower, upper = value
-    if lower > upper:
-        raise ValueError(f"{attribute.name} lower bound must not exceed its upper bound; got {value!r}.")
+def _load_same_view_temporal_window(
+    value: SameViewTemporalWindowConfig | Mapping[str, Any],
+) -> SameViewTemporalWindowConfig:
+    """Construct the nested config from serialized mappings when needed."""
+    return value if isinstance(value, SameViewTemporalWindowConfig) else SameViewTemporalWindowConfig(**value)
 
 
 @attrs.define(slots=False)
@@ -239,68 +268,17 @@ class MultiviewAttentionMaskConfig:
         validator=attrs.validators.in_(ATTENTION_SCOPES),
     )
 
-    # Only read under attention_scope="decomposed". Replaces that scope's temporal half --
-    # "the query's own frame index" -- with an inclusive (start, end) interval of key capture
-    # times relative to the query: start <= key_timestamp - query_timestamp <= end.
-    # Configs spell out both bounds: (-0.4, 0.0) is past-only,
-    # (-0.2, 0.2) is symmetric with 0.4 s total width, (-0.4, 0.2) is asymmetric.
-    # Saved legacy scalar N is converted at config construction to (-N, 0.0). None
-    # (the default) keeps the frame-index form, which only agrees across sensors that share one
-    # clock; a joint camera + LiDAR pack needs a window instead; see
-    # flex_attention.build_multiview_flex_metadata and ._multiview_pair_predicate.
-    #
-    # Both maskless counting modes group queries by capture time. Exact mode
-    # excludes own-view keys from the window pass; overlapping mode includes them,
-    # counting own-view sensor keys in that window twice after merging with the
-    # full-temporal same-view pass. None preserves midpoint-quantised instant groups.
-    # OmegaConf rejects unions containing tuples even when the value is None.
-    # Keep the serialized field untyped; the converter enforces TemporalWindow.
-    decomposed_temporal_window_seconds: Any = attrs.field(default=None, converter=load_temporal_window)
-
-    # Also let every cross-view query read its sample's first frame (capture time 0, the given
-    # frame under I2V) on the other views, whatever the window says. It widens the window's key
-    # times rather than adding a pass, so under ``deduplicate_cross_view`` a first frame that
-    # already sits inside the window is still counted once and own-view keys stay out. Maskless
-    # only, and only with a window: the mask has no such rule, and without a window the folds
-    # group by instant rather than comparing capture times.
-    decomposed_temporal_window_includes_first_frame: bool = False
+    cross_view_temporal_window: CrossViewTemporalWindowConfig = attrs.field(
+        factory=CrossViewTemporalWindowConfig, converter=_load_cross_view_temporal_window
+    )
+    same_view_temporal_window: SameViewTemporalWindowConfig = attrs.field(
+        factory=SameViewTemporalWindowConfig, converter=_load_same_view_temporal_window
+    )
 
     # Let a control query attend to every non-control sensor key in the same view,
     # across all frames. False preserves the existing one-way sensor-to-control
     # connectivity. Applies equally to camera and LiDAR control/target streams.
     control_attends_sensor: bool = False
-
-    # Optional inclusive temporal windows for each same-view generation edge.
-    # Sensor denotes the generated, non-control side for both camera and LiDAR streams.
-    # A centered [-N, N] window (inclusive) uses up to 2N+1 frames and shifts inward at the
-    # sequence boundaries to preserve that width. A causal [-N, 0] window includes
-    # the current frame and up to N earlier frames, for at most N+1 frames, and clips
-    # at the beginning of the sequence. Passing None disables temporal windowing
-    # for that edge, so every frame in the same view is used. Cross-view
-    # same-instant attention is unchanged.
-    # Experiments using selective activation checkpointing must also override
-    # model.config.activation_checkpointing.save_only_marked_ops=False when enabling
-    # any temporal window; marked-only checkpointing is not implemented for this path.
-    sensor_to_sensor_window: TemporalFrameWindow | None = attrs.field(
-        default=None,
-        converter=_convert_temporal_frame_window,
-        validator=_validate_temporal_frame_window,
-    )
-    sensor_to_control_window: TemporalFrameWindow | None = attrs.field(
-        default=None,
-        converter=_convert_temporal_frame_window,
-        validator=_validate_temporal_frame_window,
-    )
-    control_to_control_window: TemporalFrameWindow | None = attrs.field(
-        default=None,
-        converter=_convert_temporal_frame_window,
-        validator=_validate_temporal_frame_window,
-    )
-    control_to_sensor_window: TemporalFrameWindow | None = attrs.field(
-        default=None,
-        converter=_convert_temporal_frame_window,
-        validator=_validate_temporal_frame_window,
-    )
 
     # Whether the LiDAR stream of a joint camera + LiDAR pack reads its sample's captions.
     # True (the default) is the existing behaviour: a sweep is not one of the rig's cameras, so
@@ -321,6 +299,25 @@ class MultiviewAttentionMaskConfig:
     radar_attends_captions: bool = True
 
 
+def normalize_multiview_temporal_windows(mask_config: Any) -> None:
+    """Normalize temporal windows in saved DictConfig masks; attrs configs are already validated."""
+    if isinstance(mask_config, MultiviewAttentionMaskConfig):
+        return
+
+    # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
+    # the attrs converter. Normalize durations before building attention.
+    cross_view_window = mask_config.cross_view_temporal_window
+    cross_view_window.bounds = validate_temporal_window_bounds(cross_view_window.bounds)
+    same_view_window = mask_config.same_view_temporal_window
+    for name in (
+        "sensor_to_sensor_bounds",
+        "sensor_to_control_bounds",
+        "control_to_control_bounds",
+        "control_to_sensor_bounds",
+    ):
+        setattr(same_view_window, name, validate_temporal_window_bounds(getattr(same_view_window, name)))
+
+
 @attrs.define(slots=False)
 class MultiviewAttentionConfig:
     """How the multiview GEN attention is computed, for a run that asked for it.
@@ -337,9 +334,9 @@ class MultiviewAttentionConfig:
     # "auto" makes the choice a property of the host as much as of the config: the same
     # experiment can get different kernels, a different padded sequence length and different
     # rounding depending on the image it runs in, so a run that has to stay bit-comparable with
-    # an earlier one pins "flex_triton" instead. "flex_flash" and "maskless" both fail the run
-    # where they are unavailable rather than falling back, since a silent fall back from "maskless"
-    # would train a different distribution under the same config.
+    # an earlier one pins its backend. "auto" prefers supported maskless attention,
+    # then Flex Flash and Flex Triton. Explicit "flex_flash" and "maskless" both fail
+    # the run where they are unavailable rather than falling back.
     backend: BackendPreference = attrs.field(
         default="auto",
         validator=attrs.validators.in_(BACKEND_PREFERENCES),
@@ -373,8 +370,8 @@ class MultiviewAttentionConfig:
     # extrinsics-only (GTA-style) transform. Ignored by the other geometry modes.
     prope_intrinsics: bool = False
 
-    # Unit ray directions and Pluecker moments in units of this many metres; the default of
-    # 25 m is the !13388 convention. The moments' slowest frequency turns by pi per unit, so a
+    # Unit ray directions and Pluecker moments in units of this many metres; the default is
+    # 25 m. The moments' slowest frequency turns by pi per unit, so a
     # scale far above the rig's extent leaves them nearly unrotated. No alpha/ramp is used by
     # this mode, and no time coordinate unless ``rigrope_include_time``. Unused under
     # ``rigrope_moment_normalization="per_sample_rms"``.
@@ -434,7 +431,7 @@ class MultiviewAttentionConfig:
     )
 
     # Whether RigRoPE descriptors carry capture time in seconds from the sample's first frame.
-    # Off (the !13388 convention) leaves the time frequency slots at zero, which costs nothing
+    # Off (the default) leaves the time frequency slots at zero, which costs nothing
     # while every key shares the query's instant. A cross-view band keys other instants too, and
     # a static rig's rays are the same at every frame, so without time the RigRoPE heads cannot
     # tell a key five frames away from one at the query's own instant.
@@ -519,37 +516,106 @@ class MultiviewAttentionConfig:
         ),
     )
 
-    # Experimental maskless expansion of the cross-view fold. Zero with frame zero disabled
-    # preserves the ordinary aligned-frame decomposition. A positive radius keys every query
-    # instant against that symmetric range of instants, and ``include_frame_zero`` additionally
-    # includes the sample's first instant in every key run. Under "all_views" and "own_view"
-    # band keys this deliberately remains an approximation: the expanded pass overlaps the full
-    # same-view pass. They exist to measure the speed/quality tradeoff; "other_views" is the
-    # duplicate-free partition.
+    # Maskless expansion of the cross-view fold. Zero with frame zero disabled preserves the
+    # ordinary aligned-frame decomposition. A positive radius keys every query instant against
+    # that symmetric range of instants, and ``include_frame_zero`` additionally includes the
+    # sample's first instant in every key run. Only "other_views" band keys are supported for
+    # expansion: they keep the cross-view and same-view passes disjoint, counting each key once.
     maskless_cross_view_band_radius: int = attrs.field(default=0, validator=attrs.validators.ge(0))
     maskless_cross_view_include_frame_zero: bool = False
-    # Which views the band keys at instants other than the query's own; under "all_views" and
-    # "own_view" the query's own instant always keys every view, as without a band, and the
-    # setting is ignored without a band.
-    # - "all_views": every view.
-    # - "own_view": the query's own view alone, which the same-view pass also keys, so the band
-    #   only double-weights it and reaches no other view at another instant. A diagnostic against
-    #   "all_views": each query instant splits into one run per view, which gathers the own
-    #   instant once per view.
+    # Which views the band keys. Without an expansion this setting is ignored, and the ordinary
+    # decomposition remains exact regardless of a value saved in an older checkpoint.
+    # - "all_views" and "own_view": accepted for older configs without expansion, but rejected
+    #   when a radius or frame-zero expansion is requested, since they would overlap the
+    #   same-view pass. Use "other_views" for those expansions.
     # - "other_views": every other view at every band instant, the query's own instant included,
     #   and never the query's own view, which the same-view pass keys at every frame. Each key
     #   then counts once, so this is exact attention over its key set, at radius zero too, and
     #   single-view samples still never enter the cross pass. Gathering the other views once per
-    #   query view would cost ~10x the "all_views" keys on an 11-view clip, so it runs one pass
-    #   per level of a binary split of the views instead: ceil(log2(views)) times the keys.
+    #   query view would repeat each key ten times on an 11-view clip, so it runs one pass per
+    #   level of a binary split of the views instead: ceil(log2(views)) times the keys.
     maskless_cross_view_band_keys: Literal["all_views", "own_view", "other_views"] = attrs.field(
-        default="all_views", validator=attrs.validators.in_(("all_views", "own_view", "other_views"))
+        default="other_views", validator=attrs.validators.in_(("all_views", "own_view", "other_views"))
     )
 
     # What the multiview backend lets the noisy tokens attend to.
-    mask: MultiviewAttentionMaskConfig = MultiviewAttentionMaskConfig()
+    mask: MultiviewAttentionMaskConfig = attrs.field(factory=MultiviewAttentionMaskConfig)
 
-    # Count each visual key once by excluding same-view keys from the cross-instant
-    # pass. Only used by maskless decomposed attention; same_view is already exact.
-    # False preserves existing recipes.
-    deduplicate_cross_view: bool = False
+
+# Same-view windows of masks saved before the temporal-window configs, by their current names.
+_SAVED_SAME_VIEW_FRAME_WINDOWS: dict[str, str] = {
+    "sensor_to_sensor_window": "sensor_to_sensor_bounds",
+    "sensor_to_control_window": "sensor_to_control_bounds",
+    "control_to_control_window": "control_to_control_bounds",
+    "control_to_sensor_window": "control_to_sensor_bounds",
+}
+
+
+def _drop(config: Any, name: str) -> None:
+    """Remove a saved key if present."""
+    if hasattr(config, name):
+        delattr(config, name)
+
+
+def _restore_missing_fields(config: Any, default: Any) -> None:
+    """Add the fields a config saved before they existed lacks, as plain values."""
+    for field in attrs.fields(type(default)):
+        if not hasattr(config, field.name):
+            value = getattr(default, field.name)
+            setattr(config, field.name, attrs.asdict(value) if attrs.has(type(value)) else value)
+
+
+def _saved_cross_view_window(mask: Any) -> dict[str, Any]:
+    """The cross-view window equivalent to a mask's earlier ``decomposed_temporal_window_*`` keys."""
+    window = getattr(mask, "decomposed_temporal_window_seconds", None)
+    if isinstance(window, (int, float)) and not isinstance(window, bool):
+        # The old scalar N admitted keys at or before the query within N seconds.
+        if not math.isfinite(window) or window < 0:
+            raise ValueError("Saved decomposed_temporal_window_seconds must be finite and non-negative")
+        window = (-float(window), 0.0)
+    return {
+        "bounds": validate_temporal_window_bounds(window),
+        "includes_first_frame": bool(getattr(mask, "decomposed_temporal_window_includes_first_frame", False)),
+    }
+
+
+def upgrade_saved_multiview_attention(config: Any) -> None:
+    """Bring a saved ``multiview_attention`` config to the current schema, in place.
+
+    Exported checkpoint configs arrive as plain DictConfig objects, bypassing the attrs
+    converters, and can predate fields or use the earlier temporal-window keys. attrs configs
+    are already current. A config that cannot be upgraded is left unchanged.
+    """
+    if config is None or isinstance(config, MultiviewAttentionConfig):
+        return
+    mask = getattr(config, "mask", None)
+    saved_mask = mask is not None and not isinstance(mask, MultiviewAttentionMaskConfig)
+    # Convert and check before changing anything, so a failed upgrade keeps the saved values.
+    cross_view = None
+    same_view = None
+    if saved_mask and not hasattr(mask, "cross_view_temporal_window"):
+        cross_view = _saved_cross_view_window(mask)
+    if saved_mask and not hasattr(mask, "same_view_temporal_window"):
+        # Saved windows counted frames, which cannot become seconds without the clip's frame rate.
+        configured = sorted(name for name in _SAVED_SAME_VIEW_FRAME_WINDOWS if getattr(mask, name, None) is not None)
+        if configured:
+            raise ValueError(
+                f"Saved multiview mask sets frame-count windows {configured}. Set the matching "
+                "model.config.multiview_attention.mask.same_view_temporal_window.*_bounds in seconds instead."
+            )
+        same_view = dict.fromkeys(_SAVED_SAME_VIEW_FRAME_WINDOWS.values())
+
+    # Maskless cross-view segments now always exclude same-view keys, so nothing reads this.
+    _drop(config, "deduplicate_cross_view")
+    _restore_missing_fields(config, MultiviewAttentionConfig())
+    if not saved_mask:
+        return
+    for name in ("decomposed_temporal_window_seconds", "decomposed_temporal_window_includes_first_frame"):
+        _drop(mask, name)
+    for name in _SAVED_SAME_VIEW_FRAME_WINDOWS:
+        _drop(mask, name)
+    if cross_view is not None:
+        mask.cross_view_temporal_window = cross_view
+    if same_view is not None:
+        mask.same_view_temporal_window = same_view
+    _restore_missing_fields(mask, MultiviewAttentionMaskConfig())

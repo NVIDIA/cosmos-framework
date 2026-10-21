@@ -196,8 +196,8 @@ class JobConfig:
     group: str = ""
     # Run/job name.
     name: str = ""
-    # W&B mode, can be "online", or "disabled".
-    wandb_mode: str = "online"
+    # W&B is opt-in; use "online" or "offline" to enable logging.
+    wandb_mode: str = "disabled"
     # Cluster configuration (optional, for cluster-specific settings).
     cluster: Optional[Any] = None
 

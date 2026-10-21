@@ -55,7 +55,11 @@ def _pairwise(
         same_view_scores = (
             (q[qi] * k[selected]).sum(-1) if cross_view_only else (qr[qi].conj() * kr[selected]).real.sum(-1)
         )  # [N_same,H]
-        cross = [i for i, (_, _, f, c) in enumerate(layout) if f == frame and not c] if not control else []
+        cross = (
+            [i for i, (a, v, f, c) in enumerate(layout) if f == frame and not c and (a, v) != (axis, view)]
+            if not control
+            else []
+        )
         cross_scores = (qr[qi].conj() * kr[cross]).real.sum(-1)  # [N_cross,H]
         sensor_scores = torch.cat((same_view_scores, cross_scores))  # [N_sensor,H]
         selected += cross
@@ -155,9 +159,8 @@ def test_fused_joint_attention_and_backward(cross_view_only: bool, separate_cros
         {"geometry_position_encoding": "prope"},
         {"maskless_cross_view_band_radius": 1},
         {"maskless_cross_view_include_frame_zero": True},
-        {"maskless_cross_view_band_keys": "other_views"},
     ],
-    ids=["rigrope", "prope_cross_view", "prope", "band_radius", "frame_zero", "band_keys"],
+    ids=["rigrope", "prope_cross_view", "prope", "band_radius", "frame_zero"],
 )
 def test_multiview_action_conditioning_rejects_geometry_and_band_settings(attention: dict[str, object]) -> None:
     """Action conditioning builds its own plan without geometry or bands, so it must not drop them silently."""

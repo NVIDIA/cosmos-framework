@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Required: COSMOS_SIM_BIMANUAL_LOCAL_BUNDLE and COSMOS_SIM_BIMANUAL_STAGE0_CHECKPOINT.
+# Stage 0 checkpoint ROOT, including regular and EMA trees; fresh optimizer/state.
+[job]
+task = "simulation"
+experiment = "sim_local_bimanual_stage1_tf"
+name = "sim_bimanual_stage1_tf"
+wandb_mode = "disabled"

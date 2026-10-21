@@ -1,0 +1,115 @@
+# @package _global_
+
+defaults:
+  - camera_spec: internal_1cam
+  - input_fps_spec: internal_driving
+  - resolution_spec: resize_1280x720
+  - output_frame_spec: 10fps_100frame_45overlap_3chunk
+  - s3_spec: no_upload
+  - minimap_spec: internal_driving
+  - _self_
+
+
+input_root: ???
+output_root: ???
+clip_id_json: null
+camera_type: ftheta
+post_training: false
+novel_pose_folder: null
+manual_split: null
+# "v1"/"v2"/"v3" = legacy hdmap; "v4" = WM v4.0 (signs, traffic lights, road
+# markings, lens distortion); "v4.1" = WM v4.0 + static occupancy voxels.
+version: "v4"
+skip: ['lidar']
+skip_layers: []      # v3 layers: minimap, lanelines, traffic_lights, bbox, or any minimap sub-type (road_boundaries, crosswalks, road_markings, wait_lines, poles, traffic_signs)
+bbox_object_types: []   # empty = all types (Car, Truck, Pedestrian, Cyclist, Others)
+bbox_fill_face: "all"   # none = edges only; all/front/front_and_back = filled faces
+bbox_compare: false     # overlay old straight edges (red) alongside new curved edges (white)
+# Applies to v3 polygon layers and WMv4 road-marking footprint polygons.
+curve_subdivide: 10     # 1-10 subdivision quality for fisheye distortion (1=straight lines, 10=max)
+# WMv3/WMv4 color attenuation by camera-forward depth. This changes color only;
+# line widths continue to shrink with distance when false.
+depth_gradient: false
+skip_resume: false
+# Opt-in fallback for mixed 10-second/20-second clip lists. If a clip has fewer
+# frames than output_frame_spec.target_chunk_frame, write its available frames
+# as a single _0.mp4 instead of emitting no output.
+allow_short_final_chunk: false
+# WMv4: Tier-1 sign category keys (from _classify_sign) rendered as single-sided:
+# front artwork + a dedicated back-color face, so the blank back shows when
+# viewed from behind. Categories NOT listed here render double-sided — front
+# polygon only, visible from any view angle. The default below is the five
+# first-class categories we care about; anything else (other signs) stays
+# double-sided, since rendering a true single-sided sign as double-sided is less
+# damaging than the reverse. Available keys: stop, yield, do_not_enter, one_way,
+# pedestrian_crossing. Matched case-insensitively. No effect when version != "v4".
+single_sided_sign_categories: ["stop", "yield", "do_not_enter", "one_way", "pedestrian_crossing"]
+# WMv4: subfolder of input_root holding per-frame traffic-light states.
+# "3d_traffic_lights_status" = legacy red/yellow/green/unknown source;
+# "3d_traffic_lights_lightnet_status" = richer LightNet v25 taxonomy (per-
+# direction arrows etc.), collapsed to the same palette colors for the face.
+# No effect when version != "v4".
+traffic_light_status_dir: "3d_traffic_lights_lightnet_status"
+# WMv4 road-marking turn-arrows (painted lane arrows: forward/left/right,
+# left_forward/right_forward, and merge_left/merge_right). Two options that compose:
+#   use_road_marking_arrow_colors (Option 1, default): color recognized arrows
+#     from config_color_road_marking.json instead of the generic road_markings
+#     color. Categories may share one color; non-arrow markings keep the generic.
+#   use_road_marking_arrow_shapes (Option 2): draw an oriented polygon arrow glyph
+#     from assets/road_marking_arrows/arrow_shape.json in place of the arrow's
+#     rectangular footprint.
+# No effect when version != "v4".
+use_road_marking_arrow_colors: true
+use_road_marking_arrow_shapes: true
+# WMv4: uniform multiplier applied after each arrow glyph is fitted to its
+# exported footprint in both width and length. 1.0 fills the footprint; values
+# below 1.0 leave a margin. null = use arrow_shape.json's size_scale. Only affects
+# glyphs (use_road_marking_arrow_shapes=true).
+road_marking_arrow_size_scale: 1.0
+# WMv4 stop / keep_clear markings: render each exported footprint polygon using
+# its category color from config_color_road_marking.json instead of the generic
+# road_markings color. No effect when version != "v4".
+use_road_marking_text_colors: true
+# Optional WMv4 KEEP_CLEAR/TEXT_PAINT footprint refinement. When enabled,
+# shared mesh edges are subdivided until every eligible triangle edge is at
+# most this world-space length. Every other class and glyph mesh is unchanged.
+use_road_marking_interior_tessellation: true
+road_marking_interior_tessellation_max_edge_m: 1.0
+# WMv4/WMv4.1: render solid road boundaries colored by boundary_type.
+# Disable to restore the legacy single-color road-boundary layer.
+use_road_boundary_colors: true
+# WMv4/WMv4.1: per-frame pose-only filter for static map geometry below the
+# driven road level. This is one-sided: overpass geometry is deliberately kept.
+filter_below_ego_level: true
+# ---------------------------------------------------------------------------
+# WMv4.1: static occupancy voxels. Set version to "v4.1" to render everything
+# v4.0 does PLUS GPU-instanced occupancy voxel towers from
+# input_root/3d_occupancy_static/<clip>.tar (produced by
+# convert_static_occupancy_to_rds_hq.py). All keys below have no effect when
+# version != "v4.1".
+# ---------------------------------------------------------------------------
+voxel_max_distance: 80.0          # forward cull distance (m) per frame; null = no cull
+voxel_max_lateral: 28.0           # lateral cull distance (m, +/-) per frame; null = no cull
+voxel_max_height: 2.0             # clamp tower height (m); null = no clamp
+voxel_color: [180, 180, 180]      # RGB [0-255] for voxels; null = orange fallback
+voxel_ground_elevation: "base"    # base | hdmap | tilted_plane | none — tower base elevation source
+voxel_ground_smooth_window: 10    # tilted_plane smoothing half-window (frames); only for tilted_plane
+# WMv4.1 training: when true, derive column layout, base elevations, and heights
+# entirely from pc_voxelsize_01 — 3d_occupancy_static is not read at all.
+# Per cell: base = min voxel z; voxels above base + voxel_max_height are discarded
+# (removes overpass decks etc.); the vertical extent is then snapped to the voxel
+# z-lattice so each column is an integer stack of cubes (>= 1 voxel tall).
+# No effect when version != "v4.1".
+use_3d_bases: true
+# WMv4.1: delete voxel columns that intersect WMv4.0-and-earlier elements so
+# those stay visible (realistic occlusion kept elsewhere). Static elements:
+# traffic signs, traffic lights, poles (bounding boxes culled per-frame).
+voxel_cull_world_model: true
+voxel_cull_margin: 0.2            # extra clearance (m) around each priority element
+# WMv4.1: draw edges around each voxel so towers read as stacked cubes.
+voxel_edges: true
+voxel_edge_color: [0, 0, 0]      # RGB [0-255] for the cube edges (default black)
+voxel_edge_width: 0.5            # edge line width (pixels, distance-attenuated)
+# WMv4.1: split each column into stacked unit cubes so horizontal cube-boundary
+# lines are drawn at every voxel level (height/depth cues). Needs voxel_edges.
+voxel_stacked_cubes: true

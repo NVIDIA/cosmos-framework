@@ -14,13 +14,23 @@ from typing import Any
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
+from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    drop_pad_segment,
+    from_mode_splits,
+    from_und_gen_splits,
+    get_caption_seq_offsets,
+    get_causal_seq,
+    get_full_only_seq,
+    get_gen_seq,
+)
 from cosmos_framework.model.attention import (
     attention,
     multi_dimensional_attention,
     multi_dimensional_attention_varlen,
 )
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
 from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
@@ -42,22 +52,13 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     MultiviewARMemoryValue,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
+    write_current_kv_to_static_buffer,
     zero_null_action_values,
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
-)
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    drop_pad_segment,
-    from_mode_splits,
-    from_und_gen_splits,
-    get_caption_seq_offsets,
-    get_causal_seq,
-    get_full_only_seq,
-    get_gen_seq,
 )
 
 
@@ -1878,7 +1879,8 @@ def attention_AR_gen_only(
       varlen attention ignores only the padded text suffix.
     - **Static-shape** (``kv_k_static`` set, ``gen_k_hist`` ``None``):
       write the current frame in place into the pooled ``[und | curr | hist |
-      pad]`` buffer (real positions contiguous from offset 0; padding in the
+      pad]`` buffer (Transfer preserves ``[und | hist | curr | pad]`` instead;
+      real positions contiguous from offset 0; padding in the
       tail) and call ``attention()`` on that buffer
       with the varlen kwargs ``cumulative_seqlen_Q`` /
       ``cumulative_seqlen_KV`` pre-built outside the captured region in
@@ -2004,22 +2006,21 @@ def attention_AR_gen_only(
 
     if memory_value.for_cuda_graphs:
         # Static-shape branch.  ``kv_k_static`` / ``kv_v_static`` are one pooled
-        # ``[und | curr | hist | pad]`` buffer per K and V: real positions live in
+        # buffer per K and V: real positions live in
         # [0, S_und + gen_len + real_gen_cache_len) and the tail is padding to a
         # fixed max size, so a single ``cumulative_seqlen_KV = [0,
         # real_total_kv_len]`` restricts the kernel to the real prefix without any
         # padding hole.  The und region was primed once per generation and the
         # history region rebuilt outside the compiled region; only the current
         # frame is written here, in place, instead of materialising the whole
-        # sequence with ``cat`` on every forward.  RoPE was applied to each K
-        # vector at projection time, so order within the seq dim is irrelevant
-        # for correctness.
+        # sequence with ``cat`` on every forward. Transfer preserves the eager
+        # history/current order; other models retain their existing current-first path.
         assert memory_value.cu_seqlens_q_t is not None
         assert memory_value.cu_seqlens_kv_t is not None
         if memory_value.kv_k_static is None:
             # Legacy static layout: separate ``und_k_cached`` / ``gen_k_buf_full`` buffers
-            # (real history prefix + padded tail) materialised as ``[und | curr |
-            # gen_buf_full]`` per forward.  Kept for callers that build ``ARMemoryValue``
+            # (real history prefix + padded tail) materialised per forward.
+            # Kept for callers that build ``ARMemoryValue``
             # by hand; the production state hands the block the composite buffer below.
             assert memory_value.und_k_cached is not None and memory_value.und_v_cached is not None, (
                 "static-shape branch requires the und cache to be populated"
@@ -2027,8 +2028,13 @@ def attention_AR_gen_only(
             assert memory_value.gen_k_buf_full is not None and memory_value.gen_v_buf_full is not None, (
                 "static-shape branch requires either kv_k_static or gen_k_buf_full"
             )
-            k_legacy = torch.cat([memory_value.und_k_cached, k_curr, memory_value.gen_k_buf_full], dim=1)
-            v_legacy = torch.cat([memory_value.und_v_cached, v_curr, memory_value.gen_v_buf_full], dim=1)
+            if memory_value.preserve_transfer_numerics:
+                k_legacy = torch.cat([memory_value.und_k_cached, memory_value.gen_k_buf_full, k_curr], dim=1)
+                v_legacy = torch.cat([memory_value.und_v_cached, memory_value.gen_v_buf_full, v_curr], dim=1)
+                write_current_kv_to_static_buffer(k_legacy, v_legacy, k_curr, v_curr, memory_value.cu_seqlens_kv_t)
+            else:
+                k_legacy = torch.cat([memory_value.und_k_cached, k_curr, memory_value.gen_k_buf_full], dim=1)
+                v_legacy = torch.cat([memory_value.und_v_cached, v_curr, memory_value.gen_v_buf_full], dim=1)
             attn_result = attention(
                 query=q_gen.unsqueeze(0),  # [1, S_curr, H, D]
                 key=k_legacy,  # [1, KV_LEN_MAX, H_kv, D]
@@ -2054,24 +2060,30 @@ def attention_AR_gen_only(
 
         k_full = memory_value.kv_k_static  # [1, B*R, H_kv, D]
         v_full = memory_value.kv_v_static  # [1, B*R, H_kv, D]
-        curr_start = memory_value.static_curr_offset
-        if batch_rows == 1:
-            # Literally the single-row write; kept as-is so the B=1 compiled graph is unchanged.
-            k_full[:, curr_start : curr_start + gen_len].copy_(k_curr)
-            v_full[:, curr_start : curr_start + gen_len].copy_(v_curr)
-        else:
-            # Row r's current frame sits at r*R + curr_start; one strided copy for all rows.  The
-            # packed gen stream is sample-major with ``gen_len`` tokens per row.
-            row_stride = memory_value.static_row_stride
+        if memory_value.preserve_transfer_numerics:
+            # Transfer's current frame follows each row's real history, whose
+            # length can differ after independent resets.
             num_kv_heads, head_dim = k_gen.shape[-2], k_gen.shape[-1]
-            k_rows = k_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)  # [B,g,H_kv,D]
-            v_rows = v_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)  # [B,g,H_kv,D]
-            k_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
-                k_rows
-            )
-            v_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
-                v_rows
-            )
+            k_rows = k_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)
+            v_rows = v_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)
+            write_current_kv_to_static_buffer(k_full, v_full, k_rows, v_rows, memory_value.cu_seqlens_kv_t)
+        else:
+            # Keep the existing fixed-offset copy and graph for other AR models.
+            curr_start = memory_value.static_curr_offset
+            if batch_rows == 1:
+                k_full[:, curr_start : curr_start + gen_len].copy_(k_curr)
+                v_full[:, curr_start : curr_start + gen_len].copy_(v_curr)
+            else:
+                row_stride = memory_value.static_row_stride
+                num_kv_heads, head_dim = k_gen.shape[-2], k_gen.shape[-1]
+                k_rows = k_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)
+                v_rows = v_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)
+                k_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
+                    k_rows
+                )
+                v_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
+                    v_rows
+                )
 
         # ``cu_seqlens_q_t`` and ``cu_seqlens_kv_t`` are pre-built outside
         # the captured region (in ``ARMemoryState.init``) as ``[2]`` int32

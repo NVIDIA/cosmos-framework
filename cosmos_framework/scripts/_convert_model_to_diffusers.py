@@ -132,6 +132,13 @@ _TIME_EMBEDDER_KEY_REMAP = {
 
 DEFAULT_VISION_ENCODER_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 VISION_ENCODER_CHECKPOINT_PREFIX = "model.visual."
+# Root-weight prefixes a source checkpoint may store the Qwen3-VL vision tower
+# under: the exported HF layout first, then the internal OmniMoTModel layouts.
+VISION_ENCODER_CHECKPOINT_PREFIXES = (
+    VISION_ENCODER_CHECKPOINT_PREFIX,
+    "model.net.language_model.visual.",
+    "net.language_model.visual.",
+)
 VISION_ENCODER_CHECKPOINT_SUBFOLDER = "vision_encoder"
 
 COSMOS3_EDGE_REASONER = "nvidia/Cosmos3-Edge"
@@ -524,6 +531,18 @@ def _checkpoint_has_weight_prefix(checkpoint_path: pathlib.Path, prefix: str) ->
     return any(key.startswith(prefix) for key in _checkpoint_weight_map(checkpoint_path))
 
 
+def _checkpoint_vision_weight_prefix(checkpoint_path: pathlib.Path) -> str | None:
+    """The first of VISION_ENCODER_CHECKPOINT_PREFIXES with root weights in the checkpoint, else None."""
+    return next(
+        (
+            prefix
+            for prefix in VISION_ENCODER_CHECKPOINT_PREFIXES
+            if _checkpoint_has_weight_prefix(checkpoint_path, prefix)
+        ),
+        None,
+    )
+
+
 def _checkpoint_vision_subfolder_files(checkpoint_path: pathlib.Path) -> dict[str, list[str]]:
     """Group root-index keys stored under vision_encoder/ by shard file.
 
@@ -646,9 +665,9 @@ def _load_vision_encoder(
     state_dict = _get_source_vision_state_dict(source_model)
     if state_dict is not None:
         log.info("Extracting Qwen3-VL vision encoder weights from loaded source model …")
-    elif _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX):
-        log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path} …")
-        state_dict = _load_prefixed_safetensors_state_dict(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
+    elif (checkpoint_prefix := _checkpoint_vision_weight_prefix(checkpoint_path)) is not None:
+        log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path} ('{checkpoint_prefix}*') …")
+        state_dict = _load_prefixed_safetensors_state_dict(checkpoint_path, checkpoint_prefix)
     else:
         log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path}/vision_encoder …")
         state_dict = _load_vision_subfolder_state_dict(checkpoint_path)
@@ -1378,7 +1397,7 @@ def convert_model_to_diffusers(args: Args) -> None:
 
     # A ViT sidecar can be built from any of three sources: the loaded reasoner
     # model's own `.visual` tower (only present when include_visual is truthy),
-    # root `model.visual.*` weights, or a vision_encoder/ subfolder.
+    # root weights under any VISION_ENCODER_CHECKPOINT_PREFIXES, or a vision_encoder/ subfolder.
     has_source_visual = any(
         module is not None and next(module.parameters(), None) is not None
         for module in (
@@ -1389,7 +1408,7 @@ def convert_model_to_diffusers(args: Args) -> None:
     )
     has_vision_encoder_weights = (
         has_source_visual
-        or _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
+        or _checkpoint_vision_weight_prefix(checkpoint_path) is not None
         or bool(_checkpoint_vision_subfolder_files(checkpoint_path))
     )
     vision_gen = bool(
@@ -1406,8 +1425,9 @@ def convert_model_to_diffusers(args: Args) -> None:
         vision_encoder = _load_vision_encoder(checkpoint_path, _tmp, args.vision_encoder_model, dtype)
     elif want_vision_encoder:
         log.warning(
-            f"No extractable vision encoder weights found (no loaded reasoner ViT, no '{VISION_ENCODER_CHECKPOINT_PREFIX}*' "
-            "root weights, no vision_encoder/ subfolder); skipping vision_encoder/ save. Convert a checkpoint exported "
+            "No extractable vision encoder weights found (no loaded reasoner ViT, no "
+            f"{'/'.join(f'{prefix}*' for prefix in VISION_ENCODER_CHECKPOINT_PREFIXES)} root weights, "
+            "no vision_encoder/ subfolder); skipping vision_encoder/ save. Convert a checkpoint exported "
             "with include_visual=True (or one bundling a vision_encoder/) to include the reasoner vision tower."
         )
     elif args.save_pipeline and vision_gen and args.skip_vision_encoder:

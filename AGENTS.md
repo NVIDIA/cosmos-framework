@@ -108,8 +108,8 @@ execution assets, not a second AutoML entrypoint.
 
 ## Gotchas
 
-- **NGC / PyTorch containers**: run `export LD_LIBRARY_PATH=''` before any `python` call or you'll hit a `torch._C` import error. See [`docs/setup.md`](./docs/setup.md#pytorch-import-issue).
+- **NGC / PyTorch containers**: inherited libraries can conflict with PyTorch. Do not clear `LD_LIBRARY_PATH` automatically: required CUDA compatibility libraries may be there. See [`docs/setup.md`](./docs/setup.md#pytorch-import-issue) and verify CUDA initialization after changing paths.
 - **Reproducibility**: always pass `--seed <int>`. Without it a random seed is used each run.
 - **JSON paths**: relative paths inside input JSON files resolve relative to the JSON file's directory, not the working directory.
-- **Resume**: re-running the same inference command skips already-generated outputs automatically.
+- **Inference outputs**: re-running the same command regenerates requests and overwrites matching output paths. Use a fresh output directory to preserve earlier results.
 - **Separation of concerns**: keep training-time imports out of `cosmos_framework/inference/`, and keep heavyweight inference-only deps (vLLM, Ray Serve, Gradio) gated behind optional extras so plain training installs stay slim.

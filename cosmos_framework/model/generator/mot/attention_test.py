@@ -6,7 +6,7 @@ import math
 import random  # noqa: I001 - release import rewriting changes the package sort order.
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from dataclasses import fields as dataclass_fields
 from types import SimpleNamespace
 from typing import Any, cast
@@ -21,6 +21,10 @@ from cosmos_framework.model.attention import merge_attentions, multi_dimensional
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
 from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
 from cosmos_framework.utils.misc import set_torch_compile_options
+from cosmos_framework.configs.base.defaults.multiview_attention import (
+    CrossViewTemporalWindowConfig,
+    SameViewTemporalWindowConfig,
+)
 from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
 from cosmos_framework.model.generator.mot import multiview_maskless_attention
 from cosmos_framework.model.generator.mot.attention import (
@@ -2082,7 +2086,6 @@ def _plan(
     device: torch.device,
     padded: int | None = None,
     attention_scope: str = "decomposed",
-    deduplicate_cross_view: bool = False,
     temporal_window_seconds: tuple[float, float] | None = None,
 ) -> multiview_maskless_attention.MultiviewMasklessPlan:
     """The single-sample plan."""
@@ -2092,8 +2095,7 @@ def _plan(
         device=device,
         padded_gen_tokens=padded,
         attention_scope=attention_scope,
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=temporal_window_seconds,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=temporal_window_seconds),
         seconds_per_frame=[2 / 15] if temporal_window_seconds is not None else None,
     )
 
@@ -2129,7 +2131,10 @@ def test_window_plan_separates_control_and_sensor_tokens() -> None:
         items_per_sample=[2],  # The two items belong to one sample.
         is_control=[True, False],  # The control item precedes its RGB target.
         control_attends_sensor=True,
-        sensor_to_sensor_window=(-8, 8),  # Enable window-plan construction.
+        seconds_per_frame=[0.1, 0.1],
+        same_view_temporal_window=SameViewTemporalWindowConfig(
+            sensor_to_sensor_bounds=(-0.8, 0.8),  # Enable window-plan construction.
+        ),
     )
 
     # Neighborhood attention receives one view as ``[frames, height, width]``.
@@ -2182,7 +2187,10 @@ def test_window_plan_rejects_different_control_and_sensor_layouts() -> None:
             items_per_sample=[2],
             is_control=[True, False],
             control_attends_sensor=True,
-            sensor_to_sensor_window=(-1, 1),  # Enable neighborhood-plan construction.
+            seconds_per_frame=[0.1, 0.1],
+            same_view_temporal_window=SameViewTemporalWindowConfig(
+                sensor_to_sensor_bounds=(-0.1, 0.1),  # Enable neighborhood-plan construction.
+            ),
         )
 
 
@@ -2194,7 +2202,8 @@ def test_window_plan_supports_sensor_to_sensor_window_without_control() -> None:
         num_views=[2],  # One sensor item containing two views.
         token_shapes=[(6, 1, 2)],  # (2 views * 3 frames, 1 height, 2 width).
         device=torch.device("cpu"),
-        sensor_to_sensor_window=(-8, 8),
+        seconds_per_frame=[0.1],
+        same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_sensor_bounds=(-0.8, 0.8)),
     )
 
     assert plan.neighborhood_layout == (3, 1, 2)
@@ -2207,12 +2216,15 @@ def test_window_plan_supports_sensor_to_sensor_window_without_control() -> None:
 def test_window_plan_rejects_control_edges_without_control() -> None:
     # A control edge is undefined when the batch contains only sensor queries and
     # keys. Sensor-to-sensor windowing remains valid for the same geometry.
-    with pytest.raises(ValueError, match="without control items supports only sensor_to_sensor_window"):
+    with pytest.raises(
+        ValueError, match="without control items supports only same_view_temporal_window.sensor_to_sensor_bounds"
+    ):
         multiview_maskless_attention.build_multiview_maskless_plan(
             num_views=[2],  # One sensor item containing two views.
             token_shapes=[(6, 1, 2)],  # (2 views * 3 frames, 1 height, 2 width).
             device=torch.device("cpu"),
-            sensor_to_control_window=(-8, 8),
+            seconds_per_frame=[0.1],
+            same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_control_bounds=(-0.8, 0.8)),
         )
 
 
@@ -2242,17 +2254,12 @@ def test_same_view_neighborhood_attention_matches_frame_window_boundary_policy(w
     )  # [N,H,D]
     k = torch.randn_like(q)  # [N,H,D]
     v = torch.randn_like(q)  # [N,H,D]
-    # Identity gathers isolate the temporal-window calculation from any token
+    # A single view isolates the temporal-window calculation from any token
     # reordering performed by a multi-item attention plan.
-    gather = torch.arange(frames * spatial, device=device)  # [N]
-
     actual, _ = multiview_maskless_attention._same_view_neighborhood_attention(
-        q,
-        k,
-        v,
-        query_gather=gather,
-        key_gather=gather,
-        layout=(frames, height, width),  # NATTEN layout: (time, height, width).
+        q.reshape(1, frames, height, width, heads, head_dim),  # [1,F,Y,X,H,D]
+        k.reshape(1, frames, height, width, heads, head_dim),  # [1,F,Y,X,H,D]
+        v.reshape(1, frames, height, width, heads, head_dim),  # [1,F,Y,X,H,D]
         window=window,  # Centered fixed-width or causal temporal bounds.
     )  # [1,N,H,D]
 
@@ -2286,14 +2293,11 @@ def _multiview_maskless_reference(
     spatial_tokens: int,
     cross_view: bool = True,
 ) -> torch.Tensor:
-    """What merging the three passes has to come out as, in float64.
+    """The exact union of same-view and same-frame keys, in float64.
 
-    ``merge_attentions`` merges as if the passes' key sets had been concatenated, so a GEN key
-    that is both in the query's view and at its frame appears twice in that concatenation. Two
-    copies of one key with one score is the same distribution as one copy carrying twice the
-    weight, which is what the multiplicity below encodes: 2 on the query's own ``(view, frame)``
-    cell, 1 on the rest of its view and the rest of its frame, 0 elsewhere, and 1 on every
-    caption token. The overlap is deliberate -- see ``multiview_maskless_attention``.
+    The maskless passes use disjoint key sets for each query. Every allowed GEN key
+    therefore contributes once, including the query's own ``(view, frame)`` cell,
+    alongside one copy of every caption token.
     """
     gen_q = batch.gen_q.double()  # [N_gen,heads,head_dim]
     heads, head_dim = gen_q.shape[1], gen_q.shape[2]
@@ -2314,7 +2318,7 @@ def _multiview_maskless_reference(
     # group, so the pass is skipped and each key is counted once, as the mask counts it.
     multiplicity = same_view.double()  # [N_gen,N_gen]
     if cross_view:
-        multiplicity = multiplicity + same_frame.double()
+        multiplicity = (same_view | same_frame).double()  # [N_gen,N_gen]
 
     scale = head_dim**-0.5
     gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale  # [heads,N_gen,N_gen]
@@ -2346,7 +2350,7 @@ def _multiview_maskless_reference(
 )
 @torch.no_grad()
 def test_multiview_maskless_attention_matches_a_dense_reference(num_q_heads: int, num_kv_heads: int) -> None:
-    """The three merged passes come out as one softmax over their concatenated key sets.
+    """Disjoint maskless passes produce one softmax over the union of allowed keys.
 
     The reference is that concatenation written densely in float64 (``_multiview_maskless_reference``),
     which is what pins both folds at once: a view fold that crossed views, or a frame fold that
@@ -2453,9 +2457,8 @@ def test_multiview_maskless_attention_same_view_scope_matches_a_dense_reference(
 
     The reference is the same concatenation as the decomposed case with the frame fold dropped
     (``cross_view=False``), which leaves a multiplicity of 1 across the query's own view and 0
-    elsewhere. That is the mask's own counting, so unlike ``"decomposed"`` this scope is not a
-    distinct attention pattern -- one partition cannot overlap itself, so there is no own-cell
-    double weight for inclusion-exclusion to subtract back out.
+    elsewhere. Both scopes count each allowed key once; this scope omits all
+    cross-view keys, so the temporal partitions are unnecessary.
     """
     device = torch.device("cuda")
     num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
@@ -2479,8 +2482,7 @@ def test_multiview_maskless_attention_same_view_scope_matches_a_dense_reference(
     )
     # The cross-instant partition is not built at all, rather than built and merged at no
     # weight: the second kernel never runs, which is the whole cost difference between the two.
-    assert plan.cross_view_empty
-    assert plan.cross_view_gather is None
+    assert not plan.cross_view_partitions
     assert plan.attention_scope == "same_view"
 
     out_pack = multiview_attention(*batch.packs, maskless_plan=plan)
@@ -2794,7 +2796,7 @@ def test_multiview_maskless_plan_drops_lidar_from_the_sample_level_gen_to_und_pa
 
 @pytest.mark.L0
 def test_multiview_maskless_plan_expands_cross_view_to_pm5_and_first_frame() -> None:
-    """The speed-probe topology keeps one query copy and expands only its KV runs."""
+    """The band expands cross-view keys while keeping each query/key edge unique."""
     plan = multiview_maskless_attention.build_multiview_maskless_plan(
         [2],
         [(16, 1, 1)],
@@ -2803,20 +2805,26 @@ def test_multiview_maskless_plan_expands_cross_view_to_pm5_and_first_frame() -> 
         include_frame_zero=True,
     )
 
-    assert plan.cross_view_gather is not None
-    assert plan.cross_view_kv_gather is not None
-    assert plan.cross_view_offsets is not None
-    assert plan.cross_view_kv_offsets is not None
-    assert plan.cross_view_gather.tolist() == [index for frame in range(8) for index in (frame, frame + 8)]
-    assert torch.diff(plan.cross_view_offsets).tolist() == [2] * 8
+    keys_by_query: dict[int, list[int]] = {query: [] for query in range(16)}
+    for partition in plan.cross_view_partitions:
+        for start_q, end_q, start_k, end_k in zip(
+            partition.query_offsets[:-1].tolist(),
+            partition.query_offsets[1:].tolist(),
+            partition.key_offsets[:-1].tolist(),
+            partition.key_offsets[1:].tolist(),
+            strict=True,
+        ):
+            for query in partition.query_indices[start_q:end_q].tolist():
+                keys_by_query[query].extend(partition.key_indices[start_k:end_k].tolist())
+
     # Query frame 0 sees 0..5; middle frame 4 sees all 0..7; last frame 7 sees 0 and 2..7.
-    assert torch.diff(plan.cross_view_kv_offsets).tolist() == [12, 14, 16, 16, 16, 16, 16, 14]
-    assert plan.cross_view_kv_gather[:12].tolist() == [index for frame in range(6) for index in (frame, frame + 8)]
-    assert plan.cross_view_kv_gather[-14:].tolist() == [
-        0,
-        8,
-        *[index for frame in range(2, 8) for index in (frame, frame + 8)],
-    ]
+    # Every cross-view key belongs to the other camera; the same-view pass owns this one's keys.
+    for query, keys in keys_by_query.items():
+        frame = query % 8
+        other_view_start = 8 if query < 8 else 0
+        frames = {0} | set(range(max(0, frame - 5), min(8, frame + 6)))
+        assert set(keys) == {other_view_start + key_frame for key_frame in frames}
+        assert len(keys) == len(frames)
 
 
 @pytest.mark.L0
@@ -2934,9 +2942,10 @@ def test_multiview_maskless_attention_gradients_survive_activation_checkpointing
 
     Both policies are covered because both are live. ``["fmha"]`` is what the AV multiview
     recipes configure (``config_factory`` sets ``mode="selective"`` and that regex is the
-    default), and it makes all four attention calls MUST_SAVE -- the three sensor passes plus
-    the causal one -- against the mask's one, which is where this path's extra memory goes. The
-    empty list recomputes them instead, the change that would recover it.
+    default), and it makes every attention call MUST_SAVE: for this three-view case,
+    the same-view pass, two cross-view partitions, GEN-to-caption attention, and
+    UND self-attention. The empty list recomputes these five calls instead, which
+    recovers the memory used to retain their activations.
 
     The reference is the same module compiled *without* checkpointing, so the only variable is
     the checkpointing itself and the comparison can be exact. It is compiled because that is
@@ -3015,12 +3024,12 @@ def test_multiview_maskless_attention_gradients_survive_activation_checkpointing
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 @pytest.mark.parametrize("save_only_marked_ops", [False, True])
-def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all_four(save_only_marked_ops: bool) -> None:
+def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all(save_only_marked_ops: bool) -> None:
     """On the real folds, the mark separates calls ``["fmha"]`` cannot tell apart.
 
-    The three sensor passes and the causal one dispatch the same op, so the regex keeps
-    all four or none, while the same-view fold is the only one worth keeping -- ~96% of
-    forward attention time and ~94% of backward, the others cheap to recompute. That is
+    The same-view, cross-view, caption, and causal passes dispatch the same op,
+    so the regex keeps all of them or none. The same-view fold is the expensive
+    pass to retain, while the remaining passes can be recomputed. That is
     why ``multiview_maskless_attention`` marks that fold at its call site, and why the
     cam+LiDAR arm configuring ``save_only_marked_ops`` gets selective AC back instead of
     the ``mode="full"`` its siblings fell back to.
@@ -3034,7 +3043,7 @@ def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all_four(save_onl
 
     Counted as a ratio because the compiled region is traced more than once and the
     policy object is shared across those traces, so the absolute count is a multiple of
-    the four folds rather than four.
+    the number of folds rather than a single execution.
     """
     from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
         checkpoint_wrapper as ptd_checkpoint_wrapper,
@@ -3111,22 +3120,24 @@ def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all_four(save_onl
         reset_marking_for_tests()
 
     folds = [saved for name, saved in verdicts if _is_attention(name)]
-    assert folds and len(folds) % 4 == 0, f"expected whole passes over the four folds, saw {len(folds)}"
+    # Same-view and GEN-to-caption passes, cross-view partitions, then UND self-attention.
+    folds_per_pass = 3 + len(plan.cross_view_partitions)
+    assert folds and len(folds) % folds_per_pass == 0, f"expected whole passes over {folds_per_pass} folds"
     # One mark per pass. A second marked call site would double what each layer keeps,
     # and every other assertion here would still hold.
     marks = [name for name, _ in verdicts if "keep_next_activation" in name]
-    expected_marks = len(folds) // 4 if save_only_marked_ops else 0
+    expected_marks = len(folds) // folds_per_pass if save_only_marked_ops else 0
     assert len(marks) == expected_marks, f"expected {expected_marks} marks, saw {len(marks)}"
     assert not any(saved for name, saved in verdicts if not _is_attention(name)), (
         f"a non-attention op was kept: {sorted({name for name, saved in verdicts if saved and not _is_attention(name)})}"
     )
-    saved_per_pass = 4 * sum(folds) / len(folds)
+    saved_per_pass = folds_per_pass * sum(folds) / len(folds)
     if save_only_marked_ops:
-        assert saved_per_pass == 1, f"expected the marked fold alone, kept {saved_per_pass} of 4"
+        assert saved_per_pass == 1, f"expected the marked fold alone, kept {saved_per_pass} of {folds_per_pass}"
     else:
         # The behaviour every existing config relies on: the regex decides alone, and it
-        # matches all four folds.
-        assert saved_per_pass == 4, f"the regex should keep all four folds, kept {saved_per_pass}"
+        # matches every attention fold.
+        assert saved_per_pass == folds_per_pass, f"the regex should keep every fold, kept {saved_per_pass}"
 
 
 @pytest.mark.L0
@@ -3134,16 +3145,15 @@ def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all_four(save_onl
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 def test_the_marked_maskless_fold_is_the_same_view_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Which of the four folds is marked, not merely that one of them is.
+    """Which attention fold is marked, not merely that one of them is.
 
-    Keeping one fold only pays if it is the expensive one. The same-view pass is ~96%
-    of forward attention time and ~94% of backward; the other three are cheap to
-    recompute, so marking one of *those* would spend a clone and a stashed activation
-    to save almost nothing. Every other test here would still pass.
+    Keeping one fold only pays if it is the expensive one. The same-view pass
+    spans every frame of each view, while the other passes are cheaper to
+    recompute. Marking one of those would retain an activation with little
+    compute saved. Every other test here would still pass.
 
-    Checked by identity rather than by shape or position: three of the four folds run
-    on the same token count here, so nothing about the tensor says which pass it
-    belongs to.
+    Checked by identity rather than by shape or position: multiple folds run on
+    the same token count here, so the tensor shape does not identify its pass.
     """
     from cosmos_framework.model.generator.mot import multiview_maskless_attention as maskless_module
     from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
@@ -3296,7 +3306,7 @@ def test_a_marked_maskless_layer_is_stable_across_steps() -> None:
 def test_marking_costs_less_memory_than_keeping_every_maskless_fold() -> None:
     """The reason the AV recipes can turn selective AC back on, measured on the real folds.
 
-    These recipes fell back to ``mode="full"`` because ``["fmha"]`` kept all four folds.
+    These recipes fell back to ``mode="full"`` because ``["fmha"]`` kept every attention fold.
     Keeping the marked one has to cost less than that, with the marker's copy inside the
     measurement, or the config change makes things worse rather than better.
     """
@@ -3377,12 +3387,8 @@ def test_marking_costs_less_memory_than_keeping_every_maskless_fold() -> None:
 @pytest.mark.GPU
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
-@pytest.mark.parametrize(
-    ("deduplicate_cross_view", "window"), [(False, None), (True, None), (True, (-0.4, 0.0)), (False, (-0.4, 0.0))]
-)
-def test_marking_a_maskless_fold_does_not_change_its_gradients(
-    deduplicate_cross_view: bool, window: tuple[float, float] | None
-) -> None:
+@pytest.mark.parametrize("window", [None, (-0.4, 0.0)])
+def test_marking_a_maskless_fold_does_not_change_its_gradients(window: tuple[float, float] | None) -> None:
     """Marking decides what is kept, never what is computed.
 
     Not implied by the unmarked checkpointing test above: the mark clones K before the
@@ -3431,7 +3437,6 @@ def test_marking_a_maskless_fold_does_not_change_its_gradients(
             token_shape,
             device,
             _padded_gen_tokens(batch.packs[0]),
-            deduplicate_cross_view=deduplicate_cross_view,
             temporal_window_seconds=window,
         )
         num_gen_tokens = batch.gen_q.shape[0]
@@ -3544,8 +3549,7 @@ def test_multiview_maskless_attention_folds_a_ragged_batch(num_q_heads: int, num
     device = torch.device("cuda")
     # (num_views, token_shape), deliberately unequal. The third is the single-view shape every
     # LiDAR sample takes: its same-view group is the whole sample, so its cross-view pass adds
-    # nothing but the own-frame double-count -- which the reference models, and which is the
-    # distortion the V=1 neutralisation is meant to remove.
+    # no keys and must remain empty. The reference counts every same-view key once.
     samples = ((2, (4, 2, 2)), (3, (6, 2, 3)), (1, (3, 2, 2)))
     und_lens = (5, 7, 4)
     shape = _MultiviewShape(
@@ -3662,9 +3666,8 @@ def test_multiview_maskless_attention_joins_a_camera_and_a_lidar_item_by_capture
     than reading them off the plan, so a plan that quantised differently -- by frame start, or
     onto the wrong anchor -- fails here even though its shapes stay valid.
 
-    Note what the multiplicity captures: two sweeps landing on one camera instant are in both
-    partitions at once (same range item, same instant), so they double-weight each other exactly
-    as a camera token double-weights its own (view, frame) cell.
+    Two sweeps landing on one camera instant remain distinct keys. Each appears
+    once in the allowed union, including when both share the query's own view.
     """
     device = torch.device("cuda")
     num_q_heads, num_kv_heads, head_dim = 4, 2, 64
@@ -3724,7 +3727,7 @@ def test_multiview_maskless_attention_joins_a_camera_and_a_lidar_item_by_capture
 
     multiplicity = torch.tensor(
         [
-            [float(same_view[i] == same_view[j]) + float(instant[i] == instant[j]) for j in range(gen_len)]
+            [float(same_view[i] == same_view[j] or instant[i] == instant[j]) for j in range(gen_len)]
             for i in range(gen_len)
         ],
         device=device,
@@ -3775,7 +3778,7 @@ def _transfer_multiplicity(device: torch.device, *, control_attends_sensor: bool
     """What each GEN key is worth to each GEN query, as the merged passes weight it.
 
     Rebuilt from the geometry rather than from the plan, so it pins the plan rather than
-    restating it: one for sharing a view group, one more for sharing an instant -- the latter
+    restating it: one for sharing a view group or sharing an instant -- the latter
     only between two sensor tokens, every control rule in the mask being a view rule and never an
     instant one. ``control_attends_sensor=False`` takes the view term away from a control query
     reaching a *sensor* key and leaves every other pair alone, which is the whole of the flag.
@@ -3794,8 +3797,10 @@ def _transfer_multiplicity(device: torch.device, *, control_attends_sensor: bool
     return torch.tensor(
         [
             [
-                float(view_of[i] == view_of[j] and (control_attends_sensor or sensor_of[i] or not sensor_of[j]))
-                + float(sensor_of[i] and sensor_of[j] and instant_of[i] == instant_of[j])
+                float(
+                    (view_of[i] == view_of[j] and (control_attends_sensor or sensor_of[i] or not sensor_of[j]))
+                    or (sensor_of[i] and sensor_of[j] and instant_of[i] == instant_of[j])
+                )
                 for j in range(_TRANSFER_GEN_LEN)
             ]
             for i in range(_TRANSFER_GEN_LEN)
@@ -4056,6 +4061,13 @@ def test_control_attends_sensor_is_a_no_op_for_a_batch_with_no_control_item() ->
         left, right = getattr(plans[True], field.name), getattr(plans[False], field.name)
         if isinstance(left, torch.Tensor):
             assert torch.equal(left, right), field.name
+        elif field.name == "cross_view_partitions":
+            torch.testing.assert_close(
+                [asdict(partition) for partition in left],
+                [asdict(partition) for partition in right],
+                rtol=0,
+                atol=0,
+            )
         else:
             assert left == right, field.name
 
@@ -4075,14 +4087,12 @@ def test_multiview_maskless_plan_refuses_a_control_item_without_the_control_rule
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 @pytest.mark.parametrize("control_attends_sensor", [True, False])
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
 @pytest.mark.parametrize("cross_view_window", [None, (-0.4, 0.4)])
 def test_full_neighborhood_split_matches_combined_same_view(
     control_attends_sensor: bool,
-    deduplicate_cross_view: bool,
     cross_view_window: tuple[float, float] | None,
 ) -> None:
-    """Full-window splits preserve outputs and gradients under either control/counting rule."""
+    """Full-window splits preserve exact outputs and gradients under either control rule."""
     device = torch.device("cuda")
     # One control item and one RGB item each contain two views, three frames per
     # view, and a 2 x 2 spatial grid: 24 tokens per item and 48 GEN tokens total.
@@ -4111,8 +4121,7 @@ def test_full_neighborhood_split_matches_combined_same_view(
         items_per_sample=[2],  # Both items belong to the same sample.
         is_control=[True, False],  # Control first, RGB target second.
         control_attends_sensor=control_attends_sensor,
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=cross_view_window,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=cross_view_window),
         seconds_per_frame=[0.1, 0.1],
         view_axis=[0, 0],  # Both items use the same camera-view numbering.
         padded_gen_tokens=_padded_gen_tokens(packs[0]),
@@ -4122,7 +4131,9 @@ def test_full_neighborhood_split_matches_combined_same_view(
     combined_plan = multiview_maskless_attention.build_multiview_maskless_plan(**plan_kwargs)
     split_plan = multiview_maskless_attention.build_multiview_maskless_plan(
         **plan_kwargs,
-        sensor_to_control_window=(-4, 4),  # Covers all three frames, including boundaries.
+        same_view_temporal_window=SameViewTemporalWindowConfig(
+            sensor_to_control_bounds=(-0.4, 0.4),  # Covers all three frames, including boundaries.
+        ),
     )
 
     combined_pack = multiview_attention(*packs, maskless_plan=combined_plan)
@@ -4176,7 +4187,8 @@ def test_full_sensor_to_sensor_window_matches_combined_same_view_without_control
     combined_plan = multiview_maskless_attention.build_multiview_maskless_plan(**plan_kwargs)
     windowed_plan = multiview_maskless_attention.build_multiview_maskless_plan(
         **plan_kwargs,
-        sensor_to_sensor_window=(-4, 4),
+        seconds_per_frame=[0.1],
+        same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_sensor_bounds=(-0.4, 0.4)),
     )
 
     combined_pack = multiview_attention(*packs, maskless_plan=combined_plan)
@@ -4267,7 +4279,7 @@ def test_multiview_maskless_attention_reads_one_caption_per_view() -> None:
 
     gen_mult = torch.tensor(
         [
-            [float(view_of[i] == view_of[j]) + float(instant_of[i] == instant_of[j]) for j in range(gen_len)]
+            [float(view_of[i] == view_of[j] or instant_of[i] == instant_of[j]) for j in range(gen_len)]
             for i in range(gen_len)
         ],
         device=device,
@@ -4297,16 +4309,12 @@ def test_multiview_maskless_attention_reads_one_caption_per_view() -> None:
 @pytest.mark.parametrize("num_views", [pytest.param(1, id="single_view"), pytest.param(3, id="multi_view")])
 @torch.no_grad()
 def test_multiview_maskless_attention_counts_a_single_view_sample_once(num_views: int) -> None:
-    """A single-view sample attends each key once, as the mask does; a multi-view one does not.
+    """Single-view and multiview samples count every allowed key exactly once.
 
-    With one view the cross-instant groups sit inside the one view group, so merging them would
-    weight the query's own instant twice and buy nothing -- there is no second view to reach.
-    That sample is sliced out of the pass entirely, which leaves it attending its item uniformly,
-    exactly what ``attention_scope="decomposed"`` degenerates to at one view.
-
-    Parametrised against three views so the assertion is a contrast rather than a claim about
-    this implementation: the same code must double-count there, since the two passes then admit
-    genuinely different keys and the shared cell is the documented price of that.
+    With one view the cross-instant groups add no keys to the same-view group.
+    The sample is excluded from the cross-view pass, leaving full within-view
+    attention. Three views exercise the nonempty cross-view partitions under
+    the same exact union reference.
     """
     device = torch.device("cuda")
     frames_per_view, patch_h, patch_w = 3, 2, 2
@@ -4324,7 +4332,7 @@ def test_multiview_maskless_attention_counts_a_single_view_sample_once(num_views
     plan = multiview_maskless_attention.build_multiview_maskless_plan(
         [num_views], [token_shape], device=device, padded_gen_tokens=_padded_gen_tokens(batch.packs[0])
     )
-    assert plan.cross_view_empty == (num_views == 1)
+    assert (not plan.cross_view_partitions) == (num_views == 1)
 
     out_pack = multiview_attention(*batch.packs, maskless_plan=plan)
     num_gen_tokens = batch.gen_q.shape[0]
@@ -4400,30 +4408,36 @@ def test_multiview_maskless_attention_runs_a_gen_stream_past_the_varlen_index_li
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 @torch.no_grad()
-def test_multiview_maskless_plan_gather_is_a_permutation() -> None:
-    """The cross-view gather and its inverse undo each other, over a ragged batch.
+def test_multiview_maskless_plan_gathers_cover_multiview_samples() -> None:
+    """Each rectangular partition addresses unique rows within a ragged batch.
 
-    Cheap to state and the thing every ragged fold rests on: if these are not inverses, the
-    bridge's backward writes the merged output into the wrong rows and nothing raises.
+    The query gathers must cover all tokens belonging to multiview samples.
+    The single-view sample must contribute no cross-view work.
     """
     device = torch.device("cuda")
     plan = multiview_maskless_attention.build_multiview_maskless_plan(
         [2, 3, 1], [(4, 2, 2), (6, 2, 3), (3, 1, 4)], device=device
     )
-    gather = plan.cross_view_gather
-    assert gather is not None
-    # The cross-instant pass covers the samples that own more than one view group, each of their
-    # tokens exactly once. The third sample here is single-view, so its instant groups would sit
-    # inside its one view group and it is sliced out -- 16 + 36 tokens in, its 12 out.
+    # The first two samples contain 16 + 36 tokens; the last sample is single-view.
     covered = 4 * 2 * 2 + 6 * 2 * 3
     assert plan.num_gen_tokens == covered + 3 * 1 * 4
-    assert torch.equal(gather.sort().values, torch.arange(covered, device=device))
-    # One item per view axis per sample leaves a view's tokens contiguous, so the same-view
-    # groups already tile the packed stream and that pass needs no gather at all.
+    assert plan.cross_view_partitions
+    gathered: set[int] = set()
+    for partition in plan.cross_view_partitions:
+        query = partition.query_indices  # [Nq]
+        key = partition.key_indices  # [Nk]
+        assert query.unique().numel() == query.numel()
+        assert key.unique().numel() == key.numel()
+        assert int(query.max()) < covered
+        assert int(key.max()) < covered
+        gathered.update(query.tolist())
+        assert int(partition.query_offsets[-1]) == query.numel()
+        assert int(partition.key_offsets[-1]) == key.numel()
+    assert gathered == set(range(covered))
+    # One item per view axis leaves each view contiguous, so the same-view pass needs no gather.
     assert plan.same_view_gather is None
-    # Every group boundary lands where the lengths say, and the partitions cover the stream.
+    # Every same-view boundary lands where the lengths say and covers the full stream.
     assert int(plan.same_view_offsets[-1]) == plan.num_gen_tokens
-    assert int(plan.cross_view_offsets[-1]) == covered
 
 
 if __name__ == "__main__":

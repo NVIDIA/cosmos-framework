@@ -21,10 +21,20 @@ _TARGET_ALIASES = {
     "projects.cosmos3.vfm.configs.base.defaults.vlm.create_vlm_config": "create_vlm_config",
     "projects.cosmos3.vfm.models.mot.unified_mot.Nemotron3DenseVLMoTConfig.from_json_file": "nemotron3_dense_vl_mot_config_from_json_file",
     "projects.cosmos3.vfm.models.mot.unified_mot.Nemotron3DenseVLTextForCausalLM": "nemotron3_dense_vl_text_for_causal_lm",
+    # Inherited classmethods retain the defining base class in serialized
+    # LazyCall metadata. Restore the public alias to the concrete Qwen config
+    # target below so model construction keeps the correct architecture.
+    "projects.cosmos3.vfm.models.mot.unified_mot._MoTConfigBase.from_json_file": "qwen3_vl_mot_config_from_json_file",
     "projects.cosmos3.vfm.models.mot.unified_mot.Qwen3VLMoTConfig.from_json_file": "qwen3_vl_mot_config_from_json_file",
     "projects.cosmos3.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM": "qwen3_vl_text_for_causal_lm",
     "projects.cosmos3.vfm.models.omni_mot_model.OmniMoTModel": "omni_mot_model",
+    # Autoregressive causal inference model, used by distilled Self-Forcing
+    # checkpoints. Resolves to cosmos_framework.model.generator.omni_mot_causal_model
+    # through the existing 'projects.cosmos3.vfm.models.' prefix rule.
+    "projects.cosmos3.vfm.models.omni_mot_causal_model.OmniMoTCausalModel": "omni_mot_causal_model",
     "projects.cosmos3.vfm.processors.build_processor_lazy": "build_processor_lazy",
+    "cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1.LidarTokenizerV1Interface": "lidar_tokenizer_v1_interface",
+    "cosmos_framework.model.generator.tokenizers.lidar.range_projection.LidarRangeProjectionConfig": "lidar_range_projection_config",
     "projects.cosmos3.vfm.tokenizers.audio.avae.AVAEInterface": "avae_interface",
     "projects.cosmos3.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface": "wan2pt2_vae_interface",
 }
@@ -33,10 +43,26 @@ _TYPE_ALIASES = {
     "projects.cosmos3.vfm.configs.base.defaults.activation_checkpointing.ActivationCheckpointingConfig": "activation_checkpointing_config",
     "projects.cosmos3.vfm.configs.base.defaults.compile.CompileConfig": "compile_config",
     "projects.cosmos3.vfm.configs.base.defaults.ema.EMAConfig": "ema_config",
+    # Emitted by the exporter for any checkpoint that pins a flex-attention mask,
+    # which every causal AR artifact does.
+    "projects.cosmos3.vfm.configs.base.defaults.multiview_attention.MultiviewAttentionConfig": "flex_attention_config",
+    "projects.cosmos3.vfm.configs.base.defaults.multiview_attention.MultiviewAttentionMaskConfig": "flex_attention_mask_config",
+    "projects.cosmos3.vfm.configs.base.defaults.multiview_attention.CrossViewTemporalWindowConfig": "cross_view_temporal_window_config",
+    "projects.cosmos3.vfm.configs.base.defaults.multiview_attention.SameViewTemporalWindowConfig": "same_view_temporal_window_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.DiffusionExpertConfig": "diffusion_expert_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.FixedStepSamplerConfig": "fixed_step_sampler_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.LBLConfig": "lbl_config",
+    "projects.cosmos3.vfm.models.utils.load_balancing_stats.LBLConfig": "lbl_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.OmniMoTModelConfig": "omni_mot_model_config",
+    "projects.cosmos3.vfm.models.omni_mot_causal_model.OmniMoTCausalModelConfig": "omni_mot_causal_model_config",
+    # Causal attention configs use causal_flex_attention.py so they do not collide with the
+    # non-causal config two lines above, while replay_attention.py keeps its name.
+    # Both land under cosmos_framework.configs.base.defaults, so the existing
+    # cosmos_framework.configs.base. <-> projects.cosmos3.vfm.configs.base. prefix
+    # rules round-trip them with no new module rule.
+    "projects.cosmos3.vfm.configs.base.defaults.causal_flex_attention.CausalFlexAttentionConfig": "causal_flex_attention_config",
+    "projects.cosmos3.vfm.configs.base.defaults.causal_flex_attention.CausalFlexAttentionMaskConfig": "causal_flex_attention_mask_config",
+    "projects.cosmos3.vfm.configs.base.defaults.replay_attention.TeacherForcingReplayPolicyConfig": "teacher_forcing_replay_policy_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig": "rectified_flow_inference_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowTrainingConfig": "rectified_flow_training_config",
     "projects.cosmos3.vfm.configs.base.defaults.parallelism.ParallelismConfig": "parallelism_config",
@@ -183,8 +209,12 @@ def _is_type_alias(value: Any) -> bool:
 
 
 def _canonicalize_module_path(path: str) -> str:
+    # LazyConfig shortens re-exported classes to the package-level path when
+    # saving training configs. Both paths resolve to the same LiDAR tokenizer.
+    if path == "cosmos_framework.model.generator.tokenizers.lidar.LidarTokenizerV1Interface":
+        return "cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1.LidarTokenizerV1Interface"
     replacements = (
-        # vlm → reasoner rename (upstream i4). Longer/more-specific rules first
+        # Legacy vlm → reasoner rename. Longer/more-specific rules first
         # so the reasoner subtree isn't shadowed by the general vfm rules below.
         ("cosmos_framework.configs.base.defaults.reasoner.", "projects.cosmos3.vfm.configs.base.defaults.vlm."),
         ("cosmos_framework.configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),
@@ -194,10 +224,18 @@ def _canonicalize_module_path(path: str) -> str:
         ("cosmos_framework.utils.generator.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
         ("cosmos3._src.vfm.", "projects.cosmos3.vfm."),
         ("cosmos_framework.configs.base.", "projects.cosmos3.vfm.configs.base."),
+        # The LiDAR tokenizer is the only alias target outside projects/cosmos3/{vfm,interactive}:
+        # it lives under projects/cosmos3/tokenizer/ upstream. Listed before the general
+        # tokenizers rule, which shares its prefix and would otherwise capture the subtree.
+        ("cosmos_framework.model.generator.tokenizers.lidar.", "cosmos_framework.model.generator.tokenizers.lidar."),
         ("cosmos_framework.model.generator.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
         ("cosmos_framework.model.generator.diffusion.", "projects.cosmos3.vfm.diffusion."),
         ("cosmos_framework.model.generator.", "projects.cosmos3.vfm.models."),
         ("cosmos_framework.data.generator.processors.", "projects.cosmos3.vfm.processors."),
+        # The LiDAR tokenizer is the only alias target outside projects/cosmos3/{vfm,interactive}:
+        # it lives under projects/cosmos3/tokenizer/ upstream. Listed before the general
+        # tokenizers rule, which shares its prefix and would otherwise capture the subtree.
+        ("cosmos.model.vfm.tokenizers.lidar.", "cosmos_framework.model.generator.tokenizers.lidar."),
         ("cosmos.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
         ("cosmos.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
         ("cosmos.model.vfm.", "projects.cosmos3.vfm.models."),
@@ -231,6 +269,9 @@ def _replace_vfm_module_prefix(canonical_path: str, *, package: str) -> str:
         ("projects.cosmos3.vfm.utils.vlm.", f"{package}.utils.generator.reasoner."),
         ("projects.cosmos3.vfm.configs.base.", f"{package}.configs.base."),
         ("projects.cosmos3.vfm.models.", f"{package}.model.generator."),
+        # Reverse of the rule above. Without it the lidar aliases resolve to a projects.* path
+        # that does not exist here, so a camera+LiDAR checkpoint cannot load at all.
+        ("cosmos_framework.model.generator.tokenizers.lidar.", f"{package}.model.generator.tokenizers.lidar."),
         ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.generator.tokenizers."),
         ("projects.cosmos3.vfm.diffusion.", f"{package}.model.generator.diffusion."),
         ("projects.cosmos3.vfm.processors.", f"{package}.data.generator.processors."),

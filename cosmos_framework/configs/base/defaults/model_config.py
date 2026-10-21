@@ -18,11 +18,8 @@ from cosmos_framework.model.generator.mot.action_io_projector import ACTION_IO_P
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
 from cosmos_framework.model.generator.utils.sr_latent_noise import SRLatentConditionNoiseConfig
 
-# Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
-# the ``cosmos3`` workspace package at module scope makes the whole cosmos3 config tree
-# unimportable in the released imaginaire4 eval images (v11.2.1 and older ship no
-# ``cosmos3``), which breaks the benchmark-request config-check CI job. Keep in sync with
-# ``packages/cosmos3/cosmos3/common/args.py``.
+# Keep these layout names compatible with exported checkpoint metadata.
+# Define the type locally so configuration loading needs no separate workspace package.
 AttentionIOLayout = Literal["sequence_sharded", "replicated"]
 
 
@@ -258,8 +255,14 @@ class OmniMoTModelConfig:
     # Tensor layout at the attention boundary when context parallelism is enabled.
     attention_io_layout: AttentionIOLayout = "sequence_sharded"
 
-    # Opt in to summed CP output gradients; keep legacy scaling for existing optimizer state.
+    # Opt in to summed CP gradients for gathered outputs and sample-level router auxiliary loss;
+    # keep legacy scaling for existing optimizer state.
     correct_cp_gradients: bool = False
+
+    # Bound FP32 timestep-embedder temporaries and checkpoint recomputation by processing
+    # noised-token timesteps in chunks. Sequences with at most this many noised tokens, or
+    # whose noised tokens share one timestep, take the unchunked path. None disables chunking.
+    timestep_embedding_chunk_size: int | None = 128_000
 
     # Keep the raw CP data window on the host and release raw video CUDA inputs
     # immediately after slot-0 tokenization. H100 multiview experiments opt in;

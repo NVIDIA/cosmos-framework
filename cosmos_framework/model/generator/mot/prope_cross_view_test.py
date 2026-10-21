@@ -198,7 +198,7 @@ def _reference(
     *,
     radius: int,
     frame_zero: bool,
-    band_keys: str = "all_views",
+    band_keys: str = "other_views",
 ) -> torch.Tensor:  # [N_real,H*D]
     """Every pass's keys under one softmax per (query, head), with each PRoPE key and value
     carried into the query camera by the explicit relative transform."""
@@ -255,7 +255,7 @@ def _reference(
 
 @pytest.mark.parametrize(("radius", "frame_zero"), [(1, True), (0, False)])
 @pytest.mark.parametrize(("heads", "kv_heads", "geometry_kv_heads"), [(2, 2, 1), (4, 2, 1), (2, 2, None)])
-@pytest.mark.parametrize("band_keys", ["all_views", "own_view", "other_views"])
+@pytest.mark.parametrize("band_keys", ["other_views"])
 @pytest.mark.parametrize("projective", [False, True])
 def test_cross_pass_matches_per_token_reference_forward_and_backward(
     monkeypatch: pytest.MonkeyPatch,

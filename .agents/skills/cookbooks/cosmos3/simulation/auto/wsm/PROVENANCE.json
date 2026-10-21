@@ -1,0 +1,543 @@
+{
+  "component": "WSM4 reference renderer",
+  "source_commit": "add7252561b68af9e0de6d3876d8b6181aab25f5",
+  "files": {
+    ".gitignore": {
+      "source_sha256": "89a9c4505e11a740c9dabd1ece37411a358e451552f5ce72dec63d25cf387b72",
+      "sha256": "c3f904d5f48e75a21279f8a667e4de264aaadcccb1a2473af9123bad97d5359b"
+    },
+    "README.md": {
+      "source_sha256": "07ecb0c17f3bb9683e4ad9d4adf436acc9706cbe49ec94c146b2642c4698d2aa",
+      "sha256": "671958e4965edbca7794ed40a2fa20619c16bf514e3e4f539b62d08839b1f483"
+    },
+    "cosmos_auto/__init__.py": {
+      "source_sha256": "ab8377648e059b2e4de54b9e32de28c869cf3c67730feb83ef6be578b689330e",
+      "sha256": "ab8377648e059b2e4de54b9e32de28c869cf3c67730feb83ef6be578b689330e"
+    },
+    "cosmos_auto/wm/__init__.py": {
+      "source_sha256": "dad6afb146e05f87c2e2aac08f83781f3517bc924da2c31331b9a1ce3817149a",
+      "sha256": "f0b3bb691d1a6a3168fe9a9d3d7ea1e718c545ce71f6c6f245f38b3071a24075"
+    },
+    "cosmos_auto/wm/assets/.gitignore": {
+      "source_sha256": "21a0ac65465c20031e77b268d5e446123dd02abfdc3ed6e34abf21a35717a347",
+      "sha256": "21a0ac65465c20031e77b268d5e446123dd02abfdc3ed6e34abf21a35717a347"
+    },
+    "cosmos_auto/wm/assets/default_ftheta_intrinsic.tar": {
+      "source_sha256": "3c4bb5754c8da3fddf407019981bb093f6d352b84110ab8fa7f7b9787350fbf3",
+      "sha256": "3c4bb5754c8da3fddf407019981bb093f6d352b84110ab8fa7f7b9787350fbf3"
+    },
+    "cosmos_auto/wm/assets/road_marking_arrows/arrow_shape.json": {
+      "source_sha256": "729cd00f28c5ceb35e0023bd62c52d07a26d8adb4ff3465253e5dd420cf45c09",
+      "sha256": "729cd00f28c5ceb35e0023bd62c52d07a26d8adb4ff3465253e5dd420cf45c09"
+    },
+    "cosmos_auto/wm/bbox_utils.py": {
+      "source_sha256": "3c6e24811baf5f5894443cad8d56388b45d66e7caf1085c30037b8dd21a748a8",
+      "sha256": "e85225c2edd41c3629115c4d6ab3016f70410e1b04a69bd4b32ec78170e878b7"
+    },
+    "cosmos_auto/wm/camera/__init__.py": {
+      "source_sha256": "dad6afb146e05f87c2e2aac08f83781f3517bc924da2c31331b9a1ce3817149a",
+      "sha256": "f0b3bb691d1a6a3168fe9a9d3d7ea1e718c545ce71f6c6f245f38b3071a24075"
+    },
+    "cosmos_auto/wm/camera/base.py": {
+      "source_sha256": "a5dfb69e2881ef1d23728d048f48af7a1cb5c797c01a04bdf32325966e9b0329",
+      "sha256": "1c96944b3589e25e4c20afc522815c6fee7ddd02ac041a26a21f0020622eb7cf"
+    },
+    "cosmos_auto/wm/camera/ftheta.py": {
+      "source_sha256": "a94321d6bdb693e71f7d45016ef2cf3f388dfac5a0449377e87861d317531da3",
+      "sha256": "328ad1ae2c9596a25e0a702f73825e34a5c618b7f14d7d4cda23b6a891d203ad"
+    },
+    "cosmos_auto/wm/camera/pinhole.py": {
+      "source_sha256": "f2458694812eac0cbec00b05585cf6fc9f6f8e070f8e88b9ac9a8967d0b106a7",
+      "sha256": "440b45391c6fa19fd8244247e6b58f13f6f041b3f11c65d3d32c2254f5144ef7"
+    },
+    "cosmos_auto/wm/chunk_utils.py": {
+      "source_sha256": "1f791cb363952b83a7198d78f8bd07a6bb85930dbdf84418c5fe525db62eec71",
+      "sha256": "4904c6880c997b64e08ba0f8ba2e94b8cf6e4ede6e949f1a5431fb01057d3dc5"
+    },
+    "cosmos_auto/wm/cli.py": {
+      "source_sha256": "2e13b2dadf4aab01fe256cc850e75abda2dc5addf4efab65258f15fccfb3a870",
+      "sha256": "418c90829bfc22f74554eb447726eb9d6e999447e5e6d25c36b68dd298ec5a17"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_bbox.json": {
+      "source_sha256": "6f8047621d3b1789ec253a8c828e5fe929e610e9719c5d53f58b6d1e34a15c55",
+      "sha256": "6f8047621d3b1789ec253a8c828e5fe929e610e9719c5d53f58b6d1e34a15c55"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_geometry_laneline.json": {
+      "source_sha256": "bb9aa7784e558b54d7a6c8a1cab5f89942546f4c235479a6aa9bec36c38c712b",
+      "sha256": "bb9aa7784e558b54d7a6c8a1cab5f89942546f4c235479a6aa9bec36c38c712b"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_hdmap.json": {
+      "source_sha256": "755d61fc96bd9d608b3cc8f1954d365378367da965247e5aa4a6412abc18694e",
+      "sha256": "755d61fc96bd9d608b3cc8f1954d365378367da965247e5aa4a6412abc18694e"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_laneline.json": {
+      "source_sha256": "4702807a9400e3ba49148b5557cb24f5cf16062859f9bc2ea98cff48c31c06ab",
+      "sha256": "4702807a9400e3ba49148b5557cb24f5cf16062859f9bc2ea98cff48c31c06ab"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_road_boundary.json": {
+      "source_sha256": "91df5a6005720bcb7ab3c0e7327e4a0cadd95c1b92763153acb0dc717568afcc",
+      "sha256": "91df5a6005720bcb7ab3c0e7327e4a0cadd95c1b92763153acb0dc717568afcc"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_road_marking.json": {
+      "source_sha256": "08e192ef7da253c71fbfb8d00616ff83b6de060af69e4a20c4a901fcecc7c3e7",
+      "sha256": "08e192ef7da253c71fbfb8d00616ff83b6de060af69e4a20c4a901fcecc7c3e7"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_sign.json": {
+      "source_sha256": "53e08e82bc027a231287efe5cce38ce564634383569c58052c2d05a36ee935c6",
+      "sha256": "53e08e82bc027a231287efe5cce38ce564634383569c58052c2d05a36ee935c6"
+    },
+    "cosmos_auto/wm/color_scheme/config_color_traffic_light.json": {
+      "source_sha256": "277b80037a41c5ef3d138c6f5de5fedc2d0fee9e43ecd9bb188d1013d9cb1d1a",
+      "sha256": "277b80037a41c5ef3d138c6f5de5fedc2d0fee9e43ecd9bb188d1013d9cb1d1a"
+    },
+    "cosmos_auto/wm/color_scheme/config_type_hdmap.json": {
+      "source_sha256": "bde8c6d58d6269da926215d5b2f13631a12e73cec37759579aaa6e7b753df8cb",
+      "sha256": "bde8c6d58d6269da926215d5b2f13631a12e73cec37759579aaa6e7b753df8cb"
+    },
+    "cosmos_auto/wm/conf/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/camera_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/camera_spec/internal_11cam.yaml": {
+      "source_sha256": "c21461f223666fa1e959d7bf02cd690eae17d7ffcc4f664b9df239040dfe6bc0",
+      "sha256": "c21461f223666fa1e959d7bf02cd690eae17d7ffcc4f664b9df239040dfe6bc0"
+    },
+    "cosmos_auto/wm/conf/camera_spec/internal_1cam.yaml": {
+      "source_sha256": "d196e349134f3483bd2aa363facfaedca61ee94cd8f432e08401896a71c9d8f7",
+      "sha256": "d196e349134f3483bd2aa363facfaedca61ee94cd8f432e08401896a71c9d8f7"
+    },
+    "cosmos_auto/wm/conf/camera_spec/internal_6cam.yaml": {
+      "source_sha256": "299bce036db53805d45d7047e27efc3070d6c15d1b077d3632016ed00cd9adb9",
+      "sha256": "299bce036db53805d45d7047e27efc3070d6c15d1b077d3632016ed00cd9adb9"
+    },
+    "cosmos_auto/wm/conf/camera_spec/internal_7cam.yaml": {
+      "source_sha256": "7088d42438d6fbf98c54d798c49a5d03d0c4c206410ed2db7fc2fd9c47909d06",
+      "sha256": "7088d42438d6fbf98c54d798c49a5d03d0c4c206410ed2db7fc2fd9c47909d06"
+    },
+    "cosmos_auto/wm/conf/camera_spec/waymo_1cam.yaml": {
+      "source_sha256": "39b7941c3d278c42204e6d9a976216c97e0756d23415b991c53af4d039ed6d8d",
+      "sha256": "39b7941c3d278c42204e6d9a976216c97e0756d23415b991c53af4d039ed6d8d"
+    },
+    "cosmos_auto/wm/conf/camera_spec/waymo_5cam.yaml": {
+      "source_sha256": "ff0f4d51af74890ece211386a95eb5ab6bba5fd60836311ffd997f2e28106cb0",
+      "sha256": "ff0f4d51af74890ece211386a95eb5ab6bba5fd60836311ffd997f2e28106cb0"
+    },
+    "cosmos_auto/wm/conf/input_fps_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/input_fps_spec/internal_driving.yaml": {
+      "source_sha256": "523dcec33ba4798379f5aab381f8961359088f3ecdf747765faf8e57b366cda0",
+      "sha256": "523dcec33ba4798379f5aab381f8961359088f3ecdf747765faf8e57b366cda0"
+    },
+    "cosmos_auto/wm/conf/input_fps_spec/waymo.yaml": {
+      "source_sha256": "6a0860acce279b0ef9115604a6b58586310854ad278a773b6095cc44eabd5805",
+      "sha256": "6a0860acce279b0ef9115604a6b58586310854ad278a773b6095cc44eabd5805"
+    },
+    "cosmos_auto/wm/conf/minimap_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/minimap_spec/internal_driving.yaml": {
+      "source_sha256": "2e4c3aa9ee2c22437e8e45c3b9ef3662f1d669582a5a83e06536e01b1f87c6d7",
+      "sha256": "2e4c3aa9ee2c22437e8e45c3b9ef3662f1d669582a5a83e06536e01b1f87c6d7"
+    },
+    "cosmos_auto/wm/conf/minimap_spec/waymo_converted.yaml": {
+      "source_sha256": "4eb512cb31f7d1bce96ce4a14bfe4874d58027811aff5859208cc5a2d1cfa7e6",
+      "sha256": "4eb512cb31f7d1bce96ce4a14bfe4874d58027811aff5859208cc5a2d1cfa7e6"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/10fps_100frame_0overlap_1chunk.yaml": {
+      "source_sha256": "b0cfdbad66afb14a33dadcb369fa2a1d921f32d19505c3f5b0a038fb2d0567f6",
+      "sha256": "b0cfdbad66afb14a33dadcb369fa2a1d921f32d19505c3f5b0a038fb2d0567f6"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/10fps_100frame_45overlap_3chunk.yaml": {
+      "source_sha256": "c72872c3a461347c5145372425e8593f15c6d81eca2da161c0eeec4bedb2128c",
+      "sha256": "c72872c3a461347c5145372425e8593f15c6d81eca2da161c0eeec4bedb2128c"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/30fps_121frame_0overlap_5chunk.yaml": {
+      "source_sha256": "6b4737e1f651919fca1b507ca3bcf472ab46cd375e079387fc92eb271c274b59",
+      "sha256": "6b4737e1f651919fca1b507ca3bcf472ab46cd375e079387fc92eb271c274b59"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/30fps_128frame_0overlap_5chunk.yaml": {
+      "source_sha256": "4267c66c75c99efc7beaf06351eaa1ba7307b730efe682af2ed2d0533fc13367",
+      "sha256": "4267c66c75c99efc7beaf06351eaa1ba7307b730efe682af2ed2d0533fc13367"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/30fps_605frame_0overlap_1chunk.yaml": {
+      "source_sha256": "837e01886f1b45b3c0f6c1e6a3a7a0f1c58104ebd50e0fd81e80dc7d0f685386",
+      "sha256": "837e01886f1b45b3c0f6c1e6a3a7a0f1c58104ebd50e0fd81e80dc7d0f685386"
+    },
+    "cosmos_auto/wm/conf/output_frame_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/render.yaml": {
+      "source_sha256": "2972d6c90fd437746ef945d81e1910a6b0bd618d276e459b39b0d96ccd9e869e",
+      "sha256": "4cddd2ac17c3871cf1420269e06b9667734c2099e4d77ede2587757084ae0e8c"
+    },
+    "cosmos_auto/wm/conf/resolution_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/resolution_spec/resize_1280x720.yaml": {
+      "source_sha256": "f968a56f4868c3f9f67b8780bc55b51c89472af41637a350d426ca0c333ff4a3",
+      "sha256": "f968a56f4868c3f9f67b8780bc55b51c89472af41637a350d426ca0c333ff4a3"
+    },
+    "cosmos_auto/wm/conf/resolution_spec/resize_1280x720_crop_1280x704.yaml": {
+      "source_sha256": "4e5d6e0c6218110084c55dddcba43d1915ae9b38282aebb9b0fc02cb2c3f04f2",
+      "sha256": "4e5d6e0c6218110084c55dddcba43d1915ae9b38282aebb9b0fc02cb2c3f04f2"
+    },
+    "cosmos_auto/wm/conf/resolution_spec/source.yaml": {
+      "source_sha256": "eea2869897af7749f68d2befdc4e24b5bb711ae800bdaf26e361bca6a6207c3c",
+      "sha256": "eea2869897af7749f68d2befdc4e24b5bb711ae800bdaf26e361bca6a6207c3c"
+    },
+    "cosmos_auto/wm/conf/s3_spec/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cosmos_auto/wm/conf/s3_spec/no_upload.yaml": {
+      "source_sha256": "6433c53bdf754e504cfbdacf1221148294296b1e9b5f7085e30414ce9a36150f",
+      "sha256": "6433c53bdf754e504cfbdacf1221148294296b1e9b5f7085e30414ce9a36150f"
+    },
+    "cosmos_auto/wm/config.py": {
+      "source_sha256": "65b23cddb8fbe7500127fe963e78b0c72801aeed8da75ce1658d94f1e4e1d338",
+      "sha256": "d96ec0939a863a525ce95268c17fdac2af0c2d74a41c6629e9e6cc5eadd2e14d"
+    },
+    "cosmos_auto/wm/graphics_utils.py": {
+      "source_sha256": "ec4f827f9ac22541b0f91b92b62061f9c5121f0395b69aa6114927f0b80a8074",
+      "sha256": "ec4f827f9ac22541b0f91b92b62061f9c5121f0395b69aa6114927f0b80a8074"
+    },
+    "cosmos_auto/wm/laneline_utils.py": {
+      "source_sha256": "4612270b0c8f44f1f2581826c323e569aee95127af8070c22616d6584d7d5b24",
+      "sha256": "5d6118a47b5a6c50a674888f7281ee69e95a16045271d1369ed91ca04f9361a1"
+    },
+    "cosmos_auto/wm/minimap_utils.py": {
+      "source_sha256": "d96211b3e4cc2ec0a5ae215c8777cce1eff30cc03a47da44354e2c7a213d9a85",
+      "sha256": "9ff4661e9e9ae0b056cbd9a154759af5d9bf85697572e8c20e6280dbfe23b811"
+    },
+    "cosmos_auto/wm/occupancy_utils.py": {
+      "source_sha256": "eae115c7d0f22c1dc91cb190c02f5bf85dffd3ea95a0173b0abaa0b2f5cbbd3d",
+      "sha256": "0b528522fba6a57491646f1c05ccca0bfadf180cccb1e4bff8ffcab6b65b8258"
+    },
+    "cosmos_auto/wm/pcd_utils.py": {
+      "source_sha256": "82875b4f77a38a476d1f2283b0bf9d03dc0ae1bbd75b8f0ec6605363e007a50b",
+      "sha256": "5033e2259d6d33eae50a9b01e7a996ec20dad9f429282c801dd6d5732887635a"
+    },
+    "cosmos_auto/wm/ray_utils.py": {
+      "source_sha256": "4126fdbb5352dcb3abc4a2c6a98fb9beb9a24d82f4e694be4f046d52a9e9dc78",
+      "sha256": "4126fdbb5352dcb3abc4a2c6a98fb9beb9a24d82f4e694be4f046d52a9e9dc78"
+    },
+    "cosmos_auto/wm/resume_utils.py": {
+      "source_sha256": "c0745da54ea27703e1e4fa4e670e9b104cb545b1b4ebdaf3588bf0544e61aba2",
+      "sha256": "37779e9be0c386469ff07939a195b884b9f84f9fcd9033290f37230627bafbd9"
+    },
+    "cosmos_auto/wm/road_boundary_utils.py": {
+      "source_sha256": "284757576e94d90df8b91db360075268bf9af0bf9808fd8b39ba6fd83d1e580c",
+      "sha256": "6789ef549508540fa508585e7f2e30dcdae90c1b1eb446ba7c44718d3f9edb3a"
+    },
+    "cosmos_auto/wm/s3_utils.py": {
+      "source_sha256": "a3311b655ff82d93b9fb798c57836b097e0d264a8d092e560282b794ddf3ec13",
+      "sha256": "8d372b2db157ba53f99fb811c07d9d73d3413c8ecfbaf8af88ef44f1e9794282"
+    },
+    "cosmos_auto/wm/shader_utils.py": {
+      "source_sha256": "1ec0639c6c3c4da4ee0b1c636bccb87a7e327d29619fd79756c0ac96b82e703c",
+      "sha256": "1ec0639c6c3c4da4ee0b1c636bccb87a7e327d29619fd79756c0ac96b82e703c"
+    },
+    "cosmos_auto/wm/wds_utils.py": {
+      "source_sha256": "5a6c8db9e259cfa67dd9b2364ee1c2b7afaf09705925b3f818e84004c7a43bbc",
+      "sha256": "6a4fc0cc06f57e044e52b3a03175c9566683f2790adf720a2e5ce1bb77e4ef14"
+    },
+    "docs/camera-rig/app.js": {
+      "source_sha256": "78f3935d73c60555af636600e34bdb65ecea40ade54dffc382ae2c0ec873da6f",
+      "sha256": "78f3935d73c60555af636600e34bdb65ecea40ade54dffc382ae2c0ec873da6f"
+    },
+    "docs/camera-rig/example-rigs.js": {
+      "source_sha256": "87dfcedae895967a9604039eb7ba3811e3ced5584be4e5982c88088006f9e52a",
+      "sha256": "87dfcedae895967a9604039eb7ba3811e3ced5584be4e5982c88088006f9e52a"
+    },
+    "docs/camera-rig/geometry.js": {
+      "source_sha256": "1d3b4855e7ba1b2fe194f43bdee3fae7ade59baac5e105affd2e986c11ffc197",
+      "sha256": "1d3b4855e7ba1b2fe194f43bdee3fae7ade59baac5e105affd2e986c11ffc197"
+    },
+    "docs/camera-rig/guide.md": {
+      "source_sha256": "e2c6b1b8e1be720834a7454b78ee18cf002bc68357b877790aea7e97adf2e01a",
+      "sha256": "2d6b24fbe7214f715c0fcd69f4c47c85dc79ab25cac45896aac8ac8a1617b083"
+    },
+    "docs/camera-rig/index.html": {
+      "source_sha256": "8074c89d930a82edc55551f9fdedf052425b3f01cc2d527a9692dacbd0cecf9f",
+      "sha256": "8074c89d930a82edc55551f9fdedf052425b3f01cc2d527a9692dacbd0cecf9f"
+    },
+    "docs/camera-rig/layouts.js": {
+      "source_sha256": "bf1d66fc83ef2cf382a84d70ad6a495a94de33b3d30c5e0529c45216d7739842",
+      "sha256": "bf1d66fc83ef2cf382a84d70ad6a495a94de33b3d30c5e0529c45216d7739842"
+    },
+    "docs/camera-rig/preview.png": {
+      "source_sha256": "8045bf11c2c41c7d3dd7924ef2a15aa0a992bc8d41fe8cc1dd551b39bd58bc67",
+      "sha256": "8045bf11c2c41c7d3dd7924ef2a15aa0a992bc8d41fe8cc1dd551b39bd58bc67"
+    },
+    "docs/camera-rig/styles.css": {
+      "source_sha256": "002bc4804d1975af8a7dacf21ecf7d13daf9a90bcd56fadbf035ec4d5abf44e2",
+      "sha256": "002bc4804d1975af8a7dacf21ecf7d13daf9a90bcd56fadbf035ec4d5abf44e2"
+    },
+    "docs/camera-rig/tests/browser_smoke.py": {
+      "source_sha256": "4c197c1a12abf8e307c1a59f8ad42c184df6987b5bc0584b9656a4e93ac8e9e9",
+      "sha256": "4b5f863d0d33bd602e986e4c4e435f306fd3ebd7820d8095898a325ad8fa0839"
+    },
+    "docs/camera-rig/tests/docs_smoke.py": {
+      "source_sha256": "4345e0fd2324d3c6efe4ebf880575220c1cbe976f37609150eb94326e8b9383e",
+      "sha256": "3276bb625f2724d2ebbfca187c1d81ad07b28d1db51447fb7fac9f5f15bb2528"
+    },
+    "docs/camera-rig/tests/geometry.test.cjs": {
+      "source_sha256": "419606a986670da18fbd9de51eca8ebcaa3181b7900873c1fc0ec6db25fd2a12",
+      "sha256": "419606a986670da18fbd9de51eca8ebcaa3181b7900873c1fc0ec6db25fd2a12"
+    },
+    "docs/images/wsm4/README.md": {
+      "source_sha256": "82f8ff415984cc40f1b8a3956a91b0955fdf14078fe3ece217358c09ec3c90e7",
+      "sha256": "530727e29be09c34e79934c2f92592192a391930149814c9befeb6d0d2725da9"
+    },
+    "docs/images/wsm4/annotated-road-boundaries.png": {
+      "source_sha256": "0e9b8bb8372528486208d6cf062e65ae204db2f7c7196f0ce84cdf0f185654d8",
+      "sha256": "0e9b8bb8372528486208d6cf062e65ae204db2f7c7196f0ce84cdf0f185654d8"
+    },
+    "docs/images/wsm4/annotated-road-markings.png": {
+      "source_sha256": "41f0ae49e1e33aa5a9a969c47a63a738b916e19ea173bf879e3653f785a065fc",
+      "sha256": "41f0ae49e1e33aa5a9a969c47a63a738b916e19ea173bf879e3653f785a065fc"
+    },
+    "docs/images/wsm4/annotated-traffic-lights.png": {
+      "source_sha256": "64b5a3dafbaa3d0f1bf3199b82f176998cee33dc1ab4a295752b4dd7d71b59ff",
+      "sha256": "64b5a3dafbaa3d0f1bf3199b82f176998cee33dc1ab4a295752b4dd7d71b59ff"
+    },
+    "docs/images/wsm4/annotated-traffic-signs.png": {
+      "source_sha256": "4f261a7a9f5646490c837b45f87956573062dd62e0e7d1d45ae5f39bb4a8a688",
+      "sha256": "4f261a7a9f5646490c837b45f87956573062dd62e0e7d1d45ae5f39bb4a8a688"
+    },
+    "docs/images/wsm4/palette-objects-and-map-features.png": {
+      "source_sha256": "fed16bdccb0a732f3dac56d3ba7ad99975970876876ef533117657659c1666ce",
+      "sha256": "fed16bdccb0a732f3dac56d3ba7ad99975970876876ef533117657659c1666ce"
+    },
+    "docs/images/wsm4/palette-road-boundaries.png": {
+      "source_sha256": "4db6309cc2d4a29e8a65c89aad0282fe08421c00546929d2fa6abf1c97b609b7",
+      "sha256": "4db6309cc2d4a29e8a65c89aad0282fe08421c00546929d2fa6abf1c97b609b7"
+    },
+    "docs/images/wsm4/palette-road-markings.png": {
+      "source_sha256": "cf0c729d929672e19233426a6028a2cbfaeae34954282f4a2c6ccf715a2c360f",
+      "sha256": "cf0c729d929672e19233426a6028a2cbfaeae34954282f4a2c6ccf715a2c360f"
+    },
+    "docs/images/wsm4/palette-traffic-lights.png": {
+      "source_sha256": "38065b54e205c5988e613020555dee196c5dc762c11267ce02a98726a60598a8",
+      "sha256": "38065b54e205c5988e613020555dee196c5dc762c11267ce02a98726a60598a8"
+    },
+    "docs/images/wsm4/palette-traffic-signs.png": {
+      "source_sha256": "991573afec5bc1fa925b31f91c89cd001f3a02da7da2a6858996c0294341eedd",
+      "sha256": "991573afec5bc1fa925b31f91c89cd001f3a02da7da2a6858996c0294341eedd"
+    },
+    "docs/rds-hq.md": {
+      "source_sha256": "32f299ff4ea07d53c56884c47ac008c198cbca6f0fec02d79ff934f653b9c7b3",
+      "sha256": "27e09e286c845a6bb1752af4718992178fcd9cd7562c8e88b4d604dba9dee38c"
+    },
+    "docs/scenario-to-rds-hq.md": {
+      "source_sha256": "8ff8b843ba9f6b96d49578397c8f692d46ca307be04a1360b3c0c9747017cd83",
+      "sha256": "56a82a36ff464339aaa25666a029e6e2dcfc267e086c32698be6ef14bacf03d0"
+    },
+    "docs/wsm4.md": {
+      "source_sha256": "31343e3590d4c5b6e3b78220c299c0bc176bf0b6d6f575c80e2949ac906ce8ce",
+      "sha256": "ce49661a60939d15b648394d47f9d88ad32f89ed7d16b14c883c7bdd5ebc1681"
+    },
+    "examples/rds_hq/.gitattributes": {
+      "source_sha256": "116c15b65825b94cdce725a6c380e58928b054dc861b6b7b07f5eae549a7c2e9",
+      "sha256": "116c15b65825b94cdce725a6c380e58928b054dc861b6b7b07f5eae549a7c2e9"
+    },
+    "examples/rds_hq/3d_crosswalks/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "201fb5d995c9099b3347285183a385f8db81a31e110bd1a107070af2e826e86c",
+      "sha256": "201fb5d995c9099b3347285183a385f8db81a31e110bd1a107070af2e826e86c"
+    },
+    "examples/rds_hq/3d_lanelines/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "99013f4d7232838fbe8b6b2c4280b6c09abb97eb1753ac2e90c3067aafff7640",
+      "sha256": "99013f4d7232838fbe8b6b2c4280b6c09abb97eb1753ac2e90c3067aafff7640"
+    },
+    "examples/rds_hq/3d_poles/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "b5d654ca4f7b64442bc2b10d2fc24573235206a4cf996cfff5a14bb7e4f80055",
+      "sha256": "b5d654ca4f7b64442bc2b10d2fc24573235206a4cf996cfff5a14bb7e4f80055"
+    },
+    "examples/rds_hq/3d_road_boundaries/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "896728fafb8dc46d1afe0983a948ae71c1e97aa4f22dc50fac4cfd77286b5830",
+      "sha256": "896728fafb8dc46d1afe0983a948ae71c1e97aa4f22dc50fac4cfd77286b5830"
+    },
+    "examples/rds_hq/3d_road_markings/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "c8edd561ddd915588a2f59fa418296c73e3c5474a2eebb0cb099fcbd4bd2ab2e",
+      "sha256": "c8edd561ddd915588a2f59fa418296c73e3c5474a2eebb0cb099fcbd4bd2ab2e"
+    },
+    "examples/rds_hq/3d_traffic_lights/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "2cfcd872f637751f3b014d60d53575aa6fea3ba34791a8b03499ea53a124d4b2",
+      "sha256": "2cfcd872f637751f3b014d60d53575aa6fea3ba34791a8b03499ea53a124d4b2"
+    },
+    "examples/rds_hq/3d_traffic_lights_lightnet_status/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "2f57f0ca2c7621f26137ed987bbdb9ee29f9943a40f54b666e88c4bd8a03ac48",
+      "sha256": "2f57f0ca2c7621f26137ed987bbdb9ee29f9943a40f54b666e88c4bd8a03ac48"
+    },
+    "examples/rds_hq/3d_traffic_signs/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "f271519043891f55c0f763ecc86ae2822b00b8f769a697f3ee8693c751800c26",
+      "sha256": "f271519043891f55c0f763ecc86ae2822b00b8f769a697f3ee8693c751800c26"
+    },
+    "examples/rds_hq/3d_wait_lines/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "bc6532d1d8cc2bbe83fa5c62d0f5758440d68c86330b0083ac31ad77b82dfa5f",
+      "sha256": "bc6532d1d8cc2bbe83fa5c62d0f5758440d68c86330b0083ac31ad77b82dfa5f"
+    },
+    "examples/rds_hq/README.md": {
+      "source_sha256": "e187182b8c211a6dba09018e4fd97f3506b111213cc8c24c81d00490722e130c",
+      "sha256": "e0bb29fbe7205054af36c787e6311d25ce9305dc3d8ea7c3787b94270942728f"
+    },
+    "examples/rds_hq/all_object_info/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "644aae92560f0040c888948e314d4dd3bbd871e4ee6a2c4c4917a33773381009",
+      "sha256": "644aae92560f0040c888948e314d4dd3bbd871e4ee6a2c4c4917a33773381009"
+    },
+    "examples/rds_hq/ftheta_intrinsic/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "9cb7e56df4b0201599d0b60d27ffe85ab1f5bdd216d6bd31dc00b13b6df19c26",
+      "sha256": "9cb7e56df4b0201599d0b60d27ffe85ab1f5bdd216d6bd31dc00b13b6df19c26"
+    },
+    "examples/rds_hq/pose/0d7766e8-25ed-11ef-8715-00044baf7cbc_1717889548967272_1717889568967272.tar": {
+      "source_sha256": "7dd9ca306d76c4354e0f6e10cdc9658e4c2aebf31822b5173a26ee673f94a213",
+      "sha256": "7dd9ca306d76c4354e0f6e10cdc9658e4c2aebf31822b5173a26ee673f94a213"
+    },
+    "pyproject.toml": {
+      "source_sha256": "a8e6a85cc7652b70a254cafe4a82c2c4b16cd742d04242cb93c3e9177ffe58e3",
+      "sha256": "696430b59007a08bc8d4ed0c6fc2f824fd28d693f719be441958452334cfcdc8"
+    },
+    "skills/scenario-to-rds-hq/SKILL.md": {
+      "source_sha256": "e561055deb05d369cde14a2b8fef4df24a2d409dbab8dc4b6431af5e4f129425",
+      "sha256": "f8f3e748b2ee8805fc9333b950666907c66d369c1bc79f9896264d1dc5d04036"
+    },
+    "skills/scenario-to-rds-hq/assets/hyperion8.json": {
+      "source_sha256": "6b88acbfd4200e02528d5810cbf7d317b5cb43a75fd2ada59e2a4adbf0a7ca12",
+      "sha256": "6b88acbfd4200e02528d5810cbf7d317b5cb43a75fd2ada59e2a4adbf0a7ca12"
+    },
+    "skills/scenario-to-rds-hq/evals/README.md": {
+      "source_sha256": "7e62a152db5ac7695bbfc8fdf04041d7df5f6baab21b0465d62f522cb328ab88",
+      "sha256": "19d48a6b06ff1bab08ce1fcf250623f70256a9a4d1daa15793d8658effbc3149"
+    },
+    "skills/scenario-to-rds-hq/evals/evals.json": {
+      "source_sha256": "c53d5b9d253992c25ead80260218358d836c9fa0bd843b5aa47b8151db1e56e3",
+      "sha256": "c53d5b9d253992c25ead80260218358d836c9fa0bd843b5aa47b8151db1e56e3"
+    },
+    "skills/scenario-to-rds-hq/evals/files/coordinate-scene.json": {
+      "source_sha256": "e1ffb2a1d5b668f3af106f6c0966cbd45116c3d8d5aa4d62f88d427c9b339f8d",
+      "sha256": "e1ffb2a1d5b668f3af106f6c0966cbd45116c3d8d5aa4d62f88d427c9b339f8d"
+    },
+    "skills/scenario-to-rds-hq/evals/retarget_hyperion_test.py": {
+      "source_sha256": "1018398a2876a93147b51c89ec46c8e6dc8948dcd41ed10d081561c9f83fa9d8",
+      "sha256": "1e65ff81fda8d4eb725f3a2fa09cdfb36e4912862b96efe13f94046d439b5f8e"
+    },
+    "skills/scenario-to-rds-hq/evals/test_rds_hq_io.py": {
+      "source_sha256": "487c97e74b9f941e10f0f01e7252d72c35e60b18750cbacb505b69c045201d87",
+      "sha256": "487c97e74b9f941e10f0f01e7252d72c35e60b18750cbacb505b69c045201d87"
+    },
+    "skills/scenario-to-rds-hq/references/hyperion-retargeting.md": {
+      "source_sha256": "021677ea33cf21dfb29d1ddd17f4f82fd8bb4fd42511a4f464180f215466378a",
+      "sha256": "4e202644e8a43f554c64a51c9b70bd23984221ff451342b01da0a39ae4316e54"
+    },
+    "skills/scenario-to-rds-hq/references/mapping-and-inference.md": {
+      "source_sha256": "f336cf2f775a8cfe3f7d6395d151fb7a026b1a3891e718a0f80b982ac0b7ff1e",
+      "sha256": "38d902f869cfb8911cd62e108530931e1cc351699cc03fe030a518d68df794eb"
+    },
+    "skills/scenario-to-rds-hq/references/visual-review.md": {
+      "source_sha256": "2fe53c0c2cebe1f1e986a268f9764657b5da9544aa2c7d57fee278bc08308077",
+      "sha256": "2fe53c0c2cebe1f1e986a268f9764657b5da9544aa2c7d57fee278bc08308077"
+    },
+    "skills/scenario-to-rds-hq/scripts/rds_hq_io.py": {
+      "source_sha256": "894030689e4fb504dcb3fca410dc5d834dcf6a3c28125bc1a09352cce3f6c1dc",
+      "sha256": "894030689e4fb504dcb3fca410dc5d834dcf6a3c28125bc1a09352cce3f6c1dc"
+    },
+    "skills/scenario-to-rds-hq/scripts/retarget_hyperion.py": {
+      "source_sha256": "29776eac6aef4ba76846bc116b658fac4a40572ef1affa261f49f6850705070f",
+      "sha256": "fa508925a51dbf39c4b56bd13b6fe00467fbf290ff5451bfa244592d53be40c8"
+    },
+    "tests/wm/bbox_ego_suppression_test.py": {
+      "source_sha256": "20513444cea91452eae36a1af8e12055da9e2c785f9ebb1b957deac9f69c8c8a",
+      "sha256": "20513444cea91452eae36a1af8e12055da9e2c785f9ebb1b957deac9f69c8c8a"
+    },
+    "tests/wm/chunk_and_lidar_test.py": {
+      "source_sha256": "a99881999a4d2488aeb382810dbd18e28904fbd0117819262b99875e81314807",
+      "sha256": "a99881999a4d2488aeb382810dbd18e28904fbd0117819262b99875e81314807"
+    },
+    "tests/wm/rds_hq_conversion_test.py": {
+      "source_sha256": "5d132ddb98c4f538ec4ce864ebdc73a9aa61f94dbe54e7515b688934dfba0d09",
+      "sha256": "5d132ddb98c4f538ec4ce864ebdc73a9aa61f94dbe54e7515b688934dfba0d09"
+    },
+    "tests/wm/s3_utils_test.py": {
+      "source_sha256": "ebc1763f3bf44ce8be5b5433c04319ee93fc074802f3b978ceee2673b6413f30",
+      "sha256": "ebc1763f3bf44ce8be5b5433c04319ee93fc074802f3b978ceee2673b6413f30"
+    },
+    "tests/wm/source_resolution_test.py": {
+      "source_sha256": "62921a6dea050f26989c6f5ef9c646c99574e41bcf3c7d090cef7d79fb800856",
+      "sha256": "62921a6dea050f26989c6f5ef9c646c99574e41bcf3c7d090cef7d79fb800856"
+    },
+    "tests/wm/wmv4_below_level_filter_test.py": {
+      "source_sha256": "51752b8cb8e2a10abf61bf5d502fe407e19eea7888e0cf69ce867891d914f982",
+      "sha256": "51752b8cb8e2a10abf61bf5d502fe407e19eea7888e0cf69ce867891d914f982"
+    },
+    "tests/wm/wmv4_road_boundaries_test.py": {
+      "source_sha256": "bf7f667c3f347203bbb3c04a6aa08ee3f3f671906535b5bd4f1c3a5e00382fae",
+      "sha256": "bf7f667c3f347203bbb3c04a6aa08ee3f3f671906535b5bd4f1c3a5e00382fae"
+    },
+    "tests/wm/wmv4_road_markings_test.py": {
+      "source_sha256": "54c124ec02da0fafde1441c84665f278583ef919bfbe0ec636086882318ca1aa",
+      "sha256": "54c124ec02da0fafde1441c84665f278583ef919bfbe0ec636086882318ca1aa"
+    },
+    "tests/wm/wmv4_single_label_components_test.py": {
+      "source_sha256": "a5b51b23a9b1f85d7ed21d003607c431acef9f4559327a2122901113af9a5915",
+      "sha256": "a5b51b23a9b1f85d7ed21d003607c431acef9f4559327a2122901113af9a5915"
+    },
+    "tests/wm/wmv4_traffic_light_glyphs_test.py": {
+      "source_sha256": "e05ba753dfd4018372567fc3770086a2d01c9a73ea86d5c25ac556daca362200",
+      "sha256": "e05ba753dfd4018372567fc3770086a2d01c9a73ea86d5c25ac556daca362200"
+    }
+  },
+  "adaptations": [
+    "Standalone packaging and dependency declarations",
+    "WSM4 default configuration",
+    "Removed deployment-specific upload profiles and manual debug entry points",
+    "Optional recorded-RGB dependency loaded only for that workflow",
+    "Standalone documentation paths and portability validation",
+    "Framework backsync documentation uses the full repository checkout and standalone pytest boundary",
+    "Markdown table formatting follows the containing repository checks"
+  ],
+  "incremental_sources": [
+    {
+      "merge_request": 14427,
+      "source_commit": "747fc083e75502a61369558349de3aa9488ec151",
+      "files": [
+        "docs/scenario-to-rds-hq.md",
+        "skills/scenario-to-rds-hq/SKILL.md",
+        "skills/scenario-to-rds-hq/assets/hyperion8.json",
+        "skills/scenario-to-rds-hq/evals/README.md",
+        "skills/scenario-to-rds-hq/evals/evals.json",
+        "skills/scenario-to-rds-hq/evals/files/coordinate-scene.json",
+        "skills/scenario-to-rds-hq/evals/retarget_hyperion_test.py",
+        "skills/scenario-to-rds-hq/references/hyperion-retargeting.md",
+        "skills/scenario-to-rds-hq/references/visual-review.md",
+        "skills/scenario-to-rds-hq/scripts/retarget_hyperion.py"
+      ]
+    },
+    {
+      "merge_request": 14409,
+      "source_commit": "9d2bdc8cb06235a0becaf6396c3371cf430e5a28",
+      "files": [
+        "README.md",
+        "docs/camera-rig/app.js",
+        "docs/camera-rig/example-rigs.js",
+        "docs/camera-rig/geometry.js",
+        "docs/camera-rig/guide.md",
+        "docs/camera-rig/index.html",
+        "docs/camera-rig/layouts.js",
+        "docs/camera-rig/preview.png",
+        "docs/camera-rig/styles.css",
+        "docs/camera-rig/tests/browser_smoke.py",
+        "docs/camera-rig/tests/docs_smoke.py",
+        "docs/camera-rig/tests/geometry.test.cjs"
+      ]
+    }
+  ]
+}

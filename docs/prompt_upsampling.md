@@ -46,7 +46,7 @@ Run commands from the repository root. Configure the OpenAI-compatible endpoint 
 ```shell
 export PROMPT_UPSAMPLER_ENDPOINT_URL="[required endpoint url]"
 export PROMPT_UPSAMPLER_API_TOKEN="[api key]"
-export PROMPT_UPSAMPLER_MODEL_NAME="[model name]"
+export PROMPT_UPSAMPLER_MODEL="[model name]"
 ```
 
 Arguments:
@@ -116,7 +116,7 @@ For example, to use Opus to generate upsampled prompts, set
 
 ```shell
 export PROMPT_UPSAMPLER_ENDPOINT_URL="https://api.anthropic.com/v1/"
-export PROMPT_UPSAMPLER_MODEL_NAME="claude-opus-4-6"
+export PROMPT_UPSAMPLER_MODEL="claude-opus-4-6"
 ```
 
 ### Text-to-Image
@@ -127,7 +127,7 @@ python -m cosmos_framework.inference.prompt_upsampling \
     --output outputs/prompt_upsampler/upsampled_t2i_prompts_opus \
     --mode text2image \
     --endpoint-url "${PROMPT_UPSAMPLER_ENDPOINT_URL}" \
-    --model "${PROMPT_UPSAMPLER_MODEL_NAME}" \
+    --model "${PROMPT_UPSAMPLER_MODEL}" \
     --api-token "${PROMPT_UPSAMPLER_API_TOKEN}" \
     --resolution 720 \
     --aspect-ratio "1,1"
@@ -141,7 +141,7 @@ python -m cosmos_framework.inference.prompt_upsampling \
     --output outputs/prompt_upsampler/upsampled_t2v_prompts_opus \
     --mode text2video \
     --endpoint-url "${PROMPT_UPSAMPLER_ENDPOINT_URL}" \
-    --model "${PROMPT_UPSAMPLER_MODEL_NAME}" \
+    --model "${PROMPT_UPSAMPLER_MODEL}" \
     --api-token "${PROMPT_UPSAMPLER_API_TOKEN}" \
     --resolution 720 \
     --aspect-ratio "16,9" \
@@ -158,7 +158,7 @@ python -m cosmos_framework.inference.prompt_upsampling \
     --output outputs/prompt_upsampler/upsampled_i2v_prompts_opus \
     --mode image2video \
     --endpoint-url "${PROMPT_UPSAMPLER_ENDPOINT_URL}" \
-    --model "${PROMPT_UPSAMPLER_MODEL_NAME}" \
+    --model "${PROMPT_UPSAMPLER_MODEL}" \
     --api-token "${PROMPT_UPSAMPLER_API_TOKEN}" \
     --resolution 720 \
     --aspect-ratio "16,9" \
@@ -240,7 +240,7 @@ python -m cosmos_framework.inference.prompt_upsampling \
     --output outputs/prompt_upsampler/upsampled_i2v_pos_neg \
     --mode posttrain_image2video \
     --endpoint-url "${PROMPT_UPSAMPLER_ENDPOINT_URL}" \
-    --model "${PROMPT_UPSAMPLER_MODEL_NAME}" \
+    --model "${PROMPT_UPSAMPLER_MODEL}" \
     --api-token "${PROMPT_UPSAMPLER_API_TOKEN}" \
     --prompt-template cosmos_framework/inference/prompting_templates/external_api/posttrained_i2v_prompt.txt \
     --json-template cosmos_framework/inference/prompting_templates/external_api/posttrained_i2v_json_schema.json \

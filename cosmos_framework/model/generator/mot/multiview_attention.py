@@ -261,16 +261,9 @@ def resolve_multiview_backend(
 
         ``preference`` is a run's policy, not its outcome:
 
-        * ``"auto"`` ranks the masks first: FA4 where the host has it, else Triton, and the folds
-          last. That ordering keeps ``"auto"`` a choice of *kernels* -- a host that has FA4
-          installed uses it -- and never a choice of attention, because ``"maskless"`` is a different
-          pattern and a default that switched what a run trains on nothing more than which package
-          an image carries would not be a safe default. Triton is available by construction, so the
-          folds are never actually reached here: ``"maskless"`` is opt-in, by name. The flip side of
-          the kernel choice remains, that the same config on a host without FA4 runs different
-          kernels at a different padded length with different rounding, so a run that has to stay
-          bit-comparable with another pins ``"flex_triton"`` rather than trusting the environments
-          to match.
+        * ``"auto"`` prefers maskless when the config supports it, then FA4 where the host
+          has it, else Triton. Kernels, padded lengths and rounding can differ between
+          backends, so a run that has to stay bit-comparable pins its backend.
         * ``"maskless"`` demands the maskless folds and raises if the config rules them out.
         * ``"flex_triton"`` pins FlexAttention's Triton kernels, ignoring what is installed.
         * ``"flex_flash"`` demands FA4 and raises if it cannot be used, for a benchmark or a test
@@ -279,10 +272,11 @@ def resolve_multiview_backend(
     Whether the folds can serve ``config`` at all is asked of them directly, through
         :func:`~...models.mot.multiview_maskless_attention.maskless_unavailable_reason`, which answers with
         its reason rather than a bool so a pinned ``"maskless"`` can fail with the cause.
+        Action streams are supported; their per-batch view layout is validated alongside
+        the sensor geometry.
 
-        That verdict is deliberately a property of the config and not of a batch: ``"maskless"`` is a different
-        attention pattern rather than a faster one, so which one a run trains under is fixed here,
-        once. A batch that then cannot be expressed without a mask raises in
+        That verdict is a property of the config and not of a batch: the run's backend
+        is fixed here, once. A batch that then cannot be expressed without a mask raises in
         ``_multiview_maskless_geometry`` rather than quietly taking the mask.
 
     ``"maskless"`` comes back with no geometry at all. A ``FlexBackend`` describes the block a
@@ -301,59 +295,52 @@ def resolve_multiview_backend(
             ValueError: for an unknown ``preference``; for ``"maskless"`` when the config rules it
                 out; or for ``"flex_flash"`` when the backend is unavailable -- each with the
                 reason.
-            NotImplementedError: when a same-view temporal frame window is configured for a
+            NotImplementedError: when a same-view temporal window is configured for a
                 FlexAttention backend.
     """
     if preference not in BACKEND_PREFERENCES:
         raise ValueError(f"Unknown multiview attention backend {preference!r}; expected one of {BACKEND_PREFERENCES}.")
-    if config.deduplicate_cross_view and preference != "maskless":
-        raise ValueError("deduplicate_cross_view requires backend='maskless'; flex already counts each key once")
-    if config.mask.decomposed_temporal_window_includes_first_frame and preference != "maskless":
+
+    maskless_reason = maskless_unavailable_reason(config)
+    if preference == "maskless":
+        if maskless_reason is not None:
+            raise ValueError(f"backend='maskless' asks for the maskless folds, but {maskless_reason}.")
+        return "maskless", None
+    if preference == "auto" and maskless_reason is None:
+        return "maskless", None
+
+    if config.mask.cross_view_temporal_window.includes_first_frame:
         raise ValueError(
-            "decomposed_temporal_window_includes_first_frame requires backend='maskless'; the flex "
+            "cross_view_temporal_window.includes_first_frame requires backend='maskless'; the flex "
             "mask has no first-frame rule"
         )
 
-    configured_frame_windows = {
-        name: getattr(config.mask, name)
+    configured_same_view_windows = {
+        name: getattr(config.mask.same_view_temporal_window, name)
         for name in (
-            "sensor_to_sensor_window",
-            "sensor_to_control_window",
-            "control_to_control_window",
-            "control_to_sensor_window",
+            "sensor_to_sensor_bounds",
+            "sensor_to_control_bounds",
+            "control_to_control_bounds",
+            "control_to_sensor_bounds",
         )
-        if getattr(config.mask, name) is not None
+        if getattr(config.mask.same_view_temporal_window, name) is not None
     }
-    if configured_frame_windows and preference != "maskless":
+    if configured_same_view_windows:
         raise NotImplementedError(
-            "Same-view temporal frame windows are not implemented for FlexAttention; "
-            f"backend preference {preference!r} received {configured_frame_windows!r}."
+            "Same-view temporal windows in seconds are not implemented for FlexAttention; "
+            f"backend preference {preference!r} received {configured_same_view_windows!r}."
         )
 
-    # Every geometry below comes from ``resolve_flex_backend``, whose own ``"auto"`` is exactly
-    # the "FA4 where the host has it" rule this one wants for the mask half. The reason is read
-    # separately because the *name* of the chosen backend, not just its geometry, is returned.
-    flash_reason = flash_backend_unavailable_reason(device)
-    maskless_reason = maskless_unavailable_reason(config)
-
-    if preference == "maskless":
-        if maskless_reason is not None:
-            raise ValueError(
-                f"backend='maskless' asks for the maskless folds, but {maskless_reason}. "
-                "Pin a flex_* backend to run the mask instead -- but note that is different attention, "
-                "not the same attention computed differently."
-            )
-        return "maskless", None
+    # Every geometry below comes from ``resolve_flex_backend``, whose own ``"auto"`` is
+    # the FA4-then-Triton rule used after maskless is ruled out. The reason is read separately
+    # because the chosen backend's name, not just its geometry, is returned.
     if preference == "flex_triton":
         return "flex_triton", resolve_flex_backend(device, "flex_triton")
     if preference == "flex_flash":
         # Raises with the reason where FA4 is unavailable, which is this preference's contract.
         return "flex_flash", resolve_flex_backend(device, "flex_flash")
-    # "auto", in rank order: FA4, then Triton, then the folds. The third rank is vacuous --
-    # Triton always resolves -- which is the point rather than an oversight: it is what keeps
-    # "auto" from ever changing which attention a run trains. ``maskless_reason`` is read above for
-    # an explicit ``"maskless"`` and deliberately not consulted here.
-    if flash_reason is None:
+    # "auto" reaches the Flex options only when maskless cannot express this config.
+    if flash_backend_unavailable_reason(device) is None:
         return "flex_flash", resolve_flex_backend(device, "flex_flash")
     return "flex_triton", resolve_flex_backend(device, "flex_triton")
 

@@ -6,10 +6,8 @@
 from cosmos_framework.inference.common.init import init_script
 
 init_script(
-    env={
-        "COSMOS_DEVICE": "cpu",
-        "COSMOS_TRAINING": "1",
-    }
+    env={"COSMOS_TRAINING": "1"},
+    default_env={"COSMOS_DEVICE": "cpu"},
 )
 
 import inspect
@@ -21,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any, Callable, Literal
 
 import attrs
 import safetensors.torch
@@ -32,7 +30,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_
 
 from cosmos_framework.checkpoint.dcp import CustomLoadPlanner
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader
-from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.inference.bimanual import bimanual_action_metadata_for_model_config
 from cosmos_framework.inference.common.args import (
     CheckpointOverrides,
     ParallelismOverrides,
@@ -43,6 +41,7 @@ from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.config import serialize_config_dict
 from cosmos_framework.inference.common.distillation_export import (
     build_student_checkpoint_metadata,
+    resolve_student_base_model,
     resolve_vision_checkpoint_path,
     sanitize_student_model_config,
     sanitize_student_public_model_config,
@@ -53,26 +52,34 @@ from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.scripts._export_model_helpers import (
     EDGE_VIT_BUNDLE_HF_INCLUDE,
+    EXPORTED_VISUAL_PREFIXES,
+    INTERNAL_VISUAL_PREFIX,
+    LIDAR_VAE_BUNDLE_DIR,
+    bind_bundled_lidar_vae,
     build_artifact_source,
     build_export_manifest,
+    bundle_lidar_vae,
     bundle_processor_files,
     bundle_processor_from_tokenizer_node,
     bundle_vision_encoder,
     clean_stale_export_artifacts,
     constant_image_failure,
     is_edge_model,
+    lidar_tokenizer_node,
+    prepare_local_bundle_tokenizer,
     read_framework_commit,
     reasoner_vision_capable,
+    remove_export_completion_marker,
+    reset_export_parallelism,
+    resolve_per_view_caption_fields,
     resolve_vision_bundle_dirs,
+    rewrite_visual_fqns_for_vfm,
     sanitize_export_args,
     set_include_visual,
 )
 from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig, CheckpointDirHf, sanitize_uri
 from cosmos_framework.utils.lazy_config.registry import convert_target_to_string
-
-_INTERNAL_VISUAL_PREFIX = "model.net.language_model.visual."
-_EXPORTED_VISUAL_PREFIX = "model.visual."
 
 
 def _config_value(config: Any, key: str) -> Any:
@@ -165,17 +172,18 @@ def _build_edge_policy_metadata(training_config: Any) -> dict[str, Any]:
 
 def _coerce_to_base_model(model_dict: dict[str, Any]) -> None:
     """For distillation training configs, rewrite the target to the base
-    OmniMoTModel so the exported checkpoint only contains the student network."""
+    student model so the exported checkpoint contains no teacher/scorer state."""
     target = model_dict.get("_target_", "")
-    base_model_target = convert_target_to_string(OmniMoTModel)
+    base_model, base_config = resolve_student_base_model(model_dict, default_base_model=OmniMoTModel)
+    base_model_target = convert_target_to_string(base_model)
     if target != base_model_target:
-        log.info(f"Overriding model target from {target} to OmniMoTModel for export")
+        log.info(f"Overriding model target from {target} to {base_model.__name__} for export")
 
     sanitize_student_model_config(
         model_dict,
         base_model_target=base_model_target,
-        base_config_type=convert_target_to_string(OmniMoTModelConfig),
-        base_config_field_names={field.name for field in attrs.fields(OmniMoTModelConfig)},
+        base_config_type=convert_target_to_string(base_config),
+        base_config_field_names={field.name for field in attrs.fields(base_config)},
     )
 
 
@@ -191,6 +199,15 @@ class Args(ParallelismOverrides):
     """If True, export ViT weights."""
     vit_checkpoint_path: ResolvedPath | None = None
     """Optional local Hugging Face checkpoint directory containing ViT weights."""
+    bundle_lidar_vae: bool = False
+    """If True and the model has a LiDAR tokenizer, bundle its VAE under 'lidar_vae/' and point the
+    exported config at it. Off by default: the export keeps the training-time VAE location."""
+    per_view_captions: Literal["auto", "on", "off"] = "auto"
+    """Per-view caption layout recorded in config.json: 'auto' derives it from the training dataloaders;
+    'on'/'off' records it explicitly (needed when the config carries no dataloaders, e.g. a prepared
+    student config)."""
+    per_view_caption_task: str | None = None
+    """Tokenizer task of the per-view captions (e.g. 'av_joint_camera_lidar_transfer'); derived when omitted."""
     verify: bool = False
     """If True, smoke-test the exported checkpoint with single-GPU inference (tiny reasoner + generation samples)."""
 
@@ -212,18 +229,8 @@ def _load_safetensor_weights(model_dir: Path, predicate: Callable[[str], bool]) 
     return vision_weights
 
 
-def _rewrite_visual_fqns_for_vfm(state_dict: dict[str, Any]) -> dict[str, Any]:
-    """Map HF visual tower FQNs to OmniMoTModel's internal visual tower FQNs."""
-    remapped_state_dict = {}
-    for key, value in state_dict.items():
-        if key.startswith(_EXPORTED_VISUAL_PREFIX):
-            key = _INTERNAL_VISUAL_PREFIX + key[len(_EXPORTED_VISUAL_PREFIX) :]
-        remapped_state_dict[key] = value
-    return remapped_state_dict
-
-
-# Env vars stripped from the --verify subprocess: init_script pinned
-# COSMOS_DEVICE=cpu / COSMOS_TRAINING=1 for the export process itself, and any
+# Env vars stripped from the --verify subprocess: init_script defaults to
+# COSMOS_DEVICE=cpu and pins COSMOS_TRAINING=1 for the export process itself, and any
 # torchrun rendezvous vars would make single-process inference hang.
 _VERIFY_ENV_EXCLUDE = (
     "COSMOS_DEVICE",
@@ -239,7 +246,7 @@ _VERIFY_ENV_EXCLUDE = (
 
 
 def _verify_exported_checkpoint(output_dir: Path, *, run_reasoner_check: bool) -> None:
-    """Smoke-test the exported checkpoint via single-GPU 'scripts.inference'.
+    """Smoke-test the exported checkpoint via single-GPU 'cosmos_framework.scripts.inference'.
 
     Runs a minimal generation sample (plus a reasoner-image sample when
     'run_reasoner_check') and asserts each succeeded with non-empty outputs.
@@ -367,11 +374,15 @@ def export_model(args: Args) -> None:
     checkpoint_args = args.checkpoint.build_checkpoint(checkpoints={})
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.config_only and is_rank0():
+        # 'checkpoint.json' is rewritten only after every artifact succeeds;
+        # drop the previous one first so a failed re-export never looks complete.
+        if remove_export_completion_marker(args.output_dir):
+            log.info(f"Removed the completion marker of a previous export from '{args.output_dir}'")
         # Re-export into the same -o dir: drop artifacts a prior export may have
-        # left (stale vision_encoder/ bundle, stale processor files, stale
-        # manifest) so the dir always reflects THIS export — inference prefers
-        # those files local-first and would silently load a stale tower.
-        removed = clean_stale_export_artifacts(args.output_dir)
+        # left (stale vision_encoder/ or lidar_vae/ bundle, stale processor files,
+        # stale manifest) so the dir always reflects THIS export — inference
+        # prefers those files local-first and would silently load stale weights.
+        removed = clean_stale_export_artifacts(args.output_dir, include_lidar_vae=args.bundle_lidar_vae)
         if removed:
             log.info(f"Removed stale artifacts of a previous export from '{args.output_dir}': {', '.join(removed)}")
 
@@ -381,6 +392,18 @@ def export_model(args: Args) -> None:
     if not model_dict["config"]["ema"]["enabled"]:
         checkpoint_args.use_ema_weights = False
     model_dict["config"]["ema"]["enabled"] = False
+    # The export builds the model in one process; the training topology (FSDP /
+    # CP / CFG degrees) is meaningless in the exported config.
+    reset_export_parallelism(model_dict)
+
+    # The training config is loaded at most once (Edge policy metadata and the
+    # per-view caption layout both read its dataloaders).
+    training_config_cache: list[Any] = []
+
+    def training_config() -> Any:
+        if not training_config_cache:
+            training_config_cache.append(checkpoint_args.load_config())
+        return training_config_cache[0]
 
     is_edge = is_edge_model(model_dict)
     # Cosmos3 Edge action policies need the diffusers converter's `policy` block
@@ -388,9 +411,7 @@ def export_model(args: Args) -> None:
     # Only action Edge models carry an action dataloader; non-action Edge exports
     # (e.g. Edge SFT video recipes) skip this and stay unaffected.
     edge_policy_metadata = (
-        _build_edge_policy_metadata(checkpoint_args.load_config())
-        if is_edge and model_dict["config"].get("action_gen")
-        else None
+        _build_edge_policy_metadata(training_config()) if is_edge and model_dict["config"].get("action_gen") else None
     )
     if not args.vit:
         # Text/gen-only export: write include_visual=False into the exported model
@@ -442,6 +463,9 @@ def export_model(args: Args) -> None:
     # Load model
     log.info("Loading model...")
     _coerce_to_base_model(model_dict)
+    # Local training bundles use a data-loader helper with no public alias.
+    # Bundle its exact tokenizer and use the existing inference constructor.
+    local_bundle_tokenizer = prepare_local_bundle_tokenizer(model_dict, args.output_dir, config_only=args.config_only)
     hf_config = Cosmos3OmniConfig(model=build_public_model_config(model_dict))
     hf_config.save_pretrained(args.output_dir)
     hf_model = Cosmos3OmniModel(hf_config)
@@ -449,7 +473,9 @@ def export_model(args: Args) -> None:
     # Save model
     log.info("Saving model...")
     vision_tower_source: dict[str, Any] | None = None
-    processor_source: dict[str, Any] | None = None
+    processor_source: dict[str, Any] | None = (
+        {"repo": None, "revision": None, "bundled": True} if local_bundle_tokenizer and not args.config_only else None
+    )
     if not args.config_only:
         # Load checkpoint
         if checkpoint_args.checkpoint_path.startswith("s3://"):
@@ -487,11 +513,11 @@ def export_model(args: Args) -> None:
                 # Nemotron3DenseVLTextForCausalLM._ensure_vision_tower); copy it
                 # verbatim (incl. 'model.projector.*') instead of merging into the
                 # root safetensors.
-                if any(key.startswith(_INTERNAL_VISUAL_PREFIX) for key in state_dict):
+                if any(key.startswith(INTERNAL_VISUAL_PREFIX) for key in state_dict):
                     # DCP-first: never clobber a trained in-DCP tower.
                     log.warning(
                         "DCP checkpoint unexpectedly contains a vision tower "
-                        f"('{_INTERNAL_VISUAL_PREFIX}*'); keeping the in-DCP weights and "
+                        f"('{INTERNAL_VISUAL_PREFIX}*'); keeping the in-DCP weights and "
                         "skipping the vision_encoder/ bundle copy."
                     )
                 else:
@@ -511,10 +537,11 @@ def export_model(args: Args) -> None:
             else:
                 # Qwen family: merge the ViT weights into the root safetensors.
                 vit_state_dict = _load_safetensor_weights(
-                    Path(vlm_checkpoint_path), lambda x: x.startswith("model.visual.")
+                    Path(vlm_checkpoint_path), lambda x: x.startswith(EXPORTED_VISUAL_PREFIXES)
                 )
                 assert vit_state_dict, "No vision weights found"
-                state_dict.update(_rewrite_visual_fqns_for_vfm(vit_state_dict))
+                # Accepts 'model.visual.*' or 'visual.*'; raises on a mix of both.
+                state_dict.update(rewrite_visual_fqns_for_vfm(vit_state_dict))
                 vision_tower_source = build_artifact_source(
                     repo=vit_repo, resolved_path=vlm_checkpoint_path, bundled=False
                 )
@@ -522,8 +549,9 @@ def export_model(args: Args) -> None:
         # Bundle processor/tokenizer files for every export ('--no-vit' too:
         # generation-only inference still tokenizes prompts through the VLM
         # processor). Skipped when the Edge --vit path above already bundled
-        # them. Best-effort: failures log a warning and leave processor_source
-        # None; the export itself never fails on this.
+        # them, or the local training tokenizer was bundled above. Hub bundling
+        # is best-effort: failures log a warning and leave processor_source
+        # None. Local tokenizers have no hub fallback and must bundle successfully.
         if processor_source is None:
             processor_source = bundle_processor_from_tokenizer_node(
                 (model_dict["config"].get("vlm_config") or {}).get("tokenizer"), args.output_dir
@@ -535,11 +563,42 @@ def export_model(args: Args) -> None:
             state_dict=state_dict,
         )
 
+        # With --bundle-lidar-vae, bundle the LiDAR VAE so the export does not depend on the
+        # training-time VAE location (an env-var path or object-store URI). The loader binds
+        # 'lidar_vae/diffusion_pytorch_model.safetensors' when present.
+        lidar_tokenizer = lidar_tokenizer_node(model_dict)
+        if lidar_tokenizer is not None:
+            if args.bundle_lidar_vae:
+                lidar_vae_source = bundle_lidar_vae(lidar_tokenizer, args.output_dir)
+                log.info(f"Bundled {LIDAR_VAE_BUNDLE_DIR}/ from '{lidar_vae_source}'")
+
     # Re-write 'config.json' to apply replacements.
     hf_config_file = args.output_dir / "config.json"
     hf_config_json = json.loads(hf_config_file.read_text())
+    if local_bundle_tokenizer:
+        # Inference binds this node to the checkpoint-bundled files. Never
+        # publish the training-bundle location or the export machine's path.
+        hf_config_json["model"]["config"]["vlm_config"]["tokenizer"]["pretrained_model_name"] = "."
     if args.student_only_checkpoint_metadata:
         sanitize_student_public_model_config(hf_config_json["model"])
+    bimanual_metadata = bimanual_action_metadata_for_model_config(model_dict["config"])
+    if bimanual_metadata is not None:
+        hf_config_json.update(bimanual_metadata)
+    # The training dataloaders do not travel with an exported checkpoint, and the
+    # caption layout is only discoverable from them. Record it so inference does
+    # not have to guess: without it a per-view checkpoint silently falls back to
+    # one merged prompt (and the wrong system prompt).
+    # A config source that cannot be loaded as a training config, or carries no
+    # dataloaders (e.g. a prepared student config), records nothing in 'auto'
+    # mode; '--per-view-captions on|off' records the layout explicitly.
+    hf_config_json.update(
+        resolve_per_view_caption_fields(args.per_view_captions, args.per_view_caption_task, training_config)
+    )
+    # Point the LiDAR tokenizer at the bundled VAE. After the student-only
+    # sanitization above, which would otherwise rewrite it to the published
+    # registry location.
+    if args.bundle_lidar_vae and bind_bundled_lidar_vae(hf_config_json, args.output_dir):
+        log.info(f"Exported config references the bundled {LIDAR_VAE_BUNDLE_DIR}/")
     hf_config_json["model_type"] = "cosmos3_omni"
     serialize_config_dict(hf_config_json, hf_config_file)
 
@@ -552,6 +611,10 @@ def export_model(args: Args) -> None:
         "vit": args.vit,
         "vit_checkpoint_path": str(args.vit_checkpoint_path) if args.vit_checkpoint_path is not None else None,
     }
+    # Only non-default values of the newer options, so default manifests keep their previous shape.
+    for key, default in (("bundle_lidar_vae", False), ("per_view_captions", "auto"), ("per_view_caption_task", None)):
+        if getattr(args, key) != default:
+            export_args[key] = getattr(args, key)
     if args.student_only_checkpoint_metadata:
         # 'checkpoint.json' is scrubbed of local paths in this mode; the
         # manifest must not leak them through 'export_args' either. The

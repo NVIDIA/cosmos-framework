@@ -24,6 +24,11 @@ classifiers = [
 ]
 dependencies = [
   "accelerate",
+  # Imported by inference with COSMOS_TRAINING=0: inference.py (qwen-vl-utils), the multiview
+  # camera geometry (pyarrow) and the pretrained-model downloader (boto3).
+  "boto3",
+  # PyAV 18 preserves causal Transfer decode parity and requires Python >=3.11.
+  # Python 3.10 remains available for other runtimes; causal Transfer rejects it.
   # hr_lr_degradation/codec.py calls VideoFrame.reformat(threads=...), added in PyAV 17;
   # PyAV 18 (Python >=3.11) matches the imaginaire4 images the shared code is developed on.
   "av>=17,<18; python_version < '3.11'",
@@ -41,7 +46,9 @@ dependencies = [
   "nvidia-ml-py",
   "obstore",
   "omegaconf",
+  "pyarrow",
   "pydantic",
+  "qwen-vl-utils",
   "requests",
   "scipy",
   "termcolor",
@@ -86,7 +93,6 @@ train = [
   "aiohttp",
   "arrgh",
   "blobfile",
-  "boto3",
   "botocore",
   "datasets",
   "dists-pytorch",
@@ -115,6 +121,7 @@ train = [
   "megatron-core",
   "more-itertools",
   "moviepy",
+  "mujoco==3.10.0", # Bimanual local ACT2 -> calibrated FK actions (no rendering).
   "multi-storage-client[boto3,google-cloud-storage,fsspec,observability-otel,vault]==0.44.0",
   "ninja",
   "nvidia-dali-cuda120",
@@ -139,7 +146,6 @@ train = [
   "python-memcached",
   "pytz",
   "pyyaml",
-  "qwen-vl-utils",
   "robotmq",
   "rsa",
   "s3fs",
@@ -339,7 +345,11 @@ issues = "https://github.com/NVIDIA/cosmos-framework/issues"
 repository = "https://github.com/NVIDIA/cosmos-framework"
 
 [tool.uv]
-required-version = ">=0.11.3"
+# The lock is generated and checked with this exact resolver version in CI.
+# Keep the locked `uv` runtime dependency equal to it: the Posttrain guide
+# activates this project's venv, whose `uv` then runs that sync.
+required-version = "==0.11.29"
+constraint-dependencies = ["pydantic-extra-types==2.11.1", "uv==0.11.29"]
 # Install the optional AutoML engine from tao-automl/main (or an explicitly
 # selected development branch) after sync; see docs/automl.md. Keep ordinary
 # Framework setup independent of that source installation. The extras above
@@ -347,6 +357,8 @@ required-version = ">=0.11.3"
 # the core so exact sync does not remove the selected source build.
 exclude-dependencies = ["nvidia-automl-core"]
 conflicts = [
+  # Bimanual FK training and the LIBERO simulator require separate MuJoCo runtimes.
+  [{extra = "train"}, {group = "libero"}],
   [
     {group = "cu128"},
     {group = "cu128-train"},

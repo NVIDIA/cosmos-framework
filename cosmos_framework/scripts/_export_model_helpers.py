@@ -195,6 +195,33 @@ def bundle_processor_files(snapshot_root: Path, output_dir: Path) -> list[str]:
     return copied
 
 
+def prepare_local_bundle_tokenizer(model_dict: dict[str, Any], output_dir: Path, *, config_only: bool) -> bool:
+    """Export a local training tokenizer through the existing public Qwen2 loader.
+
+    Local tokenizers have no remote fallback: missing files or copy failures
+    must fail export. Keep the absolute source path for model construction;
+    the final config uses the checkpoint root after the files are bundled.
+    """
+    vlm_config = (model_dict.get("config") or {}).get("vlm_config") or {}
+    node = vlm_config.get("tokenizer")
+    if not isinstance(node, dict) or node.get("_target_") != (
+        "cosmos_framework.data.generator.local_simulation.dataset.load_bundle_tokenizer"
+    ):
+        return False
+    source = Path(node["directory"]).resolve()
+    if not config_only:
+        for name in ("tokenizer_config.json", "vocab.json", "merges.txt"):
+            if not (source / name).is_file():
+                raise FileNotFoundError(f"Local training tokenizer is missing {source / name}")
+        bundle_processor_files(source, output_dir)
+    vlm_config["tokenizer"] = {
+        "_target_": "cosmos_framework.configs.base.defaults.reasoner.create_qwen2_tokenizer_with_download",
+        "pretrained_model_name": str(source),
+        "config_variant": "hf",
+    }
+    return True
+
+
 # Hugging Face repo ids are 'org/name'; anything else in a tokenizer node
 # (local directory, URI) has no hub snapshot to bundle from.
 _HF_REPO_ID_RE = re.compile(r"[\w.\-]+/[\w.\-]+")
@@ -341,18 +368,36 @@ def sanitize_export_args(export_args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def clean_stale_export_artifacts(output_dir: Path) -> list[str]:
+# Completion marker of an export: written last by export_model.
+EXPORT_COMPLETION_MARKER = "checkpoint.json"
+
+
+def remove_export_completion_marker(output_dir: Path) -> bool:
+    """Delete a previous export's 'checkpoint.json'; return True when one was removed.
+
+    'checkpoint.json' is written last and marks the export complete. Removing it
+    before a re-export starts means a re-export that fails midway leaves a
+    directory that no longer looks complete.
+    """
+    marker = output_dir / EXPORT_COMPLETION_MARKER
+    if marker.is_file():
+        marker.unlink()
+        return True
+    return False
+
+
+def clean_stale_export_artifacts(output_dir: Path, *, include_lidar_vae: bool = False) -> list[str]:
     """Remove artifacts a previous export may have left in 'output_dir'; return removed names.
 
     Inference prefers bundled files local-first, so a re-export must not leave
-    a stale 'vision_encoder/' or processor set behind. Only the paths this tool
+    a stale 'vision_encoder/', 'lidar_vae/' or processor set behind. Only the paths this tool
     manages are removed; user files and the model shards are never touched.
     """
     removed: list[str] = []
-    vision_encoder_dir = output_dir / "vision_encoder"
-    if vision_encoder_dir.is_dir():
-        shutil.rmtree(vision_encoder_dir)
-        removed.append("vision_encoder/")
+    for bundle_dir in ("vision_encoder", *((LIDAR_VAE_BUNDLE_DIR,) if include_lidar_vae else ())):
+        if (output_dir / bundle_dir).is_dir():
+            shutil.rmtree(output_dir / bundle_dir)
+            removed.append(f"{bundle_dir}/")
     for pattern in (*PROCESSOR_FILE_PATTERNS, "export_manifest.json"):
         for path in sorted(output_dir.glob(pattern)):
             if path.is_file():
@@ -409,15 +454,18 @@ def read_framework_commit(start: Path | None = None) -> str | None:
     current = (start or Path(__file__)).resolve()
     for parent in [current, *current.parents]:
         git_dir = parent / ".git"
-        if git_dir.is_file():
-            try:
-                directive = git_dir.read_text().strip()
-            except OSError:
-                return None
-            if directive.startswith("gitdir:"):
-                git_dir = (parent / directive.removeprefix("gitdir:").strip()).resolve()
         if git_dir.is_dir():
             return _read_git_head(git_dir)
+        if git_dir.is_file():
+            try:
+                marker = git_dir.read_text().strip()
+            except OSError:
+                continue
+            if marker.startswith("gitdir:"):
+                linked_git_dir = Path(marker.removeprefix("gitdir:").strip())
+                if not linked_git_dir.is_absolute():
+                    linked_git_dir = git_dir.parent / linked_git_dir
+                return _read_git_head(linked_git_dir.resolve())
     return None
 
 
@@ -429,19 +477,308 @@ def _read_git_head(git_dir: Path) -> str | None:
     if not head.startswith("ref:"):
         return head or None
     ref = head.removeprefix("ref:").strip()
-    # Linked worktrees keep HEAD locally but share branch refs and packed refs.
+    ref_roots = [git_dir]
     common_dir_file = git_dir / "commondir"
     if common_dir_file.is_file():
         try:
-            git_dir = (git_dir / common_dir_file.read_text().strip()).resolve()
+            common_dir = Path(common_dir_file.read_text().strip())
+            if not common_dir.is_absolute():
+                common_dir = git_dir / common_dir
+            ref_roots.append(common_dir.resolve())
         except OSError:
-            return None
-    ref_file = git_dir / ref
-    if ref_file.is_file():
-        return ref_file.read_text().strip() or None
-    packed_refs = git_dir / "packed-refs"
-    if packed_refs.is_file():
-        for line in packed_refs.read_text().splitlines():
-            if line.endswith(f" {ref}"):
-                return line.split(" ", 1)[0]
+            pass
+    for ref_root in ref_roots:
+        ref_file = ref_root / ref
+        if ref_file.is_file():
+            return ref_file.read_text().strip() or None
+        packed_refs = ref_root / "packed-refs"
+        if packed_refs.is_file():
+            for line in packed_refs.read_text().splitlines():
+                if line.endswith(f" {ref}"):
+                    return line.split(" ", 1)[0]
     return None
+
+
+# ---------------------------------------------------------------------------
+# ViT checkpoint key prefixes
+# ---------------------------------------------------------------------------
+
+INTERNAL_VISUAL_PREFIX = "model.net.language_model.visual."
+# Hugging Face VLM snapshots store the vision tower under either prefix.
+EXPORTED_VISUAL_PREFIXES = ("model.visual.", "visual.")
+
+
+def select_visual_checkpoint_tensors(tensor_names: list[str]) -> tuple[str, list[str]]:
+    """Pick the one supported visual prefix present in 'tensor_names'; return (prefix, names).
+
+    Returns ('', []) when no visual tensors are present. Raises when both
+    prefixes are populated: the two keyspaces would map onto the same internal
+    keys and silently overwrite each other.
+    """
+    populated = [
+        (prefix, names)
+        for prefix in EXPORTED_VISUAL_PREFIXES
+        if (names := [name for name in tensor_names if name.startswith(prefix)])
+    ]
+    if len(populated) > 1:
+        raise ValueError(
+            "Vision checkpoint mixes both supported key prefixes; provide one unambiguous visual tensor keyspace."
+        )
+    if not populated:
+        return "", []
+    return populated[0]
+
+
+def rewrite_visual_fqns_for_vfm(state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Map HF visual tower FQNs ('model.visual.*' or 'visual.*') to OmniMoTModel's internal FQNs."""
+    source_prefix, vision_names = select_visual_checkpoint_tensors(list(state_dict))
+    if not vision_names:
+        return state_dict
+    return {
+        (INTERNAL_VISUAL_PREFIX + key[len(source_prefix) :] if key.startswith(source_prefix) else key): value
+        for key, value in state_dict.items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Exported model config fixes
+# ---------------------------------------------------------------------------
+
+_PARALLELISM_DEGREE_KEYS = (
+    "data_parallel_shard_degree",
+    "data_parallel_replicate_degree",
+    "context_parallel_shard_degree",
+    "cfg_parallel_shard_degree",
+)
+
+
+def reset_export_parallelism(model_dict: dict[str, Any]) -> bool:
+    """Reset the training-time parallelism degrees to 1 in an exported model config.
+
+    The training topology (e.g. FSDP 32 x CP 32) means nothing to the exported
+    artifact; the export builds the model in one process and inference sets its
+    own degrees. Returns False when the config has no parallelism section.
+    """
+    parallelism = (model_dict.get("config") or {}).get("parallelism")
+    if not isinstance(parallelism, dict):
+        return False
+    for key in _PARALLELISM_DEGREE_KEYS:
+        parallelism[key] = 1
+    return True
+
+
+# ---------------------------------------------------------------------------
+# LiDAR VAE bundling
+# ---------------------------------------------------------------------------
+
+# The layout 'Cosmos3OmniModel.from_pretrained_dcp' binds when present
+# (published Transfer-Auto / Sim-Auto snapshots ship the same layout).
+LIDAR_VAE_BUNDLE_DIR = "lidar_vae"
+LIDAR_VAE_BUNDLE_WEIGHTS = "diffusion_pytorch_model.safetensors"
+LIDAR_VAE_BUNDLE_CONFIG = "config.json"
+# The exported config's 'vae_path' for a bundled VAE, relative to the checkpoint root.
+LIDAR_VAE_BUNDLE_RELATIVE_PATH = f"{LIDAR_VAE_BUNDLE_DIR}/{LIDAR_VAE_BUNDLE_WEIGHTS}"
+
+# Tokenizer-node fields that locate the training-time artifact; they are not
+# part of the VAE's description and are dropped from the bundled config.
+_LIDAR_VAE_LOCATION_KEYS = ("vae_path", "bucket_name", "object_store_credential_path_pretrained", "device")
+
+
+def lidar_tokenizer_node(model_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """The model config's 'lidar_tokenizer' node, or None for a model without LiDAR."""
+    node = (model_dict.get("config") or {}).get("lidar_tokenizer")
+    return node if isinstance(node, dict) else None
+
+
+def _flatten_lidar_vae_payload(payload: Any) -> dict[str, Any]:
+    """Flatten a LiDAR VAE checkpoint payload into a '{name: tensor}' safetensors mapping.
+
+    Mirrors what the loader reads ('payload.get("model", payload)'): tensors are
+    kept under their stored names (training-wrapper prefixes are stripped at
+    load time), scalar range bounds become 0-d tensors, anything else is dropped.
+    """
+    import torch
+
+    if not isinstance(payload, dict):
+        raise TypeError(f"LiDAR VAE checkpoint must be a mapping, got {type(payload).__name__}")
+    state = payload.get("model", payload)
+    if not isinstance(state, dict):
+        raise TypeError(f"LiDAR VAE checkpoint model state must be a mapping, got {type(state).__name__}")
+    flat: dict[str, Any] = {}
+    for key, value in state.items():
+        if isinstance(value, torch.Tensor):
+            # clone(): safetensors refuses tensors that share storage.
+            flat[str(key)] = value.detach().cpu().contiguous().clone()
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            flat[str(key)] = torch.tensor(float(value))
+    if not any(key in flat for key in ("latent_mean", "model.latent_mean")):
+        raise ValueError(
+            "LiDAR VAE checkpoint carries no 'latent_mean'; it is not a loadable LiDAR tokenizer artifact."
+        )
+    return flat
+
+
+def bundle_lidar_vae(
+    lidar_tokenizer: dict[str, Any],
+    output_dir: Path,
+    *,
+    load_payload: Callable[[str], Any] | None = None,
+) -> str:
+    """Copy the LiDAR VAE into '<output_dir>/lidar_vae/'; return the resolved source path.
+
+    A local '.safetensors' artifact is copied verbatim; any other artifact
+    (torch checkpoint, object-store URI, published registry key) is loaded and
+    re-saved as a flat safetensors mapping, which the LiDAR tokenizer loader
+    reads the same way. 'lidar_vae/config.json' records the tokenizer node minus
+    its training-time location fields. All-or-nothing: on failure the partial
+    bundle is removed before the exception propagates, because inference prefers
+    a bundled VAE over the configured one. 'load_payload' is injectable for tests.
+    """
+    vae_path = lidar_tokenizer.get("vae_path")
+    if not isinstance(vae_path, str) or not vae_path:
+        raise ValueError(
+            "The model config has a LiDAR tokenizer but no 'vae_path'; cannot bundle lidar_vae/. "
+            "Omit --bundle-lidar-vae to export without it."
+        )
+    if "${" in vae_path:
+        # A recipe-level interpolation (e.g. '${oc.env:COSMOS_TRANSFER_AUTO_LIDAR_VAE}') that
+        # survived config loading; resolve it the way the training run did.
+        from omegaconf import OmegaConf
+
+        vae_path = str(OmegaConf.create({"vae_path": vae_path}).vae_path)
+    from cosmos_framework.model.generator.tokenizers.lidar.checkpoint import resolve_artifact_path
+
+    source = resolve_artifact_path(vae_path, lidar_tokenizer.get("bucket_name") or "")
+    bundle_dir = output_dir / LIDAR_VAE_BUNDLE_DIR
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        local_source = Path(source).expanduser() if "://" not in source else None
+        if local_source is not None and local_source.suffix == ".safetensors" and local_source.is_file():
+            shutil.copyfile(local_source, bundle_dir / LIDAR_VAE_BUNDLE_WEIGHTS)
+        else:
+            import safetensors.torch
+
+            if load_payload is None:
+                load_payload = _default_lidar_vae_loader(lidar_tokenizer)
+            safetensors.torch.save_file(
+                _flatten_lidar_vae_payload(load_payload(source)), str(bundle_dir / LIDAR_VAE_BUNDLE_WEIGHTS)
+            )
+        bundle_config = {key: value for key, value in lidar_tokenizer.items() if key not in _LIDAR_VAE_LOCATION_KEYS}
+        (bundle_dir / LIDAR_VAE_BUNDLE_CONFIG).write_text(
+            json.dumps(bundle_config, indent=2, sort_keys=True, default=str) + "\n"
+        )
+    except BaseException:
+        shutil.rmtree(bundle_dir, ignore_errors=True)
+        raise
+    return source
+
+
+def _default_lidar_vae_loader(lidar_tokenizer: dict[str, Any]) -> Callable[[str], Any]:
+    """Load an artifact the way the LiDAR tokenizer does, with object-store credentials when remote."""
+    from cosmos_framework.model.generator.tokenizers.lidar.checkpoint import load_artifact
+    from cosmos_framework.model.generator.tokenizers.lidar.paths import s3_backend_args
+
+    def load(source: str) -> Any:
+        backend_args = (
+            s3_backend_args(lidar_tokenizer.get("object_store_credential_path_pretrained")) if "://" in source else None
+        )
+        return load_artifact(source, backend_args=backend_args)
+
+    return load
+
+
+def bind_bundled_lidar_vae(hf_config_json: dict[str, Any], output_dir: Path) -> bool:
+    """Point the exported config's LiDAR tokenizer at the bundled 'lidar_vae/'; True when applied.
+
+    Same fields 'Cosmos3OmniModel.from_pretrained_dcp' rewrites at load time
+    ('vae_path', 'bucket_name', 'object_store_credential_path_pretrained'), but
+    with a checkpoint-relative 'vae_path' because the export directory may move;
+    the loader re-binds it to the absolute bundled path. No-op when the model
+    has no LiDAR tokenizer or the bundle is absent.
+    """
+    node = lidar_tokenizer_node(hf_config_json.get("model") or {})
+    if node is None or not (output_dir / LIDAR_VAE_BUNDLE_RELATIVE_PATH).is_file():
+        return False
+    node["vae_path"] = LIDAR_VAE_BUNDLE_RELATIVE_PATH
+    node["bucket_name"] = ""
+    node["object_store_credential_path_pretrained"] = None
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Per-view caption layout recorded in the exported config.json
+# ---------------------------------------------------------------------------
+
+
+def resolve_per_view_caption_fields(
+    mode: str,
+    task: str | None,
+    load_training_config: Callable[[], Any],
+) -> dict[str, Any]:
+    """The per-view caption fields to record in the exported 'config.json'.
+
+    'mode' is 'auto' (derive from the training dataloaders), 'on' or 'off'
+    (explicit, for configs that do not carry dataloaders, e.g. a prepared
+    student config). 'task' explicitly names the per-view tokenizer task. As in
+    i4, 'auto' mode records 'per_view_captions: false' for a config without
+    training dataloaders; pass 'on' for a per-view model exported from such a
+    config.
+    """
+    from cosmos_framework.inference.common.multiview_captions import (
+        PER_VIEW_CAPTION_TASK_KEY,
+        PER_VIEW_CAPTIONS_KEY,
+        has_training_dataloaders,
+        per_view_caption_export_fields,
+    )
+    from cosmos_framework.utils import log
+
+    if mode not in ("auto", "on", "off"):
+        raise ValueError(f"per-view caption mode must be 'auto', 'on' or 'off', got {mode!r}")
+    if task is not None and mode == "off":
+        raise ValueError("--per-view-caption-task cannot be combined with --per-view-captions off")
+
+    if mode == "off":
+        return {PER_VIEW_CAPTIONS_KEY: False}
+
+    derived: tuple[dict[str, Any], list[str], list[str]] | None = None
+    try:
+        training_config = load_training_config()
+    except Exception as e:
+        if mode == "auto":
+            log.warning(
+                f"Could not load the training config to detect the per-view caption layout ({e}); not recording "
+                "it. Pass --per-view-captions on|off to record it explicitly."
+            )
+            return {}
+        training_config = None
+    if training_config is not None and has_training_dataloaders(training_config):
+        derived = per_view_caption_export_fields(training_config)
+
+    if mode == "auto":
+        if derived is None:
+            # As i4: no caption streams are derivable, so the layout is recorded as merged.
+            return {PER_VIEW_CAPTIONS_KEY: False}
+        fields, streams, tasks = derived
+        if streams:
+            if len(tasks) > 1:
+                log.warning(
+                    f"Per-view caption streams disagree on the tokenizer task {tasks}; not recording "
+                    f"{PER_VIEW_CAPTION_TASK_KEY}. Serving will have to choose."
+                )
+            log.info(f"Recording per-view caption layout in the export (from {streams}), task={tasks or 'unset'}")
+        if task is not None:
+            if not fields[PER_VIEW_CAPTIONS_KEY]:
+                raise ValueError(
+                    "--per-view-caption-task was set, but the training dataloaders do not tokenize per-view captions."
+                )
+            fields[PER_VIEW_CAPTION_TASK_KEY] = task
+        return fields
+
+    # mode == "on"
+    fields = {PER_VIEW_CAPTIONS_KEY: True}
+    derived_tasks = derived[2] if derived is not None else []
+    if task is not None:
+        fields[PER_VIEW_CAPTION_TASK_KEY] = task
+    elif len(derived_tasks) == 1:
+        fields[PER_VIEW_CAPTION_TASK_KEY] = derived_tasks[0]
+    return fields

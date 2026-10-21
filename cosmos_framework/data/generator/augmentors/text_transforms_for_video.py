@@ -5,10 +5,11 @@ import json
 import math
 import os
 import random
+from collections.abc import Mapping, Sequence
 from typing import Optional
 
-from cosmos_framework.data.imaginaire.webdataset.augmentors.v3_text_transforms import pad_and_resize
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
+from cosmos_framework.data.imaginaire.webdataset.augmentors.v3_text_transforms import pad_and_resize
 from cosmos_framework.utils import log
 
 
@@ -363,11 +364,12 @@ class TextTransformForVideoTransferFullFrames(Augmentor):
             )
 
     @staticmethod
-    def _normalize_caption_config(caption_config: dict | list) -> list[tuple[str, float, dict]]:
-        if isinstance(caption_config, dict):
+    def _normalize_caption_config(caption_config: Mapping | Sequence) -> list[tuple[str, float, dict]]:
+        # LazyCall preserves OmegaConf containers, which implement Mapping rather than dict.
+        if isinstance(caption_config, Mapping):
             options: list[tuple[str, float, dict]] = []
             for caption_key, config in caption_config.items():
-                if isinstance(config, dict):
+                if isinstance(config, Mapping):
                     ratio = config.get("ratio", 1.0)
                     # Keep more than the sampling ratio because source-specific
                     # settings, like min_stride, are part of how caption/video
@@ -381,7 +383,7 @@ class TextTransformForVideoTransferFullFrames(Augmentor):
         for item in caption_config:
             if isinstance(item, str):
                 options.append((item, 1.0, {}))
-            elif isinstance(item, dict):
+            elif isinstance(item, Mapping):
                 caption_key = item.get("key") or item.get("caption_key") or item.get("caption_type") or item.get("name")
                 if caption_key is None:
                     raise ValueError(f"Caption config entry is missing a caption key: {item}")

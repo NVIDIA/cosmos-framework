@@ -1,0 +1,3 @@
+input_pose_fps: 30
+input_lidar_fps: 10
+gt_video_fps: 10

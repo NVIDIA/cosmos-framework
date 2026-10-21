@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # Maps ``job.task`` to the base Hydra config that ``make_config()`` lives in.
 TASK_TO_BASE_CONFIG: dict[str, str] = {
     "vfm": "cosmos_framework/configs/base/config.py",
     "vlm": "cosmos_framework/configs/base/reasoner/config.py",
+    "simulation": "cosmos_framework/configs/simulation/config.py",
 }
 
 
@@ -43,6 +43,14 @@ TASK_TO_BASE_CONFIG: dict[str, str] = {
 #   - Rename a field's Hydra path: map its prefix to the new prefix tuple.
 # ---------------------------------------------------------------------------
 PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
+    # Simulation shares the model.config layout, but not vision-SFT's nested
+    # dataset path. Keep model-specific data and distillation fields in recipes.
+    "simulation": {
+        ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
+        ("model", "attn_implementation"): None,
+        ("model", "backbone"): None,
+        ("model",): ("model", "config"),
+    },
     # VFM (OmniMoTModelConfig): every ``model.<X>`` lives at
     # ``model.config.<X>`` in the Hydra tree. ``attn_implementation`` is a
     # VLM-only knob — skip it on VFM. Other sections pass through.

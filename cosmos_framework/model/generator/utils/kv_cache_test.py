@@ -8,8 +8,15 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from cosmos_framework.model.attention import attention
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_gen_seq,
+    get_num_real_samples,
+    has_pad_segment,
+    sequence_pack_from_packed_sequence,
+)
+from cosmos_framework.model.attention import attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
@@ -31,18 +38,29 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
     UndKVCache,
+    write_current_kv_to_static_buffer,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
 )
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_gen_seq,
-    get_num_real_samples,
-    has_pad_segment,
-    sequence_pack_from_packed_sequence,
-)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("capacity", [None, 4])
+def test_retained_frame_inspection_tracks_populated_history_and_reset(capacity):
+    cache = GenKVCache(cache_size=capacity)
+    assert cache.retained_frame_indices(1) == ()
+    key = torch.ones(1, 2, 1, 2)
+    for frame in range(11):
+        cache.store_kv(key * frame, key, frame_idx=frame)
+    expected = tuple(range(11)) if capacity is None else (8, 9, 10)
+    assert cache.retained_frame_indices(11) == expected
+    cache.reset()
+    assert cache.retained_frame_indices(11) == ()
+    cache.store_kv(key * 99, key, frame_idx=0)
+    assert cache.retained_frame_indices(1) == (0,)
 
 
 @pytest.mark.L0
@@ -2051,7 +2069,8 @@ def test_rolling_kv_cache_memory_state_init_invariants():
 
 
 @pytest.mark.L0
-def test_ar_memory_state_static_shape_init_and_read():
+@pytest.mark.parametrize("preserve_transfer_numerics", (False, True))
+def test_ar_memory_state_static_shape_init_and_read(preserve_transfer_numerics: bool):
     """``ARMemoryState(for_cuda_graphs=True)`` must:
 
     1. Reject construction without the required CG params (``vision_token_shapes``,
@@ -2091,6 +2110,7 @@ def test_ar_memory_state_static_shape_init_and_read():
             frame_idx=1,
             vision_token_shapes=[(1, 2, 2)],
             for_cuda_graphs=True,
+            preserve_transfer_numerics=preserve_transfer_numerics,
             head_dim=D,
         )
     with pytest.raises(AssertionError, match=r"requires head_dim"):
@@ -2099,6 +2119,7 @@ def test_ar_memory_state_static_shape_init_and_read():
             frame_idx=1,
             vision_token_shapes=[(1, 2, 2)],
             for_cuda_graphs=True,
+            preserve_transfer_numerics=preserve_transfer_numerics,
             num_kv_heads=H,
         )
 
@@ -2111,6 +2132,7 @@ def test_ar_memory_state_static_shape_init_and_read():
         vision_token_shapes=[(1, 2, 2)],
         num_action_tokens_per_supertoken=0,
         for_cuda_graphs=True,
+        preserve_transfer_numerics=preserve_transfer_numerics,
         num_kv_heads=H,
         head_dim=D,
     )
@@ -2139,7 +2161,8 @@ def test_ar_memory_state_static_shape_init_and_read():
     assert mv_static.gen_k_buf_full is not None and mv_static.gen_v_buf_full is not None
     assert mv_static.gen_k_buf_full.shape == (B, expected_max_gen_tokens, H, D)
     s_und = und_k.shape[1]
-    assert mv_static.static_curr_offset == s_und and mv_static.static_hist_offset == s_und + S_gen
+    assert mv_static.preserve_transfer_numerics is preserve_transfer_numerics
+    assert mv_static.static_hist_offset == s_und + (0 if preserve_transfer_numerics else S_gen)
     assert mv_static.kv_k_static.shape == (B, s_und + S_gen + expected_max_gen_tokens, H, D)
     assert mv_static.kv_v_static.shape == (B, s_und + S_gen + expected_max_gen_tokens, H, D)
     assert mv_static.max_seqlen_KV == mv_static.kv_k_static.shape[1]
@@ -2176,7 +2199,8 @@ def test_ar_memory_state_static_shape_init_and_read():
 
 
 @pytest.mark.L0
-def test_ar_memory_state_static_shape_constant_across_frames():
+@pytest.mark.parametrize("preserve_transfer_numerics", (False, True))
+def test_ar_memory_state_static_shape_constant_across_frames(preserve_transfer_numerics: bool):
     """The whole point of the static-shape flavor is shape constancy across
     frames: ``cu_seqlens_*``, ``kv_k_static`` and ``gen_k_buf_full`` shapes must not change as
     ``frame_idx`` advances; only the *values* in ``cu_seqlens_kv_t`` and
@@ -2207,6 +2231,7 @@ def test_ar_memory_state_static_shape_constant_across_frames():
             vision_token_shapes=[(1, 2, 2)],
             num_action_tokens_per_supertoken=0,
             for_cuda_graphs=True,
+            preserve_transfer_numerics=preserve_transfer_numerics,
             num_kv_heads=H,
             head_dim=D,
         )
@@ -2470,6 +2495,7 @@ def _assert_transfer_static_matches_dynamic(
                 frame_idx=frame_idx,
                 vision_token_shapes=[(1, 1, tokens_per_entry)],
                 for_cuda_graphs=True,
+                preserve_transfer_numerics=True,
                 num_kv_heads=num_heads,
                 head_dim=head_dim,
                 transfer_history_sink_tokens=sink_tokens,
@@ -2482,8 +2508,13 @@ def _assert_transfer_static_matches_dynamic(
             assert static_value.for_cuda_graphs is True, context
             assert static_value.kv_k_static is not None and static_value.kv_v_static is not None, context
             hist = static_value.static_hist_offset
-            assert hist == s_und + tokens_per_entry, context
-            assert static_value.kv_k_static.shape == (1, hist + expected_buf_tokens, num_heads, head_dim), context
+            assert hist == s_und, context
+            assert static_value.kv_k_static.shape == (
+                1,
+                s_und + expected_buf_tokens + tokens_per_entry,
+                num_heads,
+                head_dim,
+            ), context
             assert static_value.real_gen_cache_len_t is not None and static_value.cu_seqlens_kv_t is not None, context
             real_len = int(static_value.real_gen_cache_len_t.item())
             assert real_len == expected_len, context
@@ -2497,6 +2528,39 @@ def _assert_transfer_static_matches_dynamic(
                 torch.testing.assert_close(
                     static_value.kv_v_static[:, hist : hist + real_len], dynamic_value.gen_v_hist
                 )
+
+            # Sampler scratch K/V must follow committed history in the exact eager order.
+            # Repeated velocity calls overwrite only scratch, including an empty history window.
+            assert dynamic_value.und_k_cached is not None and dynamic_value.und_v_cached is not None
+            for velocity in (1000.0, 2000.0):
+                current_k = torch.full_like(key, velocity)
+                current_v = current_k + 100.0
+                write_current_kv_to_static_buffer(
+                    static_value.kv_k_static,
+                    static_value.kv_v_static,
+                    current_k,
+                    current_v,
+                    static_value.cu_seqlens_kv_t,
+                )
+                expected_k = [dynamic_value.und_k_cached]
+                expected_v = [dynamic_value.und_v_cached]
+                if expected_len:
+                    assert dynamic_value.gen_k_hist is not None and dynamic_value.gen_v_hist is not None
+                    expected_k.append(dynamic_value.gen_k_hist)
+                    expected_v.append(dynamic_value.gen_v_hist)
+                expected_k.append(current_k)
+                expected_v.append(current_v)
+                end = int(static_value.cu_seqlens_kv_t[1])
+                assert torch.equal(static_value.kv_k_static[:, :end], torch.cat(expected_k, dim=1)), context
+                assert torch.equal(static_value.kv_v_static[:, :end], torch.cat(expected_v, dim=1)), context
+
+            # Only the clean frame stored by the outer loop can become next frame's history.
+            after_scratch = dynamic.read_for_layer(0)
+            if expected_len:
+                assert torch.equal(after_scratch.gen_k_hist, dynamic_value.gen_k_hist), context
+                assert torch.equal(after_scratch.gen_v_hist, dynamic_value.gen_v_hist), context
+            else:
+                assert after_scratch.gen_k_hist is None and after_scratch.gen_v_hist is None, context
 
 
 @pytest.mark.L0
@@ -2774,6 +2838,7 @@ def test_ar_memory_state_static_flavor_coarse_replay_updates_offsets_in_place_an
         frame_idx=3,
         vision_token_shapes=[(1, 1, tokens_per_entry)],
         for_cuda_graphs=True,
+        preserve_transfer_numerics=True,
         num_kv_heads=num_heads,
         head_dim=head_dim,
         write_gen_cache=True,
@@ -2789,8 +2854,13 @@ def test_ar_memory_state_static_flavor_coarse_replay_updates_offsets_in_place_an
     assert first.kv_k_static is not None
     buffer_ptr = first.kv_k_static.data_ptr()
     hist = first.static_hist_offset
-    assert hist == s_und + tokens_per_entry
+    assert hist == s_und
     assert torch.equal(first.kv_k_static[:, :s_und], und_k)  # und region primed once
+
+    # Captured velocity scratch must never become committed history on the next replay.
+    assert first.kv_v_static is not None
+    velocity_k = torch.full((1, tokens_per_entry, num_heads, head_dim), 999.0)
+    write_current_kv_to_static_buffer(first.kv_k_static, first.kv_v_static, velocity_k, velocity_k, cu_kv)
 
     state.init(hidden, device)  # warmup forward #2 / capture: same tensors, values left to prepare()
     assert (
@@ -3049,7 +3119,10 @@ def test_gen_kv_cache_composite_buffer_holds_one_row_per_batched_sample() -> Non
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_ar_memory_state_static_flavor_batched_rows_match_dynamic_batched_flavor() -> None:
+@pytest.mark.parametrize("preserve_transfer_numerics", (False, True))
+def test_ar_memory_state_static_flavor_batched_rows_match_dynamic_batched_flavor(
+    preserve_transfer_numerics: bool,
+) -> None:
     """Static flavor with B=2: [2B] offsets with zero-query gap entries and per-row regions equal
     to what the dynamic batched flavor reads for each sample."""
     rows, gen_len, und_cap, num_heads, head_dim, cache_size = 2, 2, 4, 1, 2, 4
@@ -3067,19 +3140,24 @@ def test_ar_memory_state_static_flavor_batched_rows_match_dynamic_batched_flavor
         "_num_full_tokens": rows * gen_len,
         "_num_causal_tokens": 0,
     }
-    common = dict(vision_token_shapes=[(1, 1, gen_len)], num_kv_heads=num_heads, head_dim=head_dim, batched=True)
+    common = dict(
+        vision_token_shapes=[(1, 1, gen_len)],
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+        batched=True,
+        preserve_transfer_numerics=preserve_transfer_numerics,
+    )
     static = ARMemoryState([cache], frame_idx=2, for_cuda_graphs=True, **common)
     static.init(hidden, torch.device("cpu"))
-    dynamic = ARMemoryState([cache], frame_idx=2, batched=True)
+    dynamic = ARMemoryState([cache], frame_idx=2, batched=True, preserve_transfer_numerics=preserve_transfer_numerics)
     dynamic.init(hidden, torch.device("cpu"))
 
     sv, dv = static.read_for_layer(0), dynamic.read_for_layer(0)
     hist_len = dv.gen_k_hist.shape[1]
     stride = und_cap + gen_len + (cache_size - 1) * gen_len
     assert sv.batch_size == rows and sv.gen_len == gen_len and sv.static_row_stride == stride
-    assert (
-        sv.max_seqlen_KV == stride and sv.static_curr_offset == und_cap and sv.static_hist_offset == und_cap + gen_len
-    )
+    assert sv.max_seqlen_KV == stride
+    assert sv.static_hist_offset == und_cap + (0 if preserve_transfer_numerics else gen_len)
     assert sv.kv_k_static is not None and sv.kv_k_static.shape == (1, rows * stride, num_heads, head_dim)
     assert sv.cu_seqlens_q_t.tolist() == [0, gen_len, gen_len, 2 * gen_len]
     expected_kv = []
@@ -3090,9 +3168,35 @@ def test_ar_memory_state_static_flavor_batched_rows_match_dynamic_batched_flavor
         base = row * stride
         u = und_lens[row]
         assert torch.equal(sv.kv_k_static[0, base + und_cap - u : base + und_cap], dv.und_k_cached[row, :u])
-        hist = base + und_cap + gen_len
+        hist = base + sv.static_hist_offset
         assert torch.equal(sv.kv_k_static[0, hist : hist + hist_len], dv.gen_k_hist[row])
         assert torch.equal(sv.kv_v_static[0, hist : hist + hist_len], dv.gen_v_hist[row])
+
+    current_k = torch.randn(rows, gen_len, num_heads, head_dim)
+    current_v = current_k + 10.0
+    with patch(
+        "cosmos_framework.model.generator.mot.causal_attention.attention",
+        return_value=current_k.flatten(0, 1).unsqueeze(0),
+    ):
+        attention_AR_gen_only(
+            _mk_gen_only_pack(current_k.flatten(0, 1), torch.device("cpu")),
+            _mk_gen_only_pack(current_k.flatten(0, 1), torch.device("cpu")),
+            _mk_gen_only_pack(current_v.flatten(0, 1), torch.device("cpu")),
+            None,
+            memory_value=sv,
+        )
+    for row in range(rows):
+        start, end = sv.cu_seqlens_kv_t[2 * row : 2 * row + 2].tolist()
+        k_parts = (
+            [dv.gen_k_hist[row], current_k[row]] if preserve_transfer_numerics else [current_k[row], dv.gen_k_hist[row]]
+        )
+        expected_k = torch.cat((dv.und_k_cached[row, : und_lens[row]], *k_parts))
+        v_parts = (
+            [dv.gen_v_hist[row], current_v[row]] if preserve_transfer_numerics else [current_v[row], dv.gen_v_hist[row]]
+        )
+        expected_v = torch.cat((dv.und_v_cached[row, : und_lens[row]], *v_parts))
+        assert torch.equal(sv.kv_k_static[0, start:end], expected_k)
+        assert torch.equal(sv.kv_v_static[0, start:end], expected_v)
 
     # Coarse replay flavor: offsets keep their identity, values follow the frame.
     coarse = ARMemoryState(
@@ -3216,6 +3320,7 @@ def test_ar_memory_state_static_batched_offsets_follow_per_row_restarts() -> Non
         frame_idx=5,
         vision_token_shapes=[(1, 1, gen_len)],
         for_cuda_graphs=True,
+        preserve_transfer_numerics=True,
         num_kv_heads=num_heads,
         head_dim=head_dim,
         batched=True,
@@ -3230,8 +3335,22 @@ def test_ar_memory_state_static_batched_offsets_follow_per_row_restarts() -> Non
     assert cu_kv[1] == und_cap + gen_len + 5 * gen_len  # row 0: sink 2 + recent 3 entries
     assert cu_kv[3] == stride + und_cap + gen_len + 2 * gen_len  # row 1: 2 entries since its restart at 3
     value = state.read_for_layer(0)
-    assert value.kv_k_static is not None and state._static_row_slots is not None
+    assert value.kv_k_static is not None and value.kv_v_static is not None and state._static_row_slots is not None
     assert len(state._static_row_slots[1]) == 2
+    current_k = torch.randn(rows, gen_len, num_heads, head_dim)
+    current_v = current_k + 10.0
+    write_current_kv_to_static_buffer(
+        value.kv_k_static, value.kv_v_static, current_k, current_v, state._cu_seqlens_kv_t
+    )
+    und_k, und_v = cache.und_cache.get()
+    for row, slots in enumerate(state._static_row_slots):
+        history_k = torch.cat([cache.gen_cache.backend.decode(cache.gen_cache.k_cache[slot])[row] for slot in slots])
+        history_v = torch.cat([cache.gen_cache.backend.decode(cache.gen_cache.v_cache[slot])[row] for slot in slots])
+        expected_k = torch.cat((und_k[row], history_k, current_k[row]))
+        expected_v = torch.cat((und_v[row], history_v, current_v[row]))
+        start, end = state._cu_seqlens_kv_t[2 * row : 2 * row + 2].tolist()
+        assert torch.equal(value.kv_k_static[0, start:end], expected_k)
+        assert torch.equal(value.kv_v_static[0, start:end], expected_v)
     kv_t = state._cu_seqlens_kv_t
     key = torch.randn(rows, gen_len, num_heads, head_dim)
     cache.gen_cache.store_kv(key, key, frame_idx=5)
@@ -3294,8 +3413,121 @@ def test_ar_memory_state_static_flavor_coarse_replay_without_transfer_limits() -
     assert int(state._real_gen_cache_len_t.item()) == 3 * tokens_per_entry  # min(3, cache_size-1) entries
     value = state.read_for_layer(0)
     assert value.kv_k_static is not None
+    assert value.preserve_transfer_numerics is False
+    assert value.static_hist_offset == s_und + tokens_per_entry
     hist = value.static_hist_offset
     torch.testing.assert_close(
         value.kv_k_static[:, hist : hist + 3 * tokens_per_entry],
         torch.cat([torch.full((1, tokens_per_entry, num_heads, head_dim), float(i)) for i in range(3)], dim=1),
     )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("batch_rows", (1, 2))
+def test_static_current_kv_write_replays_dynamic_row_ends_without_touching_history(batch_rows: int) -> None:
+    """The compiled scratch write follows changing device offsets, including a restarted short row."""
+    gen_len, row_stride, num_heads, head_dim = 2, 12, 2, 3
+    current_k = torch.arange(batch_rows * gen_len * num_heads * head_dim, dtype=torch.float32).view(
+        batch_rows, gen_len, num_heads, head_dim
+    )
+    current_v = current_k + 100.0
+    shape = (1, batch_rows * row_stride, num_heads, head_dim)
+    cu_kv = torch.zeros(2 * batch_rows, dtype=torch.int32)
+    compiled_write = torch.compile(write_current_kv_to_static_buffer, backend="aot_eager", fullgraph=True)
+    for write in (write_current_kv_to_static_buffer, compiled_write):
+        key = torch.full(shape, -1.0)
+        value = torch.full(shape, -2.0)
+        key_ptr, value_ptr, offsets_ptr = key.data_ptr(), value.data_ptr(), cu_kv.data_ptr()
+        for real_history_lens in ((2, 6), (6, 0), (4, 2)):
+            expected_k, expected_v = key.clone(), value.clone()
+            for row in range(batch_rows):
+                # Ragged text is right-aligned to U=3, followed by chronological history/current.
+                start = row * row_stride + row
+                current_start = row * row_stride + 3 + real_history_lens[row]
+                end = current_start + gen_len
+                cu_kv[2 * row] = start
+                cu_kv[2 * row + 1] = end
+                expected_k[0, current_start:end] = current_k[row]
+                expected_v[0, current_start:end] = current_v[row]
+            write(key, value, current_k, current_v, cu_kv)
+            assert torch.equal(key, expected_k)
+            assert torch.equal(value, expected_v)
+            assert (key.data_ptr(), value.data_ptr(), cu_kv.data_ptr()) == (key_ptr, value_ptr, offsets_ptr)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("legacy_buffers", (False, True))
+@pytest.mark.parametrize("frame_idx", (1, 3))
+@pytest.mark.parametrize("preserve_transfer_numerics", (False, True))
+def test_static_ar_attention_receives_selected_kv_order(
+    legacy_buffers: bool, frame_idx: int, preserve_transfer_numerics: bool
+) -> None:
+    """Transfer keeps eager order; ordinary AR preserves main's current-first order in both layouts."""
+    device = torch.device("cpu")
+    gen_len, und_len, num_heads, head_dim, capacity = 2, 3, 1, 2, 4
+    cache = DualKVCache(gen_cache_size=capacity)
+    und_k = torch.arange(und_len * head_dim, dtype=torch.float32).view(1, und_len, num_heads, head_dim)
+    und_v = und_k + 100.0
+    cache.und_cache.store(und_k, und_v)
+    for entry_idx in range(frame_idx):
+        history_k = torch.full((1, gen_len, num_heads, head_dim), float(entry_idx + 10))
+        cache.gen_cache.store_kv(history_k, history_k + 100.0, frame_idx=entry_idx)
+    history_k, history_v = cache.gen_cache.fetch_kv(frame_idx)
+    assert history_k is not None and history_v is not None
+    state = ARMemoryState(
+        [cache],
+        frame_idx=frame_idx,
+        vision_token_shapes=[(1, 1, gen_len)],
+        for_cuda_graphs=True,
+        preserve_transfer_numerics=preserve_transfer_numerics,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+    )
+    state.init({"_num_full_tokens": gen_len}, device)
+    memory = state.read_for_layer(0)
+    if legacy_buffers:
+        max_history_tokens = (capacity - 1) * gen_len
+        history_k_buf = torch.zeros(1, max_history_tokens, num_heads, head_dim)
+        history_v_buf = torch.zeros_like(history_k_buf)
+        history_k_buf[:, : history_k.shape[1]] = history_k
+        history_v_buf[:, : history_v.shape[1]] = history_v
+        memory = ARMemoryValue(
+            und_k_cached=und_k,
+            und_v_cached=und_v,
+            gen_k_hist=None,
+            gen_v_hist=None,
+            frame_idx=frame_idx,
+            gen_len=gen_len,
+            gen_k_buf_full=history_k_buf,
+            gen_v_buf_full=history_v_buf,
+            cu_seqlens_q_t=memory.cu_seqlens_q_t,
+            cu_seqlens_kv_t=memory.cu_seqlens_kv_t,
+            max_seqlen_KV=memory.max_seqlen_KV,
+            for_cuda_graphs=True,
+            preserve_transfer_numerics=preserve_transfer_numerics,
+        )
+    current_k = torch.full((gen_len, num_heads, head_dim), 1000.0)
+    current_v = current_k + 100.0
+    k_parts = [history_k, current_k.unsqueeze(0)] if preserve_transfer_numerics else [current_k.unsqueeze(0), history_k]
+    expected_k = torch.cat((und_k, *k_parts), dim=1)
+    v_parts = [history_v, current_v.unsqueeze(0)] if preserve_transfer_numerics else [current_v.unsqueeze(0), history_v]
+    expected_v = torch.cat((und_v, *v_parts), dim=1)
+    with patch(
+        "cosmos_framework.model.generator.mot.causal_attention.attention", return_value=current_k.unsqueeze(0)
+    ) as kernel:
+        attention_AR_gen_only(
+            _mk_gen_only_pack(current_k, device),
+            _mk_gen_only_pack(current_k, device),
+            _mk_gen_only_pack(current_v, device),
+            None,
+            memory_value=memory,
+        )
+    kernel.assert_called_once()
+    args = kernel.call_args.kwargs
+    end = int(args["cumulative_seqlen_KV"][-1])
+    assert torch.equal(args["key"][:, :end], expected_k)
+    assert torch.equal(args["value"][:, :end], expected_v)
+    assert args["max_seqlen_KV"] == und_len + capacity * gen_len
+    assert torch.equal(cache.gen_cache.fetch_kv(frame_idx)[0], history_k)

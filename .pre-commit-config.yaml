@@ -3,8 +3,11 @@
 default_language_version:
   node: 25.2.1
   python: python3.13
+# .agents/skills/{cookbooks,evaluation}/ include third-party code (VLMEvalKit,
+# Apache-2.0); keep hooks off them until they are cleaned up.
 exclude: (?x)(
-    ^tests/data/
+    ^tests/data/|
+    ^\.agents/skills/(cookbooks|evaluation)/
   )
 repos:
   - repo: https://github.com/google/addlicense
@@ -21,6 +24,8 @@ repos:
     rev: v0.2.78
     hooks:
       - id: rumdl-fmt
+        # Keep failures for violations that cannot be auto-fixed.
+        entry: rumdl check --fix
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -37,6 +42,9 @@ repos:
         entry: ./ci/uv_lock.sh
         language: script
         files: pyproject\.toml$
+        # WSM is independently installed. The Posttrain lock is generated and
+        # runtime-qualified by its pinned independent mapping flow.
+        exclude: ^(?:\.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/pyproject\.toml|docker/posttrain/environment/pyproject\.toml)$
       - id: uv-lock-script
         name: Generate uv lock files for scripts
         entry: ./ci/uv_lock_script.sh

@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+interface:
+  display_name: "Cosmos3 Nano Sim Bimanual Post-Training"
+  short_description: "Operate four-stage single-view post-training"
+  default_prompt: "Use $cosmos3-nano-sim-bimanual-post-training to prepare and run a single-view bimanual training stage."

@@ -17,6 +17,7 @@ ______________________________________________________________________
     - [Virtual Environment](#virtual-environment)
     - [CUDA Variants](#cuda-variants)
 - [Environment Variables](#environment-variables)
+- [Verify the GPU and media runtime](#verify-the-gpu-and-media-runtime)
 - [Downloading Base Checkpoints](#downloading-base-checkpoints)
 - [Troubleshooting](#troubleshooting)
   - [PyTorch Import Issue](#pytorch-import-issue)
@@ -78,19 +79,23 @@ invocation. Keep the installed revision unchanged when resuming an experiment.
 
 ### Quickstart: From the Recommended Base Image
 
-If you started from the [recommended base image](#recommended-base-image) (`nvcr.io/nvidia/pytorch:26.06-py3`), the following commands set up the full environment in one go. Run them **from the root of this repository** (i.e. inside the `Cosmos/` directory you just cloned):
+If you started from the [recommended base image](#recommended-base-image) (`nvcr.io/nvidia/pytorch:26.06-py3`), the following commands set up the full environment in one go. Run them **from the root of this repository** (i.e. inside the `cosmos-framework/` directory you just cloned):
 
 ```shell
 apt-get update
-apt-get install -y --no-install-recommends curl ffmpeg git-lfs libx11-dev tree wget
+apt-get install -y --no-install-recommends curl ffmpeg git-lfs libgl1 libglib2.0-0 libx11-dev tree wget
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
 source $HOME/.local/bin/env
 
 # CUDA 13.0 (recommended); for CUDA 12.8 use `--group=cu128-train`
 uv sync --all-extras --group=cu130-train
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
+
+Check the [GPU and media runtime](#verify-the-gpu-and-media-runtime) before
+downloading weights. Do not clear `LD_LIBRARY_PATH` unconditionally: an older
+host driver may depend on the container's CUDA compatibility libraries.
 
 </details>
 
@@ -147,13 +152,13 @@ Use these paths only when the recommended base image or Docker container are not
 Install system dependencies:
 
 ```shell
-sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libx11-dev tree wget
+sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libgl1 libglib2.0-0 libx11-dev tree wget
 ```
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
 source $HOME/.local/bin/env
 ```
 
@@ -168,7 +173,7 @@ Choose the dependency group that matches your CUDA toolkit (see [CUDA Variants](
 uv sync --all-extras --group=cu130-train
 # Or, for CUDA 12.8:
 # uv sync --all-extras --group=cu128-train
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
 
 </details>
@@ -177,7 +182,7 @@ source .venv/bin/activate && export LD_LIBRARY_PATH=
 
 ```shell
 # Create virtual environment (skip if using an existing environment)
-uv venv --clear && source .venv/bin/activate && export LD_LIBRARY_PATH=
+uv venv --clear && source .venv/bin/activate
 
 uv pip install -r pyproject.toml --all-extras --group=cu130-train
 uv pip install -e .
@@ -234,6 +239,15 @@ This repository is **training-focused**, so the `*-train` dependency groups are 
 | **CUDA 13.0 (recommended)** | `--group=cu130-train`  | [NVIDIA Driver](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html#cuda-toolkit-major-component-versions) |
 | CUDA 12.8                   | `--group=cu128-train`  | [NVIDIA Driver](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/index.html#cuda-toolkit-major-component-versions) |
 
+CUDA 13 normally requires driver 580 or newer. With an older driver, such as
+570, use the CUDA 12.8 group unless your platform supplies a supported
+[CUDA forward-compatibility setup](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html).
+If that setup requires a `cuda-compat` library directory on `LD_LIBRARY_PATH`,
+preserve it. Installing a new CUDA toolkit alone does not upgrade the host driver.
+The CUDA version displayed by `nvidia-smi` is the driver's supported version,
+not the version installed in the Python environment; exact equality with
+`torch.version.cuda` is not required.
+
 </details>
 
 </details>
@@ -242,13 +256,57 @@ This repository is **training-focused**, so the `*-train` dependency groups are 
 
 Export the following before downloading checkpoints or launching training. See [environment_variables.md](environment_variables.md) for the full reference.
 
-| Variable                 | Purpose                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `HF_TOKEN`               | Hugging Face access token for gated model/dataset downloads. Alternative to `uvx hf auth login`.       |
-| `HF_HOME`                | Cache directory for Hugging Face models and datasets. Recommend ≥ 1 TB free.                           |
-| `IMAGINAIRE_OUTPUT_ROOT` | Output root for training DCP checkpoints and logs. Recommend ≥ 1 TB free.                              |
-| `UV_CACHE_DIR`           | Cache directory for `uv`-managed dependencies.                                                         |
-| `LD_LIBRARY_PATH=`       | Clear (set to empty) after sourcing the venv to avoid host library bleed-through into PyTorch imports. |
+| Variable                 | Purpose                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `HF_TOKEN`               | Hugging Face access token for gated model/dataset downloads. Alternative to `uvx hf auth login`.                                 |
+| `HF_HOME`                | Cache directory for Hugging Face models and datasets. Recommend ≥ 1 TB free.                                                     |
+| `IMAGINAIRE_OUTPUT_ROOT` | Output root for training DCP checkpoints and logs. Recommend ≥ 1 TB free.                                                        |
+| `UV_CACHE_DIR`           | Cache directory for `uv`-managed dependencies.                                                                                   |
+| `LD_LIBRARY_PATH`        | Preserve required driver/compatibility libraries; remove conflicting library directories only when diagnosing an import failure. |
+
+## Verify the GPU and media runtime
+
+Run these checks inside the same container and allocation that will run the model:
+
+```bash
+uv --version
+nvidia-smi
+ffmpeg -version
+python - <<'PY'
+import cv2
+import torch
+from cosmos_framework.utils.generator.torchcodec_dependencies import load_torchcodec
+
+print(f"torch={torch.__version__}, CUDA build={torch.version.cuda}, OpenCV={cv2.__version__}")
+torch.cuda.init()
+torch.ones(1, device="cuda").add_(1)
+torch.cuda.synchronize()
+print(f"GPU: {torch.cuda.get_device_name()}")
+print(f"TorchCodec: {load_torchcodec().__version__}")
+PY
+```
+
+The selected `uv` executable must match `tool.uv.required-version` in
+`pyproject.toml` (currently `0.11.29`). If another version is already installed,
+run `uv self update 0.11.29` or reinstall that exact version and check `command -v uv`.
+An import-only check does not establish that CUDA initializes or video decoding works.
+After downloading an example video, verify decoding too:
+
+```bash
+export CHECK_VIDEO=/path/to/one/example.mp4
+python - <<'PY'
+import os
+from cosmos_framework.utils.generator.torchcodec_dependencies import load_torchcodec
+
+codec = load_torchcodec()
+decoder = codec.decoders.VideoDecoder(os.environ["CHECK_VIDEO"], device="cpu")
+print(decoder[0].shape)
+PY
+```
+
+The apt packages above supply FFmpeg shared libraries and OpenCV's OpenGL/GLib
+runtime dependencies. A Python wheel installation does not replace these system
+libraries. See [CUDA troubleshooting](#cuda-issue) for TorchCodec's NPP loading.
 
 ## Downloading Base Checkpoints
 
@@ -268,7 +326,7 @@ Training in this repo typically starts from a pretrained base checkpoint that yo
 
 If you encounter issues:
 
-1. Check that you don't have conflicting [environment variables](https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables) — e.g. an `HF_TOKEN` set to a different token than the one cached by `hf auth login`: `printenv | grep HF_`.
+1. Check which account is active with `hf auth whoami`. If `HF_TOKEN` is set, it takes precedence over the saved login; keep these credentials consistent. Keep token values out of logs and support requests.
 2. Check that your [token](https://huggingface.co/settings/tokens) has sufficient permissions.
 
 Checkpoints are downloaded on demand during training and evaluation. To change the cache location, set [`HF_HOME`](https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables#hfhome). See [training.md](training.md) for [DCP conversion](training.md#step-2--prepare-checkpoint) and [Hugging Face safetensors export](training.md#export-checkpoint-to-hugging-face-safetensors).
@@ -281,13 +339,18 @@ Errors:
 
 - `ImportError: cannot import name '_functionalization' from 'torch._C'`
 
-Clear the library path in your current shell:
+An inherited NGC library directory can conflict with the environment's PyTorch.
+Inspect `LD_LIBRARY_PATH` and remove the conflicting entries. If the host driver
+already supports the selected CUDA build and no compatibility directory is needed,
+test a single process with an empty path:
 
 ```shell
-export LD_LIBRARY_PATH=
+LD_LIBRARY_PATH= python -c 'import torch; torch.cuda.init(); print(torch.cuda.get_device_name())'
 ```
 
-This applies to the current session only. To persist, add the line to your `Dockerfile` or `~/.bashrc`.
+Otherwise retain the platform's `cuda-compat` directory while removing conflicting
+cuDNN/NCCL/PyTorch directories. Do not add an unconditional path reset to your
+shell startup or Dockerfile. Re-run the GPU check after any change.
 
 If this doesn't fix the issue, try [reinstalling venv](#dependency-issue).
 
@@ -301,7 +364,7 @@ Reinstall venv:
 
 ```shell
 uv sync --all-extras --group=cu130-train --reinstall
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
 
 If this doesn't fix the issue, try [reinstalling uv](#python-issue).
@@ -315,21 +378,40 @@ Errors:
 Reinstall uv and venv:
 
 ```shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
 uv python install --reinstall
 rm -rf .venv
 uv sync --all-extras --group=cu130-train --reinstall
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
 
 ### CUDA Issue
 
+For TorchCodec's CUDA builds, NPP is required even for CPU video decoding. The
+`cu128` and `cu130` groups install the matching NPP wheel. Framework's common
+video reader and inference conditioning decoder load that wheel before importing
+TorchCodec, so an empty `LD_LIBRARY_PATH` does not require a system NPP install.
+Standalone TorchCodec callers can use the same preparation:
+
+```python
+from cosmos_framework.utils.generator.torchcodec_dependencies import load_torchcodec
+
+torchcodec = load_torchcodec()
+```
+
+Install FFmpeg shared libraries that TorchCodec can load, as well as the
+`ffmpeg` executable.
+
 - `OSError: <lib_name>: cannot open shared object file: No such file or directory`
 
-Ensure you have [CUDA installed](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#ubuntu). The major version must match between the system and virtual environment CUDA versions.
+Check which library is missing before installing a toolkit. Missing FFmpeg,
+OpenGL or GLib libraries require the system packages above. CUDA initialization
+errors require checking the host driver and [CUDA variant](#cuda-variants),
+including any compatibility-library path. If a system CUDA toolkit library is
+actually missing, install the toolkit matching the environment's CUDA build:
 
 ```shell
-sudo apt-get install -y --no-install-recommends cuda-toolkit-<cuda_major_version>
+sudo apt-get install -y --no-install-recommends "cuda-toolkit-${CUDA_TOOLKIT_VERSION:?set a version such as 13-0}"
 ```
 
 Alternatively, use the [Docker container](#docker-container).

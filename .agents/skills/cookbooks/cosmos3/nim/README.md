@@ -1,0 +1,178 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: OpenMDW-1.1 -->
+
+# Cosmos3 NIM
+
+Deploy Cosmos3 models for world generation and multimodal reasoning. One image
+contains two runtimes, but each container runs only one:
+
+- **Generator** serves image/video generation, Action, and Transfer through
+  `POST /v1/infer`.
+- **Reasoner** serves OpenAI-compatible image/video understanding through Chat
+  Completions and, when enabled, the Responses API.
+
+> Deployment commands pin the current release image,
+> `nvcr.io/nim/nvidia/cosmos3:2.1.0`. Compatible configurations are in the
+> [Support Matrix](support-matrix.md).
+
+## Architecture
+
+Cosmos3 is a Mixture-of-Transformers (MoT) world foundation model with two
+jointly trained towers that share latent representations. The **Reasoner**
+(vision-language) tower grounds the prompt. The **Generator** (world simulator)
+tower produces the output, such as video. The Generator runtime uses both
+towers, and the Reasoner runtime serves understanding. For details, refer to the
+[Cosmos3 technical report](https://research.nvidia.com/labs/cosmos-lab/cosmos3/technical-report.pdf).
+
+## Choose What to Run
+
+Choose a runtime, a model variant (`NIM_MODEL_VARIANT`), optionally a
+precision, and for Generator a latency or throughput objective. The NIM
+selects a compatible profile, as described in
+[How Selection Works](deployment.md#how-selection-works).
+
+## Choose a Task
+
+| Task | Runtime | Input | Output | Guide |
+| --- | --- | --- | --- | --- |
+| Text-to-image | Generator | Prompt | JPEG image | [Generation](generation.md#text-to-image) |
+| Text-to-video | Generator | Prompt | MP4 video | [Generation](generation.md#text-to-video) |
+| Image-to-video | Generator | Prompt + image | MP4 video | [Generation](generation.md#image-to-video) |
+| Video-to-video | Generator | Prompt + video | MP4 video | [Generation](generation.md#video-to-video) |
+| Forward dynamics | Generator | Image + action trajectory | Rollout video | [Action](action.md#forward-dynamics) |
+| Policy | Generator | Image + task/state | Video + predicted action | [Action](action.md#policy) |
+| Nano-DROID policy | Generator | Image + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
+| Edge-DROID policy ([experimental](support-matrix.md#choose-a-model)) | Generator | Composed camera views + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
+| Inverse dynamics | Generator | Video | Video + predicted action | [Action](action.md#inverse-dynamics) |
+| Video Transfer | Generator | Prompt + spatial control | Controlled MP4 video | [Transfer](transfer.md) |
+| Image/video reasoning | Reasoner | Media + text | Text or structured result | [Reasoning](reasoning.md) |
+| Streaming video reasoning | Reasoner | Sequential image frames | Per-frame text with retained context | [Streaming](streaming.md) |
+| Responses API | Reasoner | Responses input | Response object/text | [Reasoning](reasoning.md#use-the-responses-api) |
+
+Local examples publish either runtime at `http://localhost:8000`. Remove the
+active example container before launching the other runtime on the same port.
+
+## Get Started
+
+### Use an Existing NIM Endpoint
+
+If an administrator already deployed the NIM, install and initialize the
+[Client Tooling](prerequisites.md#client-tooling), then set the service URL:
+
+```bash
+cd .agents/skills/cookbooks/cosmos3/nim
+export NIM_URL=${NIM_URL:-http://localhost:8000}
+curl -fsS "$NIM_URL/v1/health/ready"
+curl -fsS "$NIM_URL/v1/metadata" | python3 -m json.tool
+```
+
+Confirm that metadata identifies the intended runtime and primary endpoint.
+Generator uses `/v1/infer`, and Reasoner uses `/v1/chat/completions`.
+
+Run an example that matches the active runtime and model. For a general-purpose
+Generator, start with an image request:
+
+```bash
+uv run python examples/t2i.py
+```
+
+For a Reasoner:
+
+```bash
+uv run python examples/reasoner.py --case image_caption
+```
+
+### Deploy the NIM Yourself
+
+1. Verify the GPU host against [Prerequisites](prerequisites.md).
+2. Choose a compatible model and hardware configuration from the
+   [Support Matrix](support-matrix.md).
+3. Follow [Deployment](deployment.md) to authenticate, pull the image, run the
+   preflight, and launch Generator or Reasoner. On NVIDIA DGX Spark or Jetson AGX
+   Thor, the NIM applies a 70%
+   [unified-memory share](deployment.md#set-the-reasoner-memory-share-on-unified-memory-systems)
+   automatically.
+4. Return to [Use an Existing NIM Endpoint](#use-an-existing-nim-endpoint) to
+   verify the service and run the first request.
+
+Specialist variants accept only their task: run
+[`t2i_4step.py`](examples/t2i_4step.py),
+[`i2v_4step.py`](examples/i2v_4step.py), or
+[`policy_droid.py`](action.md#edge-droid-and-nano-droid-policy) only against the
+matching variant. Examples save outputs under the ignored `examples/outputs/`
+directory.
+
+Validate the selected configuration with representative requests before
+production use.
+
+## AI-Assisted Usage
+
+Open this directory in a compatible coding assistant to get guided help with
+host preparation, deployment, endpoint verification, request selection, and
+troubleshooting. The bundled customer instructions and skill use the public
+pages and examples as their source of truth and default to read-only assistance.
+
+## Documentation
+
+### Deploy and Configure
+
+- [Prerequisites](prerequisites.md)
+- [Deployment](deployment.md)
+- [Configuration](configuration.md)
+- [Support Matrix](support-matrix.md)
+- [Helm Deployment](helm.md)
+- [Dynamo Overview](dynamo/README.md)
+- [Dynamo Deployment](dynamo/dynamo_deployment.md)
+- [Dynamo With Streaming](dynamo/dynamo_with_streaming.md)
+- [Bring Your Own Checkpoint](bring-your-own-checkpoint.md)
+
+### Use the APIs
+
+- [API Reference](api-reference.md)
+- [Generation](generation.md)
+- [Reasoning](reasoning.md)
+- [Streaming Video](streaming.md)
+- [Action](action.md)
+- [Transfer](transfer.md)
+- [Python Examples](examples/)
+
+### Operate
+
+- [Operations and Troubleshooting](operations.md)
+- [Monitoring](monitoring.md)
+- [Release Notes](release-notes.md)
+- [License and Notices](license.md)
+- [Acknowledgements](acknowledgements/README.md)
+
+## Safety, License, and Notices
+
+Generator guardrails are enabled by default. Disabling them can remove
+content-policy and face-privacy protections. Refer to
+[Guardrails](operations.md#guardrails).
+
+Refer to [License and Notices](license.md) for the terms. This cookbook is
+licensed under the repository [LICENSE](../../../../../LICENSE). The running NIM
+serves its license at `/v1/license`. The image also contains product terms,
+notices, and component licenses. Python package licenses are listed in
+[Acknowledgements](acknowledgements/README.md).
+
+The NIM is distributed as a container image through the NVIDIA NGC Catalog.
+The catalog publishes a security scan report for each image, with a security
+rating, CVE severity by package, and links to CVE details.
+
+## NVIDIA Developer Program
+
+Want to learn more about NIMs? Join the
+[NVIDIA Developer Program](https://developer.nvidia.com/join-nvidia-developer-program)
+to get free access to self-hosting NVIDIA NIMs and microservices on up to 16
+GPUs on any infrastructure: cloud, data center, or personal workstation.
+
+After you join the free NVIDIA Developer Program, you can access NIMs through the
+[NVIDIA API Catalog](https://build.nvidia.com/explore/discover) at any time. For
+enterprise-grade security, support, and API stability, select the option to
+access NIM through our free 90-day NVIDIA AI Enterprise Trial with a business
+email address.
+
+Refer to the
+[NVIDIA NIM FAQ](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317)
+for additional information.

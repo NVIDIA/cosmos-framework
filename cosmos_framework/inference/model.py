@@ -69,6 +69,16 @@ except ImportError:
     _ROOT_DIR = Path(__file__).parents[1].absolute()
 
 
+def _configure_inference_cudnn() -> None:
+    """Match the cuDNN runtime used by native I4 inference.
+
+    I4 inherits these flags from its trainer setup. Framework inference loads
+    models directly, so configure them explicitly before constructing the model.
+    """
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
+
+
 _DIFFUSERS_ROOT_INDEX = "model.safetensors.index.json"
 _DIFFUSERS_MODEL_INDEX = "model_index.json"
 _DIFFUSERS_DROP_WEIGHT_PATH_RES: tuple[re.Pattern[str], ...] = (re.compile(r"^(?!transformer/|vision_encoder/)"),)
@@ -83,6 +93,8 @@ _DIFFUSERS_KEY_MAPPING_RES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^action_proj_out\."), "llm2action."),
     (re.compile(r"^audio_proj_in\."), "sound2llm."),
     (re.compile(r"^audio_proj_out\."), "llm2sound."),
+    (re.compile(r"^lidar_proj_in\."), "lidar2llm."),
+    (re.compile(r"^lidar_proj_out\."), "llm2lidar."),
     (re.compile(r"^audio_modality_embed$"), "sound_modality_embed"),
     (re.compile(r"^proj_in\."), "vae2llm."),
     (re.compile(r"^proj_out\."), "llm2vae."),
@@ -128,9 +140,12 @@ _DIFFUSERS_NET_KEY_PREFIXES: tuple[str, ...] = (
     "action_pos_embed.",
     "language_model.",
     "latent_pos_embed.",
+    "lidar2llm.",
     "llm2action.",
+    "llm2lidar.",
     "llm2sound.",
     "llm2vae.",
+    "rig_view_embed.",
     "sound2llm.",
     "time_embedder.",
     "vae2llm.",
@@ -497,9 +512,13 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         # optional generative-modality projection heads (action, sound). They
         # are unused for those tasks, so tolerate their absence the same way
         # vision weights are tolerated when the checkpoint provides none of them.
+        # LiDAR has no modality embedding of its own -- unlike action and sound, the network
+        # defines only the two projections -- so the pair alone decides whether the checkpoint
+        # carries the stream.
         for modality_prefixes in (
             ("action2llm.", "llm2action.", "action_modality_embed"),
             ("sound2llm.", "llm2sound.", "sound_modality_embed"),
+            ("lidar2llm.", "llm2lidar."),
         ):
             if not any(key.startswith(modality_prefixes) for key in loaded_keys):
                 missing_keys = {key for key in missing_keys if not key.startswith(modality_prefixes)}
@@ -669,6 +688,9 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         compile_config: CompileConfig | None = None,
         quantization_config: QuantizationConfig | None = None,
     ):
+        from cosmos_framework.inference.bimanual import load_bimanual_action_contract
+
+        action_contract = load_bimanual_action_contract(checkpoint_path)
         if config is None:
             config = Cosmos3OmniConfig.from_pretrained(checkpoint_path)
         if parallelism_config is None:
@@ -709,7 +731,23 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                 weight_map=_diffusers_weight_map(checkpoint_path),
             )
 
+        # Published Diffusers bundles include the LiDAR VAE, while config.json
+        # can retain its training-time object-store path and credential name.
+        # Bind the runtime config to this snapshot before tokenizer construction.
+        lidar_tokenizer = config.model.get("config", {}).get("lidar_tokenizer")
+        bundled_lidar_vae = checkpoint_path / "lidar_vae" / "diffusion_pytorch_model.safetensors"
+        if lidar_tokenizer is not None and bundled_lidar_vae.is_file():
+            # HF snapshots symlink to extensionless blobs; preserve the filename
+            # so the artifact loader selects the safetensors reader.
+            lidar_tokenizer["vae_path"] = str(bundled_lidar_vae.absolute())
+            lidar_tokenizer["bucket_name"] = ""
+            lidar_tokenizer["object_store_credential_path_pretrained"] = None
+
+        _configure_inference_cudnn()
         model = cls(config)
+        model.model._bimanual_action_contract = action_contract
+        # Sample argument validation reads the config, not the loaded model.
+        setattr(model.model.config, "_bimanual_action_contract", action_contract)
         # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
         # lazy ``_ensure_vision_tower``): checkpoints that bundle a
         # ``vision_encoder/`` next to the weights then load it without any hub

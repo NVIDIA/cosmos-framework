@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cosmos_framework.data.generator.multiview.camera_attributes import MADS_CAMERA_ATTRIBUTES
+from cosmos_framework.data.generator.multiview.camera_attributes import CAMERA_ATTRIBUTES
 from cosmos_framework.data.generator.multiview.caption_format import (
     DEFAULT_CAPTION_PREFIXES,
     first_caption_paragraph,
@@ -273,15 +273,15 @@ def load_multiview_caption_chunks_per_view(
         view_captions = [chunk.prompt for chunk in view_chunks]
         if first_caption_paragraph_only:
             view_captions = [first_caption_paragraph(caption) for caption in view_captions]
-        use_mads_camera_rig_prefix = all(camera_key in MADS_CAMERA_ATTRIBUTES for camera_key in camera_keys)
+        use_camera_rig_prefix = all(camera_key in CAMERA_ATTRIBUTES for camera_key in camera_keys)
         labeled = (
-            label_view_captions(view_captions, camera_keys=camera_keys) if use_mads_camera_rig_prefix else view_captions
+            label_view_captions(view_captions, camera_keys=camera_keys) if use_camera_rig_prefix else view_captions
         )
         separate_view_captions = format_separate_view_captions(
             view_captions,
             camera_names=camera_keys,
-            add_camera_rig_prefix=use_mads_camera_rig_prefix,
-            camera_attributes=MADS_CAMERA_ATTRIBUTES if use_mads_camera_rig_prefix else None,
+            add_camera_rig_prefix=use_camera_rig_prefix,
+            camera_attributes=CAMERA_ATTRIBUTES if use_camera_rig_prefix else None,
         )
         merged = format_multiview_caption(labeled, use_explicit_view_format=False, use_two_pass_format=False)
         chunks.append(

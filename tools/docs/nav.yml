@@ -1,0 +1,155 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Doc site navigation and publishing policy, read by tools/docs/stage.py.
+#
+# nav          MkDocs nav. Entries are SITE paths. A site path maps to a repo file by
+#              `sources` below, else `skills/<p>` -> `.agents/skills/<p>`, else `<p>` -> `docs/<p>`.
+#              Each page appears once. A URL entry is an external link.
+# sources      Site path -> repo path for pages that do not follow the default mapping.
+# extra_pages  Repo paths rendered on the site but not listed in nav (reached by links).
+# hold         Repo paths (globs allowed) never rendered; links to them become plain text.
+# not_on_site  Repo paths (globs allowed) never rendered; links to them go to GitHub.
+#
+# Every docs/**/*.md must be covered by nav, extra_pages, hold or not_on_site, or the
+# build fails. Exception: docs/posttrain/** is synced from upstream; an unlisted file there
+# only warns and is treated as not_on_site. Never edit files under docs/posttrain/.
+
+nav:
+  - Get Started:
+      - Home: index.md
+      - Quickstart: get_started/quickstart.md
+      - Install: setup.md
+      - Agent skills: get_started/agent_skills.md
+  - Models: models/README.md
+  - Inference & Deploy:
+      - Run inference: inference.md
+      - Prompt upsampling: prompt_upsampling.md
+      - Prompting the Reasoner: skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md
+      - World simulation:
+          - Transfer-Auto: inference_auto.md
+          - Sim-Auto: inference_sim_auto.md
+          - Sim-Transfer: inference_transfer.md
+          - Sim-Bimanual: inference_bimanual.md
+          - Sim-Bimanual sessions: bimanual_sessions.md
+      - Deploy:
+          - Choose a serving path: deploy/serving.md
+          - Serve DROID policies: action_policy_droid_server.md
+          - Backend environments: skills/cookbooks/cosmos3/README.md
+          - Deploy with NIM: skills/cookbooks/cosmos3/nim/README.md # the other NIM pages are extra_pages
+      - Notebooks:
+          - Generation: skills/cookbooks/cosmos3/generator/audiovisual/README.md
+          - Action: skills/cookbooks/cosmos3/generator/action/README.md
+          - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
+          - Reasoner: skills/cookbooks/cosmos3/reasoner/README.md
+          - Simulation: skills/cookbooks/cosmos3/simulation/README.md
+  - Post-Training:
+      - Choose a path: post_training/choose_path.md
+      - SFT:
+          - SFT recipes: training.md
+          - Datasets:
+              - JSONL datasets: dataset_jsonl.md
+              - Custom datasets: custom_dataset.md
+          - Robot policies:
+              - DROID policy: action_policy_droid_posttrain.md
+              - DROID forward dynamics: action_fd_droid_posttrain.md
+              - LIBERO-10 policy: action_policy_libero_posttrain.md
+          - Transfer-Auto: training_transfer_auto.md
+      # A multi-stage chain lives in the section of its final (distilled) model.
+      - Distillation:
+          - Sim-Auto: training_sim_auto.md
+          - Sim-Transfer:
+              - "Stage 0: teacher": training_sim_transfer_stage0.md
+              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md
+          - Sim-Bimanual:
+              - Check training data: bimanual_data_preflight.md
+              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md
+          - Super four-step (DMD2): skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md
+      - RL:
+          - Overview: posttrain/index.md
+          - Quickstart: posttrain/howto/run-posttrain.md
+          - Generator:
+              - DPO: posttrain/guides/dpo.md
+              - DiffusionNFT: posttrain/guides/nft.md
+          - Reasoner:
+              - GRPO: posttrain/guides/grpo.md
+              - PPO: posttrain/guides/ppo.md
+              - OPD: posttrain/guides/opd.md
+          - Customize:
+              - Custom data: posttrain/howto/custom-data.md
+              - DataPacker: posttrain/howto/custom-datapacker.md
+              - Reward: posttrain/howto/custom-reward.md
+              - Objective: posttrain/howto/custom-objective.md
+          - Operate:
+              - Preflight: posttrain/howto/preflight.md
+              - Batching and OOM: posttrain/howto/batching.md
+              - Data plane: posttrain/howto/data-plane.md
+              - Train-time validation: posttrain/howto/train-time-validation.md
+              - Checkpoint artifacts: posttrain/howto/checkpoint-artifacts.md
+              - Run guide FAQ: posttrain/howto/run-posttrain-qa.md
+          - Reference:
+              - Config: posttrain/reference/config.md
+              - Metrics: posttrain/reference/metrics.md
+              - Checkpointing: posttrain/reference/checkpoint.md
+              - Architecture: posttrain/package-overview.md
+              - Glossary: posttrain/glossary.md
+              - Troubleshooting: posttrain/troubleshooting.md
+  - Evaluate:
+      - Evaluate and score: evaluation.md
+      - PAI-Bench-C: skills/evaluation/cosmos3/generator/paibench_c/README.md
+      - PAI-Bench-G: skills/evaluation/cosmos3/generator/paibench_g/README.md
+      - Physics-IQ: skills/evaluation/cosmos3/generator/physics_iq/README.md
+      - R-Bench: skills/evaluation/cosmos3/generator/rbench/README.md
+  - Reference:
+      - SFT config: sft_config.md
+      - Environment variables: environment_variables.md
+      - FAQ: faq.md
+      - Code structure: code_structure.md
+      - Integrate into your framework: examples/integration/README.md
+      - Contributing: develop/contributing.md
+      - Security: develop/security.md
+
+sources:
+  index.md: tools/docs/site/index.md # landing page, exists only on the site
+  get_started/agent_skills.md: tools/docs/site/agent_skills.md # its table is built from the SKILL.md files
+  posttrain/package-overview.md: docs/posttrain/README.md # README.md would clash with index.md
+  develop/contributing.md: CONTRIBUTING.md
+  develop/security.md: SECURITY.md
+  examples/integration/README.md: examples/integration/README.md
+
+extra_pages:
+  - .agents/skills/cookbooks/cosmos3/nim/action.md
+  - .agents/skills/cookbooks/cosmos3/nim/api-reference.md
+  - .agents/skills/cookbooks/cosmos3/nim/bring-your-own-checkpoint.md
+  - .agents/skills/cookbooks/cosmos3/nim/configuration.md
+  - .agents/skills/cookbooks/cosmos3/nim/deployment.md
+  - .agents/skills/cookbooks/cosmos3/nim/generation.md
+  - .agents/skills/cookbooks/cosmos3/nim/helm.md
+  - .agents/skills/cookbooks/cosmos3/nim/operations.md
+  - .agents/skills/cookbooks/cosmos3/nim/prerequisites.md
+  - .agents/skills/cookbooks/cosmos3/nim/reasoning.md
+  - .agents/skills/cookbooks/cosmos3/nim/release-notes.md
+  - .agents/skills/cookbooks/cosmos3/nim/support-matrix.md
+  - .agents/skills/cookbooks/cosmos3/nim/transfer.md
+
+# Not ready for publication: not rendered and not linked.
+hold:
+  - docs/transfer_numerical_preservation.md
+  - docs/posttrain/reference/compatibility.md
+  # These simulation pages clone the code from a fork; publish once they use this repo.
+  - .agents/skills/cookbooks/cosmos3/simulation/auto/auto.md
+  - .agents/skills/cookbooks/cosmos3/simulation/transfer/transfer.md
+
+# Repo-only pages: links to them go to GitHub.
+not_on_site:
+  # How to maintain the docs, for doc developers.
+  - docs/README.md
+  # AutoML guides.
+  - docs/automl.md
+  - docs/automl-*.md
+  # Posttrain SFT guide; the site's SFT section covers SFT.
+  - docs/posttrain/guides/sft.md
+  # Joint PPO for GR00T / pi0.5 policies and their simulator integration.
+  - docs/posttrain/guides/joint-ppo-*.md
+  - docs/posttrain/howto/sim-integration.md
+  - docs/posttrain/reference/embodied.md

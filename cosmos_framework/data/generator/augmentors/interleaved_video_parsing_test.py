@@ -438,6 +438,29 @@ def test_chunked_caption_and_selected_parser_decode_matching_shared_window(
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_depth_normalization_clamps_float32_roundoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(video_parsing.log, "warning", lambda message, **kwargs: warnings.append(message))
+    frames = torch.tensor([-1e-7, 0.5, 1.0000001192092896]).reshape(1, 1, 1, 3)  # [1,1,1,3]
+    result = VideoTransferAlignedSelectedControlParsing._normalize_depth_frames(frames)  # [3,1,1,3]
+    expected = torch.tensor([0.0, 127.5, 255.0]).reshape(1, 1, 1, 3).expand(3, -1, -1, -1)  # [3,1,1,3]
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    VideoTransferAlignedSelectedControlParsing._normalize_depth_frames(frames)
+    assert len(warnings) == 2
+    assert "keeping the sample" in warnings[0]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", [-1e-4, 1.0001, float("nan"), float("inf")])
+def test_depth_normalization_rejects_invalid_values(value: float) -> None:
+    frames = torch.tensor([value]).reshape(1, 1, 1, 1)  # [1,1,1,1]
+    with pytest.raises(ValueError, match="Depth video"):
+        VideoTransferAlignedSelectedControlParsing._normalize_depth_frames(frames)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_gray12_depth_preserves_precision_through_selected_control_and_generic_normalize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

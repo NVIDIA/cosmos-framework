@@ -422,18 +422,19 @@ class TestActivationMarks:
         _, marked = _run(mark_at=1, compiled=compiled)
 
         assert (plain != 0).any(), "a zero gradient would compare equal and prove nothing"
-        scale = plain.abs().max()
+        scale = plain.abs().max()  # []
         # Two floors, because either alone is misleading. The run-to-run spread
         # catches a non-deterministic backward, but two runs can land bit-identical
-        # and report zero. Account for rounding in both gradients: each has up to
-        # half an epsilon of relative error, so their difference needs a full
-        # epsilon. Half an epsilon can be smaller than one bf16 step (e.g. 0.25
-        # near 46.5), rejecting adjacent representable values.
-        observed = (plain - plain_again).abs().max()
-        roundoff = scale * torch.finfo(plain.dtype).eps
-        floor = torch.maximum(observed * 2, roundoff)
-        difference = (marked - plain).abs().max()
-        assert difference <= floor, f"marked differs by {difference}; run-to-run {observed}, bf16 floor {roundoff}"
+        # and report zero; dtype round-off at this scale is the floor underneath
+        # that. Use the dtype's epsilon: half the bf16 epsilon can be smaller than
+        # one representable step (e.g. 0.25 for gradients near a scale of 46.5).
+        observed = (plain - plain_again).abs().max()  # []
+        roundoff_floor = scale * torch.finfo(plain.dtype).eps  # []
+        floor = torch.maximum(observed * 2, roundoff_floor)  # []
+        difference = (marked - plain).abs().max()  # []
+        assert difference <= floor, (
+            f"marked differs by {difference}; run-to-run {observed}, {plain.dtype} round-off floor {roundoff_floor}"
+        )
 
     @pytest.mark.parametrize("compiled", [False, True])
     def test_each_mark_is_consumed_by_exactly_one_call(self, compiled: bool) -> None:

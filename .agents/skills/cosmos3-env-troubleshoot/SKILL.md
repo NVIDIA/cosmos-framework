@@ -23,15 +23,15 @@ All paths below are relative to this file's location (`.agents/skills/cosmos3-en
 
 Check the error message against the table below. Each row links to the canonical fix in the docs.
 
-| Error signature                                                               | Cause                                | Fix location                                                                                             |
-| ----------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `ImportError: cannot import name '_functionalization' from 'torch._C'`        | NGC container library conflict       | `../../../docs/setup.md` § PyTorch Import Issue — run `export LD_LIBRARY_PATH=''`                        |
-| `ModuleNotFoundError: No module named 'cosmos_framework'`                     | Package not installed                | `../../../docs/setup.md` § Dependency Issue — run `uv sync --all-extras --group=cu130-train --reinstall` |
-| `ModuleNotFoundError: No module named <other>`                                | Dependency missing                   | `../../../docs/setup.md` § Dependency Issue — reinstall venv                                             |
-| `fatal error: Python.h: No such file or directory`                            | Broken Python / uv install           | `../../../docs/setup.md` § Python Issue — reinstall uv + venv from scratch                               |
-| `OSError: <lib>: cannot open shared object file`                              | CUDA version mismatch                | `../../../docs/setup.md` § CUDA Issue — install matching `cuda-toolkit-<major>`                          |
-| `docker: Error response from daemon: unknown or invalid runtime name: nvidia` | Docker nvidia runtime not configured | `../../../docs/setup.md` § Docker Container — run `sudo nvidia-ctk runtime configure --runtime=docker`   |
-| HuggingFace 401 / download failures                                           | Auth or license not accepted         | `../../../docs/setup.md` § Downloading Base Checkpoints — check `HF_TOKEN`, accept license agreement     |
+| Error signature                                                               | Cause                                  | Fix location                                                                                                                      |
+| ----------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ImportError: cannot import name '_functionalization' from 'torch._C'`        | Possible inherited library conflict    | `../../../docs/setup.md` § PyTorch Import Issue — remove conflicting paths while preserving required CUDA compatibility libraries |
+| `ModuleNotFoundError: No module named 'cosmos_framework'`                     | Package not installed                  | `../../../docs/setup.md` § Dependency Issue — run `uv sync --all-extras --group=cu130-train --reinstall`                          |
+| `ModuleNotFoundError: No module named <other>`                                | Dependency missing                     | `../../../docs/setup.md` § Dependency Issue — reinstall venv                                                                      |
+| `fatal error: Python.h: No such file or directory`                            | Broken Python / uv install             | `../../../docs/setup.md` § Python Issue — reinstall uv + venv from scratch                                                        |
+| `OSError: <lib>: cannot open shared object file`                              | Missing or incompatible shared library | `../../../docs/setup.md` § CUDA Issue — identify the library before changing CUDA or system packages                              |
+| `docker: Error response from daemon: unknown or invalid runtime name: nvidia` | Docker nvidia runtime not configured   | `../../../docs/setup.md` § Docker Container — run `sudo nvidia-ctk runtime configure --runtime=docker`                            |
+| HuggingFace 401 / download failures                                           | Auth or license not accepted           | `../../../docs/setup.md` § Downloading Base Checkpoints — check `HF_TOKEN`, accept license agreement                              |
 
 ## Step 2: If no documented fix matches, try common remediation
 
@@ -58,19 +58,19 @@ uv pip list | head -20
 
 ### Remediation ladder (try in order)
 
-1. **Clear library path**: `export LD_LIBRARY_PATH=''`
+1. **Check library paths**: remove conflicting entries only. Preserve required CUDA forward-compatibility libraries; see the setup guide's PyTorch import troubleshooting.
 2. **Reinstall venv**: `uv sync --all-extras --group=cu130-train --reinstall` (or `cu128-train` on older drivers; drop `-train` only if you intentionally want the inference-only group)
 3. **Reinstall uv + venv from scratch**:
 
    ```shell
-   curl -LsSf https://astral.sh/uv/install.sh | sh
+   curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
    uv python install --reinstall
    rm -rf .venv
    uv sync --all-extras --group=cu130-train --reinstall
    source .venv/bin/activate
    ```
 
-4. **Check CUDA version alignment**: the major CUDA version from `nvidia-smi` must match `torch.version.cuda`
+4. **Check CUDA compatibility**: verify the host driver supports the environment's CUDA build, directly or through a supported compatibility setup. Then test `torch.cuda.init()` and a CUDA tensor operation. The CUDA versions displayed by `nvidia-smi` and PyTorch need not be equal.
 5. **Try Docker**: if the host environment is too broken, fall back to the Docker container (see `../../../docs/setup.md`)
 
 ## Step 3: If still unresolved, generate a bug report

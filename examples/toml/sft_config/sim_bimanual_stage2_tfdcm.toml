@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Required: COSMOS_SIM_BIMANUAL_LOCAL_BUNDLE and COSMOS_SIM_BIMANUAL_STAGE1_CHECKPOINT.
+# Stage 1 initializes the student and frozen teacher; fresh optimizer/state.
+[job]
+task = "simulation"
+experiment = "sim_local_bimanual_stage2_tfdcm"
+name = "sim_bimanual_stage2_tfdcm"
+wandb_mode = "disabled"

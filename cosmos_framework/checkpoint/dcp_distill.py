@@ -16,6 +16,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.metadata import TensorStorageMetadata
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
@@ -178,29 +179,29 @@ class DistributedCheckpointer(_DistributedCheckpointer):
 
         model_dict = model.model_dict()
 
-        resume_keys, checkpoint_path, warm_start = self.keys_to_resume_during_load()
+        resume_keys, source = self.keys_to_resume_during_load()
         resume_keys = sorted(resume_keys)
-        log.critical(f"Resuming ckpt {checkpoint_path} with keys: {resume_keys}")
+        log.critical(f"Resuming ckpt {source} with keys: {resume_keys}")
 
         iteration = 0
 
-        if checkpoint_path is not None:
-            self._check_checkpoint_exists(checkpoint_path)
+        if source is not None:
+            self._check_checkpoint_exists(source)
             for key in resume_keys:
                 dist.barrier()
 
-                cur_key_ckpt_full_path = os.path.join(checkpoint_path, key)
+                cur_key_ckpt_full_path = os.path.join(source.path, key)
                 log.critical(f"Start loading checkpoint from {cur_key_ckpt_full_path}")
 
                 strict_resume = self.config_checkpoint.strict_resume
-                keys_to_skip_loading = self.config_checkpoint.keys_to_skip_loading if warm_start else []
+                keys_to_skip_loading = self.config_checkpoint.keys_to_skip_loading if source.warm_start else []
                 load_planner = CustomLoadPlanner(
                     allow_partial_load=not strict_resume,
                     keys_to_skip_loading=keys_to_skip_loading,
                 )
 
                 if key == "model":
-                    storage_reader = self.get_storage_reader(cur_key_ckpt_full_path)
+                    storage_reader = self.get_storage_reader(cur_key_ckpt_full_path, source)
                     log.info("- Loading the model...")
                     _model_wrapper = ModelWrapper(
                         model,
@@ -208,6 +209,26 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                         strict_resume=strict_resume,
                     )
                     _state_dict = _model_wrapper.state_dict()
+                    if strict_resume and "optim" in resume_keys:
+                        # Inspect storage before DCP casts into the destination tensors.
+                        # Legacy fake-score optimizer masters need an explicit migration;
+                        # promoting rounded model weights alone cannot restore them.
+                        metadata = storage_reader.read_metadata()
+                        low_precision_keys = [
+                            name
+                            for name, value in _state_dict.items()
+                            if name.startswith("net_fake_score.")
+                            and isinstance(value, torch.Tensor)
+                            and value.dtype == torch.float32
+                            and isinstance(saved := metadata.state_dict_metadata.get(name), TensorStorageMetadata)
+                            and saved.properties.dtype in (torch.bfloat16, torch.float16)
+                        ]
+                        if low_precision_keys:
+                            raise ValueError(
+                                "Strict resume cannot recover FP32 accumulators from low-precision model weights. "
+                                "Use a model-only warm start or explicitly migrate the legacy optimizer masters. "
+                                f"First affected keys: {low_precision_keys[:20]}"
+                            )
                     dcp.load(_state_dict, storage_reader=storage_reader, planner=load_planner)
                     _model_wrapper.load_state_dict(_state_dict)
 
@@ -215,7 +236,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                     if optimizer is None:
                         raise ValueError("optimizer must be provided when loading optim state.")
                     for optim_key, optim in optimizer.items():
-                        storage_reader = self.get_storage_reader(f"{cur_key_ckpt_full_path}_{optim_key}")
+                        storage_reader = self.get_storage_reader(f"{cur_key_ckpt_full_path}_{optim_key}", source)
                         log.info(f"- Loading the optimizer ({optim_key})...")
                         _optim_wrapper = OptimizerWrapper(model_dict[optim_key], optim)
                         _state_dict = _optim_wrapper.state_dict()
@@ -234,7 +255,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                     if scheduler is None:
                         raise ValueError("scheduler must be provided when loading scheduler state.")
                     for sched_key, sched in scheduler.items():
-                        storage_reader = self.get_storage_reader(f"{cur_key_ckpt_full_path}_{sched_key}")
+                        storage_reader = self.get_storage_reader(f"{cur_key_ckpt_full_path}_{sched_key}", source)
                         log.info(f"- Loading the scheduler ({sched_key})...")
                         _state_dict = sched.state_dict()
                         dcp.load(
@@ -247,7 +268,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                 elif key == "trainer":
                     if grad_scaler is None:
                         raise ValueError("grad_scaler must be provided when loading trainer state.")
-                    storage_reader = self.get_storage_reader(cur_key_ckpt_full_path)
+                    storage_reader = self.get_storage_reader(cur_key_ckpt_full_path, source)
                     log.info("- Loading the trainer...")
 
                     rng_key = f"rng_state_{dist.get_rank()}"
@@ -276,7 +297,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                     # Per-rank dataloader-state resume (main's base checkpointer). Skips
                     # gracefully when no dataloader-state callback is registered or no
                     # dataloader checkpoint was written.
-                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=self.load_s3_backend_key):
+                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=source.backend_key):
                         log.info(
                             f"Checkpoint {cur_key_ckpt_full_path} does not exist, skip loading dataloader.",
                             rank0_only=False,
@@ -284,14 +305,14 @@ class DistributedCheckpointer(_DistributedCheckpointer):
                         continue
                     rank = dist.get_rank()
                     dataloader_pkl_path = os.path.join(cur_key_ckpt_full_path, f"rank_{rank}.pkl")
-                    if not easy_io.exists(dataloader_pkl_path, backend_key=self.load_s3_backend_key):
+                    if not easy_io.exists(dataloader_pkl_path, backend_key=source.backend_key):
                         log.info(f"No dataloader checkpoint found at {dataloader_pkl_path}", rank0_only=False)
                         continue
                     log.info(f"- Loading the dataloader {cur_key_ckpt_full_path}...", rank0_only=False)
                     _state_dict = easy_io.load(
                         dataloader_pkl_path,
                         file_format="pkl",
-                        backend_key=self.load_s3_backend_key,
+                        backend_key=source.backend_key,
                     )
                     dataloader_wrapper = _DataloaderWrapper(self.callbacks)
                     if dataloader_wrapper.has_state():
@@ -302,14 +323,16 @@ class DistributedCheckpointer(_DistributedCheckpointer):
 
             if self.callbacks is not None:
                 self.callbacks.on_load_checkpoint(model, state_dict=_state_dict)
-            log.info(f"Loaded checkpoint from {checkpoint_path} in iteration {iteration}")
+            log.info(f"Loaded checkpoint from {source} in iteration {iteration}")
         else:
             log.info("Training from scratch.")
 
         torch.cuda.empty_cache()
 
         if self.callbacks is not None:
-            self.callbacks.on_load_checkpoint_end(model, iteration=iteration, checkpoint_path=checkpoint_path)
+            self.callbacks.on_load_checkpoint_end(
+                model, iteration=iteration, checkpoint_path=None if source is None else source.path
+            )
         return iteration
 
     # No custom save_state_dict_worker needed: the save() method below

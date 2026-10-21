@@ -10,10 +10,10 @@ import pytest
 import torch
 
 import cosmos_framework.trainer.distillation as trainer_module
-from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 from cosmos_framework.model.generator.distillation.optimizer import PhaseOptimizer, PhaseScheduler
+from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.trainer.distillation import DistillationTrainer
+from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 
 
 def _make_config(grad_accum_iter: int = 1, distributed_parallelism: str = "ddp") -> SimpleNamespace:
@@ -448,6 +448,7 @@ class _ClosureModel(torch.nn.Module):
         super().__init__()
         self.weight: torch.nn.Parameter = torch.nn.Parameter(torch.tensor(1.0))
         self.after_backward_calls: int = 0
+        self.before_optimizer_step_calls: int = 0
         self.before_zero_grad_calls: int = 0
         self.zero_grad_calls: int = 0
 
@@ -461,6 +462,10 @@ class _ClosureModel(torch.nn.Module):
 
     def on_after_backward(self) -> None:
         self.after_backward_calls += 1
+
+    def on_before_optimizer_step(self, optimizer: object, scheduler: object, iteration: int) -> None:
+        del optimizer, scheduler, iteration
+        self.before_optimizer_step_calls += 1
 
     def on_before_zero_grad(self, optimizer: object, scheduler: object, iteration: int) -> None:
         del optimizer, scheduler, iteration
@@ -522,8 +527,11 @@ def test_training_step_runs_model_closures_and_steps_once() -> None:
     torch.testing.assert_close(output_batch["loss"], torch.tensor(3.0))
     torch.testing.assert_close(model.weight.grad, torch.tensor(3.0))
     assert model.after_backward_calls == 2
+    assert model.before_optimizer_step_calls == 1
     assert model.before_zero_grad_calls == 1
     assert model.zero_grad_calls == 1
+    assert trainer.callbacks.on_before_forward.call_count == 3
+    assert trainer.callbacks.on_after_forward.call_count == 3
     grad_scaler.step.assert_called_once_with(optimizer.get("net"))
     scheduler.get("net").step.assert_called_once()
 
@@ -585,6 +593,7 @@ def test_training_step_accumulates_closures_across_two_microbatches() -> None:
     torch.testing.assert_close(model.weight.grad, torch.tensor(1.5))
     grad_scaler.step.assert_not_called()
     scheduler.get("net").step.assert_not_called()
+    assert model.before_optimizer_step_calls == 0
 
     _, second_loss, grad_accum_iter = trainer.training_step(
         model,
@@ -601,6 +610,7 @@ def test_training_step_accumulates_closures_across_two_microbatches() -> None:
     torch.testing.assert_close(model.weight.grad, torch.tensor(3.0))
     grad_scaler.step.assert_called_once_with(optimizer.get("net"))
     scheduler.get("net").step.assert_called_once()
+    assert model.before_optimizer_step_calls == 1
     assert model.fake_fsdp.gradient_sync_calls == [
         (False, False),
         (True, False),

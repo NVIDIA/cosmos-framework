@@ -1,0 +1,82 @@
+{
+  "WHITE SOLID_SINGLE": {
+      "color": [255, 255, 255],
+      "pattern": "solid",
+      "thickness_multiplier": 1.0
+  },
+  "WHITE LONG_DASHED_SINGLE": {
+      "color": [255, 255, 255],
+      "pattern": "long_dashed",
+      "thickness_multiplier": 1.0
+  },
+  "WHITE SHORT_DASHED_SINGLE": {
+      "color": [255, 255, 255],
+      "pattern": "short_dashed",
+      "thickness_multiplier": 1.0
+  },
+  "WHITE DOT_DASHED_SINGLE": {
+      "color": [255, 255, 255],
+      "pattern": "dot_dashed",
+      "thickness_multiplier": 1.0
+  },
+  "WHITE OTHER": {
+      "color": [255, 255, 255],
+      "pattern": "solid",
+      "thickness_multiplier": 3.0
+  },
+  "WHITE SOLID_GROUP": {
+      "color": [255, 255, 255],
+      "pattern": "dual",
+      "thickness_multiplier": 1.0,
+      "dual_pattern": ["solid", "solid"]
+  },
+  "YELLOW DOT_SOLID_SINGLE": {
+      "color": [255, 255, 0],
+      "pattern": "dotted_1_9",
+      "thickness_multiplier": 1.0
+  },
+  "YELLOW DOT_SOLID_GROUP": {
+      "color": [255, 255, 0],
+      "pattern": "dual",
+      "thickness_multiplier": 1.0,
+      "dual_pattern": ["dotted_1_9", "dotted_1_9"]
+  },
+  "YELLOW DASHED_SOLID": {
+      "color": [255, 255, 0],
+      "pattern": "dual",
+      "thickness_multiplier": 1.0,
+      "dual_pattern": ["solid", "long_dashed"]
+  },
+  "YELLOW SOLID_DASHED": {
+      "color": [255, 255, 0],
+      "pattern": "dual",
+      "thickness_multiplier": 1.0,
+      "dual_pattern": ["long_dashed", "solid"]
+  },
+  "YELLOW SOLID_SINGLE": {
+      "color": [255, 255, 0],
+      "pattern": "solid",
+      "thickness_multiplier": 1.0
+  },
+  "YELLOW SOLID_GROUP": {
+      "color": [255, 255, 0],
+      "pattern": "dual",
+      "thickness_multiplier": 1.0,
+      "dual_pattern": ["solid", "solid"]
+  },
+  "YELLOW LONG_DASHED_SINGLE": {
+      "color": [255, 255, 0],
+      "pattern": "long_dashed",
+      "thickness_multiplier": 1.0
+  },
+  "YELLOW OTHER": {
+      "color": [255, 255, 0],
+      "pattern": "solid",
+      "thickness_multiplier": 3.0
+  },
+  "OTHER": {
+      "color": [181, 164, 71],
+      "pattern": "solid",
+      "thickness_multiplier": 1.0
+  }
+}

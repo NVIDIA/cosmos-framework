@@ -25,7 +25,7 @@ from cosmos_framework.data.generator.local_datasets.helper import (
     parse_s3_url,
 )
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
-from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
 from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY, caption_json_to_prompt
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption

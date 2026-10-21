@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""The MADS rig: what each camera is, where it points, and how wide it sees.
+"""The pretrained Auto reference rig: camera identities, orientations and fields of view.
 
 Kept in its own stdlib-only module so it can be released alongside caption_format.py.
 The per-view caption header the model is trained on quotes these values verbatim --
@@ -12,7 +12,7 @@ describe the wrong rig.
 
 from typing import Final
 
-MADS_CAMERA_ATTRIBUTES: Final[dict[str, dict[str, str | int]]] = {
+CAMERA_ATTRIBUTES: Final[dict[str, dict[str, str | int]]] = {
     "camera_front_wide_120fov": {
         "camera_role": "front",
         "camera_type": "wide",
@@ -79,4 +79,28 @@ MADS_CAMERA_ATTRIBUTES: Final[dict[str, dict[str, str | int]]] = {
         "facing": "backward",
         "fov_degrees": 200,
     },
+}
+
+
+# The physical rig's view IDs. Written out rather than derived from the ordering of
+# CAMERA_ATTRIBUTES above: these index the trained model's view embeddings, so a cosmetic
+# reordering of that table must not silently renumber the rig. camera_attributes_test.py pins the
+# two against each other.
+#
+# It lives here, beside the attributes, because this module is the released leaf -- cosmos-framework
+# generates its copy from this file. Defining it only in multiview_data_source.py (which is not
+# release-mapped) left cosmos-framework's consumers importing a symbol that the release removed on
+# every sync, and that it only ever had because someone had hand-added it to the generated file.
+CAMERA_VIEW_MAPPING: Final[dict[str, int]] = {
+    "camera_front_wide_120fov": 0,
+    "camera_cross_right_120fov": 1,
+    "camera_rear_right_70fov": 2,
+    "camera_rear_tele_30fov": 3,
+    "camera_rear_left_70fov": 4,
+    "camera_cross_left_120fov": 5,
+    "camera_front_tele_30fov": 6,
+    "camera_front_fisheye_200fov": 7,
+    "camera_left_fisheye_200fov": 8,
+    "camera_right_fisheye_200fov": 9,
+    "camera_rear_fisheye_200fov": 10,
 }

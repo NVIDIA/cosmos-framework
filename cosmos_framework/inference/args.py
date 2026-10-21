@@ -4,21 +4,26 @@
 import json
 import math
 import os
+import re
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, Sequence, cast, override
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, Sequence, TypeVar, cast, override
 
 import pydantic
 import pynvml
 from typing_extensions import assert_never
 from tyro.conf import Suppress
 
+from cosmos_framework.data.generator.action.utils.pose_utils import PoseConvention
 from cosmos_framework.inference.common.args import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     ArgsBase,
     CfgpSize,
     CheckpointConfig,
+    CheckpointType,
+    ConfigFileType,
     OverridesBase,
     ResolvedFilePath,
     ResolvedFilePathOrUrl,
@@ -31,10 +36,20 @@ from cosmos_framework.inference.common.args import (
     _deep_merge,
     download_file,
 )
-from cosmos_framework.inference.common.config import CONFIG_DIR, PACKAGE_DIR
+from cosmos_framework.inference.common.config import CONFIG_DIR, PACKAGE_DIR, deserialize_config_dict
 from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 from cosmos_framework.utils.flags import SMOKE, TRAINING
+from cosmos_framework.utils.generator.multiview import is_causal_multiview_config, safe_multiview_camera_name
+
+CameraActionNormalization = Literal["scale", "global_asinh"]
+CameraNumFrames = Annotated[int, pydantic.Field(ge=2)]
+ContentCropBox = tuple[
+    pydantic.NonNegativeInt,
+    pydantic.NonNegativeInt,
+    pydantic.PositiveInt,
+    pydantic.PositiveInt,
+]
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -95,8 +110,8 @@ class SamplingArgs(ArgsBase):
 class SamplingOverrides(OverridesBase):
     """Sampling arguments for 'OmniMoTModel.generate_samples'."""
 
-    num_steps: Training[pydantic.PositiveInt | None] = None
-    """Number of steps for the diffusion model."""
+    num_steps: pydantic.PositiveInt | None = None
+    """Number of diffusion steps. Distilled checkpoints use their fixed schedule instead."""
     guidance: Training[Guidance | None] = None
     """Guidance scale for the diffusion model."""
     guidance_interval: Training[GuidanceInterval | None] = None
@@ -108,7 +123,9 @@ class SamplingOverrides(OverridesBase):
     sigma_max: Training[float | None] = None
     """Maximum sigma for the EDM sampler. Ignored when sampler='unipc'."""
 
-    def _build_sampling(self, model_config: "OmniMoTModelConfig", sample_meta: "SampleMeta"):
+    def _build_sampling(
+        self, model_config: "OmniMoTModelConfig", sample_meta: "SampleMeta", *, num_steps_configured: bool = True
+    ):
         if sample_meta.model_mode.is_reasoner:
             # Diffusion sampling fields are unused by the reasoner but required by
             # OmniSampleArgs validation; fill in inert sentinels.
@@ -123,6 +140,21 @@ class SamplingOverrides(OverridesBase):
             if self.sigma_max is None:
                 self.sigma_max = 0.0
             return
+        fixed_sampler = getattr(model_config, "fixed_step_sampler_config", None)
+        if fixed_sampler is not None:
+            schedule = fixed_sampler.t_list
+            # FixedStepSampler appends the terminal zero only when it is absent.
+            steps = len(schedule) - int(bool(schedule) and schedule[-1] == 0.0)
+            if steps < 1:
+                raise ValueError("fixed_step_sampler_config.t_list must contain a nonzero sigma")
+            # Warn only about a value someone chose; the built-in modality default (35) is not a
+            # request, so every default run of a distilled checkpoint would otherwise warn.
+            if num_steps_configured and self.num_steps is not None and self.num_steps != steps:
+                log.warning(
+                    f"num_steps={self.num_steps} is ignored for this distilled checkpoint; "
+                    f"using its fixed {steps}-step sampling schedule."
+                )
+            self.num_steps = steps
         assert self.num_steps is not None
         if SMOKE:
             self.num_steps = min(self.num_steps, 1)
@@ -256,6 +288,7 @@ class TransferHintKey(StrEnum):
     DEPTH = "depth"
     SEG = "seg"
     WSM = "wsm"
+    LIDAR = "lidar"
 
 
 class PresetEdgeThreshold(StrEnum):
@@ -291,6 +324,13 @@ class TransferArgs(ArgsBase):
         return 1.0 if v is None else v
 
 
+class LidarTransferArgs(TransferArgs):
+    """HD-map control and optional measured target prefix for LiDAR inference."""
+
+    condition_path: ResolvedFilePathOrUrl | None = None
+    num_conditional_sweeps: pydantic.PositiveInt = 1
+
+
 class EdgeTransferArgs(TransferArgs):
     preset_edge_threshold: PresetEdgeThreshold = PresetEdgeThreshold.MEDIUM
 
@@ -311,6 +351,20 @@ class TransferOverrides(OverridesBase):
     def download(self, output_dir: Path):
         if self.control_path is not None:
             self.control_path = download_file(self.control_path, output_dir, "transfer_control")
+
+
+class LidarTransferOverrides(TransferOverrides):
+    condition_path: ResolvedFilePathOrUrl | None = None
+    """Measured LiDAR prefix: a metric 3-channel .pt clip or prepared lidar_rangemap .tar.
+    Joint inference only. Must start at the same instant as the camera/control clips.
+    """
+    num_conditional_sweeps: pydantic.PositiveInt | None = None
+    """Number of clean target sweeps to read from condition_path (default: 1)."""
+
+    def download(self, output_dir: Path) -> None:
+        super().download(output_dir)
+        if self.condition_path is not None:
+            self.condition_path = download_file(self.condition_path, output_dir, "lidar_condition")
 
 
 class EdgeTransferOverrides(TransferOverrides):
@@ -342,6 +396,7 @@ class TextDataArgs(ArgsBase):
     prompt: str
 
     negative_prompt: str | None
+    per_view_negative_prompt: str | None = None
 
     duration_template: str | None
     resolution_template: str | None
@@ -359,6 +414,8 @@ class TextDataOverrides(OverridesBase):
 
     negative_prompt: str | None = None
     """Negative prompt - describing what you don't want in the generated video."""
+    per_view_negative_prompt: str | None = None
+    """Explicit shared negative caption for checkpoints that tokenize each camera caption separately."""
 
     duration_template: Training[str | None] = None
     """Template string for appending duration/fps to prompt. Use {duration} and {fps} placeholders."""
@@ -405,6 +462,15 @@ class TextDataOverrides(OverridesBase):
 Fps = Annotated[int, pydantic.Field(ge=1)]
 VideoSaveQuality = Annotated[int, pydantic.Field(ge=0, le=10)]
 ImageSaveQuality = Annotated[int, pydantic.Field(ge=0, le=100)]
+VideoSaveCrf = Annotated[int, pydantic.Field(ge=0, le=51)]
+
+# The full-quality video is saved as ``vision.mp4`` (qscale ``video_save_quality``). With
+# ``save_preview`` a smaller, easy-to-download ``vision_preview.mp4`` is also emitted alongside it:
+# same resolution, but H.264 CRF (constant rate factor) encoded, which is far more byte-efficient
+# than qscale at a matched perceptual quality.
+DEFAULT_SAVE_PREVIEW = False
+DEFAULT_PREVIEW_CRF = 28
+DEFAULT_PREVIEW_PRESET = "medium"
 
 
 class _VisionDataBase:
@@ -434,6 +500,9 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
     num_frames: pydantic.PositiveInt
     video_save_quality: VideoSaveQuality
     image_save_quality: ImageSaveQuality
+    save_preview: bool
+    preview_crf: VideoSaveCrf
+    preview_preset: str
 
     @property
     def duration(self) -> float:
@@ -504,19 +573,45 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     num_frames: pydantic.PositiveInt | None = None
     """Number of vision frames.
 
-    Range by resolution: 256p: [24, 400], 480p: [24, 300], 720p/768p: [24, 200].
-    These are global limits; a checkpoint's own published range may be tighter
-    (Cosmos3-Edge is documented as 50-150 video frames).
+    Generic single-view recommendations by resolution: 256p: [24, 400],
+    480p: [24, 300], 720p/768p: [24, 200]. Follow the checkpoint's published
+    generation settings. Multiview Auto uses its own sensor-aligned horizons.
+    Cosmos3-Edge is documented as 50-150 video frames.
     """
-    video_save_quality: Training[VideoSaveQuality | None] = None
+    video_save_quality: VideoSaveQuality | None = None
     """Quality of the saved video (0-10)."""
     image_save_quality: Training[ImageSaveQuality | None] = None
     """Quality of the saved image (0-100)."""
+    save_preview: Training[bool | None] = None
+    """Whether to also emit a smaller, easy-to-download ``vision_preview.mp4`` alongside the
+    full-quality video. The preview is the same resolution but H.264 CRF-encoded (see ``preview_crf``).
+    No effect on image (single-frame) outputs. Defaults to False."""
+    preview_crf: Training[VideoSaveCrf | None] = None
+    """H.264 Constant Rate Factor for ``vision_preview.mp4`` (0-51, lower = higher quality / larger
+    file). CRF is far more byte-efficient than the qscale ``video_save_quality`` path. Defaults to 28;
+    raise it (e.g. 30-32) for a smaller preview, lower it for higher quality."""
+    preview_preset: Training[str | None] = None
+    """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
+    Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
 
     @override
     def download(self, output_dir: Path):
         super().download(output_dir)
         self.vision_path = download_file(self.vision_path, output_dir, "vision")
+
+    def _fill_save_compression_defaults(self, *, enable_preview: bool):
+        """Populate the preview-video compression knobs (required on ``VisionDataArgs``).
+
+        These have no per-modality JSON defaults, so they are filled here. The full-quality
+        ``vision.mp4`` uses ``video_save_quality``; when ``save_preview`` is enabled a smaller
+        CRF-encoded ``vision_preview.mp4`` is also emitted (same resolution) for quick download.
+        """
+        if self.save_preview is None:
+            self.save_preview = DEFAULT_SAVE_PREVIEW and enable_preview
+        if self.preview_crf is None:
+            self.preview_crf = DEFAULT_PREVIEW_CRF
+        if self.preview_preset is None:
+            self.preview_preset = DEFAULT_PREVIEW_PRESET
 
     def _build_vision_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         """Finalize and validate in-place."""
@@ -536,6 +631,7 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
                 self.video_save_quality = 0
             if self.image_save_quality is None:
                 self.image_save_quality = 0
+            self._fill_save_compression_defaults(enable_preview=False)
             return
 
         if self.condition_frame_indexes_vision is None:
@@ -568,7 +664,27 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
                     f"Resolution {self.resolution!r} only supports image generation (num_frames=1). "
                     f"For video, use one of: {sorted(MAX_NUM_FRAMES)}"
                 )
-            if self.num_frames < MIN_NUM_FRAMES or self.num_frames > MAX_NUM_FRAMES[self.resolution]:
+            # Bimanual rollout length follows the supplied action trajectory,
+            # not the generic single-view video duration recommendation.
+            has_bimanual_contract = getattr(model_config, "_bimanual_action_contract", None) is not None or (
+                getattr(model_config, "action_gen", False) is True
+                and getattr(model_config, "action_schema", "native") == "unified_v1"
+                and getattr(model_config, "action_global_asinh", False) is True
+                and getattr(model_config, "action_metric_gripper", False) is True
+                and getattr(model_config, "max_action_dim", None) == 64
+                and getattr(model_config, "num_embodiment_domains", None) == 32
+            )
+            is_bimanual_rollout = has_bimanual_contract
+            # Auto multiview uses model-specific horizons, including the 297-frame
+            # example at 720p and longer causal rollouts. Its sampler validates
+            # sensor alignment and input coverage, independently of this generic
+            # single-view recommendation.
+            is_multiview_rollout = getattr(self, "multiview", None) is not None
+            if (
+                not is_bimanual_rollout
+                and not is_multiview_rollout
+                and (self.num_frames < MIN_NUM_FRAMES or self.num_frames > MAX_NUM_FRAMES[self.resolution])
+            ):
                 log.warning(
                     f"Number of frames {self.num_frames} is outside the recommended range [{MIN_NUM_FRAMES}, {MAX_NUM_FRAMES[self.resolution]}]. Quality may be degraded."
                 )
@@ -578,6 +694,9 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
         self.num_frames = (
             math.ceil((self.num_frames - 1) / temporal_compression_factor) * temporal_compression_factor + 1
         )
+        # Preview only applies to multi-frame (video) outputs; it is additionally gated on
+        # frame count at save time, so single-frame (image) modes never emit one.
+        self._fill_save_compression_defaults(enable_preview=self.num_frames > 1)
 
 
 class SoundDataArgs(ArgsBase):
@@ -603,8 +722,7 @@ class SoundDataOverrides(OverridesBase):
         if sample_meta.model_mode.is_sound_condition:
             if self.sound_path is None:
                 raise ValueError(
-                    f"model_mode={sample_meta.model_mode.value} requires a `sound_path` "
-                    "(a conditioning audio clip)"
+                    f"model_mode={sample_meta.model_mode.value} requires a `sound_path` (a conditioning audio clip)"
                 )
             self.enable_sound = True
         if self.enable_sound is None:
@@ -618,42 +736,158 @@ class SoundDataOverrides(OverridesBase):
 
 class ActionDataArgs(ArgsBase):
     action_path: ResolvedFilePath | None = None
+    kv_cache_frustum_path: ResolvedFilePath | None = None
     domain_name: str = ""
     image_size: pydantic.PositiveInt = 256
+    content_crop_box: ContentCropBox | None = None
     action_chunk_size: pydantic.PositiveInt = 16
     raw_action_dim: int | None = None
     view_point: str | None = None
+    format_prompt_as_json: bool | None = None
+
+
+class InteractiveDataArgs(ArgsBase):
+    """Resolved causal / autoregressive inference arguments.
+
+    Houses the fields that only apply to the causal AR pipeline: per-frame
+    autoregressive generation and camera-trajectory action conditioning for
+    forward-dynamics models.
+    """
+
+    autoregressive: bool = False
+    save_latents: bool = False
+    action_condition: bool = False
+    sigma_diffusion_forcing: float | None = None
+    camera_trajectory: str | None = None
+    camera_translation_scale: float = 1.0
+    camera_action_normalization: CameraActionNormalization = "global_asinh"
+    camera_num_frames: CameraNumFrames | None = None
+    camera_pose_convention: PoseConvention = "backward_chunk_anchored_16f"
+
+
+class InteractiveDataOverrides(OverridesBase):
+    """Causal / autoregressive inference overrides."""
+
+    autoregressive: bool | None = None
+    """If True, use autoregressive per-frame generation.
+    Defaults to ``model.config.video_temporal_causal``."""
+    save_latents: bool | None = None
+    """Save causal multiview RGB/joint latents alongside the generated videos. Defaults to False."""
+    action_condition: bool | None = None
+    """If True, enable action-conditioned autoregressive generation. Defaults to False."""
+    sigma_diffusion_forcing: float | None = None
+    """Post-shift sigma used to seed clean context frames into the KV cache under
+    diffusion_forcing AR inference. Overrides model.config.sigma_diffusion_forcing when set.
+    Ignored when causal_training_strategy != 'diffusion_forcing'."""
+    camera_trajectory: str | None = None
+    """Camera trajectory string parsed by ``parse_camera_string``
+    (e.g. 'w-30,right-15,w-15'). Mutually exclusive with ``action_path``;
+    only valid for ``model_mode='forward_dynamics'``."""
+    camera_translation_scale: float | None = None
+    """Translation scale used to normalize generated camera-trajectory actions.
+    Set this to the training camera dataset's ``translation_scale``; defaults to 10.0."""
+    camera_action_normalization: CameraActionNormalization | None = None
+    """How generated camera actions are normalized. ``scale`` applies the pose
+    scale normalizer with ``camera_translation_scale``; ``global_asinh`` applies the
+    global asinh normalizer and requires ``camera_translation_scale=1.0``.
+    Defaults to ``scale``."""
+    camera_num_frames: CameraNumFrames | None = None
+    """Number of camera poses/actions to consume, independently of tokenizer
+    frame-count alignment."""
+    camera_pose_convention: PoseConvention | None = None
+    """Relative-pose convention used to encode ``camera_trajectory``.
+    Defaults to ``backward_framewise``."""
+
+    def _build_interactive_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta) -> None:
+        del sample_meta
+
+        # A causal checkpoint drives autoregressive generation unless the caller
+        # said otherwise, which is what lets a distilled Self-Forcing artifact run
+        # without repeating --autoregressive on every invocation.
+        if self.autoregressive is None:
+            self.autoregressive = bool(getattr(model_config, "video_temporal_causal", False))
+        self.save_latents = bool(self.save_latents)
+
+        if self.action_condition is None:
+            self.action_condition = False
+        if self.camera_translation_scale is None:
+            self.camera_translation_scale = 1.0
+        if self.camera_action_normalization is None:
+            self.camera_action_normalization = "global_asinh"
+        if self.camera_pose_convention is None:
+            self.camera_pose_convention = "backward_chunk_anchored_16f"
+
+        if self.camera_trajectory is None:
+            return
+
+        if getattr(self, "action_path", None) is not None:
+            raise ValueError("'camera_trajectory' and 'action_path' are mutually exclusive")
+        if not self.autoregressive:
+            raise ValueError("'camera_trajectory' requires autoregressive inference")
 
 
 class ActionDataOverrides(OverridesBase):
     """Action data overrides."""
 
-    action_path: Training[ResolvedFilePathOrUrl | None] = None
+    action_path: ResolvedFilePathOrUrl | None = None
     """Path to action JSON file. Required for forward_dynamics mode."""
-    domain_name: Training[str | None] = None
+    kv_cache_frustum_path: ResolvedFilePathOrUrl | None = None
+    """Camera-geometry JSON enabling frustum-IoU KV-history retrieval.
+
+    Use explicit ``c2w`` poses, or ``pose_source=bimanual_unified_v1_chunk16``
+    to recover the trajectory from a compatible AgiBot unified-v1 sidecar.
+    Omission preserves the checkpoint's ordinary KV-history behavior.
+    """
+    domain_name: str | None = None
     """Action domain name passed to get_domain_id()."""
-    image_size: Training[pydantic.PositiveInt | None] = None
-    """Target image height in pixels (aspect-ratio-preserving resize)."""
-    action_chunk_size: Training[pydantic.PositiveInt | None] = None
+    image_size: pydantic.PositiveInt | None = None
+    """Spatial preprocessing resolution tier for recorded-action inference.
+
+    Input aspect ratio selects a canvas within this tier. Larger inputs are
+    downscaled to fit; smaller inputs are padded without upscaling. Padding is
+    removed in latent space before generation, so this is not an output-height
+    guarantee. See docs/inference_bimanual.md for the Bimanual example.
+    """
+    content_crop_box: ContentCropBox | None = None
+    """Optional ``(left, top, right, bottom)`` crop selecting real image content.
+
+    Applied before action-inference resizing and reflection padding. Use this
+    only when ``vision_path`` contains an outer canvas or transport padding;
+    canonical inputs should point directly at the unpadded source image.
+    """
+    action_chunk_size: pydantic.PositiveInt | None = None
     """Number of action steps to predict."""
-    raw_action_dim: Training[pydantic.PositiveInt | None] = None
+    raw_action_dim: pydantic.PositiveInt | None = None
     """Dimension of the raw action data. Required when action_path is not provided."""
-    view_point: Training[str | None] = None
+    view_point: str | None = None
     """Viewpoint description for the action prompt."""
+    format_prompt_as_json: bool | None = None
+    """Format legacy action prompts as JSON; unified Bimanual checkpoints require plain text.
+
+    When unset, inference selects the format from the checkpoint's action contract.
+    """
 
     @override
     def download(self, output_dir: Path):
         super().download(output_dir)
         self.action_path = download_file(self.action_path, output_dir, "action")
+        self.kv_cache_frustum_path = download_file(self.kv_cache_frustum_path, output_dir, "kv_cache_frustum")
 
     def _build_action_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         if self.domain_name is None:
             self.domain_name = ""
+        # image_size and action_chunk_size are required non-null on OmniSampleArgs, so
+        # they must be defaulted here even for a multiview sample, which never reads
+        # them: multiview resolution comes from `vision_size` (resolution/aspect_ratio),
+        # and the "image_size" key the multiview batch carries is a height/width tensor,
+        # not this field.
         if self.image_size is None:
             self.image_size = 256
         if self.action_chunk_size is None:
             self.action_chunk_size = 16
-        if self.view_point is None:
+        # Multiview samples leave view_point unset. Supplying a default here would
+        # violate _validate_multiview_options, which rejects that single-view field.
+        if self.view_point is None and self.multiview is None:
             self.view_point = "ego_view"
 
         mode = sample_meta.model_mode
@@ -666,8 +900,9 @@ class ActionDataOverrides(OverridesBase):
             )
         match mode:
             case ModelMode.FORWARD_DYNAMICS:
-                if self.action_path is None:
-                    raise ValueError(f"'action_path' is required for model_mode={mode.value!r}")
+                # camera_trajectory derives the action tensor instead of reading one.
+                if self.action_path is None and getattr(self, "camera_trajectory", None) is None:
+                    raise ValueError(f"'action_path' or 'camera_trajectory' is required for model_mode={mode.value!r}")
             case ModelMode.INVERSE_DYNAMICS | ModelMode.WAM:
                 pass
             case _:
@@ -675,6 +910,299 @@ class ActionDataOverrides(OverridesBase):
 
         if self.action_path and "://" in self.action_path:
             raise ValueError("Must call `download()` before building action data")
+
+
+_MADS_MULTIVIEW_MEDIA_DIRS: frozenset[str] = frozenset({"controls", "rgb"})
+"""Per-clip media directories inside an evaluation bundle, as written by copy_mads_mv_val_assets."""
+_MADS_MULTIVIEW_MEDIA_RE = re.compile(r"^(?P<sample_id>.+)_c(?P<camera_index>\d+)\.[^.]+$")
+_MADS_CLIP_MEDIA_RE = re.compile(r"^(?P<sample_id>.+)\.[^.]+$")
+
+
+class MultiviewCameraArgs(ArgsBase):
+    """One camera entry for AV multiview inference."""
+
+    camera_key: str
+    vision_path: ResolvedFilePath | None = None
+    control_path: ResolvedFilePath | None = None
+    caption_path: ResolvedFilePath | None = None
+    """Local caption JSON for this camera, resolved when load_caption_from_data=True."""
+
+
+class MultiviewCameraOverrides(OverridesBase):
+    """One camera entry for AV multiview inference."""
+
+    camera_key: str
+    vision_path: ResolvedFilePathOrUrl | None = None
+    """Optional per-camera image/video condition. All views must either provide this or omit it."""
+    control_path: ResolvedFilePathOrUrl | None = None
+    """Optional per-camera precomputed transfer control video. All views must either provide this or omit it."""
+    caption_path: ResolvedFilePathOrUrl | None = None
+    """Optional caption JSON for this camera. When load_caption_from_data=True and this is omitted,
+    it is inferred from this camera's own media, or taken from multiview.caption_path if that is set."""
+
+
+def _infer_multiview_caption_path(
+    *,
+    view: MultiviewCameraOverrides,
+    caption_root: str | None,
+) -> str:
+    """Locate one camera's caption JSON from the media that camera reads.
+
+    Per camera, not per sample: every kept view supplies its own text in training, so inferring a
+    single path from ``views[0]`` and handing it to all of them conditions ten cameras on the
+    eleventh's caption -- which reads as a plausible video, not as an error.
+    """
+    source_path = view.vision_path or view.control_path
+    if source_path is None:
+        raise ValueError(
+            f"Cannot infer a caption path for camera {view.camera_key!r} because it has neither vision_path "
+            "nor control_path. Set its caption_path, or multiview.caption_path, explicitly."
+        )
+
+    if caption_root:
+        filename = Path(source_path).name
+        match = _MADS_MULTIVIEW_MEDIA_RE.match(filename)
+        if match is not None:
+            return f"{caption_root.rstrip('/')}/{match.group('sample_id')}_c{match.group('camera_index')}.json"
+        clip_match = _MADS_CLIP_MEDIA_RE.match(filename)
+        if clip_match is not None:
+            # Clip-level MADS assets (hdmap/lidar rangemap tars) have no _cN suffix.
+            # Front-wide captions are the lidar-transfer training text source.
+            return f"{caption_root.rstrip('/')}/{clip_match.group('sample_id')}_c0.json"
+        raise ValueError(
+            f"Cannot infer the caption path for camera {view.camera_key!r} from "
+            f"{source_path!r}; expected a file name ending in '_c<index>.<ext>' "
+            "or a clip-level '<sample_id>.<ext>'."
+        )
+
+    # Evaluation bundles keep captions beside the media they describe, as
+    # 'samples/<clip>/{controls,rgb}/c<N>.mp4' next to 'samples/<clip>/captions/raw/c<N>.json',
+    # so the caption is derivable from the view alone and needs no root.
+    media_path = Path(source_path)
+    if media_path.parent.name in _MADS_MULTIVIEW_MEDIA_DIRS:
+        bundle_caption = media_path.parent.parent / "captions" / "raw" / f"{media_path.stem}.json"
+        if bundle_caption.is_file():
+            return str(bundle_caption)
+    raise ValueError(
+        f"Cannot infer the caption path for camera {view.camera_key!r} from {source_path!r}: it is not "
+        "inside an evaluation bundle. Set its caption_path or multiview.caption_path, or "
+        "multiview.caption_root for flat '<clip>_c<index>.json' caption directories."
+    )
+
+
+class _MultiviewBase:
+    @property
+    def camera_keys(self) -> list[str]:
+        self = cast("MultiviewArgs | MultiviewOverrides", self)
+        return [view.camera_key for view in self.views]
+
+    @property
+    def has_condition_vision(self) -> bool:
+        self = cast("MultiviewArgs | MultiviewOverrides", self)
+        return any(view.vision_path is not None for view in self.views)
+
+    @property
+    def has_control(self) -> bool:
+        self = cast("MultiviewArgs | MultiviewOverrides", self)
+        return any(view.control_path is not None for view in self.views)
+
+    @property
+    def condition_vision_mode(self) -> ConditionVisionMode | None:
+        self = cast("MultiviewArgs | MultiviewOverrides", self)
+        paths = [view.vision_path for view in self.views if view.vision_path is not None]
+        if not paths:
+            return None
+        suffixes = {Path(path).suffix.lower() for path in paths}
+        if all(suffix in IMAGE_EXTENSIONS for suffix in suffixes):
+            return ConditionVisionMode.IMAGE
+        if all(suffix in VIDEO_EXTENSIONS for suffix in suffixes):
+            if getattr(self, "condition_video_as_image", False):
+                return ConditionVisionMode.IMAGE
+            return ConditionVisionMode.VIDEO
+        raise ValueError(
+            f"Multiview condition paths must be all images or all videos, got suffixes {sorted(suffixes)}."
+        )
+
+
+class MultiviewArgs(ArgsBase, _MultiviewBase):
+    views: list[MultiviewCameraArgs]
+    """Ordered camera entries. This order is used for camera-major tensor packing and output saving."""
+    condition_video_as_image: bool = False
+    """If True, treat per-view video vision_path files as single-frame image conditions."""
+    load_caption_from_data: bool = False
+    """If True, read structured caption chunks from caption_path and run chunkwise multiview generation."""
+    caption_path: ResolvedFilePath | None = None
+    """Local caption JSON path used when load_caption_from_data=True."""
+    caption_root: str | None = None
+    """Root used to infer caption_path before downloads; retained for provenance only."""
+    use_first_chunk_only: bool = True
+    """If True, generate only from caption chunk zero instead of stitching all chunks."""
+    first_caption_paragraph_only: bool = False
+    """Trim each loaded caption before adding camera headers, matching short-window LiDAR training."""
+
+
+class MultiviewOverrides(OverridesBase, _MultiviewBase):
+    views: list[MultiviewCameraOverrides] = pydantic.Field(min_length=1)
+    """Ordered camera entries. This order is used for camera-major tensor packing and output saving."""
+    condition_video_as_image: bool = False
+    """If True, treat per-view video vision_path files as single-frame image conditions."""
+    load_caption_from_data: bool = False
+    """If True, read structured caption chunks from caption_path and run chunkwise multiview generation."""
+    caption_path: ResolvedFilePathOrUrl | None = None
+    """Optional shared caption JSON path. Prefer caption_path on each view for camera-local text."""
+    caption_root: str | None = None
+    """Root for flat '<clip>_c<index>.json' captions. Without a root or explicit caption_path,
+    infer 'captions/raw/<media-stem>.json' beside a view's 'rgb/' or 'controls/' directory."""
+    use_first_chunk_only: bool = True
+    """If True, generate only from caption chunk zero instead of stitching all chunks."""
+    first_caption_paragraph_only: bool = False
+    """Trim each loaded caption to its opening paragraph before adding camera headers.
+
+    Matches training recipes that set ``first_caption_paragraph_only`` (Transfer-Auto stage 3 and
+    LiDAR transfer), so inference conditions on the same caption text the checkpoint was trained on.
+    Only applies when ``load_caption_from_data=True``."""
+
+    @pydantic.model_validator(mode="after")
+    def _validate_views(self) -> Self:
+        if not self.views:
+            raise ValueError("multiview.views must contain at least one camera.")
+        camera_keys = [view.camera_key for view in self.views]
+        if len(set(camera_keys)) != len(camera_keys):
+            raise ValueError(f"multiview.views camera_key values must be unique, got {camera_keys}.")
+        has_condition = [view.vision_path is not None for view in self.views]
+        if any(has_condition) and not all(has_condition):
+            raise ValueError("All multiview.views entries must provide vision_path, or none of them should.")
+        has_control = [view.control_path is not None for view in self.views]
+        if any(has_control) and not all(has_control):
+            raise ValueError("All multiview.views entries must provide control_path, or none of them should.")
+        _ = self.condition_vision_mode
+        return self
+
+    @override
+    def download(self, output_dir: Path) -> None:
+        super().download(output_dir)
+        if self.load_caption_from_data:
+            # Each camera reads its own caption file, as in training, where every kept view
+            # supplies its own text. A sample-level caption_path overrides that with one shared
+            # source, which is what lidar transfer wants: front-wide text drives every view.
+            for view in self.views:
+                if view.caption_path is None:
+                    view.caption_path = self.caption_path or _infer_multiview_caption_path(
+                        view=view,
+                        caption_root=self.caption_root,
+                    )
+            if self.caption_path is not None:
+                self.caption_path = download_file(self.caption_path, output_dir, "multiview_caption")
+        for view_index, view in enumerate(self.views):
+            safe_camera_key = safe_multiview_camera_name(view.camera_key, view_index)
+            view.vision_path = download_file(view.vision_path, output_dir, f"multiview_{safe_camera_key}_vision")
+            view.control_path = download_file(view.control_path, output_dir, f"multiview_{safe_camera_key}_control")
+            view.caption_path = download_file(view.caption_path, output_dir, f"multiview_{safe_camera_key}_caption")
+
+
+class MultiviewDataArgs(ArgsBase):
+    multiview: MultiviewArgs | None = None
+
+
+class MultiviewDataOverrides(OverridesBase):
+    multiview: Training[MultiviewOverrides | None] = None
+    """Optional AV multiview inference payload. When set, inference builds camera-major multiview batches."""
+
+    @override
+    def download(self, output_dir: Path) -> None:
+        super().download(output_dir)
+        if self.multiview is not None:
+            self.multiview.download(output_dir)
+
+    def _build_multiview_data(self, *, sample_meta: SampleMeta, model_config: "OmniMoTModelConfig") -> None:
+        self = cast("SampleDataOverrides", self)
+        if self.multiview is None:
+            return
+        self._validate_multiview_options(sample_meta=sample_meta, model_config=model_config)
+
+    def _validate_multiview_options(self, *, sample_meta: SampleMeta, model_config: "OmniMoTModelConfig") -> None:
+        self = cast("SampleDataOverrides", self)
+        assert self.multiview is not None
+        errors: list[str] = []
+        # A causal multiview checkpoint samples its multiview inputs autoregressively only (build_sample
+        # turns AR on for them unless the user set it). Which inputs it takes, per-camera WSM transfer
+        # and joint camera+LiDAR, is for check_causal_multiview_options to say, so a sample without
+        # controls hears what it lacks rather than that AR is unsupported. On any other checkpoint,
+        # multiview runs the one-shot sampler.
+        causal_multiview = is_causal_multiview_config(model_config)
+
+        if sample_meta.model_mode.is_action or sample_meta.model_mode.is_reasoner:
+            errors.append("action and reasoner model modes")
+        if sample_meta.vision_mode != VisionMode.VIDEO:
+            errors.append("image output modes; set num_frames > 1")
+        if self.vision_path is not None:
+            errors.append("top-level vision_path; use multiview.views[*].vision_path")
+        if self.enable_sound:
+            errors.append("enable_sound=True")
+        # Native upsampling would rewrite the shared caption for every view.
+        # Reject it consistently instead of allowing only text-to-video samples
+        # to reach that path while image-conditioned samples fail later.
+        if self.prompt_upsampling:
+            errors.append("prompt_upsampling=True")
+        if self.autoregressive and not causal_multiview:
+            errors.append("autoregressive=True")
+        if self.action_condition:
+            errors.append("action_condition=True")
+        if self.action_path is not None:
+            errors.append("action_path")
+        if self.raw_action_dim is not None:
+            errors.append("raw_action_dim")
+        if self.domain_name not in (None, ""):
+            errors.append("domain_name")
+        if self.view_point is not None:
+            errors.append("view_point")
+        if getattr(self, "camera_trajectory", None) is not None:
+            errors.append("camera_trajectory")
+        if self.multiview.load_caption_from_data:
+            # Each camera reads its own caption file, so the sample-level caption_path being unset
+            # says nothing: download() leaves it None whenever the paths were inferred per camera
+            # or came from an evaluation bundle. What a run cannot do without is a path per camera.
+            uncaptioned = [view.camera_key for view in self.multiview.views if view.caption_path is None]
+            if uncaptioned:
+                errors.append(
+                    f"load_caption_from_data=True but camera(s) {uncaptioned} have no caption_path; call "
+                    "download(), which fills each camera's caption_path from multiview.caption_path, "
+                    "multiview.caption_root or the evaluation bundle beside its media, or set them"
+                )
+
+        expected_input_mode = {
+            None: "text",
+            ConditionVisionMode.IMAGE: "image",
+            ConditionVisionMode.VIDEO: "video",
+        }[self.multiview.condition_vision_mode]
+        actual_input_mode = sample_meta.model_mode.value.split("2", maxsplit=1)[0]
+        if actual_input_mode != expected_input_mode:
+            errors.append(
+                "model_mode is inconsistent with multiview conditioning: "
+                f"model_mode={sample_meta.model_mode.value!r} expects {actual_input_mode!r} input, "
+                f"but multiview.views imply {expected_input_mode!r} input"
+            )
+
+        # Joint camera+LiDAR legitimately carries two hints (wsm + lidar) alongside per-view
+        # control paths; _validate_lidar_transfer checks that combination instead.
+        if self.is_joint_cam_lidar_transfer:
+            pass
+        elif not self.multiview.has_control and self.transfer_hints:
+            errors.append("transfer hints without multiview.views[*].control_path")
+        elif self.multiview.has_control:
+            if not self.transfer_hints:
+                errors.append("per-view control_path without an explicit transfer hint such as wsm={}")
+            if len(self.transfer_hints) > 1:
+                errors.append("more than one transfer hint")
+            for hint_key, config in self.transfer_hints.items():
+                if config.control_path is not None:
+                    errors.append(
+                        "Multiview transfer inference uses per-view control_path; "
+                        f"do not also set {hint_key.value}.control_path"
+                    )
+
+        if errors:
+            raise ValueError("Multiview inference does not support the following option(s):\n- " + "\n- ".join(errors))
 
 
 _ReasonerTemperature = Annotated[float, pydantic.Field(gt=0, le=100)]
@@ -770,6 +1298,25 @@ class _TransferDataBase:
         # deterministic so the model sees a stable [ctrl_1, ..., ctrl_N] sequence.
         return {key: getattr(self, key.value) for key in TransferHintKey if getattr(self, key.value) is not None}
 
+    @property
+    def is_multiview_transfer(self) -> bool:
+        """True for a single-hint transfer driven by per-view controls."""
+        multiview = getattr(self, "multiview", None)
+        return multiview is not None and multiview.has_control and len(self.transfer_hints) == 1
+
+    @property
+    def is_joint_cam_lidar_transfer(self) -> bool:
+        """True when WSM, LiDAR and camera views are all present.
+
+        Joint generation denoises the camera and LiDAR streams together, so it takes a different
+        path through validation, sampling defaults and batch assembly than either modality alone.
+        """
+        return (
+            TransferHintKey.LIDAR in self.transfer_hints
+            and TransferHintKey.WSM in self.transfer_hints
+            and getattr(self, "multiview", None) is not None
+        )
+
 
 class TransferDataArgs(ArgsBase, _TransferDataBase):
     control_guidance: ControlGuidance = 1.0
@@ -779,6 +1326,7 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     depth: TransferArgs | None = None
     seg: TransferArgs | None = None
     wsm: TransferArgs | None = None
+    lidar: LidarTransferArgs | None = None
     negative_prompt_file: str | None = None
     """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
@@ -789,6 +1337,8 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
     share_vision_temporal_positions: bool | None = None
     emphasize_control_in_prompt: bool | None = None
+    transfer_resize_mode: Literal["center_crop", "direct_resize"] | None = None
+    transfer_output_size: Literal["model", "original"] | None = None
 
 
 class TransferDataOverrides(OverridesBase, _TransferDataBase):
@@ -811,6 +1361,13 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     """Segmentation control-hint overrides; set to activate the segmentation transfer hint."""
     wsm: TransferOverrides | None = None
     """World-surface-map (WSM) control-hint overrides; set to activate the WSM transfer hint."""
+    lidar: LidarTransferOverrides | None = None
+    """LiDAR rangemap control (``.pt``, prepared ``.tar``, or rangeview directory).
+
+    LiDAR-only: set ``lidar.control_path`` and leave ``wsm``, ``multiview`` and ``vision_path``
+    unset. Joint camera+LiDAR: pair it with ``wsm: {}`` and one or more multiview views, each
+    carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
+    supply measured target sweeps as a clean conditioning prefix."""
     negative_prompt_file: str | None = None
     """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
@@ -831,6 +1388,17 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     """If True (default), auto-append a one-sentence directive to the user prompt that
     names the active control modality (e.g. "Follow the edge control video precisely.
     ..."). Set False for clean baselines / ablations. The system prompt is unchanged."""
+    transfer_resize_mode: Literal["center_crop", "direct_resize"] | None = None
+    """Spatial preprocessing for bidirectional, Stage 1 TF, Stage 2 TF-dCM, or Stage 3 SF-DMD Transfer.
+    The default center_crop preserves legacy checkpoints. direct_resize matches the teacher
+    fine-tuned without spatial padding: full-frame RGB bicubic, depth bilinear,
+    segmentation nearest, with at most 3% aspect distortion at 480 or 720."""
+    transfer_output_size: Literal["model", "original"] | None = None
+    """Save generated RGB at the model bucket size (default) or restore the original
+    source dimensions. original requires direct_resize; the model-size RGB is
+    retained separately for inspection; evaluation uses the selected output size.
+    MP4 encoding adds one bottom/right pixel
+    when the corresponding source dimension is odd; output metadata records it."""
 
     @pydantic.model_validator(mode="after")
     def _validate_transfer_hints(self) -> Self:
@@ -871,10 +1439,17 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "num_first_chunk_conditional_frames": 0,
         "share_vision_temporal_positions": True,
         "emphasize_control_in_prompt": True,
+        "transfer_resize_mode": "center_crop",
+        "transfer_output_size": "model",
     }
+    _SF_DMD_TRANSFER_MAX_FRAMES: ClassVar[dict[str, int]] = {"480": 201, "720": 81}
+    _SF_DMD_TRANSFER_RECTIFIED_FLOW_SHIFT: ClassVar[dict[str, float]] = {"256": 3.0, "480": 5.0, "720": 10.0}
     _TRANSFER_HINT_DEFAULTS: ClassVar[dict[TransferHintKey, dict[str, Any]]] = {
         TransferHintKey.EDGE: {"preset_edge_threshold": PresetEdgeThreshold.MEDIUM},
         TransferHintKey.BLUR: {"preset_blur_strength": PresetBlurStrength.MEDIUM},
+        # The final _build() dumps nested overrides with None intact, so the args
+        # field default alone cannot resolve an omitted conditional-sweep count.
+        TransferHintKey.LIDAR: {"num_conditional_sweeps": 1},
     }
     # Tuned guidance / control_guidance per transfer task. Applied when the input JSON omits
     # these fields (generic video2video sampling defaults otherwise apply).
@@ -891,6 +1466,23 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             "fps": 10,
             "num_video_frames_per_chunk": 101,
         },
+        # LiDAR-only keeps its 10 Hz / 96-sweep training recipe rather than inheriting
+        # video2video's frame rate.
+        TransferHintKey.LIDAR: {
+            "num_frames": 96,
+            "fps": 10,
+            "num_video_frames_per_chunk": 96,
+            "guidance": 3.0,
+            "control_guidance": 1.0,
+        },
+    }
+    # Joint WSM + LiDAR runs on the camera clock instead: ``num_frames`` stays the camera count
+    # (multiview default 93) and the sweep count is derived from it as ``round(num_frames * 10/30)``.
+    # Training is 11-view 480p over 200 camera frames / 67 sweeps.
+    _JOINT_CAM_LIDAR_DEFAULTS: ClassVar[dict[str, Any]] = {
+        "fps": 30,
+        "resolution": "480",
+        "control_guidance": 1.0,
     }
 
     def _build_transfer_data(
@@ -913,25 +1505,135 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         if self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
 
+        # A multiview caption run takes its chunk length from the span each caption describes, so
+        # the generic 93-frame transfer chunk must not stand in for it: a 300-frame caption would
+        # generate less than a third of what its text covers. Left None for inference to derive,
+        # which is unambiguous because a value the sample set is non-None here.
+        skipped_defaults = (
+            {"num_video_frames_per_chunk"}
+            if self.multiview is not None and self.multiview.load_caption_from_data
+            else frozenset()
+        )
         for field, default in self._TRANSFER_SAMPLE_DEFAULTS.items():
-            if getattr(self, field) is None:
+            if field not in skipped_defaults and getattr(self, field) is None:
                 setattr(self, field, default)
+
+        if self.transfer_output_size == "original" and self.transfer_resize_mode != "direct_resize":
+            raise ValueError("transfer_output_size='original' requires transfer_resize_mode='direct_resize'")
+        if self.transfer_resize_mode == "direct_resize":
+            video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
+            if self.autoregressive or video_temporal_causal:
+                strategy = getattr(model_config, "causal_training_strategy", None)
+                fixed_step_sampler = getattr(model_config, "fixed_step_sampler_config", None)
+                is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
+                # Self-forcing checkpoints use their distilled sampler even if
+                # their config retains an inherited teacher-forcing strategy.
+                if is_self_forcing:
+                    supported_causal_stage = fixed_step_sampler is not None
+                else:
+                    # Stage-3 student exports omit training-only simulation_mode;
+                    # they retain strategy='none' and the distilled fixed sampler.
+                    supported_causal_stage = (strategy == "teacher_forcing" and fixed_step_sampler is None) or (
+                        strategy in {"teacher_forcing_dcm", "none"} and fixed_step_sampler is not None
+                    )
+                if not (
+                    self.autoregressive
+                    and video_temporal_causal
+                    and supported_causal_stage
+                    and getattr(model_config, "teacher_forcing_frames_per_chunk", None) == 1
+                ):
+                    raise ValueError(
+                        "Direct Transfer resizing requires a bidirectional teacher or an autoregressive "
+                        "Stage 1 teacher_forcing checkpoint without a fixed sampler or Stage 2 teacher_forcing_dcm "
+                        "checkpoint with a fixed sampler or Stage 3 SF-DMD checkpoint with a fixed sampler, "
+                        "with one latent frame per chunk"
+                    )
+                if (
+                    len(hints) != 1
+                    or self.num_first_chunk_conditional_frames != 0
+                    or getattr(self, "control_guidance", None) != 1.0
+                    or not self.share_vision_temporal_positions
+                ):
+                    raise ValueError(
+                        "Direct causal Transfer requires exactly one control hint, "
+                        "num_first_chunk_conditional_frames=0, control_guidance=1.0, "
+                        "and share_vision_temporal_positions=true"
+                    )
+            if self.multiview is not None or any(
+                key not in {TransferHintKey.EDGE, TransferHintKey.BLUR, TransferHintKey.DEPTH, TransferHintKey.SEG}
+                for key in hints
+            ):
+                raise ValueError("Direct Transfer resizing supports single-view edge, blur, depth, and seg only")
+            if self.resolution not in {"480", "720"}:
+                raise ValueError("Direct Transfer resizing supports the teacher's trained 480 and 720 tiers only")
 
         for hint_key, config in hints.items():
             for field, default in self._TRANSFER_HINT_DEFAULTS.get(hint_key, {}).items():
                 if getattr(config, field) is None:
                     setattr(config, field, default)
 
-            if self.vision_path is None and config.control_path is None:
+            # A multiview transfer sample carries its control videos per view, in
+            # multiview.views[].control_path, not at the top level -- so neither
+            # vision_path nor the hint's control_path is set for it.
+            multiview_has_control = self.multiview is not None and self.multiview.has_control
+            if self.vision_path is None and config.control_path is None and not multiview_has_control:
                 raise ValueError(
                     f"transfer inference requires 'vision_path' or a pre-computed 'control_path' (hint: {hint_key})"
                 )
 
-        if len(hints) == 1:
+        # Multiview WSM uses the multiview preset and base field defaults. Applying
+        # single-view WSM defaults would change num_frames from 93 to 101 and
+        # control_guidance from 1.0 to 3.0, enabling an additional control-CFG pass.
+        # Keep the single-view defaults scoped to single-view samples.
+        if self.is_joint_cam_lidar_transfer:
+            for field, value in self._JOINT_CAM_LIDAR_DEFAULTS.items():
+                if user_fields is None or field not in user_fields:
+                    setattr(self, field, value)
+            return
+        if len(hints) == 1 and self.multiview is None and not self.autoregressive:
             hint_key = next(iter(hints))
             for field, value in self._TRANSFER_DEFAULTS[hint_key].items():
                 if user_fields is None or field not in user_fields:
                     setattr(self, field, value)
+
+    def _apply_sf_dmd_transfer_inference_contract(
+        self,
+        *,
+        model_config: "OmniMoTModelConfig",
+        user_fields: frozenset[str],
+    ) -> None:
+        """Apply the resolution contract recorded by the SF-DMD Transfer checkpoint."""
+        self = cast("SampleDataOverrides", self)
+        video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
+        is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
+        is_distilled = getattr(model_config, "fixed_step_sampler_config", None) is not None
+        if not video_temporal_causal or not (is_self_forcing or is_distilled):
+            return
+        if int(getattr(model_config, "teacher_forcing_frames_per_chunk", 1) or 1) != 1:
+            return
+        replay_policy = getattr(model_config, "teacher_forcing_replay_policy", None)
+        if (
+            getattr(replay_policy, "control_visibility", None) != "causal"
+            or not getattr(replay_policy, "controls_read_strict_past_clean_rgb", False)
+            or getattr(replay_policy, "clean_pass_causality", None) != "frame"
+        ):
+            return
+
+        resolution = self.resolution
+        # The selected 480-only checkpoint must not inherit the legacy 720 preset.
+        # Earlier mixed-resolution students record resolution=720 and retain both tiers.
+        if str(getattr(model_config, "resolution", "")) == "480" and resolution != "480":
+            raise ValueError("This SF-DMD Transfer checkpoint supports only resolution='480'.")
+        if not self.transfer_hints or not self.autoregressive:
+            return
+        frame_cap = self._SF_DMD_TRANSFER_MAX_FRAMES.get(resolution)
+        if frame_cap is not None and "max_frames" not in user_fields:
+            self.max_frames = min(self.max_frames or frame_cap, frame_cap)
+
+        if "shift" not in user_fields:
+            resolution_shift = self._SF_DMD_TRANSFER_RECTIFIED_FLOW_SHIFT.get(resolution)
+            if resolution_shift is not None:
+                self.shift = resolution_shift
 
 
 class _SampleDataBase:
@@ -949,10 +1651,20 @@ class _SampleDataBase:
     def sample_meta(self) -> SampleMeta:
         self = cast(SampleDataOverrides, self)
         mode = self.resolved_model_mode
+        condition_vision_mode = self.condition_vision_mode
+        # Multiview carries its own conditioning mode. Its per-view first frames live in
+        # multiview.views[].vision_path, not in the top-level vision_path that the
+        # single-view path reads, so the top-level mode stays None for a multiview i2v
+        # sample. Leaving it None makes _get_multiview_condition_pixel_frames return
+        # [None, ...] and an image2video sample then generates text2video output --
+        # byte-identical to the t2v run, with no error anywhere. Measured: parity job
+        # 2041279, all 11 views identical to the t2v run.
+        if self.multiview is not None:
+            condition_vision_mode = self.multiview.condition_vision_mode
         return SampleMeta(
             model_mode=mode,
             vision_mode=VisionMode.from_model_mode(mode),
-            condition_vision_mode=self.condition_vision_mode,
+            condition_vision_mode=condition_vision_mode,
         )
 
 
@@ -962,8 +1674,10 @@ class SampleDataArgs(
     VisionDataArgs,
     SoundDataArgs,
     ActionDataArgs,
+    InteractiveDataArgs,
     ReasonerDataArgs,
     TransferDataArgs,
+    MultiviewDataArgs,
 ):
     model_mode: ModelMode
 
@@ -974,8 +1688,10 @@ class SampleDataOverrides(
     VisionDataOverrides,
     SoundDataOverrides,
     ActionDataOverrides,
+    InteractiveDataOverrides,
     ReasonerDataOverrides,
     TransferDataOverrides,
+    MultiviewDataOverrides,
 ):
     """Sample data arguments for 'OmniMoTModel.generate_samples'."""
 
@@ -1065,6 +1781,63 @@ class PromptUpsamplingOverrides(OverridesBase):
             self.prompt_upsampler_seed = 3407
 
 
+# The --experiment-overrides that bake the rolling-KV profile into a causal multiview export, with
+# the values of the Cosmos3-Nano-Sim-Auto recipe. The rolling sampler reads them from the exported
+# model config; nothing at inference time can supply them. Every refusal that asks for a re-export
+# quotes this one string.
+CAUSAL_MULTIVIEW_ROLLING_EXPORT_OVERRIDES = (
+    "model.config.rolling_kv_cache_chunks=2 model.config.rolling_kv_sink_chunks=1 "
+    "model.config.rolling_prompt_policy=segmented"
+)
+
+
+def check_causal_multiview_lidar_prefix_options(sample: "OmniSampleOverrides", config: Any) -> None:
+    """Check the causal joint LiDAR-prefix options before transfer defaults fill them in.
+
+    The rolling sampler holds at most one clean initial target sweep. An explicit sweep count
+    therefore needs a prefix to read it from, which only the request (not the defaults) can tell.
+    """
+    if sample.multiview is None or not is_causal_multiview_config(config) or not sample.is_joint_cam_lidar_transfer:
+        return
+    lidar = sample.lidar
+    if lidar is not None and (lidar.condition_path is not None or lidar.num_conditional_sweeps is not None):
+        if lidar.num_conditional_sweeps not in (None, 1):
+            raise ValueError("Causal multiview inference supports only one initial LiDAR sweep.")
+        if lidar.condition_path is None:
+            raise ValueError("lidar.num_conditional_sweeps requires lidar.condition_path.")
+
+
+def check_causal_multiview_options(sample: "OmniSampleOverrides", config: Any) -> None:
+    """Check the options consumed by the causal RGB/joint multiview runtime."""
+    causal_multiview = sample.multiview is not None and is_causal_multiview_config(config)
+    if not causal_multiview:
+        if sample.save_latents:
+            raise ValueError("Latent saving requires causal multiview inference.")
+        return
+    if not sample.autoregressive:
+        raise ValueError("Causal multiview inference requires autoregressive=True.")
+    if not (sample.is_multiview_transfer or sample.is_joint_cam_lidar_transfer):
+        raise ValueError("Causal multiview inference requires per-camera transfer controls.")
+    if sample.control_guidance != 1.0:
+        raise ValueError("Causal multiview inference requires control_guidance=1.0.")
+    if getattr(config, "fixed_step_sampler_config", None) is not None and sample.guidance != 1.0:
+        log.warning(
+            f"Sample '{sample.name}': overriding guidance={sample.guidance} with guidance=1.0 "
+            "for distilled causal multiview inference; guidance is already distilled into the student."
+        )
+        sample.guidance = 1.0
+    if sample.is_joint_cam_lidar_transfer:
+        if getattr(config, "lidar_tokenizer", None) is None:
+            raise ValueError("Joint generation requires a checkpoint with a LiDAR tokenizer.")
+        source_fps = TransferDataOverrides._JOINT_CAM_LIDAR_DEFAULTS["fps"]
+        if sample.fps != source_fps:
+            raise ValueError(
+                f"Causal joint RGB/LiDAR inference requires fps={source_fps} to match the trained source-frame clock."
+            )
+        if sample.normalize_cfg:
+            raise ValueError("Joint inference requires normalize_cfg=False.")
+
+
 class OmniSampleArgs(
     SampleArgs,
     SamplingArgs,
@@ -1090,6 +1863,7 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
         "nvidia/Cosmos3-Edge-Reasoner": "2B",
+        "nvidia/Cosmos3-Nano-Reasoner": "8B",
     }
 
     _NUM_FRAMES_DEFAULTS: ClassVar[dict[str, int]] = {
@@ -1115,26 +1889,117 @@ class OmniSampleOverrides(
         ("32B", "768"): 5.0,
     }
 
+    def _validate_lidar_transfer(self) -> None:
+        """Reject LiDAR hint combinations that later parsing would silently mis-read.
+
+        Three mutually exclusive shapes are legal:
+
+        * LiDAR-only -- ``lidar.control_path``, with no ``wsm``, ``multiview`` or ``vision_path``.
+        * WSM-only -- not a LiDAR sample; ``_validate_multiview_options`` handles it.
+        * Joint camera+LiDAR -- ``wsm`` plus ``lidar.control_path`` plus one or more camera views,
+          each carrying its own ``control_path``.
+
+        Anything else is rejected here rather than surfacing later as a shape mismatch deep in
+        batch assembly.
+        """
+        self = cast("SampleDataOverrides", self)
+        hints = self.transfer_hints
+        if TransferHintKey.LIDAR not in hints:
+            return
+        extra_hints = set(hints) - {TransferHintKey.LIDAR, TransferHintKey.WSM}
+        if extra_hints:
+            raise ValueError("lidar transfer cannot be combined with other control hints")
+        if self.vision_path is not None:
+            raise ValueError("lidar transfer uses lidar.control_path; vision_path is not supported")
+        lidar = self.lidar
+        assert lidar is not None
+        if lidar.control_path is None:
+            raise ValueError("lidar transfer requires lidar.control_path")
+
+        has_wsm = TransferHintKey.WSM in hints
+        has_multiview = self.multiview is not None
+        if has_wsm and has_multiview:
+            assert self.multiview is not None
+            if not self.multiview.views:
+                raise ValueError("joint camera+LiDAR transfer requires at least one multiview view")
+            has_vision_paths = [view.vision_path is not None for view in self.multiview.views]
+            if any(has_vision_paths) and not all(has_vision_paths):
+                raise ValueError("joint camera+LiDAR transfer does not support partial-view conditioning")
+            for view_index, view in enumerate(self.multiview.views):
+                if view.control_path is None:
+                    raise ValueError(
+                        "joint camera+LiDAR transfer requires control_path for every view "
+                        f"(missing at views[{view_index}])"
+                    )
+            if hints[TransferHintKey.WSM].control_path is not None:
+                raise ValueError(
+                    "joint camera+LiDAR transfer uses the view control_path; do not also set wsm.control_path"
+                )
+            return
+        if has_multiview:
+            raise ValueError("lidar transfer does not support multiview; set lidar.control_path")
+        if has_wsm:
+            raise ValueError("lidar + wsm requires multiview with at least one camera view")
+        # LiDAR-only generation has no measured-prefix path here, so refuse the prefix rather
+        # than drop it in silence.
+        if lidar.condition_path is not None:
+            raise ValueError("lidar.condition_path is only supported for joint camera+LiDAR transfer")
+
     @override
     def build_sample(self, *, model_config: Any) -> OmniSampleArgs:
         model_config = cast("OmniMoTModelConfig", model_config)
         sample_meta = self.sample_meta
+        self._validate_lidar_transfer()
 
         # Apply per-modality defaults from JSON config files.
         # User-provided values take precedence over JSON defaults.
         if self.defaults_file is not None:
             defaults = json.loads(self.defaults_file.read_text())
         else:
-            defaults = _load_modality_defaults(sample_meta.model_mode)
+            defaults_key = sample_meta.model_mode
+            if self.multiview is not None:
+                defaults_key = "multiview"
+            defaults = _load_modality_defaults(defaults_key)
         overrides = self.model_dump(exclude_none=True)
         shift_configured = "shift" in overrides or defaults.get("shift") is not None
         user_fields = frozenset(overrides)
         merged_data = _deep_merge(defaults, overrides)
+        # The built-in video2video recipe has a scalar shift of 10. The new
+        # directly resized Stage 1 teacher uses the resolution defaults below
+        # (5 at 480, 10 at 720); explicit sample/custom-defaults choices still win.
+        if (
+            merged_data.get("transfer_resize_mode") == "direct_resize"
+            and getattr(model_config, "causal_training_strategy", None) == "teacher_forcing"
+            and self.defaults_file is None
+            and "shift" not in overrides
+        ):
+            shift_configured = False
+        # The built-in video defaults select 16:9 for generation. Direct Transfer
+        # instead derives the least-distorted bucket from decoded source pixels;
+        # only an explicit sample/defaults-file aspect choice should override it.
+        if (
+            merged_data.get("transfer_resize_mode") == "direct_resize"
+            and "aspect_ratio" not in overrides
+            and (self.defaults_file is None or defaults.get("aspect_ratio") is None)
+        ):
+            merged_data["aspect_ratio"] = None
         merged_data = {k: v for k, v in merged_data.items() if k in type(self).model_fields}
         merged = type(self).model_validate(merged_data)
 
         self.__dict__.update(merged.__dict__)
         self.model_mode = sample_meta.model_mode
+
+        # Fields chosen by the sample, the CLI or a custom defaults file (not the built-in presets).
+        configured = (user_fields | frozenset(defaults)) if self.defaults_file is not None else user_fields
+        causal_multiview = self.multiview is not None and is_causal_multiview_config(model_config)
+        if causal_multiview:
+            # Match the model's sensor clock and distilled sampling settings instead of the
+            # bidirectional multiview preset. Explicit sample/CLI/custom-defaults choices still
+            # take precedence.
+            if "fps" not in configured:
+                self.fps = int(model_config.diffusion_expert_config.base_fps)
+            if "guidance" not in configured and getattr(model_config, "fixed_step_sampler_config", None) is not None:
+                self.guidance = 1.0
 
         # Model-specific num_frames default for video generation (e.g.
         # Cosmos3-Edge -> 121). Applies only when the user did not request a
@@ -1152,7 +2017,9 @@ class OmniSampleOverrides(
                 self.num_frames = num_frames_default
 
         self._build_sample()
-        self._build_sampling(model_config=model_config, sample_meta=sample_meta)
+        self._build_sampling(
+            model_config=model_config, sample_meta=sample_meta, num_steps_configured="num_steps" in configured
+        )
         self._build_text_data(model_config=model_config, sample_meta=sample_meta)
         self._build_vision_data(model_config=model_config, sample_meta=sample_meta)
 
@@ -1160,13 +2027,34 @@ class OmniSampleOverrides(
 
         self._build_action_data(model_config=model_config, sample_meta=sample_meta)
 
+        # Transfer defaults must follow the checkpoint's causal contract even though
+        # the generic per-modality JSON presets explicitly default AR to False. A causal
+        # multiview checkpoint is trained for AR generation only (the one-shot multiview
+        # sampler runs it without error but off-distribution), so its multiview samples
+        # follow the same contract; an explicit False is refused below.
+        if "autoregressive" not in user_fields and (
+            causal_multiview or (self.transfer_hints and self.multiview is None and model_config.video_temporal_causal)
+        ):
+            self.autoregressive = True
+        self._build_interactive_data(model_config=model_config, sample_meta=sample_meta)
+        if self.kv_cache_frustum_path is not None and (
+            not self.autoregressive or sample_meta.model_mode not in (ModelMode.IMAGE2VIDEO, ModelMode.FORWARD_DYNAMICS)
+        ):
+            raise ValueError("kv_cache_frustum_path requires autoregressive image2video or forward_dynamics")
+
         self._build_sound_data(model_config=model_config, sample_meta=sample_meta)
 
         self._build_reasoner_data(model_config=model_config, sample_meta=sample_meta)
 
-        self._build_transfer_data(
-            model_config=model_config, sample_meta=sample_meta, user_fields=user_fields
-        )
+        # Before the transfer defaults populate lidar.num_conditional_sweeps.
+        check_causal_multiview_lidar_prefix_options(self, model_config)
+        self._build_transfer_data(model_config=model_config, sample_meta=sample_meta, user_fields=user_fields)
+
+        self._apply_sf_dmd_transfer_inference_contract(model_config=model_config, user_fields=user_fields)
+
+        self._build_multiview_data(sample_meta=sample_meta, model_config=model_config)
+        # After the transfer defaults, so control_guidance and the joint clock are resolved.
+        check_causal_multiview_options(self, model_config)
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             # Unregistered backbone names (custom fine-tunes) simply skip shift
@@ -1313,6 +2201,19 @@ MAX_CP_SIZE = 32
 CpSize = Annotated[int, pydantic.Field(ge=1, le=MAX_CP_SIZE)]
 
 
+_OmniSetupT = TypeVar("_OmniSetupT", bound="OmniSetupArgs | OmniSetupOverrides")
+
+
+def _validate_condition_stream_encode(setup: _OmniSetupT) -> _OmniSetupT:
+    """Validate the streaming topology both before and after automatic resolution."""
+    if not setup.condition_stream_encode:
+        return setup
+    allowed_sizes = (0, 1) if isinstance(setup, SetupOverrides) else (1,)
+    if any(size not in allowed_sizes for size in (setup.dp_shard_size, setup.cp_size, setup.cfgp_size)):
+        raise ValueError("condition_stream_encode requires dp_shard_size=1, cp_size=1, and cfgp_size=1")
+    return setup
+
+
 class OmniSetupArgs(SetupArgs):
     variant: Suppress[Literal["omni"]] = "omni"
     """Discriminator."""
@@ -1321,6 +2222,16 @@ class OmniSetupArgs(SetupArgs):
     sample_overrides: OmniSampleOverrides
 
     sampler: Literal["unipc", "edm"]
+
+    condition_stream_encode: bool = False
+    """Encode causal Transfer controls incrementally with the cached video tokenizer."""
+
+    kv_cache_inference_size: pydantic.NonNegativeInt | None = None
+    """Causal history window in latent frames; 0 selects full history, None preserves the checkpoint."""
+    attention_sink_size: pydantic.NonNegativeInt | None = None
+    """Number of initial latent frames retained by the causal cache; None preserves the checkpoint."""
+
+    _validate_condition_stream_encode = pydantic.model_validator(mode="after")(_validate_condition_stream_encode)
 
     # Override defaults
     cp_size: CpSize
@@ -1381,6 +2292,16 @@ class OmniSetupOverrides(SetupOverrides):
 
     sampler: Literal["unipc", "edm"] = "unipc"
 
+    condition_stream_encode: bool = False
+    """Encode causal Transfer controls incrementally; requires one unsharded GPU per worker."""
+
+    kv_cache_inference_size: pydantic.NonNegativeInt | None = None
+    """Causal history window in latent frames; 0 selects full history, None preserves the checkpoint."""
+    attention_sink_size: pydantic.NonNegativeInt | None = None
+    """Number of initial latent frames retained by the causal cache; None preserves the checkpoint."""
+
+    _validate_condition_stream_encode = pydantic.model_validator(mode="after")(_validate_condition_stream_encode)
+
     # Override defaults
     dp_replicate_size: pydantic.NonNegativeInt = 0
     dp_shard_size: pydantic.NonNegativeInt = 0
@@ -1392,6 +2313,150 @@ class OmniSetupOverrides(SetupOverrides):
     compiled_region: Literal["all", "language"] = "all"
     # Unsupported
     tp_size: Suppress[pydantic.NonNegativeInt] = 1
+
+    def _apply_sf_dmd_transfer_setup_contract(self) -> None:
+        """Pin the SF-DMD Transfer runtime described by the exported student config.
+
+        This checkpoint has two sane runtimes: the static-shape CUDA-graph AR path
+        (``torch.compile`` + CUDA graphs, the default) and plain eager attention.
+        ``use_torch_compile`` selects between them: with its default ``True`` the
+        CUDA graphs are switched on as well (compile without graphs retraces every
+        frame here), ``--no-use-torch-compile`` gives the eager runtime.  Asking for
+        CUDA graphs while disabling compile is a contradiction and raises.  The
+        compiled region is pinned to the decoder blocks (``"language"``): compiling
+        the VFM heads as well measured no gain on this checkpoint while lengthening the
+        warm-up and changing the numerics floor.  The diffusion cache and CP/CFGP
+        parallelism are always disabled.
+        """
+        if not self._is_sf_dmd_transfer_hf_checkpoint():
+            return
+        if self.use_cuda_graphs and not self.use_torch_compile:
+            raise ValueError(
+                "SF-DMD Transfer CUDA graphs require torch.compile; pass --use-torch-compile together with "
+                "--use-cuda-graphs (or --no-use-torch-compile for the eager runtime)."
+            )
+        use_torch_compile = bool(self.use_torch_compile)
+        use_cuda_graphs = use_torch_compile
+        runtime_requirements: tuple[tuple[str, bool | int | str, bool | int | str], ...] = (
+            ("use_cuda_graphs", self.use_cuda_graphs, use_cuda_graphs),
+            ("compiled_region", self.compiled_region, "language"),
+            ("diffusion_cache", self.diffusion_cache, False),
+            ("cp_size", self.cp_size, 1),
+            ("cfgp_size", self.cfgp_size, 1),
+        )
+        transitions = [
+            f"{field}={current!r}->{required!r}"
+            for field, current, required in runtime_requirements
+            if current != required
+        ]
+        if transitions:
+            log.warning("Applying the SF-DMD Transfer runtime contract; overriding " + ", ".join(transitions) + ".")
+        self.use_torch_compile = use_torch_compile
+        self.use_cuda_graphs = use_cuda_graphs
+        self.compiled_region = "language"
+        self.diffusion_cache = False
+        self.cp_size = 1
+        self.cfgp_size = 1
+
+    def _hf_checkpoint_model_config(self) -> dict[str, Any] | None:
+        """Read the exported ``model.config`` of an HF checkpoint; None for any other checkpoint type."""
+        if self.checkpoint_type != CheckpointType.HF:
+            return None
+        if self.config_file_type != ConfigFileType.MODULE:
+            model_dict = deserialize_config_dict(Path(self.config_file))
+        else:
+            if self.checkpoint_hf is None:
+                checkpoint_dir = Path(self.checkpoint_path)
+            else:
+                metadata = self.checkpoint_hf.model_copy(update={"include": ("config.json",), "exclude": ()})
+                checkpoint_dir = Path(metadata.download())
+            model_dict = json.loads((checkpoint_dir / "config.json").read_text())
+        return model_dict.get("model", {}).get("config", {})
+
+    def _is_sf_dmd_transfer_hf_checkpoint(self) -> bool:
+        """Recognize the student inference contract without a private experiment name."""
+        config = self._hf_checkpoint_model_config()
+        if config is None:
+            return False
+        replay_policy = config.get("teacher_forcing_replay_policy")
+        if not isinstance(replay_policy, dict):
+            return False
+        return (
+            config.get("fixed_step_sampler_config") is not None
+            and config.get("video_temporal_causal") is True
+            and config.get("teacher_forcing_frames_per_chunk") == 1
+            and replay_policy.get("control_visibility") == "causal"
+            and replay_policy.get("controls_read_strict_past_clean_rgb") is True
+            and replay_policy.get("clean_pass_causality") == "frame"
+        )
+
+    def _apply_causal_multiview_setup_contract(self, world_size: int) -> None:
+        """Pin the eager rolling runtime of a causal multiview checkpoint (Cosmos3-Nano-Sim-Auto).
+
+        Rolling replay runs eagerly with serial CFG, and the diffusion cache does not apply to its
+        AR loop, so ``torch.compile``, CUDA graphs, CFG parallelism and the cache are switched off.
+        Context parallelism is the only multi-GPU axis this runtime uses, so an unset ``cp_size``
+        spans every rank instead of following the latency preset, which would spend half of them on
+        CFG parallelism.
+
+        The runtime implements rolling KV with segmented prompts only. A checkpoint exported without
+        that profile, a request for the framewise causal cache, or a separate VAE decode GPU is
+        refused here rather than by the guards of the sampler and the causal frontend, which run
+        only after the model has loaded.
+        """
+        config = self._hf_checkpoint_model_config()
+        if config is None or not is_causal_multiview_config(SimpleNamespace(**config)):
+            return
+        rolling_kv_cache_chunks = config.get("rolling_kv_cache_chunks")
+        rolling_prompt_policy = config.get("rolling_prompt_policy")
+        if rolling_kv_cache_chunks is None or rolling_prompt_policy != "segmented":
+            raise ValueError(
+                "This causal multiview checkpoint was exported without the rolling KV profile "
+                f"(rolling_kv_cache_chunks={rolling_kv_cache_chunks!r}, rolling_prompt_policy={rolling_prompt_policy!r}); "
+                "its inference runtime requires rolling KV with segmented prompts. Re-export it with the "
+                "rolling overrides, e.g. for Cosmos3-Nano-Sim-Auto: --experiment-overrides "
+                f"{CAUSAL_MULTIVIEW_ROLLING_EXPORT_OVERRIDES}."
+            )
+        framewise_cache_flags = [
+            f"--{field.replace('_', '-')}"
+            for field in ("kv_cache_inference_size", "attention_sink_size")
+            if getattr(self, field) is not None
+        ]
+        if framewise_cache_flags:
+            raise ValueError(
+                f"{' and '.join(framewise_cache_flags)} configure the framewise causal cache, which rolling "
+                "causal multiview inference does not use; its cache is set by rolling_kv_cache_chunks and "
+                "rolling_kv_sink_chunks in the exported config. Drop the flag(s), or re-export the checkpoint "
+                "with different rolling overrides."
+            )
+        if self.use_separate_pipeline_vision_decode_gpu:
+            # The causal frontend refuses it as well, but only at the first sample, after the weights
+            # have loaded and the VAE has moved to its own GPU.
+            raise ValueError(
+                "Causal multiview inference does not support a separate VAE decode GPU; drop "
+                "--use-separate-pipeline-vision-decode-gpu."
+            )
+
+        cp_size = self.cp_size or max(1, min(MAX_CP_SIZE, world_size))
+        runtime_requirements: tuple[tuple[str, bool | int, bool | int], ...] = (
+            ("use_torch_compile", self.use_torch_compile, False),
+            ("use_cuda_graphs", self.use_cuda_graphs, False),
+            ("diffusion_cache", self.diffusion_cache, False),
+            ("cp_size", self.cp_size, cp_size),
+            ("cfgp_size", self.cfgp_size, 1),
+        )
+        transitions = [
+            f"{field}={current!r}->{required!r}"
+            for field, current, required in runtime_requirements
+            if current != required
+        ]
+        if transitions:
+            log.warning("Applying the causal multiview runtime contract; overriding " + ", ".join(transitions) + ".")
+        self.use_torch_compile = False
+        self.use_cuda_graphs = False
+        self.diffusion_cache = False
+        self.cp_size = cp_size
+        self.cfgp_size = 1
 
     def _build_model_parallelism(self, world_size: int, device_memory_bytes: int):
         if not self.dp_shard_size:
@@ -1432,13 +2497,28 @@ class OmniSetupOverrides(SetupOverrides):
             self.model_memory_bytes = MODEL_MEMORY_BYTES_BY_SIZE[self.model_size]
         self._build_model_parallelism(world_size=world_size, device_memory_bytes=device_memory_bytes)
         self._build_context_parallelism(world_size=world_size)
+        if self.cfgp_size > 1 and self.use_batched_cfg:
+            log.warning("CFG parallelism takes precedence over batched CFG; disabling batched CFG.")
+            self.use_batched_cfg = False
 
     @override
     def build_setup(
         self, world_size: int | None = None, local_world_size: int | None = None, device_memory_bytes: int | None = None
     ) -> OmniSetupArgs:
+        if world_size is None:
+            world_size = int(os.environ.get("WORLD_SIZE", "0"))
         self._build_setup()
         self._build_checkpoint(checkpoints=self.CHECKPOINTS)
+        self._apply_sf_dmd_transfer_setup_contract()
+        self._apply_causal_multiview_setup_contract(world_size=world_size)
+        for field in ("kv_cache_inference_size", "attention_sink_size"):
+            value = getattr(self, field)
+            if value is None:
+                continue
+            key = f"model.config.{field}="
+            resolved_value = "null" if field == "kv_cache_inference_size" and value == 0 else str(value)
+            self.experiment_overrides = [item for item in self.experiment_overrides if not item.startswith(key)]
+            self.experiment_overrides.append(key + resolved_value)
         self._build_parallelism(
             world_size=world_size, local_world_size=local_world_size, device_memory_bytes=device_memory_bytes
         )
@@ -1464,6 +2544,7 @@ def _get_device_memory_bytes() -> int:
         # Fallback for unified memory architectures (e.g., GB10) where
         # nvmlDeviceGetMemoryInfo is not supported.
         import torch
+
         if torch.cuda.is_available():
             return int(torch.cuda.get_device_properties(0).total_memory)
         return 128 * 1024**3  # Default 128GB

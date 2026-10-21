@@ -15,6 +15,7 @@ from cosmos_framework.configs.base.defaults.replay_attention import TeacherForci
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_CLEAN_TARGET,
     _ROLE_CURRENT_TARGET,
+    _ROLE_PADDING,
     FlexQueryMetadata,
     TeacherForcingFlexMetadata,
     build_teacher_forcing_multiview_flex_metadata,
@@ -119,7 +120,11 @@ def build_rolling_replay_metadata(
             **combined, num_und=num_und, query=query, teacher_forcing_replay_policy=policy
         )
     if request.prompt_layout is not None:
-        result = replace(result, caption_time_bounds=request.prompt_layout.time_bounds(result.seq_len))
+        result = replace(
+            result,
+            caption_time_bounds=request.prompt_layout.time_bounds(result.seq_len),
+            token_role_id=request.prompt_layout.mask_padding(result.token_role_id, _ROLE_PADDING),  # [UND+GEN+M]
+        )
     return result
 
 

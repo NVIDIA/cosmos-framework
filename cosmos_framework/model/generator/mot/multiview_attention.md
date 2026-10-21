@@ -39,63 +39,99 @@ Within one sample, the predicate is:
 - `all_views`: any sensor frame and any view in the sample.
 - `same_view`: any frame in the query's own view.
 - `decomposed`: same view at any frame, plus the query's own frame across views.
-  With `decomposed_temporal_window_seconds`, the own-frame term becomes keys at
+  With `cross_view_temporal_window.bounds`, the own-frame term becomes keys at
   real capture times within an inclusive `(start, end)` offset from the query.
   Always use explicit `(start, end)` tuples in new configs and examples (two-element
   lists in YAML): `(-0.4, 0.0)` is past-only; `(-0.2, 0.2)` is symmetric with a
   0.4-second total width. Both bounds must be finite with `start <= end`; they do
-  not have to straddle zero. Attention helpers reject scalar inputs. At config
-  construction only, saved legacy scalar values are migrated to tuples: `0.4`
-  becomes `(-0.4, 0.0)`, preserving the old past-only attention edges. Checked-in
-  recipes use explicit tuples; interactive replay retains its separate causal-duration
+  not have to straddle zero. Configs and attention helpers reject scalar inputs.
+  Checked-in recipes use explicit tuples; interactive replay retains its separate causal-duration
   setting and translates it to bounds when calling shared attention.
 
-## Maskless counting modes and temporal windows
+## Backend selection and maskless temporal windows
 
-Both counting modes of `backend="maskless"` support `decomposed_temporal_window_seconds`:
+`backend="auto"` prefers maskless attention when the configuration is supported,
+then FlexAttention with FlashAttention-4 when available, then FlexAttention with
+Triton. Maskless supports `same_view` and `decomposed`; `all_views` uses a masked
+backend. Enabling `action_gen` permits maskless attention for camera-pose controls
+and the dedicated `multiview_action_conditioning` path, which builds plans for
+separate video and action blocks. Explicit `maskless`, `flex_flash`, or
+`flex_triton` selections pin the backend and reject unsupported configurations.
+Batch geometry is validated after selection; an unsupported batch does not
+silently switch backends.
+
+Maskless attention always counts each permitted query-key edge once. It supports
+`cross_view_temporal_window.bounds`:
 
 ```python
 MultiviewAttentionConfig(
     backend="maskless",
-    deduplicate_cross_view=False,  # True excludes own-view keys from the temporal pass.
     mask=MultiviewAttentionMaskConfig(
         attention_scope="decomposed",
-        decomposed_temporal_window_seconds=(-0.4, 0.0),
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(
+            bounds=(-0.4, 0.0),
+            includes_first_frame=False,
+        ),
     ),
 )
 ```
 
-Its temporal pass groups sensor queries by float32 frame-start capture time and
-gathers keys from all sensor views within the interval. This includes RGB↔LiDAR
-with different frame rates. Each query occurs once in this pass; keys can repeat
-across different query times. Variable-length dense attention computes the overlapping
-rectangles in one call, or the exact rectangles in one call per hierarchy depth,
-without a token mask. Plans are built once per forward.
+Saved configs must use these nested cross-view settings and `same_view_temporal_window`
+below. Legacy flat temporal-window fields are no longer migrated.
 
-With `deduplicate_cross_view=False`, this is **not exact-count attention**: own-view sensor keys in the window also
-occur in the unchanged same-view/all-time pass, so their softmax mass is counted
-twice. Controls do not enter the temporal pass. Same-view/control/caption rules,
-sample isolation and the single-view-only bypass are unchanged. A lone camera
-plus LiDAR is not a single-group sample and does use cross-sensor attention.
+Its temporal passes group sensor queries by float32 frame-start capture time and
+gather keys from other sensor views within the interval. This includes RGB↔LiDAR
+with different frame rates. A binary hierarchy partitions directed view pairs
+into disjoint rectangles. Each query occurs at most once per hierarchy depth;
+its keys are disjoint across depths. Keys can repeat across different queries.
+Variable-length dense attention computes one call per hierarchy depth without a
+token mask. Plans are built once per forward.
 
-`deduplicate_cross_view=True` instead partitions view pairs into disjoint
-rectangles using a binary hierarchy. Own-view keys occur only in the same-view
-pass, so the merged result counts each permitted key once. Both modes share the
-capture-time window planner and positive log-sum-exp merge.
+Own-view keys occur only in the same-view pass. The positive log-sum-exp merge
+therefore counts each permitted key once. Controls do not enter the temporal
+passes. Same-view/control/caption rules and sample isolation remain unchanged.
+Samples with only one view group have no cross-view work. A lone camera plus
+LiDAR has two view groups and does use cross-sensor attention.
 
-`mask.decomposed_temporal_window_includes_first_frame=True` also admits each
+`mask.cross_view_temporal_window.includes_first_frame=True` also admits each
 sample's first frame (capture time 0, the given frame under I2V) for every query
 time. The planner widens the same window table rather than adding a pass, so a
-first frame already inside the window is admitted once and exact mode still keeps
-own-view keys out. It needs a window and `backend="maskless"`: the Flex mask has
-no such rule.
+first frame already inside the window is admitted once and own-view keys remain
+excluded. It needs a window and a maskless backend (explicit or selected by
+`auto`): the Flex mask has no such rule.
 
-`None` preserves the original midpoint-quantised instant grouping, including its
-same-frame overlap when deduplication is off. Existing experiments stay unchanged;
-matched exact/overlapping symmetric-window prediction recipes are registered in
-`configs/base/experiment/multiview/av/av_maskless_exact_16b.py`. Enabling a window adds
-no weights but changes connectivity and duplicates more KV storage/work; benchmark
-memory and training speed before scaling. It does not make same-view attention causal.
+`None` preserves midpoint-quantised instant grouping, while still excluding
+own-view keys from the cross-view passes. With shared clocks this matches the
+masked decomposed scope. With mixed frame rates, midpoint grouping can differ
+from the masked backend's frame-index matching; explicit temporal windows use
+the same float32 timestamp bounds and tolerance as the masked backend.
+Existing checkpoints that used overlapping maskless passes now receive the
+disjoint counting behavior. Enabling a window adds no weights but changes
+connectivity and can duplicate KV storage/work across query times; benchmark
+memory and training speed before scaling. It does not make same-view attention
+causal.
+
+## Same-view temporal windows
+
+`mask.same_view_temporal_window` is a `SameViewTemporalWindowConfig` with four
+optional bounds: `sensor_to_sensor_bounds`, `sensor_to_control_bounds`,
+`control_to_control_bounds`, and `control_to_sensor_bounds`. Each has the same
+`tuple[float, float] | None` type as `CrossViewTemporalWindowConfig.bounds` and
+uses seconds relative to the query. `None` keeps that edge unrestricted in time.
+
+For example, `SameViewTemporalWindowConfig(sensor_to_sensor_bounds=(-0.4, 0.0))`
+admits the current sensor frame and up to 0.4 seconds of earlier frames. At a
+0.2-second latent frame period, the neighborhood spans offsets `(-2, 0)`.
+The planner uses the packed streams' real frame periods, not a fixed FPS.
+
+The current maskless neighborhood backend supports centered `(-N, N)` and causal
+`(-N, 0)` bounds, including `(0, 0)`. Centered neighborhoods retain their existing
+inward shift at sequence boundaries to preserve width; causal neighborhoods clip
+at the beginning. The batched kernel requires common frame/spatial geometry and
+bounds that resolve to the same frame offsets across its streams. Unsupported
+mixed-rate geometry raises instead of treating seconds as frames. FlexAttention
+does not implement these same-view windows. A control-to-sensor bound does not
+re-enable edges disabled by `control_attends_sensor=False`.
 
 ## Generation With Camera-Trajectory Controls
 
@@ -194,5 +230,5 @@ For joint camera+LiDAR transfer, the same matrix applies independently to each
 sensor's control/target pair on its own view-offset range. Cross-sensor
 sensor-to-sensor visibility then comes only from `attention_scope`: `all_views`
 can couple camera and LiDAR target tokens; `decomposed` needs
-`decomposed_temporal_window_seconds` so the temporal half compares real capture
+`cross_view_temporal_window.bounds` so the temporal half compares real capture
 time instead of unrelated per-sensor frame indexes.

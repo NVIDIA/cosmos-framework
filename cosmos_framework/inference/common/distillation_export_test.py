@@ -233,7 +233,7 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
                 },
                 "tokenizer": {
                     "_target_": (
-                        "projects.cosmos3.cosmos3.configs.simulation.distillation_implementation."
+                        "cosmos_framework.configs.base.experiment.distillation_implementation."
                         "_create_oss_tokenizer_with_internal_download"
                     ),
                     "config_variant": "gcp",

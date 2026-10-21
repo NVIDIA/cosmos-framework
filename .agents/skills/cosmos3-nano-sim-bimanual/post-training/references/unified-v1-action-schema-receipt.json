@@ -1,0 +1,72 @@
+{
+  "schema_name": "unified_v1",
+  "schema_receipt_version": 1,
+  "raw_action_dim": 59,
+  "model_action_dim": 64,
+  "pose_convention": "backward_chunk_anchored_16f",
+  "rotation_format": "rot6d_columns",
+  "action_space": "normalized_unified_v1",
+  "normalization": {
+    "method": "global_asinh",
+    "statistics_path": "cosmos_framework/data/generator/action/normalizers/global_asinh_v1_backward_anchored_gripper_metric.json",
+    "statistics_sha256": "ae695e2c643a5626b3c3564f00705aa3a83ab0da7640549c7340db71172594b0",
+    "metric_gripper_reference_width_m": 0.082
+  },
+  "dimension_names": [
+    "ego_tx", "ego_ty", "ego_tz", "ego_rot6d_c0_x", "ego_rot6d_c0_y", "ego_rot6d_c0_z", "ego_rot6d_c1_x", "ego_rot6d_c1_y", "ego_rot6d_c1_z",
+    "right_wrist_tx", "right_wrist_ty", "right_wrist_tz", "right_wrist_rot6d_c0_x", "right_wrist_rot6d_c0_y", "right_wrist_rot6d_c0_z", "right_wrist_rot6d_c1_x", "right_wrist_rot6d_c1_y", "right_wrist_rot6d_c1_z",
+    "right_thumb_x", "right_thumb_y", "right_thumb_z", "right_index_x", "right_index_y", "right_index_z", "right_middle_x", "right_middle_y", "right_middle_z", "right_ring_x", "right_ring_y", "right_ring_z", "right_pinky_x", "right_pinky_y", "right_pinky_z", "right_openness",
+    "left_wrist_tx", "left_wrist_ty", "left_wrist_tz", "left_wrist_rot6d_c0_x", "left_wrist_rot6d_c0_y", "left_wrist_rot6d_c0_z", "left_wrist_rot6d_c1_x", "left_wrist_rot6d_c1_y", "left_wrist_rot6d_c1_z",
+    "left_thumb_x", "left_thumb_y", "left_thumb_z", "left_index_x", "left_index_y", "left_index_z", "left_middle_x", "left_middle_y", "left_middle_z", "left_ring_x", "left_ring_y", "left_ring_z", "left_pinky_x", "left_pinky_y", "left_pinky_z", "left_openness"
+  ],
+  "domains": {
+    "agibotworld": {
+      "native_layout": "ego9,right9,right_open,left9,left_open",
+      "native_dim": 29,
+      "valid_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 58],
+      "fully_open_width_m": 0.12,
+      "gripper_calibration": {
+        "input": "actuator value",
+        "closed_value": 120.0,
+        "open_value": 35.0,
+        "clamp": true
+      }
+    },
+    "xdof_yam": {
+      "native_layout": "left9,left_open,right9,right_open",
+      "native_dim": 20,
+      "valid_indices": [9, 10, 11, 12, 13, 14, 15, 16, 17, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 58],
+      "fully_open_width_m": 0.071,
+      "gripper_calibration": {
+        "input": "adapter-provided openness",
+        "closed_value": 0.0,
+        "open_value": 1.0,
+        "clamp": false
+      }
+    },
+    "behavior1k_lerobot": {
+      "native_layout": "ego9,right9,right_open,left9,left_open",
+      "native_dim": 29,
+      "valid_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 58],
+      "fully_open_width_m": 0.1,
+      "gripper_calibration": {
+        "input": "native command",
+        "closed_value": -1.0,
+        "open_value": 1.0,
+        "clamp": true
+      }
+    }
+  },
+  "examples": [],
+  "worked_example": {
+    "domain": "xdof_yam",
+    "native_raw": [0.01, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.02, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.75],
+    "normalized_tolerance": 1e-8,
+    "expected_normalized_valid": {
+      "9": -0.015061074, "10": 0.081466351, "11": 0.150576794, "12": 1.0, "13": 0.017178207, "14": 0.015630752, "15": -0.022937468, "16": 1.0, "17": -0.077924519,
+      "33": 0.334142951,
+      "34": 0.115980475, "35": -0.105050644, "36": 0.150474455, "37": 1.0, "38": -0.028379809, "39": -0.031840056, "40": 0.036997598, "41": 1.0, "42": -0.079562538,
+      "58": -0.613118149
+    }
+  }
+}

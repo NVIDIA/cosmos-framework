@@ -12,7 +12,11 @@ from typing import Any, BinaryIO
 
 import numpy as np
 import torch
-import torchcodec
+
+from cosmos_framework.utils.generator.torchcodec_dependencies import load_torchcodec
+
+torchcodec = load_torchcodec()
+
 from torchcodec.decoders import VideoDecoder
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO

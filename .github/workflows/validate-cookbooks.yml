@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Checks that every cookbook and evaluation notebook parses and lints, then runs the
+# Auto cookbook's CPU tests (request helpers, media timelines, synthetic RDS-HQ scene).
+name: Validate cookbooks
+on:
+  push:
+    branches: [main]
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+  pull_request:
+    paths: ['.agents/skills/cookbooks/**', '.agents/skills/evaluation/**', '.agents/skills/.gitattributes', '.github/workflows/validate-cookbooks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  AUTO: .agents/skills/cookbooks/cosmos3/simulation/auto
+jobs:
+  validate-cookbooks:
+    name: Validate cookbooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install notebook checks
+        run: >-
+          python -m pip install --disable-pip-version-check
+          nbformat==5.11.1 ruff==0.16.4 httpx numpy attrs safetensors ipython matplotlib huggingface_hub imageio-ffmpeg==0.6.0
+
+      - name: Install media tools
+        run: |
+          if ! ffmpeg -version >/dev/null 2>&1 || ! ffprobe -version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+
+      - name: Parse tracked notebooks
+        shell: bash
+        run: |
+          invalid=0
+          count=0
+          while IFS= read -r -d '' notebook; do
+            count=$((count + 1))
+            if ! python -m json.tool "$notebook" >/dev/null; then
+              echo "::error file=$notebook::Notebook is not valid JSON"
+              invalid=1
+            fi
+          done < <(git ls-files -z -- '.agents/skills/*.ipynb')
+          echo "Validated $count tracked notebooks."
+          exit "$invalid"
+
+      - name: Validate notebook schemas
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          import nbformat
+
+
+          def annotation_escape(value: object) -> str:
+              return (
+                  str(value)
+                  .replace("%", "%25")
+                  .replace("\r", "%0D")
+                  .replace("\n", "%0A")
+              )
+
+
+          tracked = subprocess.run(
+              ["git", "ls-files", "-z", "--", ".agents/skills/*.ipynb"],
+              check=True,
+              capture_output=True,
+          ).stdout
+          notebooks = [Path(os.fsdecode(path)) for path in tracked.split(b"\0") if path]
+
+          invalid = 0
+          for notebook_path in notebooks:
+              try:
+                  notebook = nbformat.read(
+                      notebook_path, as_version=nbformat.NO_CONVERT
+                  )
+                  nbformat.validate(notebook)
+              except Exception as error:
+                  print(
+                      f"::error file={annotation_escape(notebook_path)}::"
+                      f"{annotation_escape(type(error).__name__ + ': ' + str(error))}"
+                  )
+                  invalid += 1
+
+          print(f"Validated {len(notebooks)} tracked notebooks against the nbformat schema.")
+          raise SystemExit(bool(invalid))
+          PY
+
+      - name: Lint notebook code
+        shell: bash
+        run: |
+          mapfile -d '' notebooks < <(git ls-files -z -- '.agents/skills/*.ipynb')
+          # Catch syntax and runtime-invalid constructs without enforcing style on legacy notebooks.
+          ruff check --output-format=github --select=E9,F63,F7,F82 -- "${notebooks[@]}"
+
+      - name: Check Multiview notebook helpers and execution order
+        run: |
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO"/*.py "$AUTO/helpers" "$AUTO/tests/test_framework_auto_helpers.py" "$AUTO/tests/test_wsm_inputs.py" "$AUTO/tests/test_auto_media.py"
+          python -m unittest discover -s "$AUTO/tests" -p 'test_framework_auto_helpers.py' -v
+
+      - name: Check published sample request preparation
+        run: |
+          python -m unittest discover -s "$AUTO/tests" -p 'test_daytime_sample.py' -v
+
+      - name: Check Sim-Auto request and HTTP helpers
+        run: |
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/helpers/sim_auto_vllm_omni_helpers.py" "$AUTO/tests/test_sim_auto_helpers.py"
+          python -m unittest discover -s "$AUTO/tests" -p 'test_sim_auto_helpers.py' -v
+
+      - name: Check media timelines with system FFmpeg
+        run: |
+          ffmpeg -version
+          ffprobe -version
+          python -m unittest discover -s "$AUTO/tests" -p 'test_auto_media.py' -v
+
+      - name: Check media timelines with imageio FFmpeg 7.0.2
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          import imageio_ffmpeg
+
+          tools_dir = Path(os.environ["RUNNER_TEMP"]) / "auto-media-ffmpeg7"
+          tools_dir.mkdir()
+          (tools_dir / "ffmpeg").symlink_to(imageio_ffmpeg.get_ffmpeg_exe())
+          env = dict(os.environ, PATH=str(tools_dir) + os.pathsep + os.environ["PATH"])
+          version = subprocess.run(["ffmpeg", "-version"], env=env, check=True, capture_output=True, text=True).stdout
+          print(version, flush=True)
+          assert "ffmpeg version 7.0.2" in version, "Expected the imageio-ffmpeg 0.6.0 bundled FFmpeg."
+          subprocess.run(
+              [sys.executable, "-m", "unittest", "discover", "-s", os.environ["AUTO"] + "/tests", "-p", "test_auto_media.py", "-v"],
+              env=env, check=True,
+          )
+          PY
+
+      - name: Check caller-supplied scene and inference handoff
+        run: |
+          python -m unittest discover -s "$AUTO/tests" -p 'test_wsm_inputs.py' -v

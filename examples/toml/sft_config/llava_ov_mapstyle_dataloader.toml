@@ -45,7 +45,7 @@ experiment   = "pre_exp012_llava_ov_mapstyle_dataloader"
 project      = "cosmos_oss_alignment"
 group        = "vlm_llava_ov_demo"
 name         = "pre_exp012_llava_ov_mapstyle_dataloader"
-wandb_mode   = "online"
+wandb_mode   = "disabled"
 
 [model]
 attn_implementation = "cosmos"

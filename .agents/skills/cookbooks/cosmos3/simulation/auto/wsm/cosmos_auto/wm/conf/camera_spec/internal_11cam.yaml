@@ -1,0 +1,14 @@
+# All 11 ftheta cameras present in the rig EXCEPT camera_front_tele_sat_30fov.
+# Used to simulate the MADS-1M render camera set.
+camera_list:
+  - "camera_front_wide_120fov"
+  - "camera_front_tele_30fov"
+  - "camera_cross_left_120fov"
+  - "camera_cross_right_120fov"
+  - "camera_rear_left_70fov"
+  - "camera_rear_right_70fov"
+  - "camera_rear_tele_30fov"
+  - "camera_front_fisheye_200fov"
+  - "camera_left_fisheye_200fov"
+  - "camera_rear_fisheye_200fov"
+  - "camera_right_fisheye_200fov"

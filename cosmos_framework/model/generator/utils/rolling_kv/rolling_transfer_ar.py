@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 
 from cosmos_framework.utils import log
+from cosmos_framework.model.generator.mot.post_saturation.rolling import RollingPostSaturation
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.multiview_ar import JointARChunk, joint_ar_chunks
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
@@ -29,6 +30,10 @@ from cosmos_framework.utils.generator.multiview import slice_camera_major_frames
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+# Reserve both sides of a caption boundary even when a sample has no boundary.
+# The schedule can increase this for neighboring context or shorter segments.
+_MIN_STATIC_CAPTION_SLOTS_PER_VIEW: int = 2
 
 
 def _initial_target(
@@ -419,6 +424,20 @@ def iter_rolling_transfer_ar(
     del probe
     cache_chunks = host.config.rolling_kv_cache_chunks
     assert cache_chunks is not None
+    post_saturation = RollingPostSaturation(host) if host.config.compile.ar_post_saturation_mode != "default" else None
+    static_caption_slots = _MIN_STATIC_CAPTION_SLOTS_PER_VIEW
+    if post_saturation is not None and prompt_schedule is not None:
+        # Reserve caption-boundary overlap before the first forward. Neighbor
+        # context or unusually short segments may require more than two slots.
+        for chunk in chunks:
+            times = tuple(frame * vision_period for frame in chunk.vision_frames)
+            if lidar is not None:
+                times += tuple(frame * lidar_period for frame in chunk.lidar_frames)
+            documents = prompt_schedule.for_times(times).documents
+            static_caption_slots = max(
+                static_caption_slots,
+                max(sum(doc.view_id == view and not doc.is_sink for doc in documents) for view in range(num_views)),
+            )
     texts = [conditional_text] if guidance == 1.0 else [conditional_text, unconditional_text]
     caches = [
         RollingReplayCache(
@@ -444,6 +463,16 @@ def iter_rolling_transfer_ar(
             prompts = [prompt_schedule.for_times(timestamps)]
             if negative_schedule is not None:
                 prompts.append(negative_schedule.for_times(timestamps))
+            if post_saturation is not None:
+                prompts = [
+                    prompt.pad_captions(
+                        static_caption_slots,
+                        host.llm_special_tokens,
+                        max_caption_tokens=host.config.rolling_static_caption_max_tokens,
+                    )
+                    for prompt in prompts
+                    if prompt is not None
+                ]
             texts = [prompt.text_tokens for prompt in prompts if prompt is not None]
         chunk_plan = replace(
             plan,
@@ -506,7 +535,15 @@ def iter_rolling_transfer_ar(
                         noise_x_sound=None,
                         timestep=timestep,  # [1,1]
                     )
-                    output = host.denoise(data_batch_packed=pack, memory=cache.read())
+                    if post_saturation is None:
+                        output = host.denoise(data_batch_packed=pack, memory=cache.read())
+                    else:
+                        output = post_saturation.denoise(
+                            pack,
+                            cache.read(),
+                            # The rolling window is full once cache_chunks preceding chunks are cached.
+                            saturated=chunk.step >= cache.cache_chunks,
+                        )
                     values = [output["preds_vision"][1][:, :, vision_indexes].reshape(1, -1)]  # each [1,Dv]
                     if lidar is not None:
                         values.append(output["preds_lidar"][1][:, :, lidar_indexes].reshape(1, -1))  # [1,Dl]
@@ -567,6 +604,8 @@ def iter_rolling_transfer_ar(
                     if modality is not None
                     for shape in modality.token_shapes
                 )
+                # Clean refresh bypasses RollingPostSaturation.denoise and stays eager:
+                # Post-saturation static compilation is not implemented for clean refresh yet.
                 host.denoise(
                     data_batch_packed=clean_pack,
                     memory=cache.writer(step=chunk.step, token_count=token_count, device=device),

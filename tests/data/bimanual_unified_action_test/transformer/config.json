@@ -1,0 +1,97 @@
+{
+  "cosmos3_nano_sim_bimanual": {
+    "conditioning": {
+      "embodiments": {
+        "abc_yam": {
+          "domain_id": 16,
+          "input_action_dim": 59
+        },
+        "embodiment_c_gripper": {
+          "domain_id": 15,
+          "input_action_dim": 59
+        },
+        "embodiment_c_gripper_ext": {
+          "domain_id": 15,
+          "input_action_dim": 59
+        },
+        "agibotworld": {
+          "domain_id": 15,
+          "input_action_dim": 59
+        },
+        "behavior1k_lerobot": {
+          "domain_id": 22,
+          "input_action_dim": 59
+        },
+        "camera_pose": {
+          "domain_id": 2,
+          "input_action_dim": 59
+        },
+        "hand_pose": {
+          "domain_id": 3,
+          "input_action_dim": 59
+        },
+        "molmoact2_yam": {
+          "domain_id": 16,
+          "input_action_dim": 59
+        },
+        "xdof_yam": {
+          "domain_id": 16,
+          "input_action_dim": 59
+        }
+      },
+      "input_contract": {
+        "action_dim": 59,
+        "action_space": "normalized_unified_v1",
+        "domain_routing": "scalar_or_per_action_row",
+        "model_mode": "forward_dynamics",
+        "runtime_normalization": false,
+        "validity": "masked_to_zero_after_normalization_by_source"
+      },
+      "layout": {
+        "fields": [
+          {
+            "name": "ego_pose",
+            "offset": 0,
+            "size": 9
+          },
+          {
+            "name": "right_wrist_pose",
+            "offset": 9,
+            "size": 9
+          },
+          {
+            "name": "right_fingertips",
+            "offset": 18,
+            "size": 15
+          },
+          {
+            "name": "right_gripper_width_m",
+            "offset": 33,
+            "size": 1
+          },
+          {
+            "name": "left_wrist_pose",
+            "offset": 34,
+            "size": 9
+          },
+          {
+            "name": "left_fingertips",
+            "offset": 43,
+            "size": 15
+          },
+          {
+            "name": "left_gripper_width_m",
+            "offset": 58,
+            "size": 1
+          }
+        ],
+        "id": "unified_v1",
+        "pose_convention": "backward_chunk_anchored_16f",
+        "rotation_representation": "rot6d_columns"
+      },
+      "model_action_dim": 64,
+      "num_embodiment_domains": 32,
+      "schema_version": 5
+    }
+  }
+}

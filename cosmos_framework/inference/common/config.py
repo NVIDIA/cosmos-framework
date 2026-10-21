@@ -452,7 +452,7 @@ try:
     import cosmos_framework.model.generator  # noqa: F401
 
     CONFIG_REPLACEMENTS_INVERSE = [
-        # vlm → reasoner (upstream rename in i4). MUST precede the general vfm rules
+        # Legacy vlm → reasoner rename. MUST precede the general vfm rules
         # so the specific vlm→reasoner subtree isn't shadowed by them.
         (r"(?<!/)\bcosmos3/_src/vfm/configs/base/defaults/vlm/", r"cosmos_framework/configs/base/defaults/reasoner/"),
         (r"(?<!/)\bcosmos3/_src/vfm/configs/base/vlm/", r"cosmos_framework/configs/base/reasoner/"),
