@@ -255,6 +255,9 @@ class SglangRequestTests(unittest.TestCase):
             prepare_request(manifest, self.root, "model", backend="sglang")
         with self.assertRaisesRegex(ValueError, "backend"):
             prepare_request(self.resolve("transfer_auto_wsm.json"), self.root, "model", backend="trt")
+        with self.assertRaisesRegex(ValueError, "backend"):
+            submit_joint(None, form, [], self.root / "unsubmitted", backend="trt")
+        self.assertFalse((self.root / "unsubmitted").exists())  # Rejected before any request or output.
 
     def test_stage_conditions_copies_each_camera_under_its_key(self):
         views = self.resolve("transfer_auto_joint.json")["multiview"]["views"]

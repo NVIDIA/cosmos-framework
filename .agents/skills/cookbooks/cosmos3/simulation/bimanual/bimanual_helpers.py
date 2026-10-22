@@ -48,9 +48,15 @@ class BimanualInput:
 
 
 def _integer(value, name: str, minimum: int = 1) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    """Return ``value`` as an ``int``; integral floats such as ``30.0`` are accepted, booleans are not."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not float(value).is_integer()
+        or value < minimum
+    ):
         raise ValueError(f"{name} must be an integer >= {minimum}.")
-    return value
+    return int(value)
 
 
 def _asset(value, base_dir: Path) -> Path:

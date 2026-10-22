@@ -39,7 +39,9 @@ distilled student: a fixed four-step sampler with a rolling key/value cache.
   the `vllm/vllm-omni:cosmos3` image.
 - **SGLang:** Docker with the NVIDIA Container Toolkit. The four SGLang notebooks use
   the published `lmsysorg/sglang:dev` image; the Auto and Sim-Transfer notebooks read
-  their inputs from the mounted cookbook root.
+  their inputs from the mounted cookbook root. The `dev` tag moves with SGLang's main
+  branch; the notebooks were validated against SGLang commit [`ab580b2e`](https://github.com/sgl-project/sglang/commit/ab580b2e060059c0f8387b598a9f648dcec13f93),
+  published as the fixed tag `lmsysorg/sglang:nightly-dev-20261020-ab580b2e`.
 
 If you pass `--defaults-file` to Framework inference, it **replaces** the built-in
 sampling defaults rather than merging with them. Start from the defaults file the

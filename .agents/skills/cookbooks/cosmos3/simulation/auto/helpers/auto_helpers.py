@@ -387,7 +387,17 @@ def validate_framework_outputs(output_dir: Path, manifest: dict) -> dict:
     return result
 
 
-# vLLM-Omni request preparation and HTTP client.
+# vLLM-Omni and SGLang request preparation and HTTP client.
+
+BACKENDS = ("vllm_omni", "sglang")
+
+
+def _check_backend(backend: str) -> str:
+    """Return ``backend`` when it names a supported Videos API server."""
+    if backend not in BACKENDS:
+        raise ValueError(f"Unknown backend {backend!r}; use {' or '.join(map(repr, BACKENDS))}.")
+    return backend
+
 
 def check_model(client, expected: str | None = None) -> str:
     """Return the served model ID from ``GET /v1/models``, requiring ``expected`` when given."""
@@ -406,15 +416,14 @@ def check_model(client, expected: str | None = None) -> str:
 def prepare_request(
     manifest: dict, base_dir: Path, model: str, *, backend: str = "vllm_omni"
 ) -> tuple[dict, list[Path]]:
-    """Build a Videos API request and its upload list.
+    """Build a Videos API request and its upload list for one of ``BACKENDS``.
 
     Both backends use multipart form fields. vLLM-Omni uploads every file and
     refers to it by a reference index; SGLang reads each file from an absolute
     path visible to the server, so the upload list stays empty. For SGLang,
     ``lidar.return_output`` is translated to ``lidar.decode``.
     """
-    if backend not in ("vllm_omni", "sglang"):
-        raise ValueError(f"Unknown backend {backend!r}; use 'vllm_omni' or 'sglang'.")
+    backend = _check_backend(backend)
     for field in ("negative_prompt", "negative_metadata_mode"):
         if manifest.get(field) is not None:
             raise ValueError(
@@ -612,6 +621,7 @@ def submit_joint(
 
     vLLM-Omni returns only the LiDAR descriptor; download its numeric output from /lidar separately.
     """
+    backend = _check_backend(backend)
     return_lidar = True
     if backend == "sglang":
         return_lidar = json.loads(form["extra_params"])["lidar"].get("decode", False)
