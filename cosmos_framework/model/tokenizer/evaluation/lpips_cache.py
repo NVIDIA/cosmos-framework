@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 import stat
 import tempfile
@@ -15,6 +14,10 @@ from pathlib import Path
 from typing import TypeVar
 
 import torch
+
+# fcntl is POSIX-only; win_compat.flock is a passthrough on Linux and an
+# msvcrt-based equivalent on Windows.
+from cosmos_framework.utils import win_compat as fcntl
 
 _ModelT = TypeVar("_ModelT")
 _READY_MARKER_PAYLOAD = b"cosmos3-tokenizer-lpips-cache-ready-v1\n"

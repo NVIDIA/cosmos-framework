@@ -263,6 +263,19 @@ class CheckpointDirHf(_CheckpointHf):
                 for i, pattern in enumerate(patterns):
                     patterns[i] = os.path.join(self.subdirectory, pattern)
 
+        # `--include *` is a *trivial* filter -- it already means "everything" --
+        # but the hf CLI parses a bare `*` as a positional FILENAME rather than as
+        # the include pattern:
+        #     UserWarning: Ignoring `--include` since filenames have been explicitly set.
+        # Only README.md is then fetched, `blobs/` stays empty, and the CLI still
+        # exits 0 returning a valid-looking snapshot path -- so the caller proceeds
+        # on an essentially empty snapshot and fails much later and misleadingly
+        # (e.g. `TypeError: expected str, bytes or os.PathLike object, not NoneType`
+        # out of the tokenizer's `open(vocab_file)`). Drop the flag when it adds
+        # nothing; a subdirectory-scoped pattern is still passed through.
+        if include == ["*"]:
+            include = []
+
         cmd_args = [
             self.repository,
             "--repo-type",
