@@ -73,6 +73,8 @@ release number. Framework's extras must match the core's distribution metadata.
 The following commands run from a prepared Framework checkout. Source selection
 is for a **new environment or new experiment**. Do not update the controller of
 a running or resumable experiment just because a branch has advanced.
+For a reproducible run or deployment, use the [commit-pinned installation](#source-revision-package-version-and-build-identity)
+instead of the moving-branch examples below.
 
 ### Default: main
 
@@ -146,7 +148,30 @@ an already-satisfied version means the selected source was installed.
 
 ### Source revision, package version and build identity
 
-Branches move. After installation, record the resolved commit and engine hash:
+`main` remains the default for a new exploratory installation. For a reproducible
+run or deployment, **resolve the selected branch to a full commit before installing**
+and retain that commit as the installation input, rather than reinstalling from
+the branch name later. After the `main` or development-branch selection above:
+
+```bash
+AUTOML_CORE_COMMIT=$(git ls-remote --exit-code \
+  https://github.com/NVIDIA-TAO/tao-automl.git "refs/heads/${AUTOML_CORE_REF}" | cut -f1)
+if [[ ! "$AUTOML_CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'Could not resolve the selected AutoML branch; stop installation.' >&2
+  exit 1
+fi
+AUTOML_CORE_REF=$AUTOML_CORE_COMMIT
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
+uv pip check --python .venv/bin/python
+```
+
+For an already recorded full commit, set `AUTOML_CORE_REF` directly to that SHA;
+do not resolve a moving branch again. Pip-only installs can use the same pinned
+`AUTOML_CORE_SOURCE`. After installation, verify and record the resolved commit
+and engine hash (the commit must match the requested pin):
 
 ```bash
 python - <<'PY'
@@ -176,6 +201,23 @@ not remove the migration protocol's requirement for the exact original wheel.
 The current core **distribution metadata is `0.1.0`**; Framework remains `1.2.2`.
 Installing a branch or building a local wheel is not a release and does not require
 a version bump. A package version alone does not identify a development build.
+
+This replaces Framework's former `==1.0.0.dev0` requirement; an environment with
+that local development wheel does **not** satisfy the new extras. For a new
+experiment, prepare a separate environment with the selected `0.1.0` source build.
+Do not downgrade a live or resumable controller in place, relabel old wheels, or
+rewrite its ledger. Keep the old environment and exact artifacts for ordinary
+resume; use [reviewed cold migration](automl-slurm.md#explicit-cold-recovery-migration)
+only where the migration protocol accepts the stopped experiment. That protocol
+does not support arbitrary version changes or GEPA migration. The old pin is no
+longer supported for new installations through these extras; this is not a claim
+that every historical `1.0.0.dev0` artifact is API-compatible or formally retired
+by its publisher.
+
+Compatibility evidence includes the [two-candidate H100 SFT smoke](#fresh-venv-wts-verification-2026-10-19)
+with core `0.1.0`, native training, export, and evaluation. It required explicit
+controller recovery and validates the recorded builds, not every future commit
+that retains the same version, nor a new GEPA GPU qualification.
 
 New SFT and GEPA identities include `engine_build`, a SHA256 fingerprint of the
 installed core's relative Python file names and contents. Identical source and
@@ -975,6 +1017,11 @@ questions. Two random-search candidates each completed five LoRA steps on eight
 H100 GPUs, DCP-to-HF export and single-GPU evaluation. Both scored **8/16 (50%)**.
 The approved limits were 30 minutes per trial and two hours for the search, with
 no automatic training retries or paid LLM calls.
+
+The initial source-install receipts identify Framework commit
+`def247af66f22abb45d25c3138bf13d0edcb4496` and core commit
+`bd21cbd3a6aa24e3277c0d232dab1614f935c03e`, with core distribution `0.1.0`.
+These are historical build-specific results, not a GPU rerun of later PR heads.
 
 This was a **pass after explicit controller recovery**, not an uninterrupted
 run. A transient shared-drive `EIO` stopped the CPU controller during the first

@@ -25,8 +25,8 @@ if [[ ! "$generation" =~ ^[0-9]+$ ]]; then
     echo 'SLURM_RESTART_COUNT must be a nonnegative decimal integer' >&2
     exit 2
 fi
-if [[ ! "$AUTOML_CONTROLLER_MAX_ALLOCATIONS" =~ ^[1-9][0-9]*$ ]]; then
-    echo 'AUTOML_CONTROLLER_MAX_ALLOCATIONS must be a positive decimal integer without leading zeros' >&2
+if [[ ! "$AUTOML_CONTROLLER_MAX_ALLOCATIONS" =~ ^[0-9]+$ || ! "$AUTOML_CONTROLLER_MAX_ALLOCATIONS" =~ [1-9] ]]; then
+    echo 'AUTOML_CONTROLLER_MAX_ALLOCATIONS must be a positive decimal integer' >&2
     exit 2
 fi
 # Normalize native zero padding; compare decimal strings without octal parsing
@@ -34,6 +34,9 @@ fi
 generation=${generation#"${generation%%[!0]*}"}
 generation=${generation:-0}
 allocation_cap=$AUTOML_CONTROLLER_MAX_ALLOCATIONS
+allocation_cap=${allocation_cap#"${allocation_cap%%[!0]*}"}
+# The cap counts the initial allocation: cap 3 admits generations 0, 1 and 2.
+# Preserve the original cap argument for the CLI's decimal int parser below.
 if [[ ${#generation} -gt ${#allocation_cap} ]] || {
     [[ ${#generation} -eq ${#allocation_cap} ]] &&
         [[ "$generation" == "$allocation_cap" || "$generation" > "$allocation_cap" ]]

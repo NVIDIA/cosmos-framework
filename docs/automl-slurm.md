@@ -190,6 +190,23 @@ but this mode does not provide cross-node bootstrap validation or automatic
 recovery for failures before the controller starts. Monitor native CPU state
 through the site's existing submission service.
 
+The allocation cap **includes the initial allocation**. Native restart generation
+is zero-based: cap `3` allows generations `0`, `1`, and `2`; generation `3` or
+higher exits `2` before a probe or controller runs. Both values must be decimal
+integers (cap positive, generation nonnegative); zero padding such as `003` and
+`0002` is accepted without octal interpretation. Missing `SLURM_RESTART_COUNT`
+means generation `0`. Malformed values now fail early rather than reaching the
+CLI. The shell compares normalized copies but passes the original cap argument
+unchanged. With the helper unset and `AUTOML_ACTION` unset, valid launches keep
+the original CLI argv and direct `exec` signal delivery.
+
+This is the same count/generation boundary as the core's `controller.Session.run`
+check, not a replacement for it: the shell reads `SLURM_RESTART_COUNT`, while the
+core independently reads native `scontrol` `Restarts` and checks ownership,
+resource shape, ledger continuity, and remaining time. Passing the shell check
+does not guarantee core acceptance. A stale or inconsistent scheduler environment
+must be reconciled, not used to bypass either guard.
+
 To enable the supervised path below, additionally set `AUTOML_STARTUP_HELPER`
 to the sealed shared helper path, `AUTOML_STARTUP_BASE` to the registered shared
 attempt base, and `AUTOML_DEADLINE` to the original absolute Unix deadline.
