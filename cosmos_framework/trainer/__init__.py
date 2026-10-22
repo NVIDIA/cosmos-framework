@@ -390,7 +390,13 @@ class ImaginaireTrainer:
         self._cp_data_window = ContextParallelDataWindow()
         self._accumulation_data_window = AccumulationDataWindow()
         # Send a TimeoutError if a training step takes over timeout_period seconds.
-        signal.signal(signal.SIGALRM, functools.partial(misc.timeout_handler, config.trainer.timeout_period))  # type: ignore
+        # SIGALRM is POSIX-only; Windows has no alarm(2) equivalent, so the
+        # hang watchdog is simply disabled there rather than aborting init.
+        self._hang_watchdog_enabled = hasattr(signal, "SIGALRM")
+        if self._hang_watchdog_enabled:
+            signal.signal(signal.SIGALRM, functools.partial(misc.timeout_handler, config.trainer.timeout_period))  # type: ignore
+        else:
+            log.warning("signal.SIGALRM is unavailable on this platform; the step-timeout watchdog is disabled.")
 
     def _fetch_data_batch(
         self,
@@ -735,7 +741,8 @@ class ImaginaireTrainer:
                     ):
                         self.validate(model, dataloader_val, iteration=iteration)
                     # This iteration is successful; reset the timeout signal.
-                    signal.alarm(self.config.trainer.timeout_period)
+                    if self._hang_watchdog_enabled:
+                        signal.alarm(self.config.trainer.timeout_period)
                     self.straggler_detector.generate_report(iteration)
                     if torch_profiler:
                         torch_profiler.step()
@@ -803,7 +810,15 @@ class ImaginaireTrainer:
                 ):
                     output_batch, loss = model_ddp.training_step(data, iteration)
             self.callbacks.on_after_forward(iteration=iteration)
-            model = model_ddp.module if self.config.trainer.distributed_parallelism == "ddp" else model_ddp
+            # `.module` only exists when the DDP wrapper was actually applied.
+            # parallel_model_wrapper may hand back the bare module (e.g.
+            # world_size==1 on Windows), so unwrap defensively rather than on
+            # the configured mode alone.
+            model = (
+                model_ddp.module
+                if self.config.trainer.distributed_parallelism == "ddp" and hasattr(model_ddp, "module")
+                else model_ddp
+            )
             self.callbacks.on_before_backward(model, loss, iteration=iteration)
             with self.training_timer("backward"):
                 with self.straggler_detector.profile_section(
