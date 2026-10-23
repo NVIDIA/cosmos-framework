@@ -10,9 +10,10 @@
 # agree, or collection either errors on an out-of-range choice or deselects
 # everything.
 #
-# A single ``pre-commit`` (lint) job runs first; the six GPU jobs all
-# ``needs:`` it, so they wait on ONE pre-commit run and are skipped if lint
-# fails — the single self-hosted runner is never spent on a lint-failing commit.
+# A single ``pre-commit`` (lint) job and a changed-path check run first. The GPU
+# jobs wait on both, so the self-hosted runner is never spent on a lint-failing
+# commit or on a change limited to ``.agents/**`` and Markdown files. The
+# relevant docs, cookbook, and WSM workflows still validate those changes.
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens
@@ -49,8 +50,43 @@ jobs:
   pre-commit:
     uses: ./.github/workflows/pre-commit.yml
 
+  changes:
+    name: Detect GPU-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_gpu: ${{ steps.filter.outputs.run_gpu }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Check changed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          changed_files="$RUNNER_TEMP/gpu-changed-files"
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+
+          run_gpu=false
+          while IFS= read -r path; do
+            case "$path" in
+              .agents/*|*.md) ;;
+              *)
+                run_gpu=true
+                break
+                ;;
+            esac
+          done < "$changed_files"
+
+          echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
+          echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
+
   training-smoke:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 90
     env:
@@ -98,7 +134,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   generator-training-regression:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 75
     env:
@@ -141,7 +178,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   generator-inference-smoke:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
     # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
@@ -213,7 +251,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   distilled-inference-smoke:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 120
     env:
@@ -256,7 +295,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   reasoner-inference-smoke:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -328,7 +368,8 @@ jobs:
           rm -rf "$PYTEST_DEBUG_TEMPROOT" || true
 
   reasoner-training-regression:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
@@ -370,10 +411,11 @@ jobs:
 
   # Co-located unit tests: every *_test.py under cosmos_framework/ (CPU and GPU
   # together) in one pytest invocation, plus two torchrun steps for the
-  # distributed tests that hardcode their world size. Runs parallel to the five
-  # jobs above (all gated on the single pre-commit lint).
+  # distributed tests that hardcode their world size. Runs parallel to the jobs
+  # above (all gated on the single pre-commit lint and changed-path check).
   unittest:
-    needs: pre-commit
+    needs: [pre-commit, changes]
+    if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
     # 60 (not 30) so the first cold-cache run can download the Cosmos3-Nano
     # checkpoint for scripts/_test's convert->export->inference pipeline; steady

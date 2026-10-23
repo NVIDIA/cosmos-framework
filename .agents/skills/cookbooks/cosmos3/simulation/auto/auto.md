@@ -16,12 +16,17 @@ model), and [Cosmos3-Nano-Sim-Transfer](../transfer/transfer.md).
 
 ## Supported backends
 
-This cookbook supports two runtimes:
+This cookbook supports three runtimes:
 
 - **Cosmos Framework** for export, native PyTorch inference.
 - **vLLM-Omni** for an OpenAI-compatible video server. The runnable
   [Multiview Simulation notebook](run_auto_with_vllm_omni.ipynb) uses the published WSM controls and the synchronous video endpoint, followed by a joint WSM/RGB/LiDAR example
   that retrieves both generated RGB and numeric LiDAR through asynchronous jobs.
+- **SGLang** for asynchronous WSM and joint camera/LiDAR generation. Its
+  [Multiview Simulation notebook](run_auto_with_sglang.ipynb) uses server-visible input paths
+  and downloads generated camera videos and numeric LiDAR through the Videos API. The
+  [Sim-Auto SGLang notebook](run_sim-auto_with_sglang.ipynb) runs the causal student's
+  seven-camera sample through the same API.
 
 These examples consume the same fixed camera order and WSM-per-view contract. The commands,
 request fields, and environment are runtime-specific.
@@ -295,6 +300,19 @@ you submit generation requests. The complete client is in
 
 ### Send the multipart request
 
+For SGLang generation, use [`run_auto_with_sglang.ipynb`](run_auto_with_sglang.ipynb).
+Call `prepare_request(..., backend="sglang")` to preserve absolute `control_path` and `vision_path` values
+and return multipart form fields with an empty upload list. Both backends encode
+`extra_params` as a JSON string. The control files must be readable
+at the same paths on the server; mount the checkout and prepared outputs into the server
+container at those paths. SGLang does not accept per-camera `control_reference_index` fields.
+Then call `submit_wsm(..., async_mode=True, timeout=3600)`. The helper submits multipart form data to `POST /v1/videos`,
+polls `GET /v1/videos/{id}`, and downloads `/content` when the job completes. It saves the
+latest status in `job.json` and raises on failure, cancellation, or polling timeout.
+For joint LiDAR, use `submit_joint(..., backend="sglang")` and the
+[SGLang LiDAR contract](#joint-rgb-and-lidar-with-sglang) below. The helpers default to the
+vLLM-Omni multipart contract and synchronous WSM endpoint shown below.
+
 `POST /v1/videos/sync` accepts one control per camera as repeated multipart `input_references`
 parts. In the JSON-encoded `extra_params`, each ordered view replaces its local `control_path`
 with a zero-based `control_reference_index` pointing at the corresponding upload. Each view
@@ -393,6 +411,62 @@ videos, and checks generated numeric shape `[3,67,128,1800]`, FP32 dtype, 10 Hz 
 metadata against the job descriptor. It displays the camera grid and saves
 `sample_outputs.json`. Generated LiDAR remains in the downloaded safetensors file with its
 metadata sidecar for further analysis.
+
+### Joint RGB and LiDAR with SGLang
+
+The LiDAR section of [`run_auto_with_sglang.ipynb`](run_auto_with_sglang.ipynb) uses the same
+daytime sample and [joint request](assets/daytime_scene/transfer_auto_joint.json). `prepare_request(..., backend="sglang")` retains each camera's absolute
+`control_path` and `vision_path`, retains the numeric `lidar.control_path`, and translates the
+manifest's `lidar.return_output` to SGLang's `lidar.decode`. It returns an empty upload list;
+the server reads the files directly. Mount the checkout and prepared outputs at the same
+absolute paths inside the server container. The joint checkpoint must include `lidar_vae/`;
+the published `lmsysorg/sglang:dev` image runs the LiDAR VAE on its built-in FlexAttention kernel.
+
+With generated LiDAR enabled, the JSON-encoded `extra_params` contains:
+
+```json
+{
+  "lidar": {
+    "control_path": "/absolute/path/to/cosmos-framework/.agents/skills/cookbooks/cosmos3/simulation/outputs/sglang/auto/lidar/prepared/lidar_control.safetensors",
+    "decode": true
+  }
+}
+```
+
+The joint preparation cell converts the sample's `control.tar` into the FP32 tensor
+`frames[3,100,128,1800]` under the output folder. SGLang selects its first
+67 sweeps for 201 camera frames at 30 FPS and a 10 Hz LiDAR checkpoint, and handles padding
+and normalization. `submit_joint(..., backend="sglang")` submits `POST /v1/videos`, polls the
+job, and downloads the camera video from `/content` and numeric LiDAR from
+`/content?variant=rangemap`. Setting the manifest's `return_output=false` produces
+`decode=false`: LiDAR still conditions camera generation, but no numeric artifact is returned.
+The notebook keeps output enabled for its validation cells.
+
+SGLang's generated safetensors contains three tensors, each shaped `[67,128,1800]`:
+
+| Tensor | Dtype | Meaning |
+| --- | --- | --- |
+| `range_m` | FP32 | Range in metres; invalid rays are zero |
+| `intensity` | FP16 | Intensity in [0,1]; invalid rays are zero |
+| `validity` | uint8 | Binary validity mask |
+
+`validate_sglang_lidar()` checks these tensors and embedded metadata. The notebook compares
+them with the job descriptor's `sweeps`, `fps`, `height`, `width`, `min_range_m`, and
+`max_range_m`. SGLang's generated file uses a different layout from the input's `frames` tensor.
+
+Default paths below are relative to `.agents/skills/cookbooks/cosmos3/simulation/`:
+
+| Artifact | Path |
+| --- | --- |
+| Input LiDAR | `outputs/sglang/auto/lidar/prepared/lidar_control.safetensors` (converted locally) |
+| Generated LiDAR | `outputs/sglang/auto/lidar/multiview_camera_major.lidar.safetensors` |
+| Generated descriptor | `outputs/sglang/auto/lidar/multiview_camera_major.lidar.json` |
+
+The notebook prints the resolved input and generated paths. Its server URL defaults to
+`SGLANG_BASE_URL` (`http://127.0.0.1:30000`); optional authentication uses `SGLANG_API_KEY`.
+`COSMOS3_OUTPUT_DIR` and `AUTO_SAMPLE_ROOT` select the output folder and a local sample copy, as in
+the vLLM-Omni notebook. Because the server opens inputs by path, the notebook stages each RGB
+condition under the output folder; keep that folder inside the mounted cookbook root.
 
 ### vLLM-Omni troubleshooting
 

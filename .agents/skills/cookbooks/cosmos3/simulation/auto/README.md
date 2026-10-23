@@ -11,7 +11,9 @@ controls. Joint generation also needs numerical HD-map LiDAR controls.
 | Native Transfer-Auto | [Framework](run_auto_with_cosmos_framework.ipynb) | Seven cameras, 297 frames, 720p; optional LiDAR |
 | Native Sim-Auto | [Framework](run_sim-auto_with_cosmos_framework.ipynb) | Seven cameras, 297 frames, 720p; optional LiDAR |
 | Served Transfer-Auto | [vLLM-Omni](run_auto_with_vllm_omni.ipynb) | Seven cameras, 201 frames, 480p; WSM-only and joint examples |
+| Served Transfer-Auto | [SGLang](run_auto_with_sglang.ipynb) | Seven cameras, 201 frames, 480p; WSM-only and joint examples from the published `lmsysorg/sglang:dev` image |
 | Served Sim-Auto | [vLLM-Omni](run_sim_auto_with_vllm_omni.ipynb) | Seven cameras, 297 frames, 480p; RGB and joint examples |
+| Served Sim-Auto | [SGLang](run_sim-auto_with_sglang.ipynb) | Seven cameras, 297 frames, 480p; RGB example from the published `lmsysorg/sglang:dev` image |
 | Render your controls | [WSM renderer](generate_wsm.ipynb) | Controls from your own RDS-HQ scene and calibration |
 | Sim-Auto with FlashDreams | [FlashDreams](https://github.com/NVIDIA/flashdreams/integrations_v2/cosmos3_nano_sim_auto) | Integrate with [FlashDreams](https://flashdreams.org/main/models/cosmos3_nano_sim_auto/) for accelerated inference |
 
