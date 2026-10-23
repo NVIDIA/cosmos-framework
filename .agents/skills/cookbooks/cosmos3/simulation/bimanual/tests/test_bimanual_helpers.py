@@ -373,7 +373,7 @@ class EncodingTests(BimanualFixture):
                 self.assertLess(len(text), 0.75 * len(naive))  # Shortest float32 decimals rather than double repr.
 
     def test_published_rollout_length_stays_within_the_form_field_limit(self):
-        # The published mixed-action example has 900 rows: 300 robot, 300 camera, 300 robot.
+        # 900 rows alternating between the robot and camera domains, the length of the published mixed-action example.
         frames = 901
         names = ["agibotworld"] * 300 + ["camera_pose"] * 300 + ["agibotworld"] * 300
         self.write_sidecar("long.json", make_rows(frames - 1, seed=1), names)
