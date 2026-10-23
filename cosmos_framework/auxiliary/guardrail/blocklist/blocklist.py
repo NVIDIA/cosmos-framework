@@ -12,6 +12,7 @@ import nltk
 from better_profanity import profanity
 from better_profanity.constants import ALLOWED_CHARACTERS
 
+from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import fold_lookalikes
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
 from cosmos_framework.auxiliary.guardrail.common.core import (
     GUARDRAIL1_CHECKPOINT,
@@ -400,6 +401,25 @@ class Blocklist(ContentSafetyGuardrail):
         if not input_prompt:
             return False, "Input is empty"
 
+        safe, message = self.check_passes(input_prompt)
+        if not safe or input_prompt.isascii():
+            return safe, message
+
+        # Letters from other scripts drawn like Latin ones ("sn<U+043E>w", with a
+        # Cyrillic o) survive NFKC, and to_ascii deletes them, so every pass
+        # above reads the word with a letter missing. The passes run once more
+        # on the prompt with those letters folded to Latin. As with the raw pass,
+        # this only adds a check: a prompt blocked as written is still blocked.
+        # NFKC runs first so a word mixing fullwidth and lookalike letters is
+        # recognized as one disguised word.
+        normalized = self.normalize_code_points(input_prompt)
+        folded = fold_lookalikes(normalized)
+        if folded != normalized:
+            return self.check_passes(folded)
+        return safe, message
+
+    def check_passes(self, input_prompt: str) -> tuple[bool, str]:
+        """Run every blocklist pass on one spelling of the prompt."""
         # An extra first pass sees the prompt as written. to_ascii rewrites every
         # non-ASCII run to a space, which erases exactly the spellings
         # censor_prompt was taught to fold: a fullwidth or accented letter is

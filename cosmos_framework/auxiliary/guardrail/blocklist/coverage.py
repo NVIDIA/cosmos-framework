@@ -9,13 +9,14 @@ a data move, a new exemption mechanism -- carries the opposite risk, and a
 corpus cannot show it: the phrasings that would newly slip through are exactly
 the ones ordinary output does not contain.
 
-This builds that missing side. For every entry it writes four prompts, one per
+This builds that missing side. For every entry it writes five prompts, one per
 way the entry can be spelled while still reading as itself:
 
     verbatim    the entry as written
     spaced      split in the middle, the fusing evasion ("de skin")
     invisible   split with a zero-width space
     fullwidth   spelled in fullwidth letters
+    lookalike   every letter that has one swapped for a Cyrillic or Greek twin
 
 Run it before and after a change and compare: any prompt that was blocked and
 now is not is a spelling the change gave up. Entry text is never printed --
@@ -30,6 +31,7 @@ review.
 import argparse
 import json
 import sys
+import unicodedata
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -38,11 +40,26 @@ FULLWIDTH = {chr(code): chr(code - 0x61 + 0xFF41) for code in range(0x61, 0x7B)}
 
 ZERO_WIDTH_SPACE = "​"
 
+
+def _lookalike_spelling() -> dict[str, str]:
+    """Latin letter -> a Cyrillic twin where one exists, else a Greek one."""
+    from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import LOOKALIKES
+
+    twins: dict[str, str] = {}
+    for script in ("CYRILLIC SMALL LETTER", "GREEK SMALL LETTER"):
+        for char, letter in sorted(LOOKALIKES.items()):
+            if letter not in twins and unicodedata.name(char, "").startswith(script):
+                twins[letter] = char
+    return twins
+
+
+LOOKALIKE = _lookalike_spelling()
+
 PROMPT_TEMPLATE = "a photo of {body} in the scene"
 
 
 def spellings(entry: str) -> dict[str, str]:
-    """The four prompts probing one entry.
+    """The five prompts probing one entry.
 
     Splitting at the midpoint is arbitrary but stable: the point is to produce a
     spelling the matcher has to fuse back together, not to find the split a
@@ -55,6 +72,7 @@ def spellings(entry: str) -> dict[str, str]:
         "spaced": PROMPT_TEMPLATE.format(body=f"{entry[:middle]} {entry[middle:]}"),
         "invisible": PROMPT_TEMPLATE.format(body=f"{entry[:middle]}{ZERO_WIDTH_SPACE}{entry[middle:]}"),
         "fullwidth": PROMPT_TEMPLATE.format(body="".join(FULLWIDTH.get(c, c) for c in entry)),
+        "lookalike": PROMPT_TEMPLATE.format(body="".join(LOOKALIKE.get(c, c) for c in entry.lower())),
     }
 
 
@@ -162,7 +180,7 @@ def main(argv=None) -> int:
     results = measure(entries, is_blocked)
     summary = summarize(results)
     print(f"entries: {len(entries)}   prompts: {len(results)}")
-    for spelling in ("verbatim", "spaced", "invisible", "fullwidth", "total"):
+    for spelling in ("verbatim", "spaced", "invisible", "fullwidth", "lookalike", "total"):
         if spelling in summary:
             counts = summary[spelling]
             print(f"  {spelling:10s} blocked={counts['blocked']:5d} passed={counts['passed']:5d}")

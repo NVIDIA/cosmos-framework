@@ -14,10 +14,11 @@ from cosmos_framework.auxiliary.guardrail.blocklist.coverage import (
     spellings,
     summarize,
 )
+from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import fold_lookalikes
 
 
 @pytest.mark.L1
-def test_spellings_cover_the_four_evasions():
+def test_spellings_cover_the_five_evasions():
     """Each probe must still read as the entry to a person."""
     probes = spellings("deskin")
 
@@ -25,6 +26,9 @@ def test_spellings_cover_the_four_evasions():
     assert probes["spaced"] == "a photo of des kin in the scene"
     assert probes["invisible"] == f"a photo of des{ZERO_WIDTH_SPACE}kin in the scene"
     assert probes["fullwidth"] == "a photo of ｄｅｓｋｉｎ in the scene"
+    assert probes["lookalike"] != probes["verbatim"]
+    assert probes["lookalike"].isascii() is False
+    assert fold_lookalikes(probes["lookalike"]) == probes["verbatim"]
 
 
 @pytest.mark.L1
