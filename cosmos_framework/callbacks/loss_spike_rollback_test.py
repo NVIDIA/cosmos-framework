@@ -6,11 +6,16 @@ Natural spikes are not reproducible run to run, so the guard is exercised with a
 injected gradient rather than by waiting for training to misbehave.
 """
 
+from types import SimpleNamespace
+
+import pytest
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
 from cosmos_framework.callbacks.loss_spike_rollback import LossSpikeRollback
+
+pytestmark = pytest.mark.L0
 
 
 def _harness(**kwargs):
@@ -28,8 +33,8 @@ def _step(model, optimizer, scheduler, callback, grad_scale):
         parameter.grad = torch.full_like(parameter, grad_scale)
     callback.on_before_optimizer_step(model, optimizer, scheduler, None)
     optimizer.step()
-    callback.on_before_zero_grad(model, optimizer, scheduler)
     scheduler.step()
+    callback.on_before_zero_grad(model, optimizer, scheduler)
     optimizer.zero_grad(set_to_none=True)
 
 
@@ -38,8 +43,8 @@ def _step_at(model, optimizer, scheduler, callback, grad_scale, iteration):
         parameter.grad = torch.full_like(parameter, grad_scale)
     callback.on_before_optimizer_step(model, optimizer, scheduler, None, iteration=iteration)
     optimizer.step()
-    callback.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
     scheduler.step()
+    callback.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
     optimizer.zero_grad(set_to_none=True)
 
 
@@ -88,6 +93,66 @@ def test_lr_backoff_survives_scheduler_step():
         _step(model, optimizer, scheduler, callback, 0.01)
     assert optimizer.param_groups[0]["lr"] <= lr_right_after * 1.1
     assert optimizer.param_groups[0]["lr"] < 0.01, "backoff was undone by scheduler.step()"
+
+
+@pytest.mark.parametrize("decay", [1.0, 0.95])
+def test_lr_backoff_applies_to_the_next_update(decay):
+    """Use the trainer order: optimizer, scheduler, rollback, then zero_grad."""
+    model, optimizer, _, callback = _harness()
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda step: decay**step)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    _step(model, optimizer, scheduler, callback, 10.0)
+
+    assert callback.rollbacks == 1
+    expected = 0.01 * decay**scheduler.last_epoch * 0.8 * 0.5
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(expected)
+    used_rates = []
+    hook = optimizer.register_step_pre_hook(lambda opt, args, kwargs: used_rates.append(opt.param_groups[0]["lr"]))
+    try:
+        _step(model, optimizer, scheduler, callback, 0.01)
+    finally:
+        hook.remove()
+    assert used_rates == pytest.approx([expected])
+    # Healthy recovery updates the already-computed rate, not just base_lrs.
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * decay**scheduler.last_epoch * callback._lr_scale)
+
+
+@pytest.mark.parametrize("with_scheduler", [True, False])
+def test_scaling_preserves_multiple_optimizers_groups_and_schedule(with_scheduler):
+    model = nn.Sequential(nn.Linear(3, 4), nn.Linear(4, 2))
+    optimizers = [
+        torch.optim.AdamW([{"params": [layer.weight], "lr": 0.02}, {"params": [layer.bias], "lr": 0.005}])
+        for layer in model
+    ]
+    schedulers = [LambdaLR(opt, lr_lambda=lambda step: 0.9**step) for opt in optimizers]
+    scheduler = SimpleNamespace(schedulers=schedulers) if with_scheduler else None
+    callback = LossSpikeRollback(enabled=True)
+    for opt, sched in zip(optimizers, schedulers):
+        opt.step()
+        if with_scheduler:
+            sched.step()
+    initial = [[group["lr"] for group in opt.param_groups] for opt in optimizers]
+    for factor in (0.5, 1.02, 0.5, 1.02):
+        callback._scale_lr(optimizers, scheduler, factor)
+        for opt, rates in zip(optimizers, initial):
+            assert [group["lr"] for group in opt.param_groups] == pytest.approx(
+                [rate * callback._lr_scale for rate in rates]
+            )
+    if with_scheduler:
+        for opt, sched in zip(optimizers, schedulers):
+            opt.step()
+            sched.step()
+            assert [group["lr"] for group in opt.param_groups] == pytest.approx(
+                [base * 0.9**sched.last_epoch * callback._lr_scale for base in (0.02, 0.005)]
+            )
+
+
+def test_zero_scale_remains_zero_during_recovery():
+    _, optimizer, scheduler, callback = _harness(lr_min_scale=0.0, lr_backoff=0.0)
+    callback._scale_lr(optimizer, scheduler, 0.5)
+    callback._scale_lr(optimizer, scheduler, 1.02)
+    assert optimizer.param_groups[0]["lr"] == 0.0
 
 
 def test_stands_down_after_sustained_divergence():
