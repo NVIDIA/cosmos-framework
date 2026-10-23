@@ -96,9 +96,15 @@ def compare(before: dict[str, bool], after: dict[str, bool]) -> dict[str, list[s
 
 
 def _build_is_blocked(blocklist_dir: str, whitelist_dir: str | None, add_phrase: str | None):
-    """A predicate running the deployed censor path over the given lists."""
-    from better_profanity.better_profanity import Profanity
+    """A predicate running the deployed entry point, is_safe, over the given lists.
 
+    is_safe and not censor_prompt: is_safe is what callers run, and it does work
+    of its own before the matcher -- to_ascii, a lemmatized pass, the exact-match
+    list -- so a sweep through censor_prompt can report a spelling as caught that
+    production lets through. When the lists sit in a checkpoint's blocklist
+    directory, the sibling exact_match list and nltk_data are used as well, so
+    the sweep sees what production sees.
+    """
     from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
     from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir
 
@@ -107,15 +113,22 @@ def _build_is_blocked(blocklist_dir: str, whitelist_dir: str | None, add_phrase:
     if add_phrase:
         whitelist = whitelist + [add_phrase]
 
-    probe = Blocklist.__new__(Blocklist)
-    probe.profanity = Profanity()
-    probe.profanity.load_censor_words(
-        custom_words=entries,
-        whitelist_words=[w for w in whitelist if " " not in w.strip()],
-    )
-    probe.whitelist_words = whitelist
-    probe.whitelist_phrases = sorted((w for w in whitelist if " " in w.strip()), key=len, reverse=True)
-    return entries, (lambda text: probe.censor_prompt(text)[0])
+    root = Path(blocklist_dir).parent
+    exact_match_dir = root / "exact_match"
+    exact_match = read_keyword_list_from_dir(str(exact_match_dir)) if exact_match_dir.is_dir() else []
+
+    lemmatizer = None
+    nltk_dir = root / "nltk_data"
+    if nltk_dir.is_dir():
+        import nltk
+
+        nltk.data.path.append(str(nltk_dir))
+        lemmatizer = nltk.WordNetLemmatizer()
+    else:
+        print(f"no nltk_data next to {blocklist_dir}; the lemmatized pass sees words unchanged", file=sys.stderr)
+
+    probe = Blocklist.from_lists(entries, whitelist, exact_match, lemmatizer=lemmatizer)
+    return entries, (lambda text: not probe.is_safe(text)[0])
 
 
 def parse_args(argv=None):

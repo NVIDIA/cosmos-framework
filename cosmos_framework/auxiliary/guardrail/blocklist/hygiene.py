@@ -96,16 +96,16 @@ def colliding_splits(
 
 
 def read_keyword_files(directory: str | Path) -> list[str]:
-    """Read every keyword file in a directory, one entry per line."""
-    entries = []
-    for path in sorted(Path(directory).iterdir()):
-        if path.is_dir():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                entries.append(line)
-    return entries
+    """Read every keyword file in a directory, exactly as the guardrail loads it.
+
+    Delegates to the production reader, so an entry the guardrail enforces is
+    never invisible to the audit. That reader keeps every stripped line,
+    including any that start with "#"; only blank lines are dropped here, since
+    an empty entry cannot be split.
+    """
+    from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir
+
+    return [entry for entry in read_keyword_list_from_dir(str(directory)) if entry]
 
 
 def build_reachability_probe(
@@ -122,18 +122,9 @@ def build_reachability_probe(
     as reachable after the phrase had been whitelisted, which is the remedy this
     tool prints. The advice has to be checkable by the check that gives it.
     """
-    from better_profanity.better_profanity import Profanity
-
     from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
 
-    whitelist = list(whitelist_words)
-    tokens = [w for w in whitelist if " " not in w.strip()]
-
-    probe_blocklist = Blocklist.__new__(Blocklist)
-    probe_blocklist.profanity = Profanity()
-    probe_blocklist.profanity.load_censor_words(custom_words=list(blocklist_words), whitelist_words=tokens)
-    probe_blocklist.whitelist_words = whitelist
-    probe_blocklist.whitelist_phrases = sorted((w for w in whitelist if " " in w.strip()), key=len, reverse=True)
+    probe_blocklist = Blocklist.from_lists(list(blocklist_words), list(whitelist_words))
 
     def is_reachable(left: str, right: str) -> bool:
         return probe_blocklist.censor_prompt(PROBE_TEMPLATE.format(left=left, right=right))[0]

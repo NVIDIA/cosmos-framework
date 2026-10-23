@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 
 import nltk
 from better_profanity import profanity
+from better_profanity.constants import ALLOWED_CHARACTERS
 
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
 from cosmos_framework.auxiliary.guardrail.common.core import (
@@ -38,8 +39,19 @@ CENSOR = misc.Color.red("*")
 INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
 
 # Punctuation trimmed from a token before it is compared with a whitelisted
-# phrase, so "a desk in, the corner" still matches the phrase "desk in".
-_STRIP_CHARS = string.punctuation
+# phrase, so "a desk in, the corner" still matches the phrase "desk in". The
+# characters better_profanity treats as part of a word (" $ ' * @) are kept:
+# they are the ones its leetspeak mapping substitutes, so stripping them would
+# let "de$k in" read as the whitelisted phrase.
+_STRIP_CHARS = "".join(sorted(set(string.punctuation) - ALLOWED_CHARACTERS))
+
+
+class _NoLemmatizer:
+    """Leaves every token as it is. The default for Blocklist.from_lists."""
+
+    @staticmethod
+    def lemmatize(token: str) -> str:
+        return token
 
 
 class Blocklist(ContentSafetyGuardrail):
@@ -62,10 +74,49 @@ class Blocklist(ContentSafetyGuardrail):
         self.guardrail_partial_match_min_chars = guardrail_partial_match_min_chars
         self.guardrail_partial_match_letter_count = guardrail_partial_match_letter_count
 
-        # Load blocklist and whitelist keywords
-        self.blocklist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "custom"))
-        self.whitelist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "whitelist"))
-        self.exact_match_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match"))
+        self.load_lists(
+            blocklist_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "custom")),
+            whitelist_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "whitelist")),
+            exact_match_words=read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match")),
+        )
+
+    @classmethod
+    def from_lists(
+        cls,
+        blocklist_words: list[str],
+        whitelist_words: list[str] | None = None,
+        exact_match_words: list[str] | None = None,
+        lemmatizer=None,
+        guardrail_partial_match_min_chars: int = 6,
+        guardrail_partial_match_letter_count: float = 0.4,
+    ) -> "Blocklist":
+        """Build a Blocklist from keyword lists in memory, without the checkpoint.
+
+        For the tests and the list-maintenance tools. It goes through load_lists
+        like __init__ does, so callers exercise the production bookkeeping rather
+        than a copy of it. The matcher is a fresh instance, not the module-level
+        singleton production shares. ``lemmatizer`` defaults to leaving tokens
+        unchanged; pass nltk's WordNetLemmatizer to match production exactly.
+        """
+        from better_profanity.better_profanity import Profanity
+
+        blocklist = cls.__new__(cls)
+        blocklist.profanity = Profanity()
+        blocklist.lemmatizer = lemmatizer if lemmatizer is not None else _NoLemmatizer()
+        blocklist.guardrail_partial_match_min_chars = guardrail_partial_match_min_chars
+        blocklist.guardrail_partial_match_letter_count = guardrail_partial_match_letter_count
+        blocklist.load_lists(blocklist_words, whitelist_words or [], exact_match_words or [])
+        return blocklist
+
+    def load_lists(self, blocklist_words: list[str], whitelist_words: list[str], exact_match_words: list[str]) -> None:
+        """Load the keyword lists into the matcher.
+
+        The single place that turns lists into matcher state, shared by __init__
+        and from_lists.
+        """
+        self.blocklist_words = blocklist_words
+        self.whitelist_words = whitelist_words
+        self.exact_match_words = exact_match_words
 
         # The matcher's whitelist is a set of single tokens, so a whitelisted
         # phrase never reaches it. Phrases are handled in censor_prompt instead,
@@ -349,7 +400,7 @@ class Blocklist(ContentSafetyGuardrail):
         if not input_prompt:
             return False, "Input is empty"
 
-        # The first pass sees the prompt as written. to_ascii rewrites every
+        # An extra first pass sees the prompt as written. to_ascii rewrites every
         # non-ASCII run to a space, which erases exactly the spellings
         # censor_prompt was taught to fold: a fullwidth or accented letter is
         # gone rather than normalized, so the word it spells never reaches the
@@ -359,7 +410,14 @@ class Blocklist(ContentSafetyGuardrail):
         if censored:
             return False, message
 
+        # The ASCII pass is kept rather than replaced. Some separators survive the
+        # folding -- "boston·dynamics" stays one token on the raw pass -- and
+        # only to_ascii turns them into the space the entry needs. Adding a pass
+        # means nothing that was blocked before can pass now.
         input_prompt = to_ascii(input_prompt)
+        censored, message = self.censor_prompt(input_prompt)
+        if censored:
+            return False, message
 
         # Check lemmatized words for censored words
         tokens = nltk.word_tokenize(input_prompt)

@@ -64,24 +64,16 @@ class _IdentityLemmatizer:
 def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) -> Blocklist:
     """Build a Blocklist around a small word list, without downloading a checkpoint.
 
-    The heavyweight __init__ (checkpoint download, nltk data) is bypassed. The
-    attributes set here are the ones is_safe reads, so a test can exercise the
-    real entry point rather than only the matcher underneath it.
+    The heavyweight __init__ (checkpoint download, nltk data) is bypassed, but
+    from_lists loads the lists through the same code as __init__, so a test
+    exercises the real bookkeeping and can call the real entry point, is_safe.
     """
-    from better_profanity.better_profanity import Profanity
-
-    whitelist = whitelist or []
-    tokens = [w for w in whitelist if " " not in w.strip()]
-    bl = Blocklist.__new__(Blocklist)
-    bl.profanity = Profanity()
-    bl.profanity.load_censor_words(custom_words=words, whitelist_words=tokens)
-    bl.whitelist_words = whitelist
-    bl.lemmatizer = _IdentityLemmatizer()
-    bl.exact_match_words = []
-    bl.guardrail_partial_match_min_chars = 100
-    bl.guardrail_partial_match_letter_count = 0.4
-    bl.whitelist_phrases = sorted((w for w in whitelist if " " in w.strip()), key=len, reverse=True)
-    return bl
+    return Blocklist.from_lists(
+        words,
+        whitelist,
+        lemmatizer=_IdentityLemmatizer(),
+        guardrail_partial_match_min_chars=100,
+    )
 
 
 @pytest.mark.L1
@@ -319,6 +311,43 @@ def test_unusual_spaces_do_not_split_a_blocked_phrase(name, prompt):
     safe, _ = bl.is_safe(prompt)
 
     assert safe is False, f"{name} was not folded away"
+
+
+class _PluralLemmatizer:
+    """Strips a trailing "s", the way WordNet reduces "dynamics" to "dynamic".
+
+    With the identity stand-in, the lemmatized pass re-checks the ASCII prompt
+    unchanged and catches anything the first pass missed. An entry whose words
+    lemmatize to something else, such as "boston dynamics", gets no such rescue,
+    which is the case these tests need.
+    """
+
+    @staticmethod
+    def lemmatize(token: str) -> str:
+        return token[:-1] if token.endswith("s") else token
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("middle dot", "a boston·dynamics robot"),
+        ("bullet", "a boston•dynamics robot"),
+        ("arrow", "a boston→dynamics robot"),
+    ],
+)
+def test_separators_the_folding_keeps_still_split_a_blocked_phrase(name, prompt):
+    """A separator NFKC leaves alone reaches the raw pass as part of one token.
+
+    Only to_ascii turns it into the space the entry needs, so the ASCII pass has
+    to run as well as the raw one, not instead of it.
+    """
+    bl = _blocklist_with_words(["boston dynamics"])
+    bl.lemmatizer = _PluralLemmatizer()
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} separator let the entry through"
 
 
 @pytest.mark.L1

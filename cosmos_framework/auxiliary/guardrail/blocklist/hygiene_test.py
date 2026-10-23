@@ -82,10 +82,11 @@ def test_audit_deduplicates_case_variants():
 
 
 @pytest.mark.L1
-def test_read_keyword_files_skips_blanks_and_comments(tmp_path):
-    (tmp_path / "list").write_text("deskin\n\n# a comment\nchromebook\n", encoding="utf-8")
+def test_read_keyword_files_matches_what_the_guardrail_loads(tmp_path):
+    """A "#" line is live in production, so the audit has to see it too."""
+    (tmp_path / "list").write_text("deskin\n\n#hashtagged\nchromebook\n", encoding="utf-8")
 
-    assert read_keyword_files(tmp_path) == ["deskin", "chromebook"]
+    assert read_keyword_files(tmp_path) == ["deskin", "#hashtagged", "chromebook"]
 
 
 @pytest.mark.L1

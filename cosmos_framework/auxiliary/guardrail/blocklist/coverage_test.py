@@ -7,6 +7,7 @@ import pytest
 
 from cosmos_framework.auxiliary.guardrail.blocklist.coverage import (
     ZERO_WIDTH_SPACE,
+    _build_is_blocked,
     compare,
     main,
     measure,
@@ -111,3 +112,17 @@ def test_sweep_over_a_synthetic_list_runs_the_deployed_path(tmp_path):
     written = json.loads((tmp_path / "out.json").read_text())
     assert written["results"]["0:verbatim"] is True
     assert written["summary"]["total"]["blocked"] >= 1
+
+
+@pytest.mark.L1
+def test_sweep_uses_the_exact_match_list_beside_the_blocklist(tmp_path):
+    """The sweep runs is_safe, so an entry only on the exact-match list still counts."""
+    (tmp_path / "custom").mkdir()
+    (tmp_path / "custom" / "list").write_text("deskin\n", encoding="utf-8")
+    (tmp_path / "exact_match").mkdir()
+    (tmp_path / "exact_match" / "list").write_text("chromebook\n", encoding="utf-8")
+
+    _, is_blocked = _build_is_blocked(str(tmp_path / "custom"), None, None)
+
+    assert is_blocked("a photo of chromebook in the scene")
+    assert not is_blocked("a photo of a laptop in the scene")
