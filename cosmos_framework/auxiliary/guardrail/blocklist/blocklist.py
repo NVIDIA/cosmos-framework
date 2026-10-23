@@ -405,18 +405,38 @@ class Blocklist(ContentSafetyGuardrail):
         if not safe or input_prompt.isascii():
             return safe, message
 
-        # Letters from other scripts drawn like Latin ones ("sn<U+043E>w", with a
-        # Cyrillic o) survive NFKC, and to_ascii deletes them, so every pass
-        # above reads the word with a letter missing. The passes run once more
-        # on the prompt with those letters folded to Latin. As with the raw pass,
-        # this only adds a check: a prompt blocked as written is still blocked.
-        # NFKC runs first so a word mixing fullwidth and lookalike letters is
-        # recognized as one disguised word.
-        normalized = self.normalize_code_points(input_prompt)
-        folded = fold_lookalikes(normalized)
-        if folded != normalized:
-            return self.check_passes(folded)
+        # The passes run once more on each other way the prompt can be read.
+        # Like the raw pass, these only add checks: a prompt blocked as written
+        # is still blocked.
+        for spelling in self.alternate_spellings(input_prompt):
+            safe, message = self.check_passes(spelling)
+            if not safe:
+                return safe, message
         return safe, message
+
+    @classmethod
+    def alternate_spellings(cls, prompt: str) -> list[str]:
+        """Other readings of a non-ASCII prompt that the passes must also see.
+
+        * Invisible characters deleted rather than turned into a space. The
+          space reading catches "snow<U+200B>white" as the entry "snow white",
+          but splits "sn<U+200B>ow white" into "sn ow white", which matches
+          nothing. Deleting them reads it as the entry.
+        * Letters from other scripts drawn like Latin ones ("sn<U+043E>w", with
+          a Cyrillic o) folded to Latin. They survive NFKC, and to_ascii deletes
+          them, so every pass reads the word with a letter missing. NFKC runs
+          first, so a word mixing fullwidth and lookalike letters is recognized
+          as one disguised word.
+
+        Each reading is returned only if it differs from the prompt.
+        """
+        normalized = cls.normalize_code_points(prompt)
+        joined = " ".join(INVISIBLE_CHARS.sub("", normalized).split())
+        spellings: list[str] = []
+        for spelling in (joined, fold_lookalikes(normalized), fold_lookalikes(joined)):
+            if spelling != normalized and spelling not in spellings:
+                spellings.append(spelling)
+        return spellings
 
     def check_passes(self, input_prompt: str) -> tuple[bool, str]:
         """Run every blocklist pass on one spelling of the prompt."""

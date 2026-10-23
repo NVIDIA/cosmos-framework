@@ -325,6 +325,55 @@ def test_unusual_spaces_do_not_split_a_blocked_phrase(name, prompt):
     assert safe is False, f"{name} was not folded away"
 
 
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("zero width space", "a sn\u200bow white poster"),
+        ("zero width joiner", "a snow wh\u200dite poster"),
+        ("soft hyphen", "a sn\u00adow white poster"),
+        ("several", "a s\u200bn\u200bo\u200bw white poster"),
+        ("with a lookalike", "a sn\u200b\u043ew white poster"),
+    ],
+)
+def test_invisible_characters_inside_one_word_of_a_phrase(name, prompt):
+    """An invisible character inside one word of a multi-word entry must not hide it.
+
+    Turning it into a space reads "sn<U+200B>ow white" as "sn ow white", which
+    matches nothing, while a reader sees the entry. Deleting it is the other
+    reading, and both are checked.
+    """
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} let the entry through"
+
+
+@pytest.mark.L1
+def test_invisible_characters_between_words_still_read_as_a_space():
+    """Deleting invisible characters is an extra reading; the space reading stays."""
+    bl = _blocklist_with_words(["snow white"])
+
+    safe, _ = bl.is_safe("a snow\u200bwhite poster")
+
+    assert safe is False
+
+
+@pytest.mark.L1
+def test_deleting_invisible_characters_does_not_block_ordinary_text():
+    """Text that uses invisible characters legitimately must still come back safe."""
+    bl = _blocklist_with_words(["snow white", "deskin"])
+
+    for prompt in (
+        "a family emoji \U0001f468\u200d\U0001f469\u200d\U0001f467 on a desk",
+        "a long\u00adword with a soft hyphen",
+        "two\u200bwords joined by a zero width space",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
 class _PluralLemmatizer:
     """Strips a trailing "s", the way WordNet reduces "dynamics" to "dynamic".
 
