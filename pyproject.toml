@@ -108,7 +108,6 @@ train = [
   "imagecodecs",
   "ipycanvas",
   "ipyevents",
-  "jupyter-compare-view",
   "jupyterlab",
   "kornia",
   "lerobot",
