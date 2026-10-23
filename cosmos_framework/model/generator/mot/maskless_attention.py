@@ -38,7 +38,9 @@ with each head's query group folded into rows, so FA4 sees equal query and KV he
 FlashAttention-4 is not a torch.library operator: traced by torch.compile it returns garbage.
 The replay therefore runs inside two opaque custom operators whose only plan input is a CPU
 handle, so a new pack is a new handle value and never a recompile.
-Execution requires NVIDIA CUDA, FlashAttention-4 and Triton; there is no alternate backend.
+Execution requires NVIDIA CUDA, FlashAttention-4 and Triton. On workstation Blackwell (sm12x), or
+with ``COSMOS_GAPPED_REPLAY_TORCH=1``, the forward instead packs each launch's used rows for PyTorch's
+FlashAttention-2 varlen kernel; that path is inference-only and its backward raises.
 
 The kernels read gap rows (partial tiles, backward preprocessing) but never write them. Gap
 rows are real tokens of the same pack and must be finite, as every token must be.
@@ -47,6 +49,7 @@ rows are real tokens of the same pack and must be finite, as every token must be
 import bisect
 import heapq
 import itertools
+import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
@@ -425,16 +428,23 @@ def _flash_attn_interface() -> ModuleType:
     return import_module("flash_attn.cute.interface")
 
 
-def _torch_replay(device: torch.device) -> bool:
-    """Whether gapped replay runs in PyTorch (:func:`_torch_varlen_fwd`): on a GPU FA4 has no
-    kernels for (sm120: RTX PRO 6000 / RTX 50 Blackwell), or with ``COSMOS_GAPPED_REPLAY_TORCH=1``.
-    Forward only: inference."""
-    import os
+# Byte budget of one FP32 score block in the matmul fallback (scores and their exponent).
+_MATMUL_SCORE_BYTES = 1 << 29
 
+
+def _fa4_replay_device(device: torch.device) -> bool:
+    """Hopper (sm90) or datacenter Blackwell (sm100/sm103): the GPUs the FA4 replay tests cover."""
+    major, minor = torch.cuda.get_device_capability(device)
+    return (major, minor) == (9, 0) or major == 10
+
+
+def _torch_replay(device: torch.device) -> bool:
+    """Whether gapped replay runs in PyTorch (:func:`_torch_varlen_fwd`) instead of FA4: on
+    workstation Blackwell (sm12x: RTX PRO 6000 / RTX 50), or on any GPU with
+    ``COSMOS_GAPPED_REPLAY_TORCH=1``. Forward only: :func:`_gapped_replay_backward` refuses it."""
     if os.environ.get("COSMOS_GAPPED_REPLAY_TORCH") == "1":
         return True
-    major, minor = torch.cuda.get_device_capability(device)
-    return (major, minor) != (9, 0) and major != 10
+    return torch.cuda.get_device_capability(device)[0] == 12
 
 
 def _torch_varlen_fwd(
@@ -462,6 +472,8 @@ def _torch_varlen_fwd(
         result, block_lse, *_ = torch.ops.aten._flash_attention_forward(
             queries, keys, values, plan.cu_q, plan.cu_k, plan.max_q, plan.max_k, 0.0, False, False, scale=scale
         )  # [n,H_KV,Dv], [H_KV,n]
+        # Unpadded varlen input makes the LSE [H, total_q] (padded input gives [B, H, max_q]);
+        # the row scatter below relies on that layout.
     else:
         result, block_lse = _matmul_varlen_fwd(queries, keys, values, plan, scale)
     plan.put(out, plan.q, result.to(out.dtype))
@@ -469,12 +481,11 @@ def _torch_varlen_fwd(
 
 
 class _VarlenGather:
-    """Which rows of a gapped varlen launch are used, packed for a dense varlen kernel."""
+    """Which rows of a gapped varlen launch are used, packed for a dense varlen kernel.
 
-    def __init__(self, cu_q: torch.Tensor, used_q: torch.Tensor, cu_k: torch.Tensor, used_k: torch.Tensor) -> None:
-        device = cu_q.device
-        qs, qn = cu_q[:-1].tolist(), used_q.tolist()
-        ks, kn = cu_k[:-1].tolist(), used_k.tolist()
+    Built from the host segment geometry (starts and used lengths), so no device sync."""
+
+    def __init__(self, qs: list[int], qn: list[int], ks: list[int], kn: list[int], device: torch.device) -> None:
         live = [(a, n, b, m) for a, n, b, m in zip(qs, qn, ks, kn, strict=True) if n > 0 and m > 0]
         empty = [(a, n) for a, n, m in zip(qs, qn, kn, strict=True) if n > 0 and m <= 0]
         self.empty_q = self._rows([(a, n) for a, n in empty], device) if empty else None
@@ -514,12 +525,13 @@ def _matmul_varlen_fwd(
     values: torch.Tensor,  # [m,H_KV,Dv]
     plan: _VarlenGather,
     scale: float,
-    block_rows: int = 2048,
 ) -> tuple[torch.Tensor, torch.Tensor]:  # [n,H_KV,Dv], [H_KV,n] FP32
     out = queries.new_empty((queries.shape[0], queries.shape[1], values.shape[-1]), dtype=torch.float32)
     lse = queries.new_empty((queries.shape[1], queries.shape[0]), dtype=torch.float32)
     q0 = k0 = 0
     for qn, kn in plan.lengths:
+        # Two FP32 [H_KV,rows,kn] temporaries (scores and their exponent) per block.
+        block_rows = max(1, _MATMUL_SCORE_BYTES // (2 * 4 * queries.shape[1] * kn))
         key = keys[k0 : k0 + kn].float().transpose(0, 1)  # [H_KV,kn,D]
         value = values[k0 : k0 + kn].float().transpose(0, 1)  # [H_KV,kn,Dv]
         for lo in range(q0, q0 + qn, block_rows):
@@ -539,12 +551,16 @@ def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     if torch.version.hip is not None:
         return "it needs NVIDIA CUDA, not ROCm"
     if _torch_replay(device):
+        # Forward only: a backward through this path raises in _gapped_replay_backward.
         return None
-    major, minor = torch.cuda.get_device_capability(device)
-    if (major, minor) != (9, 0) and major != 10:
+    if not _fa4_replay_device(device):
         # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
         # the segment isolation and untouched gap rows required by both paths.
-        return f"it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103), got sm{major}{minor}"
+        major, minor = torch.cuda.get_device_capability(device)
+        return (
+            "it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103), or the inference-only "
+            f"PyTorch path on sm12x or with COSMOS_GAPPED_REPLAY_TORCH=1, got sm{major}{minor}"
+        )
     try:
         _flash_attn_interface()
     except ImportError as error:
@@ -708,7 +724,7 @@ class _Runtime:
     ) -> None:
         q_values: list[int] = []
         k_values: list[int] = []
-        self.torch_gathers: dict[tuple[int, int], _VarlenGather] = {}
+        self.device = device
 
         def launch(q_segments: list[tuple[int, int]], q_total: int, k_segments: list[tuple[int, int]]) -> _Launch:
             # FA4 reads segment i at start cu_seqlens[i] with length seqused[i]; cu_seqlens[-1] is the span.
@@ -757,7 +773,24 @@ class _Runtime:
         self.parts = tuple(parts)
         self.q_offsets = torch.tensor(q_values, dtype=torch.int32, device=device)  # [N_offsets]
         self.k_offsets = torch.tensor(k_values, dtype=torch.int32, device=device)  # [N_offsets]
+        self._q_values, self._k_values = q_values, k_values  # host copies for the PyTorch path
         self._segments: dict[int, dict[int, _SegmentTensors]] = {}
+        self._gathers: dict[tuple[int, int], _VarlenGather] = {}
+
+    def varlen_gather(self, launch: _Launch, fold: int) -> _VarlenGather:
+        """The PyTorch path's packing of one launch, from the host offsets: no device sync."""
+        key = (launch.offset, fold)
+        if key not in self._gathers:
+            start, count = launch.offset, launch.count
+            q, k = self._q_values, self._k_values
+            self._gathers[key] = _VarlenGather(
+                [row * fold for row in q[start : start + count]],
+                [length * fold for length in q[start + count + 1 : start + 2 * count + 1]],
+                k[start : start + count],
+                k[start + count + 1 : start + 2 * count + 1],
+                self.device,
+            )
+        return self._gathers[key]
 
     def segment_tensors(self, launch: _Launch, fold: int) -> _SegmentTensors:  # [B+1], [B], [B+1], [B]
         """``cu_seqlens_q``, ``seqused_q``, ``cu_seqlens_k``, ``seqused_k`` views for one launch.
@@ -978,11 +1011,7 @@ def _gapped_replay_forward(
             k_span = k_part[launch.k_lo : launch.k_hi]  # [K_span,H_KV,D]
             v_span = v_part[launch.k_lo : launch.k_hi]  # [K_span,H_KV,Dv]
             if torch_replay:
-                # Built once per launch and fold: the segment lengths are read on the host.
-                gather = runtime.torch_gathers.get((launch.offset, fold))
-                if gather is None:
-                    gather = runtime.torch_gathers[launch.offset, fold] = _VarlenGather(cu_q, used_q, cu_k, used_k)
-                _torch_varlen_fwd(q_part, k_span, v_span, gather, dim**-0.5, out, lse)
+                _torch_varlen_fwd(q_part, k_span, v_span, runtime.varlen_gather(launch, fold), dim**-0.5, out, lse)
                 del k_span, v_span
                 continue
             flash_attn._flash_attn_fwd(
@@ -1031,6 +1060,14 @@ def _gapped_replay_backward(
     Every launch uses the same folded query layout and segment arguments as forward.
     Rows nothing reaches are zero.
     """
+    if _torch_replay(q.device):
+        major, minor = torch.cuda.get_device_capability(q.device)
+        raise RuntimeError(
+            "Gapped replay's PyTorch path is forward-only (inference); training needs FlashAttention-4 "
+            f"on Hopper (sm90) or Blackwell (sm100/sm103), got sm{major}{minor}"
+            + (" with COSMOS_GAPPED_REPLAY_TORCH=1" if os.environ.get("COSMOS_GAPPED_REPLAY_TORCH") == "1" else "")
+            + "."
+        )
     flash_attn = _flash_attn_interface()
     runtime = _runtime(handle)
     q, k, v = (tensor.contiguous() for tensor in (q, k, v))  # [1,Q,H,D], [1,KV,H_KV,D], [1,KV,H_KV,Dv]

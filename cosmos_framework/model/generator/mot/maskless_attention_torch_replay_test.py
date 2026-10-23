@@ -14,12 +14,14 @@ _SEGMENTS = [((0, 290), (0, 900)), ((300, 200), (900, 1200)), ((500, 40), (2100,
 _Q, _K = 950, 3600
 
 
-def _launch(device: torch.device) -> tuple[torch.Tensor, ...]:
-    cu_q = torch.tensor([q[0] for q, _ in _SEGMENTS] + [_Q], device=device, dtype=torch.int32)
-    used_q = torch.tensor([q[1] for q, _ in _SEGMENTS], device=device, dtype=torch.int32)
-    cu_k = torch.tensor([k[0] for _, k in _SEGMENTS] + [_K], device=device, dtype=torch.int32)
-    used_k = torch.tensor([k[1] for _, k in _SEGMENTS], device=device, dtype=torch.int32)
-    return cu_q, used_q, cu_k, used_k
+def _gather(device: torch.device) -> m._VarlenGather:
+    return m._VarlenGather(
+        [q[0] for q, _ in _SEGMENTS],
+        [q[1] for q, _ in _SEGMENTS],
+        [k[0] for _, k in _SEGMENTS],
+        [k[1] for _, k in _SEGMENTS],
+        device,
+    )
 
 
 def _reference(q, k, v, scale):  # [Q,H,D], [K,H,D], [K,H,Dv] -> rows -> (out [n,H,Dv], lse [H,n])
@@ -37,7 +39,7 @@ def _reference(q, k, v, scale):  # [Q,H,D], [K,H,D], [K,H,Dv] -> rows -> (out [n
 
 def _check(q, k, v, *, out_tol: float, lse_tol: float) -> None:
     scale = q.shape[-1] ** -0.5
-    gather = m._VarlenGather(*_launch(q.device))
+    gather = _gather(q.device)
     out = q.new_full((_Q, q.shape[1], v.shape[-1]), 7.0)
     lse = q.new_full((q.shape[1], _Q), 7.0, dtype=torch.float32)
     m._torch_varlen_fwd(q, k, v, gather, scale, out, lse)
@@ -58,7 +60,7 @@ def _check(q, k, v, *, out_tol: float, lse_tol: float) -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_gather_packs_used_rows() -> None:
-    gather = m._VarlenGather(*_launch(torch.device("cpu")))
+    gather = _gather(torch.device("cpu"))
     assert gather.lengths == [(290, 900), (200, 1200), (350, 1500)]
     assert gather.cu_q.tolist() == [0, 290, 490, 840]
     assert gather.cu_k.tolist() == [0, 900, 2100, 3600]
@@ -74,6 +76,41 @@ def test_fp32_path_matches_reference() -> None:
     torch.manual_seed(0)
     q, k, v = torch.randn(_Q, 4, 64), torch.randn(_K, 4, 64), torch.randn(_K, 4, 64)
     _check(q, k, v, out_tol=1e-4, lse_tol=1e-4)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_fp32_path_small_score_budget_matches_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One query row per block: the blocks a byte budget picks must tile every segment exactly.
+    monkeypatch.setattr(m, "_MATMUL_SCORE_BYTES", 1)
+    torch.manual_seed(0)
+    q, k, v = torch.randn(_Q, 2, 32), torch.randn(_K, 2, 32), torch.randn(_K, 2, 32)
+    _check(q, k, v, out_tol=1e-4, lse_tol=1e-4)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("capability", "torch_replay", "admitted"),
+    [
+        ((9, 0), False, True),
+        ((10, 0), False, True),
+        ((12, 0), True, True),
+        ((8, 6), False, False),
+        ((11, 0), False, False),
+    ],
+)
+def test_device_gate(monkeypatch: pytest.MonkeyPatch, capability, torch_replay: bool, admitted: bool) -> None:
+    monkeypatch.delenv("COSMOS_GAPPED_REPLAY_TORCH", raising=False)
+    monkeypatch.setattr(torch.version, "hip", None)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: capability)
+    monkeypatch.setattr(m, "_flash_attn_interface", lambda: None)
+    device = torch.device("cuda")
+    assert m._torch_replay(device) is torch_replay
+    assert (m.gapped_replay_unavailable_reason(device) is None) is admitted
+    monkeypatch.setenv("COSMOS_GAPPED_REPLAY_TORCH", "1")
+    assert m._torch_replay(device)
+    assert m.gapped_replay_unavailable_reason(device) is None
 
 
 @pytest.mark.L0
