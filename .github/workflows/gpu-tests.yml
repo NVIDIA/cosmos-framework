@@ -523,6 +523,12 @@ jobs:
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             "$test_file::$test_name" -o addopts= -m L0
 
+      - name: Distributed unit tests - HF LoRA export (torchrun, 2 ranks)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
+            cosmos_framework/callbacks/hf_export_test.py -o addopts= -m L0 -k fsdp
+
       # The cfgp_ar / context_parallel tests call dist.init_process_group and
       # skip under plain pytest (world_size 1); they must be launched with
       # torchrun. They hardcode their world size via ParallelDims, so each file

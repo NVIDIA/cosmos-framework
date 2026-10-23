@@ -32,6 +32,7 @@ import torch
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.distributed import is_rank0
+from cosmos_framework.utils.generator.lora import LoraInjectedLinear
 
 try:
     from safetensors.torch import save_file as _safetensors_save_file
@@ -51,6 +52,32 @@ _DTYPE_MAP: dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
     "float64": torch.float64,
 }
+
+
+def _hf_parameter_name(name: str) -> str:
+    """Remove complete compile/checkpoint wrapper segments, including at the end."""
+    return ".".join(part for part in name.split(".") if part not in {"_orig_mod", "_checkpoint_wrapped_module"})
+
+
+def _lora_merge_plan(network: torch.nn.Module) -> tuple[dict[str, LoraInjectedLinear], set[str]]:
+    merges: dict[str, LoraInjectedLinear] = {}
+    adapter_keys: set[str] = set()
+    for name, module in network.named_modules():
+        if isinstance(module, LoraInjectedLinear):
+            prefix = _hf_parameter_name(name)
+            prefix = f"{prefix}." if prefix else ""
+            weight_name = f"{prefix}weight"
+            if weight_name in merges:
+                raise ValueError(f"Multiple LoRA modules map to HF parameter {weight_name!r}")
+            merges[weight_name] = module
+            adapter_keys.update((f"{prefix}lora_A.weight", f"{prefix}lora_B.weight"))
+    return merges, adapter_keys
+
+
+def _gather_full(parameter: torch.Tensor) -> torch.Tensor:
+    if isinstance(parameter, torch.distributed.tensor.DTensor):
+        parameter = parameter.full_tensor()
+    return parameter.detach()
 
 
 def _upload_folder_to_s3(local_folder: str, bucket: str, s3_prefix: str, credential_path: str) -> None:
@@ -211,6 +238,10 @@ class HFExportCallback(Callback):
         ``cpu_chunks`` and ``manifest``; other ranks return empty structures but still
         participate in the distributed all-gathers.
 
+        LoRA updates are merged into detached export tensors. Adapter parameters
+        are gathered immediately after their base weight on every rank and are
+        omitted from the dense HF checkpoint. Live training weights stay intact.
+
         Returns:
             cpu_chunks:  List of ``{weight_name: cpu_tensor}`` dicts, one per shard file.
             manifest:    Mapping of ``weight_name → shard_filename``.
@@ -223,7 +254,13 @@ class HFExportCallback(Callback):
         total_size: int = 0
         file_idx: int = 0
 
-        for name, param in model.model.model.named_parameters():
+        network = model.model.model
+        merges, adapter_keys = _lora_merge_plan(network)
+        merged_names: set[str] = set()
+        exported_names: set[str] = set()
+        duplicate_names: set[str] = set()
+
+        for name, param in network.named_parameters():
             # Phase 2+: HFModel initialises _model via AutoModelForImageTextToText /
             # AutoModelForCausalLM, so parameter names are HF-native and match the
             # safetensors checkpoint keys loaded by _load_vlm_weights().
@@ -239,14 +276,23 @@ class HFExportCallback(Callback):
             # torch.compile and gradient-checkpointing wrappers inject prefixes into
             # named_parameters() output.  Strip them so exported keys are HF-native,
             # matching what HFModel._load_vlm_weights() does for the in-memory state dict.
-            name = name.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+            name = _hf_parameter_name(name)
+            if name in adapter_keys:
+                continue  # Already gathered at this adapter's base weight.
 
             # Gather across FSDP / TP / CP ranks (collective — all ranks must call).
-            if isinstance(param, torch.distributed.tensor.DTensor):
-                param = param.full_tensor()
-            param = param.detach()
-            if self._export_dtype is not None:
+            param = _gather_full(param)
+            if name in merges:
+                module = merges[name]
+                lora_a = _gather_full(module.lora_A.weight)
+                lora_b = _gather_full(module.lora_B.weight)
+                param = module.merged_weight(param, lora_a, lora_b, dtype=self._export_dtype)
+                merged_names.add(name)
+            elif self._export_dtype is not None:
                 param = param.to(dtype=self._export_dtype)
+            if name in exported_names:
+                duplicate_names.add(name)
+            exported_names.add(name)
 
             tensor_bytes = param.element_size() * param.numel()
 
@@ -262,10 +308,21 @@ class HFExportCallback(Callback):
 
             shard_name = f"{file_idx:05d}.safetensors"
             if is_rank0():
-                current_chunk[name] = param.cpu()
+                # CPU parameters also need independent storage: the background
+                # writer must not observe subsequent optimizer updates.
+                current_chunk[name] = param.to(device="cpu", copy=True)
                 manifest[name] = shard_name
                 total_size += tensor_bytes
             current_chunk_bytes += tensor_bytes
+
+        # Check after all collectives, on every rank. A tied/aliased base weight
+        # omitted by named_parameters() must not silently discard its adapter.
+        missing_merges = merges.keys() - merged_names
+        if missing_merges or duplicate_names:
+            raise ValueError(
+                "Cannot export an unambiguous dense HF checkpoint: "
+                f"unmerged LoRA weights={sorted(missing_merges)}, duplicate keys={sorted(duplicate_names)}"
+            )
 
         # Flush the final (possibly partial) chunk.
         if current_chunk_bytes > 0 and is_rank0() and current_chunk:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from cosmos_framework.utils.generator.lora import (
@@ -11,6 +12,8 @@ from cosmos_framework.utils.generator.lora import (
     inject_lora_pre_fsdp,
     merge_lora_adapters_,
 )
+
+pytestmark = pytest.mark.L0
 
 
 class _Tiny(torch.nn.Module):
@@ -81,3 +84,30 @@ def test_rslora_merge_matches_unmerged_forward() -> None:
         model.q_proj.lora_A.weight.zero_()
         model.q_proj.lora_B.weight.zero_()
     torch.testing.assert_close(model.q_proj(values), expected)
+
+
+@pytest.mark.parametrize("use_rslora", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float64])
+def test_export_merge_and_inplace_merge_share_scaling_and_precision(dtype, use_rslora):
+    torch.manual_seed(13)
+    layer = LoraInjectedLinear(
+        torch.nn.Linear(4, 3, dtype=dtype), rank=2, alpha=3, use_rslora=use_rslora, adapter_dtype=torch.float32
+    )
+    base = layer.weight.detach().clone()
+    adapter_a = layer.lora_A.weight.detach().clone()
+    adapter_b = layer.lora_B.weight.detach().clone()
+    scale = 3 / (2**0.5 if use_rslora else 2)
+    accumulation_dtype = torch.float64 if dtype == torch.float64 else torch.float32
+    expected = base.to(accumulation_dtype) + scale * (
+        adapter_b.to(accumulation_dtype) @ adapter_a.to(accumulation_dtype)
+    )
+    # A higher-precision export must not first round the merged weight to BF16.
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        exported = layer.merged_weight(base, adapter_a, adapter_b, dtype=accumulation_dtype)
+    torch.testing.assert_close(exported, expected, rtol=0, atol=0)
+    for actual, original in ((layer.weight, base), (layer.lora_A.weight, adapter_a), (layer.lora_B.weight, adapter_b)):
+        torch.testing.assert_close(actual, original, rtol=0, atol=0)
+    weight_identity = id(layer.weight)
+    layer.merge_adapter_()
+    assert id(layer.weight) == weight_identity
+    torch.testing.assert_close(layer.weight, expected.to(dtype), rtol=0, atol=0)
