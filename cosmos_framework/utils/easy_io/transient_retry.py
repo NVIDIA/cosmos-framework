@@ -27,7 +27,19 @@ from botocore.exceptions import (
 from botocore.exceptions import (
     ReadTimeoutError as BotocoreReadTimeoutError,
 )
-from multistorageclient.types import RetryableError
+
+try:
+    from multistorageclient.types import RetryableError
+except ImportError:  # pragma: no cover - platform dependent
+
+    class RetryableError(Exception):  # type: ignore[no-redef]
+        """Stand-in when multi-storage-client is unavailable (e.g. on Windows).
+
+        Kept in RETRYABLE_EXCEPTIONS so the tuple shape is unchanged; nothing
+        ever raises it because the MSC backend is not registered.
+        """
+
+
 from urllib3.exceptions import ProtocolError as URLLib3ProtocolError
 from urllib3.exceptions import ReadTimeoutError as URLLib3ReadTimeoutError
 from urllib3.exceptions import SSLError as URLLib3SSLError
