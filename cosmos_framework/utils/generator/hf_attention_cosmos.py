@@ -56,9 +56,10 @@ import torch
 
 from cosmos_framework.model.attention import attention as imag_attention
 from cosmos_framework.model.attention.masks import CausalType
+from cosmos_framework.model.generator.context_parallel import sequence_all_to_all
 
 
-def hf_attention_cosmos(
+def _hf_attention_cosmos_local(
     module: torch.nn.Module,
     query: torch.Tensor,  # [B, num_heads, N, head_dim] (BHSD)
     key: torch.Tensor,  # [B, num_kv_heads, N_kv, head_dim]
@@ -194,6 +195,8 @@ def hf_attention_cosmos(
         cumulative_seqlen_KV=cu_seq_lens_k,
         max_seqlen_Q=max_length_q,
         max_seqlen_KV=max_length_k,
+        # Backend selection has its own flag; the model/CLI sets the Torch mode.
+        deterministic=torch.are_deterministic_algorithms_enabled(),
     )
     # imag_attention returns a bare Tensor unless return_lse=True (which we don't pass);
     # cast narrows the Tensor | tuple[Tensor, Tensor] return type.
@@ -204,3 +207,105 @@ def hf_attention_cosmos(
 
     # out is BSHD [B, N, num_heads, head_dim_v] — matches HF's expected return shape.
     return out, None
+
+
+def hf_attention_cosmos(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    sliding_window: int | None = None,
+    cu_seq_lens_q: torch.Tensor | None = None,
+    cu_seq_lens_k: torch.Tensor | None = None,
+    max_length_q: int | None = None,
+    max_length_k: int | None = None,
+    decoder_attention_chunks: tuple[tuple[int, int, int, int, int], ...] | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, None]:
+    """Exchange sequence/head shards before dense or globally segmented attention.
+
+    Packed boundaries remain global: each head owner sees the complete pack and
+    applies the same isolated per-conversation attention as CP1. Vision modules
+    have no CP group and retain their original attention path.
+    """
+    cp_group = getattr(module, "_cosmos_cp_group", None)
+    if cp_group is not None:
+        if not getattr(module, "is_causal", False):
+            raise ValueError("CP requires causal decoder self-attention")
+        query, key, value = (
+            sequence_all_to_all(tensor, cp_group, scatter_dim=1, gather_dim=2) for tensor in (query, key, value)
+        )
+    if decoder_attention_chunks is not None:
+        if (
+            not getattr(module, "is_causal", False)
+            or cu_seq_lens_q is None
+            or cu_seq_lens_k is not cu_seq_lens_q
+            or max_length_q != max_length_k
+            or query.shape[0] != 1
+            or key.shape[0] != 1
+            or value.shape[0] != 1
+            or not (query.shape[2] == key.shape[2] == value.shape[2])
+        ):
+            raise ValueError("Decoder attention chunks require B=1 causal self-attention with shared boundaries")
+        if (
+            not decoder_attention_chunks
+            or decoder_attention_chunks[-1][1] != cu_seq_lens_q.numel() - 1
+            or decoder_attention_chunks[-1][3] != query.shape[2]
+        ):
+            raise ValueError("Decoder attention chunks must cover the complete packed row")
+        end_sequence = end_token = 0
+        outputs: list[torch.Tensor] = []
+        for first, end, token_start, token_end, max_length in decoder_attention_chunks:
+            if (
+                first != end_sequence
+                or token_start != end_token
+                or end <= first
+                or token_end <= token_start
+                or max_length <= 0
+                or end >= cu_seq_lens_q.numel()
+                or token_end > query.shape[2]
+            ):
+                raise ValueError("Decoder attention chunks must be contiguous, positive and ordered")
+            boundaries = cu_seq_lens_q[first : end + 1] - token_start
+            output, _ = _hf_attention_cosmos_local(
+                module,
+                query[:, :, token_start:token_end],
+                key[:, :, token_start:token_end],
+                value[:, :, token_start:token_end],
+                attention_mask,
+                dropout=dropout,
+                scaling=scaling,
+                sliding_window=sliding_window,
+                cu_seq_lens_q=boundaries,
+                cu_seq_lens_k=boundaries,
+                max_length_q=max_length,
+                max_length_k=max_length,
+                **kwargs,
+            )
+            outputs.append(output)
+            end_sequence, end_token = end, token_end
+        if end_sequence != cu_seq_lens_q.numel() - 1 or end_token != query.shape[2]:
+            raise ValueError("Decoder attention chunks must cover all sequences and tokens")
+        output = torch.cat(outputs, dim=1) if len(outputs) > 1 else outputs[0]
+    else:
+        output, _ = _hf_attention_cosmos_local(
+            module,
+            query,
+            key,
+            value,
+            attention_mask,
+            dropout=dropout,
+            scaling=scaling,
+            sliding_window=sliding_window,
+            cu_seq_lens_q=cu_seq_lens_q,
+            cu_seq_lens_k=cu_seq_lens_k,
+            max_length_q=max_length_q,
+            max_length_k=max_length_k,
+            **kwargs,
+        )
+    if cp_group is not None:
+        output = sequence_all_to_all(output, cp_group, scatter_dim=1, gather_dim=2)
+    return output, None

@@ -59,12 +59,12 @@ def test_extract_records_from_consumed_image_batch(monkeypatch: pytest.MonkeyPat
     assert all(record["rank"] == 3 for record in records)
 
 
-def test_extract_records_preserves_mixed_transfer_source_stream() -> None:
+def test_extract_records_preserves_token_mixed_source_stream() -> None:
     callback = SampledMediaRecorder(enabled=True, output_uri="/tmp/samples.lance")
     batch = {
         "__key__": ["sample-a"],
         "dataset_name": ["transfer_rgb"],
-        "transfer_source_stream": ["transfer_depth_single_view_720"],
+        "task_family": ["transfer_depth_single_view_720"],
     }
 
     records = callback._extract_records(batch, iteration=7, rank=3)

@@ -31,19 +31,23 @@ class Qwen3Guard(ContentSafetyGuardrail):
     model_id: str
     model: Any
     tokenizer: Any
+    raise_on_error: bool
 
     def __init__(
         self,
         offload_model_to_cpu: bool = True,
+        raise_on_error: bool = False,
     ) -> None:
         """Load Qwen3Guard for text filtering safety checks.
 
         Args:
             offload_model_to_cpu (bool, optional): Whether to offload the model to CPU. Defaults to True.
+            raise_on_error (bool): Propagate runtime errors for strict evaluation. Defaults to False.
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.offload_model = offload_model_to_cpu
+        self.raise_on_error = raise_on_error
         self.dtype = torch.bfloat16
 
         self.model_id = "Qwen/Qwen3Guard-Gen-0.6B"
@@ -95,6 +99,8 @@ class Qwen3Guard(ContentSafetyGuardrail):
         try:
             return self.extract_label_and_categories(prompt)
         except Exception as e:
+            if self.raise_on_error:
+                raise
             log.error(f"Unexpected error occurred when running Qwen3Guard guardrail: {e}")
             return True, "Unexpected error occurred when running Qwen3Guard guardrail."
 

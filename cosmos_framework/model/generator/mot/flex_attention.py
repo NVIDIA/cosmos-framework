@@ -546,7 +546,7 @@ class SensorMaskItem:
     views, or whose condition mask does not cover that axis, is malformed on its own terms,
     and catching it here names the one item rather than an index into a flattened list.
 
-    Every field is required. None of them has a default, for the reason :class:`FlexMetadata`
+    The clip's fields are required, for the reason :class:`FlexMetadata`
     states of its own: each one changes what the mask admits, and a silently narrower or wider
     mask is the one failure this type cannot surface. ``num_views`` and ``view_offset`` place
     the item on the view grid every rule compares in, ``is_control`` moves it between two sets
@@ -584,6 +584,8 @@ class SensorMaskItem:
             against the other sensors and its control stream alone. This is also what says
             which views a per-view caption layout has to cover: the cameras' and no others,
             see :func:`_camera_views_of_sample`.
+        frame_offset: first frame on the item's clock. Clips start at zero by default;
+            separate-camera action groups start at one, after the initial observation.
     """
 
     token_shape: tuple[int, ...]
@@ -593,8 +595,11 @@ class SensorMaskItem:
     is_control: bool
     seconds_per_frame: float
     caption_access: CaptionAccess
+    frame_offset: int = 0
 
     def __post_init__(self) -> None:
+        if self.frame_offset < 0:
+            raise ValueError(f"SensorMaskItem.frame_offset must be nonnegative, got {self.frame_offset}.")
         if self.num_views < 1 or self.latent_t % self.num_views != 0:
             raise ValueError(
                 f"SensorMaskItem has latent_t={self.latent_t}, which is not divisible by num_views={self.num_views}."
@@ -961,6 +966,7 @@ def build_multiview_flex_metadata(
         # Frame index cycles within each view; view index is constant across a view's
         # whole frame run. Both expand to one entry per token: [item_tokens].
         item_frame_ids = torch.arange(frames_per_view, device=device).repeat(num_views)  # [num_views*frames_per_view]
+        item_frame_ids = item_frame_ids + item.frame_offset  # [num_views*frames_per_view]
         frame_ids.append(item_frame_ids.repeat_interleave(spatial_tokens))  # [item_tokens]
         view_ids.append(
             (item.view_offset + torch.arange(num_views, device=device)).repeat_interleave(

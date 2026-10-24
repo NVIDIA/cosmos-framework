@@ -18,6 +18,8 @@ from cosmos_framework.data.generator.augmentors.video_editing_transform import (
 )
 from cosmos_framework.utils.generator.torchcodec_video import VideoMetadata
 
+pytestmark = [pytest.mark.L0, pytest.mark.CPU]
+
 
 def _conversation(instruction: str = "Remove the car", reference_keys: tuple[str, ...] = ()) -> str:
     return json.dumps(
@@ -241,3 +243,80 @@ def test_pair_validation_rejects_duration_difference_over_one_target_frame() -> 
 def test_parse_rejects_empty_instruction() -> None:
     with pytest.raises(ValueError, match="instruction is empty"):
         parse_video_editing_conversation(_conversation(""))
+
+
+@pytest.mark.parametrize(
+    ("source_frames", "target_frames", "fps", "allowed"),
+    [
+        (80, 77, 16.0, True),
+        (77, 77, 16.0, True),
+        (81, 77, 16.0, False),
+        (77, 80, 16.0, False),
+        (80, 77, 15.0, False),
+        (78, 75, 16.0, False),
+    ],
+)
+def test_bernini_source_tail_is_bounded_and_native_rate(
+    source_frames: int, target_frames: int, fps: float, allowed: bool
+) -> None:
+    transform = PairedVideoEditingToTrainingFormat(max_num_frames=77, bernini_77f_source_sampling=True)
+    source = VideoMetadata(num_frames=source_frames, average_fps=fps, height=64, width=96)
+    target = VideoMetadata(num_frames=target_frames, average_fps=fps, height=64, width=96)
+    if allowed:
+        duration, _, _ = transform._validate_pair(source, target)
+        assert duration == pytest.approx(77 / 16)
+        assert aligned_frame_indices(source, 16.0, 77) == list(range(77))
+        assert aligned_frame_indices(target, 16.0, 77) == list(range(77))
+    else:
+        with pytest.raises(ValueError, match="bernini_77f_pair"):
+            transform._validate_pair(source, target)
+
+
+def test_source_tail_remains_strict_without_explicit_opt_in() -> None:
+    source = VideoMetadata(num_frames=80, average_fps=16.0, height=64, width=96)
+    target = VideoMetadata(num_frames=77, average_fps=16.0, height=64, width=96)
+    with pytest.raises(ValueError, match="duration_mismatch"):
+        PairedVideoEditingToTrainingFormat(max_num_frames=77)._validate_pair(source, target)
+
+
+@pytest.mark.parametrize(("maximum", "fps"), [(93, 16.0), (77, 15.0)])
+def test_bernini_sampling_requires_its_native_target(maximum: int, fps: float) -> None:
+    with pytest.raises(ValueError, match="Bernini source sampling"):
+        PairedVideoEditingToTrainingFormat(max_num_frames=maximum, target_fps=fps, bernini_77f_source_sampling=True)
+
+
+def test_bernini_indices_match_generation_before_truncation() -> None:
+    indices = PairedVideoEditingToTrainingFormat._bernini_source_frame_indices(80)
+    assert len(indices) == 77
+    assert indices == torch.linspace(0, 79, 81).round().long().tolist()[:77]
+    assert indices != list(range(77))
+    assert indices[0] == 0
+    assert indices[-1] == 75
+    assert len(set(indices)) == 76
+    assert PairedVideoEditingToTrainingFormat._bernini_source_frame_indices(77) == list(range(77))
+
+
+@pytest.mark.parametrize("fps", [16.0, 16.0000005, 15.9999995])
+@pytest.mark.parametrize("source_frames", [77, 80])
+def test_bernini_decode_keeps_both_videos_at_77_frames_despite_fps_rounding(
+    monkeypatch: pytest.MonkeyPatch, fps: float, source_frames: int
+) -> None:
+    from cosmos_framework.data.generator.augmentors import video_editing_transform as module
+
+    transform = PairedVideoEditingToTrainingFormat(max_num_frames=77, bernini_77f_source_sampling=True)
+    source_metadata = VideoMetadata(num_frames=source_frames, average_fps=fps, height=64, width=96)
+    target_metadata = VideoMetadata(num_frames=77, average_fps=fps, height=64, width=96)
+    monkeypatch.setattr(
+        module, "probe_video", lambda payload, **_: source_metadata if payload == b"source" else target_metadata
+    )
+    selected: dict[bytes, list[int]] = {}
+
+    def decode(payload: bytes, indices: list[int], **kwargs: object) -> tuple[torch.Tensor, VideoMetadata]:
+        selected[payload] = indices
+        return torch.zeros((len(indices), 3, 64, 96), dtype=torch.uint8), target_metadata
+
+    monkeypatch.setattr(module, "decode_frames_tchw_uint8", decode)
+    source, target, _, _, _ = transform._decode_pair(b"source", b"target")
+    assert source.shape[1] == target.shape[1] == 77
+    assert selected[b"target"] == list(range(77))
+    assert selected[b"source"] == transform._bernini_source_frame_indices(source_frames)

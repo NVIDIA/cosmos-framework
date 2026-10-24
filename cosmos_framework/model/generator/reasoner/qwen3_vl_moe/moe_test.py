@@ -21,6 +21,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import 
     Qwen3VLMoeTextSparseMoeBlock,
     _weighted_expert_counts,
 )
+from cosmos_framework.model.generator.utils.moe_utils import preserve_moe_learning_accumulators
 
 
 def test_router_activation_defaults_to_softmax() -> None:
@@ -104,6 +105,92 @@ def test_aux_loss_free_controller_uses_block_config() -> None:
     assert block.aux_loss_free_load_balancing_config is controller_config
     assert "expert_bias" in block.state_dict()
     assert "tokens_per_expert" not in block.state_dict()
+
+
+def _make_router_learning_block() -> Qwen3VLMoeTextSparseMoeBlock:
+    model_config = Qwen3VLMoeTextConfig(
+        hidden_size=4,
+        moe_intermediate_size=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        hidden_act="silu",
+    )
+    return Qwen3VLMoeTextSparseMoeBlock(
+        model_config,
+        cosine_router_config=CosineRouterConfig(input_centering="ema"),
+        aux_loss_free_load_balancing_config=AuxLossFreeLoadBalancingConfig(
+            enabled=True,
+            update_speed=0.25,
+            max_bias=None,
+        ),
+    )
+
+
+def _seed_router_learning_accumulators(block: Qwen3VLMoeTextSparseMoeBlock) -> None:
+    block.tokens_per_expert.copy_(torch.tensor([3.0, 1.0, 0.0, 0.0]))  # [E]
+    block.cosine_router.router_bias_sum.copy_(torch.tensor([2.0, 4.0, 6.0, 8.0]))  # [D]
+    block.cosine_router.router_bias_count.copy_(torch.tensor([2.0]))  # [1]
+
+
+@pytest.mark.L0
+def test_sampling_observation_preserves_router_updates_but_keeps_monitoring() -> None:
+    observed_block = _make_router_learning_block()
+    baseline_block = _make_router_learning_block()
+    observed_block.experts = _RecordingExperts()
+    _seed_router_learning_accumulators(observed_block)
+    _seed_router_learning_accumulators(baseline_block)
+    observed_net = nn.Module()
+    observed_net.add_module("moe_gen", observed_block)
+    observation_hidden_states = torch.arange(20, dtype=torch.float32).reshape(5, 4)  # [N,D]
+
+    with preserve_moe_learning_accumulators(observed_net):
+        observation_output, _ = observed_block(observation_hidden_states)  # [N,D], LBLMetadata
+
+    assert observation_output.shape == observation_hidden_states.shape
+
+    torch.testing.assert_close(observed_block.tokens_per_expert, baseline_block.tokens_per_expert)
+    torch.testing.assert_close(
+        observed_block.cosine_router.router_bias_sum,
+        baseline_block.cosine_router.router_bias_sum,
+    )
+    torch.testing.assert_close(
+        observed_block.cosine_router.router_bias_count,
+        baseline_block.cosine_router.router_bias_count,
+    )
+    # Observation telemetry is deliberately not part of the restored learning state.
+    assert observed_block.total_tokens_per_expert.sum().item() == 10
+    torch.testing.assert_close(observed_block.total_tokens, torch.tensor([5]))  # [1]
+
+    observed_block.update_bias()
+    baseline_block.update_bias()
+    observed_block.update_router_bias(device_mesh=None)
+    baseline_block.update_router_bias(device_mesh=None)
+
+    torch.testing.assert_close(observed_block.expert_bias, baseline_block.expert_bias)
+    torch.testing.assert_close(observed_block.cosine_router.router_bias, baseline_block.cosine_router.router_bias)
+
+
+@pytest.mark.L0
+def test_sampling_observation_restores_learning_accumulators_after_exception() -> None:
+    block = _make_router_learning_block()
+    block.experts = _RecordingExperts()
+    _seed_router_learning_accumulators(block)
+    net = nn.Module()
+    net.add_module("moe_gen", block)
+    expected_counts = block.tokens_per_expert.clone()  # [E]
+    expected_sum = block.cosine_router.router_bias_sum.clone()  # [D]
+    expected_count = block.cosine_router.router_bias_count.clone()  # [1]
+
+    with pytest.raises(RuntimeError, match="sampling failed"):
+        with preserve_moe_learning_accumulators(net):
+            hidden_states = torch.randn(3, 4)  # [N,D]
+            block(hidden_states)
+            raise RuntimeError("sampling failed")
+
+    torch.testing.assert_close(block.tokens_per_expert, expected_counts)
+    torch.testing.assert_close(block.cosine_router.router_bias_sum, expected_sum)
+    torch.testing.assert_close(block.cosine_router.router_bias_count, expected_count)
+    assert block.training is True
 
 
 # -----------------------------------------------------------------------------

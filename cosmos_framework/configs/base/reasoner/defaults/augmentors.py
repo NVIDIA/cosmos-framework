@@ -6,6 +6,8 @@
 
 from typing import Any
 
+from omegaconf import OmegaConf
+
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.data.generator.augmentors.reasoner.bytes_to_media import BytesToMedia
 from cosmos_framework.data.generator.augmentors.reasoner.filter_output_key import FilterOutputKey
@@ -28,7 +30,15 @@ from cosmos_framework.data.generator.processors import build_processor_lazy
 from cosmos_framework.utils.generator.deterministic_rng import DeterministicAugmentor
 
 
+def _extract_video_audio(sound_und: bool, extract_audio_from_video: bool) -> bool:
+    for name, value in (("sound_und", sound_und), ("extract_audio_from_video", extract_audio_from_video)):
+        if not isinstance(value, bool):
+            raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
+    return sound_und and extract_audio_from_video
+
+
 def create_data_augmentor_config() -> dict[str, Any]:
+    OmegaConf.register_new_resolver("reasoner_video_audio", _extract_video_audio, replace=True)
     config = {
         "bytes_to_media": L(BytesToMedia)(
             input_key="media",
@@ -40,13 +50,17 @@ def create_data_augmentor_config() -> dict[str, Any]:
             video_timestamp_mode="${data_setting.video_timestamp_mode}",
             max_video_token_length="${data_setting.qwen_max_video_token_length}",  # type: ignore
             processor=processor,
-            extract_audio="${model.config.sound_und}",
+            extract_audio=(
+                "${reasoner_video_audio:${model.config.sound_und},"
+                "${model.config.sound_und_config.extract_audio_from_video}}"
+            ),
             is_input_pickle_byptes=False,  # If True, it means the input "media" is pickled bytes that needs to be unpickled first; if False, it means the input "media" is raw bytes that can be directly decoded to image/video. Set to False for most cases, and only set to True for some special datasets where media is stored as pickled bytes.
         ),  # takes "videos" and output "videos"
         "prompt_format": L(PromptFormat)(  # takes text_keys and output "conversation"
             input_keys=["texts"],
             text_chat_order="${data_setting.text_chat_order}",
             strip_thinking_prob="${data_setting.strip_thinking_prob}",
+            mask_inserted_reasoning_prefix="${data_setting.mask_inserted_reasoning_prefix}",
         ),
         "shuffle_text_media_order": L(ShuffleTextMediaOrder)(),
         "format_hot_fixes": L(FormatHotFixes)(),
@@ -134,6 +148,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
             data_stats_writer_enabled="${data_setting.data_stats_writer_enabled}",
             video_temporal_mode="${data_setting.qwen_video_temporal_mode}",
             video_timestamp_mode="${data_setting.video_timestamp_mode}",
+            keep_raw_media="${data_setting.keep_raw_media}",
             text_only=False,
             sound_und="${model.config.sound_und}",
             audio_encoder_type="${model.config.sound_und_config.audio_encoder_type}",
