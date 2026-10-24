@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: AutoML helpers
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/cosmos_workflows/**'
+      - 'examples/automl/**'
+      - '.github/workflows/automl-helpers.yml'
+      - '.pytest.toml'
+permissions:
+  contents: read
+jobs:
+  cpu-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest jsonschema
+      - name: Test execution helpers without GPU dependencies or scheduler access
+        run: >-
+          python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows
+          -o 'python_files=test_*.py *_test.py' tools/cosmos_workflows

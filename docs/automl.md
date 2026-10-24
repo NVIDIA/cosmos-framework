@@ -21,7 +21,7 @@ implementation coverage is not equivalent to live GPU validation.
 | Execution platform | Core support                         | Framework evidence / limits                                                                                                              |
 | ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Docker             | Implemented                          | Local Docker WTS GPU training/evaluation exercised.                                                                                      |
-| Virtualenv         | Implemented                          | CPU lifecycle verified; not equivalent to the recorded Framework GPU matrix.                                                             |
+| Virtualenv         | Implemented                          | Fresh-environment WTS/H100 training and evaluation passed after explicit controller recovery; see the bounded verification below.        |
 | SLURM              | Implemented                          | On-cluster CPU controller submits and monitors separate single-node GPU allocations. Recorded bounded SFT/GEPA matrix results are below. |
 | Kubernetes         | Implemented; live validation pending | Single-pod Jobs, explicit context/PVCs, native deadline and UID-safe suspension.                                                         |
 | Brev               | Implemented; live validation pending | Docker on an existing instance, explicit daemon identity and shared/controller-local instance storage; no provisioning or teardown.      |
@@ -41,75 +41,183 @@ For SLURM CPU allocations shorter than an experiment, the opt-in
 preserves active jobs and the original deadline. This is not an implementation
 of local-to-remote orchestration or a cloud controller service.
 
-## Installation and release status
+## Installation from source
 
-The independently built `nvidia-automl-core` 1.0.0.dev0 wheel must be supplied by the
-maintainer: **this change does not publish it to an index**. Install the wheel
-first, then install the extra into your already-prepared Framework environment:
+The default source is **`main` in [NVIDIA-TAO/tao-automl](https://github.com/NVIDIA-TAO/tao-automl)**,
+specifically `packages/automl-core`. A named development branch is an explicit
+override, not a fallback. Installers fetch and build this independent package;
+users do not need a pre-existing TAO checkout, TAO application/SDK, or a publicly
+published wheel. Git, repository access, and access to the package's build/runtime
+dependencies are required. Configure Git authentication separately if needed;
+do not embed credentials in the source URL.
 
-```bash
-python -m pip install /path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl
-python -m pip install -e '.[automl,reasoner-eval]'
-cosmos-automl --help
-```
+Framework requires **`nvidia-automl-core==0.1.0`**. The source repository is public,
+but your environment must still be able to reach it and read the selected revision.
+If access is unavailable, obtain a reviewed `nvidia_automl_core-0.1.0-*.whl` from
+your project maintainer and install it into the controller environment instead.
+Record its SHA256 and originating source commit; do not substitute the TAO
+application package. Neither a `main` nor a development-branch name is an immutable
+build: [record the resolved commit and engine hash](#source-revision-package-version-and-build-identity)
+after a new installation, and pin that full commit (or retain the exact wheel)
+for reproduction and existing experiments. Source access failures are not permission
+to change branches or replace an existing controller environment.
 
-The core is maintained in `tao-automl/packages/automl-core` and built independently;
-that is a maintainer source location, not a consumer installation prerequisite.
-Current delivery is **local wheels only**. To install a supplied Framework wheel
-instead of an editable checkout, install the core wheel above, then:
+The repository contains two distributions: its root package is
+`nvidia-tao-automl` (the TAO application), while `packages/automl-core` builds
+`nvidia-automl-core` (the engine imported by Framework as `automl_core`). The
+[PyPI TAO application](https://pypi.org/project/nvidia-tao-automl/) is not a
+replacement for this core package. Preserve the selected source's declared
+package name and version; do not rename it or substitute the TAO application's
+release number. Framework's extras must match the core's distribution metadata.
 
-```bash
-python -m pip install '/path/to/cosmos_framework-1.2.2-py3-none-any.whl[automl,reasoner-eval]'
-python -m pip check
-cosmos-automl --help
-```
+The following commands run from a prepared Framework checkout. Source selection
+is for a **new environment or new experiment**. Do not update the controller of
+a running or resumable experiment just because a branch has advanced.
+For a reproducible run or deployment, use the [commit-pinned installation](#source-revision-package-version-and-build-identity)
+instead of the moving-branch examples below.
 
-If Framework 1.2.2 is already installed from a different build, resolve the extras
-above, then replace just that package with `pip install --force-reinstall --no-deps
-/path/to/cosmos_framework-1.2.2-py3-none-any.whl`. The wheelhouse is not an offline
-mirror of third-party dependencies.
-
-A bare index install cannot find the unpublished core. The repository's `uv`
-configuration explicitly excludes **only `nvidia-automl-core`** from its managed
-resolution while delivery remains local-wheel-only. This lets ordinary Framework
-setup and CI resolve without an additional source checkout; it does **not**
-install AutoML.
-The wheel metadata still declares the core requirement for the AutoML extras.
-A distributable core location and removal of this development exception remain
-a release gate.
-
-For a `uv`-managed Framework checkout, sync first, then install the supplied core
-wheel into that environment (include `[prompts]` for GEPA):
+### Default: main
 
 ```bash
+AUTOML_CORE_REF=main
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+
+# Prepare Framework first; choose the CUDA group appropriate for your machine.
 uv sync --all-extras --group=cu128-train
-uv pip install --no-config --python .venv/bin/python '/path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl[prompts]'
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
 uv pip check --python .venv/bin/python
 uv run --no-sync cosmos-automl --help
 ```
 
-The install command's `--no-config` bypasses the project's development exclusion
-for this explicitly supplied wheel. Use `uv run --no-sync` or the environment's
-executable directly for AutoML.
-An exact `uv sync` removes separately installed packages; reinstall the supplied
-wheel afterward. No source checkout or machine-specific wheel path is recorded
-in the project's lock file.
+The version constraint matches the committed core package metadata and Framework's
+AutoML extras; a branch declaring an incompatible version fails resolution rather
+than weakening that requirement. `--reinstall-package` refreshes this selected
+package even when another commit has the same package version. It does not
+request reinstallation of the entire training stack.
 
-### Development version and build identity
+Framework's `uv` configuration excludes **only `nvidia-automl-core`** from managed
+resolution so ordinary setup/CI does not require a source installation or select
+a development branch for you. `--no-config` makes the explicit installation above
+honor the source requirement instead of that exclusion. Use `uv run --no-sync`
+or `.venv/bin/cosmos-automl` afterward. An exact `uv sync` removes the separately
+installed core; reinstall the **recorded commit**, not a newer branch head, if
+repairing an existing experiment's environment.
 
-AutoML is in its initial **v1 development phase**, not a released package series.
-Keep `nvidia-automl-core` at **`1.0.0.dev0`** throughout the port. Bug fixes and local
-wheel builds do not increment the patch version or development counter. Change
-the package version only as part of an explicitly approved release; building a
-local validation wheel is not a release. Cosmos Framework's existing package
-version remains **1.2.2**, independent of the AutoML development label.
+### Install from a named development branch
 
-Store each build in a separate immutable wheelhouse directory and record its
-wheel SHA256 and source revision. Do not overwrite an earlier same-named wheel.
-When intentionally selecting another same-version wheel for a new environment
-or run, install the exact supplied artifact; an existing installation may require
-`pip install --force-reinstall --no-deps /path/to/the/wheel.whl` after resolving
-dependencies. A package version alone does not identify a development build.
+Set the actual branch name in the same repository, including any `/` separators:
+
+```bash
+AUTOML_CORE_REF='codex/repository-neutral-automl'  # Replace with your development branch.
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
+uv pip check --python .venv/bin/python
+uv run --no-sync cosmos-automl --help
+```
+
+The branch must contain `packages/automl-core/pyproject.toml`. A nonexistent or
+inaccessible branch, missing package, or incompatible version is an installation
+error; do not silently switch to another branch. Skill-driven setup asks whether
+to use `main` or a user-supplied development branch before a new installation.
+Manual CLI setup uses the variable above and does not prompt interactively.
+
+### Pip-only installation
+
+In a prepared environment without a previous core installation, use the same
+`AUTOML_CORE_REF` / `AUTOML_CORE_SOURCE` selection (`main` by default):
+
+```bash
+AUTOML_CORE_REF=main  # Or the explicitly selected development branch.
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+python -m pip install "$AUTOML_CORE_SOURCE" -e '.[automl,reasoner-eval]'
+python -m pip check
+cosmos-automl --help
+```
+
+For GEPA, select `.[automl-prompts,reasoner-eval]` instead. That Framework extra
+declares `gepa==0.1.2` directly, so it also works with source branches that do not
+declare the core's optional `prompts` extra. A supplied Framework wheel may
+replace the editable requirement with `/path/to/cosmos_framework.whl[automl,reasoner-eval]`
+(using its actual filename). When switching same-version core builds, use a new
+environment or the targeted `uv --reinstall-package` command above; do not assume
+an already-satisfied version means the selected source was installed.
+
+### Source revision, package version and build identity
+
+`main` remains the default for a new exploratory installation. For a reproducible
+run or deployment, **resolve the selected branch to a full commit before installing**
+and retain that commit as the installation input, rather than reinstalling from
+the branch name later. After the `main` or development-branch selection above:
+
+```bash
+AUTOML_CORE_COMMIT=$(git ls-remote --exit-code \
+  https://github.com/NVIDIA-TAO/tao-automl.git "refs/heads/${AUTOML_CORE_REF}" | cut -f1)
+if [[ ! "$AUTOML_CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'Could not resolve the selected AutoML branch; stop installation.' >&2
+  exit 1
+fi
+AUTOML_CORE_REF=$AUTOML_CORE_COMMIT
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+uv pip install --no-config --python .venv/bin/python \
+  --reinstall-package nvidia-automl-core \
+  "$AUTOML_CORE_SOURCE" 'nvidia-automl-core==0.1.0'
+uv pip check --python .venv/bin/python
+```
+
+For an already recorded full commit, set `AUTOML_CORE_REF` directly to that SHA;
+do not resolve a moving branch again. Pip-only installs can use the same pinned
+`AUTOML_CORE_SOURCE`. After installation, verify and record the resolved commit
+and engine hash (the commit must match the requested pin):
+
+```bash
+python - <<'PY'
+import json
+from importlib.metadata import distribution
+from automl_core import build_fingerprint
+
+package = distribution("nvidia-automl-core")
+origin = json.loads(package.read_text("direct_url.json") or "{}")
+vcs = origin.get("vcs_info", {})
+print("package_version:", package.version)
+print("requested_revision:", vcs.get("requested_revision"))
+print("source_commit:", vcs.get("commit_id"))
+print("engine_build:", build_fingerprint())
+PY
+```
+
+Use the target environment's Python (for example `.venv/bin/python`). Put the
+resolved core commit in the run's provenance. For a source reinstall, set
+`AUTOML_CORE_REF` to that full commit SHA and reconstruct `AUTOML_CORE_SOURCE`;
+the same install commands then reproduce the core source selection. A Git commit
+does not freeze third-party dependencies, datasets, or training images; preserve
+those separately. For offline deployment or cold migration, retain an immutable
+wheel built from the same commit and record its SHA256. Source installation does
+not remove the migration protocol's requirement for the exact original wheel.
+
+The current core **distribution metadata is `0.1.0`**; Framework remains `1.2.2`.
+Installing a branch or building a local wheel is not a release and does not require
+a version bump. A package version alone does not identify a development build.
+
+This replaces Framework's former `==1.0.0.dev0` requirement; an environment with
+that local development wheel does **not** satisfy the new extras. For a new
+experiment, prepare a separate environment with the selected `0.1.0` source build.
+Do not downgrade a live or resumable controller in place, relabel old wheels, or
+rewrite its ledger. Keep the old environment and exact artifacts for ordinary
+resume; use [reviewed cold migration](automl-slurm.md#explicit-cold-recovery-migration)
+only where the migration protocol accepts the stopped experiment. That protocol
+does not support arbitrary version changes or GEPA migration. The old pin is no
+longer supported for new installations through these extras; this is not a claim
+that every historical `1.0.0.dev0` artifact is API-compatible or formally retired
+by its publisher.
+
+Compatibility evidence includes the [two-candidate H100 SFT smoke](#fresh-venv-wts-verification-2026-10-19)
+with core `0.1.0`, native training, export, and evaluation. It required explicit
+controller recovery and validates the recorded builds, not every future commit
+that retains the same version, nor a new GEPA GPU qualification.
 
 New SFT and GEPA identities include `engine_build`, a SHA256 fingerprint of the
 installed core's relative Python file names and contents. Identical source and
@@ -139,6 +247,41 @@ GPU video decoding, expose `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video`
 in the image or export it and include its name in `execution.environment`.
 Also verify that the non-root container has a valid user identity (for example,
 forward `USER` and `LOGNAME`) and writable per-trial caches.
+
+### Fresh-machine reproducibility checklist
+
+For a new run, preserve a small provenance bundle alongside the reviewed manifest:
+
+- Framework commit, its `uv.lock`, selected CUDA group, Python version and full
+  installed package inventory. For a non-editable training installation, use
+  `uv sync --frozen --all-extras --group=cu128-train --no-editable` (or the
+  matching CUDA group), then install the selected core as above. Record the core
+  commit and `engine_build`, plus wheel hashes or the immutable container digest.
+- The actual training/evaluation TOMLs, seed, search domains and trial/time caps.
+  Preserve dataset split/content revisions and model checkpoint identity;
+  recipe paths and record counts alone do not reproduce their contents.
+- Required environment variable **names**, decoder/export prerequisites and
+  session-local library setup. Keep credentials out of the bundle. For CUDA 12,
+  consult the [TorchCodec NPP setup](setup.md#torchcodec-cannot-find-cuda-12-npp)
+  when the host does not expose matching libraries. Declare required exported
+  variable names, such as `LD_PRELOAD`, in `execution.environment` too.
+- A writable workspace with capacity for every trial's checkpoints and exports.
+  Prefer local POSIX storage for local venv runs. Shared storage must pass
+  concurrent atomic-replacement/read checks as well as locking and fsync checks;
+  a single successful write is not sufficient.
+
+Run the install/dependency checks, `cosmos-automl --help` and CPU-only `plan`
+before approving a small GPU run. Verify training, checkpoint export and the
+selected evaluator, not just imports. Keep the run environment unchanged until
+its controller and workers are terminal. Neither the optional engine nor private
+datasets/checkpoints are bundled into Framework; a new user supplies assets and
+paths, not another developer's checkout or credentials.
+
+The recorded Python 3.13 CUDA training installation reports a `pip check` warning:
+`jupyter-compare-view==0.2.4` declares Python `<3.13`. This notebook-only dependency
+was unused by the bounded training/evaluation smoke below; its metadata conflict
+is not resolved by installing AutoML. Do not describe the full environment's
+dependency check as passing or silently change its Python/dependency pins.
 
 ## Prepare and review
 
@@ -294,6 +437,26 @@ the extra allocation caps in `plan`. An `attempt_id` can differ from the logical
 trial `id`; `attempts` preserves failed executions and their native identities.
 Unconfirmed cancellation blocks replacement rather than creating duplicate work.
 
+For shared-storage receipt/ledger reads, the core retries only transient `EIO`,
+`ESTALE` and `ETIMEDOUT`, reopening up to five times with 0.75 seconds of total
+backoff. It does not replay training, submissions or paid requests. Persistent
+errors and malformed receipts still stop safely. A dead CPU controller can leave
+a GPU worker running; check both native process/job identity and worker receipts
+before interpreting a ledger's last `RUNNING` state or starting a replacement.
+
+Ordinary resume requires the original build. A stopped same-host venv SFT search
+can use `cosmos-automl migrate --manifest <manifest> --workspace <workspace>
+--from-wheel <exact-original.whl>` to review a narrow recovery-build continuation;
+`--approve` applies it, and a separately approved `resume` continues the search.
+All old workers and command processes must first be terminal on their recorded
+host/boot. Completed-but-unrecorded results must be reconciled with the original
+build before changing it. Preserve the interpreter, package inventory, data,
+completed results, remaining trials and original absolute deadline. Never install
+a new wheel into an environment used by active workers, edit sealed identities,
+or use a fresh experiment to disguise a retry. This migration does not support
+GEPA, Docker or cloud runs; see the [SLURM migration contract](automl-slurm.md#explicit-cold-recovery-migration)
+for scheduler-owned continuations.
+
 ## Scope and checks
 
 The shared engine ports the original eleven algorithm/controller modes and
@@ -312,7 +475,7 @@ by scheduler-query timeouts during evaluation. Hyperband-ES curve pruning and
 completed GPU searches driven by those structured controllers remain verification
 gaps; these checks do not establish model quality or validate a production search.
 
-Run adapter tests with an installed core wheel (no GPU imports required):
+Run adapter tests with the selected core installed (no GPU imports required):
 
 ```bash
 python -m pytest -o addopts='' --confcutdir=tests/automl tests/automl
@@ -831,3 +994,54 @@ does not require a training-image rebuild; no existing cluster controller was
 upgraded. The earlier GPU results used the earlier core hash and do not validate
 this new build. The separate GEPA progress-file gap above remains open, as do
 the core distribution/dependency review and coordinated merge gates.
+
+### Controller startup and restart assets
+
+The checkout now supplies the [persistent observer service](automl-slurm.md#persistent-observer-service)
+and a CPU batch template that probes every native restart generation before
+starting the controller. An initial one-shot handshake cannot cover a later
+requeue. The observer must be independently supervised on an approved host; it
+does not submit or replace jobs, authorize retries, or extend the deadline.
+
+The core also retries timed-out read-only scheduler preparation checks and
+continues a fully sealed, unsubmitted candidate across a bounded CPU handoff.
+An attempted submission still uses the separate reconciliation/fencing protocol.
+These controller paths were checked with CPU subprocesses and a simulated
+scheduler; this is not live cross-node SLURM recovery or service-deployment proof.
+
+### Fresh-venv WTS verification (2026-10-19)
+
+A fresh, non-editable Python 3.13 CUDA 12.8 environment ran native Framework
+AutoML on Cosmos3-Nano-VLM with 64 WTS training records and 16 disjoint held-out
+questions. Two random-search candidates each completed five LoRA steps on eight
+H100 GPUs, DCP-to-HF export and single-GPU evaluation. Both scored **8/16 (50%)**.
+The approved limits were 30 minutes per trial and two hours for the search, with
+no automatic training retries or paid LLM calls.
+
+The initial source-install receipts identify Framework commit
+`def247af66f22abb45d25c3138bf13d0edcb4496` and core commit
+`bd21cbd3a6aa24e3277c0d232dab1614f935c03e`, with core distribution `0.1.0`.
+These are historical build-specific results, not a GPU rerun of later PR heads.
+
+This was a **pass after explicit controller recovery**, not an uninterrupted
+run. A transient shared-drive `EIO` stopped the CPU controller during the first
+trial's evaluation while its worker continued. The original build collected that
+completed result; a reviewed cold migration then resumed the corrected build.
+Both trials finished within the original deadline, with no repeated training,
+additional trial slots or budget reset. The resumed controller exited normally.
+
+The corrected core's `engine_build` is
+`cdfb7731512119c1b27db079fb34cda24b4b3506a7a8beef225894a375aaeca2`;
+its distribution version remains **0.1.0**. A separate real shared-drive stress
+probe recovered 86 transient read errors without escaping a logical read, and a
+two-launch CPU dummy workflow verified stopped-controller continuation, result
+preservation, unchanged deadlines and rejection of increased budgets. Existing
+core tests passed; no new repository unit tests or package-version bumps were
+introduced.
+
+The notebook dependency warning above remains. Transformers also emitted a
+tokenizer-regex warning while loading Qwen3-VL; tokenizer files/settings were not
+changed. This bounded random-search result establishes training/export/evaluation
+execution after recovery, **not** full-data accuracy, all-algorithm qualification,
+or automatic recovery from persistent storage failures. Private asset paths and
+run receipts are not part of the public installation instructions.

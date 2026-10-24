@@ -1,6 +1,7 @@
 # AutoML algorithm contracts
 
-Install the local core 1.0.0.dev0 wheel as described in [AutoML](automl.md). Choose
+Install the core from `tao-automl/main` or a selected development branch as
+described in [AutoML setup](automl.md#installation-from-source). Choose
 `search.algorithm` in the same native reasoner manifest; there are no competing
 launchers or target selectors. All modes use explicit objective direction,
 declared parameter domains, recorded native jobs and bounded sequential execution.

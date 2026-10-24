@@ -12,6 +12,10 @@ These checkout-local assets support [AutoML on SLURM](../../docs/automl-slurm.md
   supplies the cross-node lock observer and pre-fan-out marker. The submitting
   service must schedule observation automatically and reconcile native terminal
   state before any bounded startup retry; see the SLURM guide's startup contract.
+- `scripts/slurm_controller_watch.py` persistently observes registered CPU jobs
+  and each native restart generation. Run it as an independently supervised,
+  deadline-bounded service; its `ready` check gates submission. It never launches
+  or replaces jobs. See `examples/automl/slurm_observer.service` at repository root.
 
 The search controller is `cosmos-automl`, not a workflow wrapper in this directory.
 Stage these assets from this repository, seal their hashes in the manifest, and
@@ -21,3 +25,19 @@ of truth for whether jobs are running.
 The helpers retain their original Apache-2.0 license and attribution in
 [LICENSE](LICENSE) and [NOTICE](NOTICE). Annotation, serving, quantization, data
 conversion, and other platform workflows are not part of this focused AutoML change.
+
+## CPU-only regression checks
+
+From the repository root, using a test environment with `pytest` and `jsonschema`:
+
+```bash
+python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows \
+  -o 'python_files=test_*.py *_test.py' tools/cosmos_workflows
+```
+
+The AutoML helpers CI job runs this suite without installing the GPU stack.
+Observer tests cover registry identity, readiness/locking, native state and
+generation checks, and scheduler/storage errors. Batch-process tests check
+legacy argv/exec, decimal allocation boundaries, and opt-in bootstrap failures.
+Scheduler calls and controller children are mocked; these are not live SLURM,
+cross-node filesystem, or GPU-training verification.
