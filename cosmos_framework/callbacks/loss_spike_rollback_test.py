@@ -6,6 +6,7 @@ Natural spikes are not reproducible run to run, so the guard is exercised with a
 injected gradient rather than by waiting for training to misbehave.
 """
 
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +51,12 @@ def _step_at(model, optimizer, scheduler, callback, grad_scale, iteration):
 
 def _spike_at(model, optimizer, scheduler, callback, iteration):
     _step_at(model, optimizer, scheduler, callback, 10.0, iteration)
+
+
+def _assert_reported_lrs(scheduler):
+    rates = [group["lr"] for group in scheduler.optimizer.param_groups]
+    assert scheduler.get_last_lr() == pytest.approx(rates)
+    assert scheduler.state_dict()["_last_lr"] == pytest.approx(rates)
 
 
 def test_no_rollback_on_steady_gradients():
@@ -107,6 +114,7 @@ def test_lr_backoff_applies_to_the_next_update(decay):
     assert callback.rollbacks == 1
     expected = 0.01 * decay**scheduler.last_epoch * 0.8 * 0.5
     assert optimizer.param_groups[0]["lr"] == pytest.approx(expected)
+    _assert_reported_lrs(scheduler)
     used_rates = []
     hook = optimizer.register_step_pre_hook(lambda opt, args, kwargs: used_rates.append(opt.param_groups[0]["lr"]))
     try:
@@ -116,43 +124,135 @@ def test_lr_backoff_applies_to_the_next_update(decay):
     assert used_rates == pytest.approx([expected])
     # Healthy recovery updates the already-computed rate, not just base_lrs.
     assert optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * decay**scheduler.last_epoch * callback._lr_scale)
+    _assert_reported_lrs(scheduler)
 
 
 @pytest.mark.parametrize("with_scheduler", [True, False])
 def test_scaling_preserves_multiple_optimizers_groups_and_schedule(with_scheduler):
     model = nn.Sequential(nn.Linear(3, 4), nn.Linear(4, 2))
     optimizers = [
-        torch.optim.AdamW([{"params": [layer.weight], "lr": 0.02}, {"params": [layer.bias], "lr": 0.005}])
-        for layer in model
+        torch.optim.AdamW([{"params": [model[0].weight], "lr": 0.02}, {"params": [model[0].bias], "lr": 0.005}]),
+        torch.optim.AdamW(model[1].parameters(), lr=0.007),
     ]
-    schedulers = [LambdaLR(opt, lr_lambda=lambda step: 0.9**step) for opt in optimizers]
-    scheduler = SimpleNamespace(schedulers=schedulers) if with_scheduler else None
+    schedulers = [
+        LambdaLR(optimizers[0], lr_lambda=[lambda step: 0.9**step, lambda step: 0.8**step]),
+        LambdaLR(optimizers[1], lr_lambda=lambda step: 0.7**step),
+    ]
+    # Reporting must follow each scheduler's own optimizer, not container order.
+    scheduler = SimpleNamespace(schedulers=list(reversed(schedulers))) if with_scheduler else None
     callback = LossSpikeRollback(enabled=True)
     for opt, sched in zip(optimizers, schedulers):
         opt.step()
         if with_scheduler:
             sched.step()
     initial = [[group["lr"] for group in opt.param_groups] for opt in optimizers]
+    counters = [(sched.last_epoch, sched._step_count) for sched in schedulers]
     for factor in (0.5, 1.02, 0.5, 1.02):
         callback._scale_lr(optimizers, scheduler, factor)
         for opt, rates in zip(optimizers, initial):
             assert [group["lr"] for group in opt.param_groups] == pytest.approx(
                 [rate * callback._lr_scale for rate in rates]
             )
+        assert [(sched.last_epoch, sched._step_count) for sched in schedulers] == counters
+        if with_scheduler:
+            for sched in schedulers:
+                _assert_reported_lrs(sched)
     if with_scheduler:
-        for opt, sched in zip(optimizers, schedulers):
+        next_rates = [[0.02 * 0.9**2, 0.005 * 0.8**2], [0.007 * 0.7**2]]
+        for opt, sched, rates in zip(optimizers, schedulers, next_rates):
             opt.step()
             sched.step()
             assert [group["lr"] for group in opt.param_groups] == pytest.approx(
-                [base * 0.9**sched.last_epoch * callback._lr_scale for base in (0.02, 0.005)]
+                [rate * callback._lr_scale for rate in rates]
             )
+            _assert_reported_lrs(sched)
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_optimizer_and_scheduler_checkpoint_rates_agree(recover):
+    model, optimizer, scheduler, callback = _harness()
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    _step(model, optimizer, scheduler, callback, 10.0)
+    if recover:
+        _step(model, optimizer, scheduler, callback, 0.01)
+    _assert_reported_lrs(scheduler)
+
+    checkpoint = BytesIO()
+    torch.save(
+        {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()},
+        checkpoint,
+    )
+    checkpoint.seek(0)
+    saved = torch.load(checkpoint, weights_only=True)
+    restored_model, restored_optimizer, restored_scheduler, _ = _harness()
+    restored_model.load_state_dict(saved["model"])
+    restored_optimizer.load_state_dict(saved["optimizer"])
+    restored_scheduler.load_state_dict(saved["scheduler"])
+    assert restored_scheduler.state_dict() == scheduler.state_dict()
+    _assert_reported_lrs(restored_scheduler)
+
+    # Check the next optimizer/scheduler update, without claiming to persist the
+    # guard's separate rolling history or change its existing resume policy.
+    for net, opt, sched in ((model, optimizer, scheduler), (restored_model, restored_optimizer, restored_scheduler)):
+        for parameter in net.parameters():
+            parameter.grad = torch.full_like(parameter, 0.01)
+        opt.step()
+        sched.step()
+        _assert_reported_lrs(sched)
+    assert restored_scheduler.state_dict() == scheduler.state_dict()
+    for actual, expected in zip(restored_model.parameters(), model.parameters()):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.GPU
+@pytest.mark.parametrize("kind", ["generator", "reasoner"])
+def test_native_scheduler_container_reports_backoff_and_recovery(kind):
+    model = nn.Sequential()
+    model.add_module("net", nn.Sequential(nn.Linear(8, 8), nn.Linear(8, 8)))
+    model.cuda()
+    if kind == "generator":
+        from cosmos_framework.utils.generator.optimizer import LRSchedulersContainer
+        from cosmos_framework.utils.generator.optimizer import OptimizersContainer as GeneratorOptimizersContainer
+
+        optimizer = GeneratorOptimizersContainer(model, "adamw", fused=True, lr=0.01, lr_multipliers={"bias": 0.25})
+        scheduler = LRSchedulersContainer(optimizer, "constant")
+    else:
+        from cosmos_framework.utils.reasoner.optimizer import OptimizersContainer as ReasonerOptimizersContainer
+        from cosmos_framework.utils.reasoner.optimizer import SchedulersContainer
+
+        optimizer = ReasonerOptimizersContainer(
+            list(model.net),
+            {"lr": 0.01, "weight_decay": 0.0, "fused": True},
+            "adamw",
+            {"first": 1.0, "second": 0.25},
+            ["first", "second"],
+        )
+        scheduler = SchedulersContainer(optimizer, lr_lambda=lambda step: 0.95**step)
+    assert [len(opt.param_groups) for opt in optimizer] == ([2] if kind == "generator" else [1, 1])
+    callback = LossSpikeRollback(enabled=True, min_observations=5, window=10, rollback_depth=2)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    for gradient, expected_scale in ((10.0, 0.4), (0.01, 0.4 * 1.02)):
+        _step(model, optimizer, scheduler, callback, gradient)
+        assert callback.rollbacks == 1
+        assert callback._lr_scale == pytest.approx(expected_scale)
+        rates = [[group["lr"] for group in sched.optimizer.param_groups] for sched in scheduler.schedulers]
+        for sched in scheduler.schedulers:
+            _assert_reported_lrs(sched)
+        assert scheduler.get_last_lr() == ([lr for group in rates for lr in group] if kind == "generator" else rates)
+        assert scheduler.state_dict()["_last_lr"] == rates[0]
 
 
 def test_zero_scale_remains_zero_during_recovery():
     _, optimizer, scheduler, callback = _harness(lr_min_scale=0.0, lr_backoff=0.0)
     callback._scale_lr(optimizer, scheduler, 0.5)
+    _assert_reported_lrs(scheduler)
+    counters = (scheduler.last_epoch, scheduler._step_count)
     callback._scale_lr(optimizer, scheduler, 1.02)
     assert optimizer.param_groups[0]["lr"] == 0.0
+    _assert_reported_lrs(scheduler)
+    assert (scheduler.last_epoch, scheduler._step_count) == counters
 
 
 def test_stands_down_after_sustained_divergence():
@@ -167,11 +267,20 @@ def test_stands_down_after_sustained_divergence():
 
 def test_disabled_is_inert():
     model, optimizer, scheduler, callback = _harness(enabled=False)
-    for _ in range(20):
-        _step(model, optimizer, scheduler, callback, 0.01)
-    _step(model, optimizer, scheduler, callback, 10.0)
+    control_model, control_optimizer, control_scheduler, _ = _harness()
+    for gradient in [0.01] * 20 + [10.0]:
+        _step(model, optimizer, scheduler, callback, gradient)
+        for parameter in control_model.parameters():
+            parameter.grad = torch.full_like(parameter, gradient)
+        control_optimizer.step()
+        control_scheduler.step()
+        control_optimizer.zero_grad(set_to_none=True)
     assert callback.rollbacks == 0
     assert not callback._ring, "disabled guard should not pay the snapshot memory cost"
+    assert scheduler.state_dict() == control_scheduler.state_dict()
+    torch.testing.assert_close(optimizer.state_dict(), control_optimizer.state_dict(), rtol=0, atol=0)
+    for actual, expected in zip(model.parameters(), control_model.parameters()):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_baseline_does_not_chase_a_deteriorating_run():

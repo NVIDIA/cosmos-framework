@@ -300,6 +300,10 @@ class LossSpikeRollback(Callback):
                 for opt in _real_optimizers(optimizer):
                     for group in opt.param_groups:
                         group["lr"] = group["lr"] * self._lr_scale / previous_scale
+            # Keep logging and checkpoint state aligned with the next update's
+            # rate without advancing the schedule or its counters.
+            for sched in schedulers:
+                sched._last_lr = [group["lr"] for group in sched.optimizer.param_groups]
             return
         for opt, bases in zip(_real_optimizers(optimizer), self._base_lrs):
             for group, base in zip(opt.param_groups, bases):
