@@ -432,7 +432,7 @@ def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     if torch.version.hip is not None:
         return "it needs NVIDIA CUDA, not ROCm"
     major, minor = torch.cuda.get_device_capability(device)
-    if (major, minor) != (9, 0) and major != 10:
+    if (major, minor) not in ((9, 0), (12, 0)) and major != 10:
         # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
         # the segment isolation and untouched gap rows required by both paths.
         return f"it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103), got sm{major}{minor}"
