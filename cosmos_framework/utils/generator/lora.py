@@ -93,6 +93,28 @@ class LoraInjectedLinear(nn.Linear):
         return base_out + self._lora_scale * lora_out
 
     @torch.no_grad()
+    def merged_weight(
+        self,
+        base: torch.Tensor,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor,
+        *,
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        """Return a dense weight without changing the base or adapter parameters.
+
+        Callers exporting sharded models must gather all three tensors first.
+        Accumulate in at least FP32 and cast only the completed merge, including
+        when FP32 adapters are trained alongside a BF16 base. This is the
+        automatic-export policy; the existing in-place/offline merge retains
+        its delta rounding and ambient autocast behavior in ``merge_adapter_``.
+        """
+        accumulation_dtype = torch.float64 if base.dtype == torch.float64 else torch.float32
+        with torch.autocast(device_type=base.device.type, enabled=False):
+            delta = lora_b.to(accumulation_dtype) @ lora_a.to(accumulation_dtype)
+            return (base.to(accumulation_dtype) + self._lora_scale * delta).to(dtype=dtype or base.dtype)
+
+    @torch.no_grad()
     def merge_adapter_(self) -> None:
         """Merge the adapter update into the base weight in place."""
         delta = self.lora_B.weight.float() @ self.lora_A.weight.float()
