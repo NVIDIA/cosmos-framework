@@ -28,16 +28,24 @@ import torch
 import torch.nn as nn
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
-from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
-from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
+from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.utils import log
 from cosmos_framework.model.generator.algorithm.loss.cross_entropy import (
     cross_entropy_loss,
+    weighted_ce_denominator_from_labels,
     weighted_cross_entropy_loss,
 )
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
-from cosmos_framework.model.generator.hf_model import HFModel
+from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
+from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
+from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
+from cosmos_framework.model.generator.context_parallel import (
+    ContextParallelBatchPolicy,
+    context_parallel_router_mean,
+    prepare_context_parallel_batch,
+)
+from cosmos_framework.model.generator.hf_model import HFModel, configure_sound_und_encoder_trainability
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
 from cosmos_framework.model.generator.reasoner.qwen35_caption import (
     Qwen35CaptionLoss,
@@ -45,7 +53,7 @@ from cosmos_framework.model.generator.reasoner.qwen35_caption import (
 )
 from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
-from cosmos_framework.utils import log
+from cosmos_framework.utils.generator.attention_chunks import plan_varlen_attention_chunks
 from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_forward_result,
     maybe_dump_gradients,
@@ -55,14 +63,11 @@ from cosmos_framework.utils.generator.input_probe import (
 from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
-from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
-    maybe_download_hf_model_from_s3,
-)
+from cosmos_framework.utils.generator.reasoner.model_path import resolve_hf_model_path
 from cosmos_framework.utils.generator.reasoner.true_packing import (
     TRUE_PACKING_CPU_PREPARED_KEY,
     assert_packing_temporal_inputs_supported,
 )
-from cosmos_framework.utils.lazy_config import instantiate
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
@@ -115,7 +120,15 @@ def _set_sound_und_encoder_dtype_for_fsdp(
     explicitly matching the encoder avoids an encoder→projector dtype mismatch.
     """
     if hf_model.sound_und and fsdp_enabled:
-        hf_model.model.sound_und_model.encoder.to(dtype=PRECISION_TO_TORCH_DTYPE[precision])
+        encoder = hf_model.model.sound_und_model.encoder
+        target_dtype = PRECISION_TO_TORCH_DTYPE[precision]
+        # Trainable audio parameters retain FP32 master weights under FSDP.
+        for parameter in encoder.parameters():
+            if parameter.is_floating_point() and not parameter.requires_grad:
+                parameter.data = parameter.data.to(dtype=target_dtype)
+        for buffer in encoder.buffers():
+            if buffer.is_floating_point():
+                buffer.data = buffer.data.to(dtype=target_dtype)
 
 
 def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], bool]]:
@@ -359,11 +372,13 @@ class VLMModel(ImaginaireModel):
         else:
             n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
         if config.sound_und:
-            # The standalone artifact is the sole source of encoder weights.
-            # Keep it immutable even when a broad trainable_params expression
-            # (or a full-finetune config) would otherwise re-enable it.
-            self.model.model.sound_und_model.encoder.requires_grad_(False)
-            self.model.model.sound_und_model.encoder.eval()
+            # The standalone artifact supplies the initial encoder weights.
+            # Apply the explicit audio policy even when a broad trainable_params
+            # expression or a full-finetune config changes the encoder flags.
+            # A Stage1 checkpoint can then initialize the trainable encoder.
+            configure_sound_und_encoder_trainability(
+                self.model.model.sound_und_model, freeze_encoder=config.sound_und_config.freeze_encoder
+            )
             if config.sound_und_config.freeze_projector:
                 self.model.model.sound_und_model.projector.requires_grad_(False)
                 self.model.model.sound_und_model.projector.eval()
@@ -383,18 +398,9 @@ class VLMModel(ImaginaireModel):
         }
         log.info(f"freeze config applied (model_type={self.hf_config.model_type}): {self.parameter_summary}")
 
-        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
-            # Both CE variants normalize over every rank in the world, which is only the
-            # count they want while each rank holds a different sample. CP breaks that:
-            # its ranks hold segments of one sequence, and no reduction over those has
-            # been verified against the objective trained here (see the loss module
-            # docstring). ``_init_vlm`` already asserts cp == 1 for the attention path,
-            # which makes this unreachable today — it is here so the loss keeps its own
-            # requirement if CP is ever wired into attention.
-            raise NotImplementedError(
-                f"VLM loss does not support context parallelism (got cp={self.parallel_dims.cp}); "
-                "set parallelism.context_parallel_shard_degree=1."
-            )
+        # Logits-based CE remains CP-disabled. The configured fused path uses
+        # CP-global sample weights and WORLD normalization, verified against CP=1.
+        self.context_parallel_data_window: bool = False
 
         if config.policy.use_weighted_ce:
             log.info(f"Using weighted CE loss with exponent={config.policy.weighted_ce_exponent}")
@@ -410,16 +416,26 @@ class VLMModel(ImaginaireModel):
                 loss_scaling_factor=1.0,
                 ignore_index=IGNORE_INDEX,
             )
-        # Dense Qwen3-VL and Qwen3.5 weighted CE normalize once over the whole accumulation window.
-        # The trainer averages microbatch losses by K; training_step therefore backprops the
-        # unnormalized WORLD numerator and this hook applies K / sum(global denominator).
+        # Opt-in Qwen3-VL and Qwen3.5 weighted CE normalize over the whole accumulation window.
+        # The trainer averages microbatch losses by K. CE-only windows backprop the
+        # unnormalized WORLD numerator and the optimizer hook applies K / sum(D).
+        # Active MoE auxiliary loss uses label lookahead to scale CE before backward,
+        # preserving the separate mean auxiliary objective without a gradient buffer.
+        true_pack_model_types = {"qwen3_vl", "qwen3_vl_moe"}
         self._window_normalize_weighted_ce = bool(
             config.policy.use_weighted_ce
             and config.policy.normalize_weighted_ce_over_accumulation_window
-            and self.hf_config.model_type in {"qwen3_vl", "qwen3_5"}
+            and self.hf_config.model_type in (true_pack_model_types | {"qwen3_5"})
         )
         self._weighted_ce_window_denominator: torch.Tensor | None = None
         self._weighted_ce_window_microbatches: int = 0
+        self._weighted_ce_window_plan: torch.Tensor | None = None
+        self._weighted_ce_window_metrics: torch.Tensor | None = None
+        self.requires_accumulation_window = bool(
+            self._window_normalize_weighted_ce
+            and self.hf_config.model_type == "qwen3_vl_moe"
+            and config.lbl.coeff is not None
+        )
 
     def _init_vlm(self, config: VLMModelConfig, checkpoint) -> None:
         """Initialize VLM without the legacy ModelRegistry (Phase 2+).
@@ -440,7 +456,7 @@ class VLMModel(ImaginaireModel):
         log.info(f"checkpoint.load_path: {checkpoint.load_path!r} | load_pretrain_weights: {load_pretrain_weights}")
 
         # ── a. Download HF model files (config + tokenizer; weights only if no ckpt) ──
-        local_path = maybe_download_hf_model_from_s3(
+        local_path = resolve_hf_model_path(
             policy.backbone.model_name,
             checkpoint.load_from_object_store.credentials,
             checkpoint.load_from_object_store.bucket,
@@ -467,7 +483,12 @@ class VLMModel(ImaginaireModel):
             configured_model_name_or_path=policy.backbone.model_name,
             qwen35_fp32_recurrent_a_log=policy.qwen35_fp32_recurrent_a_log,
             enable_fused_weighted_ce=policy.enable_fused_weighted_ce,
+            recompute_fused_weighted_ce=policy.recompute_fused_weighted_ce,
+            qwen3_vl_accumulate_head_grad_fp32=policy.qwen3_vl_accumulate_head_grad_fp32,
             weighted_ce_exponent=policy.weighted_ce_exponent,
+            qwen3_vl_moe_fixed_sum=policy.qwen3_vl_moe_fixed_sum,
+            qwen3_vl_vision_attention_max_padded_tokens=policy.qwen3_vl_vision_attention_max_padded_tokens,
+            qwen3_vl_decoder_attention_max_padded_tokens=policy.qwen3_vl_decoder_attention_max_padded_tokens,
         )
 
         from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
@@ -507,7 +528,7 @@ class VLMModel(ImaginaireModel):
         # ── c. Build ParallelDims + device mesh ──
         # Overlay-mesh design (see vfm/utils/parallelism.py): cp/cfgp do NOT
         # consume FSDP rank slots, so dp_replicate * dp_shard == world_size
-        # alone. The VLM HFModel doesn't have a CP-aware attention path.
+        # alone. Qwen3-VL uses a Ulysses CP overlay on that same world.
         world_size = int(os.environ.get("WORLD_SIZE", 1))
         _dp_replicate = config.parallelism.data_parallel_replicate_degree
         # Single-process run: force dp_replicate=1 so ParallelDims doesn't
@@ -524,12 +545,17 @@ class VLMModel(ImaginaireModel):
             enable_inference_mode=False,
         )
 
-        # VLM does not currently support cp or cfgp. CP needs a CP-aware
-        # attention path (see ``vfm/models/mot/context_parallel_utils.py``) that
-        # is not wired into the VLM HFModel; CFGP is inference-only.
-        assert parallel_dims.cp == 1, f"VLM does not support CP (got cp={parallel_dims.cp})"
+        # CP is opt-in for validated native fused-loss integrations; Qwen multimodal encoding has a separate flag.
+        # The CP-aware attention path is wired before AC/FSDP wrap the blocks;
+        # CFGP remains inference-only and unsupported here.
         assert parallel_dims.cfgp == 1, f"VLM does not support CFGP (got cfgp={parallel_dims.cfgp})"
-
+        if parallel_dims.cp_enabled:
+            if config.sound_und or config.compile.enabled:
+                raise NotImplementedError("Qwen3-VL CP requires sound_und=False and compile=False")
+            if config.lbl.coeff is not None and config.lbl.method != "global":
+                raise NotImplementedError("Initial Qwen3-VL CP requires global load balancing")
+            if not policy.enable_fused_weighted_ce:
+                raise ValueError("Qwen3-VL CP requires enable_fused_weighted_ce=True")
         if torch.distributed.is_initialized():
             parallel_dims.build_meshes(device_type="cuda")
 
@@ -544,11 +570,11 @@ class VLMModel(ImaginaireModel):
             fsdp_enabled=parallel_dims.dp_enabled,
         )
 
-        # ── d. Apply activation checkpointing, torch.compile and FSDP2 ──
+        # ── d. Apply CP, activation checkpointing, torch.compile and FSDP2 ──
         # config.compile is threaded through so model.config.compile.enabled=True
         # actually compiles each block in place (was previously a dead config on
         # the VLM path — only the MoT path consumed it). See parallelize_vlm for why the
-        # three passes must run in this order (AC wraps, compile compiles the wrapper, FSDP
+        # wrapping passes must run after CP setup in this order (AC wraps, compile compiles the wrapper, FSDP
         # shards it).
         # Called unconditionally, NOT under an is_initialized() guard: activation
         # checkpointing and compile are independent of distribution, and a single-process
@@ -562,6 +588,7 @@ class VLMModel(ImaginaireModel):
             config.precision,
             activation_checkpointing=config.activation_checkpointing,
             compile_config=config.compile,
+            allow_multimodal_cp=policy.qwen3_vl_cp_multimodal,
         )
 
         # ── e. Materialize meta tensors on CUDA ──
@@ -588,7 +615,7 @@ class VLMModel(ImaginaireModel):
         # ── g. Load pretrain weights ──
         if load_pretrain_weights:
             if policy.backbone.safetensors_path:
-                safetensors_local_path = maybe_download_hf_model_from_s3(
+                safetensors_local_path = resolve_hf_model_path(
                     policy.backbone.safetensors_path,
                     checkpoint.load_from_object_store.credentials,
                     checkpoint.load_from_object_store.bucket,
@@ -617,7 +644,7 @@ class VLMModel(ImaginaireModel):
 
             if llm_path:
                 overlay_skip_patterns, is_lm_key = _get_overlay_config(hf_model.hf_config.model_type)
-                llm_local_path = maybe_download_hf_model_from_s3(
+                llm_local_path = resolve_hf_model_path(
                     llm_path,
                     checkpoint.load_from_object_store.credentials,
                     checkpoint.load_from_object_store.bucket,
@@ -682,6 +709,38 @@ class VLMModel(ImaginaireModel):
         """Capture exact pre-clip gradients when deep parity probing is enabled."""
         maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="i4")
 
+    def prepare_accumulation_window(self, batches: tuple[dict[str, Any], ...]) -> None:
+        """Know the full CE denominator before mixing CE and auxiliary gradients.
+
+        With G microbatches the objective is sum(N_g)/sum(D_g) + mean(A_g).
+        CPU lookahead avoids a second full-model gradient buffer or retained graphs.
+        Only the scalar denominators move to the device; batches remain on CPU.
+        """
+        if not self.requires_accumulation_window or len(batches) < 2:
+            raise ValueError("MoE accumulation lookahead requires an enabled objective and GAS > 1")
+        if self._weighted_ce_window_plan is not None or self._weighted_ce_window_denominator is not None:
+            raise RuntimeError("The preceding weighted-CE accumulation window has not finished")
+        denominators: list[torch.Tensor] = []
+        for batch in batches:
+            labels = batch.get("labels")
+            if not isinstance(labels, torch.Tensor):
+                raise TypeError("MoE accumulation lookahead requires pretokenized CPU labels")
+            boundaries = batch.get("packed_cu_seq_lens")
+            if batch.get("true_packing") and not isinstance(boundaries, torch.Tensor):
+                raise ValueError("Packed accumulation lookahead requires conversation boundaries")
+            denominators.append(
+                weighted_ce_denominator_from_labels(
+                    labels, exponent=self.config.policy.weighted_ce_exponent, cu_seq_lens=boundaries
+                )
+            )
+        plan = torch.stack(denominators).to(next(self.parameters()).device)
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            # The CP-aware loader replicates full labels, unlike fused CE's local targets.
+            plan.div_(self.parallel_dims.cp_mesh.size())
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(plan)
+        self._weighted_ce_window_plan = plan
+
     def on_before_optimizer_step(
         self,
         optimizer: torch.optim.Optimizer | OptimizersContainer,
@@ -694,15 +753,23 @@ class VLMModel(ImaginaireModel):
             return
         if self._weighted_ce_window_microbatches <= 0:
             raise RuntimeError("weighted-CE denominator exists without accumulated microbatches")
-        scale = self._weighted_ce_window_microbatches / self._weighted_ce_window_denominator.clamp(min=1)
-        optimizers = optimizer.optimizers if isinstance(optimizer, OptimizersContainer) else [optimizer]
-        for inner_optimizer in optimizers:
-            for group in inner_optimizer.param_groups:
-                for parameter in group["params"]:
-                    if parameter.grad is not None:
-                        parameter.grad.mul_(scale)
+        if self._weighted_ce_window_plan is not None:
+            if self._weighted_ce_window_microbatches != self._weighted_ce_window_plan.numel():
+                raise RuntimeError("Optimizer step before the complete planned accumulation window")
+            # CE was scaled before backward; rescaling the combined gradients here
+            # would incorrectly change the independently averaged auxiliary objective.
+            self._weighted_ce_window_plan = None
+        else:
+            scale = self._weighted_ce_window_microbatches / self._weighted_ce_window_denominator.clamp(min=1)
+            optimizers = optimizer.optimizers if isinstance(optimizer, OptimizersContainer) else [optimizer]
+            for inner_optimizer in optimizers:
+                for group in inner_optimizer.param_groups:
+                    for parameter in group["params"]:
+                        if parameter.grad is not None:
+                            parameter.grad.mul_(scale)
         self._weighted_ce_window_denominator = None
         self._weighted_ce_window_microbatches = 0
+        self._weighted_ce_window_metrics = None
 
     def on_before_zero_grad(
         self,
@@ -826,15 +893,24 @@ class VLMModel(ImaginaireModel):
         if self.hf_config.model_type != "qwen3_vl_moe":
             return None
 
+        metadata = collect_hf_moe_lbl_metadata(self.model)
+        if metadata is not None and self.parallel_dims.cp_enabled:
+            # Recover each full sequence's router mean when CP shards have unequal
+            # valid lengths (right padding). WORLD averaging then matches CP=1.
+            metadata = metadata._replace(
+                mean_router_prob_per_expert=context_parallel_router_mean(
+                    metadata.mean_router_prob_per_expert, metadata.num_tokens, self.parallel_dims.cp_mesh.get_group()
+                )
+            )
         return compute_load_balancing_loss(
-            collect_hf_moe_lbl_metadata(self.model),
+            metadata,
             coeff=self.config.lbl.coeff,
             method=self.config.lbl.method,
             device_mesh=self.parallel_dims.dp_mesh if self.parallel_dims is not None else None,
         )
 
     def _prepare_true_packing(self, data: dict[str, Any]) -> None:
-        """Prepare dense Qwen3-VL true-packed positions and standard varlen metadata in place.
+        """Prepare shared true-packed positions and model-family varlen metadata in place.
 
         Padded batches return immediately and continue using the current model-internal M-RoPE
         path. Packed batches are accepted only for the one backend/model combination whose
@@ -845,10 +921,18 @@ class VLMModel(ImaginaireModel):
             return
         if true_packing is not True:
             raise TypeError("true_packing must be a Python bool")
-        if self.hf_config.model_type != "qwen3_vl":
+        cp_size = self.parallel_dims.cp_size if self.parallel_dims is not None else 1
+        loader_cp_size = data.get("context_parallel_size", 1)
+        if loader_cp_size != cp_size:
+            raise ValueError(f"Loader CP={loader_cp_size} must match model CP={cp_size}")
+        supported_model_types = {"qwen3_vl", "qwen3_vl_moe"}
+        if self.hf_config.model_type not in supported_model_types:
             raise NotImplementedError(
-                f"True packing is validated only for dense qwen3_vl; got model_type={self.hf_config.model_type!r}"
+                f"True packing is validated only for {sorted(supported_model_types)}; "
+                f"got model_type={self.hf_config.model_type!r}"
             )
+        if self.hf_config.model_type == "qwen3_vl_moe" and not self.config.policy.enable_fused_weighted_ce:
+            raise ValueError("Qwen3-VL MoE packing requires fused weighted CE")
         if self.config.sound_und:
             raise NotImplementedError(
                 "True packing is not validated for audio understanding inputs; use padded batching."
@@ -898,11 +982,28 @@ class VLMModel(ImaginaireModel):
             )
 
         # Assign the same cumulative-boundary tensor object to Q and K after its one H2D copy.
-        # The cosmos adapter accepts the standard HF protocol directly.
+        # Qwen attention and weighted CE consume these same conversation boundaries.
         data["cu_seq_lens_q"] = packed_cu_seq_lens
         data["cu_seq_lens_k"] = packed_cu_seq_lens
         data["max_length_q"] = packed_max_length
         data["max_length_k"] = packed_max_length
+
+        budget = getattr(self.config.policy, "qwen3_vl_decoder_attention_max_padded_tokens", 0)
+        if budget:
+            if self.hf_config.model_type not in {"qwen3_vl", "qwen3_vl_moe"}:
+                raise ValueError("Bounded decoder varlen attention requires Qwen3-VL")
+            lengths = list(seq_lens)
+            padding = input_ids.shape[1] - sum(lengths)
+            if padding < 0:
+                raise ValueError("Packed logical lengths exceed the physical row")
+            if padding:
+                lengths.append(padding)
+            if packed_cu_seq_lens.numel() != len(lengths) + 1:
+                raise ValueError("Packed boundaries must include every conversation and the padding tail")
+            # Plan once from CPU integers, before CP shards the decoder sequence.
+            # Each attention head owner applies these global boundaries after all-to-all.
+            data["decoder_attention_chunks"] = plan_varlen_attention_chunks(lengths, budget)
+
         data.pop("true_packing", None)
 
     def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
@@ -937,8 +1038,12 @@ class VLMModel(ImaginaireModel):
         ``unit_tests/test_monkey_patch.py`` pins it.
         """
         self._prepare_true_packing(data)
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            cp_policy = self.model.context_parallel_batch_policy
+            assert isinstance(cp_policy, ContextParallelBatchPolicy)
+            data = prepare_context_parallel_batch(data, self.parallel_dims.cp_mesh.get_group(), policy=cp_policy)
         labels = data.pop("labels")
-        self._set_moe_token_mask(data.get("attention_mask"))
+        self._set_moe_token_mask(data.get("context_parallel_token_mask", data.get("attention_mask")))
 
         maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
         self._parity_probe_step = iteration
@@ -966,6 +1071,13 @@ class VLMModel(ImaginaireModel):
         if self._window_normalize_weighted_ce:
             denominator = loss_stats.global_objective_denominator
             backward_loss = loss * denominator
+            plan = self._weighted_ce_window_plan
+            if plan is not None:
+                index = self._weighted_ce_window_microbatches
+                if index >= plan.numel() or not torch.isclose(denominator, plan[index], rtol=1e-5, atol=1e-5):
+                    raise RuntimeError("Forward CE denominator differs from the CPU accumulation plan")
+                # The trainer divides each backward loss by G.
+                backward_loss = backward_loss * (plan.numel() / plan.sum().clamp(min=1))
             if self._weighted_ce_window_denominator is None:
                 self._weighted_ce_window_denominator = denominator.detach().clone()
             else:
@@ -978,7 +1090,32 @@ class VLMModel(ImaginaireModel):
         load_balancing_loss = self._moe_load_balancing_loss()
         if load_balancing_loss is not None:
             loss = loss + load_balancing_loss
-            backward_loss = backward_loss + load_balancing_loss
+            if self._weighted_ce_window_plan is not None:
+                backward_loss = backward_loss + load_balancing_loss
+            elif self._window_normalize_weighted_ce:
+                if self._weighted_ce_window_microbatches != 1:
+                    raise NotImplementedError(
+                        "Without prepare_accumulation_window, window-normalized MoE CE requires "
+                        "grad_accum_iter=1. Use the trainer's CPU lookahead for GAS > 1; rescaling "
+                        "combined gradients would change the auxiliary objective."
+                    )
+                # The optimizer hook divides by this same denominator. Keep the
+                # auxiliary coefficient unchanged for the supported single-step window.
+                backward_loss = backward_loss + load_balancing_loss * loss_stats.global_objective_denominator.clamp(
+                    min=1
+                )
+            else:
+                backward_loss = backward_loss + load_balancing_loss
+        if self._weighted_ce_window_plan is not None:
+            plan = self._weighted_ce_window_plan
+            auxiliary = torch.zeros_like(ce_loss) if load_balancing_loss is None else load_balancing_loss.detach()
+            metrics = torch.stack(
+                (ce_loss * loss_stats.global_objective_denominator / plan.sum().clamp(min=1), auxiliary / plan.numel())
+            )
+            if self._weighted_ce_window_metrics is None:
+                self._weighted_ce_window_metrics = metrics
+            else:
+                self._weighted_ce_window_metrics.add_(metrics)
         if not isinstance(logits, Qwen35CaptionLoss):
             # The fused path deliberately never creates vocabulary logits for a probe.
             maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
@@ -1009,6 +1146,15 @@ class VLMModel(ImaginaireModel):
             "per_sample_objective_weight": loss_stats.per_sample_objective_denominator,
             "global_objective_weight": loss_stats.global_objective_denominator,
         }
+        if (
+            self._weighted_ce_window_plan is not None
+            and self._weighted_ce_window_microbatches == self._weighted_ce_window_plan.numel()
+        ):
+            # The official logger observes scalar "*loss" keys at optimizer boundaries.
+            # Publish the complete window without changing legacy microbatch loss keys.
+            assert self._weighted_ce_window_metrics is not None
+            output["window_ce_loss"], output["window_aux_loss"] = self._weighted_ce_window_metrics.unbind()
+            output["window_total_loss"] = self._weighted_ce_window_metrics.sum()
         if backward_loss is not loss:
             output["_backward_loss"] = backward_loss
         if load_balancing_loss is not None:
@@ -1027,8 +1173,12 @@ class VLMModel(ImaginaireModel):
         ``attention_mask`` is forwarded (see that method's notes).
         """
         self._prepare_true_packing(data)
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            cp_policy = self.model.context_parallel_batch_policy
+            assert isinstance(cp_policy, ContextParallelBatchPolicy)
+            data = prepare_context_parallel_batch(data, self.parallel_dims.cp_mesh.get_group(), policy=cp_policy)
         labels = data.pop("labels")
-        self._set_moe_token_mask(data.get("attention_mask"))
+        self._set_moe_token_mask(data.get("context_parallel_token_mask", data.get("attention_mask")))
         forward_loss_kwargs = (
             {"labels": labels} if getattr(self.config.policy, "enable_fused_weighted_ce", False) else {}
         )

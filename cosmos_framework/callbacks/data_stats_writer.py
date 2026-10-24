@@ -52,7 +52,7 @@ class _Field:
 
 _FIELDS = (
     _Field("phase", pa.string(), 'Data split that produced the row: "train", "val", or "data_only".'),
-    _Field("step", pa.int64(), "Completed optimizer step associated with the sample."),
+    _Field("step", pa.int64(), "Completed training iteration or data-loading step associated with the sample."),
     _Field("rank", pa.int32(), "Distributed process rank that consumed the sample."),
     _Field("sample_rank", pa.int32(), "Rank recorded by the dataset distributor."),
     _Field("worker_id", pa.int32(), "Dataloader worker that selected the sample."),
@@ -111,7 +111,7 @@ _FIELDS = (
     _Field("context_length", pa.int32(), "Configured model context length."),
     _Field("dataset_weight", pa.float64(), "Effective normalized sampling share of the dataset."),
     _Field("dataset_num_urls", pa.int64(), "Dataset URL count after recipe expansion."),
-    _Field("total_training_steps", pa.int64(), "Configured maximum optimizer iterations."),
+    _Field("total_training_steps", pa.int64(), "Configured maximum training or data-loading iterations."),
 )
 
 DATA_STATS_SCHEMA = pa.schema(
@@ -290,6 +290,9 @@ class DataStatsWriterCallback(Callback):
     training continues. The next save, the end of training, and resume each wait for that merge and stop the
     job if it cannot succeed, so rank files never accumulate unnoticed. Rows recorded after the final save,
     which can only come from the last validation, are not saved.
+
+    With ``trainer.skip_model_update``, train rows retain sample metadata and trainable-token counts;
+    CE and objective fields are null because no model forward pass ran.
     """
 
     def __init__(
@@ -349,6 +352,8 @@ class DataStatsWriterCallback(Callback):
             return
         if not self._ready:
             raise RuntimeError("DataStatsWriterCallback was not initialized")
+        if int(data_batch.get("context_parallel_size", 1)) > 1:
+            raise NotImplementedError("Disable per-sample data-stats writing for CP; shard aggregation is required")
         metadata = data_batch.get("data_stats")
         if not isinstance(metadata, list) or not all(isinstance(sample_metadata, dict) for sample_metadata in metadata):
             raise TypeError(
@@ -357,6 +362,8 @@ class DataStatsWriterCallback(Callback):
             )
         if data_batch.get("true_packing") or "cu_seq_lens_q" in data_batch:
             raise NotImplementedError("Per-sample data-stats logging currently requires padded batches")
+        if phase == "train" and getattr(self.config.trainer, "skip_model_update", False):
+            output_batch = None
         missing = [key for key in _LOSS_KEYS if output_batch is not None and key not in output_batch]
         if missing:
             raise KeyError(f"Model output is missing data-stats loss fields: {missing}")
@@ -374,7 +381,7 @@ class DataStatsWriterCallback(Callback):
                 batch_values.pop("dataset_num_urls")
             _check_sample(keys[index], sample_metadata, batch_values)
         if output_batch is None:
-            labels = data_batch["labels"]
+            labels = data_batch["labels"]  # [B,T]
             ignore_indices = _values(data_batch["ignore_index"], size)
             valid_counts = [int((labels[index, 1:] != ignore_indices[index]).sum()) for index in range(size)]
             token_sums = numerators = weights = [None] * size

@@ -44,12 +44,13 @@ from cosmos_framework.model.generator.mot.camera_relative_pose import (
     apply_prope_pairs,
     prope_pair_channels,
 )
+
+from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
 from cosmos_framework.model.generator.mot.merge_bridge import (
     BridgeFn,
     DisjointQueriesBridge,
     MergeAttentionsBridge,
 )
-from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
 from cosmos_framework.model.generator.mot.rigrope import apply_mrope_rotary, apply_rig_rotary
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -157,6 +158,42 @@ def maskless_unavailable_reason(config: MultiviewAttentionConfig) -> str | None:
             "over each whole sample rather than a partition of one, so it is a mask rule here "
             "and not a fold"
         )
+    same_view_windows = sorted(
+        name
+        for name in (
+            "sensor_to_sensor_bounds",
+            "sensor_to_control_bounds",
+            "control_to_control_bounds",
+            "control_to_sensor_bounds",
+        )
+        if getattr(config.mask.same_view_temporal_window, name) is not None
+    )
+    for flag in ("maskless_cross_view_attends_action", "maskless_cross_view_action_attends_action"):
+        if not getattr(config, flag, False):
+            continue
+        if config.mask.attention_scope != "decomposed":
+            return (
+                f"{flag} adds action tokens to the capture-time cross-view rectangles, so it needs "
+                f"attention_scope='decomposed'; this config has attention_scope={config.mask.attention_scope!r}"
+            )
+        if (
+            config.maskless_cross_view_band_radius
+            or config.maskless_cross_view_include_frame_zero
+            or config.geometry_position_encoding != "baseline"
+        ):
+            return (
+                f"{flag} supports neither cross-view band expansion nor RigRoPE/PRoPE geometry, which "
+                "have no rule for action tokens; keep maskless_cross_view_band_radius=0, "
+                "maskless_cross_view_include_frame_zero=False and geometry_position_encoding='baseline'"
+            )
+        if same_view_windows:
+            # Same-view windows need every item on frame offset zero, and the flag times a
+            # frame-rate action from video frame 1, so every action batch it acts on would be
+            # refused mid-run.
+            return (
+                f"{flag} acts on camera-pose action batches, which same-view temporal windows do "
+                f"not serve; this config sets same_view_temporal_window.{same_view_windows}"
+            )
     return None
 
 
@@ -402,6 +439,8 @@ def _cross_view_partitions(
     cross_view_temporal_window: CrossViewTemporalWindowConfig,
     *,
     include_frame_zero: bool = False,
+    key_only_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] | None = None,
+    control_query_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] | None = None,
 ) -> tuple[CrossViewPartition, ...]:
     """Batch capture-time rectangles that exclude same-view keys.
 
@@ -428,39 +467,84 @@ def _cross_view_partitions(
     for every query time on top of the window. It edits that same boolean table rather than adding a rectangle, so a
     first frame already inside the window is admitted once, and the view split still keeps
     own-view keys out.
+
+    ``key_only_cells`` has the same layout and adds key spans that never query, e.g. action
+    tokens on their camera's view group. They join the key side of every rectangle their
+    instant or capture time reaches, so the view split keeps a query's own view out of them too.
+
+    ``control_query_cells`` holds control spans that query their own rectangles, keyed only by
+    the other views' spans in that same table under the same instant or window rule. They are
+    separate groups from the sensor ones, so a token still queries at most once per level.
     """
     # Each view has separate query/key spans: identical for an instant, different
     # for a directed window. Missing views on either side have empty spans.
     groups: list[list[tuple[list[tuple[int, int]], list[tuple[int, int]]]]] = []
     bounds = temporal_window_bounds(cross_view_temporal_window.bounds)
+    key_only = key_only_cells or {}
     if bounds is None:
-        groups = [[(spans, spans) for spans in views.values()] for views in instant_cells.values() if len(views) > 1]
+        for instant, queries in instant_cells.items():
+            instant_keys = {view: list(spans) for view, spans in queries.items()}
+            for view, spans in key_only.get(instant, {}).items():
+                instant_keys.setdefault(view, []).extend(spans)
+            views = sorted(instant_keys)
+            if len(views) > 1:
+                groups.append([(queries.get(view, []), instant_keys[view]) for view in views])
+        groups.extend(
+            [
+                [(spans, spans) for spans in views.values()]
+                for views in (control_query_cells or {}).values()
+                if len(views) > 1
+            ]
+        )
     else:
-        samples: dict[int, dict[float, dict[int, list[tuple[int, int]]]]] = {}
-        for (sample, timestamp), views in instant_cells.items():
-            samples.setdefault(sample, {})[timestamp] = views
         start, end = torch.tensor(bounds, dtype=torch.float32, device="cpu").unbind()  # each []
-        for cells in samples.values():
-            timestamps = sorted(cells)
-            times = torch.tensor(timestamps, dtype=torch.float32, device="cpu")  # [F_union]
-            offsets = times[None, :] - times[:, None]  # [F_union,F_union], key time minus query time
-            allowed = (offsets >= start) & (offsets <= end)  # [F_union,F_union]
-            if cross_view_temporal_window.includes_first_frame:
-                # Column 0 is the sample's earliest capture time across its streams;
-                # without frame offsets, every stream starts at capture time 0.
-                allowed[:, 0] = True  # [F_union]
-            if include_frame_zero and 0 in cells:
-                # Experimental bands refer to instant zero, even for offset clips.
-                allowed[:, timestamps.index(0)] = True  # [F_union]
-            for row, timestamp in enumerate(timestamps):
-                queries = cells[timestamp]
-                keys: dict[int, list[tuple[int, int]]] = {}
-                for column in allowed[row].nonzero(as_tuple=True)[0].tolist():
-                    for view, spans in cells[timestamps[column]].items():
-                        keys.setdefault(view, []).extend(spans)
-                views = sorted(queries.keys() | keys.keys())
-                if len(views) > 1:
-                    groups.append([(queries.get(view, []), keys.get(view, [])) for view in views])
+
+        def _by_sample(
+            cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]],
+        ) -> dict[int, dict[float, dict[int, list[tuple[int, int]]]]]:
+            samples: dict[int, dict[float, dict[int, list[tuple[int, int]]]]] = {}
+            for (sample, timestamp), views in cells.items():
+                samples.setdefault(sample, {})[timestamp] = views
+            return samples
+
+        sensor_samples = _by_sample(instant_cells)
+        key_only_samples = _by_sample(key_only)
+        control_samples = _by_sample(control_query_cells or {})
+        # Sensor queries key sensor and key-only spans; control queries key their own table.
+        for query_samples, key_sources, first_frame_column in (
+            (sensor_samples, (sensor_samples, key_only_samples), True),
+            (control_samples, (control_samples,), False),
+        ):
+            for sample, cells in query_samples.items():
+                sample_keys = [source.get(sample, {}) for source in key_sources]
+                timestamps = sorted(cells)
+                key_timestamps = sorted(set().union(*(source.keys() for source in sample_keys)))
+                times = torch.tensor(timestamps, dtype=torch.float32, device="cpu")  # [F_query]
+                key_times = torch.tensor(key_timestamps, dtype=torch.float32, device="cpu")  # [F_key]
+                offsets = key_times[None, :] - times[:, None]  # [F_query,F_key], key time minus query time
+                allowed = (offsets >= start) & (offsets <= end)  # [F_query,F_key]
+                if cross_view_temporal_window.includes_first_frame:
+                    if first_frame_column:
+                        # Column 0 is the sample's earliest capture time across its streams;
+                        # without frame offsets, every stream starts at capture time 0.
+                        allowed[:, 0] = True  # [F_key]
+                    else:
+                        # The sample's first frame is capture time 0; a control stream that starts
+                        # later, like actions from video frame 1, has no row there to admit.
+                        allowed |= (key_times == 0.0)[None, :]  # [F_query,F_key]
+                if include_frame_zero and 0 in key_timestamps:
+                    # Experimental bands refer to instant zero, even for offset clips.
+                    allowed[:, key_timestamps.index(0)] = True  # [F_key]
+                for row, timestamp in enumerate(timestamps):
+                    queries = cells[timestamp]
+                    keys: dict[int, list[tuple[int, int]]] = {}
+                    for column in allowed[row].nonzero(as_tuple=True)[0].tolist():
+                        for source in sample_keys:
+                            for view, spans in source.get(key_timestamps[column], {}).items():
+                                keys.setdefault(view, []).extend(spans)
+                    views = sorted(queries.keys() | keys.keys())
+                    if len(views) > 1:
+                        groups.append([(queries.get(view, []), keys.get(view, [])) for view in views])
     partitions: list[CrossViewPartition] = []
 
     while groups:
@@ -722,6 +806,8 @@ def build_multiview_maskless_plan(
     cross_view_band_radius: int = 0,
     include_frame_zero: bool = False,
     cross_view_band_keys: str = "other_views",
+    cross_view_key_only: Sequence[bool] | None = None,
+    cross_view_control_queries: Sequence[bool] | None = None,
 ) -> MultiviewMasklessPlan:
     """Describe a batch's GEN stream to :func:`multiview_maskless_attention`.
 
@@ -745,7 +831,10 @@ def build_multiview_maskless_plan(
       partitioned into rectangles between distinct views. Every
       control rule in the mask is a view rule, never an instant one, so a control token is
       absent from this partition as a key and as a query alike. It is sliced out rather than
-      masked, so nothing is computed for it and nothing reaches it.
+      masked, so nothing is computed for it and nothing reaches it. The exceptions are a
+      ``cross_view_key_only`` item, which joins the sensor rectangles as keys but never queries
+      them, and a ``cross_view_control_queries`` item, which queries rectangles of its own keyed
+      by the other views' tokens of such items.
 
     A sample owning a *single* same-view group is sliced out of the cross-instant partition on
     the same terms, and for a sharper reason: its instant groups are then subsets of its one
@@ -824,7 +913,16 @@ def build_multiview_maskless_plan(
             keys already covered by the same-view pass are not counted twice.
             With no expansion, the default is accepted and all cross-view rectangles
             still exclude own-view keys.
-
+        cross_view_key_only: per item, whether a control item also serves as a cross-view
+            *key*, never a query: a sensor query then reaches it on the other views at the
+            instants or capture times its window admits, the way it reaches their sensor
+            tokens. Its frame ``f`` is timed ``(f + frame_offset) * seconds_per_frame``, as a
+            sensor item's is. Needs ``attention_scope="decomposed"`` and no band expansion.
+            ``None`` keeps every control item out of that pass.
+        cross_view_control_queries: per item, whether a control item's tokens also *query* the
+            cross-view pass, keyed only by the other views' tokens of the items so marked, under
+            the same instant or window rule and the same clock as ``cross_view_key_only``. They
+            never key sensor tokens there. Same requirements as ``cross_view_key_only``.
 
     Returns:
         The plan, with its partitions as varlen offsets and the gathers that reach them.
@@ -897,6 +995,8 @@ def build_multiview_maskless_plan(
     rates = [1.0] * num_items if seconds_per_frame is None else list(seconds_per_frame)
     offsets = [0] * num_items if frame_offsets is None else list(frame_offsets)
     control = [False] * num_items if is_control is None else list(is_control)
+    key_only = [False] * num_items if cross_view_key_only is None else list(cross_view_key_only)
+    control_queries = [False] * num_items if cross_view_control_queries is None else list(cross_view_control_queries)
     axes = [0] * num_items if view_axis is None else list(view_axis)
     # ``None`` reproduces what the axis used to decide on its own: the cameras' axis is the one
     # captions are written for, and every other axis is a sensor that reads all of them. Callers
@@ -909,11 +1009,23 @@ def build_multiview_maskless_plan(
         ("seconds_per_frame", rates),
         ("frame_offsets", offsets),
         ("is_control", control),
+        ("cross_view_key_only", key_only),
+        ("cross_view_control_queries", control_queries),
         ("view_axis", axes),
         ("caption_access", accesses),
     ):
         if len(values) != num_items:
             raise ValueError(f"num_views describes {num_items} items but {name} describes {len(values)}.")
+    for name, marks in (("cross_view_key_only", key_only), ("cross_view_control_queries", control_queries)):
+        if not any(marks):
+            continue
+        if any(mark and not is_ctrl for mark, is_ctrl in zip(marks, control)):
+            raise ValueError(f"{name} marks a sensor item, which already queries and keys that pass.")
+        if attention_scope != "decomposed" or expands_band:
+            raise ValueError(
+                f"{name} adds control tokens to the cross-view rectangles, so it needs "
+                "attention_scope='decomposed' and no cross-view band expansion."
+            )
     if any(rate <= 0 or not math.isfinite(rate) for rate in rates):
         raise ValueError(f"seconds_per_frame must be positive and finite, got {rates}.")
     same_view = same_view_temporal_window or SameViewTemporalWindowConfig()
@@ -1009,6 +1121,10 @@ def build_multiview_maskless_plan(
     group_access: dict[int, CaptionAccess] = {}
     view_spans: list[list[tuple[int, int]]] = []
     instant_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] = {}
+    # The same layout for ``cross_view_key_only`` control items, which key those rectangles only.
+    key_only_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] = {}
+    # And for ``cross_view_control_queries`` items, which query and key their own rectangles.
+    control_query_cells: dict[tuple[int, float], dict[int, list[tuple[int, int]]]] = {}
     caption_reader_runs: list[torch.Tensor] = []
     caption_reader_lens: list[int] = []
     # Each same-view group's tokens kept apart by what they are, for the split
@@ -1085,7 +1201,24 @@ def build_multiview_maskless_plan(
                                 f"within each view group; group={key}, periods={period!r} and {rates[item]!r}."
                             )
 
-            if not control[item] and not single_group_sample[sample] and attention_scope != "same_view":
+            if (
+                (not control[item] or key_only[item] or control_queries[item])
+                and not single_group_sample[sample]
+                and attention_scope != "same_view"
+            ):
+                # A marked control item writes to its own tables, never to the sensor queries'.
+                destinations = (
+                    [
+                        cells
+                        for cells, marked in (
+                            (key_only_cells, key_only[item]),
+                            (control_query_cells, control_queries[item]),
+                        )
+                        if marked
+                    ]
+                    if control[item]
+                    else [instant_cells]
+                )
                 # The epsilon nudges a frame whose midpoint lands exactly on an anchor boundary
                 # into the later group rather than leaving it to float rounding. Exact landings
                 # need commensurate spans; at 10Hz against 7.5Hz the margin is an eighth of a
@@ -1106,9 +1239,10 @@ def build_multiview_maskless_plan(
                     group = view_group[(sample, axes[item], view)]
                     for frame, instant in enumerate(instants):
                         start = position + (view * frames + frame) * spatial
-                        instant_cells.setdefault((sample, instant), {}).setdefault(group, []).append(
-                            (start, start + spatial)
-                        )
+                        for cells in destinations:
+                            cells.setdefault((sample, instant), {}).setdefault(group, []).append(
+                                (start, start + spatial)
+                            )
             # The cameras' axis is the one captions are written for; every other axis is a
             # sensor no caption describes, which is what the flag decides the fate of.
             if subset_gen_to_und and accesses[item] != "no_captions":
@@ -1187,7 +1321,14 @@ def build_multiview_maskless_plan(
         if expands_band
         else cross_view
     )
-    partitions = _cross_view_partitions(instant_cells, device, partition_window, include_frame_zero=include_frame_zero)
+    partitions = _cross_view_partitions(
+        instant_cells,
+        device,
+        partition_window,
+        include_frame_zero=include_frame_zero,
+        key_only_cells=key_only_cells,
+        control_query_cells=control_query_cells,
+    )
     caption_gather, caption_lens = _caption_partition(captions, view_group, group_access, device, bool(pad_tokens))
     caption_q_gather, caption_q_offsets, caption_q_max_len, caption_offsets, caption_max_len = (
         (None, None, 0, None, 0)

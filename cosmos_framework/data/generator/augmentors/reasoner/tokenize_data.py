@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Protocol, cast
 import numpy as np
 import torch
 from PIL import Image
+from qwen_vl_utils.vision_process import smart_resize
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
@@ -35,8 +36,9 @@ from cosmos_framework.data.generator.processors.audio_utils import (
     get_qwen_video_timestamps,
     splice_audio_segments_after_video_chunks,
 )
+from cosmos_framework.data.generator.processors.qwen3vl_processor import VIDEO_BUDGET_RESIZED_KEY
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor as Processor
-from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX, MEDIA_ROLES, PROCESSOR_KEYS_TO_ADD
 from cosmos_framework.utils.generator.source_video_timing import (
     SOURCE_VIDEO_TIMING_KEY,
     require_source_pts_processor,
@@ -74,6 +76,28 @@ def expand_video_frames_for_framewise(
     expanded_videos = [frame for frame in videos for _ in range(temporal_patch_size)]
     expanded_indices = [index for index in frames_indices for _ in range(temporal_patch_size)]
     return expanded_videos, expanded_indices
+
+
+def _select_video_frames(content: dict[str, Any], indices: list[int]) -> None:
+    """Select pixels and their timing metadata together, without mutating source records."""
+    num_frames = len(content["video"])
+    if "frames_indices" in content:
+        if len(content["frames_indices"]) != num_frames:
+            raise ValueError("Framewise metadata must have one source index per video frame")
+        content["frames_indices"] = [content["frames_indices"][index] for index in indices]
+    if VIDEO_METADATA_KEY in content:
+        metadata = validate_source_video_metadata(content[VIDEO_METADATA_KEY], num_frames)
+        metadata["frames_indices"] = [metadata["frames_indices"][index] for index in indices]
+        content[VIDEO_METADATA_KEY] = metadata
+    if SOURCE_VIDEO_TIMING_KEY in content:
+        timing = content[SOURCE_VIDEO_TIMING_KEY]
+        validate_source_video_timing(timing, num_frames)
+        selected_timing = dict(timing)
+        for key in ("frame_indices", "pts_seconds", "duration_seconds"):
+            selected_timing[key] = [timing[key][index] for index in indices]
+        selected_timing["origin_pts_seconds"] = selected_timing["pts_seconds"][0]
+        content[SOURCE_VIDEO_TIMING_KEY] = selected_timing
+    content["video"] = [content["video"][index] for index in indices]
 
 
 def maybe_subsample_frames(model_name_or_path, list_of_pil_image, max_video_token_length, processor):
@@ -156,8 +180,13 @@ class TokenizeData(Augmentor):
     def __init__(
         self,
         processor: Optional[Processor] = None,
+        min_video_token_length: int = 16,
         max_video_token_length: int = 8192,
+        max_video_frames: int | None = None,
         max_image_token_length: int = 8192,
+        max_total_token_length: int | None = None,
+        adaptive_video_token_budget: bool = False,
+        adaptive_video_token_safety_margin: int = 128,
         custom_system_prompt: str | None = None,
         strip_original_system_prompt: bool = False,
         data_stats_writer_enabled: bool = False,
@@ -172,6 +201,8 @@ class TokenizeData(Augmentor):
         audio_layout: str = "separate_with_timestamps",
         video_timestamp_mode: str = "qwen_index",
         video_temporal_mode: VideoTemporalMode = "native",
+        add_vision_id: bool = False,
+        keep_raw_media: bool = True,
     ) -> None:
         """
         Args:
@@ -182,6 +213,13 @@ class TokenizeData(Augmentor):
             data_stats_writer_enabled: Collect per-sample metadata for DataStatsWriterCallback.
             sound_und (bool): Opt in to audio preprocessing and audio-token registration.
                 Disabled by default so existing text/vision tokenizers are unchanged.
+            add_vision_id (bool): Label media in samples with several images or several videos
+                ("Picture N: " / "Video N: "). Off by default: the processor wrapper used to drop this flag, so
+                checkpoints trained so far never saw the labels, and serving stacks do not add them by default.
+                It applies to every dataset this augmentor tokenizes, and datasets whose prompts already
+                interleave "Picture N" text would get duplicate labels, so it is not a recipe-wide setting.
+            keep_raw_media (bool): Also emit the debug-only "raw_image" / "raw_video" uint8 tensors. Disable for
+                long-context runs, where they duplicate every decoded frame in the dataloader output.
         """
         validate_video_timestamp_mode(video_timestamp_mode)
         self.video_timestamp_mode: str = video_timestamp_mode
@@ -192,11 +230,43 @@ class TokenizeData(Augmentor):
         # Create the tokenizer
         self.text_only = text_only
         self.processor = processor  # Expecting a ImageTextTokenizer
+        self.min_video_token_length = min_video_token_length
         self.max_video_token_length = max_video_token_length
+        self.max_video_frames = max_video_frames
         self.max_image_token_length = max_image_token_length
+        self.max_total_token_length = max_total_token_length
+        if not isinstance(adaptive_video_token_budget, bool):
+            raise TypeError(
+                f"adaptive_video_token_budget must be a bool, got {type(adaptive_video_token_budget).__name__}"
+            )
+        if min_video_token_length <= 0:
+            raise ValueError(f"min_video_token_length must be positive, got {min_video_token_length}")
+        if max_video_token_length < min_video_token_length:
+            raise ValueError(
+                "max_video_token_length must be greater than or equal to min_video_token_length, "
+                f"got min={min_video_token_length}, max={max_video_token_length}"
+            )
+        if max_video_frames is not None and max_video_frames <= 0:
+            raise ValueError(f"max_video_frames must be positive, got {max_video_frames}")
+        if adaptive_video_token_safety_margin < 0:
+            raise ValueError(
+                f"adaptive_video_token_safety_margin must be non-negative, got {adaptive_video_token_safety_margin}"
+            )
+        if adaptive_video_token_budget and (
+            max_total_token_length is None or max_total_token_length <= adaptive_video_token_safety_margin
+        ):
+            raise ValueError(
+                "adaptive_video_token_budget requires max_total_token_length greater than "
+                f"adaptive_video_token_safety_margin, got max_total_token_length={max_total_token_length}, "
+                f"margin={adaptive_video_token_safety_margin}"
+            )
+        self.adaptive_video_token_budget = adaptive_video_token_budget
+        self.adaptive_video_token_safety_margin = adaptive_video_token_safety_margin
         self.custom_system_prompt = custom_system_prompt
         self.strip_original_system_prompt = strip_original_system_prompt
         self.collect_data_stats = data_stats_writer_enabled
+        self.add_vision_id = add_vision_id
+        self.keep_raw_media = keep_raw_media
         self.video_temporal_mode: VideoTemporalMode = video_temporal_mode
         self.effective_temporal_patch_size: int = get_effective_temporal_patch_size(
             getattr(self.processor, "temporal_patch_size", 2), video_temporal_mode
@@ -225,6 +295,134 @@ class TokenizeData(Augmentor):
                 audio_pad_token=audio_pad_token,
                 audio_end_token=audio_end_token,
             )
+
+    def _video_token_counts(self, tokenizer_output: dict[str, torch.Tensor]) -> list[int]:
+        """Count post-merge tokens for each video represented by video_grid_thw."""
+        video_grid_thw = tokenizer_output.get("video_grid_thw")
+        if video_grid_thw is None:
+            return []
+        grid = torch.as_tensor(video_grid_thw, dtype=torch.int64)
+        if grid.numel() == 0:
+            return []
+        if grid.ndim == 1:
+            grid = grid.reshape(1, -1)
+        unmerged_tokens = grid.prod(dim=-1)
+        merge_area = int(self.processor.merge_size) ** 2
+        if bool(torch.any(unmerged_tokens % merge_area != 0)):
+            raise ValueError(
+                f"video_grid_thw contains per-video counts {unmerged_tokens.tolist()}, not all divisible by "
+                f"merge_size**2={merge_area}"
+            )
+        return [int(value) for value in (unmerged_tokens // merge_area).tolist()]
+
+    def _count_video_tokens(self, tokenizer_output: dict[str, torch.Tensor]) -> int:
+        """Count aggregate post-merge video tokens represented by video_grid_thw."""
+        return sum(self._video_token_counts(tokenizer_output))
+
+    def _apply_video_token_budget(
+        self,
+        conversation: list[dict[str, Any]],
+        video_token_budget: int,
+        *,
+        allow_frame_subsampling: bool,
+    ) -> bool:
+        """Apply one aggregate video budget across all videos in a conversation."""
+        video_contents = [
+            content
+            for message in conversation
+            if isinstance(message.get("content"), list)
+            for content in message["content"]
+            if content.get("type") == "video"
+        ]
+        if not video_contents:
+            return False
+
+        patch_size = int(self.processor.patch_size)
+        temporal_patch_size = int(self.processor.temporal_patch_size)
+        merge_size = int(self.processor.merge_size)
+        total_pixel_budget = token_to_pixels(
+            video_token_budget,
+            patch_size=patch_size,
+            temporal_patch_size=temporal_patch_size,
+            merge_size=merge_size,
+        )
+        pixel_budget_per_video = total_pixel_budget // len(video_contents)
+        min_pixels_per_frame = self._minimum_video_pixels_per_frame()
+
+        for content in video_contents:
+            frames = content["video"]
+            if allow_frame_subsampling:
+                max_frames = pixel_budget_per_video // min_pixels_per_frame
+                max_frames = max_frames // temporal_patch_size * temporal_patch_size
+                if max_frames < temporal_patch_size:
+                    return False
+                if len(frames) > max_frames:
+                    if self.video_temporal_mode == "framewise":
+                        # Keep the repeated tubelet for each selected source frame intact.
+                        groups = np.linspace(
+                            0, len(frames) // temporal_patch_size - 1, max_frames // temporal_patch_size
+                        ).astype(int)
+                        sample_idx = [
+                            int(group) * temporal_patch_size + offset
+                            for group in groups
+                            for offset in range(temporal_patch_size)
+                        ]
+                    else:
+                        sample_idx = np.linspace(0, len(frames) - 1, max_frames).astype(int).tolist()
+                    _select_video_frames(content, sample_idx)
+                    frames = content["video"]
+
+            max_pixels_per_frame = pixel_budget_per_video // len(frames)
+            if max_pixels_per_frame < min_pixels_per_frame:
+                return False
+            content["max_pixels"] = max_pixels_per_frame
+            if self.processor.use_smart_resize:
+                resized_frames = self._resize_video_frames(frames, max_pixels_per_frame)
+                if resized_frames is None:
+                    return False
+                content["video"] = resized_frames
+        return True
+
+    def _minimum_video_pixels_per_frame(self) -> int:
+        """Return the model-legal video floor without changing the decoder's training-quality floor."""
+        factor = int(self.processor.patch_size) * int(self.processor.merge_size)
+        wrapped_processor = getattr(self.processor, "processor", None)
+        video_processor = getattr(wrapped_processor, "video_processor", None)
+        video_size = getattr(video_processor, "size", {})
+        shortest_edge = video_size.get("shortest_edge") if isinstance(video_size, dict) else None
+        if shortest_edge is not None:
+            return max(int(shortest_edge), factor**2)
+        min_height_width = int(getattr(self.processor, "min_height_width", factor))
+        return max(min_height_width**2, factor**2)
+
+    def _resize_video_frames(
+        self,
+        frames: list[Image.Image],
+        max_pixels_per_frame: int,
+    ) -> list[Image.Image] | None:
+        """Downscale frames so processors that ignore content max_pixels still honor the budget."""
+        patch_size = int(self.processor.patch_size)
+        merge_size = int(self.processor.merge_size)
+        factor = patch_size * merge_size
+        min_pixels_per_frame = self._minimum_video_pixels_per_frame()
+        if max_pixels_per_frame < min_pixels_per_frame:
+            return None
+
+        resized_frames: list[Image.Image] = []
+        for frame in frames:
+            width, height = frame.size
+            if width * height <= max_pixels_per_frame:
+                resized_frames.append(frame)
+                continue
+            resized_height, resized_width = smart_resize(
+                height,
+                width,
+                factor=factor,
+                min_pixels=min_pixels_per_frame,
+                max_pixels=max_pixels_per_frame,
+            )
+            resized_frames.append(frame.resize((resized_width, resized_height), resample=Image.Resampling.BICUBIC))
+        return resized_frames
 
     def __call__(self, data_dict: Dict) -> Dict:
         r"""Tokenize a dialog and pad the sequence.
@@ -282,7 +480,7 @@ class TokenizeData(Augmentor):
                 raise ValueError(
                     f"message is not a dict: {message} | conversation: {conversation} | data_dict: {data_dict} | __url__: {data_dict['__url__'].root}, {data_dict['__url__'].path}"
                 )
-            if message["role"] == "user" and isinstance(message["content"], list):
+            if message["role"] in MEDIA_ROLES and isinstance(message["content"], list):
                 total_images += len([content for content in message["content"] if content["type"] == "image"])
                 total_videos += len([content for content in message["content"] if content["type"] == "video"])
                 total_audios += len([content for content in message["content"] if content["type"] == "audio"])
@@ -307,7 +505,7 @@ class TokenizeData(Augmentor):
                 return None
 
             for message in conversation:
-                if message["role"] != "user" or not isinstance(message["content"], list):
+                if message["role"] not in MEDIA_ROLES or not isinstance(message["content"], list):
                     continue
                 for content in message["content"]:
                     if content["type"] != "audio":
@@ -357,8 +555,8 @@ class TokenizeData(Augmentor):
         for message in conversation:
             video_timestamps_by_key: dict[str, list[float]] = {}
             active_video_key: str | None = None
-            # for user message, we insert the media
-            if message["role"] == "user" and isinstance(
+            # for user and tool messages, we insert the media
+            if message["role"] in MEDIA_ROLES and isinstance(
                 message["content"], list
             ):  # Otherwise it's text and content is a string
                 images_content_idx_full = [
@@ -393,7 +591,7 @@ class TokenizeData(Augmentor):
                             min_pixels_per_image = self.processor.processor.image_processor.size["shortest_edge"]
                             if max_pixels_per_image < min_pixels_per_image:
                                 log.critical(
-                                    f"max_pixels_per_image: {max_pixels_per_image} < min_pixels_per_image: {min_pixels_per_image} | self.max_video_token_length = {self.max_video_token_length} is not enough for total_images: {total_images}, as the default min_pixels is {min_pixels_per_image} | Either increase max_video_token_length or include max_pixels in the content or reduce min_pixels"
+                                    f"max_pixels_per_image: {max_pixels_per_image} < min_pixels_per_image: {min_pixels_per_image} | self.max_image_token_length = {self.max_image_token_length} is not enough for total_images: {total_images}, as the default min_pixels is {min_pixels_per_image} | Either increase max_image_token_length or include max_pixels in the content or reduce min_pixels"
                                 )
                                 return None
 
@@ -414,9 +612,10 @@ class TokenizeData(Augmentor):
                         image = data_dict["media"][content["image"]]
                         content["image"] = image
                         content["max_pixels"] = max_pixels_per_image
-                        raw_image = np.asarray(image.convert("RGB"))  # [H,W,3]
-                        raw_images.append(torch.from_numpy(raw_image).permute(2, 0, 1)[:, None])  # [3,1,H,W]
-                        native_height, native_width = raw_image.shape[:2]
+                        native_width, native_height = image.size
+                        if self.keep_raw_media:
+                            raw_image = np.asarray(image.convert("RGB"))  # [H,W,3]
+                            raw_images.append(torch.from_numpy(raw_image).permute(2, 0, 1)[:, None])  # [3,1,H,W]
                         if data_stats is not None:
                             data_stats.add_image(native_height, native_width, self.processor)
 
@@ -424,7 +623,9 @@ class TokenizeData(Augmentor):
                         # as tokenization will NOT upsample the video, we can use a larger value here at the cost of multiple video having 1.5x token length
                         max_total_pixels = token_to_pixels(
                             self.max_video_token_length * 1.5,
+                            patch_size=self.processor.patch_size,
                             temporal_patch_size=self.effective_temporal_patch_size,
+                            merge_size=self.processor.merge_size,
                         )
                         media_key = content["video"]
                         # Add each video to the content list
@@ -467,11 +668,42 @@ class TokenizeData(Augmentor):
                                 self.processor,
                                 self.effective_temporal_patch_size,
                             )
-                        # this is because videos are decoded to be around "max_video_token_length" tokens
 
-                        videos = maybe_subsample_frames(
-                            self.processor.name, videos, self.max_video_token_length, self.processor
+                        content["video"] = videos
+                        if video_metadata is not None:
+                            content[VIDEO_METADATA_KEY] = video_metadata
+                        if source_timing is not None:
+                            content[SOURCE_VIDEO_TIMING_KEY] = source_timing
+                        if self.video_temporal_mode == "framewise":
+                            content["frames_indices"] = (
+                                video_metadata["frames_indices"]
+                                if video_metadata is not None
+                                else video_media.get("source_frames_indices", list(range(len(videos))))
+                            )
+                        selected_indices = maybe_subsample_frames(
+                            self.processor.name, list(range(len(videos))), self.max_video_token_length, self.processor
                         )
+                        if self.max_video_frames is not None and len(selected_indices) > self.max_video_frames:
+                            # Framewise frames are expanded to whole tubelets later, so each source frame counts.
+                            temporal_patch_size = self.effective_temporal_patch_size
+                            aligned_max_video_frames = (
+                                self.max_video_frames // temporal_patch_size * temporal_patch_size
+                            )
+                            if aligned_max_video_frames < temporal_patch_size:
+                                log.critical(
+                                    "[TokenizerDataError]max_video_frames must allow at least "
+                                    f"{temporal_patch_size} temporally aligned frames, "
+                                    f"got {self.max_video_frames}. url: {url}",
+                                    rank0_only=False,
+                                )
+                                return None
+                            sample_idx = np.linspace(0, len(selected_indices) - 1, aligned_max_video_frames).astype(int)
+                            selected_indices = [selected_indices[index] for index in sample_idx]
+                        if len(selected_indices) != len(videos):
+                            _select_video_frames(content, selected_indices)
+                            videos = content["video"]
+                            video_metadata = content.get(VIDEO_METADATA_KEY)
+                            source_timing = content.get(SOURCE_VIDEO_TIMING_KEY)
                         if len(videos) == 0:
                             log.info(f"[TokenizerDataError]video {media_key} has no decoded frames. url: {url}")
                             return None
@@ -482,14 +714,23 @@ class TokenizeData(Augmentor):
                         if video_metadata is not None:
                             # Any later temporal selection must update source indices with the pixels.
                             content[VIDEO_METADATA_KEY] = validate_source_video_metadata(video_metadata, len(videos))
+                        content[VIDEO_BUDGET_RESIZED_KEY] = video_media.get(VIDEO_BUDGET_RESIZED_KEY, False)
 
                         max_pixels_per_image = max_total_pixels // total_videos // len(videos)
+                        # Explicit adaptive budgeting owns this pixel change. Ordinary
+                        # loaders keep the original decoded frames and processor path.
+                        if self.adaptive_video_token_budget and self.processor.use_smart_resize:
+                            resized_videos = self._resize_video_frames(videos, int(max_pixels_per_image))
+                            if resized_videos is None:
+                                log.critical(
+                                    "[TokenizerDataError]video pixel budget is below the processor's minimum "
+                                    f"frame geometry: max_pixels_per_image={max_pixels_per_image}. url: {url}",
+                                    rank0_only=False,
+                                )
+                                return None
+                            videos = resized_videos
                         if self.video_temporal_mode == "framewise":
-                            source_indices = (
-                                video_metadata["frames_indices"]
-                                if video_metadata is not None
-                                else video_media.get("source_frames_indices", list(range(len(videos))))
-                            )
+                            source_indices = content["frames_indices"]
                             if len(source_indices) != len(videos):
                                 log.critical(
                                     f"[TokenizerDataError]video frame metadata length {len(source_indices)} does not "
@@ -513,7 +754,6 @@ class TokenizeData(Augmentor):
                         else:
                             content["video"] = videos
                             content["fps"] = fps
-                        content["max_pixels"] = max_pixels_per_image
                         if message_has_audio:
                             video_timestamps_by_key[media_key] = get_qwen_video_timestamps(
                                 num_frames=len(videos),
@@ -525,10 +765,11 @@ class TokenizeData(Augmentor):
                         if self.audio_layout == "interleaved_av":
                             audio_segment_lengths_by_video.append(None)
 
-                        raw_video_frames = np.stack(
-                            [np.asarray(frame.convert("RGB")) for frame in videos], axis=0
-                        )  # [T,H,W,3]
-                        raw_videos.append(torch.from_numpy(raw_video_frames).permute(3, 0, 1, 2))  # [3,T,H,W]
+                        if self.keep_raw_media:
+                            raw_video_frames = np.stack(
+                                [np.asarray(frame.convert("RGB")) for frame in videos], axis=0
+                            )  # [T,H,W,3]
+                            raw_videos.append(torch.from_numpy(raw_video_frames).permute(3, 0, 1, 2))  # [3,T,H,W]
                     elif content["type"] == "audio":
                         assert audio_outputs is not None
                         assert self.audio_special_tokens is not None
@@ -620,6 +861,10 @@ class TokenizeData(Augmentor):
         if len(raw_videos) > 0:
             data_dict["raw_video"] = raw_videos  # each: [3,T,H,W]
 
+        # Retain the tool menu even when source system prose is stripped.
+        if conversation and conversation[0].get("tools") is not None:
+            processor_kwargs["tools"] = conversation[0]["tools"]
+
         if self.strip_original_system_prompt:
             conversation = [msg for msg in conversation if msg.get("role") != "system"]
             data_dict["conversation"] = conversation
@@ -634,10 +879,7 @@ class TokenizeData(Augmentor):
             )
             return None
 
-        if total_images > 1 or total_videos > 1:
-            add_vision_id = True
-        else:
-            add_vision_id = False
+        add_vision_id = self.add_vision_id and (total_images > 1 or total_videos > 1)
 
         try:
             conversation = convert_all_images_to_rgb(conversation)
@@ -649,7 +891,7 @@ class TokenizeData(Augmentor):
             )
             return None
 
-        try:
+        def tokenize_conversation() -> dict[str, torch.Tensor]:
             tokenizer_output = self.processor.apply_chat_template(
                 conversation,
                 tokenize=True,
@@ -676,6 +918,118 @@ class TokenizeData(Augmentor):
                 tokenizer_output["attention_mask"] = tokenizer_output["attention_mask"].new_ones(
                     spliced_input_ids.shape
                 )
+            return tokenizer_output
+
+        adaptive_video_budget_applied = False
+        try:
+            tokenizer_output = tokenize_conversation()
+            if self.adaptive_video_token_budget and total_videos > 0:
+                assert self.max_total_token_length is not None
+                initial_video_token_counts = self._video_token_counts(tokenizer_output)
+                if len(initial_video_token_counts) != total_videos:
+                    raise ValueError(f"Expected {total_videos} video grids, got {len(initial_video_token_counts)}.")
+                minimum_retained_video_tokens = tuple(
+                    min(self.min_video_token_length, token_count) for token_count in initial_video_token_counts
+                )
+                minimum_video_tokens = sum(minimum_retained_video_tokens)
+                current_video_budget = self._count_video_tokens(tokenizer_output)
+                for _ in range(3):
+                    total_token_length = int(tokenizer_output["input_ids"].numel())
+                    if total_token_length <= self.max_total_token_length:
+                        break
+
+                    actual_video_tokens = self._count_video_tokens(tokenizer_output)
+                    non_video_tokens = total_token_length - actual_video_tokens
+                    hard_available_video_tokens = self.max_total_token_length - non_video_tokens
+                    available_video_tokens = (
+                        self.max_total_token_length - self.adaptive_video_token_safety_margin - non_video_tokens
+                    )
+                    if hard_available_video_tokens < minimum_video_tokens:
+                        log.critical(
+                            "[TokenizerDataError]text and non-video tokens leave too little room for video: "
+                            f"total={total_token_length}, non_video={non_video_tokens}, "
+                            f"hard_available_video={hard_available_video_tokens}, "
+                            f"minimum_video={minimum_video_tokens}, max_total={self.max_total_token_length}. "
+                            f"url: {url}",
+                            rank0_only=False,
+                        )
+                        return None
+                    preferred_video_budget = max(
+                        available_video_tokens,
+                        minimum_video_tokens + self.adaptive_video_token_safety_margin,
+                    )
+                    next_video_budget = min(
+                        self.max_video_token_length,
+                        hard_available_video_tokens,
+                        preferred_video_budget,
+                        actual_video_tokens - 1,
+                    )
+                    if next_video_budget >= actual_video_tokens:
+                        overflow = total_token_length - self.max_total_token_length
+                        next_video_budget = actual_video_tokens - max(
+                            1,
+                            overflow + self.adaptive_video_token_safety_margin,
+                        )
+                    if next_video_budget < minimum_video_tokens:
+                        log.critical(
+                            "[TokenizerDataError]text and non-video tokens leave too little room for video: "
+                            f"total={total_token_length}, non_video={non_video_tokens}, "
+                            f"available_video={available_video_tokens}, minimum_video={minimum_video_tokens}, "
+                            f"max_total={self.max_total_token_length}. url: {url}",
+                            rank0_only=False,
+                        )
+                        return None
+                    if not self._apply_video_token_budget(
+                        conversation,
+                        next_video_budget,
+                        allow_frame_subsampling=total_audios == 0,
+                    ):
+                        log.critical(
+                            "[TokenizerDataError]adaptive video budget is below the processor's minimum "
+                            f"frame geometry: budget={next_video_budget}. url: {url}",
+                            rank0_only=False,
+                        )
+                        return None
+                    adaptive_video_budget_applied = True
+                    current_video_budget = next_video_budget
+                    tokenizer_output = tokenize_conversation()
+                else:
+                    total_token_length = int(tokenizer_output["input_ids"].numel())
+                    if total_token_length > self.max_total_token_length:
+                        log.critical(
+                            "[TokenizerDataError]adaptive video tokenization did not fit after 3 retries: "
+                            f"total={total_token_length}, max_total={self.max_total_token_length}, "
+                            f"last_video_budget={current_video_budget}. url: {url}",
+                            rank0_only=False,
+                        )
+                        return None
+
+                if int(tokenizer_output["input_ids"].numel()) > self.max_total_token_length:
+                    log.critical(
+                        "[TokenizerDataError]adaptive video tokenization exceeded the exact sequence limit: "
+                        f"total={int(tokenizer_output['input_ids'].numel())}, "
+                        f"max_total={self.max_total_token_length}. url: {url}",
+                        rank0_only=False,
+                    )
+                    return None
+                if adaptive_video_budget_applied:
+                    final_video_token_counts = self._video_token_counts(tokenizer_output)
+                    if len(final_video_token_counts) != len(minimum_retained_video_tokens) or any(
+                        actual < minimum
+                        for actual, minimum in zip(
+                            final_video_token_counts,
+                            minimum_retained_video_tokens,
+                            strict=True,
+                        )
+                    ):
+                        log.critical(
+                            "[TokenizerDataError]adaptive resize fell below the per-video quality floor after "
+                            "patch-grid quantization: "
+                            f"actual={final_video_token_counts}, minimum={minimum_retained_video_tokens}. "
+                            f"url: {url}",
+                            rank0_only=False,
+                        )
+                        return None
         except Exception as e:
             if self.video_timestamp_mode == "source_pts":
                 raise ValueError("source_pts failed while rendering aligned video timestamps") from e
@@ -683,6 +1037,21 @@ class TokenizeData(Augmentor):
                 f"Error in tokenizer_output: {e} | conversation: {conversation} | __url__: {url} | data_dict: {data_dict.keys()}"
             )
             return None
+
+        if adaptive_video_budget_applied and self.keep_raw_media:
+            raw_videos = []
+            for message in conversation:
+                if not isinstance(message.get("content"), list):
+                    continue
+                for content in message["content"]:
+                    if content.get("type") != "video":
+                        continue
+                    raw_video_frames = np.stack(
+                        [np.asarray(frame.convert("RGB")) for frame in content["video"]],
+                        axis=0,
+                    )  # [T,H,W,3]
+                    raw_videos.append(torch.from_numpy(raw_video_frames).permute(3, 0, 1, 2))  # [3,T,H,W]
+            data_dict["raw_video"] = raw_videos
         input_ids = tokenizer_output["input_ids"]
         if audio_outputs is not None:
             assert self.audio_special_tokens is not None
@@ -697,19 +1066,22 @@ class TokenizeData(Augmentor):
                 )
                 return None
         if "image_grid_thw" in tokenizer_output and "raw_image" in data_dict:
+            patch_size = self.processor.patch_size
             resized_raw_images: list[torch.Tensor] = []
             for raw_image, image_grid_thw in zip(data_dict["raw_image"], tokenizer_output["image_grid_thw"]):
-                # image_grid_thw: [t,h,w]
+                # image_grid_thw: [t,h,w] in patches
                 _, h, w = image_grid_thw
                 raw_image = torch.nn.functional.interpolate(
-                    raw_image, size=(int(h) * 14, int(w) * 14), mode="bilinear", align_corners=False
-                )  # [3,1,h*14,w*14]
+                    raw_image, size=(int(h) * patch_size, int(w) * patch_size), mode="bilinear", align_corners=False
+                )  # [3,1,h*P,w*P]
                 resized_raw_images.append(raw_image)
-            data_dict["raw_image"] = resized_raw_images  # each: [3,1,h*14,w*14]
+            data_dict["raw_image"] = resized_raw_images  # each: [3,1,h*P,w*P]
 
         try:
             # token_mask: True for tokens to compute loss on; False for tokens to ignore
             token_mask = self.processor.add_assistant_tokens_mask(input_ids)
+            if hasattr(self.processor, "apply_supervision_overrides"):
+                token_mask = self.processor.apply_supervision_overrides(input_ids, token_mask, conversation)
         except Exception as e:
             log.critical(
                 f"Error in add_assistant_tokens_mask: {e} | conversation: {conversation} | __url__: {url} | data_dict: {data_dict.keys()}"

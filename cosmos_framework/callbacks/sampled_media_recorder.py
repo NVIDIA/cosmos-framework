@@ -181,7 +181,7 @@ class SampledMediaRecorder(Callback):
         count = len(sample_ids)
         media_urls = _as_list(data_batch.get("__url__"), count)
         dataset_names = _as_list(data_batch.get("dataset_name"), count)
-        source_streams = _as_list(data_batch.get("transfer_source_stream"), count)
+        source_streams = _as_list(data_batch.get("task_family"), count)
         source_names = _as_list(data_batch.get("source_dataset_name"), count)
         captions = _as_optional_string_list(data_batch.get("ai_caption"), count) if self.record_caption else []
         source_ids = _as_list(data_batch.get("source_id"), count)

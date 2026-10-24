@@ -21,7 +21,6 @@ import torch
 import torch.nn.functional as F
 
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
-from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
@@ -34,6 +33,7 @@ from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
 )
+from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 
 # See cosmos_framework/data/generator/sequence_packing/ for the canonical definition.
 SequencePack = dict[str, Any]

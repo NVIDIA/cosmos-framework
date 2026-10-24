@@ -25,6 +25,11 @@ trace (``torch_profiles/``, when ``--profile`` is on).
 Sweeping inside one process is not a convenience: building the model and paying
 ``torch.compile`` warm-up costs minutes, while a timed point costs seconds, so
 re-launching per shape would spend almost all of its wall time on setup.
+Automatic Python garbage collection is disabled during each point, including warm-up.
+Generation-1 collection runs after each point, outside its timing and profile capture.
+Raw-video release after preprocessing is always disabled so synthetic batches remain
+available across warm-up and timed CP windows. This retains more GPU memory than
+training with raw-video release enabled.
 
 The benchmark drives the model directly rather than through
 :class:`~cosmos_framework.trainer.ImaginaireTrainer`: it builds the model from a
@@ -72,8 +77,11 @@ them, while incremental prices are exact either way.
 from __future__ import annotations
 
 import contextlib
+import gc
+import json
 import math
 import os
+import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -85,9 +93,9 @@ import torch
 import torch.distributed as dist
 import tyro
 
-from cosmos_framework.data.generator.sequence_packing import SequencePlan
-from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.config import load_config
+from cosmos_framework.utils.lazy_config import instantiate
+from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.generator.cost_model.estimator import (
     PEAK_TFLOPS_BY_DEVICE,
     BucketMeasurement,
@@ -98,11 +106,74 @@ from cosmos_framework.utils.generator.cost_model.estimator import (
     flops_per_sample,
 )
 from cosmos_framework.utils.generator.cost_model.spec import SampleSpec
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils.generator.method_timer import MethodTimer
-from cosmos_framework.utils.lazy_config import instantiate
 
 CONFIG_PATH = "cosmos_framework/configs/base/config.py"
 DEFAULT_EXPERIMENT = "t2w_mot_exp306_006_qwen3_vl_8b_ratio_sample_balancing"
+
+
+def configure_collective_debug(output_dir: str, steps: int) -> None:
+    """Configure opt-in diagnostics before NCCL or its flight recorder initializes."""
+    recorder = getattr(torch._C, "_distributed_c10d", None)
+    for name in ("_dump_nccl_trace", "_reset_fr_recording_nccl"):
+        if not callable(getattr(recorder, name, None)):
+            raise RuntimeError(f"--debug-collectives requires this PyTorch build to provide {name}.")
+    for name in ("_enable_collectives_timing", "_wait_for_pending_works"):
+        if not callable(getattr(dist.ProcessGroup, name, None)):
+            raise RuntimeError(f"--debug-collectives requires ProcessGroup.{name}.")
+    if not hasattr(getattr(dist.distributed_c10d, "_world", None), "pg_map"):
+        raise RuntimeError("--debug-collectives requires the PyTorch process-group registry.")
+
+    # A 94-layer CP32 step has over 2,500 collectives. Keep the entire timed
+    # point, not just the final 2,000 events in the launcher's default buffer.
+    buffer_size = max(65536, steps * 8192)
+    os.environ["TORCH_FR_BUFFER_SIZE"] = str(buffer_size)
+    os.environ["TORCH_NCCL_TRACE_BUFFER_SIZE"] = str(buffer_size)
+    debug_dir = Path(output_dir) / "collective_debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["NCCL_DEBUG"] = "INFO"
+    os.environ["NCCL_DEBUG_SUBSYS"] = "INIT,ENV,NET,REG,ALLOC"
+    os.environ["NCCL_DEBUG_FILE"] = str(debug_dir / "nccl.%h.%p.log")
+
+
+def dump_collective_debug(
+    output: Path,
+    groups: list[dist.ProcessGroup],
+    step_times: list[dict[str, int]],
+    timed_end_ns: int,
+) -> None:
+    """Write all this rank's collectives after measurement and watchdog retirement.
+
+    Flight Recorder's ``duration_ms`` is CUDA-event elapsed time. Its
+    ``time_discovered_started_ns`` and ``time_discovered_completed_ns`` are CPU
+    observation times, potentially delayed by the watchdog; they are not exact
+    GPU timestamps. Linux ``time_created_ns`` and the step markers both use
+    CLOCK_REALTIME. Cross-host clock offsets still need to be checked offline.
+    """
+    # Synchronization at the end of time_bucket completes GPU work, but the
+    # watchdog still needs to retire it before duration_ms is present in dumps.
+    # This waits locally and releases the GIL; it adds no distributed barrier.
+    for group in groups:
+        group._wait_for_pending_works()
+    trace = torch._C._distributed_c10d._dump_nccl_trace(
+        includeCollectives=True, includeStackTraces=False, onlyActive=False
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.with_suffix(".pickle").write_bytes(trace)
+    metadata = {
+        "rank": dist.get_rank(),
+        "world_size": dist.get_world_size(),
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "bucket": output.name,
+        "clock": "CLOCK_REALTIME nanoseconds; discovery timestamps are CPU observations",
+        "timed_end_ns": timed_end_ns,
+        "steps": step_times,
+        "buffer_size": int(os.environ["TORCH_FR_BUFFER_SIZE"]),
+    }
+    output.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
+    log.info(f"Wrote collective diagnostics: {output.with_suffix('.pickle')}")
 
 
 def _peak_tflops(device_name: str) -> float:
@@ -208,7 +279,7 @@ def build_model(
     Args:
         experiment: Registered Hydra experiment name.
         world_size: Ranks in this job.
-        extra_overrides: Additional OmegaConf overrides, applied last.
+        extra_overrides: Additional OmegaConf overrides. Raw-video release remains disabled.
         context_parallel_shard_degree: Context-parallel group size. Must divide
             ``world_size``; validated by the caller before this is reached.
 
@@ -236,8 +307,10 @@ def build_model(
         "callbacks=[basic,optimization,job_monitor]",
         "model.config.ema.enabled=False",
     ]
-    # Applied last so an explicit override on the command line still wins.
+    # Explicit overrides win for configurable settings; raw-video retention is required below.
     overrides.extend(extra_overrides)
+    # Reuse the synthetic raw batch after warm-up and at every subsequent CP window.
+    overrides.append("model.config.release_cp_raw_batch_after_preprocessing=False")
     log.info(f"Loading {experiment} with overrides {overrides}")
     config = load_config(CONFIG_PATH, overrides)
 
@@ -358,9 +431,14 @@ def time_bucket(
     step_optimizer: bool = True,
     vae_timer: MethodTimer | None = None,
     profiler: torch.profiler.profile | None = None,
+    collective_debug_output: Path | None = None,
 ) -> tuple[float, dict[str, Any], float, int]:
-    """Time ``steps`` steps (rounded up, see below) after ``warmup``, returning
+    """Time exactly ``steps`` steps after ``warmup``, returning
     ``(sec_per_step, last_output, vae_sec_per_step, steps_run)``.
+
+    Automatic Python GC is disabled for the entire point. Generation-1 collection,
+    matching production's collection level, runs afterward outside timing/profiling,
+    including on failure; the caller's previous automatic-GC state is restored.
 
     Warm-up matters more than usual here: this experiment enables
     ``torch.compile``, so the first step of every new shape pays compilation.
@@ -370,59 +448,97 @@ def time_bucket(
     a mean would report a step nobody experienced. ``vae_sec_per_step`` follows the
     same MAX convention when ``vae_timer`` is given; it is ``0.0`` otherwise.
 
-    ``profiler``, when given, is stepped once per TIMED iteration only, never during
-    warm-up. Its ``wait`` window (``--profile-wait-steps``) is documented as skipping
+    ``profiler``, when given, is entered after warm-up and stepped once per TIMED
+    iteration only. Its ``wait`` window (``--profile-wait-steps``) is documented as skipping
     steps on top of this bucket's own ``--warmup``; stepping it during warm-up too
     would run that wait window (and possibly its active window) out against
     compiling/warm-up steps instead, so the recorded trace would show compilation
     or warm-up noise rather than the steady-state timed steps it is meant to show.
     """
-    for iteration in range(warmup):
-        run_step(model, optimizer, scheduler, batch, iteration, step_optimizer=step_optimizer)
+    gc_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        debug_groups: list[dist.ProcessGroup] = []
+        debug_step_times: list[dict[str, int]] = []
+        if collective_debug_output is not None:
+            debug_groups = [group for group in dist.distributed_c10d._world.pg_map if dist.get_backend(group) == "nccl"]
+            # Enable before warm-up so event allocation is warmed too. Earlier
+            # buckets retain their normal timing policy; there is no disable API.
+            for group in debug_groups:
+                group._enable_collectives_timing()
+        cp_size = getattr(getattr(model, "parallel_dims", None), "cp_size", 1)
+        if cp_size > 1:
+            # A partial prior window must not make this bucket warm up on the old shape.
+            model._cp_window_slot = 0
+            model._cp_local_training_payload = None
+        for iteration in range(warmup):
+            run_step(model, optimizer, scheduler, batch, iteration, step_optimizer=step_optimizer)
 
-    torch.cuda.synchronize()
-    if dist.is_initialized():
-        dist.barrier()
+        torch.cuda.synchronize()
+        if dist.is_initialized():
+            dist.barrier()
 
-    # OmniMoTModel only calls VAE encode on CP window slot 0 (see
-    # OmniMoTModel._get_training_inputs) -- once every cp_size calls to
-    # training_step, with the other cp_size-1 calls broadcasting a cached payload
-    # instead. Warm-up leaves the model's window slot wherever it happened to land,
-    # so without correcting it here the timed region starts mid-window and, unless
-    # ``steps`` is itself a multiple of cp_size, clips a fractional window at the
-    # far end too -- biasing vae_sec_per_step (and adding small-N noise to
-    # sec_per_step itself) by how far ``steps`` sits from a cp_size multiple.
-    # Forcing the slot to 0 and rounding steps up to the next whole multiple makes
-    # the timed region exactly ``steps // cp_size`` complete windows, each
-    # contributing exactly one encode -- the same cadence production trains at.
-    # Safe to poke the model's counter directly: this benchmark never runs
-    # ImaginaireTrainer (run_step calls the model directly, see its docstring), so
-    # there is no ContextParallelDataWindow tracking this rank's slot to desync
-    # from.
-    cp_size = getattr(getattr(model, "parallel_dims", None), "cp_size", 1)
-    if cp_size > 1:
-        model._cp_window_slot = 0
-        steps = -(-steps // cp_size) * cp_size  # ceil to the next multiple of cp_size
+        # OmniMoTModel only calls VAE encode on CP window slot 0 (see
+        # OmniMoTModel._get_training_inputs) -- once every cp_size calls to
+        # training_step, with the other cp_size-1 calls broadcasting a cached payload
+        # instead. Reset the window after warm-up so timing always starts at slot 0,
+        # independent of the warm-up count. The requested step count is never rounded:
+        # a partial final window overrepresents window-start overhead compared with
+        # production's complete windows. Measured VAE encoding is subtracted later,
+        # but other preparation/communication overhead remains in sec_per_step.
+        # Safe to poke the model's counter directly: this benchmark never runs
+        # ImaginaireTrainer (run_step calls the model directly, see its docstring), so
+        # there is no ContextParallelDataWindow tracking this rank's slot to desync
+        # from.
+        if cp_size > 1:
+            model._cp_window_slot = 0
+            model._cp_local_training_payload = None
 
-    if vae_timer is not None:
-        vae_timer.reset()
+        if vae_timer is not None:
+            vae_timer.reset()
 
-    start = time.perf_counter()
-    output_batch: dict[str, Any] = {}
-    for iteration in range(steps):
-        output_batch = run_step(model, optimizer, scheduler, batch, warmup + iteration, step_optimizer=step_optimizer)
-        if profiler is not None:
-            profiler.step()
-    torch.cuda.synchronize()
-    sec_per_step = (time.perf_counter() - start) / steps
+        if collective_debug_output is not None:
+            torch._C._distributed_c10d._reset_fr_recording_nccl()
+        timed_end_ns = 0
+        with profiler if profiler is not None else contextlib.nullcontext():
+            start = time.perf_counter()
+            output_batch: dict[str, Any] = {}
+            for iteration in range(steps):
+                if collective_debug_output is not None:
+                    debug_step_times.append({"iteration": iteration, "cpu_start_ns": time.time_ns()})
+                output_batch = run_step(
+                    model, optimizer, scheduler, batch, warmup + iteration, step_optimizer=step_optimizer
+                )
+                if collective_debug_output is not None:
+                    debug_step_times[-1]["cpu_return_ns"] = time.time_ns()
+                if profiler is not None:
+                    profiler.step()
+            torch.cuda.synchronize()
+            sec_per_step = (time.perf_counter() - start) / steps
+            if collective_debug_output is not None:
+                timed_end_ns = time.time_ns()
 
-    vae_sec_per_step = vae_timer.stop_and_read_ms() / 1000.0 / steps if vae_timer is not None else 0.0
+        if collective_debug_output is not None:
+            dump_collective_debug(collective_debug_output, debug_groups, debug_step_times, timed_end_ns)
+        vae_sec_per_step = vae_timer.stop_and_read_ms() / 1000.0 / steps if vae_timer is not None else 0.0
 
-    if dist.is_initialized():
-        worst = torch.tensor([sec_per_step, vae_sec_per_step], device="cuda")
-        dist.all_reduce(worst, op=dist.ReduceOp.MAX)
-        sec_per_step, vae_sec_per_step = float(worst[0].item()), float(worst[1].item())
-    return sec_per_step, output_batch, vae_sec_per_step, steps
+        if dist.is_initialized():
+            worst = torch.tensor([sec_per_step, vae_sec_per_step], device="cuda")
+            dist.all_reduce(worst, op=dist.ReduceOp.MAX)
+            sec_per_step, vae_sec_per_step = float(worst[0].item()), float(worst[1].item())
+        if cp_size > 1:
+            # Release a partial window before the next bucket allocates its raw batch.
+            model._cp_window_slot = 0
+            model._cp_local_training_payload = None
+        return sec_per_step, output_batch, vae_sec_per_step, steps
+    finally:
+        # Production uses generation 1. Collect between points so a rank cannot
+        # enter automatic GC mid-step and leave its peers waiting in collectives.
+        try:
+            gc.collect(1)
+        finally:
+            if gc_enabled:
+                gc.enable()
 
 
 def observed_spec(
@@ -555,10 +671,9 @@ class BenchmarkConfig:
     Calibration.load_all."""
 
     steps: int = 8
-    """Timed steps per bucket. Under CP (``--context-parallel-shard-degree`` > 1),
-    ``time_bucket`` rounds this up to the next multiple of the CP degree so the timed
-    region covers whole encode windows -- see its docstring -- so the actual step count
-    a bucket ran at (``BucketMeasurement.steps``) may exceed this value."""
+    """Exact number of timed steps per bucket, independent of CP size. Counts that
+    are not multiples of CP include a partial window and overrepresent window-start
+    preparation/communication overhead outside VAE encode."""
 
     warmup: int = 3
     """Untimed steps per bucket, which is what covers torch.compile."""
@@ -588,17 +703,25 @@ class BenchmarkConfig:
     """Wrap the timed steps in ``torch.profiler`` and write a trace per rank to
     ``<output_dir>/torch_profiles/rank<N>``. Off by default: the profiler's own overhead
     lands on whichever bucket is profiled, so a calibration run should not combine
-    ``--profile`` with the points it means to fit against -- use it to diagnose a single
-    shape, not to run the sweep. Only the FIRST measured bucket is profiled (see
-    ``--profile-active-steps``); every later bucket runs exactly as it would without
-    ``--profile``, since a warm profiler with an exhausted schedule costs only a per-step
-    counter increment. Traces open in TensorBoard's PyTorch Profiler plugin or
+    ``--profile`` with the points it means to fit against. Only the selected bucket
+    is profiled (the first by default; see ``--profile-bucket`` and
+    ``--profile-active-steps``); all other buckets run without a profiler, preserving
+    the sweep history leading up to the selected shape. Traces open in TensorBoard's
+    PyTorch Profiler plugin or
     chrome://tracing, written gzip-compressed (see ``tensorboard_trace_handler``'s
     ``use_gzip``) since an uncompressed per-op CUDA trace across every rank is the largest
     thing this script writes and both consumers read ``.gz`` natively; the
     ``.pt.trace.json`` name -- ``.pt`` for "profiler trace", not a saved model -- is
     ``tensorboard_trace_handler``'s own naming, not this script's, so it stays fixed
     regardless of compression."""
+
+    debug_collectives: bool = False
+    """Capture collective CPU submissions and CUDA-event durations on ALL ranks for
+    all timed steps of the --profile-bucket point, without requiring --profile. Write Flight Recorder
+    dumps and step-clock metadata under collective_debug/rank<N>, plus per-process
+    NCCL INFO logs. Recording adds overhead, so use this for diagnosis, not fitting
+    calibration coefficients. GPU start/end discovery timestamps are CPU observations,
+    not exact GPU timestamps. Off by default; requires the container's private Torch APIs."""
 
     profile_wait_steps: int = 1
     """Untimed steps the profiler skips before it starts recording, on top of this
@@ -611,8 +734,9 @@ class BenchmarkConfig:
     per-op CUDA events is far more than needed to read off a kernel breakdown."""
 
     profile_rank: int = 0
-    """Which rank's ``torch.profiler`` context is active; every other rank runs the
-    profiled bucket with ``--profile`` effectively off. All ranks still execute the
+    """Which rank's ``torch.profiler`` context is active unless --profile-ranks is given;
+    every unselected rank runs the profiled bucket with ``--profile`` effectively off.
+    All ranks still execute the
     same steps and the same collectives -- profiling is local CPU/GPU instrumentation,
     not a collective itself -- so this only cuts the per-op recording overhead (and
     trace file size) on the ranks that would otherwise write a trace nobody asked for.
@@ -620,6 +744,14 @@ class BenchmarkConfig:
     that rank still runs the sweep and still contributes to the MAX-across-ranks
     ``sec_per_step``; see ``--profile``'s docstring for why a profiled run is a
     diagnostic, not a calibration point, regardless of how many ranks are traced."""
+
+    profile_ranks: list[int] | None = None
+    """Global ranks to profile simultaneously. Overrides --profile-rank when supplied."""
+
+    profile_bucket: str | None = None
+    """Exact bucket label for profiling or collective diagnostics, e.g. video_720_173f
+    (with @txt4096 when sweeping captions).
+    Defaults to the first bucket; preceding buckets run normally with no profiler attached."""
 
     log_recompiles: bool = True
     """Enable dynamo's TORCH_LOGS=recompiles logging for the run. On by default: a
@@ -680,12 +812,20 @@ class BenchmarkConfig:
             raise ValueError(f"--profile-active-steps must be positive, got {self.profile_active_steps}.")
         if self.profile_rank < 0:
             raise ValueError(f"--profile-rank cannot be negative, got {self.profile_rank}.")
+        if self.profile_ranks is not None:
+            if not self.profile_ranks or any(rank < 0 for rank in self.profile_ranks):
+                raise ValueError("--profile-ranks needs at least one nonnegative rank.")
+            self.profile_ranks = list(dict.fromkeys(self.profile_ranks))
+        if self.profile and self.profile_wait_steps + self.profile_active_steps > self.steps:
+            raise ValueError("--steps must cover --profile-wait-steps plus --profile-active-steps.")
 
 
 def main(args: BenchmarkConfig) -> None:
     if args.log_recompiles:
         torch._logging.set_logs(recompiles=True)
 
+    if args.debug_collectives:
+        configure_collective_debug(args.output_dir, args.steps)
     # NCCL reads this when the communicator is created. Match the training
     # launcher's NVLS policy for this CLI, while allowing an explicit shell
     # override. Importing the reusable benchmark helpers must not change the
@@ -704,8 +844,9 @@ def main(args: BenchmarkConfig) -> None:
             f"world_size={world_size}: CP ranks overlay onto dp rank slots in equal-sized groups, so the "
             "degree must evenly partition the launched ranks."
         )
-    if args.profile_rank >= world_size:
-        raise ValueError(f"--profile-rank={args.profile_rank} is out of range for world_size={world_size}.")
+    profile_ranks = args.profile_ranks if args.profile_ranks is not None else [args.profile_rank]
+    if any(profile_rank >= world_size for profile_rank in profile_ranks):
+        raise ValueError(f"Profile ranks {profile_ranks} are out of range for world_size={world_size}.")
 
     frame_counts = args.frames
     text_token_counts = args.text_tokens
@@ -780,6 +921,10 @@ def main(args: BenchmarkConfig) -> None:
             label += f"@txt{spec.text_tokens}"
         return label
 
+    profile_bucket = args.profile_bucket if args.profile_bucket is not None else bucket_label(points[0][0])
+    if (args.profile or args.debug_collectives) and profile_bucket not in {bucket_label(spec) for spec, _ in points}:
+        raise ValueError(f"--profile-bucket={profile_bucket!r} is not in the requested sweep.")
+
     log.info(
         f"Sweeping {len(points)} point(s) on {world_size} rank(s) at batch sizes filling a "
         f"{args.tokens_per_step:,}-token step per rank, and caption lengths {text_token_counts}"
@@ -792,6 +937,7 @@ def main(args: BenchmarkConfig) -> None:
     # copy is ever built, hence nothing to state about it here.
     carried = "with the parameter update" if args.optimizer else "forward and backward only"
     log.info(f"Timed step: {carried}, no EMA copy, VAE AOTI-compiled")
+    log.info("Python GC: automatic collection disabled during each point; manual generation-1 collection afterward")
 
     model, optimizer, scheduler = build_model(
         args.experiment, world_size, overrides, context_parallel_shard_degree=args.context_parallel_shard_degree
@@ -807,6 +953,12 @@ def main(args: BenchmarkConfig) -> None:
     # ParallelDims actually built the cp mesh at, read the same way any other
     # consumer of model.parallel_dims would.
     cp_size = model.parallel_dims.cp_size
+    if args.steps % cp_size:
+        log.warning(
+            f"Timing exactly {args.steps} steps at CP{cp_size}, including a partial CP window. "
+            "Measured VAE encode time is subtracted, but other window-start preparation/communication "
+            "overhead is overrepresented compared with a full CP window."
+        )
     if cp_size > 1:
         log.info(
             f"Context parallelism: cp={cp_size}. Ranks within a cp group of {cp_size} split ONE sample's packed "
@@ -833,125 +985,129 @@ def main(args: BenchmarkConfig) -> None:
     vae_timer = MethodTimer(model, "encode")
 
     profile_dir = str(Path(args.output_dir) / "torch_profiles")
-    profile_this_rank = args.profile and rank == args.profile_rank
-    profiler_cm = (
-        torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(
-                wait=args.profile_wait_steps, warmup=0, active=args.profile_active_steps, repeat=1
-            ),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(f"{profile_dir}/rank{rank}", use_gzip=True),
-        )
-        if profile_this_rank
-        else contextlib.nullcontext()
-    )
+    profile_this_rank = args.profile and rank in profile_ranks
     if profile_this_rank:
         log.info(
-            f"Profiling the first measured bucket on rank {rank} only: {args.profile_wait_steps} step(s) "
-            f"skipped, then {args.profile_active_steps} recorded, trace written to {profile_dir}. Every other "
-            "rank runs the same steps and collectives without the profiler attached."
+            f"Profiling bucket {profile_bucket} on ranks {profile_ranks}: {args.profile_wait_steps} step(s) "
+            f"skipped, then {args.profile_active_steps} recorded, trace written to {profile_dir}/rank{rank}. "
+            "Unselected ranks and buckets run without the profiler attached."
         )
-    elif args.profile:
-        log.info(f"--profile is on but this is rank {rank}; only rank {args.profile_rank} attaches a profiler.")
 
     measurements: dict[str, BucketMeasurement] = {}
     # Smallest packed length that ran out of memory, per resolution. Longer
     # clips at that resolution cannot fit either, so they are never attempted.
     oom_floor: dict[str, int] = {}
     skipped: dict[str, str] = {}
-    with profiler_cm as profiler:
-        for point_index, (spec, batch_size) in enumerate(points):
-            label = bucket_label(spec)
-            floor = oom_floor.get(spec.resolution)
-            if floor is not None and spec.total_tokens >= floor:
-                reason = f"skipped: {spec.resolution}p ran out of memory at {floor} tokens"
-                log.warning(f"{label}: {reason}")
-                skipped[label] = reason
-                continue
+    for spec, batch_size in points:
+        label = bucket_label(spec)
+        floor = oom_floor.get(spec.resolution)
+        if floor is not None and spec.total_tokens >= floor:
+            reason = f"skipped: {spec.resolution}p ran out of memory at {floor} tokens"
+            log.warning(f"{label}: {reason}")
+            skipped[label] = reason
+            continue
 
-            height, width = spec.pixel_shape
-            modality = spec.modality
-            failed = False
-            sec_per_step = 0.0
-            vae_sec_per_step = 0.0
-            steps_run = args.steps
-            output_batch: dict[str, Any] = {}
-            try:
-                batch = synthetic_batch(modality, height, width, spec.num_pixel_frames, batch_size, spec.text_tokens)
-                torch.cuda.reset_peak_memory_stats()
-                sec_per_step, output_batch, vae_sec_per_step, steps_run = time_bucket(
-                    model,
-                    optimizer,
-                    scheduler,
-                    batch,
-                    args.steps,
-                    args.warmup,
-                    step_optimizer=args.optimizer,
-                    vae_timer=vae_timer,
-                    # Only the first bucket carries the profiler's overhead -- see
-                    # BenchmarkConfig.profile.
-                    profiler=profiler if point_index == 0 else None,
+        height, width = spec.pixel_shape
+        modality = spec.modality
+        failed = False
+        sec_per_step = 0.0
+        vae_sec_per_step = 0.0
+        steps_run = args.steps
+        output_batch: dict[str, Any] = {}
+        try:
+            batch = synthetic_batch(modality, height, width, spec.num_pixel_frames, batch_size, spec.text_tokens)
+            torch.cuda.reset_peak_memory_stats()
+            # Construct and enter a profiler only for the selected bucket. Earlier
+            # buckets retain their training history without any profiling overhead.
+            profiler = (
+                torch.profiler.profile(
+                    activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    schedule=torch.profiler.schedule(
+                        wait=args.profile_wait_steps, warmup=0, active=args.profile_active_steps, repeat=1
+                    ),
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler(f"{profile_dir}/rank{rank}", use_gzip=True),
                 )
-            except torch.OutOfMemoryError:
-                failed = True
-                log.warning(f"{label}: out of memory at {spec.total_tokens} tokens x bs{batch_size}")
-
-            # Ranks vote so they abandon the point together; a one-sided skip would
-            # desync the next point's collectives.
-            if any_rank(failed):
-                floor = min(spec.total_tokens, oom_floor.get(spec.resolution, spec.total_tokens))
-                oom_floor[spec.resolution] = floor
-                skipped[label] = f"out of memory at {spec.total_tokens} tokens x bs{batch_size}"
-                continue
-
-            spec = observed_spec(
-                output_batch, batch_size, modality, spec.resolution, args.aspect_ratio, spec.num_pixel_frames
+                if profile_this_rank and label == profile_bucket
+                else None
             )
-            note = check_vision_tokens(spec, output_batch, batch_size)
-
-            # Subtract this run's own MEASURED VAE-encode time (via vae_timer / CUDA events)
-            # rather than a predicted one, so the fitted cost model prices transformer compute
-            # only. Measuring beats predicting here because the step is actually running --
-            # predicted_encode_seconds exists for decisions that have to be made before a step
-            # runs (VAE load balancing), not for after-the-fact accounting where the real
-            # number is directly available.
-            sec_per_step = max(sec_per_step - vae_sec_per_step, 0.0)
-
-            # A cp group of cp_size ranks cooperates on ONE logical batch -- each rank
-            # narrows its own locally built sequence down to its 1/cp_size shard rather
-            # than contributing a distinct sample (see context_parallel_utils.py). So
-            # only one cp group's worth of batch_size samples is real work per group,
-            # and there are world_size / cp_size such groups in the step.
-            samples_per_step = batch_size * world_size // cp_size
-            gpu_sec_per_step = sec_per_step * world_size
-            sample_flops = flops_per_sample(descriptor, spec, flags)
-            measurements[label] = BucketMeasurement(
-                name=label,
-                spec=spec,
-                steps=steps_run,
-                samples_per_step=samples_per_step,
-                sec_per_step=sec_per_step,
-                gpu_sec_per_sample=gpu_sec_per_step / samples_per_step,
-                flops_per_sample=sample_flops,
-                achieved_tflops_per_gpu=sample_flops * samples_per_step / gpu_sec_per_step / 1e12,
-                peak_mem_gb=torch.cuda.max_memory_allocated() / 2**30,
-                world_size=world_size,
-                note=note,
+            sec_per_step, output_batch, vae_sec_per_step, steps_run = time_bucket(
+                model,
+                optimizer,
+                scheduler,
+                batch,
+                args.steps,
+                args.warmup,
+                step_optimizer=args.optimizer,
+                vae_timer=vae_timer,
+                # Only the selected bucket carries the profiler's overhead -- see
+                # BenchmarkConfig.profile.
+                profiler=profiler,
+                collective_debug_output=(
+                    Path(args.output_dir) / "collective_debug" / f"rank{rank}" / label
+                    if args.debug_collectives and label == profile_bucket
+                    else None
+                ),
             )
-            # Both units, because the two numbers that matter live in different ones: the
-            # token target is per rank, while samples_per_step is global and is what the fit
-            # scales its per-sample columns by. Printing the per-sample token count against
-            # the global sample count invites multiplying them into a figure that describes
-            # neither a rank nor the target.
-            cp_suffix = f", cp={cp_size}" if cp_size > 1 else ""
-            log.info(
-                f"{label}: {sec_per_step * 1000:.1f} ms/step (transformer-only, VAE "
-                f"{vae_sec_per_step * 1000:.1f} ms/step measured & subtracted), "
-                f"{spec.total_tokens} tokens x {batch_size} samples/rank = {batch_size * spec.total_tokens:,} "
-                f"tokens/rank ({samples_per_step} distinct samples/step{cp_suffix}), "
-                f"{measurements[label].achieved_tflops_per_gpu:.1f} TFLOP/s/GPU, "
-                f"{measurements[label].peak_mem_gb:.1f} GiB peak"
-            )
+        except torch.OutOfMemoryError:
+            failed = True
+            log.warning(f"{label}: out of memory at {spec.total_tokens} tokens x bs{batch_size}")
+
+        # Ranks vote so they abandon the point together; a one-sided skip would
+        # desync the next point's collectives.
+        if any_rank(failed):
+            floor = min(spec.total_tokens, oom_floor.get(spec.resolution, spec.total_tokens))
+            oom_floor[spec.resolution] = floor
+            skipped[label] = f"out of memory at {spec.total_tokens} tokens x bs{batch_size}"
+            continue
+
+        spec = observed_spec(
+            output_batch, batch_size, modality, spec.resolution, args.aspect_ratio, spec.num_pixel_frames
+        )
+        note = check_vision_tokens(spec, output_batch, batch_size)
+
+        # Subtract this run's own MEASURED VAE-encode time (via vae_timer / CUDA events)
+        # rather than a predicted one, so the fitted cost model prices transformer compute
+        # only. Measuring beats predicting here because the step is actually running --
+        # predicted_encode_seconds exists for decisions that have to be made before a step
+        # runs (VAE load balancing), not for after-the-fact accounting where the real
+        # number is directly available.
+        sec_per_step = max(sec_per_step - vae_sec_per_step, 0.0)
+
+        # A cp group of cp_size ranks cooperates on ONE logical batch -- each rank
+        # narrows its own locally built sequence down to its 1/cp_size shard rather
+        # than contributing a distinct sample (see context_parallel_utils.py). So
+        # only one cp group's worth of batch_size samples is real work per group,
+        # and there are world_size / cp_size such groups in the step.
+        samples_per_step = batch_size * world_size // cp_size
+        gpu_sec_per_step = sec_per_step * world_size
+        sample_flops = flops_per_sample(descriptor, spec, flags)
+        measurements[label] = BucketMeasurement(
+            name=label,
+            spec=spec,
+            steps=steps_run,
+            samples_per_step=samples_per_step,
+            sec_per_step=sec_per_step,
+            gpu_sec_per_sample=gpu_sec_per_step / samples_per_step,
+            flops_per_sample=sample_flops,
+            achieved_tflops_per_gpu=sample_flops * samples_per_step / gpu_sec_per_step / 1e12,
+            peak_mem_gb=torch.cuda.max_memory_allocated() / 2**30,
+            world_size=world_size,
+            note=note,
+        )
+        # Both units, because the two numbers that matter live in different ones: the
+        # token target is per rank, while samples_per_step is global and is what the fit
+        # scales its per-sample columns by. Printing the per-sample token count against
+        # the global sample count invites multiplying them into a figure that describes
+        # neither a rank nor the target.
+        cp_suffix = f", cp={cp_size}" if cp_size > 1 else ""
+        log.info(
+            f"{label}: {sec_per_step * 1000:.1f} ms/step (transformer-only, VAE "
+            f"{vae_sec_per_step * 1000:.1f} ms/step measured & subtracted), "
+            f"{spec.total_tokens} tokens x {batch_size} samples/rank = {batch_size * spec.total_tokens:,} "
+            f"tokens/rank ({samples_per_step} distinct samples/step{cp_suffix}), "
+            f"{measurements[label].achieved_tflops_per_gpu:.1f} TFLOP/s/GPU, "
+            f"{measurements[label].peak_mem_gb:.1f} GiB peak"
+        )
 
     if not measurements:
         raise RuntimeError("Every sweep point failed or was skipped; nothing to calibrate against.")
@@ -978,6 +1134,8 @@ def main(args: BenchmarkConfig) -> None:
             "overrides": overrides,
             "steps": args.steps,
             "warmup": args.warmup,
+            "gc_policy": "manual_generation_1_after_each_point",
+            "debug_collectives": args.debug_collectives,
             "swept_resolutions": resolutions,
             "swept_frames": frame_counts,
             # The batch sizes the target worked out to, so a calibration says how each

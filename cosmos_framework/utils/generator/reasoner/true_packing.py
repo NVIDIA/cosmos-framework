@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Dense Qwen3-VL position helpers used only by true sequence packing."""
+"""Shared position helpers used only by true sequence packing."""
 
 from types import SimpleNamespace
 from typing import Any
@@ -39,7 +39,7 @@ def build_packed_position_ids(
     image_grid_thw: torch.LongTensor | None = None,  # [N_image,3]
     video_grid_thw: torch.LongTensor | None = None,  # [N_video,3]
 ) -> torch.Tensor:
-    """Build per-sample-reset M-RoPE ids for one true-packed dense Qwen3-VL row on CPU.
+    """Build per-sample-reset M-RoPE ids for one true-packed Qwen3-VL dense/MoE row on CPU.
 
     The unmodified dense Qwen3-VL position routine already resets each row independently
     and consumes concatenated image/video grids in row-major order. Reconstructing a small
@@ -52,10 +52,9 @@ def build_packed_position_ids(
     Returns:
         Position ids with shape ``[3,1,S_pad]``.
     """
-    if config.model_type != "qwen3_vl":
+    if config.model_type not in {"qwen3_vl", "qwen3_vl_moe"}:
         raise NotImplementedError(
-            "True-packing position ids are implemented for dense 'qwen3_vl' only; "
-            f"got model_type={config.model_type!r}."
+            f"True-packing position ids require Qwen3-VL dense or MoE; got model_type={config.model_type!r}."
         )
     if input_ids.ndim != 2 or input_ids.shape[0] != 1:
         raise ValueError(f"True packing requires input_ids with shape [1,S_pad], got {tuple(input_ids.shape)}")
@@ -100,11 +99,17 @@ def build_packed_position_ids(
         temporal * (height // spatial_merge_size) * (width // spatial_merge_size)
         for temporal, height, width in _grid_rows(image_grid_thw, "image_grid_thw")
     ]
+    video_rows = _grid_rows(video_grid_thw, "video_grid_thw")
     video_runs = [
         (height // spatial_merge_size) * (width // spatial_merge_size)
-        for temporal, height, width in _grid_rows(video_grid_thw, "video_grid_thw")
+        for temporal, height, width in video_rows
         for _ in range(temporal)
     ]
+    video_boundaries = {0}
+    frame_count = 0
+    for temporal, _, _ in video_rows:
+        frame_count += temporal
+        video_boundaries.add(frame_count)
     image_index = video_index = 0
     for sample_index, segment in enumerate(torch.split(real_input_ids, seq_lens)):
         tokens = [int(token) for token in segment.tolist()]
@@ -138,6 +143,10 @@ def build_packed_position_ids(
                 raise ValueError(
                     f"sample {sample_index} vision-start token is followed by unsupported token {modality_token}"
                 )
+        if video_index not in video_boundaries:
+            raise ValueError(
+                f"True-packing visual injection mismatch: video crosses logical sample boundary after sample {sample_index}"
+            )
     if image_index != len(image_runs) or video_index != len(video_runs):
         raise ValueError(
             "True-packing visual injection mismatch: every image/video grid row must be consumed in "
@@ -185,9 +194,10 @@ def prepare_true_packing_batch_on_cpu(data: dict[str, Any], config: Any) -> None
     """
     if data.get("true_packing") is not True:
         raise ValueError("prepare_true_packing_batch_on_cpu requires a true-packed batch")
-    if config.model_type != "qwen3_vl":
+    supported_model_types = {"qwen3_vl", "qwen3_vl_moe"}
+    if config.model_type not in supported_model_types:
         raise NotImplementedError(
-            f"True packing is validated only for dense qwen3_vl; got model_type={config.model_type!r}"
+            f"True packing is validated only for {sorted(supported_model_types)}; got model_type={config.model_type!r}"
         )
 
     input_ids = data.get("input_ids")
@@ -211,11 +221,6 @@ def prepare_true_packing_batch_on_cpu(data: dict[str, Any], config: Any) -> None
     video_grid_thw = data.get("video_grid_thw")
     if video_grid_thw is not None and not isinstance(video_grid_thw, torch.Tensor):
         raise TypeError("video_grid_thw must be a tensor")
-    if video_grid_thw is not None and bool((video_grid_thw[:, 0] != 1).any()):
-        raise NotImplementedError(
-            "True-packed multi-frame video is not enabled until padded-vs-packed GPU logit and "
-            "gradient parity are certified; use one-frame video grids or padded batching."
-        )
 
     data["position_ids"] = build_packed_position_ids(
         config,
@@ -224,4 +229,7 @@ def prepare_true_packing_batch_on_cpu(data: dict[str, Any], config: Any) -> None
         image_grid_thw=data.get("image_grid_thw"),
         video_grid_thw=video_grid_thw,
     )  # [3,1,S_pad]
+    # Varlen attention still uses cu_seq_lens. CP slicing and MoE routing
+    # need a separate real-token mask, including unsupervised prompt tokens.
+    data["attention_mask"] = (torch.arange(input_ids.shape[1]) < sum(seq_lens)).unsqueeze(0)
     data[TRUE_PACKING_CPU_PREPARED_KEY] = True

@@ -5,7 +5,8 @@ import functools
 import inspect
 import os
 import signal
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,8 +14,8 @@ import torch
 import torch.distributed as dist
 import torch.utils.data
 
-from cosmos_framework.utils.context_managers import distributed_init
 from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.context_managers import distributed_init
 from cosmos_framework.utils.profiling import (
     maybe_enable_memory_snapshot,
     maybe_enable_nsys_profiling,
@@ -29,11 +30,12 @@ except ImportError:
     USE_MEGATRON = False
 
 
+from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
-from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.utils.misc import StragglerDetectorV2
+
 
 
 @dataclass
@@ -139,6 +141,42 @@ class ContextParallelDataWindow:
             raise RuntimeError(
                 f"CP data-window desync: trainer offset {self.offset} != model window slot {model_window_slot}."
             )
+
+
+@dataclass
+class AccumulationDataWindow:
+    """Bounded CPU lookahead; consumed batches are released before the next fetch.
+
+    An incomplete window survives an epoch boundary. No optimizer checkpoint can
+    observe unread lookahead, because all batches are consumed before the update.
+    """
+
+    batches: deque[dict[str, Any]] = field(default_factory=deque)
+    ready: bool = False
+    last_stop_count: int | None = None
+
+    def fetch(
+        self,
+        iterator: Iterator[dict[str, Any]],
+        size: int,
+        prepare: Callable[[tuple[dict[str, Any], ...]], None],
+    ) -> tuple[dict[str, Any] | None, bool]:
+        if not self.ready:
+            try:
+                while len(self.batches) < size:
+                    self.batches.append(next(iterator))
+            except StopIteration:
+                if self.last_stop_count == len(self.batches):
+                    raise RuntimeError("Cannot complete an accumulation window from an empty dataloader")
+                self.last_stop_count = len(self.batches)
+                return None, True
+            prepare(tuple(self.batches))
+            self.ready = True
+            self.last_stop_count = None
+        batch = self.batches.popleft()
+        if not self.batches:
+            self.ready = False
+        return batch, False
 
 
 @dataclass
@@ -350,6 +388,7 @@ class ImaginaireTrainer:
         self.straggler_detector.initialize()
         # One fetched batch reused for cp_size consecutive steps when CP is enabled.
         self._cp_data_window = ContextParallelDataWindow()
+        self._accumulation_data_window = AccumulationDataWindow()
         # Send a TimeoutError if a training step takes over timeout_period seconds.
         signal.signal(signal.SIGALRM, functools.partial(misc.timeout_handler, config.trainer.timeout_period))  # type: ignore
 
@@ -361,7 +400,8 @@ class ImaginaireTrainer:
         """
         Fetch the next training batch.
 
-        Without CP, every rank fetches a new batch for each step. With CP, each rank
+        Without CP, or with a loader that already replicates CP samples, fetch a
+        new batch each step. Other CP models retain their rotation window: each rank
         fetches one independent local batch at the start of a ``cp_size``-step data
         window. ``self._cp_data_window`` returns that same batch for every slot
         (each slot is one training step within the window; CP rank ``s`` owns slot
@@ -373,15 +413,26 @@ class ImaginaireTrainer:
                 - data_batch: The fetched data batch (or None if stopped).
                 - stop_signal (bool): True if StopIteration was encountered.
         """
+        if getattr(model, "requires_accumulation_window", False) and self.config.trainer.grad_accum_iter > 1:
+            if self._context_parallel_size(model) != 1:
+                raise ValueError("Accumulation lookahead requires a loader that already replicates CP samples")
+            return self._accumulation_data_window.fetch(
+                dataloader_iter, self.config.trainer.grad_accum_iter, model.prepare_accumulation_window
+            )
         parallel_dims = getattr(model, "parallel_dims", None)
-        if parallel_dims is None or not parallel_dims.cp_enabled:
+        if (
+            parallel_dims is None
+            or not parallel_dims.cp_enabled
+            or not getattr(model, "context_parallel_data_window", True)
+        ):
             try:
                 return next(dataloader_iter), False
             except StopIteration:
                 return None, True
 
         cp_size = parallel_dims.cp_mesh.size()
-        self._cp_data_window.assert_synced_with_model(model)
+        if not getattr(self.config.trainer, "skip_model_update", False):
+            self._cp_data_window.assert_synced_with_model(model)
         if not self._cp_data_window.active:
             try:
                 self._cp_data_window.batch = next(dataloader_iter)
@@ -489,7 +540,11 @@ class ImaginaireTrainer:
     @staticmethod
     def _context_parallel_size(model: ImaginaireModel) -> int:
         parallel_dims = getattr(model, "parallel_dims", None)
-        if parallel_dims is None or not parallel_dims.cp_enabled:
+        if (
+            parallel_dims is None
+            or not parallel_dims.cp_enabled
+            or not getattr(model, "context_parallel_data_window", True)
+        ):
             return 1
         return int(parallel_dims.cp_mesh.size())
 
@@ -501,6 +556,7 @@ class ImaginaireTrainer:
         the next raw batch avoids replaying any data from that partial window.
         """
         microsteps = iteration * self.config.trainer.grad_accum_iter
+        # Models with an already CP-replicated loader consume one batch each microstep.
         cp_size = self._context_parallel_size(model)
         return (microsteps + cp_size - 1) // cp_size
 
@@ -521,10 +577,18 @@ class ImaginaireTrainer:
         model = model.to("cuda", memory_format=self.config.trainer.memory_format)  # type: ignore
         model.on_train_start(self.config.trainer.memory_format)
 
+        validate_training_horizon = getattr(dataloader_train, "validate_training_horizon", None)
+        if callable(validate_training_horizon):
+            validate_training_horizon(self._resume_dataloader_fetch_count(model, self.max_iterations))
+
         # Initialize the optimizer, scheduler, and grad_scaler.
         self.callbacks.on_optimizer_init_start()
         optimizer, scheduler = model.init_optimizer_scheduler(self.config.optimizer, self.config.scheduler)
         grad_scaler = torch.amp.GradScaler("cuda", **self.config.trainer.grad_scaler_args)
+        # Checkpoint callbacks also need these when optimizer-step hooks are skipped.
+        self.optimizer: torch.optim.Optimizer = optimizer
+        self.scheduler: torch.optim.lr_scheduler.LRScheduler = scheduler
+        self.grad_scaler: torch.amp.GradScaler = grad_scaler
         self.callbacks.on_optimizer_init_end()
         # Load the model checkpoint and get the starting iteration number.
         iteration = self.checkpointer.load(model, optimizer, scheduler, grad_scaler)
@@ -604,15 +668,20 @@ class ImaginaireTrainer:
                         model_ddp.train()
                     assert model_ddp.training, "model_ddp is not in training mode."
                     assert model.training, "model is not in training mode."
-                    output_batch, loss, grad_accum_iter = self.training_step(
-                        model_ddp,
-                        optimizer,
-                        scheduler,
-                        grad_scaler,
-                        step_batch.training,
-                        iteration=iteration,
-                        grad_accum_iter=grad_accum_iter,
-                    )
+                    if self.config.trainer.skip_model_update:
+                        output_batch = {}
+                        loss = torch.zeros((), device="cuda")  # []
+                        grad_accum_iter = (grad_accum_iter + 1) % self.config.trainer.grad_accum_iter
+                    else:
+                        output_batch, loss, grad_accum_iter = self.training_step(
+                            model_ddp,
+                            optimizer,
+                            scheduler,
+                            grad_scaler,
+                            step_batch.training,
+                            iteration=iteration,
+                            grad_accum_iter=grad_accum_iter,
+                        )
                     step_batch.finalize()
                     self.callbacks.on_training_step_batch_end(
                         model, step_batch.callback_post_step, output_batch, loss, iteration=iteration
@@ -622,7 +691,7 @@ class ImaginaireTrainer:
                         # Release this microstep's outputs before the next forward/backward.
                         del output_batch, loss
                         continue
-                    # Do the following when an actual optimizer (update) step has been made.
+                    # Finish an optimizer step, or its equivalent dataloading window in skip mode.
                     iteration += 1
                     # Save checkpoint.
                     completed_epoch = (
@@ -638,13 +707,10 @@ class ImaginaireTrainer:
                     )
                     iter_save_due = save_freq_in_epoch == 0 and iteration % self.config.checkpoint.save_iter == 0
                     if epoch_save_due or iter_save_due:
+                        # Only epoch saves pass ``epoch``; not every checkpointer accepts it.
+                        save_kwargs = {"epoch": completed_epoch} if epoch_save_due else {}
                         self.checkpointer.save(
-                            model,
-                            optimizer,
-                            scheduler,
-                            grad_scaler,
-                            iteration=iteration,
-                            epoch=completed_epoch if epoch_save_due else None,
+                            model, optimizer, scheduler, grad_scaler, iteration=iteration, **save_kwargs
                         )
                     self.callbacks.on_training_step_end(
                         model,
@@ -663,10 +729,10 @@ class ImaginaireTrainer:
                         and validation_freq_in_epoch > 0
                         and completed_epoch % validation_freq_in_epoch == 0
                     )
-                    iter_validation_due = (
-                        validation_freq_in_epoch == 0 and iteration % self.config.trainer.validation_iter == 0
-                    )
-                    if self.config.trainer.run_validation and (epoch_validation_due or iter_validation_due):
+                    if self.config.trainer.run_validation and (
+                        epoch_validation_due
+                        or (validation_freq_in_epoch == 0 and iteration % self.config.trainer.validation_iter == 0)
+                    ):
                         self.validate(model, dataloader_val, iteration=iteration)
                     # This iteration is successful; reset the timeout signal.
                     signal.alarm(self.config.trainer.timeout_period)
@@ -693,14 +759,8 @@ class ImaginaireTrainer:
             final_epoch is not None and save_freq_in_epoch > 0 and final_epoch % save_freq_in_epoch == 0
         ) or (save_freq_in_epoch == 0 and iteration % self.config.checkpoint.save_iter == 0)
         if not final_already_saved:
-            self.checkpointer.save(
-                model,
-                optimizer,
-                scheduler,
-                grad_scaler,
-                iteration=iteration,
-                epoch=final_epoch if save_freq_in_epoch > 0 else None,
-            )
+            save_kwargs = {"epoch": final_epoch} if save_freq_in_epoch > 0 else {}
+            self.checkpointer.save(model, optimizer, scheduler, grad_scaler, iteration=iteration, **save_kwargs)
         self.callbacks.on_train_end(model, iteration=iteration)
         self.checkpointer.finalize()
         distributed.barrier()

@@ -183,7 +183,7 @@ class VLMConfig:
 class SoundUnderstandingConfig:
     """Optional audio-understanding pathway for standalone Reasoner/VLM models.
 
-    The encoder artifact initializes the frozen modality encoder independently
+    The encoder artifact initializes the optional trainable modality encoder independently
     of the Reasoner checkpoint. The audio projector is trainable by default and
     may be frozen explicitly after alignment.
     """
@@ -207,6 +207,9 @@ class SoundUnderstandingConfig:
     # ``separate_no_timestamps`` omits only audio-side timestamps, while
     # ``interleaved_av`` inserts each audio segment after its native video chunk.
     audio_layout: str = "separate_with_timestamps"
+    # Standalone audio remains enabled independently of video soundtrack extraction.
+    extract_audio_from_video: bool = False
+    freeze_encoder: bool = True
     freeze_projector: bool = False
     # Keep the full input embedding table as an optimizer parameter while
     # allowing gradients only through the audio start/end token positions.
@@ -247,6 +250,8 @@ def validate_sound_understanding_config(config: Any, *, sound_und: bool) -> None
     if config.audio_layout not in _AUDIO_LAYOUTS:
         raise ValueError(f"sound_und_config.audio_layout must be one of {_AUDIO_LAYOUTS}, got {config.audio_layout!r}")
     for name, value in (
+        ("extract_audio_from_video", config.extract_audio_from_video),
+        ("freeze_encoder", config.freeze_encoder),
         ("freeze_projector", config.freeze_projector),
         ("train_boundary_token_embeddings_only", config.train_boundary_token_embeddings_only),
         ("encoder_checkpoint_enabled", config.encoder_checkpoint_enabled),
@@ -260,6 +265,8 @@ def validate_sound_understanding_config(config: Any, *, sound_und: bool) -> None
         raise ValueError("An enabled audio encoder checkpoint requires a non-empty path")
     if config.exclude_frozen_encoder_from_training_checkpoint and not config.encoder_checkpoint_enabled:
         raise ValueError("Excluding the frozen audio encoder from training checkpoints requires checkpoint loading")
+    if config.exclude_frozen_encoder_from_training_checkpoint and not config.freeze_encoder:
+        raise ValueError("A trainable audio encoder must be included in training checkpoints")
 
 
 # Configs for LLM models

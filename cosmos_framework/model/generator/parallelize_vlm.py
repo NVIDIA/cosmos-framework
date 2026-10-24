@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Activation checkpointing, ``torch.compile`` and FSDP2 for Cosmos3 VLM ``HFModel``s.
+"""Context-parallel setup, activation checkpointing, compile and FSDP2 for Cosmos3 VLMs.
 
 Hosts the single VLM-specific ``parallelize`` entry point used by
 ``vlm_model.VLMModel._init_vlm``.  Lives under ``cosmos_framework/model/generator/``
@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper as ptd_checkpoint_wrapper,
@@ -28,21 +29,80 @@ from torch.utils.checkpoint import (
     create_selective_checkpoint_contexts,
 )
 
+from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import (
     PRECISION_TO_TORCH_DTYPE,
     ParallelismConfig,
 )
+from cosmos_framework.model.generator.context_parallel import ContextParallelBatchPolicy, shard_decoder_inputs
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.reasoner.qwen35_caption import qwen35_fp32_decay_modules
-from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 # (parent, attribute name, module) — the module currently registered at that slot, plus what
 # is needed to swap in a replacement. Each pass in `parallelize` replaces the module with a
 # wrapper around it (checkpoint wrapper, then OptimizedModule) and hands the updated slots on.
 _BlockSlot = tuple[nn.Module, str, nn.Module]
+
+
+def apply_cp(model: HFModel, group: dist.ProcessGroup, *, allow_multimodal: bool = False) -> None:
+    """Attach shared CP to explicitly bound native decoder attention and inputs.
+
+    Configure before activation checkpointing and FSDP wrap native modules.
+    Native fusion, RoPE and attention kernels remain owned by model integrations.
+    WORLD FSDP averaging and the CP-scaled objective aggregate replicated vision
+    gradients; adding a separate vision all-reduce would double count.
+    """
+    spec = model.context_parallel_spec()
+    if not spec.fused_ce_enabled:
+        raise ValueError("VLM CP requires fused weighted CE")
+    if getattr(model.model, "_cosmos_cp_group", None) is not None:
+        raise ValueError("VLM CP is already configured")
+    config = spec.text_config
+    if spec.require_default_rope and (config.rope_scaling or {}).get("rope_type", "default") != "default":
+        raise NotImplementedError("This native CP integration requires default RoPE")
+    size = dist.get_world_size(group)
+    if config._attn_implementation != "cosmos":
+        raise ValueError("VLM CP requires cosmos attention")
+    if size not in (2, 4):
+        raise NotImplementedError("VLM CP currently supports only CP=2 or CP=4")
+    if config.num_attention_heads % size or config.num_key_value_heads % size:
+        raise ValueError("CP must divide both query and KV head counts")
+    if getattr(config, "attention_dropout", 0.0) != 0.0:
+        raise ValueError("VLM CP requires attention_dropout=0")
+    if not spec.attention_modules:
+        raise ValueError("VLM CP requires explicit native decoder attention modules")
+
+    if spec.keep_full_inputs:
+
+        def shard_native_decoder_inputs(
+            module: nn.Module, args: tuple[Any, ...], kwargs: dict[str, Any]
+        ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            if args or kwargs.get("input_ids") is not None:
+                raise ValueError("CP expects native fused embeddings at decoder entry")
+            if spec.decoder_packing_key is not None and kwargs.get(spec.decoder_packing_key) is None:
+                raise ValueError("CP requires global native packed boundaries")
+            if kwargs.get("past_key_values") is not None or kwargs.get("use_cache"):
+                raise ValueError("CP does not support a KV cache")
+            output = shard_decoder_inputs(kwargs, group, position_axes=spec.position_axes)
+            if output.get("cache_position") is not None:
+                raise ValueError("CP does not support explicit cache positions")
+            return args, output
+
+        spec.decoder.register_forward_pre_hook(shard_native_decoder_inputs, with_kwargs=True)
+    setattr(model.model, "_cosmos_cp_group", group)
+    if allow_multimodal and spec.fusion_module is not None:
+        setattr(spec.fusion_module, "_cosmos_multimodal_cp_group", group)
+    for attention in spec.attention_modules:
+        setattr(attention, "_cosmos_cp_group", group)
+    model.context_parallel_batch_policy = ContextParallelBatchPolicy(
+        position_axes=spec.position_axes,
+        allow_multimodal=allow_multimodal,
+        keep_full_inputs=spec.keep_full_inputs,
+        requires_packed=spec.requires_packed,
+    )
 
 
 def _collect_repeated_blocks(inner: nn.Module) -> tuple[list[_BlockSlot], set[str]]:
@@ -129,14 +189,14 @@ def _resolve_reduce_dtype(parallelism_config: ParallelismConfig) -> torch.dtype:
 def _collect_ignored_audio_params(model: HFModel) -> set[nn.Parameter]:
     """Return immutable audio parameters that must stay outside FSDP.
 
-    The selected audio encoder is always a frozen, artifact-backed feature extractor.
-    The projector remains part of the raw HF root (and therefore FSDP-managed)
+    Frozen artifact-backed audio parameters stay replicated, while trainable
+    encoder parameters remain FSDP-managed. The projector stays in the raw HF root
     even when it is frozen, matching the existing vision merger/projector
     lifecycle and keeping checkpoint tensor layouts uniform.
     """
     if not model.sound_und:
         return set()
-    return set(model.model.sound_und_model.encoder.parameters())
+    return {parameter for parameter in model.model.sound_und_model.encoder.parameters() if not parameter.requires_grad}
 
 
 def _compile_kwargs(compile_config: CompileConfig) -> dict[str, Any]:
@@ -513,12 +573,15 @@ def parallelize(
     precision: str,
     activation_checkpointing: ActivationCheckpointingConfig,
     compile_config: CompileConfig | None = None,
+    allow_multimodal_cp: bool = False,
 ) -> None:
     """Optimize an HFModel in place: activation checkpointing, ``torch.compile``, FSDP2.
 
     Mirrors ``parallelize_unified_mot.parallelize``, including its pass ORDER, which is
     load-bearing rather than incidental:
 
+    0. :func:`apply_cp` attaches shared CP to native decoder interfaces when enabled,
+       preserving the integration's existing input-sharding stage.
     1. :func:`apply_ac` collects the repeated blocks while their original type names are
        intact and swaps each for a ``CheckpointWrapper``.
     2. :func:`apply_compile` wraps those in ``torch.compile``, so the ``checkpoint`` call
@@ -550,7 +613,11 @@ def parallelize(
                                   ``preserve_rng_state``, ``determinism_check``).
         compile_config:           Optional ``CompileConfig``; ``None``/``enabled=False``
                                   skips compile.
+        allow_multimodal_cp:       Enable replicated native media fusion for integrations
+                                  with an opt-in multimodal path.
     """
+    if parallel_dims.cp_enabled:
+        apply_cp(model, parallel_dims.cp_mesh.get_group(), allow_multimodal=allow_multimodal_cp)
     slots = apply_ac(model, activation_checkpointing)
     slots = apply_compile(slots, compile_config)
     apply_fsdp(model, slots, parallel_dims, parallelism_config, precision)

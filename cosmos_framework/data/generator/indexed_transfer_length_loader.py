@@ -53,7 +53,7 @@ class IndexedTransferDatasetBase(Dataset[dict[str, Any]]):
         *,
         index_creds_path: str | Path | None = None,
         index_cache_dir: str | Path | None = None,
-        caption_key: str = "canonical_caption_structured",
+        caption_key: str = "caption",
         conditioning_config: dict[int, float] | None = None,
         resolution: str = "480",
         seed: int = 42,
