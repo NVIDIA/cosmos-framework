@@ -60,6 +60,30 @@ def _hf_parameter_name(name: str) -> str:
 
 
 def _lora_merge_plan(network: torch.nn.Module) -> tuple[dict[str, LoraInjectedLinear], set[str]]:
+    # Inspect every path before named_parameters() deduplicates shared weights.
+    # A plain path and an adapted path (or two distinct adapters) cannot share a
+    # single dense export weight: their effective weights may differ. Repeated
+    # aliases of the same LoRA module are safe, as are ordinary non-LoRA ties.
+    lora_owners = {
+        f"{name}.weight" if name else "weight": module
+        for name, module in network.named_modules(remove_duplicate=False)
+        if isinstance(module, LoraInjectedLinear)
+    }
+    aliases: dict[int, list[str]] = {id(module.weight): [] for module in lora_owners.values()}
+    if aliases:
+        for name, parameter in network.named_parameters(remove_duplicate=False):
+            if id(parameter) in aliases:
+                aliases[id(parameter)].append(name)
+        ambiguous = [
+            sorted(names)
+            for names in aliases.values()
+            if any(name not in lora_owners for name in names) or len({id(lora_owners[name]) for name in names}) > 1
+        ]
+        if ambiguous:
+            # This topology-only preflight runs on every rank before any tensor
+            # all-gather, so rejection does not leave peers waiting in a gather.
+            raise ValueError(f"Cannot export ambiguous shared LoRA base weights: {sorted(ambiguous)}")
+
     merges: dict[str, LoraInjectedLinear] = {}
     adapter_keys: set[str] = set()
     for name, module in network.named_modules():
@@ -315,8 +339,8 @@ class HFExportCallback(Callback):
                 total_size += tensor_bytes
             current_chunk_bytes += tensor_bytes
 
-        # Check after all collectives, on every rank. A tied/aliased base weight
-        # omitted by named_parameters() must not silently discard its adapter.
+        # After all collectives, ensure every planned merge was exported and
+        # normalized names stayed unambiguous. Keep this check on every rank.
         missing_merges = merges.keys() - merged_names
         if missing_merges or duplicate_names:
             raise ValueError(

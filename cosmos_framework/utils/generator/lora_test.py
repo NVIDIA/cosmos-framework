@@ -10,6 +10,7 @@ from cosmos_framework.utils.generator.lora import (
     LoraInjectedLinear,
     apply_lora_trainable_scope,
     inject_lora_pre_fsdp,
+    merge_and_strip_lora_adapters_,
     merge_lora_adapters_,
 )
 
@@ -88,7 +89,7 @@ def test_rslora_merge_matches_unmerged_forward() -> None:
 
 @pytest.mark.parametrize("use_rslora", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float64])
-def test_export_merge_and_inplace_merge_share_scaling_and_precision(dtype, use_rslora):
+def test_export_merge_preserves_precision_and_training_weights(dtype, use_rslora):
     torch.manual_seed(13)
     layer = LoraInjectedLinear(
         torch.nn.Linear(4, 3, dtype=dtype), rank=2, alpha=3, use_rslora=use_rslora, adapter_dtype=torch.float32
@@ -107,7 +108,41 @@ def test_export_merge_and_inplace_merge_share_scaling_and_precision(dtype, use_r
     torch.testing.assert_close(exported, expected, rtol=0, atol=0)
     for actual, original in ((layer.weight, base), (layer.lora_A.weight, adapter_a), (layer.lora_B.weight, adapter_b)):
         torch.testing.assert_close(actual, original, rtol=0, atol=0)
-    weight_identity = id(layer.weight)
-    layer.merge_adapter_()
-    assert id(layer.weight) == weight_identity
-    torch.testing.assert_close(layer.weight, expected.to(dtype), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("merge_api", ["layer", "network", "offline"])
+@pytest.mark.parametrize(
+    "dtype,autocast,expected_inplace,expected_export",
+    [
+        (torch.bfloat16, False, 1.0, 1.0078125),
+        (torch.bfloat16, True, 1.0, 1.0078125),
+        (torch.float32, False, 1.00392, 1.00392),
+        (torch.float32, True, 1.00390625, 1.00392),
+    ],
+)
+@torch.no_grad()
+def test_existing_merge_apis_retain_rounding_and_autocast(
+    merge_api, dtype, autocast, expected_inplace, expected_export
+):
+    layer = LoraInjectedLinear(
+        torch.nn.Linear(1, 1, bias=False, dtype=dtype), rank=1, alpha=1, adapter_dtype=torch.float32
+    )
+    layer.weight.fill_(1.0)
+    layer.lora_A.weight.fill_(1.0)
+    layer.lora_B.weight.fill_(0.00392)
+    weight = layer.weight
+    network = torch.nn.ModuleDict({"layer": layer})
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=autocast):
+        exported = layer.merged_weight(layer.weight, layer.lora_A.weight, layer.lora_B.weight)
+        if merge_api == "layer":
+            layer.merge_adapter_()
+        elif merge_api == "network":
+            assert merge_lora_adapters_(network) == 1
+        else:
+            assert merge_and_strip_lora_adapters_(network) == 1
+            assert type(network["layer"]) is torch.nn.Linear
+    # Deliberate boundary: legacy APIs round the delta before adding it, and
+    # honor ambient autocast. Automatic export rounds only the completed sum.
+    assert network["layer"].weight is weight
+    torch.testing.assert_close(weight, torch.full_like(weight, expected_inplace), rtol=0, atol=0)
+    torch.testing.assert_close(exported, torch.full_like(weight, expected_export), rtol=0, atol=0)

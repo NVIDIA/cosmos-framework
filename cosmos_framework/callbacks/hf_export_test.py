@@ -20,7 +20,17 @@ from cosmos_framework.utils.generator.lora import LoraInjectedLinear, inject_lor
 pytestmark = pytest.mark.L0
 
 
-def _model(*, lora=True, use_rslora=False, dtype=torch.float32):
+class _SharedBaseNetwork(nn.Module):
+    def __init__(self, layers):
+        super().__init__()
+        for name, layer in layers:
+            self.add_module(name, layer)
+
+    def forward(self, inputs):
+        return self.base(inputs) + self.adapted(inputs)
+
+
+def _model(*, lora=True, use_rslora=False, dtype=torch.float32, tied_embeddings=False):
     torch.manual_seed(123)
     config = Qwen2Config(
         vocab_size=32,
@@ -29,7 +39,7 @@ def _model(*, lora=True, use_rslora=False, dtype=torch.float32):
         num_hidden_layers=1,
         num_attention_heads=2,
         num_key_value_heads=2,
-        tie_word_embeddings=False,
+        tie_word_embeddings=tied_embeddings,
     )
     config._attn_implementation = "eager"
     model = Qwen2ForCausalLM(config).to(dtype=dtype).eval()
@@ -117,18 +127,26 @@ def test_lora_export_reloads_as_dense_hf_model(tmp_path, use_rslora, base_dtype,
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("tied_embeddings", [False, True])
 @torch.no_grad()
-def test_dense_export_preserves_weights_and_reload(tmp_path, dtype):
-    model = _model(lora=False, dtype=getattr(torch, dtype))
+def test_dense_export_preserves_weights_and_reload(tmp_path, dtype, tied_embeddings):
+    model = _model(lora=False, dtype=getattr(torch, dtype), tied_embeddings=tied_embeddings)
     callback = _callback(dtype)
     chunks, manifest, total_size = callback._gather_weights(_wrapped(model))
     for chunk in chunks:
         for name, tensor in chunk.items():
             torch.testing.assert_close(tensor, model.state_dict()[name], rtol=0, atol=0)
     callback._do_save_and_upload(chunks, manifest, total_size, model.config, "", str(tmp_path), 1)
-    reloaded = AutoModelForCausalLM.from_pretrained(
-        tmp_path, local_files_only=True, dtype=getattr(torch, dtype), attn_implementation="eager"
+    reloaded, loading = AutoModelForCausalLM.from_pretrained(
+        tmp_path,
+        local_files_only=True,
+        dtype=getattr(torch, dtype),
+        attn_implementation="eager",
+        output_loading_info=True,
     )
+    assert not loading["unexpected_keys"] and not loading["missing_keys"] and not loading["mismatched_keys"]
+    if tied_embeddings:
+        assert reloaded.get_input_embeddings().weight is reloaded.get_output_embeddings().weight
     tokens = torch.tensor([[1, 4, 9, 2]])
     torch.testing.assert_close(reloaded(tokens).logits, model(tokens).logits, rtol=0, atol=0)
 
@@ -158,11 +176,40 @@ def test_cpu_export_owns_snapshot_storage():
     torch.testing.assert_close(chunks[0]["weight"], expected, rtol=0, atol=0)
 
 
-def test_ambiguous_tied_lora_weight_is_rejected():
+@pytest.mark.parametrize("adapted_first", [False, True])
+def test_ambiguous_tied_lora_weight_is_rejected(adapted_first):
     base = nn.Linear(4, 3)
-    network = nn.ModuleDict({"base": base, "adapted": LoraInjectedLinear(base, rank=2, alpha=4)})
-    with pytest.raises(ValueError, match="unmerged LoRA weights=.*adapted.weight"):
+    adapted = LoraInjectedLinear(base, rank=2, alpha=4)
+    nn.init.constant_(adapted.lora_A.weight, 0.5)
+    nn.init.constant_(adapted.lora_B.weight, 0.25)
+    layers = [("base", base), ("adapted", adapted)]
+    network = nn.ModuleDict(reversed(layers) if adapted_first else layers)
+    with pytest.raises(ValueError, match="LoRA"):
         _callback()._gather_weights(_wrapped(network))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_distinct_adapters_sharing_a_base_are_rejected(reverse):
+    base = nn.Linear(4, 3)
+    layers = [(name, LoraInjectedLinear(base, rank=2, alpha=alpha)) for name, alpha in (("first", 2), ("second", 4))]
+    network = nn.ModuleDict(reversed(layers) if reverse else layers)
+    with pytest.raises(ValueError, match="LoRA"):
+        _callback()._gather_weights(_wrapped(network))
+
+
+@torch.no_grad()
+def test_aliases_of_the_same_lora_module_export_once():
+    layer = LoraInjectedLinear(nn.Linear(4, 3), rank=2, alpha=4)
+    nn.init.constant_(layer.lora_A.weight, 0.5)
+    nn.init.constant_(layer.lora_B.weight, 0.25)
+    network = nn.ModuleDict({"first": layer, "second": layer})
+    chunks, manifest, _ = _callback()._gather_weights(_wrapped(network))
+    assert set(manifest) == {"first.weight", "first.bias"}
+    dense = nn.Linear(4, 3)
+    dense.load_state_dict({name.removeprefix("first."): tensor for chunk in chunks for name, tensor in chunk.items()})
+    inputs = torch.randn(2, 4)
+    torch.testing.assert_close(dense(inputs), network["first"](inputs))
+    torch.testing.assert_close(dense(inputs), network["second"](inputs))
 
 
 def test_wrapper_name_collision_is_rejected():
@@ -193,15 +240,15 @@ def fsdp_group():
 
 
 @pytest.mark.GPU
-@pytest.mark.parametrize("lora", [False, True])
-def test_fsdp_export_gathers_once_in_rank_order_and_reloads(tmp_path, lora, fsdp_group):
+@pytest.mark.parametrize("lora,tied_embeddings", [(False, False), (True, False), (False, True)])
+def test_fsdp_export_gathers_once_in_rank_order_and_reloads(tmp_path, lora, tied_embeddings, fsdp_group):
     """Run with torchrun --nproc_per_node=2, like the other distributed CI cases."""
     from torch.distributed.device_mesh import init_device_mesh
     from torch.distributed.fsdp import fully_shard
 
     rank, device = fsdp_group
     output = str(tmp_path / "export")
-    model = _model(lora=lora, use_rslora=True).cuda()
+    model = _model(lora=lora, use_rslora=True, tied_embeddings=tied_embeddings).cuda()
     tokens = torch.tensor([[1, 4, 9, 2]], device=device)
     with torch.no_grad():
         expected = model(tokens).logits.cpu()
@@ -240,8 +287,39 @@ def test_fsdp_export_gathers_once_in_rank_order_and_reloads(tmp_path, lora, fsdp
             output_loading_info=True,
         )
         assert not info["unexpected_keys"] and not info["missing_keys"]
+        if tied_embeddings:
+            assert dense.get_input_embeddings().weight is dense.get_output_embeddings().weight
         with torch.no_grad():
             torch.testing.assert_close(dense(tokens.cpu()).logits, expected, atol=2e-6, rtol=2e-5)
     else:
         assert (chunks, manifest, total_size) == ([], {}, 0)
     torch.distributed.barrier()
+
+
+@pytest.mark.GPU
+@pytest.mark.parametrize("adapted_first", [False, True])
+def test_fsdp_rejects_shared_lora_base_before_collectives(adapted_first, fsdp_group, monkeypatch):
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+
+    _, device = fsdp_group
+    base = nn.Linear(4, 3, bias=False, device=device)
+    adapted = LoraInjectedLinear(base, rank=2, alpha=4)
+    layers = [("base", base), ("adapted", adapted)]
+    network = _SharedBaseNetwork(reversed(layers) if adapted_first else layers)
+    fully_shard(network, mesh=init_device_mesh("cuda", (2,)))
+    assert network.base.weight is network.adapted.weight
+    assert isinstance(base.weight, DTensor)
+    before = base.weight.to_local().detach().clone()
+
+    def unexpected_gather(*args, **kwargs):
+        pytest.fail("Ambiguous aliases must be rejected before any tensor collective")
+
+    monkeypatch.setattr(DTensor, "full_tensor", unexpected_gather)
+    with pytest.raises(ValueError, match="LoRA") as error:
+        _callback()._gather_weights(_wrapped(network))
+    messages = [None, None]
+    torch.distributed.all_gather_object(messages, str(error.value))
+    assert messages[0] == messages[1]
+    assert "adapted.weight" in messages[0] and "base.weight" in messages[0]
+    torch.testing.assert_close(base.weight.to_local(), before, rtol=0, atol=0)
