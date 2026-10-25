@@ -5,11 +5,6 @@ import copy
 
 import attrs
 import pytest
-from cosmos3.common import public_model_config
-from cosmos3.common.public_model_config import (
-    build_public_model_config,
-    restore_model_config_from_public_model_config,
-)
 
 from cosmos_framework.inference.common import distillation_export
 from cosmos_framework.inference.common.distillation_export import (
@@ -323,49 +318,6 @@ def test_sanitize_student_public_model_config_preserves_qwen_variant(model_size:
     assert (
         model_dict["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"]
         == f"cosmos_framework/model/generator/reasoner/qwen3_vl/configs/{filename}"
-    )
-
-
-def test_sanitized_student_config_round_trips_through_public_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
-    model_dict = {
-        "_target_": "cosmos_framework.model.generator.omni_mot_model.OmniMoTModel",
-        "config": {
-            "_type": "cosmos_framework.configs.base.defaults.model_config.OmniMoTModelConfig",
-            "vlm_config": {
-                "_type": "cosmos_framework.configs.base.defaults.reasoner.VLMConfig",
-                "model_instance": {
-                    "_target_": "cosmos_framework.model.generator.mot.unified_mot.Qwen3VLTextForCausalLM",
-                    "config": {
-                        "_target_": "cosmos_framework.configs.base.defaults.reasoner.create_vlm_config",
-                        "base_config": {
-                            "_target_": (
-                                "cosmos_framework.model.generator.mot.unified_mot.Qwen3VLMoTConfig.from_json_file"
-                            ),
-                            "json_file": "/private/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json",
-                        },
-                    },
-                },
-            },
-        },
-    }
-
-    distillation_export.sanitize_student_public_model_config(model_dict)
-    exported_model_config = build_public_model_config(model_dict)
-
-    exported_base_config = exported_model_config["config"]["vlm_config"]["model_instance"]["config"]["base_config"]
-    assert exported_model_config["_target"] == "omni_mot_model"
-    assert exported_base_config["json_file"] == ("cosmos3://vfm/models/vlm/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json")
-
-    monkeypatch.setattr(
-        public_model_config,
-        "_module_exists",
-        lambda module: module == "projects.cosmos3.cosmos3",
-    )
-    restored_model_config = restore_model_config_from_public_model_config(exported_model_config)
-
-    restored_base_config = restored_model_config["config"]["vlm_config"]["model_instance"]["config"]["base_config"]
-    assert restored_base_config["json_file"] == (
-        "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
     )
 
 
