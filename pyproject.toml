@@ -59,8 +59,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-automl = ["nvidia-automl-core==1.0.0.dev0"]
-automl-prompts = ["nvidia-automl-core[prompts]==1.0.0.dev0"]
+automl = ["nvidia-automl-core==0.1.0"]
+automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
 reasoner-eval = [
   "attrs",
   "evaluate",
@@ -349,11 +349,11 @@ repository = "https://github.com/NVIDIA/cosmos-framework"
 # activates this project's venv, whose `uv` then runs that sync.
 required-version = "==0.11.29"
 constraint-dependencies = ["pydantic-extra-types==2.11.1", "uv==0.11.29"]
-# Development delivery of the optional AutoML engine is by independently built
-# local wheel, not an index. Keep its published extra requirements above intact,
-# but leave that engine out of the repository's uv-managed environment. Install
-# the supplied wheel explicitly after sync; use uv run --no-sync for AutoML.
-# Remove this exception once the core has an approved distribution location.
+# Install the optional AutoML engine from tao-automl/main (or an explicitly
+# selected development branch) after sync; see docs/automl.md. Keep ordinary
+# Framework setup independent of that source installation. The extras above
+# still enforce package compatibility. Use uv run --no-sync after installing
+# the core so exact sync does not remove the selected source build.
 exclude-dependencies = ["nvidia-automl-core"]
 conflicts = [
   # Bimanual FK training and the LIBERO simulator require separate MuJoCo runtimes.
