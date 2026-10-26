@@ -98,6 +98,11 @@ def remap_framework_state_dict(
             for suffix in _SCALE_SUFFIXES:
                 if not net_key.endswith(suffix):
                     continue
+                # Packed MoE expert scales sit beside the packed parameter itself.
+                param_diffusers_key = net_to_diffusers.get(net_key[: -len(suffix)])
+                if param_diffusers_key is not None:
+                    diffusers_key = param_diffusers_key + suffix
+                    break
                 weight_key = net_key[: -len(suffix)] + ".weight"
                 weight_diffusers_key = net_to_diffusers.get(weight_key)
                 if weight_diffusers_key is not None:
@@ -108,6 +113,22 @@ def remap_framework_state_dict(
         if diffusers_key in remapped:
             raise KeyError(f"Multiple framework tensors map to Diffusers key {diffusers_key!r}.")
         remapped[diffusers_key] = value
+    return remapped
+
+
+def _remap_packed_experts(
+    experts: dict[str, torch.Tensor], bf16_state_dict: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """:func:`remap_framework_state_dict` for packed experts, where every tensor must map.
+
+    A dropped expert would leave its BF16 source tensor without scales under an FP8 config.
+    """
+    remapped = remap_framework_state_dict(experts, bf16_state_dict)
+    if len(remapped) != len(experts):
+        unmapped = sorted(
+            key for key in experts if not remap_framework_state_dict({key: experts[key]}, bf16_state_dict)
+        )
+        raise ValueError(f"{len(unmapped)} packed expert tensor(s) have no Diffusers key: {unmapped[:10]}")
     return remapped
 
 
@@ -200,6 +221,8 @@ def _remap_framework_modelopt_state(
     mapping used by checkpoint loading; no Diffusers or Transformers model is
     instantiated to reconstruct the graph.
     """
+    from .moe import is_packed_expert_key
+
     state = copy.deepcopy(state)
     modes = {name: mode_state for name, mode_state in state["modelopt_state_dict"]}
     if "quantize" not in modes or "real_quantize" not in modes:
@@ -215,7 +238,12 @@ def _remap_framework_modelopt_state(
     def remap_module(name: str) -> str | None:
         return module_map.get(name.removeprefix("net."))
 
-    active_modules = {key.removesuffix(".weight_scale") for key in exported_state_dict if key.endswith(".weight_scale")}
+    # Packed MoE experts are not linears and have no component graph state.
+    active_modules = {
+        key.removesuffix(".weight_scale")
+        for key in exported_state_dict
+        if key.endswith(".weight_scale") and not is_packed_expert_key(key)
+    }
 
     real_quantize = modes["real_quantize"]
     real_metadata = real_quantize["metadata"]
@@ -390,6 +418,8 @@ class Fp8DiffusersExporter:
         print(f"[export] wrote Transformers ModelOpt graph state for {len(quantizers)} quantizers")
 
     def overlay(self, bf16: dict, quantized: dict) -> dict:
+        from .moe import is_packed_expert_key
+
         merged = dict(bf16)
         n_weight = n_scale = n_dropped = 0
         quantized_modules: set[str] = set()
@@ -401,7 +431,7 @@ class Fp8DiffusersExporter:
                 merged[k] = v
                 n_scale += 1
                 continue
-            if k.endswith(".weight") and v.dtype in _FP8_DTYPES:
+            if (k.endswith(".weight") or is_packed_expert_key(k)) and v.dtype in _FP8_DTYPES:
                 if k not in bf16:
                     raise KeyError(
                         f"quantized weight {k!r} has no bf16 counterpart — layer-key "
@@ -410,7 +440,9 @@ class Fp8DiffusersExporter:
                 if bf16[k].shape != v.shape:
                     raise ValueError(f"shape mismatch for {k}: bf16 {tuple(bf16[k].shape)} vs fp8 {tuple(v.shape)}")
                 merged[k] = v
-                quantized_modules.add(k[: -len(".weight")])
+                # Packed experts keep only their scales; the quantizer buffers below are per linear.
+                if not is_packed_expert_key(k):
+                    quantized_modules.add(k[: -len(".weight")])
                 n_weight += 1
                 continue
             # Remaining bf16 tensors (norms, embed_tokens, renamed projections) are
@@ -443,6 +475,7 @@ class Fp8DiffusersExporter:
         modelopt_config: dict | None = None,
     ) -> None:
         from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
+        from .moe import QuantPackedExperts, export_packed_experts
 
         net = mdl.net
         transformer_export_dir.mkdir(parents=True, exist_ok=True)
@@ -450,6 +483,15 @@ class Fp8DiffusersExporter:
         n_collapsed = collapse_input_amax_to_scalar(net)
         if n_collapsed > 0:
             print(f"[export] collapsed per-channel input amax to scalar on {n_collapsed} quantizers")
+
+        # Packed MoE experts are exported directly; ModelOpt's compress and unified
+        # exporter only handle linears, so their quantizers are disabled afterwards.
+        experts = export_packed_experts(net)
+        for module in net.modules():
+            if isinstance(module, QuantPackedExperts):
+                for name in ("gate_up_proj", "down_proj"):
+                    getattr(module, f"{name}_input_quantizer").disable()
+                    getattr(module, f"{name}_weight_quantizer").disable()
 
         # Record ModelOpt's real-quantized graph metadata before the unified
         # exporter unpacks those weights into plain FP8 checkpoint tensors.
@@ -466,6 +508,7 @@ class Fp8DiffusersExporter:
         with hide_quantizers_from_state_dict(net):
             net_state_dict = {k: v.detach().contiguous().cpu() for k, v in net.state_dict().items()}
         quantized = remap_framework_state_dict(net_state_dict, bf16)
+        quantized.update(_remap_packed_experts(experts, bf16))
         merged = self.overlay(bf16, quantized)
         n_shards = save_sharded_safetensors(merged, transformer_export_dir)
         print(f"[export] wrote {len(merged)} tensors across {n_shards} shard(s)")
@@ -525,12 +568,13 @@ def _write_root_hf_quant_config(root_dir: Path, transformer_dir: Path) -> None:
     print(f"[assemble] wrote {root_dir / 'hf_quant_config.json'} for upstream-vLLM discovery")
 
 
-def _write_root_weight_index(root_dir: Path) -> None:
-    """(Re)generate the root ``model.safetensors.index.json`` for whole-model loading."""
+def _write_root_weight_index(root_dir: Path) -> dict[str, str]:
+    """(Re)generate the root ``model.safetensors.index.json``; return its weight map."""
     index = build_root_index(root_dir)
     dst = root_dir / "model.safetensors.index.json"
     index.write(dst)
     print(f"[assemble] wrote {dst.name} ({len(index.weight_map)} tensors, {index.metadata['total_size']} bytes)")
+    return index.weight_map
 
 
 def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer_dir: Path):
@@ -540,7 +584,10 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
     vision_encoder symlinked back); only ``transformer/`` is physically new (the
     quantized export). A fresh root weight index + a root ``hf_quant_config.json`` are
     written so both the diffusers and transformers loaders resolve the new weights.
+    The root Transformers ModelOpt state is skipped when the transformer has packed experts.
     """
+    from .moe import is_packed_expert_key
+
     input_dir, output_dir = Path(input_dir), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     target_transformer = output_dir / "transformer"
@@ -572,8 +619,12 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
         rel_src = os.path.relpath(src, start=output_dir.resolve())
         print(f"[assemble] linking {entry.name} -> {rel_src}")
         dst.symlink_to(rel_src)
-    _write_root_weight_index(output_dir)
-    component_state = torch.load(target_transformer / "modelopt_state.pth", map_location="cpu", weights_only=False)
-    Fp8DiffusersExporter().write_transformers_modelopt_state(component_state, output_dir, output_dir)
+    weight_map = _write_root_weight_index(output_dir)
+    has_packed_experts = any(
+        is_packed_expert_key(key) for key, file in weight_map.items() if file.startswith("transformer/")
+    )
+    if not has_packed_experts:
+        component_state = torch.load(target_transformer / "modelopt_state.pth", map_location="cpu", weights_only=False)
+        Fp8DiffusersExporter().write_transformers_modelopt_state(component_state, output_dir, output_dir)
     _write_root_hf_quant_config(output_dir, target_transformer)
     print(f"[assemble] drop-in dir ready at {output_dir}")

@@ -365,6 +365,67 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     }
 
 
+def test_assemble_skips_root_modelopt_state_for_packed_experts(export_modules, tmp_path, monkeypatch):
+    _, exporter = export_modules
+    source, output, staging = (tmp_path / name for name in ("source", "output", "staging"))
+    for directory in (source, output, staging):
+        directory.mkdir()
+    (staging / "config.json").write_text(json.dumps({"quantization_config": {"quant_method": "modelopt"}}))
+    save_file({"layers.0.mlp.experts.gate_up_proj": torch.zeros(2, 4, 4)}, str(staging / "model.safetensors"))
+
+    def fail(*args, **kwargs):
+        raise AssertionError("root ModelOpt state must not be built")
+
+    monkeypatch.setattr(exporter, "build_reasoner_modelopt_state", fail)
+    exporter.assemble_output_dir(source, output, staging)
+    assert not (output / "modelopt_state.pth").exists()
+    assert (output / "hf_quant_config.json").is_file()
+
+
+def test_component_state_ignores_packed_experts(export_modules):
+    from cosmos_framework.inference.model import _diffusers_to_net_key
+
+    _, exporter = export_modules
+    linear, experts = "layers.0.self_attn.to_q", "layers.0.mlp.experts.gate_up_proj"
+    net_linear = _diffusers_to_net_key(f"{linear}.weight").removesuffix(".weight")
+    model = torch.nn.Module()
+    model.add_module("net", torch.nn.Module())
+    parent = model.net
+    *parents, leaf = net_linear.split(".")
+    for part in parents:
+        parent.add_module(part, torch.nn.Module())
+        parent = parent._modules[part]
+    parent.add_module(leaf, torch.nn.Linear(16, 16, bias=False).bfloat16())
+    model = apply_mode(model, [("quantize", copy.deepcopy(mtq.FP8_DEFAULT_CFG))])
+    module = model.get_submodule(f"net.{net_linear}")
+    module.input_quantizer.amax = torch.tensor(3.5)
+    module.weight_quantizer.amax = module.weight.detach().float().abs().max()
+    mtq.compress(model)
+    bf16 = {f"{linear}.weight": torch.zeros(16, 16, dtype=torch.bfloat16), experts: torch.zeros(4, 16, 16)}
+    exported = {
+        f"{linear}.weight": torch.zeros(16, 16, dtype=torch.float8_e4m3fn),
+        experts: torch.zeros(4, 16, 16, dtype=torch.float8_e4m3fn),
+    }
+    for key in (linear, experts):
+        exported[f"{key}.weight_scale"] = torch.ones(())
+        exported[f"{key}.input_scale"] = torch.ones(())
+
+    state = exporter._remap_framework_modelopt_state(
+        mto.modelopt_state(model),
+        bf16_state_dict=bf16,
+        exported_state_dict=exported,
+        modelopt_config=copy.deepcopy(mtq.FP8_DEFAULT_CFG),
+    )
+
+    modes = dict(state["modelopt_state_dict"])
+    assert set(modes["real_quantize"]["metadata"]["q_tensor_state"]) == {linear}
+    names = [
+        *modes["quantize"]["metadata"]["quantizer_state"],
+        *modes["real_quantize"]["metadata"]["real_quantizer_state"],
+    ]
+    assert names and not any("experts" in name for name in names)
+
+
 @pytest.mark.skipif(not os.environ.get("COSMOS3_REASONER_STATE_SOT"), reason="external SOT path not supplied")
 def test_matches_external_sot_metadata(export_modules, tmp_path):
     helper, _ = export_modules
