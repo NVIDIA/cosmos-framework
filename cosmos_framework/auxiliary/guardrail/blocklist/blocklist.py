@@ -46,6 +46,23 @@ INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
 # let "de$k in" read as the whitelisted phrase.
 _STRIP_CHARS = "".join(sorted(set(string.punctuation) - ALLOWED_CHARACTERS))
 
+# Read after a span when it is censored on its own. better_profanity ignores a
+# one-letter word at the very end of its input, so "plan b" alone matches
+# nothing while "plan b more" matches; following every span with a word makes
+# it read the span as it would inside a prompt. Long and unlike any entry, so
+# it never joins a match itself.
+_SPAN_END = "zqxjspanendzqxj"
+
+# Bounds the per-instance cache of span censoring results.
+_SPAN_CACHE_LIMIT = 100_000
+
+# Tokens fused_matches clears with one matcher call before trying each start.
+_SPAN_CHUNK = 32
+
+# Matcher calls fused_matches may make for one prompt. A prompt needing more is
+# left blocked, as it is without phrase support, rather than slowed down.
+_SPAN_BUDGET = 4_000
+
 
 class _NoLemmatizer:
     """Leaves every token as it is. The default for Blocklist.from_lists."""
@@ -122,6 +139,8 @@ class Blocklist(ContentSafetyGuardrail):
         # The matcher's whitelist is a set of single tokens, so a whitelisted
         # phrase never reaches it. Phrases are handled in censor_prompt instead,
         # by exempting the matches that fall inside one.
+        self._span_cache: dict[str, tuple[str, bool]] = {}
+        self._span_calls = 0
         self.whitelist_phrases = sorted((w for w in self.whitelist_words if " " in w.strip()), key=len, reverse=True)
         whitelist_tokens = [w for w in self.whitelist_words if " " not in w.strip()]
 
@@ -194,6 +213,9 @@ class Blocklist(ContentSafetyGuardrail):
         source_index = 0
         buffer = ""
         for token in folded:
+            # A source token made only of invisible characters folds to nothing.
+            while source_index < len(source) - 1 and not INVISIBLE_CHARS.sub("", source[source_index]):
+                source_index += 1
             mapping.append(min(source_index, len(source) - 1))
             buffer += token
             while (
@@ -205,7 +227,7 @@ class Blocklist(ContentSafetyGuardrail):
                 source_index += 1
         return mapping
 
-    def fused_matches(self, tokens: list[str]) -> list[tuple[int, int]]:
+    def fused_matches(self, tokens: list[str]) -> list[tuple[int, int]] | None:
         """(start, end) token indices of every span that is a match on its own, end exclusive.
 
         Censoring the whole prompt is not enough to place the matches. The
@@ -216,34 +238,69 @@ class Blocklist(ContentSafetyGuardrail):
         gun" after "desk in") is never reported at all.
 
         So every span is tried on its own: it is a match when the matcher reduces
-        it to a single censored token. A span must start and end on a token that
-        holds a word, so trailing punctuation does not widen a match past a
+        it to a single censored token. Each span is read with a word after it,
+        for the reason given at _SPAN_END. A span must start and end on a token
+        that holds a word, so trailing punctuation does not widen a match past a
         phrase. The matcher joins at most MAX_NUMBER_COMBINATIONS + 1 words, and
         every word-bearing token holds at least one, which bounds the width.
+
+        Returns None when the prompt needs more than _SPAN_BUDGET matcher calls;
+        the caller then leaves it blocked.
         """
         has_word = [any(c in ALLOWED_CHARACTERS for c in token) for token in tokens]
         max_words = self.profanity.MAX_NUMBER_COMBINATIONS + 1
+        calls_before = self._span_calls
+
+        def window_end(start: int, word_limit: int) -> int:
+            """End of the widest window from start holding at most word_limit words."""
+            end, words = start, 0
+            while end < len(tokens) and words + has_word[end] <= word_limit:
+                words += has_word[end]
+                end += 1
+            return end
+
         matches: list[tuple[int, int]] = []
-        for start in range(len(tokens)):
-            if not has_word[start]:
+        for chunk in range(0, len(tokens), _SPAN_CHUNK):
+            # A match starting in this chunk lies inside the chunk plus the
+            # widest match after it. If the matcher censors nothing there, no
+            # match lies inside it: one it skipped would have to sit under an
+            # earlier match, which would have been censored.
+            words_in_chunk = sum(has_word[chunk : chunk + _SPAN_CHUNK])
+            if not self._censors_anything(" ".join(tokens[chunk : window_end(chunk, words_in_chunk + max_words)])):
                 continue
-            ends, words = [], 0
-            for end in range(start + 1, len(tokens) + 1):
-                words += has_word[end - 1]
-                if words > max_words:
-                    break
-                if has_word[end - 1]:
-                    ends.append(end)
-            # A match starting here lies inside the widest window, and the
-            # matcher reading that window from its first token would censor
-            # something; when it does not, no narrower span needs trying.
-            if CENSOR_SENTINEL not in self.profanity.censor(" ".join(tokens[start : ends[-1]]), CENSOR_SENTINEL):
-                continue
-            for end in ends:
-                censored = self.profanity.censor(" ".join(tokens[start:end]), censor_char=CENSOR_SENTINEL).split()
-                if len(censored) == 1 and CENSOR_SENTINEL in censored[0]:
-                    matches.append((start, end))
+            for start in range(chunk, min(chunk + _SPAN_CHUNK, len(tokens))):
+                if not has_word[start]:
+                    continue
+                if self._span_calls - calls_before > _SPAN_BUDGET:
+                    return None
+                ends = [end for end in range(start + 1, window_end(start, max_words) + 1) if has_word[end - 1]]
+                # The same argument for the widest window from this start.
+                if not self._censors_anything(" ".join(tokens[start : ends[-1]])):
+                    continue
+                matches.extend((start, end) for end in ends if self._is_one_match(" ".join(tokens[start:end])))
         return matches
+
+    def _censors_anything(self, text: str) -> bool:
+        return CENSOR_SENTINEL in self._censor_span(text)[0]
+
+    def _is_one_match(self, text: str) -> bool:
+        censored, end_survived = self._censor_span(text)
+        return end_survived and len(censored.split()) == 1 and CENSOR_SENTINEL in censored
+
+    def _censor_span(self, text: str) -> tuple[str, bool]:
+        """The span censored with _SPAN_END after it, and whether _SPAN_END survived.
+
+        Cached, because neighbouring spans and the alternate readings is_safe
+        checks repeat the same text many times over.
+        """
+        if text not in self._span_cache:
+            if len(self._span_cache) >= _SPAN_CACHE_LIMIT:
+                self._span_cache.clear()
+            self._span_calls += 1
+            censored = self.profanity.censor(f"{text} {_SPAN_END}", censor_char=CENSOR_SENTINEL)
+            body, _, tail = censored.rpartition(" ")
+            self._span_cache[text] = (body, True) if tail == _SPAN_END else (censored, False)
+        return self._span_cache[text]
 
     def whitelisted_phrase_spans(self, tokens: list[str]) -> list[tuple[int, int]]:
         """(start, end) token indices of every whitelisted phrase occurrence."""
@@ -308,7 +365,14 @@ class Blocklist(ContentSafetyGuardrail):
 
         # Every match must lie inside a phrase, including matches the censored
         # output does not show; see fused_matches.
-        remaining = [(start, end) for start, end in self.fused_matches(folded_tokens) if not exempt(start, end)]
+        matches = self.fused_matches(folded_tokens)
+        if not matches:
+            # Over the budget, or the prompt as a whole was censored yet no span
+            # on its own is a match. Stay blocked rather than let the exemption
+            # clear a match it could not locate.
+            display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
+            return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
+        remaining = [(start, end) for start, end in matches if not exempt(start, end)]
         if not remaining:
             return False, ""
 

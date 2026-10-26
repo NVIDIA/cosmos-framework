@@ -881,3 +881,81 @@ def test_fused_matches_locate_a_multi_token_match():
     bl = _blocklist_with_words(["snow white"])
 
     assert bl.fused_matches("a snow white poster on a wall".split()) == [(1, 3)]
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("entry ending in a one-letter word", "snow white plan b more"),
+        ("last letter split off", "snow white batma n more"),
+        ("last letter split off by a hyphen", "snow white batma-n more"),
+        ("leetspeak with the last letter split off", "snow white b@tma n more"),
+        ("one-letter entry", "snow white x y"),
+    ],
+)
+def test_a_phrase_elsewhere_does_not_clear_a_match_ending_in_one_letter(name, prompt):
+    """Found in a second review of the span fix.
+
+    better_profanity ignores a one-letter word at the very end of its input, so
+    a span such as "batma n" censored on its own matched nothing, the match was
+    never located, and a whitelisted phrase anywhere in the prompt cleared it.
+    """
+    bl = _blocklist_with_words(["batman", "plan b", "x"], whitelist=["snow white"])
+
+    blocked, _ = _blocked(bl, prompt)
+
+    assert blocked is True, f"{name} was cleared by an unrelated phrase"
+
+
+@pytest.mark.L1
+def test_a_match_the_spans_cannot_locate_stays_blocked(monkeypatch):
+    """If no span matches on its own although the prompt was censored, stay blocked."""
+    bl = _blocklist_with_words(["batman"], whitelist=["snow white"])
+    monkeypatch.setattr(bl, "fused_matches", lambda tokens: [])
+
+    blocked, _ = bl.censor_prompt("snow white batman")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_a_prompt_over_the_span_budget_stays_blocked(monkeypatch):
+    """Locating every match has a cost cap; past it the prompt is blocked, as without phrases."""
+    monkeypatch.setattr("cosmos_framework.auxiliary.guardrail.blocklist.blocklist._SPAN_BUDGET", 3)
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, _ = bl.censor_prompt(" ".join(["a desk in the room"] * 20))
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_matches_are_found_on_both_sides_of_a_chunk_boundary():
+    """The chunk pre-check must not skip a match that starts near a chunk's end."""
+    bl = _blocklist_with_words(["deskin", "shotgun"], whitelist=["desk in"])
+    filler = ["word"] * 30
+
+    for offset in range(28, 36):
+        tokens = ["word"] * offset + ["shot", "gun"] + filler + ["desk", "in"]
+        assert (offset, offset + 2) in bl.fused_matches(tokens), offset
+        blocked, _ = _blocked(bl, " ".join(tokens))
+        assert blocked is True, offset
+
+
+@pytest.mark.L1
+def test_align_folded_to_source_skips_a_token_of_only_invisible_characters():
+    """Found in review: such a token folds to nothing and must not shift the rest."""
+    source = ["\u200b", "snow", "white", "batman"]
+    folded = ["snow", "white", "batman"]
+
+    assert Blocklist.align_folded_to_source(source, folded) == [1, 2, 3]
+
+
+@pytest.mark.L1
+def test_invisible_only_token_does_not_pull_a_match_into_a_phrase():
+    bl = _blocklist_with_words(["batman"], whitelist=["snow white"])
+
+    blocked, _ = bl.censor_prompt("\u200b snow white batman")
+
+    assert blocked is True
