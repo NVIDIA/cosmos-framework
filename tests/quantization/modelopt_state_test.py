@@ -372,6 +372,7 @@ def test_assemble_skips_root_modelopt_state_for_packed_experts(export_modules, t
         directory.mkdir()
     (staging / "config.json").write_text(json.dumps({"quantization_config": {"quant_method": "modelopt"}}))
     save_file({"layers.0.mlp.experts.gate_up_proj": torch.zeros(2, 4, 4)}, str(staging / "model.safetensors"))
+    torch.save({}, staging / "modelopt_state.pth")
 
     def fail(*args, **kwargs):
         raise AssertionError("root ModelOpt state must not be built")
