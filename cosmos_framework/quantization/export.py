@@ -152,14 +152,6 @@ _DIFFUSERS_MODULES_TO_NOT_CONVERT = [
     "projector",
 ]
 
-_DIFFUSERS_DISABLED_QUANTIZER_MODULES = (
-    "embed_tokens",
-    "action_proj_in.fc",
-    "action_proj_in.bias",
-    "action_proj_out.fc",
-    "action_proj_out.bias",
-)
-
 
 def add_diffusion_step_policy(config: dict, mixed_precision_steps: int) -> None:
     """Add vLLM-Omni's symmetric first/last-step A16 policy in place.
@@ -261,18 +253,6 @@ def _remap_framework_modelopt_state(
             buffers.clear()
         remapped_quantizers[f"{remapped_module}.{quantizer_name}"] = value
 
-    # Diffusers inserts disabled quantizers on these component modules even
-    # though the framework's compressed graph has no quantizers for them.
-    disabled_modules = {name for name in _DIFFUSERS_DISABLED_QUANTIZER_MODULES if f"{name}.weight" in bf16_state_dict}
-    for name in disabled_modules:
-        for kind in ("input", "weight", "output"):
-            suffix = f".{kind}_quantizer"
-            template = next(value for key, value in remapped_quantizers.items() if key.endswith(suffix))
-            value = copy.deepcopy(template)
-            value["_disabled"] = True
-            value["_pytorch_state_metadata"]["buffers"].clear()
-            remapped_quantizers[f"{name}{suffix}"] = value
-
     if set(remapped_q_tensors) != active_modules:
         missing = sorted(active_modules - set(remapped_q_tensors))
         extra = sorted(set(remapped_q_tensors) - active_modules)
@@ -280,7 +260,7 @@ def _remap_framework_modelopt_state(
 
     expected_quantizers = {
         f"{module}.{kind}_quantizer"
-        for module in set(remapped_real_quantizers) | disabled_modules
+        for module in set(remapped_real_quantizers)
         for kind in ("input", "weight", "output")
     }
     if set(remapped_quantizers) != expected_quantizers:
