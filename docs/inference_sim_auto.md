@@ -40,6 +40,14 @@ Rolling replay runs its same-camera attention through the FlashAttention-4
 kernels. The `cu130-train` group installed there includes FlashAttention-4, so
 no separate installation is needed.
 
+On SM120 GPUs such as RTX 6000D, replay inference uses the same native
+FlashAttention-4 gapped-varlen path as the other supported architectures.
+The pinned FlashAttention-4 4.0.0b30 release includes the SM80/SM120 invalid-tile
+fix required by this workload. Upgrade the environment through the setup command
+above; admitting SM120 with the older 4.0.0b24 pin can cause illegal memory access.
+SM120 replay backward is not qualified and is explicitly rejected; SM120 support
+is inference only.
+
 ## Checkpoint
 
 Download the published snapshot and pass its local directory. A bare Hugging
