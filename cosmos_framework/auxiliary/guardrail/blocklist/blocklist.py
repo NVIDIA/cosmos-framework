@@ -4,11 +4,13 @@
 import argparse
 import os
 import re
+import string
 import unicodedata
 from difflib import SequenceMatcher
 
 import nltk
 from better_profanity import profanity
+from better_profanity.constants import ALLOWED_CHARACTERS
 
 from cosmos_framework.auxiliary.guardrail.blocklist.lookalikes import fold_lookalikes
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
@@ -36,6 +38,13 @@ CENSOR = misc.Color.red("*")
 # as nothing, so a blocklist entry split by one still reads as the entry to a human
 # while reaching the matcher as a token it does not recognise.
 INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
+
+# Punctuation trimmed from a token before it is compared with a whitelisted
+# phrase, so "a desk in, the corner" still matches the phrase "desk in". The
+# characters better_profanity treats as part of a word (" $ ' * @) are kept:
+# they are the ones its leetspeak mapping substitutes, so stripping them would
+# let "de$k in" read as the whitelisted phrase.
+_STRIP_CHARS = "".join(sorted(set(string.punctuation) - ALLOWED_CHARACTERS))
 
 
 class _NoLemmatizer:
@@ -110,10 +119,29 @@ class Blocklist(ContentSafetyGuardrail):
         self.whitelist_words = whitelist_words
         self.exact_match_words = exact_match_words
 
-        self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=self.whitelist_words)
+        # The matcher's whitelist is a set of single tokens, so a whitelisted
+        # phrase never reaches it. Phrases are handled in censor_prompt instead,
+        # by exempting the matches that fall inside one.
+        self.whitelist_phrases = sorted((w for w in self.whitelist_words if " " in w.strip()), key=len, reverse=True)
+        whitelist_tokens = [w for w in self.whitelist_words if " " not in w.strip()]
+
+        self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=whitelist_tokens)
         log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
-        log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
+        log.debug(f"Whitelisted {len(whitelist_tokens)} words and {len(self.whitelist_phrases)} phrases")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
+
+        for token in self.unprotected_whitelist_tokens(self.profanity, whitelist_tokens):
+            # better_profanity drops a whitelisted word before it expands the
+            # leetspeak variants of the other entries, so a whitelisted word can
+            # still be censored as some *other* entry's variant -- "flat" is what
+            # "fiat" becomes under the i/l mapping. Whitelisting it then silently
+            # does nothing, which is worth saying out loud at load time.
+            log.warning(f"Whitelisted word is still censored as a variant of another blocklist entry: {token!r}")
+
+    @staticmethod
+    def unprotected_whitelist_tokens(matcher, whitelist_tokens: list[str]) -> list[str]:
+        """Whitelisted words the loaded matcher censors anyway."""
+        return [token for token in whitelist_tokens if matcher.censor(token, censor_char=CENSOR_SENTINEL) != token]
 
     @staticmethod
     def normalize_for_matching(prompt: str) -> str:
@@ -135,8 +163,9 @@ class Blocklist(ContentSafetyGuardrail):
         The collapse also closes a plainer hole: a multi-word entry was defeated
         by typing two spaces between its words.
 
-        The code-point folding is a separate method because is_safe also needs it
-        on its own: see alternate_spellings.
+        The two foldings are separate methods because a whitelisted phrase has to
+        be matched between them (see censor_prompt), and is_safe also needs the
+        code-point folding on its own (see alternate_spellings).
         """
         return Blocklist.fold_invisible_characters(Blocklist.normalize_code_points(prompt))
 
@@ -151,6 +180,81 @@ class Blocklist(ContentSafetyGuardrail):
     def fold_invisible_characters(prompt: str) -> str:
         """Rewrite zero-width and bidirectional characters to a space."""
         return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
+
+    @staticmethod
+    def align_folded_to_source(source: list[str], folded: list[str]) -> list[int]:
+        """For each folded token, the index of the source token it came from.
+
+        Folding invisible characters to a space can split one source token into
+        several, so the two streams are not index-for-index. Walk them together,
+        consuming folded tokens until their concatenation reproduces the source
+        token, which is exactly what the fold did to it.
+        """
+        mapping: list[int] = []
+        source_index = 0
+        buffer = ""
+        for token in folded:
+            mapping.append(min(source_index, len(source) - 1))
+            buffer += token
+            while (
+                source_index < len(source)
+                and buffer
+                and len(buffer) >= len(INVISIBLE_CHARS.sub("", source[source_index]))
+            ):
+                buffer = ""
+                source_index += 1
+        return mapping
+
+    def fused_matches(self, tokens: list[str]) -> list[tuple[int, int]]:
+        """(start, end) token indices of every span that is a match on its own, end exclusive.
+
+        Censoring the whole prompt is not enough to place the matches. The
+        matcher replaces a matched span -- which may cover several tokens -- with
+        a single censored token, so two adjacent matches ("nice camera" + "shot
+        gun") cannot be told apart by counting tokens. It also matches greedily
+        left to right, so a match that shares a token with an earlier one ("in
+        gun" after "desk in") is never reported at all.
+
+        So every span is tried on its own: it is a match when the matcher reduces
+        it to a single censored token. A span must start and end on a token that
+        holds a word, so trailing punctuation does not widen a match past a
+        phrase. The matcher joins at most MAX_NUMBER_COMBINATIONS + 1 words, and
+        every word-bearing token holds at least one, which bounds the width.
+        """
+        has_word = [any(c in ALLOWED_CHARACTERS for c in token) for token in tokens]
+        max_words = self.profanity.MAX_NUMBER_COMBINATIONS + 1
+        matches: list[tuple[int, int]] = []
+        for start in range(len(tokens)):
+            if not has_word[start]:
+                continue
+            ends, words = [], 0
+            for end in range(start + 1, len(tokens) + 1):
+                words += has_word[end - 1]
+                if words > max_words:
+                    break
+                if has_word[end - 1]:
+                    ends.append(end)
+            # A match starting here lies inside the widest window, and the
+            # matcher reading that window from its first token would censor
+            # something; when it does not, no narrower span needs trying.
+            if CENSOR_SENTINEL not in self.profanity.censor(" ".join(tokens[start : ends[-1]]), CENSOR_SENTINEL):
+                continue
+            for end in ends:
+                censored = self.profanity.censor(" ".join(tokens[start:end]), censor_char=CENSOR_SENTINEL).split()
+                if len(censored) == 1 and CENSOR_SENTINEL in censored[0]:
+                    matches.append((start, end))
+        return matches
+
+    def whitelisted_phrase_spans(self, tokens: list[str]) -> list[tuple[int, int]]:
+        """(start, end) token indices of every whitelisted phrase occurrence."""
+        lowered = [token.strip(_STRIP_CHARS).lower() for token in tokens]
+        spans: list[tuple[int, int]] = []
+        for phrase in self.whitelist_phrases:
+            parts = phrase.strip().lower().split()
+            for start in range(len(lowered) - len(parts) + 1):
+                if lowered[start : start + len(parts)] == parts:
+                    spans.append((start, start + len(parts)))
+        return spans
 
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
         """Censor the prompt using the blocklist with better-profanity fuzzy matching.
@@ -169,15 +273,50 @@ class Blocklist(ContentSafetyGuardrail):
         # than substituting keeps the stricter reading: "n\x00ike" fuses back to
         # a blocked word instead of being split into two harmless tokens.
         input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
-        input_prompt = self.normalize_for_matching(input_prompt)
-        # The whitelist is handed to load_censor_words(), so the matcher already
-        # leaves whitelisted words alone. Restoring them a second time here is
-        # what introduced the token misalignment described in the commit message.
-        censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
-        if CENSOR_SENTINEL in censored_prompt:
+        # Whitelisted single words are handed to load_censor_words(), so the
+        # matcher already leaves them alone; restoring them a second time after
+        # censoring is what introduced the token misalignment removed earlier.
+        # Whitelisted phrases never reach the matcher, so they are located here --
+        # between the two foldings, for the reason given below.
+        input_prompt = self.normalize_code_points(input_prompt)
+
+        # Phrase occurrences are located before invisible characters are folded,
+        # and that order matters: "desk<U+200B>in" renders as the entry with no
+        # space in it, so folding first would turn an evasion into the
+        # whitelisted phrase and exempt it.
+        source_tokens = input_prompt.split()
+        exempt_spans = self.whitelisted_phrase_spans(source_tokens)
+
+        folded_prompt = self.fold_invisible_characters(input_prompt)
+        censored_prompt = self.profanity.censor(folded_prompt, censor_char=CENSOR_SENTINEL)
+        if CENSOR_SENTINEL not in censored_prompt:
+            return False, ""
+        if not exempt_spans:
             display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
             return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
-        return False, ""
+
+        # The exemption is applied to the matches, not to the prompt. Masking the
+        # phrase out before matching would also delete any match that overlaps
+        # it; dropping only the matches that lie entirely inside a whitelisted
+        # phrase leaves the ones that straddle its boundary blocked.
+        folded_tokens = folded_prompt.split()
+        to_source = self.align_folded_to_source(source_tokens, folded_tokens)
+
+        def exempt(start: int, end: int) -> bool:
+            first, last = to_source[start], to_source[end - 1]
+            return any(low <= first and last < high for low, high in exempt_spans)
+
+        # Every match must lie inside a phrase, including matches the censored
+        # output does not show; see fused_matches.
+        remaining = [(start, end) for start, end in self.fused_matches(folded_tokens) if not exempt(start, end)]
+        if not remaining:
+            return False, ""
+
+        display_tokens = list(folded_tokens)
+        for start, end in remaining:
+            for index in range(start, end):
+                display_tokens[index] = CENSOR
+        return True, f"Prompt blocked by censorship: Censored Prompt: {' '.join(display_tokens)}"
 
     @staticmethod
     def check_partial_match(

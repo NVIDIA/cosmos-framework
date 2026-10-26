@@ -644,3 +644,240 @@ def test_exact_match_folding_does_not_block_ordinary_text(monkeypatch):
     ):
         safe, message = bl.is_safe(prompt)
         assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_whitelisted_phrase_clears_the_prose_that_fuses_into_an_entry():
+    """The reported false positive: "desk" + "in" fuses into the entry "deskin".
+
+    Whitelisting the phrase exempts that one spelling. Whitelisting either half
+    on its own cannot: the fusing does not consult the whitelist.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, message = _blocked(bl, "a robot sitting at a desk in the background")
+
+    assert blocked is False, message
+
+
+@pytest.mark.L1
+def test_whitelisting_a_phrase_leaves_every_other_spelling_blocked():
+    """The exemption is one spelling wide, not a hole in the entry."""
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    for prompt in (
+        "deskin the animal",
+        "d eskin the animal",
+        "de skin the animal",
+        "des kin the animal",
+        "de sk in the animal",
+        "d3skin the animal",
+    ):
+        blocked, _ = _blocked(bl, prompt)
+        assert blocked is True, f"{prompt!r} was not blocked"
+
+
+@pytest.mark.L1
+def test_whitelisted_phrase_is_restored_in_the_blocked_message():
+    """The placeholder is internal; the user-facing quote shows their own words."""
+    bl = _blocklist_with_words(["deskin", "badword"], whitelist=["desk in"])
+
+    blocked, message = _blocked(bl, "a badword next to a desk in the room")
+
+    assert blocked is True
+    assert "desk in" in message
+    assert "zzwhitelisted" not in message
+
+
+@pytest.mark.L1
+def test_whitelisted_word_behaviour_is_unchanged_by_phrase_support():
+    """Single-word whitelisting still goes to the matcher, as before."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat", "desk in"])
+
+    blocked, _ = _blocked(bl, "the floor is flat")
+    assert blocked is False
+
+    blocked, _ = _blocked(bl, "a Snow White poster on a flat wall")
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_invisible_character_cannot_reach_the_phrase_exemption():
+    """An exemption must not be reachable by a spelling the reader cannot see.
+
+    "desk<U+200B>in" renders as the entry with nothing between its halves. The
+    invisible character is folded to a space for matching, which would turn it
+    into the whitelisted phrase, so the phrase is matched before that folding.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, "desk​in the animal")
+    assert blocked is True
+
+    blocked, _ = _blocked(bl, "desk­in the animal")
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_phrase_exemption_survives_spacing_and_case():
+    """The exempted spelling is the phrase as a reader writes it, however spaced."""
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    for prompt in ("a desk in the room", "a desk  in the room", "a DESK IN the room", "Desk In The Room"):
+        blocked, _ = _blocked(bl, prompt)
+        assert blocked is False, f"{prompt!r} was blocked"
+
+
+@pytest.mark.L1
+def test_whitelisted_word_censored_as_another_entrys_variant_is_reported():
+    """Whitelisting a word does not guarantee the matcher spares it.
+
+    better_profanity removes whitelisted words before it expands the leetspeak
+    variants of the remaining entries, so a whitelisted word that happens to be
+    a variant of another entry stays censored -- "flat" is what "fiat" becomes
+    under the i/l mapping. The whitelist entry then silently does nothing, so
+    the loader names it rather than leaving it to be found in production.
+    """
+    from better_profanity.better_profanity import Profanity
+
+    matcher = Profanity()
+    matcher.load_censor_words(custom_words=["fiat"], whitelist_words=["flat"])
+
+    assert Blocklist.unprotected_whitelist_tokens(matcher, ["flat"]) == ["flat"]
+
+    unaffected = Profanity()
+    unaffected.load_censor_words(custom_words=["snow white"], whitelist_words=["flat"])
+
+    assert Blocklist.unprotected_whitelist_tokens(unaffected, ["flat"]) == []
+
+
+@pytest.mark.L1
+def test_match_straddling_a_whitelisted_phrase_stays_blocked():
+    """The exemption covers the phrase, not everything that touches it.
+
+    Masking the phrase out before matching also deleted any match that overlaps
+    it: with "in gun" on the blocklist, "a desk in gun on the table" stopped
+    being blocked as soon as "desk in" was whitelisted. Only a match lying
+    entirely inside the phrase may be dropped.
+    """
+    bl = _blocklist_with_words(["in gun"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, "a desk in gun on the table")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_fusion_across_the_phrase_boundary_stays_blocked():
+    """Whitelisting "camera shot" must not stop "shot" + "gun" fusing into "shotgun".
+
+    The fused match takes one token from inside the phrase and one from outside
+    it, so it straddles the boundary and is kept.
+    """
+    bl = _blocklist_with_words(["shotgun"], whitelist=["camera shot"])
+
+    blocked, _ = _blocked(bl, "a camera shot gun in frame")
+    assert blocked is True
+
+    blocked, message = _blocked(bl, "a camera shot of the room")
+    assert blocked is False, message
+
+
+@pytest.mark.L1
+def test_second_occurrence_of_a_phrase_does_not_hide_a_real_match():
+    """One exempt occurrence must not exempt a different match elsewhere."""
+    bl = _blocklist_with_words(["deskin", "in gun"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, "a desk in room and a desk in gun")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_align_folded_to_source_maps_a_split_token_back():
+    """Folding an invisible character splits one source token into two."""
+    source = ["a", "desk​in", "room"]
+    folded = ["a", "desk", "in", "room"]
+
+    assert Blocklist.align_folded_to_source(source, folded) == [0, 1, 1, 2]
+
+
+@pytest.mark.L1
+def test_adjacent_matches_are_each_located_before_the_exemption():
+    """Two matches side by side must each be checked against the phrases.
+
+    Reported in review on #306. "nice camera" and "shot gun" are two fused
+    matches next to each other. The matcher reduces them to two censored
+    tokens, and a split guessed from the token count alone put the boundary
+    after "shot": "nice camera shot" and "gun", each of which lies inside a
+    whitelisted phrase, so a prompt containing a real "shot gun" was allowed.
+    """
+    bl = _blocklist_with_words(["nicecamera", "shotgun"], whitelist=["nice camera shot", "gun show"])
+
+    blocked, _ = _blocked(bl, "nice camera shot gun show")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("adjacent, phrase exempts the first", "a desk in shot gun"),
+        ("adjacent, phrase exempts the second", "a shot gun desk in room"),
+        ("three in a row", "desk in shot gun bat man"),
+        ("with punctuation", "a desk in, shot gun."),
+        ("invisible split beside a phrase", "a desk in shot\u200bgun"),
+        ("fullwidth beside a phrase", "a desk in \uff53\uff48\uff4f\uff54 gun"),
+    ],
+)
+def test_real_match_beside_an_exempt_match_stays_blocked(name, prompt):
+    """An exempt match must not take a real match next to it along with it."""
+    bl = _blocklist_with_words(["deskin", "shotgun", "batman"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, prompt)
+
+    assert blocked is True, f"{name}: the real match was exempted"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "a desk in a room",
+        "a desk in, a desk in the corner",
+        "a desk in desk in the corner",
+        "two phrases: desk in and camera shot",
+    ],
+)
+def test_only_exempt_matches_leave_the_prompt_allowed(prompt):
+    """Every match lying inside a phrase, however many, still clears the prompt."""
+    bl = _blocklist_with_words(["deskin", "shotgun"], whitelist=["desk in", "camera shot"])
+
+    blocked, message = _blocked(bl, prompt)
+
+    assert blocked is False, message
+
+
+@pytest.mark.L1
+def test_fused_matches_locate_adjacent_matches():
+    """The spans come from the matcher, not from the token count."""
+    bl = _blocklist_with_words(["nicecamera", "shotgun"])
+
+    assert bl.fused_matches("nice camera shot gun show".split()) == [(0, 2), (2, 4)]
+
+
+@pytest.mark.L1
+def test_fused_matches_include_a_match_the_greedy_censor_hides():
+    """ "in gun" shares "in" with "desk in"; censoring the prompt reports only the first."""
+    bl = _blocklist_with_words(["deskin", "in gun"])
+
+    assert bl.fused_matches("a desk in gun".split()) == [(1, 3), (2, 4)]
+
+
+@pytest.mark.L1
+def test_fused_matches_locate_a_multi_token_match():
+    """A multi-word match collapses to one censored token; recover its width."""
+    bl = _blocklist_with_words(["snow white"])
+
+    assert bl.fused_matches("a snow white poster on a wall".split()) == [(1, 3)]
