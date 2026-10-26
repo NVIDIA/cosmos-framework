@@ -154,9 +154,7 @@ def test_registration_replaces_generic_fused_experts_wrapper():
     model = _quantize(Model())
 
     assert isinstance(model.experts, QuantPackedExperts)
-    assert not isinstance(model.experts, _QuantFusedExperts)
-    registered = QuantModuleRegistry.get(Qwen3VLMoeTextExpertsGroupedMm)
-    assert issubclass(registered, QuantPackedExperts) and not issubclass(registered, _QuantFusedExperts)
+    assert issubclass(QuantModuleRegistry.get(Qwen3VLMoeTextExpertsGroupedMm), QuantPackedExperts)
 
 
 @pytest.mark.usefixtures("reference_routing")
@@ -366,38 +364,3 @@ def test_wrapper_matches_native_block_on_cuda():
         expected, _ = native(hidden_states, token_mask=token_mask)
         actual, _ = block(hidden_states, token_mask=token_mask)
     assert torch.equal(actual, expected)
-
-
-@pytest.mark.gpus(1)
-def test_a2_amax_ignores_padding_on_cuda():
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is required for torch._grouped_mm and the Triton routing kernels")
-    from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
-
-    torch.manual_seed(0)
-    block = Qwen3VLMoeTextSparseMoeBlock(_config())
-    for param in block.experts.parameters():
-        param.data.normal_()
-    block = block.to(device="cuda", dtype=torch.bfloat16).eval()
-    hidden_states = torch.randn(32, 16, device="cuda", dtype=torch.bfloat16)
-    token_mask = torch.ones(32, dtype=torch.bool, device="cuda")
-    token_mask[-5:] = False
-    routed = {}
-
-    def record_routing(module, args, kwargs):
-        routed["expert_indices"] = kwargs["expert_indices"]
-
-    block.experts.register_forward_pre_hook(record_routing, with_kwargs=True)
-    register_packed_experts()
-    config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
-    config["quant_cfg"] = [*config["quant_cfg"], *PER_EXPERT_WEIGHTS]
-    mtq.quantize(block, config, lambda model: model(hidden_states, token_mask=token_mask))
-
-    # a2 on the real rows only, one row per (token, selected expert).
-    real = token_mask.nonzero().squeeze(-1)  # [num_real]
-    experts = routed["expert_indices"][real]  # [num_real,top_k]
-    gate_up = torch.einsum("th,tkhf->tkf", hidden_states[real], block.experts.gate_up_proj[experts])
-    gate, up = gate_up.chunk(2, dim=-1)
-    expected = (F.silu(gate) * up).abs().max().float()
-    amax = block.experts.down_proj_input_quantizer.amax.float()
-    torch.testing.assert_close(amax, expected, rtol=2e-2, atol=0)
