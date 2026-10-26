@@ -74,15 +74,18 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # Integer min - pure bash
 int_min() { (( $1 < $2 )) && echo "$1" || echo "$2"; }
 
-# -- locate the cookbook root (contains cookbooks/cosmos3/) --------------------
+# -- locate the Framework checkout or legacy cookbook root ---------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COSMOS_ROOT="$SCRIPT_DIR"
 while [[ "$COSMOS_ROOT" != "/" ]]; do
-    [[ -d "$COSMOS_ROOT/cookbooks/cosmos3" ]] && break
+    if [[ -f "$COSMOS_ROOT/pyproject.toml" && -d "$COSMOS_ROOT/cosmos_framework" ]] \
+        || [[ -d "$COSMOS_ROOT/cookbooks/cosmos3" ]]; then
+        break
+    fi
     COSMOS_ROOT="$(dirname "$COSMOS_ROOT")"
 done
-[[ -d "$COSMOS_ROOT/cookbooks/cosmos3" ]] \
-    || die "Could not locate the cosmos repo root from $SCRIPT_DIR"
+[[ "$COSMOS_ROOT" != "/" ]] \
+    || die "Could not locate a Cosmos Framework checkout or legacy cookbook root from $SCRIPT_DIR"
 PAIBENCH_C_ROOT="$SCRIPT_DIR"
 log "COSMOS_ROOT=$COSMOS_ROOT"
 
@@ -103,9 +106,10 @@ fi
 : "${CUDA_VISIBLE_DEVICES:=0,1,2,3}"
 : "${COSMOS3_GIT_URL:=https://github.com/NVIDIA/cosmos-framework.git}"
 
-# Locate cosmos-framework inside the repo (packages/cosmos3 or packages/cosmos-framework)
+# Prefer the containing Framework checkout, then legacy nested checkouts.
+# An explicit COSMOS3_REPO keeps precedence, including a destination to clone.
 if [[ -z "${COSMOS3_REPO:-}" ]]; then
-    for _cand in "$COSMOS_ROOT/packages/cosmos3" "$COSMOS_ROOT/packages/cosmos-framework"; do
+    for _cand in "$COSMOS_ROOT" "$COSMOS_ROOT/packages/cosmos3" "$COSMOS_ROOT/packages/cosmos-framework"; do
         if [[ -f "$_cand/pyproject.toml" && -d "$_cand/cosmos_framework" ]]; then
             COSMOS3_REPO="$_cand"; break
         fi
