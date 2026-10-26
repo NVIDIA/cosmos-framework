@@ -20,6 +20,7 @@ from torch import nn
 
 from cosmos_framework.model.generator.moe.interface import MoEExperts
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe import Qwen3VLMoeTextExpertsGroupedMm
+from cosmos_framework.quantization.export import FP8_MAX
 
 _PACKED_EXPERT_TYPES = (Qwen3VLMoeTextExpertsGroupedMm, MoEExperts)
 
@@ -118,23 +119,12 @@ def assert_quantizers_calibrated(model: nn.Module) -> None:
         raise ValueError(f"{len(problems)} quantizer problem(s), first {min(len(problems), 10)}: {shown}")
 
 
-_FP8_MAX = 448.0  # Mirrors ``export.FP8_MAX``; export imports this module, so it is not imported back.
 _PACKED_EXPERT_QUANTIZERS = (
     "gate_up_proj_input_quantizer",
     "gate_up_proj_weight_quantizer",
     "down_proj_input_quantizer",
     "down_proj_weight_quantizer",
 )
-_PACKED_EXPERT_KEY_SUFFIXES = tuple(
-    f"experts.{name}{suffix}"
-    for name in ("gate_up_proj", "down_proj")
-    for suffix in ("", ".weight_scale", ".input_scale")
-)
-
-
-def is_packed_expert_key(key: str) -> bool:
-    """True for a packed expert parameter or its scale, e.g. ``...experts.gate_up_proj.weight_scale``."""
-    return key.endswith(_PACKED_EXPERT_KEY_SUFFIXES)
 
 
 def _check_per_expert_fp8(name: str, module: QuantPackedExperts) -> None:
@@ -174,12 +164,12 @@ def export_packed_experts(net: nn.Module) -> dict[str, torch.Tensor]:
         for param_name in ("gate_up_proj", "down_proj"):
             # BF16 models keep BF16 amax; the scales are FP32 on disk.
             weight_amax = getattr(module, f"{param_name}_weight_quantizer").amax.detach().float()
-            weight_scale = torch.where(weight_amax == 0, 1.0, weight_amax / _FP8_MAX)  # [num_experts,1,1]
+            weight_scale = torch.where(weight_amax == 0, 1.0, weight_amax / FP8_MAX)  # [num_experts,1,1]
             weight = getattr(module, param_name).detach().float()
-            fp8 = (weight / weight_scale).clamp(-_FP8_MAX, _FP8_MAX).to(torch.float8_e4m3fn)
+            fp8 = (weight / weight_scale).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
             input_amax = getattr(module, f"{param_name}_input_quantizer").amax.detach().float()
             key = f"{name}.{param_name}" if name else param_name
             exported[key] = fp8.contiguous().cpu()
             exported[f"{key}.weight_scale"] = weight_scale.contiguous().cpu()
-            exported[f"{key}.input_scale"] = (input_amax / _FP8_MAX).reshape(()).contiguous().cpu()
+            exported[f"{key}.input_scale"] = (input_amax / FP8_MAX).reshape(()).contiguous().cpu()
     return exported

@@ -139,6 +139,17 @@ _DROP_FROM_QUANTIZED = ("vae2llm.", "llm2vae.")
 _FP8_DTYPES = {torch.float8_e4m3fn, getattr(torch, "float8_e5m2", torch.float8_e4m3fn)}
 FP8_MAX = 448.0
 _SCALE_SUFFIXES = (".weight_scale", ".weight_scale_2", ".input_scale", ".input_scale_2", ".alpha", ".pre_quant_scale")
+_PACKED_EXPERT_KEY_SUFFIXES = tuple(
+    f"experts.{name}{suffix}"
+    for name in ("gate_up_proj", "down_proj")
+    for suffix in ("", ".weight_scale", ".input_scale")
+)
+
+
+def is_packed_expert_key(key: str) -> bool:
+    """True for a packed expert parameter or its scale, e.g. ``...experts.gate_up_proj.weight_scale``."""
+    return key.endswith(_PACKED_EXPERT_KEY_SUFFIXES)
+
 
 # Linears the diffusers checkpoint keeps in bf16 (never quantized), emitted in the
 # ModelOpt ``ignore`` list so a reasoning-path loader (vllm Cosmos3ForConditionalGeneration)
@@ -221,8 +232,6 @@ def _remap_framework_modelopt_state(
     mapping used by checkpoint loading; no Diffusers or Transformers model is
     instantiated to reconstruct the graph.
     """
-    from .moe import is_packed_expert_key
-
     state = copy.deepcopy(state)
     modes = {name: mode_state for name, mode_state in state["modelopt_state_dict"]}
     if "quantize" not in modes or "real_quantize" not in modes:
@@ -418,8 +427,6 @@ class Fp8DiffusersExporter:
         print(f"[export] wrote Transformers ModelOpt graph state for {len(quantizers)} quantizers")
 
     def overlay(self, bf16: dict, quantized: dict) -> dict:
-        from .moe import is_packed_expert_key
-
         merged = dict(bf16)
         n_weight = n_scale = n_dropped = 0
         quantized_modules: set[str] = set()
@@ -586,8 +593,6 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
     written so both the diffusers and transformers loaders resolve the new weights.
     The root Transformers ModelOpt state is skipped when the transformer has packed experts.
     """
-    from .moe import is_packed_expert_key
-
     input_dir, output_dir = Path(input_dir), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     target_transformer = output_dir / "transformer"
