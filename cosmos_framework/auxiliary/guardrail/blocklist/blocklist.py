@@ -305,6 +305,11 @@ class Blocklist(ContentSafetyGuardrail):
     def alternate_spellings(cls, prompt: str) -> list[str]:
         """Other readings of a non-ASCII prompt that the passes must also see.
 
+        * The code points folded (NFKC, combining marks removed). censor_prompt
+          folds them itself, but the lemmatized pass and the exact-match check
+          only see the prompt after to_ascii, which deletes a fullwidth or
+          accented letter rather than folding it. Without this reading an entry
+          that is only on the exact-match list is missed when spelled that way.
         * Invisible characters deleted rather than turned into a space. The
           space reading catches "snow<U+200B>white" as the entry "snow white",
           but splits "sn<U+200B>ow white" into "sn ow white", which matches
@@ -320,8 +325,8 @@ class Blocklist(ContentSafetyGuardrail):
         normalized = cls.normalize_code_points(prompt)
         joined = " ".join(INVISIBLE_CHARS.sub("", normalized).split())
         spellings: list[str] = []
-        for spelling in (joined, fold_lookalikes(normalized), fold_lookalikes(joined)):
-            if spelling != normalized and spelling not in spellings:
+        for spelling in (normalized, joined, fold_lookalikes(normalized), fold_lookalikes(joined)):
+            if spelling != prompt and spelling not in spellings:
                 spellings.append(spelling)
         return spellings
 

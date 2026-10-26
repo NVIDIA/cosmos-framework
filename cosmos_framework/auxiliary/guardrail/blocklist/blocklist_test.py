@@ -61,7 +61,9 @@ class _IdentityLemmatizer:
         return token
 
 
-def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) -> Blocklist:
+def _blocklist_with_words(
+    words: list[str], whitelist: list[str] | None = None, exact_match: list[str] | None = None
+) -> Blocklist:
     """Build a Blocklist around a small word list, without downloading a checkpoint.
 
     The heavyweight __init__ (checkpoint download, nltk data) is bypassed, but
@@ -71,6 +73,7 @@ def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) 
     return Blocklist.from_lists(
         words,
         whitelist,
+        exact_match,
         lemmatizer=_IdentityLemmatizer(),
         guardrail_partial_match_min_chars=100,
     )
@@ -584,3 +587,60 @@ def test_normalization_preserves_the_earlier_sentinel_and_markdown_behaviour():
     blocked, message = bl.censor_prompt("a bad\x00word in the text")
     assert blocked is True
     assert "badword" not in message
+
+
+def _fullwidth(text: str) -> str:
+    """Lowercase ASCII letters rewritten as their fullwidth presentation forms."""
+    return "".join(chr(ord(c) - 0x61 + 0xFF41) if "a" <= c <= "z" else c for c in text)
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("verbatim", "a chromebook on the desk"),
+        ("fullwidth", f"a {_fullwidth('chromebook')} on the desk"),
+        ("accent", "a chromébook on the desk"),
+        ("decomposed accent", unicodedata.normalize("NFD", "a chromébook on the desk")),
+        ("lookalike", f"a chr{_CYRILLIC_O}mebook on the desk"),
+        ("invisible split", "a chrome\u200bbook on the desk"),
+    ],
+)
+def test_exact_match_entry_is_folded_like_the_other_lists(monkeypatch, name, prompt):
+    """An entry only on the exact-match list is caught however it is spelled.
+
+    The exact-match check runs on the prompt after to_ascii, which deletes a
+    fullwidth or accented letter instead of folding it, so the folded reading
+    has to go through the whole chain of passes, not only censor_prompt.
+    The custom list holds an unrelated entry, so only the exact-match check can
+    block these prompts.
+    """
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["deskin"], exact_match=["chromebook"])
+
+    safe, message = bl.is_safe(prompt)
+
+    assert safe is False, f"{name} spelling of an exact-match entry was let through"
+    assert "Exact Match Word" in message
+
+
+@pytest.mark.L1
+def test_exact_match_folding_does_not_block_ordinary_text(monkeypatch):
+    """The folded reading must not invent exact matches in clean text."""
+    monkeypatch.setattr(
+        "cosmos_framework.auxiliary.guardrail.blocklist.blocklist.nltk.word_tokenize",
+        str.split,
+    )
+    bl = _blocklist_with_words(["deskin"], exact_match=["chromebook"])
+
+    for prompt in (
+        "a chrome bowl on the desk",
+        "café scene with Élodie",
+        f"a {_fullwidth('laptop')} on the desk",
+        "\u0441\u043e\u0441\u043d\u0430 \u0443 \u043e\u043a\u043d\u0430",
+    ):
+        safe, message = bl.is_safe(prompt)
+        assert safe is True, f"{prompt!r} was wrongly reported as blocked: {message}"
