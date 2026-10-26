@@ -55,7 +55,7 @@ class DataLoaderStateCallback(Callback):
         self.lance_state: dict[int, dict[str, Any]] = {}
         self.val_lance_state: dict[int, dict[str, Any]] = {}
         self.val_lance_batches: int = 0
-        self._pending_lance_state: dict[str, Any] | None = None
+        self._pending_lance_state: dict[str, Any] | list[dict[str, Any]] | None = None
         self._pending_val_lance_state: dict[str, Any] | None = None
         self.verbose = True
 
@@ -75,7 +75,12 @@ class DataLoaderStateCallback(Callback):
             return
         lance_state = data_batch.pop(LANCE_VLM_RESUME_STATE_KEY, None)
         if lance_state is not None and not isinstance(lance_state, dict):
-            raise TypeError(f"{LANCE_VLM_RESUME_STATE_KEY} must be a dict, got {type(lance_state).__name__}.")
+            if (
+                not isinstance(lance_state, list)
+                or not lance_state
+                or not all(isinstance(x, dict) for x in lance_state)
+            ):
+                raise TypeError(f"{LANCE_VLM_RESUME_STATE_KEY} must be a dict or a non-empty list of cursor dicts.")
         self._pending_lance_state = lance_state
 
     def _update_lance_state(self, update: dict[str, Any], split: str = "train") -> None:
@@ -168,7 +173,9 @@ class DataLoaderStateCallback(Callback):
     ) -> None:
         if self.distributor_type == "no_replace":
             if self._pending_lance_state is not None:
-                self._update_lance_state(self._pending_lance_state)
+                updates = self._pending_lance_state
+                for update in updates if isinstance(updates, list) else [updates]:
+                    self._update_lance_state(update)
                 self._pending_lance_state = None
             else:
                 self._update_state_from_batch(self.state, data_batch)

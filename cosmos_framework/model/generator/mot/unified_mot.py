@@ -13,20 +13,9 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    from_all_seq,
-    from_und_gen_splits,
-    get_gen_seq,
-    get_num_real_tokens,
-    get_und_seq,
-    has_pad_segment,
-    set_gen_seq,
-    set_und_seq,
-    zeros_like,
-)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
+from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
@@ -89,7 +78,18 @@ from cosmos_framework.model.generator.utils.load_balancing_stats import (
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.model.generator.utils.numerics import native_rms_norm
-from cosmos_framework.utils import log
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_num_real_tokens,
+    get_und_seq,
+    has_pad_segment,
+    set_gen_seq,
+    set_und_seq,
+    zeros_like,
+)
 
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
@@ -746,13 +746,22 @@ class PackedAttentionMoT(nn.Module):
                 memory_value,
             )
 
-        q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
+        text_cache = getattr(memory_value, "text_cache", None)
+        projected_text = text_cache.projected if text_cache is not None else None
+        cached_text = projected_text is not None
+        q_und_in = (
+            self.q_proj(get_und_seq(pack)) if projected_text is None else projected_text[0].flatten(-2)
+        )  # [N_und,num_heads*head_dim]
         q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
 
-        k_und_in = self.k_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
+        k_und_in = (
+            self.k_proj(get_und_seq(pack)) if projected_text is None else projected_text[1].flatten(-2)
+        )  # [N_und,num_kv_heads*head_dim]
         k_gen_in = self.k_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
 
-        v_und_in = self.v_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
+        v_und_in = (
+            self.v_proj(get_und_seq(pack)) if projected_text is None else projected_text[2].flatten(-2)
+        )  # [N_und,num_kv_heads*head_dim]
         v_gen_in = self.v_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
 
         q_und = q_und_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_und,num_heads,head_dim]
@@ -775,8 +784,9 @@ class PackedAttentionMoT(nn.Module):
             for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
                 torch._dynamo.mark_static(head_split, 1)
 
-        q_und = _apply_request_rms_norm(self.q_norm, q_und, memory_value)  # [N_und,num_heads,head_dim]
-        k_und = _apply_request_rms_norm(self.k_norm, k_und, memory_value)  # [N_und,num_kv_heads,head_dim]
+        if not cached_text:
+            q_und = _apply_request_rms_norm(self.q_norm, q_und, memory_value)  # [N_und,num_heads,head_dim]
+            k_und = _apply_request_rms_norm(self.k_norm, k_und, memory_value)  # [N_und,num_kv_heads,head_dim]
 
         q_gen = _apply_request_rms_norm(self.q_norm_moe_gen, q_gen, memory_value)  # [N_gen,num_heads,head_dim]
         k_gen = _apply_request_rms_norm(self.k_norm_moe_gen, k_gen, memory_value)  # [N_gen,num_kv_heads,head_dim]
@@ -784,13 +794,18 @@ class PackedAttentionMoT(nn.Module):
         packed_cos = packed_position_embeddings[0]
         packed_sin = packed_position_embeddings[1]
 
-        q_und_, k_und_ = self._apply_rotary_pos_emb(
-            q_und,
-            k_und,
-            get_und_seq(packed_cos),
-            get_und_seq(packed_sin),
-            unsqueeze_dim=1,
-        )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
+        if cached_text:
+            q_und_, k_und_ = q_und, k_und  # each [N_und,H,D], already post-RoPE
+        else:
+            q_und_, k_und_ = self._apply_rotary_pos_emb(
+                q_und,
+                k_und,
+                get_und_seq(packed_cos),
+                get_und_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
+            if text_cache is not None:
+                text_cache.projected = (q_und_, k_und_, v_und)
         maskless_plan = getattr(attention_mask, "multiview_maskless", None)
         defer_gen_rope = maskless_plan is not None and maskless_plan.mrope_cos is not None
         if defer_gen_rope:
@@ -816,14 +831,20 @@ class PackedAttentionMoT(nn.Module):
         # qk_norm_for_text=False, i.e. the Nemotron-3 config).  The raw k_und_ is kept
         # in packed_key_states_ for the reasoner's own causal self-attention.
         if self.k_norm_und_for_gen is not None:
-            k_und_normalized = self.k_norm_und_for_gen(k_und)  # RMSNorm before RoPE
-            _, k_und_for_gen_ = self._apply_rotary_pos_emb(
-                q_und_,  # dummy q — already RoPE-applied, output discarded; only k is used
-                k_und_normalized,
-                get_und_seq(packed_cos),
-                get_und_seq(packed_sin),
-                unsqueeze_dim=1,
-            )  # k_und_for_gen_: [N_und,num_kv_heads,head_dim]
+            if cached_text:
+                assert text_cache is not None and text_cache.projected_normalized_k is not None
+                k_und_for_gen_ = text_cache.projected_normalized_k  # [N_und,num_kv_heads,head_dim]
+            else:
+                k_und_normalized = self.k_norm_und_for_gen(k_und)  # [N_und,num_kv_heads,head_dim], RMSNorm before RoPE
+                _, k_und_for_gen_ = self._apply_rotary_pos_emb(
+                    q_und_,  # dummy q — already RoPE-applied, output discarded; only k is used
+                    k_und_normalized,
+                    get_und_seq(packed_cos),
+                    get_und_seq(packed_sin),
+                    unsqueeze_dim=1,
+                )  # k_und_for_gen_: [N_und,num_kv_heads,head_dim]
+                if text_cache is not None:
+                    text_cache.projected_normalized_k = k_und_for_gen_
             packed_key_states_normalized_: SequencePack | None = from_und_gen_splits(k_und_for_gen_, k_gen_, pack)
         else:
             packed_key_states_normalized_ = None
@@ -912,7 +933,13 @@ class PackedAttentionMoT(nn.Module):
                 cp_group,
             )  # [N_gen,hidden_size]
         else:
-            und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
+            if cached_text:
+                assert text_cache is not None and text_cache.hidden_output is not None
+                # The layer restores its cached final caption output; this value
+                # only keeps the existing packed geometry during media execution.
+                und_seq = text_cache.hidden_output  # [N_und,hidden_size]
+            else:
+                und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
             gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_gen,hidden_size]
         return from_und_gen_splits(und_seq, gen_seq, pack), kv_to_store  # [N_und+N_gen,hidden_size]
 
@@ -1168,6 +1195,10 @@ def _impl_forward(
     for i, decoder_layer in enumerate(self.layers):
         # MemoryState: produce read-only MemoryValue for this layer (outside compile)
         memory_value = memory.read_for_layer(i) if memory is not None else None
+        text_cache_layers = getattr(attention_mask, "ar_text_cache_layers", None)
+        if text_cache_layers is not None:
+            assert memory_value is not None
+            memory_value.text_cache = text_cache_layers[i]
 
         hidden_states, lbl_metadata_dict, kv_to_store = decoder_layer(
             hidden_states,
@@ -1411,6 +1442,8 @@ class MoTDecoderLayer(nn.Module):
                 before every decoder operation and restores the full layout on return.
         """
         target_only_no_text = gen_only and bool(getattr(memory_value, "target_only_no_text", False))
+        text_cache = getattr(memory_value, "text_cache", None)
+        cached_text = text_cache is not None and text_cache.hidden_output is not None
         layer_input = input
         layer_position_embeddings = packed_position_embeddings
         target_start = 0
@@ -1462,8 +1495,8 @@ class MoTDecoderLayer(nn.Module):
             )
 
         # Pre-Attention layernorm
-        if target_only_no_text:
-            norm_und = get_und_seq(layer_input)  # [0,hidden_size]
+        if target_only_no_text or cached_text:
+            norm_und = get_und_seq(layer_input)  # [N_und,hidden_size], empty in target-only mode
         else:
             norm_und = _apply_request_rms_norm(
                 self.input_layernorm, get_und_seq(layer_input), memory_value
@@ -1563,8 +1596,10 @@ class MoTDecoderLayer(nn.Module):
             mlp_out_gen_seq = residual_gen + mlp_out_gen
         else:
             # STANDARD PATH: Process both und and gen tokens
-            ln_out_und = _apply_request_rms_norm(
-                self.post_attention_layernorm, residual_und, memory_value
+            ln_out_und = (
+                residual_und
+                if cached_text
+                else _apply_request_rms_norm(self.post_attention_layernorm, residual_und, memory_value)
             )  # [N_und,hidden_size]
             ln_out_gen = _apply_request_rms_norm(
                 self.post_attention_layernorm_moe_gen, residual_gen, memory_value
@@ -1582,13 +1617,16 @@ class MoTDecoderLayer(nn.Module):
             if self._sample_lbl_und:
                 und_sample_ids, und_num_samples = _get_local_sample_ids(layer_input, "und")
 
-            mlp_out_und, lbl_metadata_und = _run_mlp(
-                self.mlp,
-                ln_out_und,
-                und_token_mask,
-                sample_ids=und_sample_ids,
-                num_samples=und_num_samples,
-            )
+            if cached_text:
+                mlp_out_und, lbl_metadata_und = ln_out_und, None  # [N_und,hidden_size], unused caption residual
+            else:
+                mlp_out_und, lbl_metadata_und = _run_mlp(
+                    self.mlp,
+                    ln_out_und,
+                    und_token_mask,
+                    sample_ids=und_sample_ids,
+                    num_samples=und_num_samples,
+                )
             # mlp_out_und: [N_und,hidden_size], zero on the padding rows
             mlp_out_gen, lbl_metadata_gen = _run_mlp(
                 self.mlp_moe_gen,
@@ -1604,7 +1642,13 @@ class MoTDecoderLayer(nn.Module):
             if lbl_metadata_gen is not None:
                 lbl_metadata_dict["gen"] = lbl_metadata_gen
 
-            mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
+            if cached_text:
+                assert text_cache is not None and text_cache.hidden_output is not None
+                mlp_out_und_seq = text_cache.hidden_output  # [N_und,hidden_size]
+            else:
+                mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
+                if text_cache is not None:
+                    text_cache.hidden_output = mlp_out_und_seq
             mlp_out_gen_seq = residual_gen + mlp_out_gen  # [N_gen,hidden_size]
 
         layer_output = from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, layer_input)

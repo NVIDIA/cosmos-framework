@@ -55,8 +55,8 @@ from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils import callback, distributed, log, misc
 from cosmos_framework.utils.config import CheckpointConfig, JobConfig
+from cosmos_framework.utils import callback, distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.reasoner.model_wrapper import ModelWrapper
 from cosmos_framework.utils.reasoner.optimizer import OptimizersContainer
@@ -330,9 +330,18 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     log.info("scheduler.load_state_dict done", rank0_only=False)
                 elif key == "trainer":
                     log.info(f"- Loading the trainer {cur_key_ckpt_full_path}...", rank0_only=False)
-                    # Here we skip loading the trainer, since 1) we only need the iteration which could be parsed from the name 2) we dont use grad_scaler
-                    iteration = cur_key_ckpt_full_path.split("iter_")[-1].split("/")[0]
-                    iteration = int(iteration)
+                    if os.path.basename(os.path.normpath(source.path)).startswith("epoch_"):
+                        # Epoch-named checkpoints carry no iteration in their name; save() records it.
+                        trainer_state = easy_io.load(
+                            os.path.join(cur_key_ckpt_full_path, f"rank_{dist.get_rank()}.pkl"),
+                            file_format="pkl",
+                            backend_key=source.backend_key,
+                        )
+                        iteration = int(trainer_state["iteration"])
+                    else:
+                        # Here we skip loading the trainer, since 1) we only need the iteration which could be parsed from the name 2) we dont use grad_scaler
+                        iteration = cur_key_ckpt_full_path.split("iter_")[-1].split("/")[0]
+                        iteration = int(iteration)
                 elif key == "dataloader":
                     rank = dist.get_rank()
                     dataloader_pkl_path = os.path.join(cur_key_ckpt_full_path, f"rank_{rank}.pkl")
@@ -429,7 +438,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         checkpoint_file: str,
     ) -> None:
         for k, (v, full_checkpoint_path) in to_save_dict.items():
-            if k == "dataloader":
+            if k in ("dataloader", "trainer"):
                 self._save_as_pkl(v, full_checkpoint_path)
             else:
                 log.info(f"Saving {k} checkpoint to {full_checkpoint_path}")
@@ -479,6 +488,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
         }
 
         self.callbacks.on_save_checkpoint(model_parts, state_dict=to_save_dict)
+        if epoch is not None:
+            # load() reads the iteration from an iter_* name; an epoch-named checkpoint records it.
+            to_save_dict["trainer"] = {"iteration": iteration}
 
         for k in to_save_dict.keys():
             output_dirname = os.path.join(self.save_dirname, checkpoint_file, k)
@@ -486,10 +498,11 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
             # Dataloader state is a plain dict, not tensors; save in main process and exclude from async staging.
-            dataloader_entry = to_save_dict.pop("dataloader", None)
-            if dataloader_entry is not None:
-                dataloader_state, dataloader_save_dir = dataloader_entry
-                self._save_as_pkl(dataloader_state, dataloader_save_dir)
+            for pkl_key in ("dataloader", "trainer"):
+                pkl_entry = to_save_dict.pop(pkl_key, None)
+                if pkl_entry is not None:
+                    pkl_state, pkl_save_dir = pkl_entry
+                    self._save_as_pkl(pkl_state, pkl_save_dir)
             self._async_with_pinned_memory(checkpoint_file, to_save_dict)
         else:
             self.save_state_dict_worker(to_save_dict, checkpoint_file)

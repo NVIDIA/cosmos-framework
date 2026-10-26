@@ -117,10 +117,13 @@ register_backend("http", HTTPBackend, prefixes=["http", "https"])
 if TRAINING:
     try:
         from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
-    except ImportError as error:
+    except ModuleNotFoundError as error:
         # multistorageclient is an optional internal S3 dependency. Local,
         # HTTP, Docker, and Pyxis training must remain importable without it.
         # A later s3:// access fails clearly because no S3 backend is present.
+        # Any other import failure (a bug in the backend or its imports) surfaces here.
+        if (error.name or "").split(".")[0] not in {"boto3", "botocore", "multistorageclient"}:
+            raise
         MSC_IMPORT_ERROR = error
     else:
         # To avoid breaking backward Compatibility, 's3' is also used as a

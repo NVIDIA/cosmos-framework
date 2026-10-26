@@ -10,9 +10,9 @@ import pytest
 import torch
 
 import cosmos_framework.trainer.distillation as trainer_module
-from cosmos_framework.model.generator.distillation.optimizer import PhaseOptimizer, PhaseScheduler
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.trainer.distillation import DistillationTrainer
+from cosmos_framework.model.generator.distillation.optimizer import PhaseOptimizer, PhaseScheduler
 from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 
 

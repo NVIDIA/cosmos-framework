@@ -190,3 +190,5 @@ def test_multiview_augmentations_defer_normalization_to_model() -> None:
     augmentations = module.make_auto_augmentations({})
 
     assert not any("normalize" in type(augmentor).__name__.lower() for augmentor in augmentations)
+
+

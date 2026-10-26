@@ -19,6 +19,7 @@ from cosmos_framework.utils import distributed, misc
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.multiview_attention import CrossViewTemporalWindowConfig
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
+from cosmos_framework.model.generator.mot import context_parallel_utils as cp_utils
 from cosmos_framework.model.generator.mot.attention import (
     SplitInfo,
     build_packed_sequence,
@@ -31,7 +32,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
 )
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
-from cosmos_framework.model.generator.utils.memory import MemoryValue
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache, MemoryValue
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     build_sequence_plans_from_data_batch,
@@ -72,6 +73,7 @@ class _CountingIterator:
 
 def _make_window_trainer(cp_size: int = 2) -> tuple[ImaginaireTrainer, Any]:
     trainer = object.__new__(ImaginaireTrainer)
+    trainer.config = SimpleNamespace(trainer=SimpleNamespace(skip_model_update=False))
     trainer._cp_data_window = ContextParallelDataWindow()
     cp_mesh = SimpleNamespace(size=lambda: cp_size, get_group=lambda: object())
     parallel_dims = SimpleNamespace(cp_enabled=True, cp_mesh=cp_mesh)
@@ -1562,3 +1564,76 @@ if __name__ == "__main__":
     test_context_parallel_attention_two_way()
     test_get_context_parallel_sharded_sequence_three_way()
     test_context_parallel_multiview_maskless()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("cp_size", [4, 16])
+def test_ar_text_cache_skips_text_collectives_and_preserves_cp_kv(
+    monkeypatch: pytest.MonkeyPatch,
+    cp_size: int,
+) -> None:
+    """Later steps exchange media only, including CP greater than KV-head count."""
+    calls: list[str] = []
+    monkeypatch.setattr(dist, "get_world_size", lambda group: cp_size)
+
+    def gather(tensor: torch.Tensor, **kwargs: Any) -> torch.Tensor:  # [S_local,H,D] -> [S,H_local,D]
+        calls.append("gather")
+        return tensor.repeat(cp_size, 1, 1)[:, : tensor.shape[1] // cp_size].contiguous()  # [S,H_local,D]
+
+    def scatter(tensor: torch.Tensor, **kwargs: Any) -> torch.Tensor:  # [S,H_local*D] -> [S_local,H*D]
+        calls.append("scatter")
+        return tensor[: tensor.shape[0] // cp_size].repeat(1, cp_size)  # [S_local,H*D]
+
+    monkeypatch.setattr(cp_utils, "gather_seq_scatter_heads", gather)
+    monkeypatch.setattr(cp_utils, "gather_heads_scatter_seq", scatter)
+    meta: SequencePack = {
+        "is_sharded": True,
+        "_num_causal_tokens": 2 * cp_size,
+        "_num_full_tokens": 3 * cp_size,
+        "sample_offsets": torch.tensor([0, 5 * cp_size], dtype=torch.int32),  # [B+1]
+        "max_sample_len": 5 * cp_size,
+        "max_causal_len": 2 * cp_size,
+        "max_full_len": 3 * cp_size,
+        "_causal_indices": torch.arange(2 * cp_size),  # [S_text]
+        "_full_indices": torch.arange(2 * cp_size, 5 * cp_size),  # [S_gen]
+        "_causal_seq_offsets": torch.tensor([0, 2 * cp_size], dtype=torch.int32),  # [B+1]
+        "_full_only_seq_offsets": torch.tensor([0, 3 * cp_size], dtype=torch.int32),  # [B+1]
+    }
+    text = torch.randn(2, 32, 4)  # [S_text_local,H,D]
+    media = torch.randn(3, 32, 4)  # [S_gen_local,H,D]
+    q = from_mode_splits(text, media, meta, is_sharded=True)
+    k = from_mode_splits(text[:, :8], media[:, :8], meta, is_sharded=True)  # streams [S_local,H_kv,D]
+    v = from_mode_splits(text[:, :8] * 2, media[:, :8] * 2, meta, is_sharded=True)  # [S_local,H_kv,D]
+    normalized = from_mode_splits(text[:, :8] * 3, media[:, :8], meta, is_sharded=True)  # [S_local,H_kv,D]
+
+    def attention(
+        q: SequencePack, k: SequencePack, v: SequencePack, mask: object, **kwargs: Any
+    ) -> tuple[SequencePack, None]:
+        normalized_k = kwargs["packed_key_states_normalized"]
+        und = get_und_seq(q) + get_und_seq(k).repeat_interleave(4 if cp_size == 4 else 2, dim=1)  # [S_text,H_local,D]
+        gen = get_gen_seq(q) + get_gen_seq(normalized_k).repeat_interleave(
+            4 if cp_size == 4 else 2, dim=1
+        )  # [S_gen,H_local,D]
+        return from_mode_splits(und.flatten(-2), gen.flatten(-2), q), None
+
+    memory = MemoryValue(text_cache=ARTextLayerCache())
+    mesh = SimpleNamespace(get_group=lambda: None)
+    with torch.no_grad():
+        cp_utils.context_parallel_attention(
+            mesh, q, k, v, object(), attention, memory_value=memory, packed_key_states_normalized=normalized
+        )
+        assert len(calls) == 9
+        calls.clear()
+        cached, cached_kv = cp_utils.context_parallel_attention(
+            mesh, q, k, v, object(), attention, memory_value=memory, packed_key_states_normalized=normalized
+        )
+        assert calls == ["gather", "gather", "gather", "scatter"]
+        reference, reference_kv = cp_utils.context_parallel_attention(
+            mesh, q, k, v, object(), attention, memory_value=MemoryValue(), packed_key_states_normalized=normalized
+        )
+        torch.testing.assert_close(get_gen_seq(cached), get_gen_seq(reference), rtol=0, atol=0)
+        torch.testing.assert_close(get_und_seq(cached), get_und_seq(reference), rtol=0, atol=0)
+        assert cached_kv is not None and reference_kv is not None
+        for a, b in zip(cached_kv, reference_kv, strict=True):
+            torch.testing.assert_close(a, b, rtol=0, atol=0)

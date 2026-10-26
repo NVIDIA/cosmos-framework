@@ -289,6 +289,8 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 )
             flex_metadata = replace(flex_metadata, teacher_forcing_replay_policy=teacher_forcing_replay_policy)
             setattr(attention_meta, "replay_maskless_plan", build_replay_maskless_plan(flex_metadata, sensor_items))
+            if rolling_request is not None:
+                setattr(attention_meta, "ar_text_cache_layers", rolling_request.text_cache_layers)
             # The marked replay dispatch must consume this plan, never the base
             # bidirectional plan that was constructed before the pre-hook.
             attention_meta.multiview_maskless = None

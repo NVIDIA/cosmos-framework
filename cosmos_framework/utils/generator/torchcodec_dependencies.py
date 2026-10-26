@@ -39,7 +39,11 @@ def preload_npp(cuda_version: str | None) -> ctypes.CDLL | None:
     for path in package.files or ():
         if path.name == library:
             # NPP's own $ORIGIN runpath resolves its sibling libnppc dependency.
-            return ctypes.CDLL(str(package.locate_file(path)))
+            try:
+                return ctypes.CDLL(str(package.locate_file(path)))
+            except OSError:
+                # Leave the failure to TorchCodec's full loader diagnostics.
+                return None
     return None
 
 
