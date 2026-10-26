@@ -105,14 +105,22 @@ class LoraInjectedLinear(nn.Linear):
 
         Callers exporting sharded models must gather all three tensors first.
         Accumulate in at least FP32 and cast only the completed merge, including
-        when FP32 adapters are trained alongside a BF16 base. This is the
+        when FP32 adapters are trained alongside a BF16 base. Disable TF32 as
+        well as autocast so CUDA matmuls preserve FP32 input precision. This is the
         automatic-export policy; the existing in-place/offline merge retains
         its delta rounding and ambient autocast behavior in ``merge_adapter_``.
         """
         accumulation_dtype = torch.float64 if base.dtype == torch.float64 else torch.float32
-        with torch.autocast(device_type=base.device.type, enabled=False):
-            delta = lora_b.to(accumulation_dtype) @ lora_a.to(accumulation_dtype)
-            return (base.to(accumulation_dtype) + self._lora_scale * delta).to(dtype=dtype or base.dtype)
+        previous_precision = torch.get_float32_matmul_precision() if base.is_cuda else None
+        try:
+            if previous_precision is not None:
+                torch.set_float32_matmul_precision("highest")
+            with torch.autocast(device_type=base.device.type, enabled=False):
+                delta = lora_b.to(accumulation_dtype) @ lora_a.to(accumulation_dtype)
+                return (base.to(accumulation_dtype) + self._lora_scale * delta).to(dtype=dtype or base.dtype)
+        finally:
+            if previous_precision is not None:
+                torch.set_float32_matmul_precision(previous_precision)
 
     @torch.no_grad()
     def merge_adapter_(self) -> None:

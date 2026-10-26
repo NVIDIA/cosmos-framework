@@ -146,3 +146,29 @@ def test_existing_merge_apis_retain_rounding_and_autocast(
     assert network["layer"].weight is weight
     torch.testing.assert_close(weight, torch.full_like(weight, expected_inplace), rtol=0, atol=0)
     torch.testing.assert_close(exported, torch.full_like(weight, expected_export), rtol=0, atol=0)
+
+
+@pytest.mark.GPU
+@pytest.mark.parametrize("precision", ["highest", "high", "medium"])
+@pytest.mark.parametrize("use_rslora", [False, True])
+@torch.no_grad()
+def test_cuda_export_merge_preserves_precision_and_restores_matmul_settings(precision, use_rslora):
+    torch.manual_seed(13)
+    layer = LoraInjectedLinear(torch.nn.Linear(16, 16), rank=4, alpha=8, use_rslora=use_rslora)
+    layer.lora_A.weight.normal_(std=0.1)
+    layer.lora_B.weight.normal_(std=0.1)
+    expected = (
+        layer.weight.double() + layer._lora_scale * (layer.lora_B.weight.double() @ layer.lora_A.weight.double())
+    ).float()
+    layer.cuda()
+    previous = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision(precision)
+    try:
+        actual = layer.merged_weight(layer.weight, layer.lora_A.weight, layer.lora_B.weight)
+        assert torch.get_float32_matmul_precision() == precision
+        torch.testing.assert_close(actual.cpu(), expected, atol=1e-7, rtol=1e-6)
+        with pytest.raises(RuntimeError, match="shapes cannot be multiplied"):
+            layer.merged_weight(layer.weight, layer.lora_A.weight, layer.lora_B.weight[:, :-1])
+        assert torch.get_float32_matmul_precision() == precision
+    finally:
+        torch.set_float32_matmul_precision(previous)

@@ -5,6 +5,8 @@
 
 import json
 import os
+import traceback
+from contextlib import contextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -241,17 +243,22 @@ def fsdp_group():
 
 @pytest.mark.GPU
 @pytest.mark.parametrize("lora,tied_embeddings", [(False, False), (True, False), (False, True)])
-def test_fsdp_export_gathers_once_in_rank_order_and_reloads(tmp_path, lora, tied_embeddings, fsdp_group):
+def test_fsdp_export_gathers_once_in_rank_order_and_reloads(
+    tmp_path, lora, tied_embeddings, fsdp_group, export_matmul_precision
+):
     """Run with torchrun --nproc_per_node=2, like the other distributed CI cases."""
     from torch.distributed.device_mesh import init_device_mesh
     from torch.distributed.fsdp import fully_shard
 
-    rank, device = fsdp_group
+    rank, _ = fsdp_group
     output = str(tmp_path / "export")
-    model = _model(lora=lora, use_rslora=True, tied_embeddings=tied_embeddings).cuda()
-    tokens = torch.tensor([[1, 4, 9, 2]], device=device)
+    model = _model(lora=lora, use_rslora=True, tied_embeddings=tied_embeddings)
+    tokens = torch.tensor([[1, 4, 9, 2]])
+    # The reload runs on CPU, so compute its reference on CPU too. CUDA may use
+    # TF32 kernels, whose rounding is unrelated to checkpoint correctness.
     with torch.no_grad():
-        expected = model(tokens).logits.cpu()
+        expected = model(tokens).logits
+    model = model.cuda()
     fully_shard(model, mesh=init_device_mesh("cuda", (2,)))
     parameters = dict(model.named_parameters())
     assert all(isinstance(parameter, DTensor) for parameter in parameters.values())
@@ -277,22 +284,59 @@ def test_fsdp_export_gathers_once_in_rank_order_and_reloads(tmp_path, lora, tied
     for name, parameter in model.named_parameters():
         assert parameter is parameters[name]
         torch.testing.assert_close(parameter.full_tensor(), before[name], rtol=0, atol=0)
-    if rank == 0:
-        callback._do_save_and_upload(chunks, manifest, total_size, model.config, "", output, 1)
-        dense, info = AutoModelForCausalLM.from_pretrained(
-            output,
-            local_files_only=True,
-            dtype=torch.float32,
-            attn_implementation="eager",
-            output_loading_info=True,
-        )
-        assert not info["unexpected_keys"] and not info["missing_keys"]
-        if tied_embeddings:
-            assert dense.get_input_embeddings().weight is dense.get_output_embeddings().weight
-        with torch.no_grad():
-            torch.testing.assert_close(dense(tokens.cpu()).logits, expected, atol=2e-6, rtol=2e-5)
-    else:
-        assert (chunks, manifest, total_size) == ([], {}, 0)
+    with _collective_export_check():
+        if rank == 0:
+            callback._do_save_and_upload(chunks, manifest, total_size, model.config, "", output, 1)
+            dense, info = AutoModelForCausalLM.from_pretrained(
+                output,
+                local_files_only=True,
+                dtype=torch.float32,
+                attn_implementation="eager",
+                output_loading_info=True,
+            )
+            assert not info["unexpected_keys"] and not info["missing_keys"]
+            if tied_embeddings:
+                assert dense.get_input_embeddings().weight is dense.get_output_embeddings().weight
+            with torch.no_grad():
+                torch.testing.assert_close(dense(tokens).logits, expected, atol=2e-6, rtol=2e-5)
+        else:
+            assert (chunks, manifest, total_size) == ([], {}, 0)
+
+
+@pytest.fixture(params=["highest", "high"], ids=["fp32", "tf32"])
+def export_matmul_precision(request):
+    previous = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision(request.param)
+    try:
+        yield
+    finally:
+        torch.set_float32_matmul_precision(previous)
+
+
+@contextmanager
+def _collective_export_check():
+    """Report local validation errors on every rank before starting another case."""
+    error = None
+    try:
+        yield
+    except Exception:
+        error = traceback.format_exc()
+    errors = [None] * torch.distributed.get_world_size()
+    torch.distributed.all_gather_object(errors, error)
+    failures = "\n".join(f"Rank {rank}:\n{error}" for rank, error in enumerate(errors) if error is not None)
+    assert not failures, failures
+
+
+@pytest.mark.GPU
+@pytest.mark.parametrize("failing_rank,error_type", [(0, AssertionError), (1, OSError)])
+def test_fsdp_export_validation_failure_reaches_all_ranks(fsdp_group, failing_rank, error_type):
+    rank, _ = fsdp_group
+    with pytest.raises(AssertionError, match=rf"(?s)Rank {failing_rank}:.*injected export validation failure"):
+        with _collective_export_check():
+            if rank == failing_rank:
+                raise error_type("injected export validation failure")
+    # The failure must leave the group usable for the next case, not strand a
+    # peer in the old barrier until the NCCL watchdog kills the test process.
     torch.distributed.barrier()
 
 
