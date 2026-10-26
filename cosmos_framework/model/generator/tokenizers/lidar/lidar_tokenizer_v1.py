@@ -143,7 +143,8 @@ class LidarTokenizerV1Interface(VideoTokenizerInterface):
         super().__init__(object_store_credential_path_pretrained)
 
         self.device = torch.device(device)
-        self.dtype = as_torch_dtype(dtype)
+        # Exported configs serialize torch dtypes as strings (for example, "float32").
+        self.dtype: torch.dtype = as_torch_dtype(dtype)
         self.sample_posterior = sample_posterior
         self.apply_validity_mask = apply_validity_mask
         if streaming_chunk_frames is not None and streaming_chunk_frames < 1:

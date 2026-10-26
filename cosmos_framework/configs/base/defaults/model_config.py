@@ -340,6 +340,8 @@ class OmniMoTModelConfig:
     # None preserves Auto's separate action controls and control/target item roles.
     # Opt-in batches use separate ragged RGB and full frame-rate action blocks;
     # single-view batches in the same run keep their original dense packing.
+    # This config controls packing/view codes; attention uses the resulting item
+    # layout and the shared multiview_attention settings above.
     multiview_action_conditioning: MultiviewActionConditioningConfig | None = None
 
     # Per-layer NATTEN parameters

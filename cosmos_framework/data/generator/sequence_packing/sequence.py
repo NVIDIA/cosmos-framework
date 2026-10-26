@@ -1383,6 +1383,12 @@ class PackedSequence:
     # with samples that have none.
     num_action_items_per_sample: list[int] | None = None
 
+    # Separate-camera RGB/action layout: each camera is one vision item, and its
+    # full-rate actions occupy this many rows per latent step, starting at step 1.
+    # Set by the dedicated packer so attention reads the layout from the batch,
+    # without interpreting arbitrary control/target items as separate cameras.
+    multiview_action_temporal_factor: int | None = None
+
     def __post_init__(self) -> None:
         self._sequence_pack_metadata: SequencePackMetadata | None = None
         assert isinstance(self.text_ids, torch.Tensor), "PackedSequence.text_ids must be finalized"

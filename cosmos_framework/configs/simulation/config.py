@@ -14,21 +14,15 @@ import importlib.util
 
 from hydra.core.config_store import ConfigStore
 
+from cosmos_framework.utils.lazy_config import LazyCall as L
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.trainer import ImaginaireTrainer
+from cosmos_framework.utils.config_helper import import_all_modules_from_package, import_module
 from cosmos_framework.configs.base.config import Config as VFMConfig
 from cosmos_framework.configs.base.defaults.callbacks import register_callbacks
 from cosmos_framework.configs.base.defaults.checkpointer import (
     register_checkpoint,
     register_ckpt_type,
-)
-from cosmos_framework.configs.base.defaults.distill_callbacks import (
-    register_distill_callbacks,
-)
-from cosmos_framework.configs.base.defaults.distill_ckpt_type import (
-    register_distill_ckpt_type,
-)
-from cosmos_framework.configs.base.defaults.distill_optimizer import (
-    register_optimizer,
-    register_scheduler,
 )
 from cosmos_framework.configs.base.defaults.ema import register_ema
 from cosmos_framework.configs.base.defaults.model import register_model
@@ -40,6 +34,16 @@ from cosmos_framework.configs.base.defaults.tokenizer import (
     register_sound_tokenizer,
     register_tokenizer,
 )
+from cosmos_framework.configs.base.defaults.distill_callbacks import (
+    register_distill_callbacks,
+)
+from cosmos_framework.configs.base.defaults.distill_ckpt_type import (
+    register_distill_ckpt_type,
+)
+from cosmos_framework.configs.base.defaults.distill_optimizer import (
+    register_optimizer,
+    register_scheduler,
+)
 from cosmos_framework.model.generator.consistency_model.tf_dcm import (
     TeacherForcingDCMModel,
     TeacherForcingDCMModelConfig,
@@ -48,17 +52,13 @@ from cosmos_framework.model.generator.distillation.self_forcing_dmd import (
     SelfForcingDMDConfig,
     SelfForcingDMDModel,
 )
+from cosmos_framework.trainer.distillation import (
+    DistillationTrainer,  # noqa: F401 - release-only binding of the distillation trainer
+)
 from cosmos_framework.model.generator.omni_mot_causal_model import (
     OmniMoTCausalModel,
     OmniMoTCausalModelConfig,
 )
-from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.trainer.distillation import (
-    DistillationTrainer,  # noqa: F401 - release-only binding of the distillation trainer
-)
-from cosmos_framework.utils.config_helper import import_all_modules_from_package, import_module
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.lazy_config import LazyDict
 
 # Experiment registries imported when make_config() is called without an explicit
 # registry. The released copy imports only the families that ship with it.

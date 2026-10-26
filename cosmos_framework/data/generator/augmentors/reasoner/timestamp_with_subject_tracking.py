@@ -324,6 +324,7 @@ class TimeStampWithSubjectTracking(Augmentor):
         ] = "random",
         urls_needs_timestamp: list = ["tl_plm_sav_20250714"],
         processor=None,
+        stable_candidate_order: bool = False,
     ) -> None:
         """
         Args:
@@ -332,6 +333,7 @@ class TimeStampWithSubjectTracking(Augmentor):
         self.input_key = input_key
         self.output_format = output_format
         self.urls_needs_timestamp = urls_needs_timestamp
+        self.stable_candidate_order: bool = stable_candidate_order
         self.processor = processor
 
     def __call__(self, data_dict: Dict) -> Dict:
@@ -406,8 +408,10 @@ class TimeStampWithSubjectTracking(Augmentor):
         ]:
             assistant_message = random.sample(assistant_message, 1)
         elif output_format in ["dense_video_caption_json_one_subject", "dense_video_caption_plain_one_subject"]:
-            available_subject_ids = list(
-                set([assistant_message_i["subject_id"] for assistant_message_i in assistant_message])
+            candidates = [assistant_message_i["subject_id"] for assistant_message_i in assistant_message]
+            # Offline replay must not depend on a worker's Python hash seed.
+            available_subject_ids = (
+                list(dict.fromkeys(candidates)) if self.stable_candidate_order else list(set(candidates))
             )
             # sample one subject id
             subject_id = random.choice(available_subject_ids)

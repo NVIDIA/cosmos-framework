@@ -11,6 +11,7 @@ from typing import Any
 import torch
 
 from cosmos_framework.data.generator.reasoner.video_decoder_qwen import pixels_to_token, token_to_pixels
+from cosmos_framework.utils.generator.reasoner.constant import MEDIA_ROLES
 
 
 def _mean(values: list[float] | list[int]) -> float | None:
@@ -57,7 +58,7 @@ class SampleDataStats:
         num_videos = 0
         for message in conversation:
             content = message.get("content")
-            if message.get("role") != "user" or not isinstance(content, list):
+            if message.get("role") not in MEDIA_ROLES or not isinstance(content, list):
                 continue
             num_images += sum(item.get("type") == "image" for item in content)
             num_videos += sum(item.get("type") == "video" for item in content)

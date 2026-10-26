@@ -31,16 +31,29 @@ def sample_seed(data: dict[str, Any]) -> int:
 
 
 class DeterministicAugmentor(Augmentor):
-    def __init__(self, augmentor: Augmentor) -> None:
-        self.augmentor = augmentor
+    def __init__(self, augmentor: Augmentor, *, fixed_sample_epoch: int | None = None) -> None:
+        """Optionally pin the augmented view for a measured offline packing catalog."""
+        if fixed_sample_epoch is not None and (type(fixed_sample_epoch) is not int or fixed_sample_epoch < 0):
+            raise ValueError("fixed_sample_epoch must be a non-negative integer or None.")
+        self.augmentor: Augmentor = augmentor
+        self.fixed_sample_epoch: int | None = fixed_sample_epoch
 
     def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+        if self.fixed_sample_epoch is not None:
+            if not isinstance(data, dict) or not isinstance(data.get("__key__"), str) or not data["__key__"]:
+                raise ValueError("A fixed augmented view requires a non-empty sample key.")
+            url = data.get("__url__", "")
+            root = getattr(url, "root", url)
+            if not isinstance(root, str) or not root:
+                raise ValueError("A fixed augmented view requires a non-empty source root.")
         if not isinstance(data, dict) or "__key__" not in data:
             return self.augmentor(data)
         python_state = random.getstate()
         numpy_state = np.random.get_state()
         torch_state = torch.get_rng_state()  # [N_state]
-        seed = sample_seed(data)
+        # Only the RNG identity is pinned; preserve the caller's epoch metadata.
+        seed_data = data if self.fixed_sample_epoch is None else {**data, "sample_epoch": self.fixed_sample_epoch}
+        seed = sample_seed(seed_data)
         random.seed(seed)
         np.random.seed(seed % (2**32))
         torch_generator = torch.Generator(device="cpu")

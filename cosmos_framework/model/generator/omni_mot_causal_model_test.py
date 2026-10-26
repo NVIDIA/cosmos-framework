@@ -18,6 +18,7 @@ Bugs patched:
       uninitialized.
 """
 
+from contextlib import nullcontext
 from types import MethodType, SimpleNamespace
 from typing import Literal, cast
 from unittest.mock import MagicMock, patch
@@ -41,8 +42,8 @@ def test_clean_tf_cache_preserves_target_indexes_and_caption_layout(
     view_scoped: bool, detach_clean_kv: bool, maskless_replay: bool
 ) -> None:
     """Exercise the real mask builder and index helper through the model entry point."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     original_masks = [
         torch.ones(4),  # [V*T]
@@ -295,8 +296,8 @@ def test_target_only_teacher_forcing_requires_one_logical_sample(
     num_items: int, item_counts: list[int] | None, sample_lens: list[int], valid: bool
 ) -> None:
     """Implicit single-target grouping is valid; multiple logical samples are not."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = MagicMock()
     model.config.video_temporal_causal = True
@@ -409,13 +410,13 @@ def test_detached_target_only_cache_is_allowed_only_for_tfdcm_teacher(
 @pytest.mark.CPU
 def test_teacher_forcing_replay_policy_resolves_lazy_config_and_runs_validation() -> None:
     """LazyConfig must become the typed policy before model construction."""
+    from cosmos_framework.utils.lazy_config import LazyCall as L
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator.omni_mot_causal_model import (
         OmniMoTCausalModel,
         OmniMoTCausalModelConfig,
         _resolve_teacher_forcing_replay_policy,
     )
-    from cosmos_framework.utils.lazy_config import LazyCall as L
 
     lazy_call = L(OmniMoTCausalModel)(config=OmniMoTCausalModelConfig(), _recursive_=False)
     lazy_policy = lazy_call.config.teacher_forcing_replay_policy
@@ -449,12 +450,12 @@ def test_public_teacher_forcing_kv_implementation_survives_config_resolution(
     implementation: TeacherForcingKVImplementation,
 ) -> None:
     """Every public backend must pass both attrs validation and LazyConfig resolution."""
+    from cosmos_framework.utils.lazy_config import LazyCall as L
     from cosmos_framework.model.generator.omni_mot_causal_model import (
         OmniMoTCausalModel,
         OmniMoTCausalModelConfig,
         _resolve_teacher_forcing_kv_implementation,
     )
-    from cosmos_framework.utils.lazy_config import LazyCall as L
 
     config = OmniMoTCausalModelConfig(teacher_forcing_kv_implementation=implementation)
     lazy_model = L(OmniMoTCausalModel)(config=config, _recursive_=False)
@@ -533,7 +534,8 @@ def test_multiview_replay_selection_rejects_non_replay_strategy(implementation: 
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("causal_training_strategy", ["teacher_forcing", "teacher_forcing_dcm"])
-def test_maskless_replay_requires_backend_before_network_build(causal_training_strategy: str) -> None:
+@pytest.mark.parametrize("device", ["cpu", "cuda:3"])
+def test_maskless_replay_requires_backend_before_network_build(causal_training_strategy: str, device: str) -> None:
     """Reject a missing replay backend before allocating the network or changing its config."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator import omni_mot_causal_model as causal_model_module
@@ -542,7 +544,7 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
-    model.tensor_kwargs = {"device": "cuda:3"}
+    model.tensor_kwargs = {"device": device}
     model.config = SimpleNamespace(
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation="multiview_maskless_kv",
@@ -564,7 +566,7 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
     ):
         model.build_net(torch.bfloat16)
 
-    require_replay.assert_called_once_with(torch.device("cuda:3"))
+    require_replay.assert_called_once_with(torch.device(device))
     base_build.assert_not_called()
     assert model.config.video_temporal_causal is True
     assert model.config.joint_attn_implementation == "three_way"
@@ -577,8 +579,9 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
 @pytest.mark.parametrize("implementation", ["multiview_flex_kv", "multiview_maskless_kv"])
 @pytest.mark.parametrize("video_temporal_causal", [False, True])
 @pytest.mark.parametrize("causal_training_strategy", ["teacher_forcing", "teacher_forcing_dcm"])
+@pytest.mark.parametrize("architecture_only", [False, True])
 def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
-    implementation: str, video_temporal_causal: bool, causal_training_strategy: str
+    implementation: str, video_temporal_causal: bool, causal_training_strategy: str, architecture_only: bool
 ) -> None:
     """Construct the selected student network while preserving bidirectional teacher settings."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
@@ -586,6 +589,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import InteractiveCosmos3VFMNetwork
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+    from cosmos_framework.model.generator.utils.model_construction import architecture_only_model_construction
 
     replay_policy = TeacherForcingReplayPolicyConfig(
         control_visibility="causal",
@@ -594,7 +598,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     )
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
-    model.tensor_kwargs = {"device": "cuda:3"}
+    model.tensor_kwargs = {"device": "cpu" if architecture_only else "cuda:3"}
     model.config = SimpleNamespace(
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation=implementation,
@@ -637,10 +641,11 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     with (
         patch.object(OmniMoTModel, "build_net", side_effect=_fake_base_build),
         patch.object(causal_model_module, "require_gapped_replay") as require_replay,
+        architecture_only_model_construction() if architecture_only else nullcontext(),
     ):
         result = model.build_net(torch.bfloat16)
 
-    if use_maskless:
+    if use_maskless and not architecture_only:
         require_replay.assert_called_once_with(torch.device("cuda:3"))
     else:
         require_replay.assert_not_called()
@@ -698,8 +703,8 @@ class TestTeacherForcingTransferControlDropout:
     @pytest.mark.parametrize("dropout_rate", [0.0, 1.0])
     def test_target_only_replay_accepts_pack_after_control_dropout(self, dropout_rate: float) -> None:
         """Keep the grouping returned by real control dropout when validating replay."""
-        from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
         model = self._make_model(dropout_rate)
         model.config.video_temporal_causal = True
@@ -935,8 +940,8 @@ def test_teacher_forcing_cp_local_kv_heads_match_ulysses_layout() -> None:
 def test_three_way_teacher_forcing_memory_state_does_not_require_flex_metadata() -> None:
     """Legacy replay defaults the Flex-only clean-memory capacity to zero."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -978,9 +983,9 @@ def test_multiview_clean_tf_cache_selects_target_tokens_and_preserves_condition_
 ) -> None:
     """Both TF stages select real target tokens before the clean copy becomes fully conditioned."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
@@ -1138,9 +1143,7 @@ def test_multiview_transfer_ar_mode_dispatches_to_specialized_iterator() -> None
         "sample_n_views": torch.tensor([2]),  # [B]
     }
 
-    with patch(
-        "cosmos_framework.model.generator.omni_mot_causal_model.reset_ar_post_saturation_runtime_for_generation"
-    ):
+    with patch("cosmos_framework.model.generator.omni_mot_causal_model.reset_ar_post_saturation_runtime_for_generation"):
         outputs = list(
             OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
                 model,
@@ -1416,11 +1419,11 @@ def test_multiview_transfer_ar_pack_sets_metadata_and_aligned_view_positions() -
 @pytest.mark.parametrize("condition_count", [0, 1, 5])
 def test_multiview_transfer_prefill_is_clean_without_extending_conditioned_prefix(condition_count: int) -> None:
     """Recomputed RGB history omits diffusion embeddings without changing the rollout prefix."""
-    from cosmos_framework.data.generator.sequence_packing import ModalityData
     from cosmos_framework.model.generator.utils.multiview_ar import (
         MultiviewTransferARBackend,
         multiview_conditioned_prefix_length,
     )
+    from cosmos_framework.data.generator.sequence_packing import ModalityData
 
     target_mask = (torch.arange(5) < condition_count).repeat(2).reshape(10, 1, 1)  # [V*T,1,1]
     control_mask = torch.ones_like(target_mask)  # [V*T,1,1]
@@ -2375,6 +2378,30 @@ class TestARGenerationLoopLogic:
             )
         result = {"vision": torch.cat([out["vision"] for out in outputs], dim=2)}  # [B,C,T,H,W]
         return result, mock_pack
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("mode", ["text2video", "image2video", "video_transfer"])
+    @pytest.mark.parametrize("view_id", [-1, 8])
+    @pytest.mark.parametrize("guidance", [1.0, 3.0])
+    def test_ar_preserves_view_ids_for_denoising_prefill_and_refresh(
+        self, mode: str, view_id: int, guidance: float
+    ) -> None:
+        model = self._make_model_mock()
+        data = self._make_gen_data(mode)
+        target_ids = torch.tensor([view_id])  # [V]
+        control_ids = torch.tensor([2])  # [V]
+        data.vision_view_ids = [control_ids, target_ids] if mode == "video_transfer" else [target_ids]
+
+        _, build_pack = self._run(model, mode, gen_data=data, guidance=guidance)
+
+        assert build_pack.call_count > 0
+        for call in build_pack.call_args_list:
+            torch.testing.assert_close(call.kwargs["vision_view_ids"], target_ids)
+        assert model._seed_frame_into_kv_cache.call_count > 0
+        for call in model._seed_frame_into_kv_cache.call_args_list:
+            is_control = mode == "video_transfer" and bool(call.kwargs["frame_latent"].eq(1).all())
+            torch.testing.assert_close(call.kwargs["vision_view_ids"], control_ids if is_control else target_ids)
 
     @pytest.mark.L0
     @pytest.mark.CPU
@@ -4008,6 +4035,38 @@ def test_teacher_forcing_replay_policy_resolves_a_serialized_config_dict() -> No
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_teacher_forcing_replay_policy_resolves_lazycall_dictconfig() -> None:
+    """A LazyCall-style DictConfig (``_target_`` plus fields), as composed configs hold it.
+
+    ``OmegaConf.to_object`` returned this node unchanged, so it reached the typed check as a
+    DictConfig and was rejected. Converting to plain containers takes the typed path.
+    """
+    from cosmos_framework.configs.base.defaults.replay_attention import (
+        TeacherForcingReplayPolicyConfig,
+    )
+    from cosmos_framework.model.generator.omni_mot_causal_model import (
+        _resolve_teacher_forcing_replay_policy,
+    )
+
+    policy = OmegaConf.create(
+        {
+            "_target_": "cosmos_framework.configs.base.defaults.replay_attention.TeacherForcingReplayPolicyConfig",
+            "control_visibility": "current",
+            "controls_read_strict_past_clean_rgb": True,
+            "clean_pass_causality": "chunk",
+        }
+    )
+
+    resolved = _resolve_teacher_forcing_replay_policy(policy)
+
+    assert isinstance(resolved, TeacherForcingReplayPolicyConfig)
+    assert resolved.control_visibility == "current"
+    assert resolved.controls_read_strict_past_clean_rgb is True
+    assert resolved.clean_pass_causality == "chunk"
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_teacher_forcing_replay_policy_still_rejects_unknown_real_fields() -> None:
     """Stripping the marker must not turn typos into silently ignored fields."""
     from cosmos_framework.model.generator.omni_mot_causal_model import (
@@ -4039,20 +4098,25 @@ def _forward_graph_model_mock() -> MagicMock:
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("frame_idx", [0, 2])
+@pytest.mark.parametrize("view_id", [None, -1, 8])
 @pytest.mark.parametrize("preserve_transfer_numerics", [False, True])
-def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int, preserve_transfer_numerics: bool) -> None:
+def test_seed_routes_static_frames_to_the_forward_cuda_graph(
+    frame_idx: int, view_id: int | None, preserve_transfer_numerics: bool
+) -> None:
     """cuda_graph_scope="forward": cache idx >= 1 seeds replay a whole-forward graph, idx 0 stays eager."""
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
     model = _forward_graph_model_mock()
     cond_pack = MagicMock(name="cond_pack")
+    ids = torch.tensor([view_id]) if view_id is not None else None  # [V] or None
     with (
-        patch(_PATCH_PACK, MagicMock(return_value=cond_pack)),
+        patch(_PATCH_PACK, MagicMock(return_value=cond_pack)) as build_pack,
         patch("cosmos_framework.model.generator.omni_mot_causal_model.run_ar_forward_cuda_graph") as run_graph,
     ):
         OmniMoTCausalModel._seed_frame_into_kv_cache(
             model,
             frame_latent=torch.zeros(1, 4, 1, 2, 2),  # [B,C,T,H,W]
+            vision_view_ids=ids,
             frame_idx=frame_idx,
             dual_kv_cache=[MagicMock()],
             dual_kv_cache_uncond=None,
@@ -4080,6 +4144,7 @@ def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int, pre
             transfer_history_sink_tokens=8,
             transfer_history_max_tokens=12,
         )
+    assert build_pack.call_args.kwargs["vision_view_ids"] is ids
     if frame_idx == 0:
         run_graph.assert_not_called()
         model.denoise.assert_called_once()

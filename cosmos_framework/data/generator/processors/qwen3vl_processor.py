@@ -3,7 +3,7 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -14,6 +14,16 @@ from cosmos_framework.data.generator.processors.base import (
     maybe_get_max_pixels_from_images_kwargs,
     maybe_parse_video_content,
 )
+from cosmos_framework.utils.generator.structured_conversation import (
+    REASONING_PREFILL_KEY,
+    assistant_body_spans,
+    restore_agentic_messages,
+    restrict_assistant_loss,
+)
+
+# Set by the reasoner video decoder on media (and copied onto chat content) whose frames it already
+# smart-resized to the sample's video token budget.
+VIDEO_BUDGET_RESIZED_KEY = "budget_resized"
 
 
 def _is_local_qwen35_snapshot(path: str) -> bool:
@@ -52,9 +62,7 @@ class Qwen3VLProcessor(BaseVLMProcessor):
         self.merge_size = self.processor.video_processor.merge_size
         self.use_smart_resize = True
         normalized_name = f"{name} {type(self.processor).__name__}".lower()
-        self.retain_mm_token_type_ids: bool = (
-            "qwen3.5" in normalized_name or "qwen3_5" in normalized_name or _is_local_qwen35_snapshot(name)
-        )
+        self.retain_mm_token_type_ids: bool = "qwen3.5" in normalized_name or "qwen3_5" in normalized_name or _is_local_qwen35_snapshot(name)
 
     def apply_chat_template(
         self,
@@ -76,8 +84,15 @@ class Qwen3VLProcessor(BaseVLMProcessor):
         assert tokenize, "tokenize must be True"
         assert return_tensors == "pt", "return_tensors must be pt"
         # Note: this tokenizer does not support "content": str, it always expect "content" entry to be a list of dicts
+        messages, stored_tools = restore_agentic_messages(messages)
         messages = convert_string_content_to_list_content(messages)
-        kwargs = {}
+        tools = kwargs.pop("tools", stored_tools)
+        if stored_tools is not None and tools != stored_tools:
+            raise ValueError("Explicit tools disagree with the stored tool menu")
+        # ``add_vision_id`` is a chat-template variable ("Picture N: " / "Video N: " labels). TokenizeData requests it
+        # only when its opt-in ``add_vision_id`` is set, so existing checkpoints keep seeing unlabeled media; it is
+        # forwarded only when set because HF warns about it on calls without media.
+        template_kwargs = {"add_vision_id": True} if kwargs.pop("add_vision_id", False) else {}
         max_pixels, min_pixels = maybe_get_max_pixels_from_images_kwargs(messages)
 
         if max_pixels is not None:
@@ -90,7 +105,6 @@ class Qwen3VLProcessor(BaseVLMProcessor):
             # File "/invalid_dir", line 321, in _decode_and_sample_videos
             #     raise ValueError(
             # ValueError: Sampling frames from a list of images is not supported! Set `do_sample_frames=False`.
-            kwargs["videos_kwargs"] = dict(do_sample_frames=False)
             video_metadata = [
                 dict(fps=fps, total_num_frames=total_num_frames, frames_indices=frames_indices)
                 for fps, total_num_frames, frames_indices in zip(
@@ -103,6 +117,10 @@ class Qwen3VLProcessor(BaseVLMProcessor):
                 "do_sample_frames": False,
                 "video_metadata": video_metadata[0] if num_video == 1 else video_metadata,
             }
+            if self._videos_are_budget_resized(messages):
+                # The HF resize would re-apply video_processor.size["longest_edge"] (12,288 tokens per video for the
+                # released Qwen3-VL / Qwen3.5 configs) and shrink frames the decoder already sized to the budget.
+                kwargs["videos_kwargs"]["do_resize"] = False
         # Both Transformers 4.x and 5.x forward modality kwargs directly to
         # the processor. Nesting them in ``processor_kwargs`` silently loses
         # frame indices, FPS and the request to keep already-sampled frames.
@@ -112,6 +130,8 @@ class Qwen3VLProcessor(BaseVLMProcessor):
             add_generation_prompt=add_generation_prompt,
             return_dict=True,
             return_tensors=return_tensors,
+            tools=tools,
+            **template_kwargs,
             **kwargs,
         )
 
@@ -132,6 +152,28 @@ class Qwen3VLProcessor(BaseVLMProcessor):
             inputs["mm_token_type_ids"] = self.build_mm_token_type_ids(inputs["input_ids"])
         return inputs
 
+    def _videos_are_budget_resized(self, messages: list[dict]) -> bool:
+        """Whether the reasoner video decoder already sized every video of the conversation to its token budget.
+
+        Videos from any other producer (e.g. raw clips passed by the VFM model) keep the HF resize.
+
+        Raises:
+            ValueError: Only some videos are decoder-sized. HF takes one resize setting per call, so it would either
+                re-cap the decoder-sized videos below their token budget or leave the others unresized.
+        """
+        flags = [
+            isinstance(content.get("video"), list) and bool(content.get(VIDEO_BUDGET_RESIZED_KEY, False))
+            for message in messages
+            if isinstance(message["content"], list)
+            for content in message["content"]
+            if content.get("type", "") == "video"
+        ]
+        if not any(flags):
+            return False
+        if not all(flags):
+            raise ValueError("Either every video of a conversation is sized by the reasoner decoder or none is")
+        return True
+
     def build_mm_token_type_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Identify text, image and video tokens in the final expanded sequence."""
         mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.long)
@@ -141,7 +183,39 @@ class Qwen3VLProcessor(BaseVLMProcessor):
             mm_token_type_ids[input_ids == self.video_token_id] = 2
         return mm_token_type_ids
 
-    def add_assistant_tokens_mask(self, tokens):
+    def apply_supervision_overrides(
+        self,
+        tokens: torch.Tensor | list[int],
+        mask: torch.Tensor | list[bool],
+        messages: list[dict[str, Any]],
+    ) -> torch.Tensor | list[bool]:
+        """Preserve plain-message masks while honoring structured source supervision."""
+        structured = any(
+            any(key in message for key in ("tools", "tool_calls", "loss", REASONING_PREFILL_KEY))
+            or message.get("role") == "tool"
+            for message in messages
+        )
+        if not structured:
+            return mask
+        values = tokens.detach().cpu().numpy() if isinstance(tokens, torch.Tensor) else np.asarray(tokens)
+        # Structured messages may merge source-leading whitespace into the header
+        # token. Repair that boundary without replacing processor-specific masks
+        # (in particular, Nemo Chat's generation-supplied thinking prefix).
+        losses = (
+            mask.detach().cpu().numpy().copy()
+            if isinstance(mask, torch.Tensor)
+            else np.asarray(mask, dtype=bool).copy()
+        )
+        tokenizer = self.processor.tokenizer
+        frame_starts = np.flatnonzero(values == tokenizer.convert_tokens_to_ids("<|im_start|>"))
+        header_size = 1 + len(tokenizer.encode("assistant\n", add_special_tokens=False))
+        for start, end in assistant_body_spans(values, tokenizer):
+            frame_start = int(frame_starts[np.searchsorted(frame_starts, start) - 1])
+            losses[start : min(frame_start + header_size, end)] = True
+        restricted = restrict_assistant_loss(values, losses, messages, self.processor.tokenizer)
+        return torch.from_numpy(restricted) if isinstance(tokens, torch.Tensor) else restricted.tolist()
+
+    def add_assistant_tokens_mask(self, tokens: list[int] | torch.Tensor) -> list[bool] | torch.Tensor:
         """
         Add a mask to the assistant tokens.
         This is used to mask out tokens that are not generated by the assistant (e.g.,  system prompts, user prompts, chat templates), such that in the loss computation, only the tokens generated by the assistant are used.
@@ -161,18 +235,21 @@ class Qwen3VLProcessor(BaseVLMProcessor):
         np_tokens = tokens.cpu().numpy() if isinstance(tokens, torch.Tensor) else np.array(tokens)
         assert np_tokens.ndim == 1
 
-        # Constants defining bos, eos and fixed offsets.
+        # Constants defining the ChatML boundaries.
         BOS_TOKEN = "<|im_start|>"
         EOS_TOKEN = "<|im_end|>"
         ROLE = "assistant"
-        # Offsets: skip the bos + "assistant\n" (always 3 tokens) and include the eos (+1) for supervision
-        START_OFFSET = 3
         END_OFFSET = 1
 
-        # Retrieve token IDs for the markers and the role.
+        # Match tokenizer-rendered headers instead of assuming that the role is
+        # one token. Some supported tokenizers render ``assistant`` as several
+        # BPE tokens followed by a newline token.
         bos_token_id = self.processor.tokenizer.convert_tokens_to_ids(BOS_TOKEN)
         eos_token_id = self.processor.tokenizer.convert_tokens_to_ids(EOS_TOKEN)
         role_id = self.processor.tokenizer.convert_tokens_to_ids(ROLE)
+        full_role_header_ids = self.processor.tokenizer.encode(f"{BOS_TOKEN}{ROLE}\n", add_special_tokens=False)
+        role_header_ids = self.processor.tokenizer.encode(f"{ROLE}\n", add_special_tokens=False)
+        role_ids = self.processor.tokenizer.encode(ROLE, add_special_tokens=False)
 
         # Locate all positions where the start and end markers appear.
         start_indices = np.where(np_tokens == bos_token_id)[0]
@@ -181,12 +258,29 @@ class Qwen3VLProcessor(BaseVLMProcessor):
         # Initialize the mask with False values.
         masks = np.zeros_like(np_tokens, dtype=bool)
         assert len(start_indices) == len(end_indices)
-        # For each pair of bos/eos, check if the role is 'assistant'
-        # and apply the mask accordingly.
+        # For each pair of bos/eos, check if the role is assistant and apply
+        # the mask to the response plus the closing boundary.
         for start, end in zip(start_indices, end_indices):
-            if np_tokens[start + 1] == role_id:
-                # Mask tokens from after the assistant header (start+3) to include the end marker (end+1)
-                masks[start + START_OFFSET : end + END_OFFSET] = True
+            content_start = None
+            full_rendered_header = np.asarray(full_role_header_ids, dtype=np_tokens.dtype)
+            header_end = start + len(full_rendered_header)
+            if header_end <= end and np.array_equal(np_tokens[start:header_end], full_rendered_header):
+                content_start = header_end
+            else:
+                rendered_header = np.asarray(role_header_ids, dtype=np_tokens.dtype)
+                header_end = start + 1 + len(rendered_header)
+                if header_end <= end and np.array_equal(np_tokens[start + 1 : header_end], rendered_header):
+                    content_start = header_end
+            if content_start is None and start + 1 < end and np_tokens[start + 1] == role_id:
+                content_start = start + 3
+            elif content_start is None:
+                rendered_role = np.asarray(role_ids, dtype=np_tokens.dtype)
+                role_end = start + 1 + len(rendered_role)
+                if role_end < end and np.array_equal(np_tokens[start + 1 : role_end], rendered_role):
+                    content_start = role_end + 1
+            if content_start is None or content_start > end:
+                continue
+            masks[content_start : end + END_OFFSET] = True
 
         assert masks.shape == np_tokens.shape
         if isinstance(tokens, torch.Tensor):

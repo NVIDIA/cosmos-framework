@@ -55,10 +55,14 @@ class Qwen3OmniThinkingAudioEncoder(nn.Module):
         self,
         config: Qwen3OmniMoeAudioEncoderConfig | None = None,
         encoder: Qwen3OmniMoeAudioEncoder | None = None,
+        output_mode: str = "native",
     ) -> None:
         super().__init__()
+        if output_mode not in ("native", "pre_projection"):
+            raise ValueError(f"Unsupported Qwen3-Omni encoder output mode: {output_mode!r}")
         self.config = config if config is not None else get_qwen3_omni_thinking_audio_encoder_config()
         self.encoder = encoder if encoder is not None else Qwen3OmniMoeAudioEncoder(self.config)
+        self.output_mode: str = output_mode
 
     def get_output_lengths(self, input_lengths: torch.Tensor) -> torch.Tensor:
         """Return the native encoded length for each input feature sequence."""
@@ -81,25 +85,43 @@ class Qwen3OmniThinkingAudioEncoder(nn.Module):
         self,
         input_features: torch.Tensor,
         input_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:  # input_features: [B,T,128], input_lengths: [B], returns [B,T',D], [B]
         """Encode padded log-mels and return padded native audio features."""
         packed_features = torch.cat(
             [input_features[index, : int(length)].transpose(0, 1) for index, length in enumerate(input_lengths)],
             dim=1,
-        ).contiguous()
-        output_lengths = self.get_output_lengths(input_lengths)
+        ).contiguous()  # [128,N]
+        output_lengths = self.get_output_lengths(input_lengths)  # [B]
         use_bf16_autocast = (
             self.config._attn_implementation == "flash_attention_2" and packed_features.device.type == "cuda"
         )
+        pre_projection_features: list[torch.Tensor] = []
+
+        def capture_pre_projection(_module: nn.Module, inputs: tuple[torch.Tensor, ...]) -> None:  # inputs[0]: [N,D]
+            pre_projection_features.append(inputs[0])  # [N,D]
+
+        projection_hook = None
+        if self.output_mode == "pre_projection":
+            projection_hook = self.encoder.proj1.register_forward_pre_hook(capture_pre_projection)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16_autocast):
-            flat_features = self.encoder(
-                input_features=packed_features,
-                feature_lens=input_lengths,
-            ).last_hidden_state
+            try:
+                encoder_output = self.encoder(
+                    input_features=packed_features,
+                    feature_lens=input_lengths,
+                )  # last_hidden_state: [N,output_dim]
+            finally:
+                if projection_hook is not None:
+                    projection_hook.remove()
+        if self.output_mode == "pre_projection":
+            if len(pre_projection_features) != 1:
+                raise RuntimeError("Qwen3-Omni native projection input was not captured exactly once")
+            flat_features = pre_projection_features[0]  # [N,d_model]
+        else:
+            flat_features = encoder_output.last_hidden_state  # [N,output_dim]
         padded_features = nn.utils.rnn.pad_sequence(
-            flat_features.split(output_lengths.tolist()),
+            list(flat_features.split(output_lengths.tolist())),
             batch_first=True,
-        )
+        )  # [B,T',D]
         return padded_features, output_lengths
 
 
@@ -108,7 +130,7 @@ class Qwen3OmniAudioProjector(AudioProjector):
 
     def __init__(self, config: Qwen3OmniAudioConfig) -> None:
         super().__init__(
-            input_hidden_size=config.encoder_config.output_dim,
+            input_hidden_size=config.encoder_output_size,
             projection_hidden_size=config.projection_hidden_size,
             out_hidden_size=config.out_hidden_size,
         )
@@ -125,13 +147,27 @@ class Qwen3OmniAudioModel(nn.Module):
     ) -> None:
         super().__init__()
         self.config = config if config is not None else Qwen3OmniAudioConfig()
-        self.encoder = encoder if encoder is not None else Qwen3OmniThinkingAudioEncoder(self.config.encoder_config)
+        self.encoder = (
+            encoder
+            if encoder is not None
+            else Qwen3OmniThinkingAudioEncoder(
+                self.config.encoder_config,
+                output_mode=self.config.encoder_output_mode,
+            )
+        )
         self.projector = projector if projector is not None else Qwen3OmniAudioProjector(self.config)
 
     def init_weights(self, buffer_device: torch.device | None = None) -> None:
         """Restore nonpersistent buffers and initialize the fresh projector."""
         self.encoder.reset_nonpersistent_buffers(buffer_device)
         self.projector.reset_parameters()
+
+    def configure_encoder_trainability(self, *, train_encoder: bool) -> None:
+        """Train the effective trunk while keeping bypassed native projections frozen."""
+        self.encoder.requires_grad_(train_encoder)
+        if self.config.encoder_output_mode == "pre_projection":
+            self.encoder.encoder.proj1.requires_grad_(False)
+            self.encoder.encoder.proj2.requires_grad_(False)
 
     def forward(
         self,

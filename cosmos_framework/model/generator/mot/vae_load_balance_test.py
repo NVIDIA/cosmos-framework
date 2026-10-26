@@ -415,6 +415,9 @@ def test_balanced_vae_encode_on_a_real_4gpu_node() -> None:
 
     world_size = int(os.environ["WORLD_SIZE"])
     if not dist.is_initialized():
+        # Same NVLS policy as the benchmark CLI and production launcher (NVLink SHARP fails on
+        # GB200); importing build_model no longer sets it process-wide.
+        os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
         dist.init_process_group(backend="nccl")
     rank = dist.get_rank()
     torch.cuda.set_device(rank)

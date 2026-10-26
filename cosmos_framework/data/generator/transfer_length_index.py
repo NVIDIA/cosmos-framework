@@ -3,13 +3,13 @@
 
 """Build a complete, version-pinned Transfer video census and disjoint length index.
 
-Only canonical Lance metadata is read: no video bytes are downloaded. The runtime
+Only source metadata rows are read: no video bytes are downloaded. The runtime
 adapter supplies candidate selection so source/caption/control eligibility cannot
 silently diverge. Every unique RGB URI belongs to one bucket, with its longest
 fully available caption window. The full window is resampled, never prefix-cropped.
 A manifest is published only after scanning every source row and closing SQLite.
 
-Run with ``python -m cosmos_framework.data.generator.transfer_length_index``.
+Build an index from metadata rows with ``build_index_from_rows``.
 """
 
 from __future__ import annotations

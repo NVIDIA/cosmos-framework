@@ -285,6 +285,8 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
         input_keys: List with the single key holding the media dict. Defaults to ``["media_list"]``.
         max_pixels: Maximum total pixel area per image after resize.
         padding_divisor: Dimension alignment divisor (both width and height become multiples of it).
+        interpolation_overrides: Map media keys to Pillow resampling names (e.g. "nearest" or "bilinear").
+            Unlisted keys use the default Lanczos interpolation.
         args: Additional arguments passed to the parent class.
     """
 
@@ -294,11 +296,15 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
         max_pixels: int = DEFAULT_MAX_PIXELS,
         padding_divisor: int = 16,
         args: Optional[dict] = None,
+        interpolation_overrides: dict[str, str] | None = None,
     ) -> None:
         input_keys = input_keys or ["media_list"]
         super().__init__(input_keys, None, args)
         self.max_pixels = max_pixels
         self.padding_divisor = padding_divisor
+        self.interpolation_overrides: dict[str, Image.Resampling] = {
+            key: Image.Resampling[mode.upper()] for key, mode in (interpolation_overrides or {}).items()
+        }
 
     def _compute_target_size(self, width: int, height: int) -> tuple[int, int]:
         """Scale to fit within max_pixels, then align down to padding_divisor."""
@@ -309,17 +315,19 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
             padding_constant=self.padding_divisor,
         )
 
-    def _resize_image(self, img: Image.Image) -> Image.Image:
+    def _resize_image(self, img: Image.Image, resample: Image.Resampling = Image.Resampling.LANCZOS) -> Image.Image:
         w, h = img.size
         target_w, target_h = self._compute_target_size(w, h)
         if (target_w, target_h) != (w, h):
-            img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            img = img.resize((target_w, target_h), resample)
         return img
 
-    def _process_media(self, media) -> Image.Image | list:
+    def _process_media(
+        self, media: Image.Image | list[Image.Image], resample: Image.Resampling = Image.Resampling.LANCZOS
+    ) -> Image.Image | list[Image.Image]:
         if isinstance(media, list):
-            return [self._resize_image(frame) for frame in media]
-        return self._resize_image(media)
+            return [self._resize_image(frame, resample) for frame in media]
+        return self._resize_image(media, resample)
 
     def __call__(self, data_dict: Dict) -> Optional[Dict]:
         assert len(self.input_keys) == 1, (
@@ -333,7 +341,8 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
 
         diffusion_media_content = {}
         for key, media in media_list.items():
-            diffusion_media_content[key] = self._process_media(media)
+            resample = self.interpolation_overrides.get(key, Image.Resampling.LANCZOS)
+            diffusion_media_content[key] = self._process_media(media, resample)
 
         data_dict["diffusion_media_list"] = diffusion_media_content
         return data_dict

@@ -3,7 +3,8 @@
 
 """Augmentations to remove keys from the output data_dict"""
 
-from typing import Dict, List, Optional
+from collections.abc import Mapping
+from typing import Any, List, Optional
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
@@ -32,7 +33,20 @@ class FilterSeqLength(Augmentor):
         audio_pad_token: str = AUDIO_PAD_TOKEN,
         audio_end_token: str = AUDIO_END_TOKEN,
         drop_over_max_length: bool = False,
+        complete_sample_max_length_by_source: Mapping[str, int] | None = None,
     ) -> None:
+        """Optionally retain complete supervised examples for exact source URL roots.
+
+        Sources in the map use their own limit, drop overlength examples instead
+        of truncating, and require at least one next-token supervision target.
+        All other sources retain the existing length and truncation policy.
+        """
+        self.complete_sample_max_length_by_source: dict[str, int] = dict(complete_sample_max_length_by_source or {})
+        if any(
+            not isinstance(root, str) or not root or type(limit) is not int or limit < 2
+            for root, limit in self.complete_sample_max_length_by_source.items()
+        ):
+            raise ValueError("Complete-sample length policies require non-empty source roots and integer limits >= 2.")
         self.max_token_length = max_token_length
         self.processor = processor
         self.drop_over_max_length: bool = drop_over_max_length
@@ -47,8 +61,18 @@ class FilterSeqLength(Augmentor):
                 audio_end_token=audio_end_token,
             ).token_ids[1]
 
-    def __call__(self, data_dict: Dict) -> Dict:
+    def __call__(self, data_dict: dict[str, Any]) -> dict[str, Any] | None:
         input_ids = data_dict["input_ids"]
+        if self.complete_sample_max_length_by_source:
+            limit = self.complete_sample_max_length_by_source.get(str(data_dict["__url__"].root))
+            if limit is not None:
+                # Prefix truncation can remove the answer from a long SFT example.
+                if input_ids.shape[-1] > limit:
+                    return None
+                labels = data_dict["labels"]
+                if not bool((labels[1:] != int(data_dict.get("ignore_index", -100))).any()):
+                    return None
+                return data_dict
         if input_ids.shape[-1] > self.max_token_length and not self.drop_over_max_length:
             # check if there is pixel values or pixel value videos in the remaining tokens, if not truncate the input ids
             input_ids_extra = input_ids[self.max_token_length :]
