@@ -2750,7 +2750,7 @@ requires-dist = [
     { name = "nvidia-cudnn-frontend" },
     { name = "nvidia-dali-cuda120", marker = "extra == 'train'" },
     { name = "nvidia-ml-py" },
-    { name = "nvidia-modelopt", marker = "extra == 'quantization'", specifier = "==0.47.0" },
+    { name = "nvidia-modelopt", marker = "extra == 'quantization'", specifier = "==0.44.0" },
     { name = "obstore" },
     { name = "omegaconf" },
     { name = "open-clip-torch", marker = "extra == 'train'" },
@@ -9835,7 +9835,7 @@ wheels = [
 
 [[package]]
 name = "nvidia-modelopt"
-version = "0.47.0"
+version = "0.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ninja" },
@@ -9860,7 +9860,7 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/46/f32f6183f6a26db8c6bf5c70f89f68ae2cc55c3fbb981016a772c93c4fc2/nvidia_modelopt-0.47.0-py3-none-any.whl", hash = "sha256:db13e62d7efe4a1512e8b8c3f479e28d64022306f94a194f13234e7dca1d3120", size = 2186201, upload-time = "2026-09-23T19:06:44.103Z" },
+    { url = "https://files.pythonhosted.org/packages/83/ab/7e12dd238638624cb9d48904e9205abe16a5b26bdd5f9b91e3357821cf90/nvidia_modelopt-0.44.0-py3-none-any.whl", hash = "sha256:9b54a853dfda161db97a0dfce4d7c24269d1d19966b5e2026094186af897f74d", size = 1604658, upload-time = "2026-05-13T20:47:04.007Z" },
 ]
 
 [[package]]

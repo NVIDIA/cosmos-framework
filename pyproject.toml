@@ -61,7 +61,7 @@ dependencies = [
 [project.optional-dependencies]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
-quantization = ["nvidia-modelopt==0.47.0"]
+quantization = ["nvidia-modelopt==0.44.0"]
 reasoner-eval = [
   "attrs",
   "evaluate",
