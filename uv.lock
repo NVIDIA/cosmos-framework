@@ -2389,6 +2389,7 @@ guardrail = [
     { name = "sentencepiece" },
 ]
 quantization = [
+    { name = "datasets" },
     { name = "nvidia-modelopt" },
 ]
 reasoner-eval = [
@@ -2701,6 +2702,7 @@ requires-dist = [
     { name = "boto3" },
     { name = "botocore", marker = "extra == 'train'" },
     { name = "cattrs" },
+    { name = "datasets", marker = "extra == 'quantization'" },
     { name = "datasets", marker = "extra == 'train'" },
     { name = "diffusers", specifier = ">=0.39.0" },
     { name = "dists-pytorch", marker = "extra == 'train'" },
