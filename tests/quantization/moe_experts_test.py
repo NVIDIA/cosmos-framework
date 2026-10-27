@@ -34,14 +34,8 @@ from cosmos_framework.quantization.moe import (
 
 QUANTIZERS = (
     "gate_up_proj_input_quantizer",
-    "gate_up_proj_weight_quantizer",
     "down_proj_input_quantizer",
-    "down_proj_weight_quantizer",
 )
-PER_EXPERT_WEIGHTS = [
-    {"quantizer_name": "*gate_up_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
-    {"quantizer_name": "*down_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
-]
 
 
 def _reference_grouped_mm(x: torch.Tensor, w: torch.Tensor, offs: torch.Tensor) -> torch.Tensor:
@@ -126,7 +120,7 @@ def _forward_inputs(
 def _quantize(model: nn.Module, calibration: list[tuple] | None = None, *extra_cfg: dict) -> nn.Module:
     register_packed_experts()
     config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
-    config["quant_cfg"] = [*config["quant_cfg"], *PER_EXPERT_WEIGHTS, *extra_cfg]
+    config["quant_cfg"] = [*config["quant_cfg"], *extra_cfg]
 
     def forward_loop(model: nn.Module) -> None:
         for inputs in calibration or [_forward_inputs()]:
@@ -177,7 +171,7 @@ def test_wrapper_matches_native_with_quantizers_disabled(experts, top_k, routing
 
 
 @pytest.mark.usefixtures("reference_routing")
-def test_each_quantizer_changes_the_wrapper_output():
+def test_each_input_quantizer_changes_the_wrapper_output():
     model = _quantize(Model())
     inputs = _forward_inputs(seed=4)
     for name in QUANTIZERS:
@@ -192,7 +186,7 @@ def test_each_quantizer_changes_the_wrapper_output():
 
 
 @pytest.mark.usefixtures("reference_routing")
-def test_forward_calibrates_per_expert_weights_and_unpadded_activations():
+def test_forward_calibrates_unpadded_activations():
     calibration = []
     for seed in (1, 2):
         hidden_states, _, expert_indices, counts, token_mask = _forward_inputs(seed)
@@ -203,10 +197,6 @@ def test_forward_calibrates_per_expert_weights_and_unpadded_activations():
 
     assert_quantizers_calibrated(model)
     experts = model.experts
-    for name in ("gate_up_proj", "down_proj"):
-        amax = getattr(experts, f"{name}_weight_quantizer").amax
-        assert amax.shape == (4, 1, 1)
-        assert torch.equal(amax, getattr(experts, name).abs().amax(dim=(1, 2), keepdim=True))
     real = [(x[mask], indices[mask]) for x, _, indices, _, mask in calibration]
     assert torch.equal(experts.gate_up_proj_input_quantizer.amax, torch.stack([x.abs().max() for x, _ in real]).max())
     # a2 sees act(gate) * up on the real (token, expert) rows only, before the routing scores.
@@ -292,12 +282,11 @@ def test_export_skips_dense_and_disabled_experts_and_rejects_mixed():
 
 @pytest.mark.usefixtures("reference_routing")
 def test_export_rejects_non_per_expert_fp8():
-    register_packed_experts()
-    scalar_weights = mtq.quantize(Model(), copy.deepcopy(mtq.FP8_DEFAULT_CFG), lambda m: m.experts(*_forward_inputs()))
-    assert scalar_weights.experts.gate_up_proj_weight_quantizer.amax.numel() == 1
+    per_channel_inputs = _quantize(Model(), None, {"quantizer_name": "*input_quantizer", "cfg": {"axis": 0}})
+    assert per_channel_inputs.experts.gate_up_proj_input_quantizer.amax.numel() > 1
     with pytest.raises(ValueError, match="per-expert FP8") as error:
-        export_packed_experts(scalar_weights)
-    assert "experts" in str(error.value) and "gate_up_proj_weight_quantizer" in str(error.value)
+        export_packed_experts(per_channel_inputs)
+    assert "experts" in str(error.value) and "gate_up_proj_input_quantizer" in str(error.value)
 
     int8 = _quantize(Model(), None, {"quantizer_name": "*experts*", "cfg": {"num_bits": 8}})
     assert int8.experts.down_proj_input_quantizer.num_bits == 8

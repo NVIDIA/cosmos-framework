@@ -2,22 +2,14 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """ModelOpt FP8 quantization of the packed grouped-mm MoE experts.
 
-Quantizes both the expert weights (per-expert scales) and the expert inputs (static scales
-calibrated through the wrapper's ``forward``).
+Calibrates and fake-quantizes the expert inputs through the wrapper's ``forward``, and quantizes
+the expert weights (with one scale per expert) directly in :func:`export_packed_experts`.
 This code does not support weight-only.
 
 How to run quantization: call :func:`register_packed_experts` before ``mtq.quantize`` (and before
-restoring a saved ModelOpt state), and give the weight quantizers one scale per expert, as vLLM's
-FP8 MoE layout requires; :func:`export_packed_experts` rejects ``mtq.FP8_DEFAULT_CFG`` alone::
-
-    config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
-    config["quant_cfg"] += [
-        {"quantizer_name": "*gate_up_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
-        {"quantizer_name": "*down_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
-    ]
-
-Then export with :func:`~cosmos_framework.quantization.export.export_quantized_transformer`,
-which writes the experts via :func:`export_packed_experts`.
+restoring a saved ModelOpt state), then export with
+:func:`~cosmos_framework.quantization.export.export_quantized_transformer`, which writes the
+experts via :func:`export_packed_experts`.
 
 Without the registration, ModelOpt's generic ``_QuantFusedExperts`` claims these experts and,
 since it only intercepts ``F.linear`` and they run ``torch._grouped_mm``, quantizes nothing.
@@ -37,13 +29,11 @@ _PACKED_EXPERT_TYPES = (Qwen3VLMoeTextExpertsGroupedMm, MoEExperts)
 
 
 class QuantPackedExperts(QuantModule):
-    """Quantized packed grouped-mm experts; the packed parameters stay untouched."""
+    """Calibrates and fake-quantizes expert inputs; per-expert FP8 weights are quantized on export."""
 
     def _setup(self):
         self.gate_up_proj_input_quantizer = TensorQuantizer()
-        self.gate_up_proj_weight_quantizer = TensorQuantizer()
         self.down_proj_input_quantizer = TensorQuantizer()
-        self.down_proj_weight_quantizer = TensorQuantizer()
 
     def forward(
         self,
@@ -74,15 +64,13 @@ class QuantPackedExperts(QuantModule):
         scores: torch.Tensor,  # [num_routed]
     ) -> torch.Tensor:  # [num_routed,hidden_size]
         # a2 observes ``act(gate) * up`` before the routing scores, because vLLM applies the scores
-        # after the down GEMM.
+        # after the down GEMM. Per-expert weight scales are computed directly on export.
         offsets = torch.cumsum(num_tokens_per_expert, dim=0, dtype=torch.int32)  # [num_experts]
         x = self.gate_up_proj_input_quantizer(x)
-        h = torch._grouped_mm(x, self.gate_up_proj_weight_quantizer(self.gate_up_proj), offs=offsets)
+        h = torch._grouped_mm(x, self.gate_up_proj, offs=offsets)
         g, u = torch.chunk(h, chunks=2, dim=-1)  # 2x [num_routed,moe_intermediate_size]
         a = self.down_proj_input_quantizer(self.act_fn(g) * u)  # [num_routed,moe_intermediate_size]
-        return torch._grouped_mm(
-            a * scores.unsqueeze(-1), self.down_proj_weight_quantizer(self.down_proj), offs=offsets
-        )  # [num_routed,hidden_size]
+        return torch._grouped_mm(a * scores.unsqueeze(-1), self.down_proj, offs=offsets)  # [num_routed,hidden_size]
 
 
 def register_packed_experts() -> None:
@@ -132,24 +120,17 @@ def assert_quantizers_calibrated(model: nn.Module) -> None:
 
 _PACKED_EXPERT_QUANTIZERS = (
     "gate_up_proj_input_quantizer",
-    "gate_up_proj_weight_quantizer",
     "down_proj_input_quantizer",
-    "down_proj_weight_quantizer",
 )
 
 
 def _check_per_expert_fp8(name: str, module: QuantPackedExperts) -> None:
-    """Refuse any layout but the one written below: FP8 E4M3, per-expert weight amax, scalar input amax."""
+    """Refuse any input quantizer layout but FP8 E4M3 with a scalar amax."""
     for quantizer_name in _PACKED_EXPERT_QUANTIZERS:
         quantizer = getattr(module, quantizer_name)
         amax_shape = tuple(quantizer.amax.shape)
         if quantizer.num_bits != (4, 3) or quantizer.block_sizes:
             found = f"num_bits={quantizer.num_bits}, block_sizes={quantizer.block_sizes}"
-        elif quantizer_name.endswith("weight_quantizer"):
-            num_experts = getattr(module, quantizer_name.removesuffix("_weight_quantizer")).shape[0]
-            if amax_shape == (num_experts, 1, 1):
-                continue
-            found = f"amax shape {amax_shape}, expected ({num_experts}, 1, 1)"
         elif quantizer.amax.numel() == 1:
             continue
         else:
@@ -174,10 +155,10 @@ def export_packed_experts(net: nn.Module) -> dict[str, torch.Tensor]:
         _check_per_expert_fp8(name or "experts", module)
         for param_name in ("gate_up_proj", "down_proj"):
             # BF16 models keep BF16 amax; the scales are FP32 on disk.
-            weight_amax = getattr(module, f"{param_name}_weight_quantizer").amax.detach().float()
+            param = getattr(module, param_name).detach()
+            weight_amax = param.abs().amax(dim=(1, 2), keepdim=True).float()
             weight_scale = torch.where(weight_amax == 0, 1.0, weight_amax / FP8_MAX)  # [num_experts,1,1]
-            weight = getattr(module, param_name).detach().float()
-            fp8 = (weight / weight_scale).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
+            fp8 = (param.float() / weight_scale).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
             input_amax = getattr(module, f"{param_name}_input_quantizer").amax.detach().float()
             key = f"{name}.{param_name}" if name else param_name
             exported[key] = fp8.contiguous().cpu()

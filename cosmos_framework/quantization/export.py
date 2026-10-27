@@ -478,7 +478,6 @@ class Fp8DiffusersExporter:
             if isinstance(module, QuantPackedExperts):
                 for name in ("gate_up_proj", "down_proj"):
                     getattr(module, f"{name}_input_quantizer").disable()
-                    getattr(module, f"{name}_weight_quantizer").disable()
 
         # Record ModelOpt's real-quantized graph metadata before the unified
         # exporter unpacks those weights into plain FP8 checkpoint tensors.
