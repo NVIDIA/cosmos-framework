@@ -1409,29 +1409,27 @@ class OmniMoTModel(ImaginaireModel):
         vae_pixel_shapes = payload["vae_pixel_shapes"]
         return input_text_indexes, sequence_plans, gen_data_clean, memory_info, data_resolutions, vae_pixel_shapes
 
-    def _release_raw_video_after_tokenization(
+    def _release_raw_vision_after_tokenization(
         self,
         gen_data_clean: GenerationDataClean,
         data_batch: dict[str, torch.Tensor],
     ) -> None:
-        """Free raw video tensors from GPU after CP slot-0 tokenization.
+        """Free raw image or video tensors from GPU after CP slot-0 tokenization.
 
-        Only video (the largest modality) is dropped, and only for non-image
-        batches.  The trainer retains the original host batch for callbacks,
-        which re-encode from its uint8 video.
+        The trainer retains the original host batch for callbacks, which
+        re-encode from its image or video tensors.
 
         ``num_vision_items_per_sample`` and ``image_size`` are kept: both
         describe the flattened vision-item layout and must stay mutually
-        consistent.  :meth:`build_callback_batch` restores host video and
-        flattens it to match the retained counts so callbacks see a
-        self-consistent batch without recomputation.
+        consistent.  :meth:`build_callback_batch` restores host vision and
+        flattens it to match the retained counts so callbacks see a self-consistent
+        batch without recomputation.
         """
         if not self.config.release_cp_raw_batch_after_preprocessing:
             return
-        if gen_data_clean.is_image_batch:
-            return
         gen_data_clean.raw_state_vision = None
         data_batch.pop(self.input_video_key, None)
+        data_batch.pop(self.input_image_key, None)
 
     def _get_training_inputs(
         self, data_batch: dict[str, torch.Tensor], iteration: int
@@ -1476,7 +1474,7 @@ class OmniMoTModel(ImaginaireModel):
         if cp_window_slot == 0:
             local_training_data = self._prepare_training_data(data_batch, iteration)
             self._cp_local_training_payload = self._pack_training_payload(*local_training_data)
-            self._release_raw_video_after_tokenization(local_training_data[2], data_batch)
+            self._release_raw_vision_after_tokenization(local_training_data[2], data_batch)
         if self._cp_local_training_payload is None:
             raise RuntimeError("CP training payload cache is empty before its data window is complete.")
         payload = broadcast_context_parallel_object(

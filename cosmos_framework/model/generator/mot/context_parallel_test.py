@@ -141,12 +141,13 @@ def test_context_parallel_fetch_is_release_unaware(
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_next_step_batch_routes_release_mode_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("media_key", ["video", "images"])
+def test_next_step_batch_routes_release_mode_batches(monkeypatch: pytest.MonkeyPatch, media_key: str) -> None:
     """StepBatch encapsulates host retention, CUDA transfer, and callback merging."""
     trainer, model = _make_window_trainer(cp_size=2)
     model.config = SimpleNamespace(release_cp_raw_batch_after_preprocessing=True)
-    raw_video = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)
-    host_batch = {"video": raw_video, "dataset_name": "host"}
+    raw_vision = torch.zeros(1, 3, 2, 4, 4, dtype=torch.uint8)  # [B,C,T,H,W]
+    host_batch = {media_key: raw_vision, "dataset_name": "host"}
     dataloader_iter = _CountingIterator([host_batch])
     monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
     monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
@@ -174,7 +175,7 @@ def test_next_step_batch_routes_release_mode_batches(monkeypatch: pytest.MonkeyP
     assert not step1._is_fetch_slot
     assert step1.training is prepared
     cb = step1.callback_post_step
-    assert cb["video"] is raw_video
+    assert cb[media_key] is raw_vision
     assert cb["packed_tokens"] is prepared["packed_tokens"]
     assert cb["dataset_name"] == "prepared"
     assert dataloader_iter.fetch_count == 1
