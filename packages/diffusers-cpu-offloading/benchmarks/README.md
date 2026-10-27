@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Reproduce Cosmos 3 Nano BF16 and FP8 benchmarks
 
 These runners generate complete examples using BF16 or the FP8 checkpoint's
@@ -80,15 +85,15 @@ if you change the code or benchmark settings.
 
 ## What the matrix runs
 
-| Modality flag | Example | Steps | Frames | FPS | Seed | Guidance |
-|---|---|---:|---:|---:|---:|---:|
-| `t2v` | Text to video | 35 | 189 | 24 | 123 | 6 |
-| `i2v` | Image to video | 35 | 189 | 24 | 1111 | 6 |
-| `t2vs` | Text to video with sound | 35 | 189 | 24 | 0 | 6 |
-| `i2vs` | Image to video with sound | 35 | 189 | 24 | 0 | 6 |
-| `action` | Action policy with video output | 30 | 17 | 5 | 0 | 1 |
-| `v2v` | Video-conditioned generation | 35 | 189 | 24 | 0 | 6 |
-| `transfer` | Edge-conditioned transfer | 35 per chunk | 121 | 30 | 0 | 3 |
+| Modality flag | Example                         |        Steps | Frames |  FPS | Seed | Guidance |
+| ------------- | ------------------------------- | -----------: | -----: | ---: | ---: | -------: |
+| `t2v`         | Text to video                   |           35 |    189 |   24 |  123 |        6 |
+| `i2v`         | Image to video                  |           35 |    189 |   24 | 1111 |        6 |
+| `t2vs`        | Text to video with sound        |           35 |    189 |   24 |    0 |        6 |
+| `i2vs`        | Image to video with sound       |           35 |    189 |   24 |    0 |        6 |
+| `action`      | Action policy with video output |           30 |     17 |    5 |    0 |        1 |
+| `v2v`         | Video-conditioned generation    |           35 |    189 |   24 |    0 |        6 |
+| `transfer`    | Edge-conditioned transfer       | 35 per chunk |    121 |   30 |    0 |        3 |
 
 Each modality runs at `240p` (432x240), `480p` (848x480), and `720p`
 (1280x720), in that order. Action uses its native resolution tiers 256, 480,

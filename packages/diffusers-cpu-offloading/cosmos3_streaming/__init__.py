@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Cosmos 3 Nano streaming execution for Diffusers modular pipelines."""
 
 from .config import StreamingConfig

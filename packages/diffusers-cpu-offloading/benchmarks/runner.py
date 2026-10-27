@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run full BF16 or checkpoint-policy FP8 benchmarks with safety checking enabled.
 
 Default: seven modalities, three resolutions, full steps, one GPU, fresh process

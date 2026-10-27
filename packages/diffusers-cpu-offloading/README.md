@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Cosmos3-Nano CPU-GPU weight streaming
 
 Run the Cosmos3-Nano Diffusers modular pipeline with model weights stored in
@@ -104,13 +109,13 @@ on your hardware.
 Use the same `pipe` instance. Diffusers selects the generation workflow from
 the call arguments.
 
-| Modality | Additional call inputs |
-| --- | --- |
-| Image-to-video | `image=` with a conditioning image |
-| Video-to-video | `video=` and the appropriate frame-conditioning arguments |
-| T2V or I2V with sound | `enable_sound=True` |
-| Action | `action=CosmosActionCondition(...)` |
-| Transfer | `control_videos=` with the matching control prompt and settings |
+| Modality              | Additional call inputs                                          |
+| --------------------- | --------------------------------------------------------------- |
+| Image-to-video        | `image=` with a conditioning image                              |
+| Video-to-video        | `video=` and the appropriate frame-conditioning arguments       |
+| T2V or I2V with sound | `enable_sound=True`                                             |
+| Action                | `action=CosmosActionCondition(...)`                             |
+| Transfer              | `control_videos=` with the matching control prompt and settings |
 
 For example, add a conditioning image to the video call:
 
