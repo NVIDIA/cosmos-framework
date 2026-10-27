@@ -40,3 +40,32 @@ constructor or dataset configuration. Original private dataset YAML defaults
 remain available. Missing or nonexistent grounding annotation files produce a
 clear `ValueError`. Omni3D retains its existing private configuration and can be
 pointed at another authorized dataset through `raw_image_path` and `json_path`.
+
+## Brev Nano and fully local VANTAGE scoring
+
+The [Brev launchable](launchable/README.md) uses this Framework-native kit, the
+pinned Nano revision, and a caller-supplied, labeled `scoring-assets.json` bundle.
+Prepare authorized sources offline with `python -m vlmeval.scoring_assets`; that
+step writes canonical tables and a fingerprinted manifest, not original labels
+or media. Keep the bundle and runtime state outside every source checkout.
+During evaluation Compose mounts the completed bundle read-only; local scoring
+does not use an API judge, dataset downloader, credential mount, or external
+submission workflow.
+
+For `MetropolisVQA`, `MetropolisTemporal`, `MetropolisEventVerification`, and
+`MetropolisDVC`, provide `local_data_file` and `local_video_root` together to
+bypass cache and remote-source discovery. The local table must include genuine
+ground truth and bundle-relative media identities; missing labels or media fail.
+`Astro2DBenchDataset` accepts a `data_roots` mapping covering all registered child
+datasets. Existing explicit local grounding, pointing, and SOT constructor paths
+are reused. Local DVC scoring requires a fingerprinted, revisioned local
+roberta-large checkpoint and never consults the remote BERTScore endpoint.
+
+Use `python -m vlmeval.local_scoring` for existing native predictions without a
+model endpoint or GPU. Prediction identity columns must match trusted rows;
+prediction-supplied answers and paths cannot replace ground truth. Subsets
+require an explicit opt-in and are reported as subsets. There is no aggregate
+cross-task score or claim of official parity. Dataset distribution approval and
+a named reference result remain release gates. Original labels and native
+filtering are preserved; annotation anomalies are recorded in private local
+diagnostics rather than repaired or silently omitted.

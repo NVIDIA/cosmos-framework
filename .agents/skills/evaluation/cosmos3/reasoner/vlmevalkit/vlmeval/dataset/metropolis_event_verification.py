@@ -60,6 +60,8 @@ class MetropolisEventVerification(VideoBaseDataset):
         max_pixels=None,
         max_frames=None,
         system_prompt_option='merged',
+        local_data_file=None,
+        local_video_root=None,
     ):
         """
         MetropolisEventVerification dataset for event verification in videos.
@@ -69,6 +71,10 @@ class MetropolisEventVerification(VideoBaseDataset):
         self.max_pixels = max_pixels
         self.max_frames = max_frames
         self.system_prompt_option = system_prompt_option
+        self.local_data_file = local_data_file
+        self.local_video_root = local_video_root
+        if (local_data_file is None) != (local_video_root is None):
+            raise ValueError("local_data_file and local_video_root must be supplied together")
         super().__init__(
             dataset=dataset,
             nframe=nframe,
@@ -81,6 +87,10 @@ class MetropolisEventVerification(VideoBaseDataset):
         return list(cls._S3_PATHS.keys())
 
     def prepare_dataset(self, dataset_name='MetropolisEventVerification'):
+        if self.local_data_file is not None:
+            from ..scoring_assets import validate_local_video_inputs
+            return validate_local_video_inputs(self.local_data_file, self.local_video_root, 'EventVerification')
+
         from s3fs import S3FileSystem
 
         bucket, prefix = self._S3_PATHS[dataset_name]

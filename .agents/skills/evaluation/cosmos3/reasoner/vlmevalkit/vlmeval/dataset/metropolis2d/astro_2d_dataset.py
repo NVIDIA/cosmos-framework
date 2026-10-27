@@ -588,6 +588,36 @@ def _build_astro2dbench_dataset(concat_base):
             ],
         }
 
+        def __init__(self, dataset='VANTAGE_Astro2D', data_roots=None, **kwargs):
+            if data_roots is None:
+                super().__init__(dataset=dataset, **kwargs)
+                return
+            children = self.DATASET_SETS[dataset]
+            if set(data_roots) != set(children):
+                raise ValueError('data_roots must specify every registered ASTRO child')
+            self.dataset_name = dataset
+            self.datasets = children
+            self.dataset_map = {}
+            tables = []
+            for name in children:
+                root = os.fspath(data_roots[name])
+                if not os.path.isdir(root):
+                    raise ValueError('ASTRO data_roots must be existing local directories')
+                child = Astro2DDetectionDataset(
+                    dataset=name, data_root=root,
+                    min_bbox_area=400 if name.endswith('_IVAKPI05') else 0,
+                    **kwargs,
+                )
+                self.dataset_map[name] = child
+                table = child.data.copy()
+                table['SUB_DATASET'] = name
+                tables.append(table)
+            self.data = pd.concat(tables, ignore_index=True)
+            self.data['original_index'] = self.data.pop('index')
+            self.data['index'] = np.arange(len(self.data))
+            self.TYPE = next(iter(self.dataset_map.values())).TYPE
+            self.MODALITY = next(iter(self.dataset_map.values())).MODALITY
+
         def evaluate(self, eval_file, **judge_kwargs):
             result = super().evaluate(eval_file, **judge_kwargs)
             # f1 (F1@0.5) first so dict iteration / Format-D parsers pick it

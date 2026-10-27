@@ -113,15 +113,19 @@ class MetropolisDVC(VideoBaseDataset):
 
     def __init__(self, dataset='MetropolisDVC', pack=False, nframe=0, fps=0, total_pixels=8192 * 32 * 32,
                  max_pixels=None, max_frames=128, test_mode=False, limit=None,
-                 random_state=None, include_categories=None):
+                 random_state=None, include_categories=None, local_data_file=None, local_video_root=None):
         self.test_mode = test_mode
+        self.local_data_file = local_data_file
+        self.local_video_root = local_video_root
+        if (local_data_file is None) != (local_video_root is None):
+            raise ValueError("local_data_file and local_video_root must be supplied together")
         self.limit = limit
         self.max_pixels = max_pixels
         self.max_frames = max_frames
         self.random_state = random_state
         self.include_categories = set(include_categories) if include_categories else None
 
-        if not test_mode:
+        if not test_mode or local_data_file is not None:
             super().__init__(dataset=dataset, pack=pack, nframe=nframe, fps=fps, total_pixels=total_pixels)
             original_size = len(self.data) if hasattr(self, 'data') else 0
 
@@ -324,6 +328,10 @@ class MetropolisDVC(VideoBaseDataset):
         - category: category label
         - qid: question ID
         """
+        if self.local_data_file is not None:
+            from ..scoring_assets import validate_local_video_inputs
+            return validate_local_video_inputs(self.local_data_file, self.local_video_root, 'DVC')
+
         if dataset_name == 'VANTAGE_DVC':
             return self._prepare_vantage_from_s3(dataset_name)
 
@@ -479,6 +487,19 @@ class MetropolisDVC(VideoBaseDataset):
         - Temporal IoU for localization accuracy
         - BERTScore for caption semantic similarity
         """
+        local_scoring = judge_kwargs.get('local_scoring', False)
+        local_model = judge_kwargs.get('bert_score_model')
+        if local_scoring:
+            if judge_kwargs.get('bert_score_endpoint'):
+                raise ValueError("Local DVC scoring does not permit a BERTScore endpoint")
+            from ..scoring_assets import validate_bert_score_model
+            local_model = str(validate_bert_score_model(local_model))
+            try:
+                import torch
+                from bert_score import BERTScorer
+            except ImportError as exc:
+                raise ImportError("Local DVC scoring requires torch and bert-score") from exc
+
         data = load(eval_file)
 
         # Convert data to SODA format
@@ -534,6 +555,11 @@ class MetropolisDVC(VideoBaseDataset):
             if gt_timestamps:
                 gts[vid] = {"timestamps": gt_timestamps, "sentences": gt_sentences}
 
+        if local_scoring and (
+            not len(data) or parse_fail_count or len(preds) != len(data) or len(gts) != len(data)
+        ):
+            raise ValueError("Local DVC scoring rejects unmatched, duplicate, or unparseable scoring rows")
+
         if parse_fail_count > 0:
             print(f'[MetropolisDVC] WARNING: {parse_fail_count} events failed to parse '
                   f'(missing or malformed start/end timestamps). '
@@ -548,29 +574,27 @@ class MetropolisDVC(VideoBaseDataset):
 
         print(f"\nEvaluating {len(gt_vids)} videos with SODA-c metric...")
 
-        # Check for remote BERTScore endpoint (set via env var or judge_kwargs)
-        bert_endpoint = judge_kwargs.get('bert_score_endpoint') or os.environ.get('BERT_SCORE_ENDPOINT')
-
-        # Initialize BERTScorer (local or remote)
+        # Explicit local scoring never consults the remote endpoint environment.
+        bert_endpoint = None if local_scoring else (
+            judge_kwargs.get('bert_score_endpoint') or os.environ.get('BERT_SCORE_ENDPOINT')
+        )
         bert_scorer = None
-        use_remote = False
-
-        if bert_endpoint:
-            # Use remote BERTScore endpoint
-            print(f"Using remote BERTScore endpoint: {bert_endpoint}")
-            use_remote = True
-        else:
-            # Try local BERTScorer
+        use_remote = bool(bert_endpoint)
+        if not use_remote:
             try:
                 import torch
                 from bert_score import BERTScorer
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                bert_scorer = BERTScorer(model_type="roberta-large", device=device)
-                print(f"BERTScorer initialized locally on {device}")
-            except ImportError:
-                print("Warning: bert_score not available, using dummy scorer (F1=0.5)")
-                print("Install with: pip install bert-score")
-                print("Or set BERT_SCORE_ENDPOINT env var for remote evaluation")
+            except ImportError as exc:
+                raise ImportError("Real DVC semantic scoring requires torch and bert-score") from exc
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            scorer_kwargs = dict(device=device)
+            if local_scoring:
+                # Native roberta-large BERTScore uses layer 17. An absolute existing
+                # model directory makes Transformers resolve every file locally.
+                scorer_kwargs['num_layers'] = 17
+            bert_scorer = BERTScorer(
+                model_type=local_model if local_scoring else "roberta-large", **scorer_kwargs
+            )
 
         def compute_bert_scores_remote(candidates: List[str], references: List[str]) -> List[float]:
             """Call remote BERTScore endpoint."""
@@ -619,8 +643,7 @@ class MetropolisDVC(VideoBaseDataset):
                     _, _, F1 = bert_scorer.score(pred_sentences, refs)
                     score_matrix[gi, :] = F1.cpu().numpy()
             else:
-                # Dummy scores if BERTScore unavailable
-                score_matrix = np.ones_like(iou_matrix) * 0.5
+                raise RuntimeError("DVC semantic scorer was not initialized")
 
             # SODA-c: optimal matching using IoU × BERTScore
             combined_matrix = iou_matrix * score_matrix
