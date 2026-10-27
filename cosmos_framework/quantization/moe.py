@@ -1,15 +1,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""ModelOpt FP8 wrapper for the packed grouped-mm MoE experts.
+"""ModelOpt FP8 quantization of the packed grouped-mm MoE experts.
 
-ModelOpt's generic ``_QuantFusedExperts`` claims any module with 3-D ``gate_up_proj`` /
-``down_proj`` parameters but only intercepts ``F.linear``, so on the packed grouped-mm experts
-(which run ``torch._grouped_mm``) it would quantize nothing. :class:`QuantPackedExperts` keeps
-the experts packed and quantizes them in place: one per-expert weight quantizer per packed
-parameter and one shared input quantizer per GEMM, matching what vLLM's FP8 MoE kernels consume.
+Quantizes both the expert weights (per-expert scales) and the expert inputs (static scales
+calibrated through the wrapper's ``forward``).
+This code does not support weight-only.
 
-The quantizers act on tensors inside the expert computation, so its ``forward`` routes the tokens
-and runs both grouped GEMMs itself.
+How to run quantization: call :func:`register_packed_experts` before ``mtq.quantize`` (and before
+restoring a saved ModelOpt state), and give the weight quantizers one scale per expert, as vLLM's
+FP8 MoE layout requires; :func:`export_packed_experts` rejects ``mtq.FP8_DEFAULT_CFG`` alone::
+
+    config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)
+    config["quant_cfg"] += [
+        {"quantizer_name": "*gate_up_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
+        {"quantizer_name": "*down_proj_weight_quantizer", "cfg": {"num_bits": (4, 3), "axis": 0}},
+    ]
+
+Then export with :func:`~cosmos_framework.quantization.export.export_quantized_transformer`,
+which writes the experts via :func:`export_packed_experts`.
+
+Without the registration, ModelOpt's generic ``_QuantFusedExperts`` claims these experts and,
+since it only intercepts ``F.linear`` and they run ``torch._grouped_mm``, quantizes nothing.
 """
 
 from __future__ import annotations
