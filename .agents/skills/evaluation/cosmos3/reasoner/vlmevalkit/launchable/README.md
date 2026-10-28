@@ -69,11 +69,11 @@ Serving uses `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921
 
 ### Validation status and limits
 
-- The runtime code passed 20 native-scoring/artifact regressions in the packaged evaluator on native Linux x86-64. The committed fixtures are synthetic and use temporary directories; no benchmark labels, media, or executed notebook outputs are included.
-- A private five-question Brev notebook smoke exercised Nano inference and native local scoring. Saved predictions were also rescored in a CPU evaluator with networking disabled. This demonstrates the subset workflow, not a full benchmark or published-score reproduction.
-- DVC's genuine pinned local metric model was exercised offline with controlled captions, not model-generated benchmark answers. No DVC model-quality claim is made.
+- The runtime code passed 23 native-scoring/artifact regressions on native Linux x86-64. Fixtures are synthetic and use temporary directories; no benchmark labels, media, or executed notebook outputs are included.
+- A private five-question Brev notebook smoke exercised Nano inference and native local scoring. Saved predictions were also rescored in a CPU evaluator with networking disabled.
+- Private full-coverage inference and native local scoring have now been exercised for all eight tasks with manually staged authorized assets. DVC used its genuine pinned local metric model offline on saved Nano outputs. This is recovered-run evidence, not a fresh one-click launch or published-score reproduction; detailed results remain private.
 - Preparation preserves original labels, native filtering, and ground-truth denominators. Annotation anomalies are recorded in private local diagnostics rather than repaired or silently omitted.
-- Full eight-task model evaluation, immutable one-click cold launch, end-to-end BYOM, and named reference-score reproduction remain unverified. Scoring assets, detailed operational evidence, and benchmark results must be supplied and retained separately.
+- Immutable one-click cold launch, end-to-end BYOM, and named reference-score reproduction remain unverified. Scoring assets, detailed operational evidence, and benchmark results must be supplied and retained separately.
 
 ## Run and score
 
@@ -103,6 +103,8 @@ All output directories must be fresh. Direct scoring requires full task coverage
 
 `--mode all` always performs native inference first, then the same local scorer used for existing outputs. It never substitutes inference-only behavior or runs a remote scoring service. `--dry-run` composes configuration but does not prove inference or media compatibility.
 
+The controller defaults to **one concurrent API/video worker** and records `api_nproc` in `run.json`. Video decoding consumes host RAM independently of GPU VRAM; increase `--api-nproc N` only after measuring available host memory. This changes scheduling, not model generation or metric parameters.
+
 ## Metric semantics and provenance
 
 | Task | Native primary metric | Unit / aggregation |
@@ -117,6 +119,8 @@ All output directories must be fresh. Direct scoring requires full task coverage
 | Astro2D | F1 | Percent; unweighted sequence macro |
 
 Each private `summary.json` includes native metrics, explicit units/aggregation, expected/scored row counts, asset ID and annotation hashes, prediction snapshot hash, scorer-source hashes, and DVC metric-model fingerprints. There is **no invented cross-task overall VANTAGE score** or unverified leaderboard-parity claim. DVC requires a real local model; remote endpoints and dummy semantic scores are not allowed in local scoring. Missing or silently skipped examples fail scoring. Native failures leave a private `scoring-error.log`, not a success summary.
+
+Finite zero-duration and reversed predicted intervals follow each native parser and IoU implementation. The wrapper does not drop them, repair timestamps, or replace them with full-duration answers. Unparseable responses, nonfinite timestamps, missing events/captions, or skipped rows still fail rather than producing a misleading score.
 
 `run.json` records controller state and the exact scoring-asset manifest hash. Generated native configuration and `/opt/evaluation-packages.txt` identify runtime inputs. A BYOM endpoint's revision cannot be inferred from its display name; record its deployment revision separately. Treat predictions, native diagnostics, and summaries as private until reviewed. Nothing is uploaded automatically.
 

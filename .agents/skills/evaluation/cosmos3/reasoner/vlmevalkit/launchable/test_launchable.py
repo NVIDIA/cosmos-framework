@@ -16,6 +16,16 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fresh --work-dir"):
                 launchable.run(["VANTAGE_VQA"], Path(temp), "infer", True, False, Path(temp) / "assets")
 
+    def test_nonpositive_worker_count_is_rejected_before_assets_or_output(self):
+        for count in (0, -1):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "fresh"
+                with self.assertRaisesRegex(ValueError, "positive"):
+                    launchable.run(["VANTAGE_VQA"], output, "infer", False, False,
+                                   root / "missing-assets", api_nproc=count)
+                self.assertFalse(output.exists())
+
     def test_predictions_reject_empty_and_failure_markers(self):
         for value in ("   ", "VIDEO_LOAD_FAILED", "prefix VIDEO_LOAD_FAILED",
                       "Failed to obtain answer via API.", "null"):

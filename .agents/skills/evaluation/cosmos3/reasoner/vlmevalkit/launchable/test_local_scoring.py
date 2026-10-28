@@ -17,7 +17,7 @@ import pandas as pd
 from PIL import Image
 
 from vlmeval.local_scoring import (
-    build_local_dataset, dataset_config, load_assets, score_predictions,
+    _validate_predictions, build_local_dataset, dataset_config, load_assets, score_predictions,
 )
 from vlmeval.scoring_assets import EVENT_FILES, SOURCE_DIRS, VQA_FILES, prepare_assets
 
@@ -370,6 +370,43 @@ class LocalScoringTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest))
         with self.assertRaisesRegex(ValueError, 'escapes'):
             load_assets(self.assets, ['2DGrounding'])
+
+    def test_temporal_zero_interval_reduces_score_without_dropping_row(self):
+        _temporal(self.assets)
+        _prepare(self.assets, ['Temporal'])
+        dataset = build_local_dataset(self.assets, 'Temporal')
+        values = [
+            json.dumps({'start': '0', 'end': '0'} if position == 0 else {'start': '1', 'end': '3'})
+            for position, (_, row) in enumerate(dataset.data.iterrows())
+        ]
+        summary = self.score('Temporal', self.predictions('Temporal', values))
+        self.assertEqual(summary['primary_metric']['value'], 0.75)
+        self.assertEqual(summary['native_metrics']['overall']['count'], 3)
+        self.assertEqual(summary['coverage'], {'expected_rows': 3, 'scored_rows': 3, 'subset': False})
+
+    def test_dvc_degenerate_intervals_retain_native_zero_iou_without_fallback(self):
+        from vlmeval.dataset.metropolis_dvc import MetropolisDVC, _iou
+
+        rows = pd.DataFrame({'prediction': [
+            json.dumps([{'start': start, 'end': end, 'caption': 'A square moves.'}])
+            for start, end in [('0', '0'), ('3', '1'), ('1', '3')]
+        ]})
+        _validate_predictions('DVC', MetropolisDVC, rows)
+        overlaps = []
+        for text in rows['prediction']:
+            event, = MetropolisDVC.parse_events_from_json(text)
+            interval = [MetropolisDVC.parse_timestamp(event[key]) for key in ('start', 'end')]
+            overlaps.append(_iou(interval, [1, 3]))
+        self.assertEqual(overlaps, [0.0, 0.0, 1.0])
+        self.assertEqual(sum(overlaps) / len(overlaps), 1 / 3)
+        for event in (
+            {'start': 'nan', 'end': '3', 'caption': 'A square moves.'},
+            {'start': '1', 'caption': 'A square moves.'},
+            {'start': '1', 'end': '3', 'caption': ''},
+        ):
+            with self.subTest(event=event), self.assertRaisesRegex(ValueError, 'silent fallback'):
+                _validate_predictions('DVC', MetropolisDVC,
+                                      pd.DataFrame({'prediction': [json.dumps([event])]}))
 
     def test_dvc_without_genuine_local_model_is_rejected(self):
         from vlmeval.scoring_assets import validate_bert_score_model

@@ -125,7 +125,9 @@ def _write_state(work, state):
     (work / "run.json").write_text(json.dumps(state, indent=2) + "\n")
 
 
-def run(selected, work, mode, smoke, dry_run, assets_dir):
+def run(selected, work, mode, smoke, dry_run, assets_dir, api_nproc=1):
+    if api_nproc < 1:
+        raise ValueError("--api-nproc must be positive")
     if smoke and selected != ["VANTAGE_VQA"]:
         raise ValueError("--smoke requires --benchmarks VANTAGE_VQA")
     if work.exists():
@@ -146,11 +148,11 @@ def run(selected, work, mode, smoke, dry_run, assets_dir):
              "cosmos_commit": os.environ.get("COSMOS_COMMIT", "unknown"),
              "model": os.environ.get("COSMOS_MODEL", "${COSMOS_MODEL}"),
              "benchmarks": selected, "mode": mode, "smoke": smoke, "dry_run": dry_run,
+             "api_nproc": api_nproc,
              "scoring_assets": {"asset_id": bundle["manifest"]["asset_id"],
                                 "manifest_sha256": bundle["manifest_sha256"]},
              "work_dirs": {}, "predictions": {}, "scores": {}}
     _write_state(work, state)
-    entries = manifest()
     try:
         for index, bench in enumerate(selected):
             config_path = configs / f"{bench}.json"
@@ -164,10 +166,9 @@ def run(selected, work, mode, smoke, dry_run, assets_dir):
             config_path.write_text(json.dumps(cfg, indent=2) + "\n")
             out = work / f"bench_{index:02d}"
             state["work_dirs"][bench] = out.name
-            flags = entries[f"metropolis/{bench}"]["run"]
             command = [sys.executable, str(ROOT / "run.py"), "--config", str(config_path),
                        "--mode", "infer", "--work-dir", str(out),
-                       "--api-nproc", str(flags["api_nproc"]), "--verbose"]
+                       "--api-nproc", str(api_nproc), "--verbose"]
             if dry_run:
                 print(" ".join(command))
                 continue
@@ -262,6 +263,8 @@ def main():
     for child in (prep, runner):
         child.add_argument("--benchmarks", default="VANTAGE_VQA")
     runner.add_argument("--mode", choices=["infer", "all"], default="all")
+    runner.add_argument("--api-nproc", type=int, default=1,
+                        help="Concurrent API/video workers; increase only for available host RAM")
     runner.add_argument("--smoke", action="store_true", help="Five seeded VQA samples, not a full benchmark")
     runner.add_argument("--dry-run", action="store_true")
     runner.add_argument("--work-dir", type=Path, required=True)
@@ -276,7 +279,7 @@ def main():
         prepare(benchmarks(args.benchmarks), args.assets_dir.resolve())
     elif args.command == "run":
         run(benchmarks(args.benchmarks), args.work_dir.resolve(), args.mode,
-            args.smoke, args.dry_run, args.assets_dir.resolve())
+            args.smoke, args.dry_run, args.assets_dir.resolve(), args.api_nproc)
     elif args.command == "score":
         score(args.work_dir.resolve(), args.assets_dir.resolve(), args.score_dir)
     else:

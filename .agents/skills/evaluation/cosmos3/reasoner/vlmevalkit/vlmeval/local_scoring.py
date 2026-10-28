@@ -332,7 +332,8 @@ def _validate_predictions(task, dataset, rows):
                         raise ValueError('DVC event is missing timestamps')
                     start = dataset.parse_timestamp(event.get('start') or event.get('start_time', '0'))
                     end = dataset.parse_timestamp(event.get('end') or event.get('end_time', '0'))
-                    if (not math.isfinite(start) or not math.isfinite(end) or end <= start
+                    # Native IoU retains finite zero/reversed spans as zero overlap.
+                    if (not math.isfinite(start) or not math.isfinite(end)
                             or not (event.get('caption') or event.get('description') or '').strip()):
                         raise ValueError('DVC contains an invalid or skipped event')
             elif task == 'Temporal':
@@ -350,8 +351,8 @@ def _validate_predictions(task, dataset, rows):
                         native_stamps = stamps
                     if native_stamps != stamps:
                         raise ValueError('Temporal prediction would trigger a silent full-duration fallback')
-                if not all(math.isfinite(value) for value in stamps) or stamps[1] <= stamps[0]:
-                    raise ValueError('Invalid temporal prediction interval')
+                if not all(math.isfinite(value) for value in stamps):
+                    raise ValueError('Nonfinite temporal prediction interval')
             elif task == 'SOT':
                 from .dataset.vantage_sot import parse_sot_response
                 parsed = parse_sot_response(text, int(row['n_frames']), model_family='cr')
