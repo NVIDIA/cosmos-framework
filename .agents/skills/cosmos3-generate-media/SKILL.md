@@ -14,8 +14,7 @@ description: >
 # Cosmos3 Audiovisual Media Generation
 
 One skill for the whole audiovisual generation family: seven serving-path
-variants that share the same model family, prompt format and bundled assets
-(the NIM takes plain-text prompts).
+variants that share the same model family, prompt format and bundled assets.
 
 ## Read this first
 
@@ -25,7 +24,7 @@ Before the first command of any variant — including a single-image smoke:
    sections the smoke path needs) in full, plus § 2.3–2.4, § 3.3, § 4.5, § 6
    and § 7 of the shared [`references/payloads.md`](references/payloads.md).
    The variant sections below only summarise the notebooks; the reference files
-   are the notebooks migrated 1:1 (all but the Jupyter preview/viewer cells).
+   are the notebooks migrated 1:1 (all but the Jupyter preview/viewer cells; Variant 7: the NIM cookbook pages).
 2. Check the GPU with `nvidia-smi`: the CUDA major version picks the torch
    backend / dependency group, the memory picks the model (table below).
 3. After a failure, go back to the reference section that covers the failing
@@ -95,7 +94,7 @@ disable it with the backend's switch below.
 | vLLM-Omni        | `--no-guardrails` on `vllm serve` (server-wide), or `guardrails: false` in `extra_params` / `extra_args` (per request). The server loads the gated guardrail at startup; without Hugging Face access to it the server exits before serving, and the per-request switch does not fix that |
 | SGLang           | no switch documented in the notebook or README; the notebook's helpers send `guardrails: True` in `extra_params` (sglang.md § 6.2)                                                                                                                                                       |
 | TensorRT-LLM     | `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` before starting the server, or `use_guardrails` set to `False` in the request `extra_params`                                                                                                                                                       |
-| NIM              | `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0`                                                                                                                                                                                                                             |
+| NIM              | `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0 NIM_ENABLE_SIGLIP_GUARDRAILS=0` (2.1.0 README; nim/operations.md: disabling the video guardrail also disables SigLIP)                                                                                                        |
 
 ## Variant 1 — diffusers (in-process, no server)
 
@@ -393,86 +392,85 @@ the server has no `ffmpeg`. `build_trtllm_video_body` for `t2i_distilled`, with 
 
 ## Variant 7 — NIM (packaged container)
 
-Reference: [`references/nim.md`](references/nim.md) — read it before the first
-command (§ 1 Launch, § 2 Wait for readiness, § 3 Inspect, § 4 Request parameters, § 5–6, Playback note).
+Reference: the Cosmos3 NIM cookbook in this checkout, [`../cookbooks/cosmos3/nim/`](../cookbooks/cosmos3/nim/README.md) —
+[deployment.md](../cookbooks/cosmos3/nim/deployment.md) (How Selection Works, Launch Generator, Wait for Readiness, Verify the
+Selection), [generation.md](../cookbooks/cosmos3/nim/generation.md) (Image-to-Video; Choose Resolution, Frames, and FPS),
+[api-reference.md](../cookbooks/cosmos3/nim/api-reference.md), [operations.md](../cookbooks/cosmos3/nim/operations.md) — and its own
+skill [`cosmos3-nim-user`](../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md); read deployment.md and generation.md
+before the first command. Upstream replaced `run_with_nim.ipynb` with this cookbook and its example scripts (cosmos-framework #296).
 
-NIMs use NGC auth, not Hugging Face. The notebook's launch cell (authenticate
-Docker once; the cache is pre-created and made writable before the first launch):
+NIMs use NGC auth, not Hugging Face. One runtime per container (`NIM_MODEL_TYPE=generator`); `NIM_MODEL_VARIANT` selects the model
+(`nano` in the README launch; `super` and the specialist variants: deployment.md "Select a Generator Model"), `NIM_PERF_PROFILE` the
+objective (`latency` / `throughput`); add `-e NIM_PRECISION=fp8` only to pin precision. The README's launch, with `CONTAINER_NAME`,
+`NIM_PORT` and `NIM_IMAGE` as this skill's parameters for the README's literals (authenticate Docker once; the cache is pre-created):
 
 ```bash
-echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
-export CONTAINER_NAME="${CONTAINER_NAME:-nvidia-cosmos3-generator}"
-export IMG_NAME="${IMG_NAME:-nvcr.io/nim/nvidia/cosmos3-generator:1.0.0}"
-export NIM_MODEL_SIZE="${NIM_MODEL_SIZE:-nano}"; export NIM_PRECISION="${NIM_PRECISION:-fp8}"
-export NIM_PERF_PROFILE="${NIM_PERF_PROFILE:-latency}"; export NIM_PORT="${NIM_PORT:-8000}"
+echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin   # NGC_API_KEY must be exported: the launch passes it by name
+export CONTAINER_NAME="${CONTAINER_NAME:-cosmos3-generator}"; export NIM_PORT="${NIM_PORT:-8000}"
+export NIM_IMAGE="${NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3:2.1.0}"
+export NIM_MODEL_VARIANT="${NIM_MODEL_VARIANT:-nano}"; export NIM_PERF_PROFILE="${NIM_PERF_PROFILE:-latency}"
 export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
 mkdir -p "$LOCAL_NIM_CACHE"; chmod -R 777 "$LOCAL_NIM_CACHE" 2>/dev/null || true
-docker run -d --rm --name="$CONTAINER_NAME" \
-  --runtime=nvidia --gpus all --shm-size=32GB --ulimit nofile=65536:65536 \
-  -e NGC_API_KEY="$NGC_API_KEY" \
-  -e NIM_MODEL_SIZE="$NIM_MODEL_SIZE" -e NIM_PRECISION="$NIM_PRECISION" -e NIM_PERF_PROFILE="$NIM_PERF_PROFILE" \
-  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
+docker run -d --name "$CONTAINER_NAME" \
+  --gpus '"device=0"' --shm-size 16g --ulimit memlock=-1 --ulimit stack=67108864 --ulimit nofile=65536:65536 \
   -p "${NIM_PORT}:8000" \
-  "$IMG_NAME"
+  -e NGC_API_KEY \
+  -e NIM_MODEL_TYPE=generator -e NIM_MODEL_VARIANT="$NIM_MODEL_VARIANT" -e NIM_PERF_PROFILE="$NIM_PERF_PROFILE" \
+  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
+  "$NIM_IMAGE"
+# Readiness (deployment.md): "A cold start (download, materialization, model load, warmup) takes much longer than HTTP startup. Send inference only after readiness succeeds."
+until curl -fsS "http://127.0.0.1:${NIM_PORT}/v1/health/ready" >/dev/null; do sleep 10; done   # follow the start-up with: docker logs -f "$CONTAINER_NAME"
+curl -fsS "http://127.0.0.1:${NIM_PORT}/v1/metadata" | python3 -m json.tool   # "Confirm that `model_type` and `inference_endpoint` are `generator` and `/v1/infer`"
 ```
 
-"The default launch below uses Nano (`NIM_MODEL_SIZE=nano`), FP8 (`NIM_PRECISION=fp8`),
-and the latency profile (`NIM_PERF_PROFILE=latency`). Set `NIM_MODEL_SIZE=super` before
-running the launch cell to serve the larger model." Setup-guide table: `NIM_MODEL_SIZE` is
-`nano` or `super`; `NIM_PRECISION` is `bf16`, `fp8` or `nvfp4` (`nvfp4` requires Blackwell);
-`NIM_PERF_PROFILE` is `latency` or `throughput`; `NIM_TAGS_SELECTOR` pins a profile (e.g.
-`model_size=super,nim_tp=2`). Weights download from NGC into `/opt/nim/.cache`.
+Request (api-reference.md): one JSON object to `POST /v1/infer`; "Every request must set `model_mode`" and the server "rejects
+unknown fields". Image-to-Video is `model_mode` `image2video` plus `input_reference` as a data URL (generation.md). The skill's
+request from the bundled assets (compact-JSON `prompt` / `negative_prompt` as for the other backends, payloads.md § 9.1) is the
+request of the cookbook's `../cookbooks/cosmos3/nim/examples/i2v.py` at smoke size (`"256"` / 25 frames are a skill choice; cookbook
+defaults `720` / 189), run from this skill directory (the one with `assets/`). "Requests are synchronous and can stay quiet until
+done … do not retry a quiet connection" (generation.md):
 
-Readiness (notebook § 2): "The first run downloads model artifacts and may spend
-additional time compiling/warming the engine. The server is ready for inference when
-`GET /v1/health/ready` returns HTTP 200" — the notebook polls it while checking with
-`docker ps` that the container is still running, and prints `docker logs --tail 160` if it
-exited. Inspect the service with `/v1/models`, `/v1/metadata`, `/v1/version` and `/openapi.json`.
-
-Requests: `POST /v1/infer` with the Cosmos3-specific JSON schema — `prompt`,
-`negative_prompt`, `image`, `seed`, `guidance_scale` (1.0–7.0, default 6.0), `steps`
-(1–100, default 35), `resolution` (`256`, `480`, `720`, optionally suffixed `_16_9`,
-`_1_1`, `_9_16`, `_4_3`, `_3_4`), `num_output_frames` (4k+1: 25, 29, 33, …), `fps`
-(1.0–60.0, default 24.0). "Unknown request fields are rejected by the server." The
-response is JSON; decode `response["b64_video"]` to get the MP4 — "unlike vLLM-Omni, it
-does not use `/v1/videos/sync` and does not return MP4 bytes directly". Image2Video:
-"provide an `image` field. The field accepts raw base64, a `data:image/...;base64,...`
-URI, or a public URL when URL inputs are enabled" — the notebook encodes a local image as
-a data URI; the README writes the JSON to a file and posts it with `curl -d @<file>`:
-
-```json
-{"prompt": "The humanoid robot performs a controlled standing backflip in a modern living room, then lands steadily on both feet.",
- "image": "data:image/jpeg;base64,<base64 of assets/images/image2video/humanoid_robot.jpg>",
- "seed": 123, "guidance_scale": 6.0, "steps": 35, "resolution": "256",
- "num_output_frames": 25, "fps": 24.0}
+```python
+import base64, json, os, urllib.request
+from pathlib import Path
+compact = lambda p: json.dumps(json.load(open(p)), ensure_ascii=True, separators=(",", ":"))
+body = {"model_mode": "image2video",
+        "prompt": compact("assets/prompts/image2video/car_driving.json"),
+        "negative_prompt": compact("assets/negative_prompts/image2video/neg_prompt.json"),
+        "input_reference": "data:image/jpeg;base64," + base64.b64encode(Path("assets/images/image2video/car_driving.jpg").read_bytes()).decode(),
+        "resolution": "256", "num_frames": 25, "fps": 24.0, "num_inference_steps": 35, "guidance_scale": 6.0, "flow_shift": 10.0, "seed": 0}  # i2v.py's fields; 256 / 25 = smoke size
+req = urllib.request.Request(f"http://127.0.0.1:{os.environ.get('NIM_PORT', '8000')}/v1/infer", json.dumps(body).encode(), {"Content-Type": "application/json"})
+out = Path(os.environ.get("OUT", "outputs")) / "cosmos3_generator_nim" / "cosmos3_generator_nim_i2v.mp4"; out.parent.mkdir(parents=True, exist_ok=True)
+with urllib.request.urlopen(req, timeout=1800) as resp:
+    out.write_bytes(base64.b64decode(json.load(resp)["b64_video"])); print(f"HTTP {resp.status} -> {out} {out.stat().st_size} B")
 ```
 
-**Scope: the Generator NIM exposes Text2Video and Image2Video ONLY** — no
-text-to-image, video-to-video, audio, action, or transfer. Playback note: "The
-generated `b64_video` payload is an MP4 container. Some environments may not
-preview VP9-in-MP4 inline" — verify the file with `ffplay`, `mpv` or IINA, or
-re-encode externally to H.264. `docker stop "$CONTAINER_NAME"` when done.
+**Scope (README):** "The Cosmos3 NIM serves text-to-image, text-to-video, image-to-video, and video-to-video, plus Action and
+Transfer. It does not generate audio." `b64_video` decodes to an MP4 container (generation.md "Output and Playback"). When done, the
+cookbook's cleanup: `docker rm -f "$CONTAINER_NAME"` (deployment.md; a stopped container still holds the name).
 
 ## Reference files
 
 The full cookbook content for a backend (every model size, text-to-video, image/video
 conditioning, audio, multi-GPU, the complete request contracts and helper code) lives in
 `references/`, migrated 1:1 from the notebooks — read the matching file and
-`references/payloads.md` before the first command (see the top). Do not look for the notebooks; these files replace them.
+`references/payloads.md` before the first command (see the top). Do not look for the notebooks; these files replace them
+(Variant 7: the NIM cookbook in `../cookbooks/cosmos3/nim/` replaced that notebook upstream — see its row).
 
-| File                              | Backend                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| `references/payloads.md`          | Shared: assets, prompt serialisation, sampling defaults, use-case matrix |
-| `references/diffusers.md`         | Variant 1 — diffusers                                                    |
-| `references/cosmos-framework.md`  | Variant 2 — cosmos_framework                                             |
-| `references/vllm-omni.md`         | Variant 3 — vLLM-Omni                                                    |
-| `references/sglang.md`            | Variant 4 — SGLang                                                       |
-| `references/trt-llm.md`           | Variant 5 — TensorRT-LLM                                                 |
-| `references/distilled-trt-llm.md` | Variant 6 — distilled 4-step students                                    |
-| `references/nim.md`               | Variant 7 — NIM                                                          |
+| File                                                              | Backend                                                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `references/payloads.md`                                          | Shared: assets, prompt serialisation, sampling defaults, use-case matrix                                                                               |
+| `references/diffusers.md`                                         | Variant 1 — diffusers                                                                                                                                  |
+| `references/cosmos-framework.md`                                  | Variant 2 — cosmos_framework                                                                                                                           |
+| `references/vllm-omni.md`                                         | Variant 3 — vLLM-Omni                                                                                                                                  |
+| `references/sglang.md`                                            | Variant 4 — SGLang                                                                                                                                     |
+| `references/trt-llm.md`                                           | Variant 5 — TensorRT-LLM                                                                                                                               |
+| `references/distilled-trt-llm.md`                                 | Variant 6 — distilled 4-step students                                                                                                                  |
+| [`../cookbooks/cosmos3/nim/`](../cookbooks/cosmos3/nim/README.md) | Variant 7 — NIM: the Cosmos3 NIM cookbook (deployment, generation, api-reference, operations) and its `cosmos3-nim-user` skill; not part of this skill |
 
 Origin: the `cookbooks/cosmos3/generator/audiovisual` notebooks of the public Cosmos
-repository, pinned at <https://github.com/NVIDIA/cosmos/tree/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual>; superseded by this skill.
+repository, pinned at <https://github.com/NVIDIA/cosmos/tree/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual>
+(Variant 7: the `cosmos3/nim/` cookbook pages of this checkout); superseded by this skill.
 
 ## Things not obvious from the docs
 
@@ -490,9 +488,10 @@ repository, pinned at <https://github.com/NVIDIA/cosmos/tree/6e2c69afafd6444c1ca
 
 ## Related skills
 
-| Skill                                  | When to use                          |
-| -------------------------------------- | ------------------------------------ |
-| `../cosmos3-setup/SKILL.md`            | Framework environment for Variant 2  |
-| `../cosmos3-inference/SKILL.md`        | Framework-native inference reference |
-| `../cosmos3-env-troubleshoot/SKILL.md` | CUDA/import/server failures          |
-| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases      |
+| Skill                                                               | When to use                           |
+| ------------------------------------------------------------------- | ------------------------------------- |
+| `../cosmos3-setup/SKILL.md`                                         | Framework environment for Variant 2   |
+| `../cosmos3-inference/SKILL.md`                                     | Framework-native inference reference  |
+| `../cosmos3-env-troubleshoot/SKILL.md`                              | CUDA/import/server failures           |
+| `../cosmos3-skill-authoring/SKILL.md`                               | Editing this skill's eval cases       |
+| `../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md` | Operating the Cosmos3 NIM (Variant 7) |

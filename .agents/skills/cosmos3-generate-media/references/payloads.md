@@ -1,6 +1,6 @@
 # Cosmos3 Generator Audiovisual — shared payload reference, distilled from the cookbook notebooks
 
-Source: `run_with_cosmos_framework.ipynb`, `run_with_diffusers.ipynb`, `run_with_vllm_omni.ipynb`, `run_with_sglang.ipynb`, `run_with_trt_llm.ipynb`, `run_distilled_with_trt_llm.ipynb`, `run_with_nim.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/README.md> (pinned commit; this file supersedes them for the content they share and is complete on its own).
+Source: `run_with_cosmos_framework.ipynb`, `run_with_diffusers.ipynb`, `run_with_vllm_omni.ipynb`, `run_with_sglang.ipynb`, `run_with_trt_llm.ipynb`, `run_distilled_with_trt_llm.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/README.md> (pinned commit; this file supersedes them for the content they share and is complete on its own).
 
 Scope: everything the seven backend notebooks and the README have in common — the README introduction, the asset catalogue, guardrail/licensing/access notes, the `ASSET_SETS` use-case matrix, the sampling-default tables, the resolution/aspect-ratio → height × width mapping, `create_payload` and its helpers, model identifiers, and the env-var and output-naming conventions; per-backend server launch, request helpers and run sections live in the sibling backend files, which say "see payloads.md § …" for what is here.
 
@@ -13,9 +13,9 @@ Generate images and video (with optional audio) from text, image or video prompt
 distilled Cosmos3-Super students across Cosmos Framework, Diffusers, vLLM-Omni, TRT-LLM
 and NIM backends. Sample prompts live under [`assets/`](../assets).
 
-> **NIM scope:** `Cosmos3-Generator` NIM currently exposes Text2Video and
-> Image2Video only. It does not expose text-to-image, video-to-video,
-> sound/audio generation, action modes, or transfer controls.
+> **NIM scope:** The Cosmos3 NIM serves text-to-image,
+> text-to-video, image-to-video, and video-to-video, plus Action and Transfer.
+> It does not generate audio.
 
 Environment setup for every backend is centralized in the shared
 [Cosmos3 cookbooks environment setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md) guide; each backend below
@@ -28,11 +28,11 @@ HF repository before running these examples. To disable the guardrail, set
 `enable_safety_checker=False` (Diffusers), `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1`
 or `use_guardrails: false` through `extra_params` (TensorRT-LLM),
 `guardrails: false` (vLLM-Omni `extra_params`/`extra_args`), or
-`--no-guardrails` (Cosmos Framework). For
-Generator NIM set `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0`.
+`--no-guardrails` (Cosmos Framework). For the
+Cosmos3 NIM, set `NIM_ENABLE_TEXT_GUARDRAILS=0 NIM_ENABLE_VIDEO_GUARDRAILS=0 NIM_ENABLE_SIGLIP_GUARDRAILS=0`.
 
 NIM backends use NGC authentication instead of Hugging Face login; see the
-[Generator NIM setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#generator-nim) for details.
+[NIM setup](../../cookbooks/cosmos3/README.md#cosmos3-nim) for details.
 
 ## 2. Licensing and access
 
@@ -111,7 +111,7 @@ The "Preview caption" column is what the notebooks' preview cell prints for each
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `assets/images/image2video/car_driving.jpg`        | `i2v_nano_noaudio`, `i2v_super_noaudio`, `i2v_distilled`, `i2v_distil`, `i2v_distil_noaudio`, `i2v_edge_noaudio` (framework, diffusers, vllm_omni, sglang) and `i2v_edge` (trt_llm, whose section calls it "the coastal-road dashcam frame"). `run_with_cosmos_framework.ipynb` Super 4-Step: "the existing public car-driving image and prompt". |
 | `assets/images/image2video/coastal_road_audio.jpg` | `i2vs` (framework, diffusers, vllm_omni, sglang) and `i2av_nano`, `i2av_super` (trt_llm).                                                                                                                                                                                                                                                         |
-| `assets/images/image2video/humanoid_robot.jpg`     | `i2v_nano`, `i2v_super` (trt_llm); the NIM Image2Video request, where it is sent inline as a `data:image/jpeg;base64,...` URI with the prompt "The humanoid robot performs a controlled standing backflip in a modern living room, then lands steadily on both feet."                                                                             |
+| `assets/images/image2video/humanoid_robot.jpg`     | `i2v_nano`, `i2v_super` (trt_llm); the retired 1.0.0 NIM notebook's Image2Video request, where it was sent inline as a `data:image/jpeg;base64,...` URI with the prompt "The humanoid robot performs a controlled standing backflip in a modern living room, then lands steadily on both feet."                                                   |
 
 Image2video cases upload the image as-is: `-F input_reference=@<path>` (vllm_omni, sglang), `-F input_reference=@<path>;type=image/jpeg` (distilled trt-llm), `-F image_reference=@<path>;type=image/jpeg` (trt_llm), `load_image(<path>)` (diffusers), `vision_path` in the payload JSON (cosmos_framework).
 
@@ -360,7 +360,7 @@ Model notes that recur across notebooks:
 - `run_with_cosmos_framework.ipynb` (Nano FP8): "FP8 checkpoints are published in the same Hugging Face repositories as the standard checkpoints, under the `fp8` revision rather than in separate FP8 repositories."
 - `run_distilled_with_trt_llm.ipynb` model pages: [`nvidia/Cosmos3-Super-Text2Image-4Step`](https://huggingface.co/nvidia/Cosmos3-Super-Text2Image-4Step) — text-to-image; [`nvidia/Cosmos3-Super-Image2Video-4Step`](https://huggingface.co/nvidia/Cosmos3-Super-Image2Video-4Step) — image-to-video. `run_with_vllm_omni.ipynb`: "`Cosmos3-Super-Text2Image-4Step` and `Cosmos3-Super-Image2Video-4Step` are distilled models which require fewer inference steps for Text2Image and Image2Video tasks respectively." `run_with_diffusers.ipynb` `ASSET_SETS` comment: "Distilled 4-step checkpoints bake classifier-free guidance into the weights and read their sigma schedule from the checkpoint, so they carry no num_steps/guidance/shift."
 - Edge, as stated in the shared cells: `run_with_cosmos_framework.ipynb` "Cosmos3-Edge has no audio modules, so its examples run without audio."; `run_with_diffusers.ipynb` "Cosmos3-Edge has no audio modules and uses its 480p generation settings."; `run_with_trt_llm.ipynb` sampling-table comment "Cosmos3-Edge is 480p-native and has no audio tower, so it runs a different shape from Nano/Super." (§ 6.1).
-- Guardrail model: `nvidia/Cosmos-1.0-Guardrail` (§ 2.3). NIM container image: `nvcr.io/nim/nvidia/cosmos3-generator:1.0.0`.
+- Guardrail model: `nvidia/Cosmos-1.0-Guardrail` (§ 2.3). NIM container image: `nvcr.io/nim/nvidia/cosmos3:2.1.0` with `NIM_MODEL_TYPE=generator` (the retired Generator NIM image was `nvcr.io/nim/nvidia/cosmos3-generator:1.0.0`).
 
 ## 6. Sampling defaults
 
@@ -453,7 +453,7 @@ DISTILLED_SAMPLING = {
 }
 ```
 
-`run_with_nim.ipynb` has no sampling table; its two inline payloads use `seed` 42 (T2V) / 123 (I2V), `guidance_scale` 6.0, `steps` 35, `resolution` `"256"`, `num_output_frames` 25, `fps` 24.0 ("The examples use `resolution="256"` and `num_output_frames=25` so a smoke test completes faster. Increase these values for quality once the workflow is verified.").
+The NIM has no sampling table of its own (nim/generation.md): T2V, I2V and V2V use these defaults when fields are omitted — `resolution` `720` (1280 × 720), `num_frames` `189`, `num_inference_steps` `35`, `guidance_scale` `6.0`, `flow_shift` `10.0`, `fps` `24.0`; text2image — `720_1_1` (960 × 960), `num_inference_steps` `50`, `guidance_scale` `4.0`, `flow_shift` `3.0`, empty `negative_prompt`. The skill's smoke request sends `resolution` `"256"` and `num_frames` 25 (skill choice, SKILL.md Variant 7; the retired 1.0.0 notebook's examples used the same values as `resolution="256"` / `num_output_frames=25`).
 
 ### 6.2 Comparison
 
@@ -681,12 +681,14 @@ Every named use case from every notebook. "Defined in" names the notebook(s) who
 
 For every trt_llm `text2image` spec `create_payload` adds `extra_params["output_type"] = "image"` and removes `num_frames` and `fps` from the payload; every other mode receives the per-mode negative prompt (§ 3.3).
 
-### 8.6 NIM requests (`run_with_nim.ipynb`; inline payloads, no `ASSET_SETS`)
+### 8.6 NIM requests (cookbook README `## Run with NIM` and nim/generation.md; inline requests, no `ASSET_SETS`)
 
-| Request                                      | Model                                        | Fields                                                                                                                                                                                                                                                                                                             | Output                          |
-| -------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
-| Text2Video (non-empty `prompt`, no `image`)  | `NIM_MODEL_SIZE` `nano` (default) or `super` | `prompt`: "A humanoid robot walks through a futuristic warehouse, inspecting shelves of mechanical components. Photorealistic, cinematic lighting."; `seed`: 42; `guidance_scale`: 6.0; `steps`: 35; `resolution`: "256"; `num_output_frames`: 25; `fps`: 24.0                                                     | `cosmos3_generator_nim_t2v.mp4` |
-| Image2Video (`image` plus optional `prompt`) | same                                         | `prompt`: "The humanoid robot performs a controlled standing backflip in a modern living room, then lands steadily on both feet."; `image`: data URI of `assets/images/image2video/humanoid_robot.jpg`; `seed`: 123; `guidance_scale`: 6.0; `steps`: 35; `resolution`: "256"; `num_output_frames`: 25; `fps`: 24.0 | `cosmos3_generator_nim_i2v.mp4` |
+| Request                                                                             | Model                                                     | Fields                                                                                                                                                                                                                | Output                                                                        |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| text2video (`"model_mode": "text2video"`, non-empty `prompt`, no `input_reference`) | `NIM_MODEL_VARIANT` `nano` (the README launch) or `super` | `prompt`: "A modern industrial robotic arm cleans a kitchen counter with a green sponge."; `resolution`: "720_16_9"; `num_frames`: 189; `fps`: 24.0; `seed`: 0                                                        | `/tmp/cosmos3_nim_t2v.mp4` (README) / `t2v_robot_kitchen.mp4` (generation.md) |
+| image2video (`"model_mode": "image2video"`, image `input_reference`)                | same                                                      | `prompt`: "A car travels along a coastal mountain road with natural motion."; `input_reference`: data URL of `assets/images/image2video/car_driving.jpg`; `seed`: 0 (omitted fields take the video defaults of § 6.1) | `i2v_car_driving.mp4` (generation.md)                                         |
+
+The skill's own I2V request (bundled prompt and negative prompt as compact JSON, `"256"` / 25 frames) is in SKILL.md Variant 7; it writes `<OUT>/cosmos3_generator_nim/cosmos3_generator_nim_i2v.mp4` (§ 4.2).
 
 ### 8.7 `ASSET_SETS` source, verbatim per notebook
 
@@ -1726,7 +1728,7 @@ How the request helpers of each notebook translate the payload JSON written by `
 | video reference (`vision_path` / `video_path`) | —                                                                              | `-F video_reference=@<path>;type=video/mp4`                                                   | `-F video_reference=@<path>;type=video/mp4` with `extra_params.condition_video_latent_indexes` / `condition_video_keep`                                                      | —                                                                                                         | `video=load_video(<path>)`, `condition_frame_indexes_vision=payload.get(..., [0, 1])`, `condition_video_keep=payload.get(..., "first")`                              | —                                                                                                                      |
 | response                                       | video: MP4 bytes (`Accept: video/mp4`); image: `data[0].b64_json`              | video: `id` → poll → `/content` MP4; image: `response_format: "b64_json"`, `data[0].b64_json` | video: `format: "mp4"`, `response_format: "file"`, must be `video/mp4` with `ftyp`; image: `format: "png"`, `response_format: "b64_json"`, must start with the PNG signature | video bytes (`Accept: video/mp4, video/x-msvideo, application/octet-stream`), `.mp4`/`.avi` by inspection | `result.video` / `result.sound`; distilled returns `videos` (`videos[0].save` for text2image)                                                                        | files written by the inference script under `-o`                                                                       |
 
-`run_with_nim.ipynb` uses its own schema (`prompt`, `negative_prompt`, `image`, `seed`, `guidance_scale`, `steps`, `resolution`, `num_output_frames`, `fps`; JSON to `POST /v1/infer`; MP4 returned base64-encoded in `b64_video`); it is documented in the NIM backend file.
+The NIM uses its own schema (`model_mode` — required —, `prompt`, `negative_prompt`, `input_reference`, `seed`, `guidance_scale`, `num_inference_steps`, `flow_shift`, `resolution`, `num_frames`, `fps`, plus the V2V / Action / Transfer fields; one JSON object to `POST /v1/infer`; video returned base64-encoded in `b64_video`, text2image as JPEG in `b64_image`); it is documented in the NIM cookbook (`../cookbooks/cosmos3/nim/api-reference.md`, Generator Endpoint). The retired 1.0.0 notebook's fields `image`, `steps` and `num_output_frames` are not accepted by the 2.1.0 image.
 
 ## 11. Workflow
 

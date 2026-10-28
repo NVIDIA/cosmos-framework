@@ -16,7 +16,7 @@ repository. The notebooks remain readable at the pinned public commit:
 - [`run_with_sglang.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_sglang.ipynb) → `.agents/skills/cosmos3-generate-media/references/sglang.md`
 - [`run_with_trt_llm.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_trt_llm.ipynb) → `.agents/skills/cosmos3-generate-media/references/trt-llm.md`
 - [`run_distilled_with_trt_llm.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_distilled_with_trt_llm.ipynb) → `.agents/skills/cosmos3-generate-media/references/distilled-trt-llm.md`
-- [`run_with_nim.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_nim.ipynb) → `.agents/skills/cosmos3-generate-media/references/nim.md`
+- [`run_with_nim.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_nim.ipynb) → `.agents/skills/cosmos3-generate-media/references/nim.md` (removed again on 2026-10-27 — Variant 7 now delegates to the Cosmos3 NIM 2.1.0 cookbook; see the NIM section at the end)
 - [`README.md`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/README.md) → per-backend "Quickstart (cookbook README)" sections and `.agents/skills/cosmos3-generate-media/references/payloads.md`
 
 Rules applied: every command, flag, value, note and explanation was kept as written (nothing was corrected, even where
@@ -745,3 +745,32 @@ Applied after the final audits, form only:
 - The notebooks' video-to-video input `videos/car_driving_plain.mp4` is a Git LFS object of the cookbook and is
   **not vendored** in the skill; the references keep the notebook's file name (as `assets/videos/car_driving_plain.mp4`
   after path translation) and `payloads.md` § 3 marks it as not vendored.
+
+### NIM (Variant 7): delegation to the Cosmos3 NIM 2.1.0 cookbook (2026-10-27)
+
+Upstream retired the Generator NIM 1.0.0: `run_with_nim.ipynb` was deleted and the README `## Run with NIM` rewritten by
+cosmos-framework #296 (9a70e64d, 2026-10-21; the notebook's last copy is at 7e918d7b), and the setup guide's `### Generator NIM`
+section is gone (`#generator-nim` → `#cosmos3-nim`). The documented backend is now the unified Cosmos3 NIM
+`nvcr.io/nim/nvidia/cosmos3:2.1.0`: `NIM_MODEL_TYPE=generator` + `NIM_MODEL_VARIANT` (`nano`, `super`, `super-t2i`,
+`super-t2i-4step`, `super-i2v`, `super-i2v-4step`, …) replace `NIM_MODEL_SIZE` / `NIM_PRECISION=fp8`; the launch is `docker run -d
+--name cosmos3-generator --gpus '"device=0"' --shm-size 16g --ulimit memlock=-1 --ulimit stack=67108864 --ulimit
+nofile=65536:65536 -p 8000:8000 -e NGC_API_KEY …`; `POST /v1/infer` requires `model_mode` and rejects unknown fields, with
+`input_reference` / `num_inference_steps` / `num_frames` / `flow_shift` instead of `image` / `steps` / `num_output_frames`, and
+returns `b64_video` or `b64_image`; a third guardrail switch `NIM_ENABLE_SIGLIP_GUARDRAILS` exists; the NIM scope blockquote now
+reads "serves text-to-image, text-to-video, image-to-video, and video-to-video, plus Action and Transfer. It does not generate
+audio."
+
+`references/nim.md` (375 lines, the 1:1 migration of the retired notebook audited above) was removed instead of being rebuilt from
+the cookbook: Variant 7 now delegates to the NIM cookbook in this checkout, `.agents/skills/cookbooks/cosmos3/nim/`
+(deployment.md, generation.md, api-reference.md, operations.md) and to its own skill `cosmos3-nim-user` (nested under
+`nim/.agents/skills/`, not in the top-level skill directories, hence the explicit pointer and the new Related-skills row); the
+skill's reference table names the cookbook directory in nim.md's place. SKILL.md Variant 7 carries the pointers, the README's
+2.1.0 launch (with `CONTAINER_NAME` / `NIM_PORT` / `NIM_IMAGE` as parameters for the README's literals), the readiness and
+selection checks of deployment.md, an I2V request built from `car_driving.jpg` as a data URL with the compact-JSON `prompt` /
+`negative_prompt` — the request of the cookbook's `examples/i2v.py` at smoke size (`"256"` / 25 frames, formerly the notebook's own
+smoke values, now a declared skill choice; cookbook defaults `720` / 189) — and the README scope quote; payloads.md § 1 takes the
+README's new blockquote, guardrail sentence and `[NIM setup](…#cosmos3-nim)` link verbatim (the deleted notebook leaves its
+Source line), § 3 re-attributes the `humanoid_robot.jpg` request to the retired notebook, § 5 names the new image and
+`NIM_MODEL_VARIANT`, § 6.1 / § 8.6 / § 10 state the 2.1.0 fields and defaults; the guardrail table in SKILL.md adds the SIGLIP
+switch. Nothing else changed: the six other reference files, `eval/eval.config` and the assets are untouched (eval/eval.config's
+NIM case still says "serves Text2Video and Image2Video only" and "does not expose text2image" — a follow-up).
