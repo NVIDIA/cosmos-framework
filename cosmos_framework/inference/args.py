@@ -497,6 +497,7 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
     resolution: Resolution | None
     aspect_ratio: AspectRatio | None
     fps: pydantic.PositiveInt
+    output_fps: pydantic.PositiveInt | None = None
     num_frames: pydantic.PositiveInt
     video_save_quality: VideoSaveQuality
     image_save_quality: ImageSaveQuality
@@ -507,6 +508,11 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
     @property
     def duration(self) -> float:
         return self.num_frames / self.fps
+
+    @property
+    def video_output_fps(self) -> int:
+        """Playback clock only; ``fps`` and ``duration`` retain their model-clock meanings."""
+        return self.output_fps if self.output_fps is not None else self.fps
 
     @property
     def vision_size(self) -> tuple[int, int]:
@@ -569,7 +575,12 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """Vision aspect ratio. When None, image_edit preserves the input image's native
     aspect ratio; all other modes default to 16:9."""
     fps: Fps | None = None
-    """Vision frames per second. Recommended range [10, 30]; quality may be degraded outside of this range."""
+    """Model conditioning frames per second. Recommended range [10, 30]; quality may be degraded outside
+    of this range. Released Auto camera models require 30 (also their default); use output_fps for playback."""
+    output_fps: pydantic.PositiveInt | None = None
+    """Saved video playback FPS for Auto RGB-only generation; defaults to fps. Does not resample frames
+    or change model conditioning. Joint RGB/LiDAR currently requires output_fps == fps. Unsupported
+    for other models and LiDAR-only generation."""
     num_frames: pydantic.PositiveInt | None = None
     """Number of vision frames.
 
@@ -1791,6 +1802,29 @@ CAUSAL_MULTIVIEW_ROLLING_EXPORT_OVERRIDES = (
 )
 
 
+def check_auto_fps_options(sample: "OmniSampleOverrides | OmniSampleArgs", config: Any) -> None:
+    """Validate effective arguments for CLI and API callers, including already-built samples."""
+    camera_fps = getattr(config, "_auto_camera_fps", None)
+    if camera_fps is None or sample.multiview is None:
+        if sample.output_fps is not None:
+            raise ValueError("output_fps is only supported for identified Auto camera models with multiview inputs.")
+        return
+    if sample.fps != camera_fps:
+        raise ValueError(
+            f"This Auto checkpoint requires model conditioning fps={camera_fps}, got fps={sample.fps}. "
+            f"For RGB-only playback at {sample.fps} FPS, omit --fps and use --output-fps {sample.fps} "
+            "(JSON: output_fps). Keep the synchronized input frames unchanged."
+        )
+    if sample.output_fps is not None and sample.output_fps != camera_fps:
+        if sample.is_joint_cam_lidar_transfer:
+            raise ValueError(
+                "Joint RGB/LiDAR retiming is not supported: output_fps must equal fps=30 to preserve "
+                "camera/sweep synchronization. Use different output_fps only for RGB-only Auto generation."
+            )
+        if sample.enable_sound or sample.sound_path is not None:
+            raise ValueError("Auto output_fps retiming supports RGB-only generation without audio.")
+
+
 def check_causal_multiview_lidar_prefix_options(sample: "OmniSampleOverrides", config: Any) -> None:
     """Check the causal joint LiDAR-prefix options before transfer defaults fill them in.
 
@@ -2001,6 +2035,17 @@ class OmniSampleOverrides(
             if "guidance" not in configured and getattr(model_config, "fixed_step_sampler_config", None) is not None:
                 self.guidance = 1.0
 
+        # Auto's released camera clock is fixed, but the shared interface remains variable-FPS
+        # for other models. Only omitted FPS gets defaulted; sample/CLI/custom-defaults values
+        # must pass validation rather than being silently replaced.
+        auto_fps = getattr(model_config, "_auto_camera_fps", None)
+        if auto_fps is not None and self.multiview is not None:
+            if "fps" not in configured or self.fps is None:
+                self.fps = auto_fps
+            if self.output_fps is None:
+                self.output_fps = self.fps
+        check_auto_fps_options(self, model_config)
+
         # Model-specific num_frames default for video generation (e.g.
         # Cosmos3-Edge -> 121). Applies only when the user did not request a
         # frame count and the mode produces a plain video; image, action, and
@@ -2055,6 +2100,9 @@ class OmniSampleOverrides(
         self._build_multiview_data(sample_meta=sample_meta, model_config=model_config)
         # After the transfer defaults, so control_guidance and the joint clock are resolved.
         check_causal_multiview_options(self, model_config)
+        check_auto_fps_options(self, model_config)
+        if auto_fps is not None and self.multiview is not None:
+            log.info(f"Model conditioning: {self.fps} FPS | Output playback: {self.output_fps} FPS")
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             # Unregistered backbone names (custom fine-tunes) simply skip shift

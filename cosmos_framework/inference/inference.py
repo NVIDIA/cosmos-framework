@@ -32,6 +32,7 @@ from cosmos_framework.inference.args import (
     NegativeMetadataMode,
     OmniSampleArgs,
     OmniSetupArgs,
+    check_auto_fps_options,
 )
 from cosmos_framework.inference.common.args import (
     VIDEO_EXTENSIONS,
@@ -43,6 +44,7 @@ from cosmos_framework.inference.common.args import (
     SampleOutputs,
     SetupArgs,
 )
+from cosmos_framework.inference.common.auto_fps import auto_camera_fps
 from cosmos_framework.inference.common.inference import (
     Inference,
     PreparedBatch,
@@ -1596,6 +1598,7 @@ class OmniInference(Inference):
         # Only an exported checkpoint records these; the module-config path has no equivalent.
         exported_per_view_captions = False
         exported_per_view_caption_task: str | None = None
+        exported_metadata: Any = None
         if _loads_training_experiment(setup_args):
             from cosmos_framework.inference.common.config import save_config
             from cosmos_framework.utils.generator.model_loader import load_model_from_checkpoint
@@ -1801,6 +1804,16 @@ class OmniInference(Inference):
                     rank0_only=False,
                 )
 
+        # Runtime-only policy: preserve immutable published checkpoint files and the shared
+        # argument-builder signature. CLI, Ray and Python callers all use pipe.model_config.
+        checkpoint_hf = setup_args.checkpoint_hf
+        setattr(
+            model.config,
+            "_auto_camera_fps",
+            auto_camera_fps(
+                exported_metadata, repository=checkpoint_hf.repository if checkpoint_hf is not None else None
+            ),
+        )
         pipe = cls(setup_args=setup_args, model=model, vae_decode_stream=vae_decode_stream, **kwargs)
         pipe.per_view_captions = exported_per_view_captions
         pipe.per_view_caption_task = exported_per_view_caption_task
@@ -2150,6 +2163,9 @@ class OmniInference(Inference):
 
         require_idle_bimanual_model(self.model)
         assert all(isinstance(sa, OmniSampleArgs) for sa in sample_args_list)
+        for sample in sample_args_list:
+            # Also protect callers that construct or modify already-built OmniSampleArgs.
+            check_auto_fps_options(cast(OmniSampleArgs, sample), self.model.config)
 
         # A multiview sample driven by a multiview caption file uses the chunkwise path, as in
         # the reference implementation. Without this dispatch load_caption_from_data was accepted, validated
@@ -2704,7 +2720,7 @@ class OmniInference(Inference):
             sample_args,
             guardrailed_view_videos,
             prefix="vision",
-            fps=sample_args.fps,
+            fps=sample_args.video_output_fps,
         )
         files.extend(vision_files)
 
@@ -2727,7 +2743,7 @@ class OmniInference(Inference):
                 sample_args,
                 control_views,
                 prefix="control",
-                fps=sample_args.fps,
+                fps=sample_args.video_output_fps,
             )
             files.extend(control_files)
             content["control_files_by_camera"] = control_files_by_camera
