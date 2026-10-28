@@ -142,6 +142,8 @@ hold:
 
 # Repo-only pages: links to them go to GitHub.
 not_on_site:
+  # Design proposal; runtime support and qualification remain pending.
+  - docs/post_training/qlora_native_vlm_design.md
   # How to maintain the docs, for doc developers.
   - docs/README.md
   # AutoML guides.
