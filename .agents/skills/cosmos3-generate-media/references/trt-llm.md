@@ -603,6 +603,10 @@ export TRTLLM_VENV="${TRTLLM_VENV:-$PWD/.venv-trtllm}"
 # --no-config: the uv pin — stock uv 0.13+, not Variant 2's 0.11.29 (see SKILL.md, Read this first)
 uv venv "$TRTLLM_VENV" --python 3.12 --seed --managed-python --allow-existing --no-config
 source "$TRTLLM_VENV/bin/activate"
+# The export and the activation exist only in the shell that ran them, so every command below names the venv explicitly
+# (--python "$TRTLLM_VENV/bin/python", "$TRTLLM_VENV/bin/…"): run in a later shell call it still targets this venv, whereas a
+# bare `uv pip install` lands in whichever Python is first on PATH (eval run 2026-10-28, trtllm-nano × cursor: the evaluator's own
+# venv, where `llist` has no wheel and the source build wanted clang). Skill addition (the F2c mechanism of Variant 1).
 # PyPI has only sdists of tensorrt_llm; the wheels live on pypi.nvidia.com, so both index flags are
 # required (uv's default first-index strategy would stop at the PyPI sdist). rc27 is the first tag
 # containing the pinned commit bca6761 and its binaries are built against torch 2.13 (rc27 + torch
@@ -612,21 +616,21 @@ source "$TRTLLM_VENV/bin/activate"
 # openai_server.py:3164 — fixed in bca6761, first shipped in rc27; video routes (/v1/videos/*) are
 # unaffected, so Variant 6 on rc26 is fine (video route; its image-route fallback needs rc27). Do NOT float to newer rcs: rc28 needs torch>=2.13,
 # rc29/1.4.0rc* need torch 2.14; 1.4.0rc1 served Nano but is unverified for Edge/distilled.
-uv pip install --no-config --index-strategy unsafe-best-match \
+uv pip install --no-config --python "$TRTLLM_VENV/bin/python" --index-strategy unsafe-best-match \
   --extra-index-url https://pypi.nvidia.com --extra-index-url https://download.pytorch.org/whl/cu130 \
   "tensorrt_llm==1.3.0rc27" "torch==2.13.0+cu130" "torchvision==0.28.0+cu130"
 # torch/nvidia-* from the cu130 index provide the wheel's CUDA-13 libraries (libcublasLt.so.13 ...)
 # under site-packages/nvidia/cu13; the system's CUDA 11/12 libraries do not satisfy them — never
 # symlink .so.12 to .so.13. CC=gcc may be needed if a dependency has no cp312 wheel; clang and a
 # system CUDA toolkit are NOT needed (clang only matters for `pip install -e .`).
-export CUDA_HOME="$(python -c 'import nvidia,os;print(os.path.join(nvidia.__path__[0],"cu13"))')"
+export CUDA_HOME="$("$TRTLLM_VENV/bin/python" -c 'import nvidia,os;print(os.path.join(nvidia.__path__[0],"cu13"))')"
 # DeepGEMM asserts _find_cuda_home() at import ('Decoding operators failed to load' / serve exits
 # before /health); no nvcc is used for bf16 serving. If FP8 block-scale kernels are ever JIT-compiled,
 # add nvidia-cuda-nvcc-cu13 to the same tree.
 # Preflight before any checkpoint download — two checks, so an import failure is not misreported as a
 # VisualGen-less build (run the block as a script: `exit 1` would close an interactive shell)
-python -c "import tensorrt_llm" || { echo "tensorrt_llm import failed — OpenMPI / CUDA_HOME prerequisites above"; exit 1; }
-trtllm-serve serve --help | grep -q visual_gen_args || { echo "this tensorrt_llm has no Cosmos3 VisualGen"; exit 1; }   # the group-level --help does not list serve options
+"$TRTLLM_VENV/bin/python" -c "import tensorrt_llm" || { echo "tensorrt_llm import failed — OpenMPI / CUDA_HOME prerequisites above"; exit 1; }
+"$TRTLLM_VENV/bin/trtllm-serve" serve --help | grep -q visual_gen_args || { echo "this tensorrt_llm has no Cosmos3 VisualGen"; exit 1; }   # the group-level --help does not list serve options
 # Pinned checkout, YAML configs only (Edge needs none). Its version.py reports 1.3.0rc26 — that is NOT the
 # wheel to install (see the comment above); fetch the SHA directly.
 # Optional minimal form: --filter=blob:none on the fetch, then `git sparse-checkout set examples/visual_gen/configs` before the checkout.

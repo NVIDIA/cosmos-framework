@@ -1231,3 +1231,9 @@ Source wording and the "rewritten to the same files at the pinned commit" notes 
 Quickstart) remain true at the new pin; the `"8B Nano"` label (SKILL.md model table, skill-notes.md § 2) came from the Generator NIM table of the `6e2c69a` setup guide,
 which `cc28c0c` no longer has — re-attributed to that retired table rather than dropped. Only URL, link-target, link-text ("NIM setup") and skill-prose changes; no notebook text changed; `eval/eval.config` (no
 permalinks) unchanged.
+
+2026-10-28 (a full run of the fixes branch): trtllm-nano-t2i × cursor passed only after a self-correction — the agent ran the
+§ 7.2 Route A `uv pip install` in a later shell call than the venv activation, so the wheel set landed in the evaluator's own venv, where `llist` has no
+wheel and the source build wanted `clang`. **F2d**: the § 7.2 install block and its preflights name the venv explicitly (`uv pip install --python
+"$TRTLLM_VENV/bin/python"`, `"$TRTLLM_VENV/bin/python" -c …`, `"$TRTLLM_VENV/bin/trtllm-serve"`) — the F2c mechanism applied to Variant 5's skill
+launch script (skill-authored block, no notebook text involved). The other three agents and every earlier run installed into the right venv.
