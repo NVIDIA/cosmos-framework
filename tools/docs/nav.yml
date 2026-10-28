@@ -38,7 +38,7 @@ nav:
           - Backend environments: skills/cookbooks/cosmos3/README.md
           - Deploy with NIM: skills/cookbooks/cosmos3/nim/README.md # the other NIM pages are extra_pages
       - Notebooks:
-          - Generation: skills/cookbooks/cosmos3/generator/audiovisual/README.md
+          - Generation: skills/cosmos3-generate-media/SKILL.md
           - Action: skills/cookbooks/cosmos3/generator/action/README.md
           - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
           - Reasoner: skills/cookbooks/cosmos3/reasoner/README.md
@@ -144,6 +144,8 @@ hold:
 not_on_site:
   # How to maintain the docs, for doc developers.
   - docs/README.md
+  # Migration records: where each cell of a retired cookbook notebook went in its agent skill.
+  - docs/cookbook_to_skill_migration.md
   # AutoML guides.
   - docs/automl.md
   - docs/automl-*.md
