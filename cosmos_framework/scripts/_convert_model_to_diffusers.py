@@ -198,7 +198,7 @@ def _resolve_fixed_step_sampler_config(model_cfg) -> dict | None:
     if len(t_list) == 0:
         raise ValueError("`fixed_step_sampler_config.t_list` cannot contain only terminal 0.0.")
 
-    # Default "sde" matches i4's FixedStepSamplerConfig; "ode" is still a valid explicit value.
+    # Default "sde" matches the upstream FixedStepSamplerConfig; "ode" is still a valid explicit value.
     sample_type = str(_get_config_value(fixed_step_cfg, name="sample_type", default="sde")).lower()
     if sample_type not in {"ode", "sde"}:
         raise ValueError(

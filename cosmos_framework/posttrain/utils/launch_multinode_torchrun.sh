@@ -39,7 +39,7 @@ rdzv_id="${SLURM_JOB_ID:-torchrun}"  # captured before the unset below; must mat
 # command runs on every node (no --node-rank). torchrun sets MASTER_ADDR/RANK/WORLD_SIZE/LOCAL_RANK
 # for the entry (e.g. entrypoints/dpo.py _run_single, which reads them via init_process_group).
 srun --overlap --ntasks-per-node=1 --container-name "$CONTAINER_NAME" bash -c "
-  export POSTTRAIN_SLURM_JOB_ID=\"\${SLURM_JOB_ID:-}\"  # the entry's provenance stamp reads it after the unset (R125-D-04)
+  export POSTTRAIN_SLURM_JOB_ID=\"\${SLURM_JOB_ID:-}\"  # the entry's provenance stamp reads it after the unset
   unset SLURM_JOB_ID SLURM_NODELIST SLURM_JOBID
   ${VENV_ACTIVATE:+source '$VENV_ACTIVATE' && }cd '$CONTAINER_WORKDIR' || exit 1
   export PYTHONPATH='$CONTAINER_WORKDIR' HF_HOME=\"\${HF_HOME:-\$HOME/.cache}\" \

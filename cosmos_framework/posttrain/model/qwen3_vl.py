@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""i4-native Qwen3-VL policy adapter and shared family semantics.
+"""Native Qwen3-VL policy adapter and shared family semantics.
 
 The native model classes are imported lazily from ``projects.cosmos3``; this adapter never routes
 through posttrain's generic ``HFModel``. This module owns Qwen construction and assembles explicit
-lifecycle hooks for i4 activation checkpointing, FSDP, materialization, and checkpoint loading.
+lifecycle hooks for native activation checkpointing, FSDP, materialization, and checkpoint loading.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ _NON_MODEL_BATCH_KEYS: frozenset[str] = frozenset(
 # TEMPORARY I4 QWEN3-VL COMPATIBILITY BOUNDARY — DELETE WHEN UPSTREAM SUPPORTS IT
 #
 # The forward override below and the native config, causal-mask, RoPE, and padded-MoE adapters in
-# this module and `qwen3_vl_moe.py` bridge the currently vendored i4 modeling snapshot. They must
-# not become a second permanent model implementation. Remove them once i4 natively supports the
+# this module and `qwen3_vl_moe.py` bridge the currently vendored upstream modeling snapshot. They must
+# not become a second permanent model implementation. Remove them once upstream natively supports the
 # same multimodal forward contract, installed Transformers version, and padded MoE policy batches.
 # See `cosmos_framework/posttrain/docs/design/DESIGN.md#v5-native-qwen3-vl-compatibility-boundary`.
 # =============================================================================
@@ -334,7 +334,7 @@ def validate_qwen3_vl_parallelism(parallel_dims: Any | None) -> None:
 
 
 def _native_qwen3_vl_classes(model_type: str) -> tuple[type[Any], type[nn.Module]]:
-    """Resolve the vendored i4 config/model classes without eager family imports."""
+    """Resolve the vendored upstream config/model classes without eager family imports."""
     if model_type == "qwen3_vl":
         from cosmos_framework.model.generator.reasoner.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
         from cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl import Qwen3VLForConditionalGeneration
@@ -361,7 +361,7 @@ def _qwen3_vl_causal_mask(
     if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 4:
         return attention_mask  # [B,1,N_q,N_kv]
     if getattr(config, "_attn_implementation", "eager") != "eager":
-        # Native flash/i4 attention is causal internally. Policy batches are right padded, so valid
+        # Native flash/upstream attention is causal internally. Policy batches are right padded, so valid
         # queries never attend a future padding key; padded query outputs are masked from the loss.
         return None
     from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import eager_mask
@@ -401,11 +401,11 @@ def _qwen3_vl_default_rope(
 
 
 def _override_native_attention_mask_compatibility(model_type: str) -> None:
-    """Bind both native Qwen3-VL families to i4's version-stable causal-mask helper.
+    """Bind both native Qwen3-VL families to the upstream version-stable causal-mask helper.
 
     The dense snapshot carries an incomplete local mask registry, while the MoE snapshot imports
     the Transformers helper whose keyword contract changed in Transformers 5. The adapter helper
-    has the exact ``input_embeds`` contract both native decoders call and uses i4's eager-mask
+    has the exact ``input_embeds`` contract both native decoders call and uses the upstream eager-mask
     primitive without consulting the installed Transformers registry implementation.
     """
     if model_type == "qwen3_vl":
@@ -524,7 +524,7 @@ def _default_load_weights(
     credential_path: str | None,
     parallel_dims: Any,
 ) -> None:
-    """Use the i4-native dense/MoE safetensors loader."""
+    """Use the native dense/MoE safetensors loader."""
     from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
 
     load_vlm_model(
@@ -548,7 +548,7 @@ def _move_to_device(value: Any, device: torch.device) -> Any:
 
 
 class Qwen3VLPolicy:
-    """Posttrain capability adapter over an i4-native Qwen3-VL family module."""
+    """Posttrain capability adapter over a native Qwen3-VL family module."""
 
     def __init__(self, net: nn.Module, model_type: str) -> None:
         if model_type not in _SUPPORTED_MODEL_TYPES:
@@ -625,7 +625,7 @@ def build_qwen3_vl_policy(
 
     Order: native config/model construction -> model preparation -> FSDP/AC ->
     materialization -> embedding tie -> checkpoint load. A distributed build must
-    inject the i4 parallelization hook; silently running an unsharded copy on each
+    inject the native parallelization hook; silently running an unsharded copy on each
     rank is forbidden.
     """
     validate_qwen3_vl_parallelism(parallel_dims)
@@ -721,7 +721,7 @@ def build_qwen3_vl_native_value_model(
 
 
 def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3VLPolicy:
-    """Build an i4-native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup."""
+    """Build a native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup."""
     if not cfg.name_or_path:
         raise ValueError("Qwen3VLModelConfig.name_or_path must be non-empty")
     validate_qwen3_vl_parallelism(pdims)
@@ -778,9 +778,9 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
                 raise ValueError("qwen3_vl_moe model contains no native sparse-MoE block to adapt")
 
     def parallelize_native(net: nn.Module, parallel_dims: Any) -> None:
-        # `parallelize_vlm` reads `.model`, the disabled audio flag and (since i4 97c344f2be8, the
+        # `parallelize_vlm` reads `.model`, the disabled audio flag and (since an upstream change, the
         # Qwen3.5 caption port) `.hf_config.model_type` to decide whether vision blocks stay in the
-        # root FSDP unit. Keep the shim here so the generic i4 module does not depend on posttrain's
+        # root FSDP unit. Keep the shim here so the generic native module does not depend on posttrain's
         # policy wrapper; `hf_config` is the same AutoConfig the policy was built from, so the
         # qwen3_vl|qwen3_vl_moe branch keeps the pre-97c344f2be8 wrapping exactly.
         class NativeVLMShim:
@@ -872,7 +872,7 @@ def _canonical_state_dict(model: Any) -> dict[str, tuple[str, Any]]:
 
 
 def _engine_name(wire_name: str) -> str:
-    """Map one HF/i4 wire name to vLLM's live parameter namespace."""
+    """Map one HF/native wire name to vLLM's live parameter namespace."""
     if wire_name.startswith("model.language_model."):
         return wire_name.replace("model.language_model.", "language_model.model.", 1)
     if wire_name.startswith("model.visual."):

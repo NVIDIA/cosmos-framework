@@ -1016,7 +1016,7 @@ class TestResolvePerViewCaptionFields:
         assert fields == {"per_view_captions": False}
 
     def test_auto_records_merged_without_dataloaders(self):
-        # As i4: no derivable caption streams records the merged layout.
+        # As upstream: no derivable caption streams records the merged layout.
         from types import SimpleNamespace
 
         assert helpers.resolve_per_view_caption_fields("auto", None, lambda: SimpleNamespace(model={})) == {

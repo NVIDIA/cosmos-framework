@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Modules:
+Modules:
 Pluggable storage formats for cached key/value tensors.
 
 A storage backend converts a BF16 key or value tensor into some stored

@@ -253,7 +253,7 @@ class MSCBackend(BaseStorageBackend):
 
                     storage_provider_type: str = "s3"
                     parsed_endpoint_url = urlparse(legacy_boto3_config["endpoint_url"])
-                    # Handle regional SwiftStack endpoints.
+                    # Handle regional S3-compatible endpoints.
                     if parsed_endpoint_url.hostname.endswith(".s8k.io"):
                         storage_provider_type = "s8k"
                     # Handle global and regional GCS endpoints.

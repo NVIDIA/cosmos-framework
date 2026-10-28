@@ -292,7 +292,7 @@ def build_config() -> PosttrainGRPOConfig:
         grad_clip_norm=1.0,
         warmup_steps=20,
         # Full-finetune the LLM: train ALL params. Stated explicitly even though it now MATCHES the
-        # OptimizerConfig default — an earlier draft defaulted this to the i4/diffusion
+        # OptimizerConfig default — an earlier draft defaulted this to the upstream/diffusion
         # generation-adapter keys (["moe_gen", "time_embedder", ...]), which match no Qwen causal-LM
         # parameter and would have frozen the whole net; the landed schema keeps a freeze subset a
         # per-recipe choice and defaults to []. Pinning it here makes the recipe independent of that
@@ -338,7 +338,7 @@ def build_config() -> PosttrainGRPOConfig:
 
 
 def make_config() -> PosttrainGRPOConfig:
-    """The i4 `--config` entry point (`cosmos_framework.utils.config.load_config` calls `make_config()`).
+    """The upstream `--config` entry point (`cosmos_framework.utils.config.load_config` calls `make_config()`).
 
     Alias of `build_config` so this recipe can be launched directly:
 

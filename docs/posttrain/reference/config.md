@@ -1,11 +1,11 @@
 # Config system
 
-One posttrain experiment = an **inherited i4 model/data tree** (`defaults`) + a **typed
+One posttrain experiment = an **inherited upstream model/data tree** (`defaults`) + a **typed
 `rl` section**, in ONE OmegaConf tree. The design serves three stakeholders at once:
-researchers keep their existing i4 experiments (inherit them verbatim), infra gets full
+researchers keep their existing upstream experiments (inherit them verbatim), infra gets full
 CLI override, and every run dumps a resolved YAML that agents/repro tooling can reload.
 It is deliberately NOT Hydra-`_target_`-instantiate-everything — typed dataclasses +
-i4 LazyConfig inheritance + dotlist override (DESIGN §11.3 / appendix B.4).
+LazyConfig inheritance + dotlist override (DESIGN §11.3 / appendix B.4).
 
 ## Selecting and overriding
 
@@ -27,7 +27,7 @@ PYTHONPATH=. torchrun --nproc_per_node=4 --standalone -m cosmos_framework.posttr
 
 | subtree                        | what                                                                                                                                                                                                                                                                                                                                                                                 | schema                                                                                   |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `model.*`                      | an inherited i4 LazyConfig tree, or `NativePolicyBuildSpec` for an online native policy                                                                                                                                                                                                                                                                                              | the i4 experiment or `config/model.py`                                                   |
+| `model.*`                      | an inherited LazyConfig tree, or `NativePolicyBuildSpec` for an online native policy                                                                                                                                                                                                                                                                                                 | the upstream experiment or `config/model.py`                                             |
 | `rl.*`                         | the RL half: shared lifecycle + optimizer, then algorithm knobs (objective/ref/data, group/sampling, actor-critic updates, teacher credit, or online WFM)                                                                                                                                                                                                                            | `config/rl.py::RunConfig` → `DPOConfig`/`GRPOConfig`/`PPOConfig`/`OPDConfig`/`NFTConfig` |
 | `grid.*`                       | orchestration: `backend` (local\|ray); DPO/PPO/NFT grouping; GRPO/PPO/OPD `gpu_placement` (colocated\|disaggregated); plus `ranks`, `num_replicas`, and per-role shapes                                                                                                                                                                                                              | `config/rl.py::GridConfig` and algorithm-specific extensions                             |
 | `model_backend` / model config | model sourcing: `i4` (`model`, the default) \| `hf` (`model_hf`, explicit); an unsupported native VLM can select `hf` for image-conditioned clipped GRPO, which dispatches configs with `vision_config` to the generic HF VLM packer and propagates the policy's `trust_remote_code` decision to its model, rollout/vLLM, and packer consumers; legacy `qwen3_vl` normalizes to `i4` | `config/model.py::NativePolicyBuildSpec` / `HFModelConfig`                               |
@@ -59,7 +59,7 @@ from hydra.core.config_store import ConfigStore
 from cosmos_framework.posttrain.config.rl import DPOConfig, OptimizerConfig, PreferenceEnvConfig, RefConfig
 
 my_dpo_exp = LazyDict(dict(
-    defaults=["/experiment/cosmos3_ga_16bm8b_v2_midtrain", "_self_"],  # inherit a real i4 experiment
+    defaults=["/experiment/cosmos3_ga_16bm8b_v2_midtrain", "_self_"],  # inherit a real upstream experiment
     rl=DPOConfig(
         beta=500.0, max_steps=2000, save_every=250,
         # freeze backbone, train only the OmniMoT gen-pathway params
@@ -118,7 +118,7 @@ independent inference engines, each made of `ROLLOUT_RANKS` ranks.
 
 HF policies configure these dimensions as `model_hf.parallelism.dp_replicate` and
 `model_hf.parallelism.dp_shard`. A `NativePolicyBuildSpec` uses the same two field names under
-`model.parallelism`; a legacy inherited i4 tree continues to use
+`model.parallelism`; a legacy inherited upstream tree continues to use
 `model.config.parallelism.data_parallel_{replicate,shard}_degree`. A concrete native builder may
 enforce a narrower contract; Qwen3-VL, for example, accepts pure FSDP only and rejects policy
 TP/EP/PP/CP and a replicate axis.

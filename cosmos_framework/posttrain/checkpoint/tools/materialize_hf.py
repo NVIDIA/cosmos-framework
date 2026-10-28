@@ -13,10 +13,10 @@ run inside the training container). This module owns everything around it:
   lock as validation, then OPENED ONCE under the lock: the identity of record is hashed through that open file object, the
   skip / mismatch decision, the source record and the marker use it, and the overlay memory-maps the SAME open file (through
   ``/proc/self/fd``; ``conversion.hf.load_consolidated_state_dict``) and the default verification (``verify_with_torch``) compares
-  the staged shards against that same open file (fix round T6t), so by construction the marker names the bytes the overlay
+  the staged shards against that same open file, so by construction the marker names the bytes the overlay
   consumed and the shards are verified against them, whatever the path names meanwhile: the merge tool (tmp + os.replace over ``model.pt``) is not excluded by the output
-  lock and may replace the path while the request waits or while the overlay runs (fix rounds T6q and T6r, review thread
-  524355e746; a change during the wait is adopted with a WARNING naming both hashes, since ``--ckpt-dir`` names a path; a
+  lock and may replace the path while the request waits or while the overlay runs (a change
+  during the wait is adopted with a WARNING naming both hashes, since ``--ckpt-dir`` names a path; a
   replacement during the overlay is logged and irrelevant to what was built). The opened inode is fstat'd before the hash and
   after the overlay: a change of its size or mtime refuses the build by name, with no "same bytes" acceptance, because the
   digest of a file after the fact says nothing about what a reader consumed. That check is best effort against a writer INTO
@@ -39,7 +39,7 @@ run inside the training container). This module owns everything around it:
 * Staging reuse. ``<out>.tmp`` left by an attempt that DIED after the overlay (a signal, a timeout) is reused when config +
   index exist, every indexed shard is a complete safetensors file with the index's tensors, and its ``.overlay_source.json``
   stamp carries exactly the identity this invocation resolved. No stamp or any difference rebuilds. A request WITHOUT
-  ``--force`` only (``--force`` rebuilds from the source, fix round T6l); the reused copy goes through the same verification as a
+  ``--force`` only (``--force`` rebuilds from the source); the reused copy goes through the same verification as a
   fresh build, and ``--no-verify`` then trusts its bytes on size and tensor count. A failure this invocation itself meets before
   the swap removes ``<out>.tmp`` (see the staged construction below).
 * Preflight before anything is written. The preflight is every
@@ -48,9 +48,9 @@ run inside the training container). This module owns everything around it:
   ``weight_map`` mapping tensor names to shard names, every base shard the index lists passing the safetensors header check
   the output gets (``conversion.hf.shard_status``: present, readable, header parsed, size = 8 + header + data, header keys =
   the index's) AND accepted by the pinned safetensors reader itself (``conversion.hf.safetensors_reader_error``:
-  ``safe_open`` on the header; dtype names, string metadata, contiguous offsets, byte count per tensor, file length; fix
-  round T6j, review R149G-01), every Jinja template the loaders read (``chat_template.jinja``,
-  ``additional_chat_templates/*.jinja``; ``conversion.hf.loader_template_files``) decoding as strict UTF-8 (fix round T6j),
+  ``safe_open`` on the header; dtype names, string metadata, contiguous offsets, byte count per tensor, file length),
+  every Jinja template the loaders read (``chat_template.jinja``,
+  ``additional_chat_templates/*.jinja``; ``conversion.hf.loader_template_files``) decoding as strict UTF-8,
   every JSON sidecar parsing to a JSON
   object and ``chat_template.json``, when present, carrying a non-empty ``chat_template`` string (the loaders index these
   after the overlay: a ``[]`` sidecar or a ``{}`` template file fails them), in the default path an
@@ -64,19 +64,19 @@ run inside the training container). This module owns everything around it:
   (below), so a failure there keeps the existing output too. One JSON decoder serves the whole preflight and this module's
   readers (``conversion.hf.decode_json_bytes``:
   strict UTF-8 text, as ``model_identity``, ``_read_json_file`` and transformers' loaders decode in the staged build; a UTF-8
-  byte-order mark is refused by name, review R149F-01, where ``json.loads(bytes)`` stripped it and a BOM-prefixed ``config.json``
+  byte-order mark is refused by name, where ``json.loads(bytes)`` stripped it and a BOM-prefixed ``config.json``
   destroyed an existing export), and ``shard_status`` validates the safetensors header's shape (an object of tensor entries with
-  ``dtype``, ``shape`` and two-integer ``data_offsets``, an optional ``__metadata__`` object; review R149F-02), so a malformed
+  ``dtype``, ``shape`` and two-integer ``data_offsets``, an optional ``__metadata__`` object), so a malformed
   header is a named refusal here and a named verifier failure on the output, never a traceback; the reader's semantics (an
   unknown dtype, a non-string metadata value, an offset gap or overlap, a byte range that is not dtype size x shape) are the
-  pinned reader's own verdict, asked for every base shard (fix round T6j). NOT part of the preflight, by
+  pinned reader's own verdict, asked for every base shard. NOT part of the preflight, by
   design: the weights-free loader calls themselves (``AutoProcessor`` /
   ``AutoTokenizer`` / ``GenerationConfig`` ``from_pretrained`` on the base). They are not torch-free (the processor
   instantiates the image and video processors, which import torch), their verdicts depend on the installed transformers
   rather than on the files, and the synthetic bases of the tests and the review probes are not loadable by them; a base
   that passes every structural check above but fails a loader on a schema fact the files do not state (``tokenizer.json``
   = ``{}``, ``preprocessor_config.json`` without ``image_processor_type``) is still refused by the overlay, in the staged build,
-  with the existing output kept (fix round T6j).
+  with the existing output kept.
 * Sidecars. After the overlay every tokenizer / processor / generation sidecar of the base is copied verbatim over
   the staging directory and every one the base lacks is removed (``conversion.hf.sync_sidecars``), then verified.
 * Unified chat template (``--unified-chat-template``, default off). After the sidecar sync, BOTH template files of the
@@ -114,10 +114,10 @@ run inside the training container). This module owns everything around it:
   side by side from the overlay to the swap (the staged shards are written by ``save_pretrained``, not linked) plus the fetch
   stage. ``<out>.tmp`` and ``<out>.previous`` are this module's names: a leftover ``<out>.previous`` (an interrupted swap, or
   a directory parked under that name) is refused before the build unless ``--force``; on the idempotent skip it is reported
-  and left. Under ``--force`` (fix round T6k, review R149H-01) no complete marked tree is discarded while it is the only one:
+  and left. Under ``--force`` no complete marked tree is discarded while it is the only one:
   with ``<out>`` absent, ``<out>.previous`` is renamed back to ``<out>`` first (the crash state between the two renames) and
   the build happens beside it; with ``<out>`` present, a leftover ``<out>.previous`` is kept until the swap and removed there,
-  after the new tree is verified; ``--force`` then REBUILDS FROM THE SOURCE (fix round T6l, review R149I-01): a death-left
+  after the new tree is verified; ``--force`` then REBUILDS FROM THE SOURCE: a death-left
   ``<out>.tmp`` is discarded whatever its marker says once ``<out>`` holds a complete marked tree (a marker match covers the
   identity, the shard sizes and tensor counts, not the shard bytes, and the base digest excludes the base shards' bytes, so a
   kept copy with a flipped data byte, or one built from base shards whose bytes changed with the size kept, must not be
@@ -126,34 +126,34 @@ run inside the training container). This module owns everything around it:
   publication without a fresh overlay is a request WITHOUT ``--force`` only (the staging reuse above, the idempotent recovery),
   after the same verification as a fresh build: index, sidecars and the torch probe unless ``--no-verify``, which trusts the
   kept copy's bytes on size and tensor count.
-* One materializer per output (fix round T6k, review R149H-02). ``<out>.lock`` beside the output, held with
+* One materializer per output. ``<out>.lock`` beside the output, held with
   ``fcntl.flock(LOCK_EX | LOCK_NB)`` (``output_lock``) from before ``<out>.previous`` / ``<out>.tmp`` / the fetch stage are
   touched to after the swap and the removal of ``<out>.previous``; a second materializer on the same ``--out`` is REFUSED by
   name (``REFUSED: <out> is being materialized by another process (<out>.lock held by pid P on host H since T)``) without
   touching anything, after WAITING for a held lock up to ``LOCK_WAIT_SECONDS`` = 120 s (``--lock-wait-seconds``; polling every 0.2 s;
-  fix round T6n, review R149K-02: two simultaneous identical requests of a published source both end with 0, the second skipping
+  Two simultaneous identical requests of a published source both end with 0, the second skipping
   once the holder has finished; a differing request is refused on the marker under the lock; a holder still there after the
   bound is refused by name with the bound stated). flock is released by the kernel when its holder exits (a crash, a kill), so a
   held lock means a live holder: wait, or check that pid on that host. The lock file stays beside the output (unlinking it would race a waiter that
   already opened it) and carries the last holder's record; it is not part of the export. The file system must support flock
   (Lustre: the ``flock`` mount option, as on the cluster); one that refuses it is a named refusal (fail closed).
-  The marker decision (skip / mismatch / build) is taken UNDER the lock (fix round T6m): a materializer that paused before the
+  The marker decision (skip / mismatch / build) is taken UNDER the lock: a materializer that paused before the
   lock while another published a different source sees that export's marker when it acquires and is refused without ``--force``
   instead of overwriting it with a stale "absent" decision.
-* An inherited sole complete marked staging copy is never deleted (fix round T6m). When a first publication died after writing
+* An inherited sole complete marked staging copy is never deleted. When a first publication died after writing
   ``.materialized`` and before the rename, ``<out>.tmp`` is the only completed copy: ``--force`` refuses by name (above) and a
   request without ``--force`` recovers it under protection: the marker must be this request's (else refused by name), a missing
   staged ``config.json`` is repaired from the base through a temporary file and a rename, the sidecars are re-synced the same way
   (files through ``.copying`` + replace, the template directory through a staged copy and renames; never a shard), then the
   verification a fresh build gets, the marker and the swap; a failure at any of these refuses by name and KEEPS the tree: its
-  shards and its marker untouched, its sidecars possibly repaired from the base before the check (fix round T6n, review R149K-01;
+  shards and its marker untouched, its sidecars possibly repaired from the base before the check (
   under ``--unified-chat-template`` the two template files are re-synced to the base's form at the sidecar-sync stage and rewritten
   with the unified text through a ``.writing`` temporary, so a failure there leaves ``<template>.writing`` beside base-form files:
-  the refusal names "a .copying or .writing temporary"; fix round T6o, review R149L-01; the refusal's third clause for the state
+  the refusal names "a .copying or .writing temporary"; the refusal's third clause for the state
   at ``<out>``, a complete marked export standing there, is unreachable by construction: the skip / mismatch decision in
   ``run_request`` itself, under the lock, returns or refuses before the recovery condition is evaluated whenever a complete marked
   export stands at ``<out>``, for the CLI and for a direct caller alike; the clause is kept as a defensive branch, since the state is
-  read at refusal time: only a hand change of ``<out>`` during the run could print it (fix round T6p, review R149M-01):
+  read at refusal time: only a hand change of ``<out>`` during the run could print it:
   the refusal says so and names the state at ``<out>``: absent, standing but not a complete marked export, or a complete marked
   export); no discard, no half-written file; the overlay is never run while the copy is the sole complete tree (no rebuild beside
   it).
@@ -204,13 +204,13 @@ MARKER_PROTOCOL = "posttrain.materialized-hf.v1"
 # Contract of the bytes this module produces (overlay with strict accounting, experts in the checkpoint layout on
 # disk, base sidecars verbatim, source proven by sha256 + bytes for archived artifacts too). Bump whenever any of that
 # changes: outputs built under the old contract then stop satisfying the idempotent skip and are refused until --force.
-CONVERSION_VERSION = "materialize_model_pt_to_hf/4"  # /4: config.json = the base's (R125-D-08); every tensor verified bitwise with digests (R125-D-09)
+CONVERSION_VERSION = "materialize_model_pt_to_hf/4"  # /4: config.json = the base's; every tensor verified bitwise with digests
 SOURCE_STAMP = ".overlay_source.json"  # written into <out>.tmp right after the overlay: the identity that built it
 STAGING_SUFFIX = ".tmp"  # <out>.tmp: the staging directory the whole build happens in, beside an existing output
 PREVIOUS_SUFFIX = ".previous"  # <out>.previous: the old output during the swap; a leftover is refused unless --force
-LOCK_SUFFIX = ".lock"  # <out>.lock: the per-output flock held from before the staging to after the swap (fix round T6k)
+LOCK_SUFFIX = ".lock"  # <out>.lock: the per-output flock held from before the staging to after the swap
 LOCK_WAIT_SECONDS = (
-    120.0  # how long a request waits for a held <out>.lock before refusing by name (fix round T6n; --lock-wait-seconds)
+    120.0  # how long a request waits for a held <out>.lock before refusing by name (--lock-wait-seconds)
 )
 LOCK_POLL_SECONDS = 0.2  # the polling interval of that wait
 DEFAULT_MIN_TENSORS = 800
@@ -234,10 +234,10 @@ def read_index_weight_map(index_path: str) -> dict[str, str]:
     """The ``weight_map`` of one safetensors index, validated torch-free: ``index_path`` parses to a JSON object whose
     ``weight_map`` is a non-empty JSON object mapping tensor names to shard file names (non-empty strings). ``ValueError``,
     ``<index_path> unreadable: <what was found>``, for every other shape, so no index escapes the iteration that follows as
-    AttributeError / TypeError (review R149E-03: ``{"weight_map": []}`` and ``{"weight_map": {"a.weight": 1}}`` did) and an
+    AttributeError / TypeError (``{"weight_map": []}`` and ``{"weight_map": {"a.weight": 1}}`` did) and an
     empty ``weight_map`` (no shard to open; ``verify_index`` refuses it on the output) is refused before the staged build too.
     Used on the base (``base_identity``, the preflight) and on ``<out>.tmp`` (``tmp_complete``). Decodes through the one decoder,
-    ``conversion.hf.decode_json_bytes`` (strict UTF-8 text; a byte-order mark is refused by name, review R149F-01)."""
+    ``conversion.hf.decode_json_bytes`` (strict UTF-8 text; a byte-order mark is refused by name)."""
     try:
         with open(index_path, "rb") as handle:
             payload = hf.decode_json_bytes(handle.read())
@@ -631,7 +631,7 @@ def validate_args(a: argparse.Namespace) -> str | None:
         return "--out must not be the base model dir"
     wait = getattr(a, "lock_wait_seconds", LOCK_WAIT_SECONDS)
     if not math.isfinite(wait) or wait < 0:
-        # argparse's float accepts "inf" (an unbounded wait) and "nan" (which max() turns into 0): both refused by name (fix round T6o)
+        # argparse's float accepts "inf" (an unbounded wait) and "nan" (which max() turns into 0): both refused by name
         return f"--lock-wait-seconds must be >= 0 and finite (0 = refuse a held lock at once), got {wait!r}"
     return None
 
@@ -640,7 +640,7 @@ REFUSED_PREFIX = "REFUSED before anything is published: "
 
 
 def _refuse(reason: str) -> NoReturn:
-    """The one message family of every preflight refusal (review R149E-04): the required files, the content identity, the
+    """The one message family of every preflight refusal: the required files, the content identity, the
     index and its shards, ``config.json``, the JSON sidecars, the template directory, the unified-mode contract and an
     unreadable base all raise through it as ``REFUSED before anything is published: <what was found; what the staged
     build would have done with it>``. A reason that already carries the prefix (the unified conflict text of
@@ -652,36 +652,36 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
     """Every torch-free refusal that reads the BASE alone, run by ``run_request`` before anything is written (the creation of
     ``<out>.tmp``, the overlay) and so before the swap that replaces an existing ``out``. Each check names what the
     staged build would otherwise do with the base,
-    and every refusal is raised through ``_refuse`` (one message family, review R149E-04): (1) the teacher files the base
+    and every refusal is raised through ``_refuse`` (one message family): (1) the teacher files the base
     must carry (``REQUIRED_FILES``); (2) its content identity (``base_identity``: config, index, shards and every sidecar
-    hashed; a missing shard, or an index whose ``weight_map`` is not tensor name -> shard name, ``read_index_weight_map``,
-    review R149E-03); (3) ``config.json`` parses to a JSON object (its own reason when it does not) carrying the structural
+    hashed; a missing shard, or an index whose ``weight_map`` is not tensor name -> shard name, ``read_index_weight_map``);
+    (3) ``config.json`` parses to a JSON object (its own reason when it does not) carrying the structural
     identity (``model_identity_from_config``) that ``write_config_from_base`` requires after the overlay; (4) every base
     shard the index lists passes the safetensors header check the OUTPUT gets in ``verify_index`` (``shard_status``: present,
     readable, header parsed, size = 8 + header + data, header keys = the tensors the index maps to it): the overlay's
     ``from_pretrained`` opens every shard, and a shard truncated by one byte, with a garbage header or unreadable used to pass
-    because ``base_identity`` records sizes only (review R149E-01), AND is accepted by the pinned safetensors reader itself
+    because ``base_identity`` records sizes only, AND is accepted by the pinned safetensors reader itself
     (``conversion.hf.safetensors_reader_error``, ``safe_open`` on the header: dtype names, string metadata values, contiguous
-    offsets, byte count per tensor, file length; fix round T6j, review R149G-01, where a BF16 ``[3]`` tensor over four bytes,
+    offsets, byte count per tensor, file length, where a BF16 ``[3]`` tensor over four bytes,
     an unknown dtype, a non-string metadata value and an offset gap passed the shape check); (5b) every Jinja template the
     tokenizer and processor loaders read as UTF-8 text (``conversion.hf.loader_template_files``: ``chat_template.jinja`` and
     every ``additional_chat_templates/*.jinja`` named template, the loader lines cited there) decodes as strict UTF-8
-    (``conversion.hf.utf8_text_error``; fix round T6j, where a template with byte FF passed and the tokenizer loader raised
+    (``conversion.hf.utf8_text_error``, where a template with byte FF passed and the tokenizer loader raised
     UnicodeDecodeError in the overlay); (5) every JSON sidecar the base
     carries parses to a JSON object (``read_tokenizer_config`` for ``tokenizer_config.json``, ``json.loads`` plus the object
     rule for the rest: the loaders index them after the overlay and a ``[]`` fails them) and ``chat_template.json``, when
     present, carries a non-empty ``chat_template`` string (``read_processor_template``: the processor loader's legacy path
-    indexes ``["chat_template"]``, so ``{}`` is a KeyError at load; review R149E-02); (6) without the option,
+    indexes ``["chat_template"]``, so ``{}`` is a KeyError at load); (6) without the option,
     ``additional_chat_templates/`` holds regular files only: ``sync_sidecars`` copies the directory verbatim and
     ``verify_sidecars`` refuses a sub-directory (``filecmp`` reports it as a mismatch) while a dangling symlink fails the
-    copy (review R149D-01); (7) under ``--unified-chat-template`` the supported-base contract
+    copy; (7) under ``--unified-chat-template`` the supported-base contract
     (``conversion.hf.preflight_unified_base``: both template files parse and carry a template string, the processor
     template canonicalizes, no loader-preferred sidecar conflicts, the directory refused whatever it holds). An ``OSError``
     met while reading the base (an unreadable directory or file; a file that vanished after its presence check) is refused
-    with its class and path, never traced (review R149D-02). Returns ``{"base": base_identity(base), "preferred_sidecars":
+    with its class and path, never traced. Returns ``{"base": base_identity(base), "preferred_sidecars":
     the allowed ones}``. What only the OUTPUT can show (the tensor count, the export's shards and sidecars, the torch probe)
-    is verified on the staged ``<out>.tmp`` before the swap, so a failure there keeps an existing ``out`` too (fix round
-    T6j); the weights-free loader calls stay in the overlay (module docstring: why).
+    is verified on the staged ``<out>.tmp`` before the swap, so a failure there keeps an existing ``out`` too;
+    the weights-free loader calls stay in the overlay (module docstring: why).
     """
     allowed: list[dict[str, Any]] = []
     try:
@@ -702,7 +702,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
         with open(config_path, "rb") as handle:
             raw_config = handle.read()
         try:
-            config = hf.decode_json_bytes(raw_config)  # the one decoder (strict UTF-8 text), review R149F-01
+            config = hf.decode_json_bytes(raw_config)  # the one decoder (strict UTF-8 text)
         except hf.ByteOrderMarkError as error:
             _refuse(
                 f"{config_path} {error}; the overlay's from_pretrained and config.json <- base decode it as UTF-8 text after an "
@@ -724,7 +724,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
                 f"architectures, {', '.join(hf.REQUIRED_MODEL_IDENTITY_FIELDS)}), which config.json <- base requires after "
                 f"the overlay; nothing published"
             )
-        # The shards (review R149E-01): the check verify_index applies to the output, on every base shard the index lists.
+        # The shards: the check verify_index applies to the output, on every base shard the index lists.
         weight_map = read_index_weight_map(os.path.join(base, INDEX_FILE))
         for shard in sorted(set(weight_map.values())):
             shard_path = os.path.join(base, shard)
@@ -734,7 +734,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
                     f"base shard {reason}; the overlay opens every base shard the index lists (from_pretrained) in the staged "
                     f"build, so a shard that is missing, truncated, unreadable or not the index's is refused first"
                 )
-            # The pinned reader itself (fix round T6j, review R149G-01): the semantics the shape check does not claim.
+            # The pinned reader itself: the semantics the shape check does not claim.
             reason = hf.safetensors_reader_error(shard_path)
             if reason:
                 _refuse(
@@ -743,7 +743,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
                     f"unknown dtype, a non-string metadata value, offsets with a gap or an overlap, a byte range that is not the "
                     f"dtype size x the shape) is refused first, by file and reader message"
                 )
-        # The JSON sidecars (fix round T6g; the object rule and the template string, review R149E-02).
+        # The JSON sidecars (the object rule and the template string).
         for name in SIDECAR_FILES:
             path = os.path.join(base, name)
             if not name.endswith(".json") or not os.path.isfile(path):
@@ -755,7 +755,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
                     hf.read_processor_template(base)
                 else:
                     with open(path, "rb") as handle:
-                        payload = hf.decode_json_bytes(handle.read())  # the one decoder (strict UTF-8 text), R149F-01
+                        payload = hf.decode_json_bytes(handle.read())  # the one decoder (strict UTF-8 text)
                     if not isinstance(payload, dict):
                         raise ConversionError(f"{path} is not a JSON object ({hf.describe_json_value(payload)})")
             except ConversionError as error:
@@ -790,7 +790,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
             # in the two JSON files only; a chat_template.jinja (the tokenizer loader prefers it), the additional_chat_templates/
             # directory (refused whatever it holds) or a chat_template key in processor_config.json with another text would
             # make the export render a template the option does not promise.
-            # An equal chat_template.jinja is allowed and recorded. Its texts join the one family (review R149E-04).
+            # An equal chat_template.jinja is allowed and recorded. Its texts join the one family.
             try:
                 allowed = hf.preflight_unified_base(base)
             except ConversionError as error:
@@ -803,7 +803,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
         else:
             # The default path copies additional_chat_templates/ verbatim after the overlay and verifies it file by file:
             # a sub-directory (filecmp reports it as a mismatch) or a dangling symlink (the copy fails) would cost an existing
-            # output, so the directory must hold regular files only (review R149D-01; the same lister as the unified rule).
+            # output, so the directory must hold regular files only (the same lister as the unified rule).
             record = hf.unified_template_directory_conflict(base)
             irregular = [
                 entry for entry in (record["entries"] if record is not None else []) if entry["kind"] != "file"
@@ -816,7 +816,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
                     f"while a dangling symlink fails the copy, so such a base is refused first"
                 )
     except OSError as error:
-        # An unreadable directory or file (R149D-02), or a file that vanished between its presence check and its read: the
+        # An unreadable directory or file, or a file that vanished between its presence check and its read: the
         # class and the errno text with the path, in the one family (every expected absence is refused by name above).
         _refuse(f"the base {base} is not readable: {type(error).__name__}: {error}")
     _log(
@@ -827,7 +827,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
 
 def _remove_path(path: str) -> None:
     """Remove what is at ``path``: a directory tree, or a file / symlink as such (its target untouched). Used on the names
-    this module owns, ``<out>.previous`` and the staging directory (fix round T6j)."""
+    this module owns, ``<out>.previous`` and the staging directory."""
     if os.path.isdir(path) and not os.path.islink(path):
         shutil.rmtree(path)
     elif os.path.lexists(path):
@@ -835,7 +835,7 @@ def _remove_path(path: str) -> None:
 
 
 def _discard_staging(tmp_out: str) -> bool:
-    """Remove the staging directory after a failure before the swap (fix round T6j); True when it is gone. Errors while
+    """Remove the staging directory after a failure before the swap; True when it is gone. Errors while
     removing are swallowed: the failure that brought us here is the one to report."""
     shutil.rmtree(tmp_out, ignore_errors=True)
     if os.path.lexists(tmp_out):
@@ -847,7 +847,7 @@ def _discard_staging(tmp_out: str) -> bool:
 def complete_marked(path: str) -> tuple[bool, str]:
     """``(True, identity digest)`` when ``path`` is a complete marked tree: a ``.materialized`` marker that parses to an identity
     record and a shard inventory whose shards are on disk unchanged (``inventory_mismatch``), whatever the identity; else
-    ``(False, why)``. The rule of fix round T6k (review R149H-01): such a tree is never discarded while it is the only one."""
+    ``(False, why)``. The rule: such a tree is never discarded while it is the only one."""
     marker_path = os.path.join(path, MATERIALIZED_MARKER)
     if not os.path.isfile(marker_path):
         return False, f"{marker_path} missing"
@@ -882,14 +882,14 @@ def _lock_holder(fd: int) -> str:
 
 @contextlib.contextmanager
 def output_lock(out: str, source: str | None = None, wait_seconds: float | None = None) -> Iterator[str]:
-    """The per-output exclusive lock of fix round T6k (review R149H-02): ``<out>.lock`` beside the output, ``fcntl.flock(LOCK_EX |
+    """The per-output exclusive lock: ``<out>.lock`` beside the output, ``fcntl.flock(LOCK_EX |
     LOCK_NB)`` on it for the whole build path (from before ``<out>.previous`` / ``<out>.tmp`` / the fetch stage are touched to after
     the swap and the removal of ``<out>.previous``). A second materializer on the same ``--out`` raises ``MaterializeRefusedError``
     naming the holder (pid, host, start time, source from the record the holder wrote) and touches nothing. flock is released by the
     kernel when the holder exits, so a held lock means a live holder; the lock file is never unlinked (a waiter that already opened
     it would otherwise lock a dead inode while a newcomer creates a new one) and is not part of the export. A file system that
     refuses flock (``ENOLCK`` / ``EOPNOTSUPP`` / ``ENOSYS``: Lustre without the ``flock`` mount option) is a named refusal, fail
-    closed. Fix round T6n (review R149K-02): a held lock is WAITED for, polling every ``LOCK_POLL_SECONDS`` up to ``wait_seconds``
+    closed. A held lock is WAITED for, polling every ``LOCK_POLL_SECONDS`` up to ``wait_seconds``
     (default ``LOCK_WAIT_SECONDS`` = 120 s; the CLI's ``--lock-wait-seconds``; 0 = refuse at once), so two simultaneous identical
     requests of a published source both end with 0 (the second skips once the holder has finished) and a differing request is
     refused on the marker under the lock; a holder still there after the bound is refused by name, the bound stated. Yields the
@@ -897,8 +897,8 @@ def output_lock(out: str, source: str | None = None, wait_seconds: float | None 
     lock_path = out + LOCK_SUFFIX
     wait = (
         LOCK_WAIT_SECONDS if wait_seconds is None else (float(wait_seconds) or 0.0)
-    )  # -0.0 renders as 0 (fix round T6p)
-    if not (math.isfinite(wait) and wait >= 0):  # inf would wait forever, nan would silently mean 0 (fix round T6o)
+    )  # -0.0 renders as 0
+    if not (math.isfinite(wait) and wait >= 0):  # inf would wait forever, nan would silently mean 0
         raise ValueError(f"wait_seconds must be a finite number >= 0, got {wait_seconds!r}")
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -943,7 +943,7 @@ def output_lock(out: str, source: str | None = None, wait_seconds: float | None 
 
 
 def _repair_staged_config(tmp_out: str, base: str) -> bool:
-    """Fix round T6m: an inherited complete marked staging copy may lack ``config.json`` (the file ``write_config_from_base`` rewrites
+    """An inherited complete marked staging copy may lack ``config.json`` (the file ``write_config_from_base`` rewrites
     last before the marker; a death or a hand removal can leave the shards and the marker without it). Copy the base's ``config.json``
     in through a temporary file and a rename (the base is the one the marker's identity names: same base digest) so the recovery's
     ``write_config_from_base`` can validate the identity; nothing else is touched. Returns True when it wrote the file."""
@@ -958,7 +958,7 @@ def _repair_staged_config(tmp_out: str, base: str) -> bool:
 
 def digest_open_file(payload: BinaryIO) -> dict[str, Any]:
     """``{"sha256", "bytes"}`` of the file ``payload`` has open, read sequentially through that file object from offset 0 (8 MiB
-    chunks; fix round T6r, review thread 524355e746): the identity of the inode the caller holds open, not of whatever its path
+    chunks): the identity of the inode the caller holds open, not of whatever its path
     names now. ``bytes`` is what was read; the caller compares it with ``fstat`` and refuses a file that grew or shrank meanwhile."""
     digest = hashlib.sha256()
     payload.seek(0)
@@ -973,14 +973,14 @@ def digest_open_file(payload: BinaryIO) -> dict[str, Any]:
 def inode_signature(st: os.stat_result) -> tuple[int, int, int]:
     """``(inode, size, mtime_ns)`` of an fstat'd open file: what a write INTO that inode changes. Not ctime: the merge tool's rebuild
     unlinks the path before writing the new file (``merge.py``: ``os.remove``, then tmp + ``os.replace``), and unlinking the inode a
-    reader holds open moves its link count and so its ctime without touching one byte of it (the first T6r candidate included ctime
+    reader holds open moves its link count and so its ctime without touching one byte of it (an earlier candidate included ctime
     and refused the reviewer's own scenario on it, on Lustre); a replacement of the PATH never matters to a reader holding the inode
-    open. Fix round T6r."""
+    open."""
     return (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 def probe_opened_source(payload: BinaryIO, path: str) -> tuple[dict[str, Any], os.stat_result]:
-    """Identify the local ``model.pt`` the caller has OPEN (fix round T6r): fstat first, then the hash through the same file object;
+    """Identify the local ``model.pt`` the caller has OPEN: fstat first, then the hash through the same file object;
     a size that differs between the two means a writer is changing the inode in place and the request is refused by name."""
     opened = os.fstat(payload.fileno())
     _log(f"hashing {path} through the open file ({opened.st_size / 2**30:.1f} GiB, inode {opened.st_ino})")
@@ -996,7 +996,7 @@ def probe_opened_source(payload: BinaryIO, path: str) -> tuple[dict[str, Any], o
 def _refuse_if_opened_inode_changed(
     payload: BinaryIO, opened: os.stat_result, model_pt: str, probe: dict[str, Any]
 ) -> None:
-    """Fix round T6r (review thread 524355e746): the overlay memory-mapped the file object ``payload``, the same inode the identity of
+    """The overlay memory-mapped the file object ``payload``, the same inode the identity of
     record was hashed from, so a replacement of the PATH meanwhile changed nothing of what was built (logged, with the inode that
     now stands at the path). What CAN change what a mapping reads is a write to that inode itself: ``fstat`` after the overlay
     must equal ``fstat`` before the hash (inode, size, mtime; ``inode_signature``); any difference refuses the build by name, with
@@ -1025,7 +1025,7 @@ def _refuse_if_opened_inode_changed(
 
 
 def publish_staging(tmp_out: str, out: str) -> str | None:
-    """The swap (fix round T6j): a leftover ``<out>.previous`` (kept until now under ``--force``, fix round T6k) removed first,
+    """The swap: a leftover ``<out>.previous`` (kept until now under ``--force``) removed first,
     ``out`` -> ``<out>.previous`` when ``out`` exists, ``tmp_out`` -> ``out``, then ``<out>.previous`` removed; returns the removed
     path, or None when there was no previous output. Two ``os.rename`` on one file system (Lustre has neither RENAME_NOREPLACE nor
     RENAME_EXCHANGE). A failure of the first rename leaves both directories as they are; a failure of the second puts the old
@@ -1033,7 +1033,7 @@ def publish_staging(tmp_out: str, out: str) -> str | None:
     raised with ``out`` already published (the next request skips on the marker and reports the leftover; ``--force`` removes it
     at its own swap). In every failure the staging directory stays, complete and marked for the request: a re-run with
     ``--force`` puts the old output back under its name when it is absent, discards the staging directory and rebuilds from
-    the source (fix round T6l); without ``--force`` the request decides on ``out``'s marker (skip, or refused while it holds
+    the source; without ``--force`` the request decides on ``out``'s marker (skip, or refused while it holds
     another materialization). Every failure is a ``ConversionError``
     naming the state. Called with ``<out>.lock`` held."""
     previous = out + PREVIOUS_SUFFIX
@@ -1045,7 +1045,7 @@ def publish_staging(tmp_out: str, out: str) -> str | None:
     )
     try:
         if os.path.lexists(previous):
-            # A leftover of an interrupted swap, kept until the new tree was verified (R149H-01): it may go now.
+            # A leftover of an interrupted swap, kept until the new tree was verified: it may go now.
             _remove_path(previous)
         if had_output:
             os.rename(out, previous)
@@ -1102,13 +1102,13 @@ def run_request(
 
     Raises ``ConversionError`` in the preflight's one family (``REFUSED before anything is published: ...``) when the base
     is refused before anything is written, ``MaterializeRefusedError`` when ``out`` holds a different or unprovable
-    materialization and ``force`` is false (decided under the output lock, fix round T6m; or a leftover ``<out>.previous`` exists
+    materialization and ``force`` is false (decided under the output lock; or a leftover ``<out>.previous`` exists
     without ``force``, or an inherited sole complete marked ``<out>.tmp`` is not this request's, or another materializer
     holds ``<out>.lock`` beyond ``lock_wait_seconds``, or a complete marked ``<out>.tmp`` is the only complete tree),
     ``ConversionError``
     naming the stage when the staged build or a verification fails (a fresh build's staging directory removed, an existing
-    ``out`` untouched; fix round T6j) or when the recovery of an inherited sole complete marked ``<out>.tmp`` fails (the directory
-    kept: its shards and marker untouched, its sidecars possibly repaired from the base; fix rounds T6m / T6n) or when the swap
+    ``out`` untouched) or when the recovery of an inherited sole complete marked ``<out>.tmp`` fails (the directory
+    kept: its shards and marker untouched, its sidecars possibly repaired from the base) or when the swap
     fails, ``RuntimeError``
     when the archive fetch refuses (a foreign staged copy, an unprovable payload), ``FileNotFoundError`` / ``ValueError``
     for an invalid request (no ``model.pt`` in ``ckpt_dir``, a malformed ``artifact_uri``).
@@ -1118,12 +1118,12 @@ def run_request(
     if lock_wait_seconds is not None and not (math.isfinite(lock_wait_seconds) and lock_wait_seconds >= 0):
         raise ValueError(f"lock_wait_seconds must be a finite number >= 0, got {lock_wait_seconds!r}")
     out = os.path.abspath(out.rstrip("/"))
-    # Every torch-free refusal that reads the base alone, before anything destructive (fix round T6f): nothing below
+    # Every torch-free refusal that reads the base alone, before anything destructive: nothing below
     # removes or writes until it has passed.
     base_id = preflight(base, unified_chat_template=unified_chat_template)["base"]
     # Identify the requested source WITHOUT fetching: hash a local model.pt, or read the archived manifest. The skip
     # below must prove that `out` was built from THIS source, THIS base and THIS conversion; --no-verify never skips that.
-    # The source is identified twice (fix rounds T6q and T6r, review thread 524355e746): once here, before the lock, so a missing
+    # The source is identified twice: once here, before the lock, so a missing
     # model.pt or an unprovable artifact is refused without waiting, and once more UNDER the lock through the file object that the
     # overlay then maps, which is the identity the decision, the source record and the marker use: the lock may wait up to
     # --lock-wait-seconds and the merge tool (tmp + os.replace over model.pt) is not excluded by it, so the path may change while
@@ -1140,7 +1140,7 @@ def run_request(
         output_lock(out, source=ckpt_dir or artifact_uri, wait_seconds=lock_wait_seconds),
         contextlib.ExitStack() as held,
     ):
-        # Fix rounds T6q / T6r: the identity of record is read here, under the lock. A local model.pt is OPENED ONCE (closed when
+        # The identity of record is read here, under the lock. A local model.pt is OPENED ONCE (closed when
         # the lock is released): fstat, then the hash through that file object, and the overlay below maps the same file object,
         # so the marker names the bytes the overlay consumed by construction; an archived artifact's fetched copy is opened and
         # hashed the same way after the fetch and must match the manifest identity.
@@ -1157,7 +1157,7 @@ def run_request(
                 f"sha256 {probe_before['sha256'][:12]} ({probe_before['bytes']} bytes) before, {probe['sha256'][:12]} "
                 f"({probe['bytes']} bytes) now; the request proceeds with the bytes it reads now, and the marker records them"
             )
-        # Fix round T6m (review R149J-02 / thread b15dc9ef1b): the marker decision (skip / mismatch / build) is taken UNDER the
+        # The marker decision (skip / mismatch / build) is taken UNDER the
         # per-output lock, so decision and publication happen in one lock hold; a materializer that paused before the lock
         # while another one published a different source now sees that export's marker and is refused without --force.
         status, why = marker_status(out, want, probe)
@@ -1178,9 +1178,9 @@ def run_request(
                 f"REFUSED: {out} holds a different or unproven materialization: {why}. Pass --force to rebuild it from the "
                 f"requested source, or choose another --out"
             )
-        # Nothing is removed here (fix round T6j): the build is staged in <out>.tmp beside an existing output, which the swap
-        # below replaces only after the staged build and its verification have succeeded. Fix round T6k: no complete marked
-        # tree is discarded while it is the only one (R149H-01), and one materializer per output (R149H-02, the lock).
+        # Nothing is removed here: the build is staged in <out>.tmp beside an existing output, which the swap
+        # below replaces only after the staged build and its verification have succeeded. No complete marked
+        # tree is discarded while it is the only one, and one materializer per output (the lock).
         previous = out + PREVIOUS_SUFFIX
         if os.path.lexists(previous):
             if not force:
@@ -1234,9 +1234,9 @@ def run_request(
 
         started = time.time()
         if force and os.path.lexists(tmp_out):
-            # Fix round T6l (review R149I-01): --force means a rebuild from the source. A death-left staging directory is discarded
+            # --force means a rebuild from the source. A death-left staging directory is discarded
             # whatever its marker says once <out> holds a complete marked tree (after the restore above, or when it stood); a
-            # complete marked staging directory that is the only complete tree is not discarded (fix round T6k's rule): a request
+            # complete marked staging directory that is the only complete tree is not discarded: a request
             # WITHOUT --force publishes it after verification (tmp_complete below), or it is removed by hand.
             marked, marked_why = complete_marked(tmp_out)
             if marked:
@@ -1254,7 +1254,7 @@ def run_request(
             else:
                 _log(f"--force: discarding staging dir {tmp_out} ({marked_why})")
             _remove_path(tmp_out)
-        # Fix round T6m (review R149J-01 / thread 677171a12b): an INHERITED sole complete marked staging copy (a first publication
+        # An INHERITED sole complete marked staging copy (a first publication
         # that died after writing .materialized and before the rename; <out> holds no complete marked export, else --force would be
         # the way and the unforced request would have skipped or been refused above) is recovered under protection: its marker must
         # be this request's (else refused by name), a missing staged config.json is repaired from the base through a temporary file
@@ -1363,8 +1363,8 @@ def run_request(
             atomic_write_json(os.path.join(tmp_out, MATERIALIZED_MARKER), report)
         except Exception as error:
             if recovery:
-                # Fix round T6m: the inherited sole complete marked copy is never deleted; the failed check refuses by name. Fix round
-                # T6n (review R149K-01): the words say what is true: the repair and the sidecar sync ran BEFORE the check, so the
+                # The inherited sole complete marked copy is never deleted; the failed check refuses by name.
+                # The words say what is true: the repair and the sidecar sync ran BEFORE the check, so the
                 # sidecars may differ from what was found while the shards and the marker are untouched; the state at <out> is named.
                 out_marked, out_why = complete_marked(out)
                 out_state = (
@@ -1383,7 +1383,7 @@ def run_request(
                     f"in the base's form when that rewrite did not reach its rename); {out_state}; nothing was published; fix the "
                     f"cause and retry without --force, or remove the directory by hand"
                 ) from error
-            # Fix round T6j: nothing of the existing output has been touched; the staging directory goes, the stage is named.
+            # Nothing of the existing output has been touched; the staging directory goes, the stage is named.
             gone = _discard_staging(tmp_out)
             kept = f"; the existing output {out} was not touched by this request" if replaces else ""
             raise ConversionError(
@@ -1496,7 +1496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except (ConversionError, OSError, RuntimeError, ValueError) as error:
         # OSError covers FileNotFoundError and, after the preflight, any unreadable path met later: a named FATAL line,
-        # never a traceback (review R149D-02).
+        # never a traceback.
         print(f"[materialize] FATAL: {error}", file=sys.stderr, flush=True)
         return 1
     print("MATERIALIZE DONE", out, *(["(idempotent skip)"] if result == "skipped" else []), flush=True)

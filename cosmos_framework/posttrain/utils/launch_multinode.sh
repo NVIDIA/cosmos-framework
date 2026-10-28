@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# In-allocation multinode Ray bringup: start a Ray cluster across the job's nodes inside the i4
+# In-allocation multinode Ray bringup: start a Ray cluster across the job's nodes inside the training
 # container, export RAY_ADDRESS so the driver joins it (control.placement._ensure_ray), then run
 # RUN_CMD on the head. Cluster teardown = job end. The Python launcher (utils/launch_multinode.py)
 # submits the sbatch job and, in waiting mode, backstops it with an sacct timeout + scancel. This stays a

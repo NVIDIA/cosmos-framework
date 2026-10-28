@@ -966,7 +966,7 @@ def _infer_multiview_caption_path(
             return f"{caption_root.rstrip('/')}/{match.group('sample_id')}_c{match.group('camera_index')}.json"
         clip_match = _MADS_CLIP_MEDIA_RE.match(filename)
         if clip_match is not None:
-            # Clip-level MADS assets (hdmap/lidar rangemap tars) have no _cN suffix.
+            # Clip-level assets (hdmap/lidar rangemap tars) have no _cN suffix.
             # Front-wide captions are the lidar-transfer training text source.
             return f"{caption_root.rstrip('/')}/{clip_match.group('sample_id')}_c0.json"
         raise ValueError(

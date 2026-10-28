@@ -8,8 +8,8 @@ seed, checkpoint, precision, and device configuration, then compare its saved
 safetensors outputs. For example::
 
     python -m cosmos_framework.scripts.compare_inference_outputs \
-        --run native-i4=outputs/native-1 --run native-i4=outputs/native-2 \
-        --run hf-i4=outputs/hf-1 --run hf-i4=outputs/hf-2 \
+        --run native=outputs/native-1 --run native=outputs/native-2 \
+        --run hf=outputs/hf-1 --run hf=outputs/hf-2 \
         --run framework=outputs/cf-1 --run framework=outputs/cf-2 \
         --required-tensor vision --report outputs/parity.json
 

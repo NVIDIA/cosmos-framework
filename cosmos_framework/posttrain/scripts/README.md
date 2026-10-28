@@ -154,7 +154,7 @@ timestamped report under the job output dir, so run `--validate-rows` on one ran
 script above with `--dp-world`) rather than on the training allocation. `--allow-empty-assistant` accepts assistant
 turns whose body is empty (only `<|im_end|>` supervised), which the validator refuses by default.
 
-The held-out census (the setup's `require_disjoint_datasets`, thread b9b8f14577) needs both splits in one run:
+The held-out census (the setup's `require_disjoint_datasets`) needs both splits in one run:
 `--split all` (the default, and what the entry's `--validate-rows` uses) applies it; `--split validation` alone prints
 `validation: held-out census not run (the train split was not loaded in this run; use --split all ...)`, leaves
 `held_out_census` at `null` in the summary and can exit 0 for a split the setup would refuse. Use `--split all`

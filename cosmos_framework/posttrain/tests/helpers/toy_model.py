@@ -3,10 +3,10 @@
 """Toy flow-matching model — a TEST FIXTURE implementing `FlowMatchingPolicy` (DESIGN §6).
 
 Not a production backend and not registered in `model.registry` — production selects the
-real `FlowMatchingPolicy` (the i4 OmniMoT `model/cosmos3.py`) via the i4 config tree. This
+real `FlowMatchingPolicy` (the OmniMoT `model/cosmos3.py`) via the upstream config tree. This
 is a tiny CPU Linear "velocity field", just enough to exercise the full DPO loop (loss + a
 real optimizer step) on the `local` backend, so the model↔algorithm↔trainer decoupling can
-be tested without a GPU / the 8B model / the i4 env. Tests construct it directly
+be tested without a GPU / the 8B model / the training env. Tests construct it directly
 (`ToyFlowModel(dim=..., seed=...)`); it lives under `tests/` so no test-only code sits next
 to the production backends.
 

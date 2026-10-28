@@ -1064,7 +1064,7 @@ def test_joint_entry_places_sweeps_on_the_sample_camera_clock(
     requested: list[int] = []
 
     def load_mads_archive(model: Any, lidar: Any, *, max_frames: int) -> tuple[str, torch.Tensor, torch.Tensor]:
-        # A MADS rangemap archive records every sweep's source frame on the 30 fps camera clock.
+        # A rangemap archive records every sweep's source frame on the 30 fps camera clock.
         requested.append(max_frames)
         return "clip.tar", torch.zeros(3, max_frames, 2, 2), torch.arange(max_frames) * 3
 

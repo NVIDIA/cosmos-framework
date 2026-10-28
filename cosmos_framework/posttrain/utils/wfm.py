@@ -193,7 +193,7 @@ def repeat_conditioning_batch(conditioning: WFMConditioningInput, count: int) ->
         raise ValueError(f"online NFT local group must be >= 1, got {count}")
 
     def repeat(value: Any) -> Any:
-        # i4 batches use either a leading tensor axis or a one-element list
+        # Upstream batches use either a leading tensor axis or a one-element list
         # axis. Preserve that convention instead of adding a second batch axis.
         if isinstance(value, torch.Tensor):
             if value.ndim == 0 or value.shape[0] != 1:

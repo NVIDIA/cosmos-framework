@@ -720,11 +720,11 @@ class LLMTrainer(BaseTrainer):
                 detached_norm = local_norm.detach()  # []
                 metrics["train/grad_norm"] = float(detached_norm)
                 if self.max_grad_norm > 0:
-                    # The clip record, from the norm the clip measured (review R125-D-07), by ONE rule:
+                    # The clip record, from the norm the clip measured, by ONE rule:
                     # ``train/grad_clip_coef`` = ``min(1, max_grad_norm / (norm + 1e-6))``, the factor
                     # ``clip_grad_norm_`` applied to every gradient, and ``train/grad_clipped`` = 1.0 exactly when that
                     # factor is below 1.0. So a norm inside the 1e-6 band below ``max_grad_norm`` counts as clipped, as
-                    # its gradients were scaled (review round 1 of fix round 1, finding F11).
+                    # its gradients were scaled.
                     clip_coef = min(1.0, self.max_grad_norm / (float(detached_norm) + 1e-6))
                     metrics["train/grad_clip_coef"] = clip_coef
                     metrics["train/grad_clipped"] = 1.0 if clip_coef < 1.0 else 0.0

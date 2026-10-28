@@ -376,7 +376,7 @@ def test_nested_lidar_prefix_options_support_one_initial_sweep(
 def test_lidar_sweep_count_without_a_prefix(
     sample_input: dict[str, Any], model_config: SimpleNamespace, causal: bool
 ) -> None:
-    # Matches i4: only the causal joint path checks an explicit sweep count, before defaults fill
+    # Matches upstream: only the causal joint path checks an explicit sweep count, before defaults fill
     # it in; the bidirectional path ignores a count without a prefix.
     joint = _with_lidar(sample_input)
     joint["autoregressive"] = causal

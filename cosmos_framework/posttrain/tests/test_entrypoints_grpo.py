@@ -207,7 +207,7 @@ def test_reward_packer_uses_student_factory_only_for_prefix_filtering(monkeypatc
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_online_i4_rejects_legacy_model_before_instantiate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A legacy i4 tree must fail on the driver instead of constructing a large model there."""
+    """A legacy native tree must fail on the driver instead of constructing a large model there."""
     from cosmos_framework.posttrain.config import build as build_module
     from cosmos_framework.posttrain.entrypoints import grpo
 

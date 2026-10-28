@@ -145,7 +145,7 @@ def _parse_gpus_marker(mark: pytest.Mark) -> int:
 
 @cache
 def _mapped_destinations(root_dir: Path) -> frozenset[str]:
-    """Return repository-relative files generated from imaginaire4 sources."""
+    """Return repository-relative files generated from upstream sources."""
     payload = json.loads((root_dir / ".file_mapping.json").read_text())
     files = payload.get("files", payload)
     if not isinstance(files, dict) or any(not isinstance(path, str) for path in files.values()):

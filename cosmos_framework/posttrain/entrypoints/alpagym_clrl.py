@@ -21,7 +21,7 @@ Sharding the policy is a REQUIREMENT, not a tuning choice: measured on cw-dfw, a
 trainer is 54.62 GiB and does not fit beside the rollout's 20.64 GiB on one 80 GiB card.
 
 CONFIG. This entry reads AlpaGym's already-resolved run config (`alpagym_host.config.
-load_run_config`), the same file `cosmos/entrypoint.py` reads today — it does NOT go through i4's
+load_run_config`), the same file `cosmos/entrypoint.py` reads today — it does NOT go through upstream's
 config root. That root needs `multi-storage-client`, which moves protobuf 4.25.9 → 7.35.1 in
 AlpaGym's venv, under a link where AlpaGym exchanges protobuf messages with the simulator on every
 one of an episode's 22 ticks. Migrating the config surface is milestone 2 (design §12).
@@ -546,7 +546,7 @@ def loop(units: dict, config: EntryConfig) -> dict:
     updates_per_step = _updates_per_step(config)
     # Reporting is a control-plane concern and the loop is its single writer, fed the metrics the
     # trainer already reduced. `ConsoleReporter` is constructed directly rather than through
-    # `make_reporters`, which reads `config.job.wandb_mode` off an i4 config this entry does not
+    # `make_reporters`, which reads `config.job.wandb_mode` off an upstream config this entry does not
     # have; the W&B channel comes with the config migration (milestone 2).
     reporters = [
         ConsoleReporter(
@@ -569,7 +569,7 @@ def loop(units: dict, config: EntryConfig) -> dict:
             ),
         )
     ]
-    # `make_reporters` reads `config.job.wandb_mode` off an i4 config this entry does not have, so
+    # `make_reporters` reads `config.job.wandb_mode` off an upstream config this entry does not have, so
     # the list is built here; the W&B channel comes with the config migration.
     failed_reporters: set[int] = set()
     start_best_effort(reporters, failed_reporters=failed_reporters)

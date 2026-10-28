@@ -870,7 +870,7 @@ def test_legacy_media_budget_is_not_silently_ignored(vlm_packer: QwenSFTDataPack
 
 
 def test_think_opener_mask_unsupervises_the_prefilled_opener_only() -> None:
-    """Review R125-D-01 knob 7, ruled in reviews R134-01 / R134-02 and corrected by review R138-01: ``mask_think_opener=True``
+    """Knob 7: ``mask_think_opener=True``
     unsupervises the ``<think>`` token that opens an assistant body -- the token a prefilling serve supplies (a request
     without tools; NOT the serving path of record, where tools are present, vLLM 0.24 prefills no opener and the student
     must emit it) -- and NOTHING else: the reasoning after it and the closer of an empty block (``\n\n</think>\n\n``, the
@@ -878,7 +878,7 @@ def test_think_opener_mask_unsupervises_the_prefilled_opener_only() -> None:
     student emits them in either case. Checked on
     the base's own chat template (``tests/fixtures/qwen3_vl_chat_template.jinja`` == the base's ``chat_template.json``
     byte for byte) with a tokenizer whose ``\n\n`` is one token like the base's (id 271): 22bfce78f40's Nemo-Chat rule
-    masked the single-newline closer (``review_r134/5_p_tok.out``: ``['Ċ', 'Answer', ...]`` left supervised), and the
+    masked the single-newline closer (``['Ċ', 'Answer', ...]`` left supervised), and the
     template strips a ``<think></think>`` content prefix, so that turn has no opener to mask. The default supervises the
     opener (what the A1 arms trained, and what the path of record needs)."""
     from cosmos_framework.posttrain.tests.helpers import sft_packer as helpers
@@ -950,7 +950,7 @@ def local_tokenizer_without_think() -> Any:
     )()
 
 
-# --- Row-level supervision: ``SFTTarget.supervise`` (fix round T6: the prefix rows) ----------------------------------
+# --- Row-level supervision: ``SFTTarget.supervise`` (the prefix rows) ----------------------------------
 
 _THREE_TURN_MESSAGES = [
     {"role": "user", "content": "Use a tool."},
@@ -1045,12 +1045,12 @@ def test_supervise_last_assistant_official_template_keeps_history_at_minus_100(
     official_vlm_packer: QwenSFTDataPacker,
 ) -> None:
     """The agentic row under the official Qwen3-VL template with ``supervise="last_assistant"`` and a history turn
-    carrying no reasoning (review R151-04: the original row, whose history turn carries ``reasoning_content``, is refused,
+    carrying no reasoning (the original row, whose history turn carries ``reasoning_content``, is refused,
     asserted first): only the second turn's body (its think block, text and ``<|im_end|>``) is supervised; the first
     turn's text and tool call stay in the ids at -100 beside the system block, the tools block, the image pads and the
     tool response, and the ids equal the ``all_assistant`` packing of the same messages. The ``mask_think_opener``
     interplay is unchanged: the variant unsupervises the LAST turn's opener, the only opener in the row, and nothing
-    else. Fix round T6."""
+    else."""
     with_history_reasoning = _agentic_messages(_image())
     with pytest.raises(ValueError, match="history assistant turn 2 carries reasoning \\(reasoning_content\\)"):
         official_vlm_packer.sft_process_sample(
@@ -1118,7 +1118,7 @@ def test_supervise_refuses_unknown_values_and_rows_without_an_assistant_turn(tex
 
 
 def test_last_assistant_row_prefix_is_the_served_prefix_under_both_templates_and_history_reasoning_is_refused() -> None:
-    """Review R151-04 (fix round T6). The packer renders rows through the PROCESSOR template (``chat_template.json``); a
+    """The packer renders rows through the PROCESSOR template (``chat_template.json``); a
     tokenizer-only loader (vLLM with a tools array) serves the TOKENIZER template (``tokenizer_config.json``), which renders
     no ``reasoning_content`` and keeps a ``<think></think>`` content prefix the processor template strips. Both texts are
     repo fixtures saved verbatim from the base of record. A ``last_assistant`` row whose history turns carry no reasoning:
@@ -1220,16 +1220,16 @@ def test_last_assistant_row_prefix_is_the_served_prefix_under_both_templates_and
 def test_processor_canonical_template_trims_the_replayed_reasoning_where_the_verbatim_template_pads_it(
     tmp_path: Path,
 ) -> None:
-    """Row rule R1 of record (fix round T6; review round 147c): the unified export ships the processor template with ONE
+    """Row rule R1 of record: the unified export ships the processor template with ONE
     change, ``reasoning_content`` rendered ``| trim``. A replayed reasoning string that arrives with a newline at both ends
     (dsh's form) renders ``<think>\\n\\nLet me read TASK.md.\\n\\n</think>\\n`` under the verbatim processor template (the
     PADDED form) and ``<think>\\nLet me read TASK.md.\\n</think>\\n`` under the canonical one (the student's own emission
     form): the same token count, the ``\\n\\n`` tokens become ``\\n`` tokens -- the base's 271 -> 198 and 382 -> 624 at
     positions 7248 / 7254 / 8016 / 8025 of the captured request, 8,969 ids either way, pinned in the lab's fix record. A
     trimmed string (row rule R2) renders identically under both, so a row packed through the base's own template and a
-    serve through the canonical one agree. Fix round T6b: the same two forms WITHOUT tools, and through the processor
+    serve through the canonical one agree. The same two forms WITHOUT tools, and through the processor
     template file of a unified scratch export (``chat_template.json``, which a processor loader reads), which carries the
-    canonical text too. On the parent of T6 ``canonicalize_processor_template`` does not exist; on T6 itself the export's
+    canonical text too. Before this change ``canonicalize_processor_template`` did not exist; with it alone the export's
     ``chat_template.json`` is not written."""
     from cosmos_framework.posttrain.checkpoint.conversion.hf import (
         CANONICAL_REASONING_LINE,
@@ -1308,7 +1308,7 @@ def test_processor_canonical_template_trims_the_replayed_reasoning_where_the_ver
     assert exported.apply_chat_template(replayed, tools=_AGENTIC_TOOLS, tokenize=False, add_generation_prompt=True) == (
         stripped
     )
-    # review R149-02 (fix round T6d), the two row conditions behind "exact under any serve of a unified export" (pins):
+    # The two row conditions behind "exact under any serve of a unified export" (pins):
     # (a) tool-call arguments travel as the PARSED OBJECT: the template renders a dict through ``tojson`` (the serve
     #     re-serialises the parsed arguments the same way); a JSON STRING is emitted verbatim, so the model's compact bytes
     #     differ from the served prefix at the first argument
@@ -1358,7 +1358,7 @@ def test_processor_canonical_template_trims_the_replayed_reasoning_where_the_ver
         verbatim.apply_chat_template(fully_stripped, tools=_AGENTIC_TOOLS, tokenize=False, add_generation_prompt=True)
         == stripped
     )
-    # review R149B-01 (fix round T6e): the string form of condition (a). A string equal to json.dumps(obj, ensure_ascii=False)
+    # The string form of condition (a). A string equal to json.dumps(obj, ensure_ascii=False)
     # (HF's tojson form) renders byte-equal to the parsed object; json.dumps(obj) with the default ensure_ascii=True escapes
     # non-ASCII and differs, as does the model's compact string.
     accented = {"box": [0, 0, 4, 4], "note": "café"}
@@ -1379,7 +1379,7 @@ def test_processor_canonical_template_trims_the_replayed_reasoning_where_the_ver
     assert forms["compact_string"] != forms["object"] and '"box":[0,0,4,4]' in forms["compact_string"]
 
 
-# --- Row-level opener: ``SFTTarget.opener`` (fix round T6c, row rule R4) --------------------------------------------
+# --- Row-level opener: ``SFTTarget.opener`` (row rule R4) --------------------------------------------
 
 _REASONING_THREE_TURN = [
     {"role": "user", "content": "Use a tool."},
@@ -1397,13 +1397,13 @@ _REASONING_THREE_TURN = [
 def test_opener_prefilled_three_turn_row_exact_loss_counts_under_the_four_combinations(
     text_packer: QwenSFTDataPacker,
 ) -> None:
-    """Fixture for ``SFTTarget.opener`` (fix round T6c, row rule R4): a three-turn row through the toy tokenizer (one
+    """Fixture for ``SFTTarget.opener`` (row rule R4): a three-turn row through the toy tokenizer (one
     token per ASCII byte, ``<think>`` / ``</think>`` one token each, the toy template's ``<think>\n`` + reasoning +
     ``\n</think>\n\n`` before the body) under supervise x opener. Under ``all_assistant`` the row carries reasoning in both
     assistant turns, so every supervised block has an opener: turn 1 = 1 + 1 + 5 (``Look.``) + 1 + 1 + 2 + 90 (the tool
     call) + 1 (``<|im_end|>``) = 102, turn 2 = 1 + 1 + 5 (``Sure.``) + 1 + 1 + 2 + 4 (``done``) + 1 = 16: ``self`` 118 =
     [102, 16], ``prefilled`` 116 = [101, 15]. Under ``last_assistant`` the same conversation with the history turn
-    reasoning-free, as review R151-04 requires (the full row is refused there, asserted): ``self`` 16, ``prefilled`` 15.
+    reasoning-free, as requires (the full row is refused there, asserted): ``self`` 16, ``prefilled`` 15.
     The prefilled counts are the self counts minus one token per supervised block, the difference exactly the ``<think>``
     opener of each supervised block with the target beginning at the newline after it; within each supervision value the
     ids are identical; the contract strings gain ``_opener_prefilled_v1``. On the parent commit the field does not exist."""
@@ -1464,7 +1464,7 @@ def test_opener_prefilled_three_turn_row_exact_loss_counts_under_the_four_combin
 def test_opener_prefilled_and_the_global_mask_are_one_rule(text_packer: QwenSFTDataPacker) -> None:
     """A row with ``opener: prefilled`` under a run with ``mask_think_opener=True`` is masked ONCE: its labels equal the
     row-only and the knob-only packings, the count is unchanged (116 on the reasoning three-turn row); the row's contract
-    string carries the row's rule, the packer identity the run's knob. Fix round T6c."""
+    string carries the row's rule, the packer identity the run's knob."""
     knob = QwenSFTDataPacker(text_packer.tokenizer, max_length=4096, mask_think_opener=True)
     prefilled_row = SFTTarget(_REASONING_THREE_TURN, tools=_THREE_TURN_TOOLS, opener="prefilled")
     self_row = SFTTarget(_REASONING_THREE_TURN, tools=_THREE_TURN_TOOLS)
@@ -1485,7 +1485,7 @@ def test_opener_prefilled_and_the_global_mask_are_one_rule(text_packer: QwenSFTD
 def test_opener_refuses_unknown_values_and_a_tokenizer_without_think(text_packer: QwenSFTDataPacker) -> None:
     """Fail closed: the schema refuses any value outside the two at construction, the packer refuses a target mutated after
     construction and a ``prefilled`` row on a tokenizer whose vocabulary has no ``<think>``; ``masking_contract`` refuses
-    an unknown opener. Fix round T6c."""
+    an unknown opener."""
     from cosmos_framework.posttrain.data.packer.sft import masking_contract
 
     with pytest.raises(ValueError, match="opener must be one of"):
@@ -1549,7 +1549,7 @@ def test_consecutive_think_openers_mask_exactly_one_token_per_supervised_block(t
 
 
 def test_opener_prefilled_refuses_a_supervised_block_without_an_opener(text_packer: QwenSFTDataPacker) -> None:
-    """Review R149-01 (fix round T6d): a ``prefilled`` row whose supervised assistant block carries no ``<think>`` opener
+    """A ``prefilled`` row whose supervised assistant block carries no ``<think>`` opener
     is REFUSED, naming the bare block(s) and the per-block mask counts, instead of packing as a self row under a
     ``_opener_prefilled_v1`` contract string. B1: ``all_assistant`` with no reasoning turn at all (both blocks bare);
     B2: ``last_assistant`` with a bare last turn; B3: mixed, turn 1 with reasoning and turn 2 bare. The same rows pack as

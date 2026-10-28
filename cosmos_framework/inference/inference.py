@@ -2151,7 +2151,7 @@ class OmniInference(Inference):
         require_idle_bimanual_model(self.model)
         assert all(isinstance(sa, OmniSampleArgs) for sa in sample_args_list)
 
-        # A multiview sample driven by a MADS caption file uses the chunkwise path, as in
+        # A multiview sample driven by a multiview caption file uses the chunkwise path, as in
         # the reference implementation. Without this dispatch load_caption_from_data was accepted, validated
         # and downloaded, then silently ignored: generation fell through to the one-shot
         # builder with the raw prompt, full num_frames, and the unsliced control head.
@@ -2798,7 +2798,7 @@ class OmniInference(Inference):
         *,
         save_outputs: bool = True,
     ) -> list[SampleOutputs]:
-        """Chunkwise multiview generation driven by a MADS caption file.
+        """Chunkwise multiview generation driven by a multiview caption file.
 
         Generation lives in ``inference/multiview.py``; this wrapper owns arg persistence, the prompt
         guardrail, saving, and error handling, matching ``_generate_transfer_batch``.

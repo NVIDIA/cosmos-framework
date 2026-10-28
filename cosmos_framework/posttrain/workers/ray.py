@@ -826,7 +826,7 @@ class _HostImpl:
         becomes MASTER_ADDR:PORT for the NCCL rendezvous (picked just before init so the
         port is fresh)."""
         ip, ports = self.rendezvous_endpoints(1)
-        # TODO(dinghaoy): rendezvous_endpoints closes the socket before init_distributed actually
+        # TODO: rendezvous_endpoints closes the socket before init_distributed actually
         # binds the port, so on a busy node another process can claim it in between (NCCL then fails
         # "address already in use" / hangs the whole grid). Harden by keeping the socket open
         # (SO_REUSEPORT) or starting the rank-0 c10d store before returning.
@@ -834,7 +834,7 @@ class _HostImpl:
 
     def rendezvous_endpoints(self, count: int) -> tuple[str, tuple[int, ...]]:
         """Allocate distinct currently-free ports on this node in one atomic socket batch."""
-        # TODO(dinghaoy): every socket is released before the caller starts its c10d store, so
+        # TODO: every socket is released before the caller starts its c10d store, so
         # another process can claim a returned port in between. Harden by keeping the sockets open
         # (SO_REUSEPORT) or starting each rank-0 c10d store before returning.
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
@@ -1526,7 +1526,7 @@ class _HostImpl:
                     )
                     if preserved is not None:
                         return preserved
-                    # future(yangyangt): every CUDA tensor is pooled regardless of size, so a 0-D
+                    # Future work: every CUDA tensor is pooled regardless of size, so a 0-D
                     # reward or logprob scalar costs a 256-byte aligned slot plus a PoolSlice
                     # descriptor larger than the value. A `cuda_min_bytes` floor mirroring the CPU
                     # one would keep such tensors inline, but inline CUDA tensors are then serialized

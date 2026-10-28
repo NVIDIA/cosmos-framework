@@ -624,7 +624,7 @@ def validate_cosmos3_cold_lora_inventory(
 
 
 class Cosmos3FlowPolicy:
-    """`FlowMatchingPolicy` over the i4 OmniMoT (`cosmos_framework.model.generator.OmniMoTModel`)."""
+    """`FlowMatchingPolicy` over the OmniMoT (`cosmos_framework.model.generator.OmniMoTModel`)."""
 
     def __init__(self, omnimot: Any, build_ref: bool = True, build_old: bool = False) -> None:
         self.omnimot = omnimot
@@ -977,7 +977,7 @@ class Cosmos3FlowPolicy:
         m = self.omnimot
         gdc = self._get_data_and_condition(batch, sample_encode_seeds=sample_encode_seeds)
         if "text_token_ids" in batch:
-            # iteration=1 is the i4 default; _load_and_tokenize_text_data ignores it.
+            # iteration=1 is the upstream default; _load_and_tokenize_text_data ignores it.
             text_tokens = m._load_and_tokenize_text_data(batch, iteration=1)
         else:
             text_tokens, _ = m._get_inference_text_tokens(batch, has_negative_prompt=False)

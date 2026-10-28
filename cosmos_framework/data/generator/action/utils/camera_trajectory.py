@@ -4,7 +4,7 @@
 """Camera-trajectory primitives shared by evaluation and inference.
 
 These were extracted verbatim from ``evaluation/action/eval_camera.py`` so the
-inference frontends -- both the native Imaginaire4 one and the released
+inference frontends -- both the native one and the released
 cosmos-framework one -- can build camera actions without importing the
 evaluation harness, which drags in OmegaConf, the sharded camera dataset, and
 the visualization stack.

@@ -55,8 +55,8 @@ arrive later in this series. `sim_manifest()` is declare-only for the same reaso
 ## The import discipline (gate G4)
 
 Every module directly under `embodied/` imports **stdlib, numpy and `schema` only**. That is
-what lets one core load in the Isaac venv (py3.11 + Isaac 5.1, no torch, no i4), the policy
-venv (torch + i4, no omnigibson) and the trainer venv alike.
+what lets one core load in the Isaac venv (py3.11 + Isaac 5.1, no torch, no native policy stack), the policy
+venv (torch + the native policy stack, no omnigibson) and the trainer venv alike.
 
 **It is also why this is a top-level package rather than a subtree of `roles/`.**
 `roles/` is the framework's role taxonomy; this is a library that two different venvs load.
@@ -150,7 +150,7 @@ already booted its engine. `the external simulator backend` does this; the cost 
 ## Two containers, one loop
 
 OmniGibson pins python 3.11 and needs `SimulationApp` on the process main thread. The framework
-venv has torch and i4 and pins its own python. Neither constraint bends, so the simulator runs
+venv has torch and the native policy stack and pins its own python. Neither constraint bends, so the simulator runs
 in its own image — and the loop has to reach across.
 
 **The split is at `SimRole`, not at `Simulator`.** That choice is the whole design:

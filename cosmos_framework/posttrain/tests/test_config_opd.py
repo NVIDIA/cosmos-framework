@@ -523,7 +523,7 @@ def test_runtime_preflight_rejects_incompatible_opd_settings() -> None:
 def test_native_qwen3_vl_builder_dispatches_from_resolved_model_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The config path selects the direct i4-native builder, never posttrain's generic HFModel."""
+    """The config path selects the direct native builder, never posttrain's generic HFModel."""
     captured: dict[str, object] = {}
     sentinel = object()
 

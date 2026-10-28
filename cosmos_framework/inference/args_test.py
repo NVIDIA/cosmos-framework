@@ -556,13 +556,13 @@ def test_multiview_text2video_still_resolves_no_conditioning(tmp_path: Path):
     assert _multiview_sample_meta(tmp_path, with_vision=False).condition_vision_mode is None
 
 
-# --- camera defaults must track imaginaire4 -----------------------------------
+# --- camera defaults must track the upstream codebase -----------------------------------
 #
 # These three are a single coherent recipe, not independent knobs: global_asinh
-# requires translation_scale=1.0. imaginaire4 changed all three together in
+# requires translation_scale=1.0. The upstream codebase changed all three together in
 # 2b258f77340 ("Add production Lance camera stage-0 recipe"), and this repo kept the
 # previous values for a while afterwards. Nothing failed -- packages/cosmos3 is not
-# release-mapped, so an imaginaire4 change to it cannot propagate here, and a camera
+# release-mapped, so an upstream change to it cannot propagate here, and a camera
 # run that does not pass these flags silently produced a different rollout in each
 # runtime. Pin them so the next divergence is a failing test rather than a bad video.
 
@@ -588,7 +588,7 @@ def test_unset_camera_overrides_fall_back_to_the_same_values(tmp_path: Path) -> 
     """The Overrides fallback must agree with the Args default.
 
     Two places encode the same recipe, so they can drift apart from each other as
-    well as from imaginaire4.
+    well as from the upstream codebase.
     """
     import types
 
@@ -625,7 +625,7 @@ def _caption_mode_transfer_overrides(tmp_path: Path, *, load_caption_from_data: 
 def test_caption_mode_withholds_the_generic_transfer_chunk_length(tmp_path: Path) -> None:
     """A caption run derives its chunk length from the span each caption describes.
 
-    The generic 93-frame transfer chunk must not stand in for it: the MADS captions cover 0-300,
+    The generic 93-frame transfer chunk must not stand in for it: the multiview captions cover 0-300,
     which derives to 297, so letting the default win generates less than a third of what the text
     covers -- with no error, and a well-formed video.
     """
@@ -663,7 +663,7 @@ def _mv_overrides(tmp_path: Path, *, per_view_captions: bool) -> dict:
 
 
 def test_each_camera_can_carry_its_own_caption_path(tmp_path: Path) -> None:
-    """The schema gap that made imaginaire4's shipped per-view inputs unloadable here.
+    """The schema gap that made the upstream codebase's shipped per-view inputs unloadable here.
 
     OverridesBase is extra="forbid", so caption_path on a view was a hard validation error rather
     than an ignored key -- 11 of them for an 11-camera rig.

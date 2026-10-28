@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for the multiview MADS caption-chunk frontend and the per-camera media loaders.
+"""Tests for the multiview caption-chunk frontend and the per-camera media loaders.
 
-The parser itself is released from imaginaire4 and tested there against both on-disk schemas.
-What is pinned here is the part this repo owns: that the frontend reads the schema the MADS eval
+The parser itself is released from the upstream codebase and tested there against both on-disk schemas.
+What is pinned here is the part this repo owns: that the frontend reads the schema the multiview eval
 bundles actually carry, and that the chunk boundaries it hands to generation are the ones the
 parser produced.
 """
@@ -383,7 +383,7 @@ def test_decoder_output_is_mapped_from_minus_one_one_to_zero_one() -> None:
 
     Handing a [-1, 1] tensor to a [0, 1] consumer crushes everything the model put below 0.5 to
     black. Measured on an 11-camera run before this was fixed: 70.7% of all pixels were exactly
-    zero, and the saved video related to imaginaire4's by cf = clamp(2*i4 - 255, 0, 255) to within
+    zero, and the saved video related to the upstream video's by cf = clamp(2*up - 255, 0, 255) to within
     0.61/255.
     """
     assert _decode_to_pixels(-1.0) == pytest.approx(0.0)
