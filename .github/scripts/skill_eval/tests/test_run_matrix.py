@@ -291,6 +291,7 @@ def write_config(
         f"launcher: {launcher}",
         f"env_file: {env_file or tmp_path / 'missing.env'}",
         "codex_model: openai/openai/gpt-6-astra",
+        "cursor_model: cursor/claude-sonnet-5-5-medium",
         f"workdir: {tmp_path / 'work'}",
     ]
     if skills is not None:
@@ -482,7 +483,7 @@ def test_load_config_expands_paths_and_validates(tmp_path: Path):
     path = tmp_path / "c.yml"
     path.write_text(
         "backends: [claude]\nimage: img\ndashboard: http://d/\n"
-        "launcher: ~/bin/launch\nworkdir: ~/work\nenv_file: ~/e.env\ncodex_model: m\n"
+        "launcher: ~/bin/launch\nworkdir: ~/work\nenv_file: ~/e.env\ncodex_model: m\ncursor_model: c\n"
     )
     config = rm.load_config(path)
     assert config.launcher == Path.home() / "bin" / "launch"
@@ -490,6 +491,7 @@ def test_load_config_expands_paths_and_validates(tmp_path: Path):
     assert config.env_file == Path.home() / "e.env"
     assert config.dashboard == "http://d"
     assert config.codex_model == "m"
+    assert config.cursor_model == "c"
     assert config.skills is None and config.smoke is None  # no `skills:` -> detect from the PR; canary off by default
 
     path.write_text("backends: [claude]\ndashboard: http://d\nlauncher: l\nworkdir: w\n")
@@ -994,6 +996,7 @@ def test_build_launcher_command_matches_contract(tmp_path: Path):
         workdir=tmp_path,
         env_file=env_file,
         codex_model="openai/openai/gpt-6-astra",
+        cursor_model="cursor/claude-sonnet-5-5-medium",
     )
     checkout = tmp_path / "co"
     out = tmp_path / "out"
@@ -1023,6 +1026,9 @@ def test_build_launcher_command_matches_contract(tmp_path: Path):
     assert codex[1:3] == ["--env-file", str(env_file)]
     assert "COSMOS_EVAL_CODEX_MODEL=openai/openai/gpt-6-astra" in codex
     assert "COSMOS_EVAL_CODEX_MODEL=openai/openai/gpt-6-astra" not in claude
+    cursor = rm.build_launcher_command(config, checkout, out, rm.Cell(SKILL, "hello", "cursor"))
+    assert "COSMOS_EVAL_CURSOR_MODEL=cursor/claude-sonnet-5-5-medium" in cursor
+    assert "COSMOS_EVAL_CURSOR_MODEL=cursor/claude-sonnet-5-5-medium" not in codex and "COSMOS_EVAL_CODEX_MODEL" not in " ".join(cursor)
 
 
 def test_build_launcher_env_passes_the_job_environment_through_minus_the_github_token(tmp_path: Path):

@@ -5,10 +5,14 @@
 #   - applies a trigger label to a PR: `run-skill-eval` (default run: the touched skills, no canary),
 #     `run-skill-eval-smoke` (canary only), `run-skill-eval-failed` (re-run the cells that did not PASS) or
 #     `run-skill-eval-force` (re-run everything),
-#   - comments `/run-skill-eval [args]` on a PR (owner/member/collaborator) — args: `smoke-only`, `with-smoke`,
+#   - comments `/run-skill-eval [args]` on a PR (repository write access, see `gate` below) — args: `smoke-only`, `with-smoke`,
 #     `force`, `rerun-failed`, `cells=<backend>/<case>,…`, `group=<id>` (see .github/scripts/skill_eval/README.md,
 #     "Trigger arguments"), or
 #   - dispatches it manually with a PR number, a scope and optional args.
+# Who may start it: the `gate` job (GitHub-hosted, no checkout) asks the collaborators API for the role of the person who
+# commented, applied the label or dispatched, and accepts only `write`, `maintain` or `admin` on this repository —
+# organisation membership or a read / triage role is not enough — before any self-hosted job starts; PRs from forks are
+# refused (the `plan` job checks the head repository again).
 # The `plan` job detects the skills the PR touches and posts ONE comment; every eval cell (case × backend)
 # then runs as its own job, so GitHub queues the cells over all idle runners with the `cosmos-skill-eval`
 # + `h100` labels (3 nodes = 3 cells in flight) — except cursor cells, whose jobs also need `cursor-serial`, a label
@@ -56,10 +60,12 @@ env:
   COSMOS_SKILL_EVAL_DASHBOARD: ${{ vars.COSMOS_SKILL_EVAL_DASHBOARD }}
 
 jobs:
-  plan:
-    name: plan
-    # The comment match is a prefix: `/run-skill-eval` followed by arguments. The arguments themselves are
-    # taken apart in the plan step (shell/python), never in this expression.
+  gate:
+    name: gate
+    # Cheap pre-filter on the event (which label, which comment prefix, who could possibly be allowed); the decision —
+    # does the person who triggered the run hold the write, maintain or admin role on this repository — is the
+    # collaborators-API check in the step below. The comment match is a prefix: `/run-skill-eval` followed by
+    # arguments. The arguments themselves are taken apart in the plan step (shell/python), never in this expression.
     if: >-
       (github.event_name == 'pull_request'
         && contains(fromJSON('["run-skill-eval","run-skill-eval-smoke","run-skill-eval-failed","run-skill-eval-force"]'), github.event.label.name)
@@ -69,6 +75,45 @@ jobs:
         && startsWith(github.event.comment.body, '/run-skill-eval')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest  # GitHub-hosted and no checkout: nothing from the PR runs before the check has passed
+    timeout-minutes: 5
+    steps:
+      - name: Require the write, maintain or admin role of the person who triggered the run
+        env:
+          # the commenter, the person who applied the label, or the dispatcher — read from the event, never from the PR
+          ACTOR: ${{ github.event.sender.login || github.actor }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]; tok = os.environ["GH_TOKEN"]; actor = os.environ["ACTOR"]
+          def api(path, method="GET", body=None):
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/{path}", method=method,
+                  data=json.dumps(body).encode() if body else None,
+                  headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
+                           "Content-Type": "application/json", "User-Agent": "cosmos-skill-eval"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r) if r.status != 204 else {}
+          try:
+              perm = api(f"collaborators/{actor}/permission")
+              role = perm.get("role_name") or perm.get("permission") or "none"
+          except urllib.error.HTTPError as exc:  # 404: not a collaborator of this repository at all
+              role = f"none (HTTP {exc.code})"
+          allowed = role in ("admin", "maintain", "write")
+          print(f"{actor}: role {role} on {repo} -> {'allowed' if allowed else 'refused'} (PR #{os.environ['PR_FROM_EVENT']})")
+          if not allowed:
+              if os.environ.get("COMMENT_ID"):
+                  try:
+                      api(f"issues/comments/{os.environ['COMMENT_ID']}/reactions", "POST", {"content": "confused"})
+                  except Exception as exc:  # cosmetic
+                      print(f"reaction skipped: {exc}")
+              raise SystemExit(f"::error::{actor} has the role '{role}' on {repo}: only write, maintain or admin may start the skill eval")
+          PY
+
+  plan:
+    name: plan
+    needs: gate
     runs-on: [self-hosted, cosmos-skill-eval]
     timeout-minutes: 30
     # one plan at a time per PR; later triggers queue (an unrelated label/comment event never reaches this job,

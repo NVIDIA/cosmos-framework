@@ -14,12 +14,20 @@ Never automatically. `.github/workflows/skill-eval.yml` starts a run when someon
   at the end so they can be re-applied): `run-skill-eval` (default run: the touched skills, no canary),
   `run-skill-eval-smoke` (canary only, = token `smoke-only`), `run-skill-eval-failed` (re-run the cells that did
   not PASS, see [Re-running](#re-running-cache-semantics)) or `run-skill-eval-force` (re-run every cell),
-- comments `/run-skill-eval [arguments]` on a PR (owner / member / collaborator; needs the file on `main`) — the
+- comments `/run-skill-eval [arguments]` on a PR (write, maintain or admin role on the repository, see below; needs the
+  file on `main`) — the
   comment's first line, anything after `/run-skill-eval` is parsed as [trigger arguments](#trigger-arguments), or
 - dispatches the workflow manually with a PR number, a scope (`full`, or `smoke` = token `smoke-only`) and optional
   `args` (the same trigger arguments as in a comment, e.g. `with-smoke`).
 
-The workflow has four stages, all on self-hosted runners (label `cosmos-skill-eval`; cells also need `h100`, and
+**Who may start it.** Every trigger passes a GitHub-hosted `gate` job first (no checkout, so nothing from the PR runs
+before it): it reads the role of the person who commented, applied the label or dispatched
+(`GET /repos/<owner>/<repo>/collaborators/<login>/permission`) and accepts `write`, `maintain` or `admin` only.
+Organisation membership, a read or triage role, or a PR from a fork is refused — a refused comment gets a 😕 reaction
+and the run ends before a self-hosted runner is touched; `plan` refuses fork heads a second time. (Applying a label
+needs triage access on GitHub anyway; the gate still requires write.)
+
+After the gate the workflow has four stages, all on self-hosted runners (label `cosmos-skill-eval`; cells also need `h100`, and
 cursor cells `cursor-serial` — see [Runners](#runners)):
 
 1. **`plan`** checks out the PR head (full history — every branch, so the base commit and the merge base that the
@@ -398,9 +406,12 @@ the version's newest published result for it, whichever run produced it.
 
 ## Config
 
-`backends:`, `image:`, `dashboard:`, `launcher:`, `env_file:`, `codex_model:` and `workdir:` are plain key/value
+`backends:`, `image:`, `dashboard:`, `launcher:`, `env_file:`, `codex_model:`, `cursor_model:` and `workdir:` are plain key/value
 settings in `.github/skill-eval.yml`, plus the optional `smoke:`, `skills:`, `docker_check:` and `docker_repair:`
 keys described above (the two commands are split like a shell would), `docker_wait_minutes:`, and the runner labels
+(`codex_model:` / `cursor_model:` reach the evaluator container as `COSMOS_EVAL_CODEX_MODEL` / `COSMOS_EVAL_CURSOR_MODEL`
+for the cells of that backend — the model the agent runs; a cursor value is a Cursor model slug prefixed `cursor/`,
+e.g. `cursor/claude-sonnet-5-5-medium`, served by Cursor's own backend),
 of the cell jobs: `runner_labels:` (default `[self-hosted, cosmos-skill-eval, h100]`, every cell job's `runs-on`),
 `serial_backends:` (default `[cursor]`; `[]` switches the pinning off) and `serial_runner_label:` (default
 `cursor-serial`) — a cell of a serial backend gets that extra label, which exactly one runner carries, see

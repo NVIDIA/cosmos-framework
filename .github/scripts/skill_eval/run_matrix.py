@@ -159,6 +159,7 @@ class Config:
     workdir: Path
     env_file: Path | None = None
     codex_model: str | None = None
+    cursor_model: str | None = None  # COSMOS_EVAL_CURSOR_MODEL for cursor cells (a `cursor/<slug>` model id)
     skills: list[str] | None = None  # explicit override; None = detect the skills the PR touches
     smoke: bool | None = None  # None = only on request (`with-smoke`/`smoke-only`); True = always; False = never
     docker_check: list[str] | None = None  # must succeed before a cell starts (e.g. `docker info`); None = no gate
@@ -291,6 +292,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         )
     env_file = data.get("env_file")
     codex_model = data.get("codex_model")
+    cursor_model = data.get("cursor_model")
     # The evaluator image and the dashboard URL are deployment values: the repository variables
     # COSMOS_SKILL_EVAL_IMAGE / COSMOS_SKILL_EVAL_DASHBOARD (exported by the workflow) override the config file, whose
     # own values are placeholders in the public mirror of this tree.
@@ -305,6 +307,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         workdir=_expand_path(required_scalar("workdir")),
         env_file=_expand_path(env_file) if isinstance(env_file, str) else None,
         codex_model=codex_model if isinstance(codex_model, str) else None,
+        cursor_model=cursor_model if isinstance(cursor_model, str) else None,
         skills=skills,
         smoke=optional_tristate("smoke"),
         docker_check=optional_command("docker_check"),
@@ -1927,6 +1930,8 @@ def build_launcher_command(
         command += ["-e", f"COSMOS_EVAL_SKILL_CONTENT_SHA={content_sha}"]
     if cell.backend == "codex" and config.codex_model:
         command += ["-e", f"COSMOS_EVAL_CODEX_MODEL={config.codex_model}"]
+    if cell.backend == "cursor" and config.cursor_model:
+        command += ["-e", f"COSMOS_EVAL_CURSOR_MODEL={config.cursor_model}"]
     command += ["--github-env"]
     command += ["eval", f"/workspace/skill-source/{skill_dir(cell.skill, canary=cell.canary)}"]
     command += ["--backend", cell.backend, "--case", cell.case]

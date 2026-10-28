@@ -41,6 +41,10 @@ dashboard: https://set-COSMOS_SKILL_EVAL_DASHBOARD.invalid
 launcher: ~/cosmos-skill-eval-src/scripts/cosmos-skill-eval
 env_file: ~/cosmos-skill-eval.env       # used only if it exists on the runner
 codex_model: openai/openai/gpt-6-astra
+# Cursor cells run Claude Sonnet 5.5 through Cursor's backend (Cursor model slug `claude-sonnet-5-5-medium`, listed by
+# `cursor-agent --list-models`; the evaluator's own default is Cursor's Composer model) so the four backends exercise four
+# different model families. Handed to the evaluator container as COSMOS_EVAL_CURSOR_MODEL for cursor cells only.
+cursor_model: cursor/claude-sonnet-5-5-medium
 workdir: ~/ci-skill-eval
 # Runner health gate (see .github/scripts/skill_eval/README.md, "Runner health"): the check runs before every
 # cell; when it fails the repair runs once and the check is repeated. A cell whose launcher died on a docker
