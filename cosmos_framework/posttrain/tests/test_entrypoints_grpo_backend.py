@@ -174,7 +174,7 @@ build.build_vllm_rollout = lambda _config, *, packer, trust_remote_code, return_
 packer = build_rollout(config)
 assert isinstance(packer, Qwen3VLDataPacker)
 assert config.model.requires_collated_policy_forward is True
-assert hf_module not in sys.modules, "the i4 rollout imported the HF VLM packer"
+assert hf_module not in sys.modules, "the native rollout imported the HF VLM packer"
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

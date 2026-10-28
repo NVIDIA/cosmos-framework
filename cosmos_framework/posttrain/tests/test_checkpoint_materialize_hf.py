@@ -1357,7 +1357,7 @@ def test_default_preflight_refuses_a_named_template_directory_with_entries_that_
     if case == "jinja_named_subdirectory":
         doc = hf_overlay.unified_template_directory_conflict.__doc__ or ""
         assert "*.jinja" in doc and "IsADirectoryError" in doc, (
-            "R149D-03: the loader clause for a sub-directory named *.jinja"
+            "the loader clause for a sub-directory named *.jinja"
         )
     # regular files only: the default build accepts and mirrors the directory (today's behaviour kept)
     if case == "dangling_symlink":

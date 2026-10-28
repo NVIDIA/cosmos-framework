@@ -579,7 +579,7 @@ def test_camera_defaults_match_imaginaire4() -> None:
     for field, expected in _I4_CAMERA_DEFAULTS.items():
         actual = InteractiveDataArgs.model_fields[field].default
         assert actual == expected, (
-            f"{field} is {actual!r} but imaginaire4 resolves {expected!r}; "
+            f"{field} is {actual!r} but upstream resolves {expected!r}; "
             "a camera run without this flag would diverge between the two runtimes"
         )
 

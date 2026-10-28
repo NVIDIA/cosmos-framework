@@ -60,7 +60,7 @@ def test_gcs_endpoint_gets_interop_config():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_non_gcs_endpoint_untouched():
-    cfg = build_s3_config("https://pdx.s8k.io")
+    cfg = build_s3_config("https://s3.example.com")
     assert cfg.signature_version is None  # stock signing for real S3-compatible stores
 
 

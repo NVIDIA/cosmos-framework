@@ -574,7 +574,7 @@ class TestSanitizeExportArgs:
             "student_only_checkpoint_metadata": True,
             "verify": True,
             "vit": True,
-            "vit_checkpoint_path": "/lustre/users/someone/hf_snapshot",
+            "vit_checkpoint_path": "/data/users/someone/hf_snapshot",
         }
         sanitized = helpers.sanitize_export_args(export_args)
         assert sanitized == {

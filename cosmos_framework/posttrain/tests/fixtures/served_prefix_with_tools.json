@@ -29,11 +29,11 @@
     "version": "0.24.0"
    }
   },
-  "measurement_of_record": "review round 138 R138-01 (/path/to/shared-storage P3/P4, 21_live_probes_b.out P7/P8, 22_live_probe_developer.out P9)"
+  "measurement_of_record": "live probes (/path/to/shared-storage P3/P4, 21_live_probes_b.out P7/P8, 22_live_probe_developer.out P9)"
  },
  "deployment": {
-  "description": "A1a test deployment, SLURM job 761966 (b0-export-serve) on nvl72d411-T09, port 8000",
-  "base_url": "http://nvl72d411-T09:8000",
+  "description": "A1a test deployment, single serving node, port 8000",
+  "base_url": "http://<serving-host>:8000",
   "served_model": "cosmos35-a1a-final",
   "vllm_version": "0.24.0"
  },
@@ -253,13 +253,13 @@
   "responses_path_input_tokens": {
    "effort_high": 157,
    "no_reasoning_field": 157,
-   "measured": "fix round 8d R1 / R2 and review round 138 P4 / P7 (one synthetic tool)",
+   "measured": "live probes R1 / R2 and P4 / P7 (one synthetic tool)",
    "eight_tools_with_wire": {
     "effort_high": 7862,
     "no_reasoning_field": 7862,
     "effort_adds_input_tokens": 0,
-    "measured": "review round 142 Q3 / Q4 (/path/to/shared-storage, 2026-10-02T14:58-07:00, the same A1a deployment, vLLM 0.24.0): POST /v1/responses with the wire instructions (16,979 chars), input hello, the 8 captured Codex tools and max_output_tokens 1, with reasoning.effort high (Q3) and without the reasoning field (Q4); the first live effort-present vs effort-absent pair with the 8 tools",
-    "earlier_record": "review round 138 P3 (/path/to/shared-storage) measured the effort-present member live (7862) and compared it with the LOCAL rendering without <think> (7862), not with a live request without the effort field (review R142-02)"
+    "measured": "live probes Q3 / Q4 (/path/to/shared-storage, 2026-10-02T14:58-07:00, the same A1a deployment, vLLM 0.24.0): POST /v1/responses with the wire instructions (16,979 chars), input hello, the 8 captured Codex tools and max_output_tokens 1, with reasoning.effort high (Q3) and without the reasoning field (Q4); the first live effort-present vs effort-absent pair with the 8 tools",
+    "earlier_record": "live probe P3 (/path/to/shared-storage) measured the effort-present member live (7862) and compared it with the LOCAL rendering without <think> (7862), not with a live request without the effort field"
    }
   }
  },

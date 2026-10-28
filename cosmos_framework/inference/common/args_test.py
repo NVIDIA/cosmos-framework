@@ -169,7 +169,7 @@ def test_parse_checkpoint_path(tmp_path: Path):
 
     # S3 DCP checkpoint
     args = CheckpointOverrides(
-        checkpoint_path=f"s3://bucket/cosmos3_vfm/t2i_mot_0p6b_qwen3_vl_ablations/t2i_mot_exp000_015_qwen3_0p6b_256res_frozen_llm_lr_4e4_large_seq_no_llm_qknorm_gcp_bs8k_baseline_long_run_1e4/checkpoints/iter_000700000/model",
+        checkpoint_path=f"s3://bucket/project/group/t2i_mot_exp000_015_qwen3_0p6b_256res_frozen_llm_lr_4e4_large_seq_no_llm_qknorm_gcp_bs8k_baseline_long_run_1e4/checkpoints/iter_000700000/model",
     ).build_checkpoint(checkpoints=CHECKPOINTS)
     assert args.checkpoint_type == "dcp"
     assert (
