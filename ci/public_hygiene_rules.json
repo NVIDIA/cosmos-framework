@@ -1,0 +1,38 @@
+{
+  "dependency_approved_owners": ["NVIDIA", "huggingface", "pytorch", "vllm-project", "open-compass", "SHI-Labs"],
+  "rules": [
+    {
+      "id": "internal-link",
+      "pattern": "(?i)https?://(?:gitlab-master\\.nvidia\\.com|nvbugs(?:\\.nvidia\\.com)?)(?:[/:]|$)",
+      "message": "Review whether this internal development link belongs in the public output. Preserve useful provenance upstream."
+    },
+    {
+      "id": "internal-resource",
+      "pattern": "(?i)(?:https?://(?:[a-z0-9.-]+\\.s8k\\.io|sc-hw-artf\\.nvidia\\.com|[a-z0-9.-]+\\.xenon\\.lepton\\.run)(?:[/:]|$)|/(?:lustre|scratch)/(?:fsw|fs[0-9]+)/portfolios/|s3://(?:cosmos_understanding|metropolis-benchmark-datasets|nv-cosmos-checkpoint-[a-z0-9-]+)(?:/|$))",
+      "message": "Review this known internal resource reference. It may be intentional compatibility metadata, not an active public dependency."
+    },
+    {
+      "id": "dependency-source",
+      "pattern": "(?i)(?:git\\+https?|git\\+ssh|git|ssh)://(?:git@)?github\\.com/(?P<owner>[a-z0-9-]+)/[a-z0-9_.-]+|https://github\\.com/(?P<https_owner>[a-z0-9-]+)/[a-z0-9_.-]+\\.git\\b",
+      "dependency_source": true,
+      "message": "Review ownership, pinning, and public availability of this Git dependency. An unlisted owner is not necessarily personal or private."
+    },
+    {
+      "id": "model-access-review",
+      "pattern": "(?i)(?:nvidia(?:-cosmos-ea)?/Cosmos(?:3)?-Experimental|nvidia/Cosmos3-[a-z0-9.-]+-Private)\\b",
+      "message": "Review whether this known experimental/private-model reference is intended for public use. No network or access check was performed."
+    },
+    {
+      "id": "internal-provenance",
+      "pattern": "(?i)\\binternal[ -]+(?:MR|merge request|review|bug|codename)\\b",
+      "message": "Review internal development provenance in public text; this is not a request to remove code directives, attribution, or licenses."
+    },
+    {
+      "id": "release-wording",
+      "pattern": "\\b(?:before[ -]+(?:EA|GA)|after[ -]+(?:EA|GA)|pre[ -](?:EA|GA)|early[ -]access|general availability|pre[ -]release)\\b",
+      "prose_only": true,
+      "message": "Review whether release-stage wording is still accurate. Valid release notes and support limitations may be retained."
+    }
+  ],
+  "exceptions": []
+}

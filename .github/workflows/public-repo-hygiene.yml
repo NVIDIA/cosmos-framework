@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: Public repo hygiene
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-repo-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review-hints:
+    name: Public repo hygiene (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Check the scanner (standard library only)
+        run: python -m unittest discover -s ci -p 'test_public_hygiene.py' -v
+      - name: Review added PR lines
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python ci/check_public_hygiene.py --base "$BASE_SHA" --head "$HEAD_SHA" --github
+      - name: Review the tracked release tree (manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: python ci/check_public_hygiene.py --root . --github
