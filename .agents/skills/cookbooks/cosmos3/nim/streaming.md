@@ -18,6 +18,11 @@ an image with streaming support. Refer to [Streaming Video
 Sessions](configuration.md#streaming-video-sessions)
 for enablement, capacity, and idle timeouts.
 
+> [!NOTE]
+> Checkpoint and KV-cache precision affect streaming quality. NVFP4 checkpoints
+> are currently not recommended for streaming. Use an FP8 checkpoint with BF16
+> KV-cache precision for streaming workloads.
+
 For a shared NVIDIA Dynamo frontend, use the [Dynamo streaming deployment](dynamo/dynamo_with_streaming.md)
 and the client's `--backend dynamo --transport rest` mode. Dynamo supports REST
 sessions and config GET. WebSocket is unsupported. In this mode, the client
