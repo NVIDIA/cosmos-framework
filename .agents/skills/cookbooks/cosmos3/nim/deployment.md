@@ -69,8 +69,9 @@ workload requires it. Edge Reasoner is BF16 or FP8 (no NVFP4), and Edge-DROID
 and Nano-DROID are BF16 only.
 
 For [streaming video sessions](streaming.md), precision affects quality:
-NVFP4 checkpoints are currently not recommended. Select an FP8 checkpoint
-with `NIM_PRECISION=fp8` and use BF16 KV-cache precision.
+NVFP4 checkpoints are currently not recommended. Select either an FP8 checkpoint
+with `NIM_PRECISION=fp8` and BF16 KV-cache precision, or a BF16 checkpoint
+with `NIM_PRECISION=bf16`.
 
 ## Before You Deploy
 
