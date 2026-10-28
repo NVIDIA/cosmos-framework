@@ -1,14 +1,12 @@
 # Cosmos Framework (torchrun) — distilled from the cookbook notebook
 
-Source: `run_with_cosmos_framework.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_cosmos_framework.ipynb> (pinned commit; this file supersedes it and is complete on its own)
-
 Scope: the native PyTorch backend — the README quickstart, the notebook's environment variables, framework checkout, `uv` install and GPU check, and the per-use-case `torchrun -m cosmos_framework.scripts.inference` runs for Cosmos3-Nano, Nano FP8, Cosmos3-Super, the Super 4-Step students and Cosmos3-Edge; the payload helpers, asset sets and sampling tables this notebook shares with the other backends are referenced from payloads.md.
 
 ## Quickstart (cookbook README)
 
 ### Quickstart
 
-Set up the environment: [Cosmos Framework setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#cosmos-framework).
+Set up the environment: [Cosmos Framework setup](../../cookbooks/cosmos3/README.md#cosmos-framework).
 Activate the framework venv created during setup (`packages/cosmos3/.venv` at the
 cookbook root, `.agents/skills`), or call its `torchrun` by path. The notebook builds a full inference
 payload JSON (not the raw prompt asset alone); build one the same way, then run
@@ -66,7 +64,7 @@ only 256p/480p, so use Edge's generation settings in the payload:
 
 ### Notebook walkthrough
 
-[`run_with_cosmos_framework.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_cosmos_framework.ipynb) is the full
+`run_with_cosmos_framework.ipynb` is the full
 tutorial for the native PyTorch backend: it covers every use case — text-to-image,
 text-to-video, image-to-video, with audio on or off — and includes the detailed,
 environment-aware setup and visualization for each generation. It also includes
@@ -75,7 +73,7 @@ four-GPU inference examples for `nvidia/Cosmos3-Super-Text2Image-4Step` and
 
 ### Distillation training recipe
 
-[`distill/README.md`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/distill/README.md) documents the short T2I and I2V DMD2
+[`distill/README.md`](../../cookbooks/cosmos3/generator/audiovisual/distill/README.md) documents the short T2I and I2V DMD2
 training, resume, and student-only export workflow. The first supported topology
 is exactly 8 GB200 nodes with 4 GPUs per node. This is an integration smoke
 recipe, not a production reproduction recipe.
@@ -200,6 +198,8 @@ if [ ! -x "$COSMOS3_UV_ENV/bin/python" ]; then
   exit 1
 fi
 ```
+
+Skill note (not in the notebook): `command -v uv` is not enough — the uv version must equal `tool.uv.required-version` of the checkout (`==0.11.29` in its `pyproject.toml`), which uv applies from any cwd under the checkout; any other uv aborts `uv sync` with exit 2 (`error: Required uv version ==0.11.29 does not match the running version …`). `uv self update 0.11.29` only works for a standalone-installer uv (it refuses for pip/apt/vendored uv: `Self-update is only available for uv binaries installed via the standalone installation scripts`). SKILL.md Variant 2 has the preflight: install the pinned uv side-by-side (`curl -LsSf "https://astral.sh/uv/0.11.29/install.sh" | env UV_INSTALL_DIR="$HOME/.local/uv-0.11.29" INSTALLER_NO_MODIFY_PATH=1 sh`, then put that directory first on `PATH`), or leave the `uv` on PATH alone and run `GIT_LFS_SKIP_SMUDGE=1 uvx --from 'uv==0.11.29' uv sync --all-extras --group="$COSMOS3_UV_GROUP"` from the checkout.
 
 ## 5. Verify GPU and Python Environment
 
@@ -399,3 +399,23 @@ COSMOS_TRAINING=1 COSMOS_INTERNAL=0 CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
 ## Edge: Image to Video Without Audio
 
 Edge image-to-video generation using its paired image asset, with audio disabled (Edge has no audio modules).
+
+## 8. Skill notes (not in the notebook) — `uv sync` alternative and run settings (from SKILL.md Variant 2)
+
+Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; wording unchanged). Nothing in this section is notebook text; SKILL.md keeps a one-line pointer at each former location.
+
+### 8.1 Install-free `uv sync` alternative (SKILL.md Variant 2)
+
+Install-free alternative used by the framework docs, in place of the `uv sync` line:
+`GIT_LFS_SKIP_SMUDGE=1 uvx --from "uv==$REQ_UV" uv sync --all-extras --group="$COSMOS3_UV_GROUP"`.
+
+### 8.2 `--checkpoint-path` names, output discovery and the Edge / Super / 4-Step run settings (SKILL.md Variant 2)
+
+`--checkpoint-path` takes the short names the notebook and README pass —
+`Cosmos3-Edge`, `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Super-Text2Image-4Step`,
+`Cosmos3-Super-Image2Video-4Step` — or a local checkpoint directory (the notebook's
+Nano FP8 example). `view_run` finds the result under the `-o` directory as `*.mp4`
+(ignoring `*_preview.mp4` / `*_browser.mp4`) or `*.png` / `*.jpg` / `*.jpeg`. Edge runs
+single-GPU (`--nproc-per-node=1`) but supports only 256p/480p, has no audio modules
+(keep `"enable_sound": false`), and uses `"num_frames": 121` at `"fps": 24`. The 4-Step
+students run on four GPUs with `--dp-shard-size=4` here; Super: "use more GPUs via `--nproc-per-node`".

@@ -16,7 +16,7 @@ repository. The notebooks remain readable at the pinned public commit:
 - [`run_with_sglang.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_sglang.ipynb) → `.agents/skills/cosmos3-generate-media/references/sglang.md`
 - [`run_with_trt_llm.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_trt_llm.ipynb) → `.agents/skills/cosmos3-generate-media/references/trt-llm.md`
 - [`run_distilled_with_trt_llm.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_distilled_with_trt_llm.ipynb) → `.agents/skills/cosmos3-generate-media/references/distilled-trt-llm.md`
-- [`run_with_nim.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_nim.ipynb) → `.agents/skills/cosmos3-generate-media/references/nim.md` (removed again on 2026-10-27 — Variant 7 now delegates to the Cosmos3 NIM 2.1.0 cookbook; see the NIM section at the end)
+- [`run_with_nim.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_nim.ipynb) → `.agents/skills/cosmos3-generate-media/references/nim.md`
 - [`README.md`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/README.md) → per-backend "Quickstart (cookbook README)" sections and `.agents/skills/cosmos3-generate-media/references/payloads.md`
 
 Rules applied: every command, flag, value, note and explanation was kept as written (nothing was corrected, even where
@@ -27,16 +27,16 @@ twice against its sources by an independent reader; the final audit result is re
 
 ### Summary
 
-| Source                                              | Destination                                                             | Lines | Units migrated | Not migrated (plumbing) | Final audit                                      |
-| --------------------------------------------------- | ----------------------------------------------------------------------- | ----- | -------------- | ----------------------- | ------------------------------------------------ |
-| notebooks (shared cells) + README (shared parts)    | `.agents/skills/cosmos3-generate-media/references/payloads.md`          | 1739  | 32             | 12                      | written first; covered by the per-backend audits |
-| `run_with_diffusers.ipynb` + README section         | `.agents/skills/cosmos3-generate-media/references/diffusers.md`         | 423   | 50             | 9                       | faithful — 0 missing, 9 modified, 5 additions    |
-| `run_with_cosmos_framework.ipynb` + README section  | `.agents/skills/cosmos3-generate-media/references/cosmos-framework.md`  | 401   | 49             | 9                       | faithful — 0 missing, 6 modified, 3 additions    |
-| `run_with_vllm_omni.ipynb` + README section         | `.agents/skills/cosmos3-generate-media/references/vllm-omni.md`         | 473   | 60             | 7                       | faithful — 0 missing, 0 modified, 0 additions    |
-| `run_with_sglang.ipynb` + README section            | `.agents/skills/cosmos3-generate-media/references/sglang.md`            | 399   | 64             | 8                       | faithful — 0 missing, 3 modified, 8 additions    |
-| `run_with_trt_llm.ipynb` + README section           | `.agents/skills/cosmos3-generate-media/references/trt-llm.md`           | 569   | 92             | 11                      | faithful — 0 missing, 1 modified, 2 additions    |
-| `run_distilled_with_trt_llm.ipynb` + README section | `.agents/skills/cosmos3-generate-media/references/distilled-trt-llm.md` | 265   | 47             | 8                       | faithful — 0 missing, 3 modified, 8 additions    |
-| `run_with_nim.ipynb` + README section               | `.agents/skills/cosmos3-generate-media/references/nim.md`               | 375   | 33             | 5                       | faithful — 0 missing, 4 modified, 0 additions    |
+| Source                                              | Destination                                                             | Lines | Units migrated | Not migrated (plumbing) | Final audit                                                                                          |
+| --------------------------------------------------- | ----------------------------------------------------------------------- | ----- | -------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| notebooks (shared cells) + README (shared parts)    | `.agents/skills/cosmos3-generate-media/references/payloads.md`          | 1739  | 32             | 12                      | written first; covered by the per-backend audits + eval-derived skill notes (see Eval-derived fixes) |
+| `run_with_diffusers.ipynb` + README section         | `.agents/skills/cosmos3-generate-media/references/diffusers.md`         | 423   | 50             | 9                       | faithful — 0 missing, 9 modified, 5 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_with_cosmos_framework.ipynb` + README section  | `.agents/skills/cosmos3-generate-media/references/cosmos-framework.md`  | 401   | 49             | 9                       | faithful — 0 missing, 6 modified, 3 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_with_vllm_omni.ipynb` + README section         | `.agents/skills/cosmos3-generate-media/references/vllm-omni.md`         | 473   | 60             | 7                       | faithful — 0 missing, 0 modified, 0 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_with_sglang.ipynb` + README section            | `.agents/skills/cosmos3-generate-media/references/sglang.md`            | 399   | 64             | 8                       | faithful — 0 missing, 3 modified, 8 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_with_trt_llm.ipynb` + README section           | `.agents/skills/cosmos3-generate-media/references/trt-llm.md`           | 569   | 92             | 11                      | faithful — 0 missing, 1 modified, 2 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_distilled_with_trt_llm.ipynb` + README section | `.agents/skills/cosmos3-generate-media/references/distilled-trt-llm.md` | 265   | 47             | 8                       | faithful — 0 missing, 3 modified, 8 additions + eval-derived skill notes (see Eval-derived fixes)    |
+| `run_with_nim.ipynb` + README section               | `.agents/skills/cosmos3-generate-media/references/nim.md`               | 375   | 33             | 5                       | faithful — 0 missing, 4 modified, 0 additions + eval-derived skill notes (see Eval-derived fixes)    |
 
 ### Shared content → `payloads.md`
 
@@ -170,7 +170,7 @@ Final audit:
 
 - modified: README relative links rewritten to pinned-commit URLs (payloads.md path-translation rule; stated at reference line 9) — source: Set up the environment: [Diffusers setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#diffusers). ... [`run_with_diffusers.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_diffusers.ipynb) is the full tutorial for / reference: Set up the environment: [Diffusers setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#diffusers).
 - modified: § 2 configuration cell trimmed to backend-only variables (rules 3/4): `find_repo_root`, the `COSMOS_ROOT` / `COSMOS3_AUDIOVISUAL_ROOT` / `COSMOS3_AUDIOVISUAL_OUTPUT_ROOT` globals, their assignments (`COSMOS3_AUDIOVISUAL_ROOT / "outputs" / "notebooks"` default) and `os.environ["COSMOS3_AUDIOVISUAL_OUTPUT_ROOT"] = ...`, and the 8-key echo loop + `HF_TOKEN: <set>/<unset>` print are removed; the function now relies on `COSMOS_ROOT` from payloads.md § 4.1. All removed values survive in payloads.md § 4.1/§ 4.4 and the reference's § 2 table/prose. — source: def configure_diffusers_environment() -> None: global COSMOS_ROOT global COSMOS3_AUDIOVISUAL_ROOT global COSMOS3_DIFFUSERS_VENV global COSMOS3_T / reference: def configure_diffusers_environment() -> None: global COSMOS3_DIFFUSERS_VENV global COSMOS3_TORCH_BACKEND COSMOS3_DIFFUSERS_VENV = Path( os
-- modified: § 3 install block: `%%bash` magic, the `ipykernel install` registration and the two kernel-switch echoes removed (rule 3); everything else verbatim including `set -euo pipefail`, the uv check, `uv venv ... --python 3.13 --seed --managed-python --allow-existing`, the full `uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND"` package list (still includes `ipykernel`) — source: "$COSMOS3_DIFFUSERS_VENV/bin/python" -m ipykernel install --user \ --name cosmos3-diffusers \ --display-name "Cosmos3 Diffusers (Python 3.13)" echo echo "I / reference: echo echo "Installed dependencies into: $COSMOS3_DIFFUSERS_VENV"
+- modified: § 3 install block: `%%bash` magic, the `ipykernel install` registration and the two kernel-switch echoes removed (rule 3); everything else verbatim including `set -euo pipefail`, the uv check, `uv venv ... --python 3.13 --seed --managed-python --allow-existing`, the full `uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND"` package list (still includes `ipykernel`; the `--no-config` now on the `uv venv` and `uv pip install` lines is the F2 deviation of the 2026-10-24 follow-up, and the `&& uv pip uninstall … opencv-python-headless==5.0.0.93` continuation of the `uv pip install` command is its Loop 2 deviation, see Eval-derived fixes) — source: "$COSMOS3_DIFFUSERS_VENV/bin/python" -m ipykernel install --user \ --name cosmos3-diffusers \ --display-name "Cosmos3 Diffusers (Python 3.13)" echo echo "I / reference: echo echo "Installed dependencies into: $COSMOS3_DIFFUSERS_VENV"
 - modified: § 7 runner block: `MODEL_IDS`, `DISTILLED_MODELS` (with its two-line comment), `resolve_model_id` and `is_distilled_model` replaced by pointer comments (rule 6; verbatim copies confirmed in payloads.md § 5), and the venv guard removed; `import sys` is retained verbatim although now unused. `cuda_allocated_gib`, `release_pipe`, `get_pipe`, `run_diffusers_payload` are character-for-character identical to the source. — source: MODEL_IDS = { "Cosmos3-Nano": "nvidia/Cosmos3-Nano", ... } # Distilled checkpoints are served only by Cosmos3DistilledModularPipeline; Cosmos3OmniPipeline / reference: # MODEL_IDS and DISTILLED_MODELS: see payloads.md § 5 _pipe = None _pipe_model = None # resolve_model_id and is_distilled_model: see payloads.md § 5
 - modified: `ASSET_SETS` (payloads.md § 8.7, run_with_diffusers.ipynb block): the four video2video `video` lines carry an appended inline comment (rule 4); otherwise identical, including both comment blocks — source: "video": "assets/videos/car_driving_plain.mp4", / reference: "video": "assets/videos/car_driving_plain.mp4", # not vendored in this skill
 - modified: `create_payload` (payloads.md § 9.2, run_with_diffusers.ipynb block): the two IPython display calls removed (rule 3; declared once in the § 9 preamble); every other line verbatim, including the duplicated summary `print(json.dumps(...))` lines and the `distilled: step count and guidance come from the checkpoint config` print — source: print(f"video: {vision_display_path.relative_to(COSMOS_ROOT)}") display_video(vision_display_path, width=420) else: print(f"im / reference: print(f"video: {vision_display_path.relative_to(COSMOS_ROOT)}") else: print(f"image: {vision_display_path.relative_to(COSMOS_ROOT)}")
@@ -733,8 +733,9 @@ the shared setup guide; a "Read this first" section and a "Reference: … read i
 under every variant make the reference files required reading, also for a single-image smoke. Pre-audit SKILL.md
 text without a notebook/README source (parameter counts and bf16 sizes, the "One 46 GB L40S?" column,
 "license-gated but not access-gated", `/app/...` paths, load-time figures, the `safety_checker=None` claim) was
-replaced by sourced wording. Nothing in SKILL.md comes from the evaluation runs; the eval-derived fixes (TensorRT-LLM
-pre-release wheel route, SGLang server-side guardrail switch, 4-Step `fp8` revision, …) are left for a follow-up PR.
+replaced by sourced wording. At that point nothing in SKILL.md came from the evaluation runs; the eval-derived fixes
+(TensorRT-LLM pre-release wheel route, SGLang server-side guardrail switch, 4-Step 80 GB offload route, …) are recorded
+under Eval-derived fixes below.
 
 Applied after the final audits, form only:
 
@@ -746,31 +747,487 @@ Applied after the final audits, form only:
   **not vendored** in the skill; the references keep the notebook's file name (as `assets/videos/car_driving_plain.mp4`
   after path translation) and `payloads.md` § 3 marks it as not vendored.
 
-### NIM (Variant 7): delegation to the Cosmos3 NIM 2.1.0 cookbook (2026-10-27)
+### Eval-derived fixes (follow-up PR, 2026-10-24)
 
-Upstream retired the Generator NIM 1.0.0: `run_with_nim.ipynb` was deleted and the README `## Run with NIM` rewritten by
-cosmos-framework #296 (9a70e64d, 2026-10-21; the notebook's last copy is at 7e918d7b), and the setup guide's `### Generator NIM`
-section is gone (`#generator-nim` → `#cosmos3-nim`). The documented backend is now the unified Cosmos3 NIM
-`nvcr.io/nim/nvidia/cosmos3:2.1.0`: `NIM_MODEL_TYPE=generator` + `NIM_MODEL_VARIANT` (`nano`, `super`, `super-t2i`,
-`super-t2i-4step`, `super-i2v`, `super-i2v-4step`, …) replace `NIM_MODEL_SIZE` / `NIM_PRECISION=fp8`; the launch is `docker run -d
---name cosmos3-generator --gpus '"device=0"' --shm-size 16g --ulimit memlock=-1 --ulimit stack=67108864 --ulimit
-nofile=65536:65536 -p 8000:8000 -e NGC_API_KEY …`; `POST /v1/infer` requires `model_mode` and rejects unknown fields, with
-`input_reference` / `num_inference_steps` / `num_frames` / `flow_shift` instead of `image` / `steps` / `num_output_frames`, and
-returns `b64_video` or `b64_image`; a third guardrail switch `NIM_ENABLE_SIGLIP_GUARDRAILS` exists; the NIM scope blockquote now
-reads "serves text-to-image, text-to-video, image-to-video, and video-to-video, plus Action and Transfer. It does not generate
-audio."
+Source of every row below: the skill-eval CI run of the migration PR (44 cells, 2026-10-21/23, one H100 80 GB),
+analysed as remediation rows F1–F30; this subsection records the rows applied by this PR. Convention: in
+`references/*.md` every eval-derived addition is a marked line or paragraph (`Skill note (not in the notebook): …`)
+placed next to the verbatim notebook/README text, which keeps its wording and headings; in SKILL.md eval-derived
+additions are plain prose, and every measured figure is labelled as measured by the eval runs (not a notebook figure).
+Exactly two SKILL.md edits deviate from notebook text (F7, F9 below). In the reference files the in-block deviations (lines that
+differ from the notebook inside a verbatim fenced block) — each declared in a skill note next to the block — are: diffusers.md § 3
+install block: `--no-config` on the `uv venv` and `uv pip install` lines (F2), the headless-swap `&& uv pip uninstall …
+opencv-python-headless==5.0.0.93` continuation appended to the `uv pip install` command (Loop 2 item 5, **F3b**) and
+`--python "$COSMOS3_DIFFUSERS_VENV"` on the three `uv pip` commands (F2c, 2026-10-26); sglang.md § 2: the
+`-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` lines inserted into the four `docker run` blocks and the
+`export SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` before the bare CFG-Parallel `sglang serve` (F9); vllm-omni.md § 2: the `-e HF_TOKEN`
+line in the five `docker run` blocks (F9b, 2026-10-26). The Summary table's line counts are those of the 2026-10-20 audit; its
+"Final audit" column points here for the files that gained skill notes.
 
-`references/nim.md` (375 lines, the 1:1 migration of the retired notebook audited above) was removed instead of being rebuilt from
-the cookbook: Variant 7 now delegates to the NIM cookbook in this checkout, `.agents/skills/cookbooks/cosmos3/nim/`
-(deployment.md, generation.md, api-reference.md, operations.md) and to its own skill `cosmos3-nim-user` (nested under
-`nim/.agents/skills/`, not in the top-level skill directories, hence the explicit pointer and the new Related-skills row); the
-skill's reference table names the cookbook directory in nim.md's place. SKILL.md Variant 7 carries the pointers, the README's
-2.1.0 launch (with `CONTAINER_NAME` / `NIM_PORT` / `NIM_IMAGE` as parameters for the README's literals), the readiness and
-selection checks of deployment.md, an I2V request built from `car_driving.jpg` as a data URL with the compact-JSON `prompt` /
-`negative_prompt` — the request of the cookbook's `examples/i2v.py` at smoke size (`"256"` / 25 frames, formerly the notebook's own
-smoke values, now a declared skill choice; cookbook defaults `720` / 189) — and the README scope quote; payloads.md § 1 takes the
-README's new blockquote, guardrail sentence and `[NIM setup](…#cosmos3-nim)` link verbatim (the deleted notebook leaves its
-Source line), § 3 re-attributes the `humanoid_robot.jpg` request to the retired notebook, § 5 names the new image and
-`NIM_MODEL_VARIANT`, § 6.1 / § 8.6 / § 10 state the 2.1.0 fields and defaults; the guardrail table in SKILL.md adds the SIGLIP
-switch. Nothing else changed: the six other reference files, `eval/eval.config` and the assets are untouched (eval/eval.config's
-NIM case still says "serves Text2Video and Image2Video only" and "does not expose text2image" — a follow-up).
+- **F1** TensorRT-LLM install route (the five fatal cells). SKILL.md Variant 5 (Variant 6 inherits it): stable PyPI
+  `tensorrt-llm` 1.2.x has no VisualGen; the primary path is now the pip wheel `tensorrt_llm==1.3.0rc27` with
+  `torch==2.13.0+cu130` and `torchvision==0.28.0+cu130` (pypi.nvidia.com + cu130 torch index, `--index-strategy
+  unsafe-best-match`, VisualGen preflight), the devel-container source build is the alternative, `trtllm-serve serve …`
+  is noted as the explicit form; skill-note paragraphs in trt-llm.md § 2 "Start the Server" intro and
+  distilled-trt-llm.md § 2 intro. Source: eval evidence (rc27 PASS cells), checked against pypi.nvidia.com and the
+  upstream tags. Addition only; the cookbook README copy under `.agents/skills/cookbooks/` is third-party licensed and
+  was not changed.
+- **F2** uv version pin. SKILL.md "Read this first" uv note (the checkout pins `[tool.uv] required-version =
+  "==0.11.29"`, applied from any cwd under it); Variant 1 `uv venv`/`uv pip install … --no-config`; Variant 2 preflight
+  installing uv 0.11.29 side-by-side (`curl -LsSf https://astral.sh/uv/$REQ_UV/install.sh | env UV_INSTALL_DIR=…
+  INSTALLER_NO_MODIFY_PATH=1 sh`) or `uvx --from "uv==$REQ_UV" uv sync …`, and the Variant 2 intro now points at
+  `../cosmos3-setup` step 3 (installs uv 0.11.29); `--no-config` added to the `uv venv` and `uv pip install` lines of
+  the diffusers.md § 3 verbatim install block (every other line unchanged), declared in the skill note after the block;
+  skill notes after the diffusers.md § 3 and cosmos-framework.md § 4 install blocks (each fenced block contains the
+  `command -v uv` presence check, which does not catch the pin) and in payloads.md § 2.4 (after both verbatim `uv self
+  update 0.11.29` quotes). Source: the notebooks' § 1 blockquotes (payloads.md § 2.4) + framework docs (docs/setup.md,
+  docs/automl.md, docs/inference_bimanual.md) + eval evidence (`uv self update` refusal on non-standalone uv,
+  `--no-config`).
+  **Deviation:** the two diffusers.md § 3 `uv` lines (declared in the skill note after the block, like F9's sglang.md
+  lines); everything else in this row is addition only.
+- **F3** Headless diffusers install. SKILL.md Variant 1: the install block gains the setup guide's headless OpenCV swap
+  (`uv pip uninstall --no-config opencv-python && uv pip install --no-config opencv-python-headless==5.0.0.93`) plus an
+  import check of `Cosmos3OmniPipeline`; the apt fallback becomes `apt-get update && apt-get install -y libxcb1 libgl1
+  libglib2.0-0 ffmpeg` with a root caveat; marked skill notes after the verbatim libxcb quotes in payloads.md § 2.4 and
+  after the § 3 install block in diffusers.md (plus its § 1 pointer). Source: setup guide (TensorRT-LLM Generator
+  section for the swap, Framework section for the apt line); diffusers `pipeline_cosmos3_omni.py:50-51` (module-scope
+  `if is_cosmos_guardrail_available(): from cosmos_guardrail import CosmosSafetyChecker`) for the import-time claim +
+  eval evidence (import-time `cv2` ImportError in 12/12 diffusers cells; `apt-get update` required on minimal images).
+  Also records the provenance of the pre-existing SKILL.md Variant 1 blockquote sentence "Setup guide (TensorRT-LLM
+  section): `pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93`" (setup guide
+  § TensorRT-LLM Generator), which this document had not recorded before. Addition only.
+- **F4** Wheel prerequisites on a bare GPU host. SKILL.md Variant 5, inside the F1 wheel block: `apt-get update &&
+  apt-get install -y libopenmpi-dev openmpi-bin ffmpeg`, a seeded uv venv (`--python 3.12 --seed --managed-python
+  --allow-existing --no-config`), the cu130 index for the CUDA-13 libraries (never symlink `.so.12` to `.so.13`),
+  `export CUDA_HOME="$(python -c 'import nvidia,os;print(os.path.join(nvidia.__path__[0],"cu13"))')"`, and the serve
+  paragraph now requires OpenMPI and `CUDA_HOME`; one sentence after the ffmpeg sentence in trt-llm.md § 2 intro and
+  distilled-trt-llm.md § 2 intro, citing the upstream TensorRT-LLM "Installing on Linux via pip" page. Source: eval
+  evidence + that upstream page. Addition only.
+- **F5** `TRTLLM_USE_PRECOMPILED` shortcut. SKILL.md Variant 5: the trailing `# Python-only changes:
+  TRTLLM_USE_PRECOMPILED=1 pip install -e .` hint is removed and a paragraph after the block says why (setup.py resolves
+  the unpublished `1.3.0rc26+bca6761ab8`; a wheel path belongs in `TRTLLM_PRECOMPILED_LOCATION`; the rc26 binaries lack
+  `trtllm::silu_and_mul_fp8_quantize_1x128_packed_ue8m0`); the one-sentence form closes the § 2 intro skill-note
+  paragraph (F1/F4) of trt-llm.md and distilled-trt-llm.md, which follows the verbatim Build-from-Source sentence (the
+  distilled copy allows 1.3.0rc26 for the video-only notebook, in line with F12). Source: setup guide (the shortcut is
+  its wording) + eval evidence, checked against the pinned setup.py and pypi.nvidia.com. The references keep their
+  verbatim text; no notebook text changed.
+- **F6** Output verification. SKILL.md: new `## Verify the output` section before `## Reference files` (ffprobe
+  `-count_frames` command; root-free decode with the venv's `av`; Pillow `Image.open(p).verify()`; expected smoke facts
+  — diffusers Edge t2v h264 832x480 24/1 121 frames 5.041667 s, NIM "256"/25 frames vp9 320x192 25 frames ~1.04 s), a
+  step-4 pointer in "Read this first", a verify sentence closing Variant 1, `ffmpeg` on the Variant 1 apt line, a
+  headless-check sentence in Variant 7; skill notes in nim.md "Playback note" (never run the check inside the NIM
+  container) and payloads.md § 2.4 (ffmpeg is in neither apt list). Source: eval evidence (the notebooks' only check was
+  the Jupyter viewer, not migrated); the apt phrase reuses the notebooks' server-side `apt-get update && apt-get install
+  -y ffmpeg`. Addition only; the optional eval.config wording (F6 item 5) was not applied.
+- **F7** Headless start / readiness / teardown. SKILL.md "Things not obvious from the docs": shared patterns for the
+  Docker variants (`docker run -d --name`, poll loop, `docker logs` → `stop` → `rm`) and for `trtllm-serve` (`setsid …
+  &`, poll `/health`, `kill -INT -- "-$PID"`) with measured readiness/memory figures; pointers in Variants 3–6 (Variant
+  6's points at Variant 5's `trtllm-serve` pattern); SGLang readiness in Variant 4 (`GET /health` is 503 while warming, 200 `{"status":"ok"}`
+  when ready, 60–171 s for Edge); Nano/Super t2i body in Variant 5; skill notes in vllm-omni.md § 2 intro (readiness
+  `GET /v1/models`), sglang.md § 2 intro, trt-llm.md § 2 Nano (readiness/memory), nim.md § 1 (after the launch block)
+  and § 7 (log-preserving teardown), payloads.md § 4.5 route rows. Source: setup guide (vLLM `/v1/models`) and
+  notebooks (TRT-LLM `check_trtllm_server`, NIM `/v1/health/ready` loop) + eval evidence (SGLang `/health`, detached
+  pattern, timings, NIM log loss).
+  **Deviation:** SKILL.md Variant 7 launches with `docker run -d --name=` (notebook: `-d --rm --name=`) so the § 2
+  loop's `docker logs --tail 160` still works after a startup failure, and tears down with `docker stop; docker logs >
+  …/cosmos3_generator_nim/container.log; docker rm`; nim.md keeps the verbatim block and records the deviation as a
+  skill note.
+- **F8** Distilled 4-Step memory. SKILL.md "Model sizes vs GPU" 4-Step row (measured: 131.4 GB = 122.4 GiB of bf16
+  safetensors per student; GPU column qualified) and Variant 6 (every "single GPU" qualified once; after the launch
+  block: copy `cosmos3-t2i-1gpu.yaml` and append `cpu_offload_config: {enable: true, pin_memory: true}`; measured ~250 s
+  to ready, 70,271 MiB GPU peak, ~116 GiB pinned host RAM, 1024x1024 t2i ~7 s; warning that dynamic FP8 returned noise
+  and that the FP8+offload profile and the HF `fp8` branch are unverified, not routes); the same qualifiers, offload
+  block and warning as skill notes in distilled-trt-llm.md (README paragraph, notebook intro, § 1, and § 2 after the
+  Text2Image-4Step launch — the § 2 intro itself carries no F8 note). Source: eval evidence (+ TensorRT-LLM
+  `visual_gen/args.py` `CpuOffloadConfig`). Addition only; the public "single GPU" wording stays verbatim.
+- **F9** SGLang guardrail switch and HF token. SKILL.md "Disabling the guardrail, per backend" SGLang row rewritten (`-e
+  SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` server-wide plus `guardrails: false` per request; the per-request flag alone does
+  not prevent the startup `GatedRepoError 401`), `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` in the
+  Variant 4 block, the "Guardrail gating" bullet names the switch; sglang.md: § 2 "Set up HF Cache" note (`-e HF_TOKEN`
+  on every `docker run`; anonymous Hub calls are rate-limited), the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` /
+  `-e HF_TOKEN` lines inserted inside the four § 2 docker blocks and an `export` line before the CFG-Parallel
+  `sglang serve` (every other line verbatim; declared by a § 2 skill note), a skill note after the § 6.2 helpers (the
+  `"guardrails": True` lines are kept verbatim); a skill note after the payloads.md § 2.3 table names the switch for
+  run_with_sglang.ipynb, marked eval-verified (the verbatim rows, including the shared "No guardrail paragraph" row, and
+  the README paragraph are untouched). Source: eval evidence; image source `lmsysorg/sglang:dev` (`cosmos3_pipeline.py`
+  and the `cosmos3_guardrails.py` docstring, read independently by three eval agents; the server then logged
+  `guardrails=False`); in no notebook or README.
+  **Deviation:** the SKILL.md Variant 4 request body sends `"guardrails": false` where the notebook helper sends `True`.
+- **F10** NIM profile pinning and guardrail env. nim.md § 1: a "Profiles" paragraph and block after the default-launch
+  sentence (`docker run --rm --runtime=nvidia --gpus all -e NGC_API_KEY="$NGC_API_KEY" "$IMG_NAME" list-model-profiles`;
+  `NIM_MODEL_PROFILE=<id>` / `NIM_TAGS_SELECTOR`; `NimCatalogSelectionError` meaning; "4 of 63 profiles compatible on
+  one H100 80 GB" as an example only), a deviation note under the verbatim launch block carrying the two env lines `-e
+  NIM_ENABLE_TEXT_GUARDRAILS="${NIM_ENABLE_TEXT_GUARDRAILS:-0}" -e
+  NIM_ENABLE_VIDEO_GUARDRAILS="${NIM_ENABLE_VIDEO_GUARDRAILS:-0}"` and `${NIM_MODEL_PROFILE:+-e
+  NIM_MODEL_PROFILE="$NIM_MODEL_PROFILE"}`, skill notes adding `/v1/manifest` after the intro list and after the
+  verbatim § 3 inspect loop; SKILL.md Variant 7: the same two lines inside its launch block, the env-var paragraph
+  (`NIM_MODEL_PROFILE`, `list-model-profiles`) and the inspect sentence (`/v1/manifest`,
+  `selectedModelProfileId`). Source: vendored NIM docs (`.agents/skills/cookbooks/cosmos3/nim/configuration.md`,
+  deployment.md, operations.md, support-matrix.md — written for the 2.0.0 image; its
+  `NIM_MODEL_TYPE`/`NIM_MODEL_VARIANT` names were not imported) + the public NIM utilities page (`list-model-profiles`)
+  plus eval evidence (counts, ids). Addition only; the README-verbatim Quickstart blocks are untouched.
+- **F11** NIM cache writable by uid 1000. nim.md § 1, a marked note + block directly before the verbatim launch block
+  (whose `mkdir -p`/`chmod -R 777` lines are kept): a daemon-side preflight (`docker run --rm --user 0 --entrypoint
+  /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$IMG_NAME" -c 'chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX
+  /opt/nim/.cache'`, then a write test as the image's default user that exits 1 with "not writable by the NIM user
+  (uid 1000)") and a paragraph explaining that the Docker daemon, not the
+  shell, resolves `-v` paths (`ManifestDownloadError … Permission denied (os error 13)`); a one-line pointer from the
+  README Quickstart; the preflight mirrored in SKILL.md Variant 7, whose "pre-created and made writable" parenthetical
+  is reworded; the "Checkpoint cache" bullet under Things not obvious from the docs gains one sentence (every `-v` cache
+  path is resolved by the Docker daemon; only the NIM mount needs the uid-1000 preflight). Source: eval evidence only.
+  Addition only.
+- **F12** TensorRT-LLM 1.3.0rc26 image-route bug. SKILL.md Variant 5: a comment in the wheel block (keep rc27 although
+  the bca6761 checkout reports `1.3.0rc26`; rc26 answers `/v1/images/generations` with HTTP 500 `NameError
+  get_steady_clock_now_in_seconds`, video routes are unaffected so Variant 6 on rc26 is fine) and a sentence after the
+  `/health` polling paragraph ("a 200 on /health does not exercise the image route …"); trt-llm.md § 2 Edge: a skill
+  note after the verbatim "use a TensorRT-LLM release that includes the Cosmos3 VisualGen API schema" sentence (floor
+  `tensorrt_llm` 1.3.0rc27; 1.2.x has no VisualGen; rc26 HTTP 500; 1.3.0rc29 and the 1.4.0rc* line require torch 2.14,
+  a different pairing from this stack's torch 2.13.0+cu130 — do not float), the Quickstart copy of the sentence points
+  to it; not added to distilled-trt-llm.md (video route). Source: eval evidence re-verified against upstream v1.3.0rc26
+  / bca6761 / v1.3.0rc27. Addition only.
+- **F13** Model-size figures. SKILL.md "Model sizes vs GPU": a paragraph under the table labelled measured on one H100
+  80 GB (eval runs 2026-10-21/23), not a notebook figure — Edge: diffusers t2i ~9.0 GiB peak allocated (3–5 s), t2v 121
+  frames ~12.4 GiB allocated / 15.2 GiB reserved (16–23 s), framework 9,735–9,785 MiB, TRT-LLM 17,633–17,770 MiB incl.
+  warm-up; Nano: ~31.5 GB bf16 weights, diffusers 720x1280 t2i 33.8 GiB allocated / 35.4 GiB reserved (36,939 MiB),
+  framework 35,973 MiB, TRT-LLM with the shipped `cosmos3-nano-1gpu.yaml` 50,623–52,147 MiB and `/health` in ~110–180 s
+  — "every Nano path fits an 80 GB GPU in bf16 as shipped"; "8B Nano" marked as the NIM table's label; small-GPU pointer
+  to the sourced fp8 revision (cosmos-framework.md "Nano FP8: Text to Image"; NIM serves fp8 by default). Variant 5
+  after the Nano serve block and a skill note in trt-llm.md § 2 Nano: memory is controlled by the `--visual_gen_args`
+  YAML, not by trtllm-serve's LLM flags; smaller-GPU warm-up restriction via `compilation_config` (one run, not a
+  benchmark). Source: eval evidence for every figure; the fp8 pointer
+  is sourced. Addition only; the optional untested Variant 1 `enable_model_cpu_offload()` comment was flagged as
+  optional and may be absent.
+- **F14** Distilled t2i still frame. SKILL.md Variant 6, after "The response is the video bytes …": it is a one-frame
+  video, not a PNG; extract it with `ffmpeg -nostdin -y -i <OUT>/trt_llm_distilled/t2i_distilled/t2i_distilled.mp4
+  -frames:v 1 <OUT>/t2i_4step.png` (1024x1024); distilled-trt-llm.md "Distilled: Text to Image": the same sentence plus
+  a `subprocess.run([... "-frames:v", "1", ...], check=True)` snippet, and a note on the `view_run` line that the
+  notebook viewed the one-frame video inline. The documented video route is kept (no switch to
+  `/v1/images/generations`). Source: eval evidence. Addition only.
+- **F15** Configs-only TensorRT-LLM checkout. SKILL.md Variant 5: on the wheel path the pin is fetched without clone,
+  submodules or LFS (`git init TensorRT-LLM && cd TensorRT-LLM && git remote add origin
+  https://github.com/NVIDIA/TensorRT-LLM.git`; `git fetch --depth 1 origin bca6761ab84fbcd58fc7f914eade7de48b32e35e`;
+  `GIT_LFS_SKIP_SMUDGE=1 git checkout FETCH_HEAD`; `export TRTLLM_ROOT="$PWD"`), with three warnings (a shallow clone of
+  main followed by `git checkout <pin>` fails; the checkout only supplies `examples/visual_gen/configs/*.yaml`, never on
+  PYTHONPATH or `pip install -e`; Edge needs no checkout); the full clone + submodules + `git lfs pull` stays under the
+  source-build alternative; the serve paragraph points at `TRTLLM_ROOT`. Source: eval evidence (the claude-nano pattern,
+  codex's `--no-checkout`), SHA fetch verified against GitHub on 2026-10-23. SKILL.md only; no notebook text involved.
+- **F16** `cosmos_guardrail` install line. SKILL.md Variant 5: `pip install cosmos_guardrail==0.3.0` leaves the install
+  block (every TRT-LLM serve block disables guardrails) and returns as an optional "Only if you keep guardrails on"
+  step: the setup guide's install line, its `transformers>=5` requirement (resolves on 1.3.0rc26+, refused on the stable
+  1.2.1 wheel), the headless OpenCV swap and the guide's "Server-side NLTK data setup" (README#tensorrt-llm-generator at
+  6e2c69af). Source: setup guide "TensorRT-LLM Generator" + eval evidence (PyPI requires_dist conflict). SKILL.md only.
+- **F17** NIM prompt form. SKILL.md intro ("the NIM takes plain-text prompts" → the NIM notebook's inline requests use
+  plain-English captions; `/v1/infer` also accepts the bundled structured-JSON assets serialised compactly, `prompt` max
+  20000 chars), the "Bundled assets" compact-JSON rule (NIM payloads are inline literals, but the same compact string is
+  what to send as `prompt`/`negative_prompt`), Variant 7 "Requests" paragraph (compact car_driving.json, 8151 chars,
+  plus the I2V negative prompt, 14674 chars, plus a data-URI image; both HTTP 200 on cosmos3-generator:1.0.0); optional
+  `prompt` / `negative_prompt` rows in nim.md § 4 (no 20000-char claim for `negative_prompt`). Source: eval evidence
+  (HTTP 200) + the README cap (nim.md Quickstart table). The changed sentence was skill-authored, not notebook text.
+- **F18** Variant 1 polish. SKILL.md Variant 1: an Edge t2i / t2v (no audio) snippet composed from the README Edge
+  sentence and the notebook's `run_diffusers_payload` branches (480x832, 20 steps, guidance 5.0, flow_shift 8.0, seed
+  1234, `export_to_video(..., fps=24, macro_block_size=1)`), the `# run from this skill directory (the one with
+  assets/)` comment Variant 2 already carries, and two "Things not obvious from the docs" bullets marked as measured in
+  the 2026-10-21 eval smoke (benign diffusers load warnings: `torch_dtype is deprecated`, Edge `config attributes … will
+  be ignored`; measured Edge footprint). Source: cookbook README + notebook (diffusers.md § 7) + the payloads.md § 3 / §
+  4.1 cwd rule; eval evidence for the warnings and figures. SKILL.md only.
+- **F25** not taken after all: `eval/eval.config` is byte-identical to the base branch, so every cell of this PR's validation
+  runs ran the baseline prompts, assertions and checks (user decision 2026-10-25: keep the eval stable for the before/after
+  comparison; the F25 framework output-path check and the F13 item-4 trtllm-nano prompt wording were reverted and are not
+  carried anywhere).
+
+Rows considered and not taken (review of 2026-10-23): F19 (Variant 2 doc gaps), F20 (vllm-omni.md § 2 flags, Edge t2i
+row), F21 (`input_reference` vs `image_reference` in trt-llm.md) — LV2-only / documentation-only rows, deferred as low
+priority; F22 (first-attempt assertion in every case), F23 (documented-blocker verdict rule), F24 (token budget), F25
+(framework output-path check, reverted) and F29 (eval task image, `docker: true` for the TensorRT-LLM cases) — eval-config /
+environment rows: eval.config stays identical to the base branch.
+F26–F28 and F30 are harness (evaluator) and agent-behaviour rows, handled outside this repository. The cookbook
+README copies under `.agents/skills/cookbooks/**` named by F1 and F8 as optional upstream fixes were not changed
+(third-party-licensed, excluded from the hooks).
+
+Loop 2 (2026-10-24, after CI run 40053076043 / group ci-pr250-e72a3d5 on image v20261030: 44/44 PASS, first-attempt
+PASS 39/44 — was 7/44 before loop 1). Sources: the five cells that still self-corrected (distilled-trtllm-t2i × claude /
+cursor / opencode, diffusers-edge-t2v × opencode, trtllm-nano-t2i × opencode — details JSON and transcripts of that run)
+and the `fp8` branch's own config files (`hf_quant_config.json`, `transformer/config.json` of
+`nvidia/Cosmos3-Super-Text2Image-4Step` revision `fp8`, e6e06ab9). Same conventions as above; the rows are L2-A (distilled
+gates + `fp8` route; PR fix id **F8b**), L2-B (headless swap inside the install command; **F3b**), L2-C (uv-version guidance; **F2b**), L2-D (launch/teardown
+robustness; **F7b**). One bullet per changed unit:
+
+- **Item 1 — SKILL.md Variant 6** (L2-A, L2-D; **F8b**, **F7b**). Restructured around two gates: a "Choose the launch by GPU and host
+  memory" paragraph with the check commands (`nvidia-smi --query-gpu=memory.total --format=csv,noheader`, `free -g`) —
+  the bf16 weights are 122.4 GiB, so on any GPU under ~125 GiB (every H100 80 GB and H100 NVL 94 GB) the notebook's
+  plain launch OOMs at load (measured 79.11/79.22 GiB on H100 PCIe, 79.18/79.22 on H100 SXM, 91.65/93.13 GiB on H100 NVL) and is the launch for
+  ≥ ~125 GiB (H200/B200-class) GPUs only; the plain block stays verbatim under that heading, `test -f` guard included; the
+  offload block is introduced as the launch for GPUs under ~125 GiB with ≥ ~128 GiB host RAM available (eval-verified on
+  the H100 SXM 80 GB node / 251 GiB host RAM and the H100 NVL 94 GB node / 1 TB host RAM) and gains a fail-stop host-RAM preflight (`avail=$(free -g 2>/dev/null | awk '/Mem:/{print $7}' || true);
+  [ "${avail:-0}" -ge 128 ] || { echo …; exit 1; }`) plus the host-OOM-kill measurement (the H100 PCIe 80 GB node, 125.6 GiB host: peak 126,136 of
+  128,664 MiB sampled at 158 s, SIGKILL by the OOM killer at 170 s — the loader materialises the offloaded towers on CPU and packs each
+  stage into a new pinned buffer before freeing the original); a new `fp8`-branch block (`uvx --no-config hf@latest
+  download … --revision fp8`, 69.0 GB; `cp -rs "$FP8_SRC"/. "$FP8_DST"/` symlink overlay plus a `python - <<'PY'` snippet
+  that appends `"*embed_tokens*"` to the top-level `ignore` of `hf_quant_config.json` and to `quantization_config.ignore`
+  of `transformer/config.json`, weights untouched — tested on copies of the branch's two files; then `trtllm-serve
+  "$FP8_DST"` with the shipped `cosmos3-t2i-1gpu.yaml`, no offload) with its measured figures (one run: `/health` 200 after
+  60 s incl. the 7.2 s 1024x1024x1 warm-up, 70,983 MiB of 81,559 GPU peak, host ~6.7 GB, 1024x1024 t2i 2.5 s, visually
+  correct) and the reason for the patch (the branch's `ignore` lists omit `embed_tokens`; the loader's "Static quantization
+  (FP8) is configured for module 'language_model.embed_tokens' … without the expected scale tensor(s) ['weight_scale']"
+  error; a workaround until the branch lists it itself; the image comes from the FP8 ModelOpt variant, not the bf16 main
+  revision); the "unverified" paragraph rewritten (dynamic `FP8_BLOCK_SCALES` on the bf16 weights still returns noise — do
+  not use; the FP8 + offload + skip_warmup profile stays unverified; the HF `fp8` branch IS verified with the patch); the
+  headless sentence gains the `setsid … &`-from-a-script rule (the opencode run's server, started in a backgrounded subshell
+  `( … ) &`, was killed with that command at the agent tool's 60–120 s timeout; `nohup`/`disown` fixed it) and the SIGINT → TERM → KILL escalation when the server is still alive after 30 s (one run),
+  mirrored in the trtllm-serve block under "Things not obvious from the docs" (a bounded 30 s wait replaces the blocking
+  `wait` after SIGINT, escalation lines added, distilled `fp8` ~60 s added to the measured sentence); Model table 4-Step row:
+  "needs `cpu_offload_config` with ≥ ~128 GiB host RAM, or the patched `fp8` branch (Variant 6)". Source: distilled-trtllm-t2i
+  × claude (H100 PCIe 80 GB node, 125 GiB host RAM: offload host-OOM-kill, `fp8` route) and × cursor / opencode (H100 NVL plain-launch OOM; the subshell-launched
+  server lost at the tool timeout), plus the `fp8` branch's config files. Addition only; notebook text untouched.
+- **Item 2 — SKILL.md Variant 1** (L2-B; **F3b**). The headless OpenCV swap is folded into the install command: `uv pip install … \`
+  continues with `&& uv pip uninstall --no-config opencv-python && uv pip install --no-config opencv-python-headless==5.0.0.93`
+  (one compound command); the comment moves above the command and says the swap is part of the install step; the import
+  check stays after it. Source: diffusers-edge-t2v × opencode (ran the import check before the separate swap lines →
+  `libxcb.so.1` ImportError, then the swap → PASS). SKILL.md only; a skill-authored block.
+- **Item 3 — SKILL.md uv-version guidance** (L2-C; **F2b**). "Read this first" item 3: Variants 1, 5 and 6 (standalone venvs) keep
+  the stock uv (0.13+) with `--no-config`; do NOT install uv 0.11.29 for them — it cannot resolve tensorrt_llm's pre-release
+  dependency `nvidia-cutlass-dsl==4.8.0.dev0` without `--prerelease=allow`, which then also pulls `mpmath 1.5.0a1` and
+  breaks the import; 0.11.29 is for `uv sync` in Variant 2 only. Variant 5 Route A: the `--no-config` comment on the `uv
+  venv` line names the stock uv; Variant 2's REQ_UV preflight: a comment that its PATH change is for `uv sync` only. Source:
+  trtllm-nano-t2i × opencode (installed uv 0.11.29 via the Variant 2 preflight and reused it → `--prerelease=allow` →
+  mpmath 1.5.0a1, `ImportError: cannot import name 'bitcount' from 'mpmath.libmp'`, until mpmath was pinned to 1.3.0; the
+  other 11 TRT-LLM cells resolved with the stock uv 0.13.0). SKILL.md only.
+- **Item 4 — distilled-trt-llm.md** (L2-A; **F8b**). Skill notes only, each marked "Skill note (not in the notebook; eval runs
+  2026-10-21/24)": a new § 2 note with the two gates (GPU < ~125 GiB → never the plain launch; host RAM ≥ ~128 GiB →
+  offload, else `fp8`) after the install note; the F8 note after the Text2Image-4Step block gains the NVL measurement, the
+  host-RAM requirement and the host-OOM-kill measurement, the skill-added offload block gains the preflight line, the
+  measured note names the verified hosts, and the warning blockquote is rewritten (dynamic FP8 noise; FP8 + offload
+  profile unverified; the `fp8` branch verified with the `embed_tokens` patch — summary, figures, pointer to SKILL.md
+  Variant 6 for the commands); the README Quickstart note now names both launches. Verbatim notebook text untouched.
+  Source: as item 1.
+- **Item 5 — diffusers.md § 3** (L2-B; **F3b**). **Deviation:** the verbatim install block's `uv pip install` command now ends with
+  `\` + `&& uv pip uninstall --no-config opencv-python && uv pip install --no-config opencv-python-headless==5.0.0.93`
+  (same mechanism as F2's `--no-config`; every other line verbatim), declared in the two skill notes after the block — the
+  F2 note lists the added continuation, the headless note says why (an agent that copies this block instead of SKILL.md's
+  hit the ImportError on 2026-10-24). Source: diffusers-edge-t2v × opencode.
+- **Review round 1 (2026-10-24, Loop 2 review; same sources plus the claude transcript and the Hugging Face refs API)** (**F8b**, **F7b**).
+  SKILL.md Variant 6: the check block now also carries `export TRTLLM_ROOT="${TRTLLM_ROOT:-$PWD}"`, the `test -f` guard
+  and `export TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` (before, only the plain block had them — the block sub-125-GiB agents
+  are told to skip), the offload and `fp8` blocks repeat the two exports so each runs as its own script, and the check
+  block reads `/sys/fs/cgroup/memory.max` (`free` reports the host's /proc/meminfo, not a container's limit); the
+  `nvidia-smi` comment states the gate in the unit it prints (128,000 MiB = 125 × 1024; 81559 on an H100 80 GB); the
+  host-RAM preflight fail-stops (`exit 1`; `${avail:-0}` plus `|| true` inside the substitution when `free` is missing, so
+  a `set -euo pipefail` script prints the message instead of dying with 127 — tested; `free -g` truncates, so the H100 PCIe 80 GB node's
+  128,664 MiB read as 125); gate (ii) and the `fp8` paragraph are scoped to the Text2Image-4Step student (the
+  Image2Video-4Step repo's `fp8` branch, 220a1b2d, was served by no eval run); the plain launch is marked as the
+  notebook's claim, not exercised (no ≥ ~125 GiB GPU among the eval nodes); the `fp8` measured paragraph names
+  TensorRT-LLM 1.3.0rc27 (the claude transcript's `TensorRT LLM version: 1.3.0rc27`); `FP8_SRC` / `FP8_DST` default to
+  the disk that holds `HF_HOME` (`${HF_HOME:-$HOME/.cache/huggingface}/local/…` and `…-patched`) instead of the checkout,
+  with the 69 GB disk need stated; in the trtllm-serve teardown `kill -INT` falls back to an echo and every escalation
+  kill is `|| true`-guarded, so a `set -e` script survives a server that died earlier. distilled-trt-llm.md § 2 note,
+  offload block and blockquote mirror the MiB figure, the cgroup clause, the fail-stop preflight, the not-exercised
+  clause, the i2v scoping, the guardrail-switch reminder and rc27. This document: the deviation sentence in this
+  subsection's intro now counts the Loop 2 item 5 continuation. Addition only; notebook text untouched.
+- **Review round 2 (2026-10-24, Loop 2 review; sources: the loop-1 details JSON — distilled-trtllm-t2i × opencode
+  corrections[1], trtllm-nano-t2i × opencode corrections[2]/[3], trtllm-edge-t2i × cursor corrections[1] — the claude and
+  cursor transcripts, proposal row F8 and the brief's runner facts)** (**F8b**, **F7b**). SKILL.md Variant 6: the measured-OOM labels are
+  corrected — the 79.18/79.22 GiB figure (2026-10-21, after 41 s) was taken on the H100 SXM 80 GB node (the
+  251 GiB host RAM runner), not on H100 PCIe, and the 2026-10-24 PCIe OOM (79.11/79.22, the H100 PCIe 80 GB node) came after 30 s, so the gates
+  paragraph names H100 PCIe 80 GB, H100 SXM 80 GB and H100 NVL 94 GB with each figure's node and time (mirrored in the
+  distilled-trt-llm.md § 2 and F8 notes and in item 1 above); the host-OOM-kill sentence separates the peak sample
+  (126,136 of 128,664 MiB at 158 s) from the SIGKILL (170 s) in the same three places; `A100` is dropped from the
+  sub-~125 GiB GPU lists (nothing was measured there) and gate (ii) says FP8 needs an SM 89+ GPU (Ada/Hopper/Blackwell),
+  so on an A100 only gate (i) can apply and no eval run touched one (also the distilled § 2 note and item 1 above); the
+  Model table 4-Step row names H100 80 GB / NVL 94 GB (any GPU under ~125 GiB) and scopes the `fp8` branch to
+  Text2Image-4Step, matching the gates; the host-RAM preflight folds in the cgroup v2 ceiling (`lim=$(cat
+  /sys/fs/cgroup/memory.max …)`, taken when lower than `free -g`'s figure; the message names both sources — tested:
+  `max` leaves the figure, a 2 GiB limit fails the gate) in the SKILL.md and distilled-trt-llm.md offload blocks; the
+  check block and the plain, offload and `fp8` blocks gain the Variant 5 Route A venv activation (`source
+  "${TRTLLM_VENV:?…}/bin/activate"` — no default, since the blocks often run from inside the TensorRT-LLM checkout;
+  Route B's devel container skips the line) and the `CUDA_HOME` export, because a block run as its own script on a bare
+  host has no `python` / `trtllm-serve` without the venv and DeepGEMM asserts without `CUDA_HOME` (trtllm-nano-t2i ×
+  opencode lost it between tool calls); the launch rule states the recorded mechanism — the opencode run's server,
+  started in a backgrounded subshell, was killed with that command at the agent tool's 60–120 s timeout (nohup+disown
+  also survived it), not by the subshell exiting, which was the brief's wording (corrected in item 1 above, the Variant 6
+  sentence and the trtllm-serve block comment); the teardown polls and escalates on the process group (`kill -0 --
+  "-$PID"`) instead of the leader PID — with a dead leader and a live worker the old poll broke at once and skipped the
+  TERM/KILL escalation (tested with an orphaned worker ignoring INT+TERM: the group check reports it, the group KILL
+  removes it, exit 0) — and ends with a leftover check (`nvidia-smi --query-gpu=memory.used` back to 0 MiB,
+  `--query-compute-apps=pid,used_memory` and `pgrep -fl '[t]rtllm-serve'` to name survivors to kill by PID; a report,
+  not the review's blind `xargs kill -KILL` sweep, which would also kill unrelated GPU processes on a shared host),
+  mentioned in the Variant 6 teardown sentence. distilled-trt-llm.md § 2 install note: 1.3.0rc27 is recorded as
+  exercised on this notebook on 2026-10-24 (offload launch on two H100 NVL cells, patched `fp8` launch) instead of
+  "expected to work". Addition only; notebook text untouched.
+
+Loop 3 (2026-10-24, after the loop-2 selective reruns in group ci-pr250-794c78d — distilled-trtllm-t2i × claude first-attempt PASS on the 125 GiB host; × cursor (H100 NVL) and × opencode (H100 SXM) still ran the notebook's plain launch first, and opencode's offload launch then OOMed against the still-loading plain server, served the patched fp8 branch and hit HTTP 500 on the one-frame video route):
+
+- **L3-A** (**F8b**) SKILL.md Variant 6: the three launch blocks became one gated launch script (GPU total MiB → plain route only at ≥ 128,000 MiB; host RAM available incl. the cgroup ceiling → offload at ≥ 128 GiB, else the patched fp8 branch; refuses to start while the GPU is in use; one `setsid trtllm-serve` + health poll). The notebook's command is named in one sentence as what the plain route issues (reference only, not a runnable block — the loop-2 reruns ran the quoted block by hand); distilled-trt-llm.md § 2 keeps it verbatim. Source: eval runs 20261024T074644Z-…-3d16d6 (cursor) and 20261024T074647Z-…-06fa18 (opencode); measured figures merged into one paragraph.
+- **L3-B** (**F14b**) SKILL.md Variant 6 + distilled-trt-llm.md (Distilled: Text to Image): fallback to the native image route `/v1/images/generations` with `output_type: "image"` when the one-frame video route returns HTTP 500 `Video generation failed` (eval-verified once on the fp8 server, opencode run above). Source: evidence only; the notebook has no such case.
+- **L3-C** (**F7b**) SKILL.md Variant 6 headless sentence + Things not obvious: never start a second server while one is loading/running on the same GPU; stop it and wait for `nvidia-smi` memory.used 0 MiB (the launch script enforces it). Source: the opencode run above.
+- distilled-trt-llm.md § 2 skill note extended with the loop-3 pointer (no notebook text changed).
+- **L3-D** (**F8b**, **F14b**; review pass, same day) SKILL.md Variant 6 launch script hardened: fp8 download / overlay / patch steps fail-stop, `FP8_SRC` made absolute, `MemAvailable` read from /proc/meminfo (no procps), nvidia-smi failure detected and `CUDA_VISIBLE_DEVICES` honoured, 1800 s readiness deadline (the notebook's check_trtllm_server limit); the 128 GiB host-RAM gate labelled a lower bound; image-route fallback body spelled out (t2i_distilled extra_params + output_type image, needs rc27) with the instruction to record the fallback in result_summary.md; NVL offload readiness corrected to ~4.5–5 min (260 s / 301 s measured). Source: evidence of the loop-1/2 runs; no notebook text changed.
+
+2026-10-26 (forced full run on a75ab26, cold HF cache on the new H100 NVL 94 GB node, 1 TB host RAM): vllm-omni-edge-t2i × cursor self-corrected because the
+Variant 3 / vllm-omni.md § 2 `docker run` blocks passed no `-e HF_TOKEN` (anonymous Hub rate limit, HTTP 429, container exit) — the same gap
+F9 closed for SGLang. **F9b**: `-e HF_TOKEN \` added as the first option line of the SKILL.md Variant 3 block and of the five vllm-omni.md § 2
+`docker run` blocks (declared in-block addition, the F9 mechanism; every other line verbatim), with a skill note in the § 2 intro and the
+Variant 3 prose. Source: eval evidence (run 20261026T043014Z-…-057b88); the vLLM-Omni notebook's § 1 sentence "also set and pass HF_TOKEN"
+named the token only for the guardrail case. eval.config unchanged.
+
+2026-10-26 (forced full run of the fixes branch: 44/44 PASS, 43/44 first-attempt): diffusers-nano-t2i × opencode
+self-corrected because the agent ran the Variant 1 install block across separate shell calls — the `export COSMOS3_DIFFUSERS_VENV`
+and `source …/activate` of the first call were gone in the second, `uv pip install` went into the evaluator's own venv and the
+import check ran against that interpreter (the agent then "fixed" the OpenCV pin, which was never broken: the same block passed
+first-attempt in the other eleven diffusers cells of the run). **F2c**: the three `uv pip` commands of the SKILL.md Variant 1 block
+and of the diffusers.md § 3 block carry `--python "$COSMOS3_DIFFUSERS_VENV"` (declared in-block addition, the F2/F3 mechanism; with
+the variable set the command targets this venv whether or not it is activated, with it unset uv stops with `No virtual environment
+found` instead of installing elsewhere — verified with uv 0.13.0), the import check and the generation snippets run with
+`"$COSMOS3_DIFFUSERS_VENV/bin/python"`, and a block comment / § 3 skill note says the block is one shell call. Source: eval evidence
+(run 20261026T211646Z-…-6b279d). eval.config unchanged.
+
+2026-10-27 — Layout: SKILL.md under the 500-line budget. SKILL.md went from 977 to 488 lines (static tier 100 with zero findings; before:
+95, "SKILL.md body is 967 lines (>500)") by moving skill-authored text into the reference files. Layout change only: every moved
+paragraph keeps its wording (apart from the pointer, antecedent and lead-in edits listed below), SKILL.md keeps a one-line pointer where each note lived ("Notes: `references/<file>` § n"), every
+runnable block that stayed in SKILL.md is unchanged, and no notebook text changed — the moved text sits under a new top-level
+heading "Skill notes (not in the notebook) — …" at the end of each reference, numbered as that file's next section, each
+subsection naming the SKILL.md variant it came from. Moves (destination § ← SKILL.md source, moved lines):
+
+- `references/skill-notes.md` (new file): § 1 ← the intro's NIM prompt-form parenthetical and the "Bundled assets"
+  payload-rules paragraph (13 lines); § 2 ← the "Model sizes vs GPU" measured-footprints paragraph (13 lines); § 3 ←
+  the "Disabling the guardrail, per backend" table (its own `##` heading dropped; the Model-sizes guardrail sentence
+  points at it) (8 lines); § 4 ← the whole "Things not obvious from the docs" section — its `##` heading dropped, the
+  six bullets and the two headless-pattern bash blocks verbatim (67 lines); § 5 ← the "Verify the output"
+  expected-smoke-facts bullet (4 lines); § 6 ← "Read this first" item 3's explanation of why uv 0.11.29 must not be
+  installed for Variants 1, 5 and 6 (5 lines).
+- `references/diffusers.md` (new § 8): § 8.1 ← Variant 1 "Headless servers" blockquote (apt fallback) (10 lines); §
+  8.2 ← Variant 1 Nano text-to-image snippet with its provenance / run-it sentences — **code block moved** (24 lines);
+  § 8.3 ← Variant 1 README Edge-settings / video-modes paragraph (6 lines); § 8.4 ← Variant 1 Edge t2i / t2v snippet
+  with its lead sentence — **code block moved** (32 lines).
+- `references/cosmos-framework.md` (new § 8): § 8.1 ← Variant 2 install-free `uvx --from "uv==$REQ_UV" uv sync`
+  alternative (2 lines); § 8.2 ← Variant 2 `--checkpoint-path` names / `view_run` output discovery / Edge, Super and
+  4-Step run-settings paragraph (8 lines).
+- `references/vllm-omni.md` (new § 7): § 7.1 ← Variant 3 sentence on why `-e HF_TOKEN` is a skill addition (F9b) (5
+  lines).
+- `references/sglang.md` (new § 7): § 7.1 ← Variant 4 `--host 0.0.0.0` / `-p 30000:30000` sentence and the measured
+  readiness parenthetical (60–171 s) (4 lines).
+- `references/trt-llm.md` (new § 7): § 7.1 ← Variant 5 setup-guide quote + "Hard prerequisite" paragraph (1.2.x has no
+  VisualGen; rc27 or the source build) (7 lines); § 7.2 ← Variant 5 Route A lead sentence and install block — **code
+  block moved** (rule (c)) (45 lines); § 7.3 ← Variant 5 shallow-clone / configs-only paragraph (6 lines); § 7.4 ←
+  Variant 5 Route B lead sentence and source-build block — **code block moved** (rule (c)) (15 lines); § 7.5 ← Variant
+  5 `TRTLLM_USE_PRECOMPILED=1` paragraph (14 lines); § 7.6 ← Variant 5 "Only if you keep guardrails on" paragraph (9
+  lines); § 7.7 ← Variant 5 serve lead paragraph and the Edge / Nano / Super serve block — **code block moved** (rule
+  (c)) (16 lines); § 7.8 ← Variant 5 explicit-form / Nano-YAML-memory / `compilation_config` / headless-pointer
+  paragraph (12 lines); § 7.9 ← Variant 5 image-route sentences (rc26 `/health` diagnosis; `output_type="image"`,
+  `format`, sampling per model) (12 lines).
+- `references/distilled-trt-llm.md` (new § 7): § 7.1 ← Variant 6 "One launch script, gated by GPU and host memory"
+  paragraph with its three route bullets (23 lines); § 7.2 ← Variant 6 "Run it as a script" paragraph and the launch
+  script — **code block moved** (rule (c)) (76 lines); § 7.3 ← Variant 6 sentence naming the notebook's command as the
+  `plain` route (1 line); § 7.4 ← Variant 6 measured paragraph (offload and `fp8` routes) (9 lines); § 7.5 ← Variant
+  6 "Still unverified — not routes" paragraph (5 lines); § 7.6 ← Variant 6 image-route fallback sentences (HTTP 500 on
+  the one-frame video route; L3-B / F14b) (11 lines); § 7.7 ← Variant 6 launch-mechanism / teardown-escalation /
+  leftover sentences (10 lines).
+- `references/nim.md` (new § 8): § 8.1 ← Variant 7 `--rm` deviation sentences (5 lines); § 8.2 ← Variant 7 "Why the
+  preflight" paragraph (7 lines); § 8.3 ← Variant 7 `NIM_MODEL_SIZE` / `NIM_PRECISION` / `NIM_PERF_PROFILE` /
+  profile-pinning paragraph (9 lines); § 8.4 ← Variant 7 bundled-assets-as-requests paragraph (F17) (7 lines); § 8.5 ←
+  Variant 7 playback-note / headless-check / expected-smoke sentences (9 lines).
+
+Code blocks moved under rule (c) of the brief (the two longest variants, Variant 6 and Variant 5): the Variant 5 Route A install
+block, Route B source-build block and Edge / Nano / Super serve block (trt-llm.md § 7.2 / § 7.4 / § 7.7) and the Variant 6 launch
+script (distilled-trt-llm.md § 7.2); SKILL.md replaces each with a 2–3 line "run § n of references/<file> as ONE shell call,
+verbatim; do not compose … from the prose" instruction. Beyond that scope — because (a) + (b) + (c) still left SKILL.md at 543
+lines — the Variant 1 Nano and Edge python snippets moved to diffusers.md § 8.2 / § 8.4 with the same kind of instruction (reported
+for review; the 44/44 first-attempt result was measured with the snippets in SKILL.md — review verdict below). Cross-reference wording changed only where a
+pointer had to follow the text: "the pattern under Things not obvious from the docs" → "the pattern in `references/skill-notes.md`
+§ 4" (Variants 3–6, trt-llm.md § 7.8); "install block above" → "§ 7.2"; "the script above" → "the § 7.2 script"; "see Verify the
+output" → "see SKILL.md Verify the output" (diffusers.md § 8.1 / § 8.3, nim.md § 8.5); "as documented above" → "as documented in
+trt-llm.md § 7.7" (skill-notes.md § 4, trtllm-serve block comment); "the serve blocks below" → "the serve blocks (§ 7.7 below)";
+"the implicit form above" → "the implicit form of § 7.7"; "teardown below" → "teardown: `references/skill-notes.md` § 4" and "the launch
+script above refuses" → "the launch script refuses" (SKILL.md Variant 6); "the launch script below picks" → "the launch script (§ 7.2 of the
+reference) picks" (SKILL.md Variant 6); "disable it with the backend's switch below" → "disable it with the backend's switch (table:
+`references/skill-notes.md` § 3; every variant block below carries its switch)" (SKILL.md Model sizes vs GPU); "do NOT install uv 0.11.29 for
+them" → "Do NOT install uv 0.11.29 for Variants 1, 5 and 6 (standalone venvs)" (skill-notes.md § 6, antecedent restored); and two lead-ins,
+"NIM prompt form (SKILL.md intro):" (skill-notes.md § 1) and "Readiness poll timing:" (sglang.md § 7.1). "Read this first" item 1 and the "Reference files" table declare
+`references/skill-notes.md` as required reading. Hostname scrub (text only; it changes the skill content hash, so the next CI run
+opens a new dashboard group): the internal lease-node names in distilled-trt-llm.md § 2 (two skill notes and one block comment) and
+in this record (Loop 2 item 1, review rounds 1 and 2, the first 2026-10-26 entry) are replaced by the hardware class — "H100 PCIe
+80 GB node, 125 GiB host RAM (128,664 MiB)", "H100 SXM 80 GB node, 251 GiB host RAM", "H100 NVL 94 GB node, 1 TB host RAM" — with
+dates and measured numbers unchanged (the `.agents/skills` tree is mirrored to the public NVIDIA/cosmos-framework repository).
+
+Review pass (same day): eight pre-existing skill notes still pointed at SKILL.md text that had moved; refreshed — the sglang.md §
+2 and vllm-omni.md § 2 readiness notes ("pattern in SKILL.md, Things not obvious from the docs" → "pattern in skill-notes.md §
+4"); the trt-llm.md § 2 and distilled-trt-llm.md § 2 install notes ("Full recipe: SKILL.md Variant 5" → "§ 7.2 below" /
+"trt-llm.md § 7.2", Route A, with § 7.4 as the source build); the distilled-trt-llm.md § 2 gate note ("commands in SKILL.md
+Variant 6" → "commands: the `fp8` route of the § 7.2 script below"; "SKILL.md Variant 6 carries it in every block" → "the § 7.2
+script exports it before every route"; "SKILL.md Variant 6 now has ONE gated launch script" → "§ 7.2 below (the launch SKILL.md
+Variant 6 points at) is ONE gated launch script"; "quoted in SKILL.md only as the command" → "named in § 7.3 only as the command")
+and its `fp8` blockquote ("Commands (…): SKILL.md Variant 6" → "the `fp8` route of the § 7.2 script below"); the diffusers.md § 3
+`--python` note ("the generation snippets of SKILL.md" → "the import check (SKILL.md Variant 1) and the generation snippets of §
+8.2 / § 8.4 below"); the skill-notes.md § 4 trtllm-serve comment ("as documented in SKILL.md Variant 5" → "as documented in
+trt-llm.md § 7.7"); and one comment inside a moved code block — the trt-llm.md § 7.2 Route A `--no-config` line, "(see Read this
+first)" → "(see SKILL.md, Read this first)" — the only edit inside any moved block. The intro line of each reference section that
+carries such an edit (skill-notes.md, sglang.md § 7, trt-llm.md § 7, diffusers.md § 8, nim.md § 8) now reads "wording unchanged
+apart from pointers and lead-ins that had to follow the text"; cosmos-framework.md § 8, vllm-omni.md § 7 and distilled-trt-llm.md
+§ 7 are verbatim. SKILL.md Variant 5 "Serve:" corrected: it credited § 7.7 with setting `TRTLLM_ROOT`, `CUDA_HOME` and the
+guardrail switch, but § 7.7 sets only `TRTLLM_ROOT` and `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` — the `TRTLLM_VENV` export, the venv
+activation and the `CUDA_HOME` export are § 7.2's, and a new shell call has none of them (the pre-split wording, "`CUDA_HOME` set
+(install block above)", had the same gap). The "Reference files" row for skill-notes.md now also names § 6 (uv version detail).
+Variant 1 snippets — review verdict: the § 8.2 / § 8.4 move is a first-attempt risk, not a defect (the replacement instruction
+names file, section, interpreter and cwd, and diffusers.md is required reading); the move stands, and the merge gate for this
+layout is the next full CI run showing all eight diffusers cells (diffusers-nano-t2i and diffusers-edge-t2v on every agent)
+first-attempt PASS, as before the split.
+eval.config unchanged.
+
+### Source re-pin to NVIDIA/cosmos-framework (2026-10-27)
+
+Every pinned URL in the skill (the Source line of each reference, the setup-guide links, the Notebook-walkthrough and
+`distill/README.md` links, the SKILL.md Origin line) pointed at the public `NVIDIA/cosmos` repository at
+`6e2c69afafd6444c1ca14a021aba93fcc6b7996a`, path `cookbooks/cosmos3/generator/audiovisual/` (setup guide:
+`cookbooks/cosmos3/README.md`). The cookbook has moved to this repository, `NVIDIA/cosmos-framework`, and `NVIDIA/cosmos` `main` no longer has the directory (404; the old permalinks
+still resolve). The skill is re-pinned to `NVIDIA/cosmos-framework` `main` = `cc28c0c36bf8f39d5d0a7afe71e237178f180155`
+(2026-10-27T12:15Z), path `.agents/skills/cookbooks/cosmos3/generator/audiovisual/` (setup guide:
+`.agents/skills/cookbooks/cosmos3/README.md`). Only two commits touched the audiovisual directory there: `7e918d7b` (#292,
+2026-10-21, the sync that brought the migrated content) and `9a70e64d` (#296, 2026-10-21, "update
+Cosmos3 NIM cookbook to 2.1.0").
+
+Diff `6e2c69a` → `cc28c0c`, checked file by file (cell text extracted from both notebook sets; `cmp` of the raw `.ipynb`
+files shows the six non-NIM notebooks at `cc28c0c` byte-identical to the ones this skill was migrated from, so #296 changed none of them). Six non-NIM
+notebooks: identical except the `find_repo_root` predicate, `(path / "README.md").exists() and (path / "cookbooks").exists()`
+→ `(path / "cookbooks" / "cosmos3").is_dir()` (one line per definition; the function name and
+`COSMOS3_AUDIOVISUAL_ROOT = COSMOS_ROOT / "cookbooks" / "cosmos3" / "generator" / "audiovisual"` are unchanged, so
+`COSMOS_ROOT` is now the cookbook root `.agents/skills`), and, in `run_with_cosmos_framework.ipynb` and
+`run_with_diffusers.ipynb` only, the § 1 "uv version" blockquote (`uv >= 0.11.3` → the exact `uv 0.11.29` wording).
+`run_with_nim.ipynb`: removed by #296 (last present at `7e918d7b`) in favour of the 2.1.0 NIM cookbook
+`.agents/skills/cookbooks/cosmos3/nim/`. Audiovisual `README.md`: one sentence of the Cosmos Framework quickstart
+(`packages/cosmos3/.venv` "at the repo root" → "at the cookbook root, `.agents/skills`") and, from #296, the NIM parts —
+NIM-scope blockquote, guardrail sentence (adds `NIM_ENABLE_SIGLIP_GUARDRAILS=0`), `../../README.md#generator-nim` →
+`#cosmos3-nim` ("NIM setup"), the whole "Run with NIM" quickstart (image `nvcr.io/nim/nvidia/cosmos3:2.1.0`, `model_mode`
+requests), with the Notebook walkthrough, the I2V example, the field table and Limitations removed. Setup guide
+`cosmos3/README.md`: the anchors the skill links — `#diffusers`, `#cosmos-framework`, `#vllm-omni`,
+`#tensorrt-llm-generator` — still exist; `#generator-nim` is gone (section removed; `### Cosmos3 NIM` → `#cosmos3-nim` is
+upstream's own replacement); its other changes (Simulation rows, `LD_LIBRARY_PATH` guidance, the TensorRT-LLM PR paragraph
+replaced by one sentence, a TensorRT-Edge-LLM section, NIM image `cosmos3:2.1.0` and variant list) touch no text the skill
+quotes — every quoted phrase (`--init-timeout 1800`, `cosmos_guardrail==0.3.0`, `opencv-python-headless==5.0.0.93`,
+`TRTLLM_USE_PRECOMPILED=1`, "the right path …", "tens of GiB") is still at `cc28c0c`, and trt-llm.md § 7.1 already quotes
+the one-sentence TensorRT-LLM wording. Assets: identical — the new repository stores the three JPEGs and the MP4 as git-LFS
+pointers whose sha256 oids equal the vendored files (`car_driving.jpg` = `coastal_road_audio.jpg` `1de51eb5…`,
+`humanoid_robot.jpg` `32f3d551…`) and the JSON blobs are byte-identical; `videos/car_driving_plain.mp4` stays not vendored.
+
+Edited in the skill: 25 pinned URLs rewritten in place (SKILL.md 1, cosmos-framework.md 4, diffusers.md 3, distilled-trt-llm.md 4,
+payloads.md 3, sglang.md 1, trt-llm.md 5, vllm-omni.md 4) from `NVIDIA/cosmos/{blob,tree}/6e2c69a…/cookbooks/cosmos3/` to
+`NVIDIA/cosmos-framework/{blob,tree}/cc28c0c…/.agents/skills/cookbooks/cosmos3/`, with one hand exception — the payloads.md § 1
+`README.md#generator-nim` link becomes `README.md#cosmos3-nim` with upstream's link text "NIM setup" (the section was removed) —
+and payloads.md's Source line no longer lists the deleted `run_with_nim.ipynb`; nim.md's three links went with its removal (NIM
+bullet below). Skill prose: the SKILL.md Origin line names the `.agents/skills/cookbooks/cosmos3/generator/audiovisual` notebooks and README of
+the public cosmos-framework repository (Variant 7: the `cosmos3/nim/` cookbook pages at the same commit), its "Read this first"
+item 1 notes that Variant 7's reference is built from the NIM cookbook pages rather than a notebook, and the payloads.md
+path-translation note says the notebooks resolved assets under
+`<cosmos-framework checkout>/.agents/skills/cookbooks/cosmos3/generator/audiovisual/`. Already current, so untouched:
+cosmos-framework.md § Quickstart carries the new venv sentence (the migrated copy already carried it — it was
+current — the `6e2c69a` permalink showed the older "repo root" wording, which the re-pin resolves), payloads.md § 2.4 quotes
+the `uv 0.11.29` blockquotes (bare URLs wrapped by rumdl, as recorded above), § 4.1 replaced the `find_repo_root` plumbing
+and its "What the notebooks did instead" line is unchanged upstream, and the verbatim `ASSET_SETS` comment "repo-relative
+under cookbooks/cosmos3/generator/audiovisual" is unchanged upstream.
+
+- **NIM (Variant 7, nim.md, payloads.md § 1 / § 5 / § 6.1 / § 8.6 / § 10, skill-notes.md § 3–5).** Upstream retired the Generator NIM 1.0.0: `run_with_nim.ipynb` was deleted and the README `## Run with NIM` rewritten by cosmos-framework #296 (9a70e64d, 2026-10-21; the notebook's last copy is at 7e918d7b), and the setup guide's `### Generator NIM` section is gone (`#generator-nim` → `#cosmos3-nim`). The documented backend is now the unified Cosmos3 NIM `nvcr.io/nim/nvidia/cosmos3:2.1.0`: `NIM_MODEL_TYPE=generator` + `NIM_MODEL_VARIANT` (`nano`, `super`, `super-t2i`, `super-t2i-4step`, `super-i2v`, `super-i2v-4step`, …) replace `NIM_MODEL_SIZE` / `NIM_PRECISION=fp8`; the launch is `docker run -d --name cosmos3-generator --gpus '"device=0"' --shm-size 16g --ulimit memlock=-1 --ulimit stack=67108864 --ulimit nofile=65536:65536 -p 8000:8000 -e NGC_API_KEY …`; `POST /v1/infer` requires `model_mode` and rejects unknown fields, with `input_reference` / `num_inference_steps` / `num_frames` / `flow_shift` instead of `image` / `steps` / `num_output_frames`, and returns `b64_video` or `b64_image`; a third guardrail switch `NIM_ENABLE_SIGLIP_GUARDRAILS` exists; the NIM scope blockquote now reads "serves text-to-image, text-to-video, image-to-video, and video-to-video, plus Action and Transfer. It does not generate audio." nim.md was removed (475 lines) instead of being rebuilt from the cookbook: Variant 7 now delegates to the NIM cookbook in this checkout, `.agents/skills/cookbooks/cosmos3/nim/` (deployment.md, generation.md, api-reference.md, operations.md — 2.0.0 pages here, 2.1.0 upstream, same Generator contract) and to its own skill `cosmos3-nim-user` (nested under `nim/.agents/skills/`, not in the top-level skill directories, hence the explicit pointer and the new Related-skills row), both also linked at the pinned commit cc28c0c; the skill's reference table names the cookbook directory in nim.md's place. SKILL.md Variant 7 (SKILL.md stays under 500 lines) carries the pointers, the 2.1.0 image, the cookbook's launch flags and profile preflight, the readiness and selection checks (with a ~40-min deadline as a skill note), an I2V request built from `car_driving.jpg` as a data URL with the compact-JSON `prompt` / `negative_prompt` — the request of the cookbook's `examples/i2v.py` at smoke size — and the README scope quote; payloads.md § 1 takes the README's new blockquote, guardrail sentence and `[NIM setup](…#cosmos3-nim)` link verbatim, § 5 names the new image and `NIM_MODEL_VARIANT`, § 6.1 / § 8.6 / § 10 state the 2.1.0 fields and defaults; skill-notes.md § 3 adds the SIGLIP switch. Skill-note status (the former nim.md § 8 notes are condensed into one skill-notes.md § 4 bullet and the § 5 smoke facts): F7's `--rm` deviation is **closed** (the cookbook launches detached without `--rm`; the log-preserving `docker stop; docker logs > …/container.log; docker rm` teardown stays an addition); F11's uid-1000 cache preflight stays valid (deployment.md: "The container runs as UID/GID 1000 (`nvs`)"); F10 is re-stated for 2.1.0 (selectors + `profile_selection.startup` preflight + `/v1/metadata` / `/v1/manifest`; `NIM_TAGS_SELECTOR` keys `model_variant` etc., `NIM_MODEL_PROFILE` in Advanced Settings) and its 1.0.0 facts — `NIM_MODEL_SIZE`, `model_size=`, `list-model-profiles`, `NimCatalogSelectionError`, `selectedModelProfileId`, "4 of 63 profiles" — are dropped except as labelled 1.0.0-era terms; the compact-JSON HTTP 200 and the vp9 320x192 / 25 frames / ~1.04 s figures are labelled as measured on 1.0.0 and not yet re-verified on 2.1.0. The `"256"` / 25-frame smoke request, formerly the notebook's own, is now a declared skill choice (cookbook defaults `720` / 189). Skill additions inside SKILL.md's launch block: the three guardrail `-e` lines, the `NIM_MODEL_PROFILE` pass-through, the cache preflight and the `CONTAINER_NAME` / `NIM_PORT` / `NIM_IMAGE` parameters (declared in the Variant 7 text). eval/eval.config is untouched in #250; its NIM case still says "serves Text2Video and Image2Video only" and "does not expose text2image" — a #128 follow-up. The NIM eval cell's 44/44 pass was produced on the cached 1.0.0 image; the 2.1.0 image was pulled on the first runner on 2026-10-27 (163 s, 31.2 GB on disk) and the documented preflight selected nano / fp8 / latency on its H100 PCIe 80 GB in 17 s (`list-model-profiles` is still present in the image, undocumented); the full matrix has not yet run on 2.1.0.
+
+Deliberately left: the historical `6e2c69a` permalinks in this record (the list at the top, the per-file audit rows, the
+F16 row) describe what was migrated on 2026-10-20 and stay; the "(pinned commit; …)"
+Source wording and the "rewritten to the same files at the pinned commit" notes (payloads.md top note, diffusers.md §
+Quickstart) remain true at the new pin; the `"8B Nano"` label (SKILL.md model table, skill-notes.md § 2) came from the Generator NIM table of the `6e2c69a` setup guide,
+which `cc28c0c` no longer has — re-attributed to that retired table rather than dropped. Only URL, link-target, link-text ("NIM setup") and skill-prose changes; no notebook text changed; `eval/eval.config` (no
+permalinks) unchanged.

@@ -1,7 +1,5 @@
 # vLLM-Omni — distilled from the cookbook notebook
 
-Source: `run_with_vllm_omni.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_vllm_omni.ipynb> (pinned commit; this file supersedes it and is complete on its own)
-
 Scope: the vLLM-Omni backend — the notebook's prerequisites, Docker server launches (Nano, Edge, Super with tensor parallelism and layerwise offload, the two Super 4-Step students, CFG parallel), endpoint verification, the `curl`-based request helpers (`video_api_url`, `image_api_url`, `build_vllm_form`, `build_vllm_image_body`, `post_video`, `post_image`, `run_vllm_payload`), its twelve run sections collapsed into one use-case table, and the README's vLLM-Omni Quickstart and Notebook walkthrough; content shared with the other backends (`ASSET_SETS`, `FIXED_SAMPLING`, `payload_dimensions`, `create_payload`, endpoint variables, output naming) is in payloads.md and is referenced by section.
 
 ## Cosmos3 Generator Audiovisual with vLLM Omni
@@ -24,10 +22,13 @@ Local-default endpoint exports (`COSMOS3_VLLM_BASE_URL`, `COSMOS3_VLLM_NANO_BASE
 
 Run the vLLM Omni server before running the request cells. Use the Docker image for every modality on this page. Mount any directory that contains local media or action files you want the server to read.
 
+Skill note (not in the notebook): every `docker run` below carries one added line, `-e HF_TOKEN` — the first launch downloads the model into the mounted `HF_HOME` and anonymous Hub calls are rate-limited (eval run 2026-10-26, cold cache: the container exited with HTTP 429 and its log asked for `HF_TOKEN`); every other line is the notebook's. Skill note (not in the notebook): readiness is `GET http://localhost:8000/v1/models` (setup guide: the server prints `Application startup complete.` when the API is up; observed ~45–73 s for Edge on 1x H100 across four eval runs, 2026-10-21/23). For automation run detached — `docker run -d --name cosmos3-vllm …` with the rest of the block unchanged — poll `/v1/models`, then `docker stop cosmos3-vllm && docker rm cosmos3-vllm` (pattern in skill-notes.md § 4).
+
 ### Docker Image: Cosmos3-Nano
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
   -v "$(pwd):/workspace" \
   -p 8000:8000 \
   --ipc=host \
@@ -44,6 +45,7 @@ docker run --runtime nvidia --gpus all \
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
   -v "$(pwd):/workspace" \
   -p 8000:8000 \
   --ipc=host \
@@ -64,6 +66,7 @@ For example, on four GPUs:
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
   -v "$(pwd):/workspace" \
   -p 8000:8000 \
   --ipc=host \
@@ -88,6 +91,7 @@ Start one model at a time on port 8000 and run its matching example below. Both 
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
   -v "$(pwd):/workspace" \
   -p 8000:8000 \
   --ipc=host \
@@ -106,6 +110,7 @@ docker run --runtime nvidia --gpus all \
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
   -v "$(pwd):/workspace" \
   -p 8000:8000 \
   --ipc=host \
@@ -382,7 +387,7 @@ run_vllm_payload(<use_case>_payload, <use_case>_output, model="<Model>")
 ### Quickstart
 
 Set up the environment and start the server:
-[vLLM-Omni setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#vllm-omni) (Docker recommended). Run the
+[vLLM-Omni setup](../../cookbooks/cosmos3/README.md#vllm-omni) (Docker recommended). Run the
 Docker command from this folder (`COSMOS3_WORKDIR` defaults to the current
 directory) with **`COSMOS3_HOST_PORT=8000`** unless you already have another
 server on that port.
@@ -465,9 +470,21 @@ Path("/tmp/cosmos3_v2v.mp4").write_bytes(response.content)
 
 ### Notebook walkthrough
 
-[`run_with_vllm_omni.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_vllm_omni.ipynb) is the full tutorial for
+`run_with_vllm_omni.ipynb` is the full tutorial for
 the vLLM-Omni backend: it walks through text-to-image, text-to-video, and
 image-to-video requests with audio on or off plus standard video-to-video
 requests. Server launch options (Nano and
 Super, tensor parallelism, layerwise offload, and CFG-parallel variants) live in
-the [shared environment setup guide](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#vllm-omni).
+the [shared environment setup guide](../../cookbooks/cosmos3/README.md#vllm-omni).
+
+## 7. Skill notes (not in the notebook) — `HF_TOKEN` (from SKILL.md Variant 3)
+
+Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; wording unchanged). Nothing in this section is notebook text; SKILL.md keeps a one-line pointer at each former location.
+
+### 7.1 Why the `-e HF_TOKEN` line (SKILL.md Variant 3)
+
+The `-e HF_TOKEN` line is a skill
+addition (eval run 2026-10-26, cold cache on a fresh node): the first launch downloads `nvidia/Cosmos3-<model>`
+into `HF_HOME`, and anonymous Hub calls are rate-limited — the container crashed with HTTP 429 and its log asked
+for `HF_TOKEN`; with guardrails enabled the token must also be authorised for the gated guardrail repo ("also set
+and pass `HF_TOKEN` to the container").
