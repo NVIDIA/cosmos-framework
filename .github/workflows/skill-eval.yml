@@ -1,0 +1,298 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Skill eval on the self-hosted GPU runners — never automatic. Starts when someone
+#   - applies a trigger label to a PR: `run-skill-eval` (default run: the touched skills, no canary),
+#     `run-skill-eval-smoke` (canary only), `run-skill-eval-failed` (re-run the cells that did not PASS) or
+#     `run-skill-eval-force` (re-run everything),
+#   - comments `/run-skill-eval [args]` on a PR (owner/member/collaborator) — args: `smoke-only`, `with-smoke`,
+#     `force`, `rerun-failed`, `cells=<backend>/<case>,…`, `group=<id>` (see .github/scripts/skill_eval/README.md,
+#     "Trigger arguments"), or
+#   - dispatches it manually with a PR number, a scope and optional args.
+# The `plan` job detects the skills the PR touches and posts ONE comment; every eval cell (case × backend)
+# then runs as its own job, so GitHub queues the cells over all idle runners with the `cosmos-skill-eval`
+# + `h100` labels (3 nodes = 3 cells in flight) — except cursor cells, whose jobs also need `cursor-serial`, a label
+# ONE runner carries, so they run one at a time (working hypothesis: a per-key concurrency cap on Cursor's side killed
+# 2 of 7 concurrent cursor cells on 2026-10-26; the labels of each cell job come from the plan's matrix entry,
+# `runs_on`, out of .github/skill-eval.yml); the canary cells
+# (only when asked for: `smoke-only`, `with-smoke` or `smoke: true` in .github/skill-eval.yml) go first, the
+# `report` job writes the final comment.
+# Secret: the cell jobs need the inference-gateway key for the agents and the judge as a repository secret —
+# `COSMOS_SKILL_EVAL_NVIDIA_API_KEY`, or the older `NVIDIA_API_KEY` as the fallback (the evaluator image >= v20261031
+# no longer bakes it; README, "Secrets").
+# See .github/scripts/skill_eval/README.md.
+name: skill-eval
+
+on:
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to evaluate (its current head is used)
+        required: true
+      scope:
+        description: full = the touched skills (add with-smoke to args for the canary too); smoke = canary only
+        default: full
+        type: choice
+        options: [full, smoke]
+      args:
+        description: "trigger arguments, as after `/run-skill-eval`: with-smoke, force, rerun-failed, cells=<backend>/<case>,…, group=<id>"
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  # Deployment values (evaluator image, dashboard URL) live in repository variables, not in the mirrored tree.
+  COSMOS_SKILL_EVAL_IMAGE: ${{ vars.COSMOS_SKILL_EVAL_IMAGE }}
+  COSMOS_SKILL_EVAL_DASHBOARD: ${{ vars.COSMOS_SKILL_EVAL_DASHBOARD }}
+
+jobs:
+  plan:
+    name: plan
+    # The comment match is a prefix: `/run-skill-eval` followed by arguments. The arguments themselves are
+    # taken apart in the plan step (shell/python), never in this expression.
+    if: >-
+      (github.event_name == 'pull_request'
+        && contains(fromJSON('["run-skill-eval","run-skill-eval-smoke","run-skill-eval-failed","run-skill-eval-force"]'), github.event.label.name)
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '/run-skill-eval')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, cosmos-skill-eval]
+    timeout-minutes: 30
+    # one plan at a time per PR; later triggers queue (an unrelated label/comment event never reaches this job,
+    # so it cannot cancel a pending run the way a workflow-level group would)
+    concurrency:
+      group: skill-eval-plan-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+      cancel-in-progress: false
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
+      plan: ${{ steps.plan.outputs.plan }}
+      canary: ${{ steps.plan.outputs.canary }}
+      skills: ${{ steps.plan.outputs.skills }}
+      has_canary: ${{ steps.plan.outputs.has_canary }}
+      has_skills: ${{ steps.plan.outputs.has_skills }}
+    steps:
+      - name: Resolve the PR head
+        id: pr
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]; tok = os.environ["GH_TOKEN"]
+          n = os.environ["PR_FROM_EVENT"]
+          def api(path, method="GET", body=None):
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/{path}", method=method,
+                  data=json.dumps(body).encode() if body else None,
+                  headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
+                           "Content-Type": "application/json", "User-Agent": "cosmos-skill-eval"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r) if r.status != 204 else {}
+          pr = api(f"pulls/{n}")
+          if (pr.get("head", {}).get("repo") or {}).get("full_name") != repo:
+              raise SystemExit(f"PR #{n} comes from a fork; fork code is never run on the self-hosted runners")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"number={n}\nsha={pr['head']['sha']}\nref={pr['head']['ref']}\nbase_sha={pr['base']['sha']}\n")
+          if os.environ["EVENT_NAME"] == "issue_comment" and os.environ.get("COMMENT_ID"):
+              try:
+                  api(f"issues/comments/{os.environ['COMMENT_ID']}/reactions", "POST", {"content": "eyes"})
+              except Exception as exc:  # cosmetic: a deleted comment must not fail the run
+                  print(f"reaction skipped: {exc}")
+          print(f"PR #{n} head {pr['head']['sha'][:7]} ({pr['head']['ref']}) base {pr['base']['sha'][:7]} ({pr['base']['ref']})")
+          PY
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          persist-credentials: false  # the API calls use the GH_TOKEN env var, nothing pushes: no job token in .git/config
+          fetch-depth: 0  # full history: the git fallback of skill detection diffs base...head and needs the base
+                          # commit plus a merge base — every branch is fetched, so both are in the clone without a
+                          # separate fetch (which could not use the job token anyway); the group anchoring resolves
+                          # `<commit>:<skill dir>` tree ids for the commits the dashboard knows
+
+      - name: Plan the matrix and post the comment
+        id: plan
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_REF: ${{ steps.pr.outputs.ref }}
+          # Trigger arguments (README, "Trigger arguments"): what the label means, the comment text after
+          # `/run-skill-eval`, or the dispatch inputs. Resolved below, with the event payload read from env
+          # variables only (never interpolated into the script).
+          LABEL_NAME: ${{ github.event.label.name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          DISPATCH_SCOPE: ${{ inputs.scope }}
+          DISPATCH_ARGS: ${{ inputs.args }}
+        run: |
+          TRIGGER_ARGS="$(python3 - <<'PY'
+          import os
+          event = os.environ["GITHUB_EVENT_NAME"]
+          command = "/run-skill-eval"
+          if event == "issue_comment":
+              lines = (os.environ.get("COMMENT_BODY") or "").strip().splitlines()
+              first = lines[0].strip() if lines else ""
+              rest = first[len(command):]
+              # `/run-skill-eval smoke-only` -> `smoke-only`; `/run-skill-evalXYZ ...` keeps the glued token so the
+              # orchestrator reports it as an unknown argument instead of running something else quietly
+              args = rest if first.startswith(command) and (not rest or rest[0].isspace()) else first
+          elif event == "pull_request":
+              labels = {"run-skill-eval-smoke": "smoke-only", "run-skill-eval-failed": "rerun-failed",
+                        "run-skill-eval-force": "force"}
+              args = labels.get(os.environ.get("LABEL_NAME") or "", "")
+          else:  # workflow_dispatch
+              scope = "smoke-only " if os.environ.get("DISPATCH_SCOPE") == "smoke" else ""
+              args = scope + (os.environ.get("DISPATCH_ARGS") or "")
+          print(" ".join(args.split()))
+          PY
+          )"
+          echo "trigger args: '$TRIGGER_ARGS'"
+          python3 .github/scripts/skill_eval/run_matrix.py plan --config .github/skill-eval.yml \
+            --checkout "$GITHUB_WORKSPACE" --trigger-args "$TRIGGER_ARGS" --plan-out "$RUNNER_TEMP/skill-eval-plan.json"
+
+  canary:
+    name: "cell: ${{ matrix.skill }}/${{ matrix.backend }}/${{ matrix.case }}"
+    needs: plan
+    if: needs.plan.outputs.has_canary == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.canary) }}
+    # the plan's labels for this cell: `runner_labels`, plus `serial_runner_label` for a backend in `serial_backends`
+    # (.github/skill-eval.yml) — cursor cells land on the one runner labelled `cursor-serial` and run one at a time
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false  # this checkout is bind-mounted into the agent task container: no job token in .git/config
+      - name: Run the cell
+        env:
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+          CELL_SKILL: ${{ matrix.skill }}
+          CELL_BACKEND: ${{ matrix.backend }}
+          CELL_CASE: ${{ matrix.case }}
+          # Inference-gateway key for the evaluator container (image >= v20261031 does not bake it): the orchestrator
+          # hands its environment to the launcher, which forwards NVIDIA_API_KEY with a bare `-e` (docker applies `-e`
+          # after every `--env-file` entry whatever the flag order), so this secret wins over the runner's
+          # ~/cosmos-skill-eval.env. GitHub masks it in the logs; nothing prints the value, only a provenance line.
+          NVIDIA_API_KEY: ${{ secrets.COSMOS_SKILL_EVAL_NVIDIA_API_KEY || secrets.NVIDIA_API_KEY }}
+        run: |
+          [ -n "$NVIDIA_API_KEY" ] || { echo "::error::neither repository secret COSMOS_SKILL_EVAL_NVIDIA_API_KEY nor NVIDIA_API_KEY is set (the evaluator image no longer bakes the inference key)"; exit 1; }
+          python3 .github/scripts/skill_eval/run_matrix.py cell --config .github/skill-eval.yml \
+            --checkout "$GITHUB_WORKSPACE" --plan "$PLAN_JSON" --results-dir "$RUNNER_TEMP/cell-results" \
+            --skill "$CELL_SKILL" --backend "$CELL_BACKEND" --case "$CELL_CASE"
+      # The cell's outcome is persisted independently of the comment: the report job aggregates these files.
+      - name: Keep the cell outcome as a run artifact
+        if: always()
+        continue-on-error: true  # a flaky upload must not red a passed cell; the report job recovers the result from the dashboard
+        uses: actions/upload-artifact@v4
+        with:
+          name: cell-${{ matrix.skill }}-${{ matrix.backend }}-${{ matrix.case }}
+          path: ${{ runner.temp }}/cell-results/*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 30
+
+  cells:
+    name: "cell: ${{ matrix.skill }}/${{ matrix.backend }}/${{ matrix.case }}"
+    needs: [plan, canary]
+    # canary first (ordering, not gating): skill cells start once the canary jobs are done or were skipped —
+    # but not when the run was cancelled meanwhile (always() would launch every GPU cell after a cancel)
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.has_skills == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.skills) }}
+    # the plan's labels for this cell: `runner_labels`, plus `serial_runner_label` for a backend in `serial_backends`
+    # (.github/skill-eval.yml) — cursor cells land on the one runner labelled `cursor-serial` and run one at a time
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false  # this checkout is bind-mounted into the agent task container: no job token in .git/config
+      - name: Run the cell
+        env:
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+          CELL_SKILL: ${{ matrix.skill }}
+          CELL_BACKEND: ${{ matrix.backend }}
+          CELL_CASE: ${{ matrix.case }}
+          # Inference-gateway key for the evaluator container (image >= v20261031 does not bake it): the orchestrator
+          # hands its environment to the launcher, which forwards NVIDIA_API_KEY with a bare `-e` (docker applies `-e`
+          # after every `--env-file` entry whatever the flag order), so this secret wins over the runner's
+          # ~/cosmos-skill-eval.env. GitHub masks it in the logs; nothing prints the value, only a provenance line.
+          NVIDIA_API_KEY: ${{ secrets.COSMOS_SKILL_EVAL_NVIDIA_API_KEY || secrets.NVIDIA_API_KEY }}
+        run: |
+          [ -n "$NVIDIA_API_KEY" ] || { echo "::error::neither repository secret COSMOS_SKILL_EVAL_NVIDIA_API_KEY nor NVIDIA_API_KEY is set (the evaluator image no longer bakes the inference key)"; exit 1; }
+          python3 .github/scripts/skill_eval/run_matrix.py cell --config .github/skill-eval.yml \
+            --checkout "$GITHUB_WORKSPACE" --plan "$PLAN_JSON" --results-dir "$RUNNER_TEMP/cell-results" \
+            --skill "$CELL_SKILL" --backend "$CELL_BACKEND" --case "$CELL_CASE"
+      # The cell's outcome is persisted independently of the comment: the report job aggregates these files.
+      - name: Keep the cell outcome as a run artifact
+        if: always()
+        continue-on-error: true  # a flaky upload must not red a passed cell; the report job recovers the result from the dashboard
+        uses: actions/upload-artifact@v4
+        with:
+          name: cell-${{ matrix.skill }}-${{ matrix.backend }}-${{ matrix.case }}
+          path: ${{ runner.temp }}/cell-results/*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 30
+
+  report:
+    name: report
+    needs: [plan, canary, cells]
+    if: always() && needs.plan.result == 'success'
+    runs-on: [self-hosted, cosmos-skill-eval]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false  # the API calls use the GH_TOKEN env var, nothing pushes: no job token in .git/config
+      - name: Collect the cell outcomes written by the cell jobs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cell-*
+          path: ${{ runner.temp }}/cell-results
+          merge-multiple: true
+      - name: Write the final comment
+        env:
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+        run: >-
+          python3 .github/scripts/skill_eval/run_matrix.py report --config .github/skill-eval.yml
+          --checkout "$GITHUB_WORKSPACE" --plan "$PLAN_JSON" --results-dir "$RUNNER_TEMP/cell-results"
+
+  labels:
+    name: remove trigger label
+    needs: [plan, report]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Remove the trigger labels so they can be re-applied
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for label in run-skill-eval run-skill-eval-smoke run-skill-eval-failed run-skill-eval-force; do
+            curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/$label" >/dev/null || true
+          done
