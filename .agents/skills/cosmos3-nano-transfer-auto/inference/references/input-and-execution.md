@@ -214,59 +214,50 @@ Budget additional compute and input/output memory for longer runs.
 
 ### Source timing, model FPS and playback FPS
 
-These are three different quantities. The released Auto recipe uses **30 FPS
-camera data**. Match the request FPS to the effective sampling rate of your inputs.
+The released Transfer-Auto model was trained on **30-FPS videos only**. Keep
+its FPS conditioning at **30**, including when using 10-FPS camera inputs.
+Using `--fps 10` changes the Transformer's temporal conditioning and has been
+reported to produce poorer, jumpier results.
 
-| Quantity                    | Meaning                                                                                                              | What to check                                                                                                 |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Source sampling rate        | Actual time between the RGB/WSM observations: 100 ms at 10 FPS, about 33 ms at 30 FPS                                | Timestamps, frame selection and synchronization; an MP4 header alone is insufficient                          |
-| Request `fps` / CLI `--fps` | The camera rate assumed by the model; it affects temporal-position/mRoPE scaling and formatted FPS/duration metadata | Match the effective source sampling rate for correctly timed inference                                        |
-| Saved-video playback rate   | How quickly the generated frames are displayed                                                                       | Framework's Auto saver currently uses the request FPS; changing playback afterward does not change generation |
+The **model's FPS conditioning** (`fps` / `--fps`) is separate from the
+**video's sampling and playback rate**. The loader reads multiview frames by
+index; `--fps` does not resample them. These rates do not describe generation
+throughput.
 
-There is no separate `multiview.output_fps` request field. For a playback-only
-comparison, create a separate viewing copy after generation
-with the same generated frames. Preserve the original outputs and request.
+#### Recommended inference configuration for 10-FPS inputs
 
-Changing `--fps` does not resample multiview controls: the loader selects decoded
-frames by index. Do not relabel 10-FPS recordings as 30 FPS to claim compatibility.
-Actual conversion requires an explicit, synchronized resampling policy for all
-affected inputs; duplicated/interpolated frames do not recover missing observations.
-Recompute caption frame bounds when frame indices change, preserve event times,
-and check any supplied RGB conditions against the resulting control timeline.
+For **RGB-only Transfer-Auto**:
 
-Count and duration must agree: 297 saved frames play for 9.9 seconds at 30 FPS,
-but 29.7 seconds at 10 FPS. Check resolved caption spans, frame count and saved
-video metadata; a top-level frame-count edit alone may not select a new interval.
+1. **Use synchronized 10-FPS inputs unchanged.** Render WSM at 10 FPS and keep
+   any RGB conditioning aligned. Do not duplicate or interpolate frames.
+2. **Set `fps: 30` in the request, or pass `--fps 30`.** Keep the input frame
+   sequence and caption frame bounds unchanged; do not triple the frame count.
+3. **Encode the generated frames at 10 FPS**, preserving every frame, to play
+   the result at the intended speed.
 
-#### Diagnose a quality drop with 10-FPS camera data
+Framework currently saves Auto videos at the request FPS and has no separate
+`multiview.output_fps` field. After generation, create a 10-FPS copy of each
+30-FPS output, for example:
 
-1. Confirm the actual source timestamps and which frames the loader consumes.
-   If an original 30-FPS recording exists, retain a correctly conditioned
-   30-FPS baseline for the same physical scene interval. A comparison that
-   changes both source sampling and model FPS does not isolate either cause.
-2. For an **RGB-only** test, use aligned 10-FPS RGB/WSM with request `fps: 10`.
-   Keep the checkpoint, cameras, spatial transforms, captions, seed and sampling
-   settings fixed. Check duration and every camera's motion and geometry.
-3. Optionally repeat the **same 10-FPS frame sequence** with request `fps: 30`,
-   keeping the same frame count and inputs. This deliberately changes the model's
-   timing assumption and derived caption metadata. Inspect the effective captions
-   too; timestamped text can now conflict with that clock. View a separate copy
-   at 10 FPS if needed. The model still interpreted the observed displacements
-   as occurring **three times faster**; slower playback cannot undo that.
-   Use this diagnostic comparison to isolate FPS conditioning, not as a quality fix.
+```bash
+ffmpeg -n -i generated_30fps.mp4 -an \
+  -vf "setpts=3*(PTS-STARTPTS)" -r 10 -fps_mode cfr \
+  -c:v libx264 -crf 18 -preset slow generated_10fps.mp4
+```
 
-Use a fresh output directory per case and record source sampling, requested FPS,
-actual generated frame count, caption timing and viewing-copy playback rate.
-For domain adaptation, use the [Transfer-Auto post-training guide](../../post-training/SKILL.md)
-and evaluate the result on held-out recordings at your target sampling rate.
-For Sim-Auto, adapt Transfer-Auto before causal distillation.
+Do not use `-r 10` alone: that drops frames instead of slowing playback.
+Check that both files have the same frame count. For example, 297 frames last
+9.9 seconds at 30 FPS and 29.7 seconds at 10 FPS. Preserve the original output.
 
-**Joint RGB/LiDAR needs a separate timing check.** The reference is 30-FPS
-cameras with 10-Hz LiDAR; 10-Hz LiDAR does not imply 10-FPS cameras. Camera FPS
-also determines sweep counts and source-frame alignment. Current joint Sim-Auto
-rejects camera FPS other than 30. Do not bypass that check or apply the relabeling
-experiment to joint inputs; preserve the supported sensor clocks and verify
-range-control IDs.
+For timestamped caption text, express event times on the model's 30-FPS clock:
+an event at input frame 60 is at 2 seconds for conditioning and 6 seconds in
+the final 10-FPS video. Keep original captions and save any adjusted version
+separately. This changes text timing, not the input frames or their indices.
+
+**Joint RGB/LiDAR needs separate clock/alignment handling.** This configuration
+is not a joint-generation recipe: camera FPS also determines LiDAR sweep counts
+and alignment. Keep the supported 30-FPS camera / 10-Hz LiDAR setup for joint
+generation; current joint Sim-Auto rejects camera FPS other than 30.
 
 ### What guidance means
 
