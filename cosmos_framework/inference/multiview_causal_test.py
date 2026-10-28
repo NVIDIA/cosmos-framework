@@ -1260,14 +1260,16 @@ def test_save_publishes_complete_receipt_or_preserves_existing_outputs(
         assert not [path for path in sample.output_dir.iterdir() if path.name.startswith(".causal-")]
 
 
-@pytest.mark.parametrize("joint", [False, True])
+@pytest.mark.parametrize("joint,output_fps", [(False, None), (False, 10), (True, None)])
 @pytest.mark.parametrize("save_latents", [False, True])
 def test_saved_layout_matches_reference_plus_control_views(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, joint: bool, save_latents: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, joint: bool, save_latents: bool, output_fps: int | None
 ) -> None:
     size, num_frames = 16, 9
     monkeypatch.setattr(OmniSampleArgs, "vision_size", property(lambda self: (size, size)))
-    sample = _sample(tmp_path, **(_joint(tmp_path) if joint else {})).model_copy(update={"num_frames": num_frames})
+    sample = _sample(tmp_path, **(_joint(tmp_path) if joint else {})).model_copy(
+        update={"num_frames": num_frames, "output_fps": output_fps}
+    )
     assert sample.output_dir is not None and sample.multiview is not None
     projection = LidarRangeProjectionConfig(
         native_height=2, native_width=8, semantic_height=2, semantic_width=8, model_width=8
@@ -1304,7 +1306,7 @@ def test_saved_layout_matches_reference_plus_control_views(
         max_workers: int,
     ) -> Any:
         written_views[prefix] = view_videos
-        assert fps == sample.fps
+        assert fps == (output_fps or sample.fps)
         return save_views(
             staged, view_videos, prefix=prefix, fps=fps, encoder_threads=encoder_threads, max_workers=max_workers
         )
