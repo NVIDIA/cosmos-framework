@@ -24,6 +24,19 @@ Measured on one NVIDIA GB300 (aarch64, driver 595, CUDA 13.0), two runs at seed 
 bit-reproducible): exact match 0.548 before, 0.632 and 0.620 after. Details:
 [`references/measured-run.md`](references/measured-run.md).
 
+## For an agent
+
+The whole job is the eight steps below, run in order, each one command. A request that fits in one line:
+
+> Using the `cosmos3-qwen3-vl-robovqa-sft` skill in this Cosmos Framework checkout: set up the environment,
+> download the model and RoboVQA, prepare the training rows, run the preflight, score Qwen3-VL-8B before
+> training, fine-tune for one epoch, export, and score after. Report both scores.
+
+Rules: run the steps in the order listed; after each step compare the last lines with the step's "Expected";
+stop at the first `FAILED` and report the step, the stage and the log path it printed; do not change the
+commands or the recipe. With `--smoke` on every step the same request is a 25-minute check on six bundled clips
+and 2 updates (the scores then mean nothing).
+
 ## Read this first
 
 1. **One command per step.** Every step is
@@ -38,6 +51,23 @@ bit-reproducible): exact match 0.548 before, 0.632 and 0.620 after. Details:
    log's path, and the step stops there.
 4. **After a failure**, read "Things not obvious from the docs" and the troubleshooting section of
    [`references/measured-run.md`](references/measured-run.md) before changing a command.
+
+## Your own data or another Qwen3-VL size
+
+- **Another dataset.** The recipe reads `SFT_DATA_ROOT` (the `data` step writes it as `artifacts/qwen3-vl-robovqa/data`).
+  Point it at your own folder and skip the `data` step. The folder needs `train.jsonl` in the framework's SFT
+  conversation format (`docs/posttrain/guides/sft.md` section 3: one conversation per line, a `video` or `image`
+  part plus the question in the user turn, the answer in the assistant turn, media paths relative to the file), and
+  for the `before` and `after` steps `hf/test.jsonl` and `samples_test.jsonl` as `scripts/prepare_robovqa.py` writes
+  them. The scorer's metrics (normalised exact match, token F1, yes/no accuracy) suit short-answer VQA; other tasks
+  need their own scorer. Run `preflight` first: it refuses rows the recipe cannot train on.
+- **Another Qwen3-VL size.** The model is one line of the recipe, `cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py`
+  (`SFT_MODEL_PATH`, which the `download` step sets to the 8B snapshot). Copy the config, change the model, and
+  pass the copy as `CONFIG` to `run.sh`; the framework's SFT path supports the Qwen3-VL and Qwen3-VL-MoE
+  families (`docs/posttrain/guides/sft.md` section 1). Memory scales with size: 8B peaks at 143,566 MiB on one
+  GPU. Only the 8B on RoboVQA is measured.
+- **Another model family** (Llama, Gemma, InternVL, ...): not through this path; the SFT builder accepts the Qwen
+  families only.
 
 ## When to use this skill
 

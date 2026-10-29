@@ -45,15 +45,19 @@ SFT_LIBS="$SFT_VENV/lib/python3.13/site-packages/nvidia/cu13/lib"    # NVIDIA NP
 EVAL_VENV="$ART/venvs/eval"
 EVAL_PY="$EVAL_VENV/bin/python"
 EVAL_LIBS="$EVAL_VENV/lib/python3.12/site-packages/nvidia/cu13/lib"
-CONFIG="cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py"
-export SFT_MODEL_PATH="$ART/models/Qwen3-VL-8B-Instruct"  # read by the recipe
+# Three knobs, read from the environment when set (SKILL.md "Your own data or another Qwen3-VL size"):
+#   CONFIG          the recipe file; a copy with another Qwen3-VL model trains that model
+#   SFT_MODEL_PATH  the model snapshot the recipe and the scorer load
+#   SFT_DATA_ROOT   the data folder (train.jsonl, hf/test.jsonl, samples_test.jsonl); the data step writes it
+CONFIG=${CONFIG:-cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py}
+export SFT_MODEL_PATH=${SFT_MODEL_PATH:-"$ART/models/Qwen3-VL-8B-Instruct"}
 if [ "$SMOKE" = 1 ]; then
-  SRC="$SKILL_DIR/assets/robovqa" DATA="$ART/smoke" RUN="$ART/runs-smoke" EVAL="$ART/eval-smoke"
+  SRC="$SKILL_DIR/assets/robovqa" DATA=${SFT_DATA_ROOT:-"$ART/smoke"} RUN="$ART/runs-smoke" EVAL="$ART/eval-smoke"
   EXPORT="$ART/export-smoke" STEPS=2 TAG="-smoke"
 else
-  SRC="$ART/robovqa" DATA="$ART/data" RUN="$ART/runs" EVAL="$ART/eval" EXPORT="$ART/export" STEPS=125 TAG=""
+  SRC="$ART/robovqa" DATA=${SFT_DATA_ROOT:-"$ART/data"} RUN="$ART/runs" EVAL="$ART/eval" EXPORT="$ART/export" STEPS=125 TAG=""
 fi
-export SFT_DATA_ROOT="$DATA"  # read by the recipe
+export SFT_DATA_ROOT="$DATA"
 mkdir -p "$ART/logs"
 
 say() { printf '\n==> %s\n' "$*"; }
