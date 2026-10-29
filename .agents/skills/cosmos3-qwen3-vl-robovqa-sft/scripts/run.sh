@@ -116,8 +116,8 @@ setup() {
   echo "  GPU: $(gpu --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
   stage "host: CUDA 13 driver, git, ffmpeg, g++, uv" setup-host check_host
   stage "SFT environment: torch 2.11, transformers 5.8.1" setup-sft-env sft_env
-  if "$SFT_PY" -c "import torch, amp_C" 2>/dev/null; then
-    printf '  %-58s%s\n' "apex optimizer" "already installed"
+  if apex_runs_on_gpu; then
+    printf '  %-58s%s\n' "apex optimizer" "already installed for this GPU"
   else
     stage "apex optimizer, compiled for this GPU (about 10 min)" apex-build build_apex
   fi
@@ -163,7 +163,24 @@ build_apex() {
     return 1
   fi
   $UV pip install --python "$SFT_PY" "$wheel"
-  "$SFT_PY" -c "import torch, amp_C" || { echo "apex installed but does not import" >&2; return 1; }
+  apex_runs_on_gpu || { echo "apex installed but its kernels do not run on this GPU" >&2; return 1; }
+}
+
+apex_runs_on_gpu() {
+  # True when apex imports AND its fused kernel runs on the selected GPU. A build made for another GPU imports fine
+  # and fails only at the first optimizer step ("no kernel image is available for execution on the device").
+  "$SFT_PY" - <<'PY' 2>/dev/null
+import sys, torch
+try:
+    import amp_C
+    from apex.multi_tensor_apply import multi_tensor_applier
+    p = [torch.ones(8, device="cuda")]
+    out = torch.zeros(1, dtype=torch.int, device="cuda")
+    multi_tensor_applier(amp_C.multi_tensor_scale, out, [p, p], 1.0)
+    torch.cuda.synchronize()
+except Exception:
+    sys.exit(1)
+PY
 }
 
 hf_model() {
