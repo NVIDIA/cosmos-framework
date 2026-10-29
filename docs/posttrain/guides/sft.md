@@ -59,7 +59,9 @@ export SFT_DATA_ROOT="$PWD/.ene/scratch/sft-example"
 
 The generator creates 32 training and 8 validation conversations with local PNG/MP4 media;
 it refuses to overwrite a nonempty directory. Video decoding requires TorchCodec 0.11.0
-and compatible FFmpeg shared libraries. This is a functional example, not a quality benchmark.
+and compatible FFmpeg shared libraries. This is a functional example, not a quality benchmark; for a
+worked example on real data with a measured before and after on one GPU, see the
+[`cosmos3-qwen3-vl-robovqa-sft` skill](../../../.agents/skills/cosmos3-qwen3-vl-robovqa-sft/SKILL.md).
 Preflight checks configuration, local file availability and role wiring, not GPU memory or
 remote access. `--validate-rows` then runs every row through the real packer on CPU and refuses
 over-long rows, masks that disagree with the assistant turns, and mislabelled tool turns before any
