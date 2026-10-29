@@ -2,9 +2,9 @@
 
 Two runs of this recipe at seed 0, each on one NVIDIA GB300 (256,703 MiB, aarch64, driver 595.91.07, CUDA 13.0),
 directly on the host without a container, in October 2026, with the framework at commit
-`9a70e64d2ad7ff1417484d12d10fb121b270baaf`. The commands were the ones in `SKILL.md` steps 1 to 8, with the training
-config, data preparation and evaluator unchanged; the runs drove them from one shell script, and wrote the HF export
-through the materializer with 5 GB shards (the change that ships with this skill).
+`9a70e64d2ad7ff1417484d12d10fb121b270baaf`. The runs used the commands of [`../scripts/run.sh`](../scripts/run.sh)
+from an earlier version of that script, with the same training config, data preparation and evaluator, and wrote the
+HF export through the materializer with 5 GB shards (the change that ships with this skill).
 
 ## Versions
 
@@ -71,23 +71,24 @@ normalised exact match.
 
 ## Troubleshooting
 
-Each entry: symptom, cause, check, fix.
+Each entry: symptom, cause, check, fix. Paths are relative to the repository root.
 
 - **`libnppicc.so.13: cannot open shared object file`** when TorchCodec loads. Cause: NVIDIA NPP is not on the
-  library path. Check: `ls "$SFT_LIBS" "$EVAL_LIBS" | grep nppicc`. Fix: keep the `nvidia-npp` installs of step 1 and
-  the `LD_LIBRARY_PATH=...` prefix of every decoding command; never clear `LD_LIBRARY_PATH`.
+  library path. Check: `ls docker/posttrain/environment/.venv-sft/lib/python3.13/site-packages/nvidia/cu13/lib | grep nppicc`.
+  Fix: re-run `run.sh setup`, which installs `nvidia-npp` in both environments; `run.sh` puts it on
+  `LD_LIBRARY_PATH` for every command that decodes video. Never clear `LD_LIBRARY_PATH`.
 - **`ImportError: libc10.so` importing `amp_C`.** Cause: apex's extensions link against torch's libraries. Check:
-  `"$SFT_PY" -c "import torch, amp_C"`. Fix: import `torch` first.
-- **apex missing after re-running step 1a.** Cause: an exact `uv sync` uninstalls packages the lock does not list.
-  Check: `"$SFT_PY" -c "import torch, amp_C"`. Fix: keep `--inexact`; re-run 1b.
+  `docker/posttrain/environment/.venv-sft/bin/python -c "import torch, amp_C"`. Fix: import `torch` first.
+- **apex missing after running `uv sync` by hand.** Cause: an exact sync uninstalls packages the lock does not list.
+  Check: the same import. Fix: re-run `run.sh setup` (it syncs with `--inexact` and rebuilds apex only when missing).
 - **The SFT environment was built on Python 3.12.** Cause: with `--project`, uv does not read the checkout's
-  `.python-version` and takes any interpreter in range. Check: `"$SFT_PY" --version`. Fix: delete
-  `docker/posttrain/environment/.venv-sft` and re-run 1a with `--python 3.13`.
+  `.python-version` and takes any interpreter in range. Check: `docker/posttrain/environment/.venv-sft/bin/python
+  --version`. Fix: delete `docker/posttrain/environment/.venv-sft` and re-run `run.sh setup`, which pins
+  `--python 3.13`.
 - **`[materialize] FATAL ... model.safetensors.index.json missing`.** Cause: Transformers 5.8.1 writes a model under
-  50 GB as one file without an index, and the materializer's verifier requires the index. Check:
-  `ls "$ART/export.tmp" "$ART/export" 2>/dev/null`. Fix: a materializer that writes 5 GB shards (this skill's
-  change), then re-run step 7.
-- **The training stage prints nothing for about three minutes.** Cause: model load and the first update's warm-up.
+  50 GB as one file without an index, and the materializer's verifier requires the index. Fix: a framework checkout
+  that writes 5 GB shards (the change that ships with this skill), then re-run `run.sh export`.
+- **The training step prints nothing for about three minutes.** Cause: model load and the first update's warm-up.
   Check: `nvidia-smi` shows the process growing toward 140 GB. Fix: none; wait for `step 1/125`.
 - **`--validate-rows` prints `train: dp_world not checked`.** Expected outside torchrun; one GPU divides every row
   count.
