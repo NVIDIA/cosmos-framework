@@ -599,9 +599,9 @@ def test_prefilled_opener_variant_sets_the_typed_serve_contract_and_is_recorded_
 def test_sft_config_refuses_an_opener_mask_outside_the_prefills_opener_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """(FIXTURE: on d8c7213d0a the
+    """FIXTURE: on d8c7213d0a the
     override ``rl.mask_think_opener=True`` was ACCEPTED whenever ``SFT_SERVE_PREFILLS_OPENER=1`` stood in the shell, and
-    the resolved config of the accepted run was byte-identical to a refused one's). The refusal lives in
+    the resolved config of the accepted run was byte-identical to a refused one's. The refusal lives in
     ``SFTConfig.__post_init__``, so a ``--`` override on the ``default`` variant, a YAML and the recipe variant are judged
     by the same typed field: ``mask_think_opener=True`` under the default contract ``tools_no_prefill`` is refused naming
     the serving path of record and ``rl.serve_contract=prefills_opener`` whatever the environment says, and it is refused where the

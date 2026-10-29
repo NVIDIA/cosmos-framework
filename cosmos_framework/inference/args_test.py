@@ -551,7 +551,7 @@ def test_multiview_text2video_still_resolves_no_conditioning(tmp_path: Path):
     With no vision_path on any view, MultiviewOverrides.condition_vision_mode returns None --
     the same value the top-level property it replaced would have returned -- so the t2v path is
     unchanged. Verified empirically too: cosmos-framework t2v output is byte-identical before and
-    after this fix (11/11 views, parity jobs 2041278 and 2041490).
+    after this fix (11/11 views).
     """
     assert _multiview_sample_meta(tmp_path, with_vision=False).condition_vision_mode is None
 

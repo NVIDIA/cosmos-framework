@@ -468,7 +468,7 @@ def test_collect_provenance_reads_the_relaunched_slurm_job_id(tmp_path: Path, mo
 def test_collect_provenance_records_the_resolved_recipe_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """(FIXTURE: 4821e1d9943 had no registry and no key). A recipe variant selected by ``SFT_RECIPE_VARIANT``
+    """FIXTURE: 4821e1d9943 had no registry and no key. A recipe variant selected by ``SFT_RECIPE_VARIANT``
     left no trace in the record (``ENV_KEYS`` is ``I4_ROOT`` / ``PYTHONPATH``) and the resolved config carries the
     variant's VALUES (``rl.mask_think_opener`` tells ``prefilled_opener`` from ``default`` today) but not its NAME, so a
     readout could not name the variant that produced them. A recipe's ``build_config``

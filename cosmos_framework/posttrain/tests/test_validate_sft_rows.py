@@ -1348,7 +1348,7 @@ def test_census_read_failure_is_the_validation_splits_failure_and_its_rows_are_s
 def test_census_media_os_error_names_the_row_and_the_rows_are_still_inspected(
     text_packer: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """(FIXTURE: on the parent this ``IsADirectoryError`` escaped ``validate_sources``). The
+    """FIXTURE: on the parent this ``IsADirectoryError`` escaped ``validate_sources``. The
     factory opens each image part's file while the census reads validation row 2, and that path is a directory, not a
     file: an ``OSError`` from the media is the validation split's failure, named with the row, the class and the redacted
     path; the rows are still inspected (row 2 is the same refusal per row) and both summaries are written."""
@@ -1381,9 +1381,9 @@ def test_census_media_os_error_names_the_row_and_the_rows_are_still_inspected(
 def test_census_corrupt_backing_row_names_the_decoder_error_and_the_row(
     text_packer: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """(FIXTURE: on the parent the decoder's ``JSONDecodeError`` was caught as a bare
+    """FIXTURE: on the parent the decoder's ``JSONDecodeError`` was caught as a bare
     ``ValueError`` and ``census_error`` read ``Expecting property name enclosed in double quotes: line 1 column 2 (char 1)``:
-    no class, no side, no row). The backing record of validation row 2 is not JSON: ``census_error`` names the decoder's
+    no class, no side, no row. The backing record of validation row 2 is not JSON: ``census_error`` names the decoder's
     class, the side and the row; the rows are still inspected and row 2 carries the same refusal per row."""
     validation = _backed_source(tmp_path / "backing", [_held_out_row("gamma", "held/G"), "{corrupt"])
     train = _jsonl_source(tmp_path / "train.jsonl", _TRAIN_ROWS)

@@ -3310,7 +3310,7 @@ def test_grpo_final_drain_joins_publishers_once_after_the_final_save(monkeypatch
     """The in-loop drain runs exactly once, at the last step, between that step's save and the trailing
     offload, and this controller loop takes no host-memory reading of its own.
 
-    canM7 (job 461919) lost its four policy actors to the cgroup OOM killer inside this drain. The
+    One run lost its four policy actors to the cgroup OOM killer inside this drain. The
     readings that explain the next incident are the worker's (CheckpointManager samples at every save
     and at its finalize); a reading from this process would be a different RSS and, under a multi-node
     or disaggregated placement, a different cgroup from the one the kernel enforced."""

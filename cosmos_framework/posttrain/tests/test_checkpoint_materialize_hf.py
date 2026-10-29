@@ -2972,7 +2972,7 @@ def test_lock_wait_seconds_refuses_non_finite_values(
             pass
     assert _tree_bytes(out) == before and len(calls) == 1 and not os.path.exists(out + ".tmp")
     assert mat.main([*args, "--lock-wait-seconds", "5"]) == 0 and "idempotent skip" in capsys.readouterr().out
-    assert mat.main([*args, "--lock-wait-seconds", "-0.0"]) == 0, "-0.0 is a finite 0: accepted (fix round T6p)"
+    assert mat.main([*args, "--lock-wait-seconds", "-0.0"]) == 0, "-0.0 is a finite 0: accepted"
 
 
 # ---------------------------------------------------------------- the source identity is read under the lock
