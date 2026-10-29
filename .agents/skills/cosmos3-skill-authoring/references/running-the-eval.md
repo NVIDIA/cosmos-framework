@@ -25,14 +25,12 @@ branch before that branch reaches `main`. The evaluator is `cosmos-skill-eval` (
 
   A cell lands on any of them, so a skill must work on all three classes (80 GB and 94 GB GPUs, 125 GiB to
   1 TB of host RAM). Hardware-dependent choices belong inside the documented command (SKILL.md § "Writing
-  commands that pass on the first attempt"), not in prose. Cursor cells are the one exception to "any of them":
-  their jobs also need the label `cursor-serial`, which today only runner C carries, so they queue on
-  that runner and never run concurrently. The serialized runs of 2026-10-27 showed that concurrency is not the whole
-  story: the Cursor service also rejects single sessions intermittently (`RetriableError: [resource_exhausted]` after
-  the CLI's own resume attempts, independent of tool-call length or payload size). Since evaluator 0.3.3 (image
-  `v20261101`) such an exit is a transient `model_api` failure that the cell retries by itself after
-  `COSMOS_EVAL_RETRY_BACKOFF_S` (120 s); the serialization stays as a safeguard, and a second runner can take the label
-  later if cursor becomes the bottleneck.
+  commands that pass on the first attempt"), not in prose. Cursor cells are no exception any more: they were pinned to
+  runner C (label `cursor-serial`, one at a time) while the cursor backend ran Composer 2.5 and the Cursor service
+  rejected sessions with `RetriableError: [resource_exhausted]`; with Claude Sonnet 5.5 as the cursor model the 11
+  cursor cells ran four at a time on 2026-10-29 without a rejection, so `serial_backends` is empty in
+  `.github/skill-eval.yml`. Since evaluator 0.3.3 (image `v20261101`) such an exit is a transient `model_api` failure
+  that the cell retries by itself after `COSMOS_EVAL_RETRY_BACKOFF_S` (120 s).
 - **Task container**: the evaluator image itself (Ubuntu 22.04, python 3.10 + a 3.12 venv first on PATH, docker
   CLI, no CUDA toolkit, no ffmpeg); the agent runs as root; `docker: true` cases get the host docker socket
   (read-only mount) so they can run container-served backends. Everything else (framework wheels, venvs,

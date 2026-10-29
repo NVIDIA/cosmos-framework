@@ -3284,7 +3284,7 @@ def test_matrix_entries_pin_serial_backends_to_their_runner_label(tmp_path: Path
     live = rm.load_config(github_dir / "skill-eval.yml")
     assert (live.runner_labels, live.serial_backends, live.serial_runner_label) == (
         ["self-hosted", "cosmos-skill-eval", "h100"],
-        ["cursor"],
+        [],  # no backend pinned since the cursor backend runs Claude Sonnet 5.5; the label stays configured for re-pinning
         "cursor-serial",
     )
     workflow = (github_dir / "workflows" / "skill-eval.yml").read_text(encoding="utf-8")
