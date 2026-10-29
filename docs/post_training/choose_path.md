@@ -1,6 +1,6 @@
 # Choose a post-training path
 
-Every path starts from a released Cosmos3 checkpoint; the sections below differ by the training signal you bring.
+Most paths start from a released Cosmos3 checkpoint; experimental native QLoRA uses its pinned Qwen3-VL base. The sections below differ by the training signal you bring.
 
 | You have                                                                   | Method       | Where                         |
 | -------------------------------------------------------------------------- | ------------ | ----------------------------- |
@@ -17,6 +17,7 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 ```
 
 - [SFT recipes](../training.md): Generator SFT for Cosmos3-Nano, Cosmos3-Super (LoRA) and Cosmos3-Edge, Reasoner SFT for all three, plus checkpoint conversion and export.
+- [Native QLoRA (experimental)](native_qlora.md): frozen NF4 language weights and native LoRA on Qwen3-VL-8B, initially restricted to one A100 80GB; runtime and quality qualification are pending.
 - Your own data: [JSONL datasets](../dataset_jsonl.md) and [custom datasets](../custom_dataset.md).
 - Robot actions from Cosmos3-Nano: [DROID policy](../action_policy_droid_posttrain.md) (reproduces Cosmos3-Nano-Policy-DROID), [DROID forward dynamics](../action_fd_droid_posttrain.md) and [LIBERO-10 policy](../action_policy_libero_posttrain.md).
 - [Transfer-Auto](../training_transfer_auto.md): a four-phase RGB/LiDAR curriculum from Cosmos3-Nano, run with `cosmos_framework.scripts.train_experiment` instead.

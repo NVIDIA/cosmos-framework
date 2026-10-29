@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 
 _PHYSICAL_COMPONENT_FAMILIES: dict[str, CheckpointComponent] = {
     "model": "model",
+    "model_metadata": "model",
     "optim": "optimizer",
     "trainer": "training_state",
     "data": "training_state",

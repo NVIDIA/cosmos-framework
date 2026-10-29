@@ -308,6 +308,7 @@ class Qwen3VLBuildHooks:
     parallelize: Callable[[nn.Module, Any], None] | None = None
     materialize: Callable[[nn.Module], None] | None = None
     load_weights: Callable[[nn.Module, str, str | None, Any], None] | None = None
+    finalize_model: Callable[[nn.Module], None] | None = None
 
 
 def validate_qwen3_vl_parallelism(parallel_dims: Any | None) -> None:
@@ -661,6 +662,8 @@ def build_qwen3_vl_policy(
         (hooks.load_weights or _default_load_weights)(net, checkpoint_path, credential_path, parallel_dims)
     elif hooks.load_weights is not None:
         hooks.load_weights(net, "", credential_path, parallel_dims)
+    if hooks.finalize_model is not None:
+        hooks.finalize_model(net)
     if model_type == "qwen3_vl_moe":
         from cosmos_framework.posttrain.model.qwen3_vl_moe import Qwen3VLMoePolicy
 
@@ -715,6 +718,8 @@ def build_qwen3_vl_native_value_model(
     pdims: Any = None,
 ) -> nn.Module:
     """Build a Qwen3-VL backbone and attach the shared scalar value head."""
+    if getattr(cfg, "adapter", None) is not None or getattr(cfg, "quantized_base", None) is not None:
+        raise ValueError("native adapter training currently supports the SFT policy only, not a value model")
     from cosmos_framework.posttrain.model.value import DenseValueModel
 
     return DenseValueModel(build_qwen3_vl_native_policy(model_id, cfg, pdims), pdims=pdims)
@@ -736,7 +741,14 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
 
     # One artifact owns both architecture semantics and rollout identity. A separate config path
     # would let RoPE/vision defaults drift while parameter names and shapes still appeared valid.
-    model_config = AutoConfig.from_pretrained(cfg.name_or_path)
+    adapter_enabled = getattr(cfg, "adapter", None) is not None
+    if getattr(cfg, "quantized_base", None) is not None and not adapter_enabled:
+        raise ValueError("a frozen quantized base requires an explicit ordinary native LoRA configuration")
+    model_config = (
+        AutoConfig.from_pretrained(cfg.name_or_path, trust_remote_code=False, local_files_only=True)
+        if adapter_enabled
+        else AutoConfig.from_pretrained(cfg.name_or_path)
+    )
     resolved_model_type = getattr(model_config, "model_type", None)
     if resolved_model_type not in _SUPPORTED_MODEL_TYPES:
         raise ValueError(
@@ -753,6 +765,11 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             "native Qwen3-VL OPD requires tie_word_embeddings=False: publishing one tied policy tensor "
             "into the rollout engine's live embedding/head namespace is not supported"
         )
+    adapter_lifecycle = None
+    if adapter_enabled:
+        from cosmos_framework.posttrain.model.quantization.loader import NativeAdapterLifecycle
+
+        adapter_lifecycle = NativeAdapterLifecycle(cfg, model_config, pdims)
     activation_checkpointing = ActivationCheckpointingConfig(mode=cfg.activation_checkpointing)
     parallelism_config = ParallelismConfig(
         data_parallel_shard_degree=1 if pdims is None else int(pdims.dp_shard),
@@ -776,6 +793,8 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             overridden = override_qwen3_vl_moe_for_padded_batches(net)
             if overridden < 1:
                 raise ValueError("qwen3_vl_moe model contains no native sparse-MoE block to adapt")
+        if adapter_lifecycle is not None:
+            adapter_lifecycle.prepare(net)
 
     def parallelize_native(net: nn.Module, parallel_dims: Any) -> None:
         # `parallelize_vlm` reads `.model`, the disabled audio flag and (since i4 97c344f2be8, the
@@ -801,7 +820,13 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
         parallel_dims=pdims,
         dtype=getattr(torch, cfg.dtype),
         attn_implementation=cfg.attn_impl,
-        hooks=Qwen3VLBuildHooks(prepare_model=prepare_native, parallelize=parallelize_native),
+        hooks=Qwen3VLBuildHooks(
+            prepare_model=prepare_native,
+            parallelize=parallelize_native,
+            materialize=adapter_lifecycle.materialize if adapter_lifecycle is not None else None,
+            load_weights=adapter_lifecycle.load if adapter_lifecycle is not None else None,
+            finalize_model=adapter_lifecycle.finalize if adapter_lifecycle is not None else None,
+        ),
         initialize_on_meta=True,
     )
 
@@ -959,6 +984,8 @@ class Qwen3VLWeightMapper:
         CPU garbage collections while other ranks wait in all-gather. Full tensors remain
         bucket-scoped; these references only retain the model's existing shard storage.
         """
+        if getattr(_net(model), "_cosmos_adapter_metadata", None) is not None:
+            raise ValueError("native adapter serving publication/export is not qualified; use the adapter artifact")
         state = _net(model).state_dict()  # values: local tensors or sharded DTensors, no gather
         self._export_state = state
         try:
@@ -971,6 +998,8 @@ class Qwen3VLWeightMapper:
     def manifest(self, model: Any) -> list[WeightTensorSpec]:
         """Return a sorted metadata-only manifest without materializing FSDP tensors."""
         net = _net(model)
+        if getattr(net, "_cosmos_adapter_metadata", None) is not None:
+            raise ValueError("native adapter serving publication/export is not qualified; use the adapter artifact")
         cached_owner = self._manifest_owner_ref() if self._manifest_owner_ref is not None else None
         if cached_owner is net:
             return list(self._manifest_cache)

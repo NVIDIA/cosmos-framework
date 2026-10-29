@@ -47,6 +47,7 @@ nav:
       - Choose a path: post_training/choose_path.md
       - SFT:
           - SFT recipes: training.md
+          - Native QLoRA (experimental): post_training/native_qlora.md
           - Datasets:
               - JSONL datasets: dataset_jsonl.md
               - Custom datasets: custom_dataset.md

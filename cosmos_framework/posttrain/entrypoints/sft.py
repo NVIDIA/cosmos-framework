@@ -80,6 +80,9 @@ def sft_policy_source(config: Any) -> tuple[str, bool]:
             "SFT with model_backend='i4' requires config.model=NativePolicyBuildSpec for the Qwen3-VL native "
             "seat; legacy i4 model trees are not supported"
         )
+    from cosmos_framework.posttrain.utils.adapter_source import prepare_sft_adapter_source
+
+    prepare_sft_adapter_source(spec)
     return resolve_native_sft_source(spec)
 
 
@@ -141,8 +144,84 @@ def validate_config(config: Any) -> SFTConfig:
     return rl
 
 
+def _adapter_run_contract(
+    config: Any, packer: Any, objective_identity: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Bind numerical processor identity separately from exact training continuation."""
+    import re
+
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.utils.identity import canonical_config_value, normalize_json_dict
+
+    selection = select_policy_backend(config)
+    spec = selection.native_spec
+    if spec is None or getattr(spec.model_config, "adapter", None) is None:
+        return None
+    rl = config.rl
+    if rl.checkpoint_format != "dcp" or rl.save_async or rl.checkpoint_store.backend != "local":
+        raise ValueError("native adapter training requires synchronous local DCP checkpoints")
+    from cosmos_framework.posttrain.config.rl import FULL_CHECKPOINT_COMPONENTS
+
+    supported_plans = ({"model"}, set(FULL_CHECKPOINT_COMPONENTS))
+    plans = [rl.checkpoint_components]
+    if rl.validation.enabled and rl.validation.save_checkpoint:
+        plans.append(rl.validation.checkpoint_components)
+    if any(set(plan) not in supported_plans for plan in plans):
+        raise ValueError("native adapter checkpoints support full resume state or model-only artifacts")
+    if getattr(rl, "init_from", ""):
+        raise ValueError("native adapter training does not support init_from; use exact resume or the reload API")
+    revision = os.environ.get("COSMOS_TRAINING_CODE_REVISION", "")
+    wheel_sha256 = os.environ.get("COSMOS_TRAINING_WHEEL_SHA256", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(r"[0-9a-f]{64}", wheel_sha256):
+        raise ValueError(
+            "native adapter training requires COSMOS_TRAINING_CODE_REVISION (40 hex) and "
+            "COSMOS_TRAINING_WHEEL_SHA256 (64 hex) from the installed build receipt"
+        )
+    processor = normalize_json_dict(packer.validation_semantics_identity(), context="adapter processor identity")
+    training = normalize_json_dict(
+        {
+            "objective": objective_identity,
+            "optimizer": canonical_config_value(rl.optimizer),
+            "schedule": canonical_config_value(rl.lr_schedule),
+            "max_steps": rl.max_steps,
+            "seed": rl.seed,
+            "deterministic": rl.deterministic,
+            "validation": canonical_config_value(rl.validation),
+            "code_revision": revision,
+            "wheel_sha256": wheel_sha256,
+        },
+        context="adapter training identity",
+    )
+    return processor, training
+
+
+def _preflight_adapter_resume(
+    config: Any, checkpoint: Any, processor_identity: dict[str, Any], training_identity: dict[str, Any]
+) -> None:
+    """Reject an incompatible or incomplete resume before allocating base weights."""
+    if not checkpoint.resume_checkpoint:
+        return
+    from cosmos_framework.posttrain.checkpoint.adapter import read_adapter_metadata
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.utils.identity import canonical_config_value
+    from cosmos_framework.utils.lazy_config import instantiate
+
+    cfg = instantiate(select_policy_backend(config).native_spec.model_config)
+    read_adapter_metadata(
+        checkpoint.resume_checkpoint,
+        expected_identity={
+            "base": canonical_config_value(cfg.source_identity),
+            "adapter": asdict(cfg.adapter),
+            "quantization": asdict(cfg.quantized_base) if cfg.quantized_base is not None else None,
+            "processor_contract": processor_identity,
+            "training_contract": training_identity,
+        },
+        require_resume=True,
+        manager=checkpoint.manager,
+    )
+
+
 def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None, checkpoint: Any) -> Any:
-    from cosmos_framework.utils import misc
     from cosmos_framework.posttrain.algorithm.sft import make_objective
     from cosmos_framework.posttrain.config.build import (
         build_backbone,
@@ -155,6 +234,8 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     from cosmos_framework.posttrain.roles.trainer.validation.sft import evaluate_sft_batch
     from cosmos_framework.posttrain.roles.trainer.validation.state import ValidationState
     from cosmos_framework.posttrain.utils.dist import run_rank_converged, world_size_or_1
+    from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
+    from cosmos_framework.utils import misc
 
     name_or_path, trust_remote_code = sft_policy_source(config)
     packer = run_rank_converged(
@@ -182,9 +263,19 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "dp_world": world_size_or_1(),
         "precision": asdict(resolve_precision(config)),
     }
+    adapter_contract = _adapter_run_contract(config, packer, objective.identity)
+    if adapter_contract is not None:
+        _preflight_adapter_resume(config, checkpoint, *adapter_contract)
     misc.set_random_seed(seed=rl.seed, by_rank=False)
     model = build_backbone(config)
     optimizer = build_optimizer(model.net, rl.optimizer)
+    if adapter_contract is not None:
+        codec = getattr(model.net, "_cosmos_adapter_checkpoint_codec", None)
+        if codec is None:
+            raise RuntimeError("native adapter builder did not provide its checkpoint codec")
+        codec.bind_processor_identity(adapter_contract[0])
+        codec.bind_training_identity(adapter_contract[1])
+        codec.assert_live(optimizer=optimizer)
     groups = []
     for index, group in enumerate(optimizer.param_groups):
         lr = group["lr"]
@@ -237,6 +328,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
             },
         }
     trainer.configure_validation(validation_identity)
+    record_qlora_phase("trainer_ready", reset_peak=True)
     return trainer
 
 
@@ -262,10 +354,10 @@ def held_out_census(data: Any, validation: Any) -> dict[str, Any]:
 
 def make_setup(config_path: str, opts: list[str]) -> Any:
     def setup() -> dict[str, Any]:
-        from cosmos_framework.utils.config import load_config
         from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
         from cosmos_framework.posttrain.roles.env.sft import build_sft_env
         from cosmos_framework.posttrain.utils.dist import rank_identical, rank_or_0, run_rank_converged, world_size_or_1
+        from cosmos_framework.utils.config import load_config
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
@@ -392,12 +484,12 @@ def _evaluate(
 
 
 def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]:
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.termination import TerminationWatch
     from cosmos_framework.posttrain.control.validation import ValidationSchedule
     from cosmos_framework.posttrain.control.validation.boundary import ValidationBoundaryCoordinator
     from cosmos_framework.posttrain.control.validation.transaction import ValidationTransaction
+    from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
     from cosmos_framework.posttrain.utils.report import (
         emit_metric_frame,
         finish_best_effort,
@@ -406,6 +498,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data, policy = units["data"], units["policy"]
@@ -444,12 +537,14 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
     clipped_steps, counted_steps = prior_clip_counts(reporters)
     try:
         initial = boundary.resume_or_initial(start, resumed_from_checkpoint=resumed)
+        record_qlora_phase("initial_validation", reset_peak=True)
         if initial.preempted:
             return {"final_step": start, "preempted": initial.preempted}
         for step in range(start, rl.max_steps):
             began = time.monotonic()
             metrics = train_step(data, policy, rl)
             final_step = step + 1
+            record_qlora_phase(f"optimizer_step_{final_step}", reset_peak=True)
             if int(resolve(policy.iteration())) != final_step:
                 raise RuntimeError("SFT loop and trainer optimizer clocks diverged")
             final_loss = float(metrics["train/loss_avg"])
@@ -470,6 +565,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                 return {"final_step": final_step, "preempted": outcome.preempted}
             if save_due:
                 checkpoints.save_configured_if_needed(final_step)
+            record_qlora_phase(f"validation_checkpoint_boundary_{final_step}", reset_peak=True)
             stopped = watch.should_stop()
             if stopped:
                 # rl.emergency_checkpoint_components: "full" upgrades to the exact-resume plan; "run" writes

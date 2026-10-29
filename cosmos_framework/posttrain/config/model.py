@@ -13,7 +13,9 @@ shape. ``tests/test_config_model_gr00t.py`` asserts this in a subprocess.
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -153,6 +155,93 @@ class HFModelConfig:
 
 
 @dataclass
+class NativeLoRAConfig:
+    """Native language-only LoRA; no PEFT preparation or implicit trainable modules.
+
+    The named profile resolves to the seven attention/MLP projections of every dense
+    Qwen3-VL-8B language block. The builder verifies that complete set before loading.
+    Adapter storage and optimizer moments are FP32, independently of the BF16 base.
+    """
+
+    method: str = "lora"
+    rank: int = 16
+    alpha: float = 32.0
+    dropout: float = 0.0
+    parameter_dtype: str = "float32"
+    target_profile: str = "qwen3_vl_8b_language_v1"
+    bias: str = "none"
+    modules_to_save: tuple[str, ...] = ()
+    initialization: str = "kaiming_A_zero_B"
+    initialization_seed: int = 42
+
+    def __post_init__(self) -> None:
+        required = {
+            "method": "lora",
+            "parameter_dtype": "float32",
+            "target_profile": "qwen3_vl_8b_language_v1",
+            "bias": "none",
+            "initialization": "kaiming_A_zero_B",
+        }
+        for name, expected in required.items():
+            if getattr(self, name) != expected:
+                raise ValueError(f"NativeLoRAConfig.{name} supports only {expected!r}")
+        if type(self.rank) is not int or self.rank <= 0:
+            raise ValueError("NativeLoRAConfig.rank must be a positive integer")
+        if type(self.alpha) not in (int, float) or not math.isfinite(self.alpha) or self.alpha <= 0:
+            raise ValueError("NativeLoRAConfig.alpha must be finite and positive")
+        if type(self.dropout) not in (int, float) or self.dropout != 0:
+            raise ValueError("NativeLoRAConfig.dropout supports only 0.0 in the initial native capability")
+        if (
+            not isinstance(self.modules_to_save, Sequence)
+            or isinstance(self.modules_to_save, (str, bytes))
+            or self.modules_to_save
+        ):
+            raise ValueError("NativeLoRAConfig.modules_to_save must be empty; only adapters may be trained")
+        self.modules_to_save = ()
+        if type(self.initialization_seed) is not int or not 0 <= self.initialization_seed < 2**63:
+            raise ValueError("NativeLoRAConfig.initialization_seed must be an integer in [0, 2**63)")
+
+
+@dataclass
+class QuantizedBaseTrainingConfig:
+    """One explicitly qualified frozen-base format, separate from adapter configuration.
+
+    uint8 stores packed NF4 values; BF16 describes the source and dequantized compute.
+    Metadata and packed weights are immutable during training and never optimizer members.
+    """
+
+    backend: str = "bitsandbytes"
+    backend_version: str = "0.49.2"
+    format: str = "nf4"
+    block_size: int = 64
+    nested: bool = True
+    source_dtype: str = "bfloat16"
+    storage_dtype: str = "uint8"
+    compute_dtype: str = "bfloat16"
+    target_profile: str = "qwen3_vl_8b_language_v1"
+    offload: str = "none"
+
+    def __post_init__(self) -> None:
+        required = {
+            "backend": "bitsandbytes",
+            "backend_version": "0.49.2",
+            "format": "nf4",
+            "source_dtype": "bfloat16",
+            "storage_dtype": "uint8",
+            "compute_dtype": "bfloat16",
+            "target_profile": "qwen3_vl_8b_language_v1",
+            "offload": "none",
+        }
+        for name, expected in required.items():
+            if getattr(self, name) != expected:
+                raise ValueError(f"QuantizedBaseTrainingConfig.{name} supports only {expected!r}")
+        if type(self.block_size) is not int or self.block_size != 64:
+            raise ValueError("QuantizedBaseTrainingConfig.block_size supports only 64")
+        if self.nested is not True:
+            raise ValueError("QuantizedBaseTrainingConfig.nested must be True")
+
+
+@dataclass
 class Qwen3VLModelConfig:
     """Model-family config carried by a Qwen3-VL ``NativePolicyBuildSpec``.
 
@@ -171,6 +260,10 @@ class Qwen3VLModelConfig:
     attn_impl: str = "eager"
     activation_checkpointing: str = "full"
     fsdp_reduce_dtype: str = "float32"
+    adapter: NativeLoRAConfig | None = None
+    quantized_base: QuantizedBaseTrainingConfig | None = None
+    # Declared repository/revision are verified and enriched with file hashes before loading.
+    source_identity: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.revision is not None and not isinstance(self.revision, str):
@@ -188,6 +281,27 @@ class Qwen3VLModelConfig:
                 "model_qwen3_vl.activation_checkpointing must be none|full|selective, got "
                 f"{self.activation_checkpointing!r}"
             )
+        if not isinstance(self.source_identity, Mapping):
+            raise TypeError("model_qwen3_vl.source_identity must be a dictionary")
+        self.source_identity = dict(self.source_identity)
+        if self.adapter is not None:
+            if not isinstance(self.adapter, NativeLoRAConfig):
+                raise TypeError("model_qwen3_vl.adapter must be NativeLoRAConfig or None")
+            self.adapter.__post_init__()
+            if self.dtype != "bfloat16" or self.fsdp_reduce_dtype != "float32":
+                raise ValueError("native LoRA requires BF16 base dtype and FP32 reduce dtype")
+            if self.attn_impl != "sdpa" or self.activation_checkpointing != "full":
+                raise ValueError("native LoRA initially requires attn_impl='sdpa' and activation_checkpointing='full'")
+            if self.trust_remote_code:
+                raise ValueError("native LoRA does not support trust_remote_code")
+        if self.quantized_base is not None:
+            if not isinstance(self.quantized_base, QuantizedBaseTrainingConfig):
+                raise TypeError("model_qwen3_vl.quantized_base must be QuantizedBaseTrainingConfig or None")
+            self.quantized_base.__post_init__()
+            if self.adapter is None:
+                raise ValueError("quantized_base requires an adapter; frozen-base full fine-tuning is unsupported")
+            if self.quantized_base.target_profile != self.adapter.target_profile:
+                raise ValueError("quantized_base and adapter target profiles must match")
 
 
 # ---------------------------------------------------------------------------

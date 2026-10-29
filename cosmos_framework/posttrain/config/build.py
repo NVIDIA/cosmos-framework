@@ -36,6 +36,7 @@ from cosmos_framework.posttrain.config.model import (
     HFModelConfig,
     NativePolicyBuildSpec,
     NativePolicyParallelismConfig,
+    Qwen3VLModelConfig,
 )
 from cosmos_framework.posttrain.config.rl import (
     OPTIMIZER_NAMES,
@@ -541,6 +542,18 @@ def build_optimizer(
     # over `net.named_parameters()` is correct. Mesh-aware per-bucket optimizers (grouping
     # params by device_mesh) are a follow-up for multi-mesh parallelism (TP/EP).
     net = getattr(model, "net", model)
+    adapter_parameters = getattr(net, "_cosmos_adapter_parameters", None)
+    if adapter_parameters is not None:
+        _validate_native_adapter_optimizer(opt_cfg)
+        expected = list(adapter_parameters.values())
+        expected_ids = {id(p) for p in expected}
+        actual_ids = {id(p) for p in net.parameters() if p.requires_grad}
+        if not expected or len(expected_ids) != len(expected) or actual_ids != expected_ids:
+            raise ValueError("native adapter optimizer membership must equal exactly the final adapter parameters")
+        if any(p.dtype != torch.float32 or not p.requires_grad for p in expected):
+            raise ValueError("native adapter optimizer requires materialized, trainable FP32 adapter parameters")
+        if any(p.is_meta for p in expected):
+            raise ValueError("native adapter optimizer cannot contain unmaterialized meta parameters")
     # An explicit partition is complete by construction; the train-key and decay-group paths
     # below see already-populated groups (and validated-empty knobs) and leave them alone.
     params: list = [] if parameter_groups is None else _explicit_parameter_groups(net, opt_cfg, parameter_groups)
@@ -648,7 +661,7 @@ def build_optimizer(
         kernel["foreach"] = True
     elif impl == "for-loop":
         kernel["foreach"] = False
-    return torch.optim.AdamW(
+    optimizer = torch.optim.AdamW(
         params,
         lr=opt_cfg.lr,
         weight_decay=opt_cfg.weight_decay,
@@ -656,6 +669,23 @@ def build_optimizer(
         eps=opt_cfg.eps,
         **kernel,
     )
+    if adapter_parameters is not None:
+        members = [p for group in optimizer.param_groups for p in group["params"]]
+        if len(members) != len(expected_ids) or {id(p) for p in members} != expected_ids:
+            raise ValueError(
+                "native adapter optimizer groups must contain every adapter exactly once and no base weights"
+            )
+    return optimizer
+
+
+def _validate_native_adapter_optimizer(opt_cfg: OptimizerConfig) -> None:
+    """Keep the initial paired recipes on one explicitly qualified optimizer path."""
+    if opt_cfg.name != "adamw" or opt_cfg.impl != "fused":
+        raise ValueError("native LoRA requires OptimizerConfig(name='adamw', impl='fused')")
+    if opt_cfg.train_keys:
+        raise ValueError("native LoRA requires train_keys=[]; the builder owns the exact trainability policy")
+    if opt_cfg.decay_groups or opt_cfg.lr_multipliers:
+        raise ValueError("native LoRA requires no decay_groups or lr_multipliers in the initial capability")
 
 
 def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConfig) -> None:
@@ -677,8 +707,21 @@ def refuse_rounding_or_unavailable_optimizer(config: Any, opt_cfg: OptimizerConf
         storage = str(resolve_precision(config).master)
         seat = "the HF seat (rl.master_dtype, else rl.param_dtype, else model_hf.dtype)"
     elif selection.native_spec is not None:
-        storage = str(getattr(selection.native_spec.model_config, "dtype", "") or "the model dtype")
-        seat = "the native seat (Qwen3VLModelConfig.dtype is the builder's FSDP master dtype)"
+        model_cfg = selection.native_spec.model_config
+        if (
+            selection.native_spec.builder == _QWEN3_VL_NATIVE_BUILDER
+            and isinstance(model_cfg, Qwen3VLModelConfig)
+            and model_cfg.adapter is not None
+        ):
+            model_cfg.__post_init__()
+            _validate_native_adapter_optimizer(opt_cfg)
+            # Only the adapters are trainable. Their explicit FP32 storage, rather than
+            # the frozen BF16/packed base, determines AdamW update and moment precision.
+            storage = model_cfg.adapter.parameter_dtype
+            seat = "the native adapter seat (NativeLoRAConfig.parameter_dtype)"
+        else:
+            storage = str(getattr(model_cfg, "dtype", "") or "the model dtype")
+            seat = "the native seat (Qwen3VLModelConfig.dtype is the builder's FSDP master dtype)"
     else:
         return
     name = getattr(opt_cfg, "name", "adamw")

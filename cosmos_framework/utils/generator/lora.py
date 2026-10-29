@@ -22,7 +22,41 @@ import torch.nn.functional as F
 from cosmos_framework.utils import log
 
 
-class LoraInjectedLinear(nn.Linear):
+class NativeLoRAMixin:
+    """Backend-neutral adapter contract; dense merge is a separate capability.
+
+    Implementations own their base operation but share native A/B names, scaling,
+    explicit adapter arithmetic, and post-materialization initialization.
+    """
+
+    lora_A: nn.Linear
+    lora_B: nn.Linear
+    lora_dropout: nn.Module
+    _lora_rank: int
+    _lora_alpha: float
+    _lora_use_rslora: bool
+
+    @property
+    def _lora_scale(self) -> float:
+        denominator = math.sqrt(self._lora_rank) if self._lora_use_rslora else self._lora_rank
+        return self._lora_alpha / denominator
+
+    def adapter_parameters(self) -> dict[str, nn.Parameter]:
+        return {"lora_A.weight": self.lora_A.weight, "lora_B.weight": self.lora_B.weight}
+
+    def adapter_delta(self, x: torch.Tensor, *, output_dtype: torch.dtype) -> torch.Tensor:
+        adapter_input = self.lora_dropout(x).to(dtype=self.lora_A.weight.dtype)
+        return self._lora_scale * self.lora_B(self.lora_A(adapter_input)).to(dtype=output_dtype)
+
+    @torch.no_grad()
+    def reset_adapter_parameters(self, *, generator: torch.Generator | None = None) -> None:
+        if self.lora_A.weight.is_meta or self.lora_B.weight.is_meta:
+            raise RuntimeError("materialize native LoRA parameters before initializing them")
+        nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5), generator=generator)
+        nn.init.zeros_(self.lora_B.weight)
+
+
+class LoraInjectedLinear(NativeLoRAMixin, nn.Linear):
     """nn.Linear with sibling lora_A and lora_B that preserves the original ``.weight`` key.
 
     State-dict keys for a module at ``<path>``:
@@ -81,16 +115,9 @@ class LoraInjectedLinear(nn.Linear):
         self._lora_alpha = float(alpha)
         self._lora_use_rslora = bool(use_rslora)
 
-    @property
-    def _lora_scale(self) -> float:
-        denominator = math.sqrt(self._lora_rank) if self._lora_use_rslora else self._lora_rank
-        return self._lora_alpha / denominator
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base_out = F.linear(x, self.weight, self.bias)
-        adapter_input = self.lora_dropout(x).to(dtype=self.lora_A.weight.dtype)
-        lora_out = self.lora_B(self.lora_A(adapter_input)).to(dtype=base_out.dtype)
-        return base_out + self._lora_scale * lora_out
+        return base_out + self.adapter_delta(x, output_dtype=base_out.dtype)
 
     @torch.no_grad()
     def merged_weight(
@@ -230,7 +257,7 @@ def apply_lora_trainable_scope(
         else:
             frozen_parameters += parameter.numel()
 
-    adapter_modules = sorted(name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear))
+    adapter_modules = sorted(name for name, module in network.named_modules() if isinstance(module, NativeLoRAMixin))
     summary: dict[str, object] = {
         "training_mode": "peft",
         "trainable_parameters": trainable_parameters,
@@ -357,13 +384,9 @@ def init_lora_weights_post_materialization(network: torch.nn.Module) -> None:
     runs in fp32, bf16, or fp16.
     """
     for module in network.modules():
-        if not isinstance(module, LoraInjectedLinear):
+        if not isinstance(module, NativeLoRAMixin):
             continue
-        adapter_dtype = module.lora_A.weight.dtype
-        torch.nn.init.kaiming_uniform_(module.lora_A.weight, a=math.sqrt(5))
-        module.lora_A.weight.data = module.lora_A.weight.data.to(adapter_dtype)
-        torch.nn.init.zeros_(module.lora_B.weight)
-        module.lora_B.weight.data = module.lora_B.weight.data.to(adapter_dtype)
+        module.reset_adapter_parameters()
 
 
 @torch.no_grad()
@@ -374,6 +397,11 @@ def merge_lora_adapters_(network: torch.nn.Module) -> int:
     callers exporting to a dense Hugging Face model should copy only base
     parameters after this operation.
     """
+    if any(
+        isinstance(module, NativeLoRAMixin) and not isinstance(module, LoraInjectedLinear)
+        for module in network.modules()
+    ):
+        raise ValueError("native quantized adapters require a separately qualified export; dense merge is unsupported")
     merged = 0
     for module in network.modules():
         if isinstance(module, LoraInjectedLinear):
@@ -385,6 +413,11 @@ def merge_lora_adapters_(network: torch.nn.Module) -> int:
 @torch.no_grad()
 def merge_and_strip_lora_adapters_(network: torch.nn.Module) -> int:
     """Merge adapters and restore plain ``nn.Linear`` modules for HF export."""
+    if any(
+        isinstance(module, NativeLoRAMixin) and not isinstance(module, LoraInjectedLinear)
+        for module in network.modules()
+    ):
+        raise ValueError("native quantized adapters require a separately qualified export; dense merge is unsupported")
     merged = 0
     for parent in list(network.modules()):
         for child_name, child in list(parent.named_children()):
