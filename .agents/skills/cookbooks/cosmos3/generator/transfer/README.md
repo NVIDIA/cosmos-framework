@@ -1,8 +1,5 @@
 # Cosmos3 Generator Transfer Examples
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
-and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
-
 Cosmos3 video **transfer** examples — **Nano** (single GPU) and **Super** (multi-GPU, 32B) — on
 the native PyTorch (Cosmos Framework) path, the Diffusers modular pipeline, and the
 OpenAI-compatible TensorRT-LLM and vLLM-Omni server paths.

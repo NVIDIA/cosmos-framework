@@ -1,8 +1,5 @@
 # Cosmos3 Generator Action
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
-and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
-
 Cosmos3-Nano action-generation supports three distinct tasks:
 
 - **Forward dynamics (`fd`)** — predict future observations from a start image plus an action trajectory.

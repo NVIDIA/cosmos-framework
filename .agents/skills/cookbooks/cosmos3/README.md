@@ -5,10 +5,6 @@ Simulation).
 Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
-For static checkpoint FP8 export of Nano/Super video and Super base/distilled
-T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
-local Framework environment below with ModelOpt, datasets, and notebook tooling.
-
 | Backend | Use it for | Used by |
 | --- | --- | --- |
 | [Cosmos Framework](#cosmos-framework) | Native PyTorch inference, launched with `torchrun` | Reasoner, Generator (Audiovisual, Action, **Transfer**), Simulation (Bimanual, Auto, Sim-Auto, Sim-Transfer) |
@@ -67,10 +63,6 @@ Native PyTorch inference through the Cosmos Framework checkout. Used by the
 quickstarts.
 
 From the cookbook root (`.agents/skills`), clone (or reuse) the framework checkout:
-
-If you are already inside this Framework repository, reuse its root (the
-directory containing `pyproject.toml` and `cosmos_framework/`) and run the
-installation commands there. A second clone is unnecessary.
 
 ```bash
 mkdir -p packages
