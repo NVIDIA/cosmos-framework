@@ -349,8 +349,8 @@ group pages is the version's static score) and the compare view
 with the delta on B), where a ref is
 `group:<id>[@<ISO asof>]`, `branch:<name>` or `run:<run_id>`; both refs are
 required (with only `b` the page shows pickers). Examples:
-`compare?a=group:ci-pr128-0ba391d&b=group:ci-pr250-a292f5e` and
-`compare?a=branch:skills/generate-media-migration-and-eval&b=branch:skills/generate-media-fixes`.
+`compare?a=group:ci-pr324-b50b766&b=group:ci-pr327-b7ad087` and
+`compare?a=branch:skills/generate-media-migration-and-eval-public&b=branch:skills/generate-media-fixes-public`.
 
 **Static checks** (<1 s, no agent): the evaluator's static tier enforces the
 structure rules above and scores them 0–100 (critical −15, warning −5) — the
@@ -410,9 +410,9 @@ carries both to `main`.
 
 ## Related skills
 
-| Skill                                | When to use                                                                                                                                                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `../cosmos3-setup/SKILL.md`          | Environment setup the eval cases assume                                                                                                                                                                                                                            |
-| `../cosmos3-inference/SKILL.md`      | Inference workflows your cases exercise                                                                                                                                                                                                                            |
-| `../cosmos3-codebase-nav/SKILL.md`   | Finding configs/params to reference                                                                                                                                                                                                                                |
-| `../cosmos3-generate-media/SKILL.md` | Worked example: 7 variants, 11 eval cases; 44/44 PASS, 43/44 first-attempt in the final forced run, the 44th fixed and re-verified by a manual rerun and a CI rerun of that one cell (newest result per cell: 44/44 first-attempt; fixes from the stacked PR #250) |
+| Skill                                | When to use                                                                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`          | Environment setup the eval cases assume                                                                                                                          |
+| `../cosmos3-inference/SKILL.md`      | Inference workflows your cases exercise                                                                                                                          |
+| `../cosmos3-codebase-nav/SKILL.md`   | Finding configs/params to reference                                                                                                                              |
+| `../cosmos3-generate-media/SKILL.md` | Worked example: 7 variants, 11 eval cases; 44/44 PASS, 44/44 first-attempt on the fixes PR's full run (group `ci-pr327-b7ad087`; fixes from the stacked PR #327) |
