@@ -57,11 +57,11 @@ def adapter_config(method: str, *, dropout: float = 0) -> AdapterConfig:
     )
 
 
-def make_policy():
+def make_policy(*, dtype=torch.float32):
     return build_qwen3_vl_policy(
         model_type="qwen3_vl",
         model_config=_dense_config(),
-        dtype=torch.float32,
+        dtype=dtype,
         hooks=Qwen3VLBuildHooks(prepare_model=lambda net: override_qwen3_vl_forward(net.model)),
         initialize_on_meta=False,
     )
@@ -208,6 +208,35 @@ def test_loaded_base_hook_runs_before_distributed_registration():
     assert events == ["materialize", "load", "adapters", "distributed"]
 
 
+def test_bf16_extra_norm_keeps_activation_dtype_and_merged_reload():
+    from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
+
+    torch.manual_seed(19)
+    policy = make_policy(dtype=torch.bfloat16)
+    cfg = adapter_config("lora")
+    cfg.extra_modules = [AdapterExtraModuleConfig(targets=["model.language_model.norm"])]
+    manifest = install_adapters(policy.net, cfg)
+    ident = {**identity(manifest), "base_storage_dtype": "bfloat16"}
+    opt = torch.optim.AdamW([p for p in policy.net.parameters() if p.requires_grad], lr=0.01)
+    norm = policy.net.model.language_model.norm
+    before = norm.weight.detach().clone()
+    batch = _batch()
+    batch["pixel_values"] = batch["pixel_values"].bfloat16()
+    for _ in range(3):
+        opt.zero_grad()
+        loss = policy.forward_policy_batch(batch).logits.float().square().mean()
+        loss.backward()
+        opt.step()
+    assert norm.weight.dtype == torch.float32 and not torch.equal(before, norm.weight)
+    assert norm(torch.randn(2, 32, dtype=torch.bfloat16)).dtype == torch.bfloat16
+    merged = make_policy(dtype=torch.bfloat16)
+    merged.net.load_state_dict(prepare_merged_state(policy.net.state_dict(), ident), strict=True)
+    with torch.no_grad():
+        torch.testing.assert_close(
+            policy.forward_policy_batch(batch).logits, merged.forward_policy_batch(batch).logits, atol=0.015, rtol=0.02
+        )
+
+
 def test_real_meta_builder_loads_base_before_pissa_and_preserves_resume(tmp_path, monkeypatch):
     from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
     from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
@@ -227,7 +256,7 @@ def test_real_meta_builder_loads_base_before_pissa_and_preserves_resume(tmp_path
     assert net._posttrain_adapter_identity == restored._posttrain_adapter_identity
 
 
-def tiny_snapshot(path):
+def tiny_snapshot(path, *, tied=False):
     """Real tokenizer/processor, native model, indexed safetensors for HF conversion."""
     from safetensors.torch import save_file
 
@@ -236,6 +265,7 @@ def tiny_snapshot(path):
     path.mkdir()
     tokenizer = local_tokenizer()
     config = _dense_config()
+    config.tie_word_embeddings = config.text_config.tie_word_embeddings = tied
     config.text_config.vocab_size = len(tokenizer)
     config.image_token_id = tokenizer.convert_tokens_to_ids("<|image_pad|>")
     config.video_token_id = tokenizer.convert_tokens_to_ids("<|video_pad|>")
@@ -248,6 +278,8 @@ def tiny_snapshot(path):
     policy.net.config.save_pretrained(path)
     local_processor(tokenizer).save_pretrained(path)
     state = policy.net.state_dict()
+    if tied:
+        del state["lm_head.weight"]
     shard = "model-00001-of-00001.safetensors"
     save_file(state, str(path / shard))
     (path / "model.safetensors.index.json").write_text(
@@ -258,6 +290,41 @@ def tiny_snapshot(path):
             }
         )
     )
+
+
+def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path):
+    from transformers import AutoModelForImageTextToText
+
+    from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+
+    base = tmp_path / "base"
+    tiny_snapshot(base, tied=True)
+    cfg = Qwen3VLModelConfig(name_or_path=str(base), dtype="float32", activation_checkpointing="none")
+    adapters = adapter_config("dora")
+    original = build_qwen3_vl_model(cfg, adapters=adapters)
+    assert original.net.lm_head.weight is original.net.model.language_model.embed_tokens.weight
+    assert not original.net.lm_head.weight.requires_grad
+    with torch.no_grad():
+        original.net.model.language_model.layers[0].self_attn.q_proj.lora_B.weight.add_(0.01)
+    portable = tmp_path / "portable"
+    save_adapter_artifact(original.net, str(portable))
+    adapters.warm_start = str(portable)
+    reloaded = build_qwen3_vl_model(cfg, adapters=adapters)
+    assert reloaded.net.lm_head.weight is reloaded.net.model.language_model.embed_tokens.weight
+    merged = tmp_path / "merged"
+    export_merged_adapter(str(portable), str(base), str(merged))
+    dense = AutoModelForImageTextToText.from_pretrained(merged, dtype=torch.float32).eval()
+    assert dense.lm_head.weight is dense.model.language_model.embed_tokens.weight
+    batch = {"input_ids": torch.tensor([[30, 31, 32, 33]])}
+    original.net.eval()
+    reloaded.net.eval()
+    with torch.no_grad():
+        expected = original.forward_policy_batch(batch).logits
+        torch.testing.assert_close(reloaded.forward_policy_batch(batch).logits, expected, atol=0, rtol=0)
+        torch.testing.assert_close(dense(**batch).logits, expected, atol=3e-5, rtol=3e-5)
 
 
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])

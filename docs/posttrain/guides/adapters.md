@@ -62,6 +62,9 @@ resolved by identity; compatible aliases share adapters and one optimizer entry.
 Cross-block ties are refused for FSDP2. Architecture-declared embedding ties remain
 frozen; embedding/head adaptation is not supported. Arbitrary custom ties are not a
 claim of compatibility with a stock HF architecture.
+Portable reload preserves declared custom adapter aliases; stock HF merged export
+rejects them because its config cannot reconstruct those ties. Architecture-declared
+frozen embedding/head ties are preserved through both export types.
 
 The resolved manifest records component, path, type, shape, owner alias, rank,
 effective scaling, method/init/dropout/dtype, LR/decay and expected trainable count.
@@ -71,6 +74,8 @@ settings own those policies. `lr_multiplier` multiplies the global optimizer LR;
 `weight_decay` is absolute and defaults to zero. The initial profile uses AdamW,
 FP32 adapter storage/accumulation, BF16 or FP32 frozen base, eager/SDPA and full
 non-reentrant activation checkpointing or none. BF16 adapter storage is refused.
+Separately trained normalization parameters remain FP32 while their output keeps
+the input activation dtype. Merged BF16 exports round these parameters once.
 
 ## Methods and lifecycle
 

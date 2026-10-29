@@ -240,6 +240,11 @@ def prepare_merged_state(state: dict[str, torch.Tensor], identity: dict) -> dict
     # Preserve separately trained modules; remove only adapter-owned tensors.
     extra = {row["name"] for row in identity["resolved"]["extra_parameters"]}
     result = {n: t for n, t in state.items() if n not in spec or n in extra}
+    for name in extra:
+        # Stock HF normalization must retain its base activation boundary. A
+        # merged BF16 model rounds these trained FP32 values just like merged
+        # projection weights; the portable artifact retains full FP32 precision.
+        result[name] = state[name].to(getattr(torch, identity["base_storage_dtype"]))
     merged = {}
     for row in identity["resolved"]["targets"]:
         name, owner = row["name"], row["owner"]

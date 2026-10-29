@@ -905,8 +905,14 @@ def overlay_consolidated_onto_hf(
             f"transposed {len(expert_orig)} fused MoE expert tensors for the in-memory overlay (shards keep the checkpoint layout)"
         )
 
-    result = model.load_state_dict(state_dict, strict=False, assign=True)
     tied = bool(getattr(model.config, "tie_word_embeddings", False))
+    if tied and "lm_head.weight" in state_dict:
+        embedding = model.get_input_embeddings().weight
+        for key, value in model.named_parameters(remove_duplicate=False):
+            if value is embedding and key != "lm_head.weight" and key in state_dict:
+                if not torch.equal(state_dict[key], state_dict["lm_head.weight"]):
+                    raise ConversionError(f"tied embedding aliases disagree in checkpoint: {key}, lm_head.weight")
+    result = model.load_state_dict(state_dict, strict=False, assign=True)
     allowed = {"lm_head.weight"} if tied else set()
     missing = sorted(set(result.missing_keys) - allowed)
     unexpected = sorted(set(result.unexpected_keys) - allowed)
@@ -919,6 +925,11 @@ def overlay_consolidated_onto_hf(
             f"{model_pt}: state dict overlay onto {model_id} differs beyond embedding tying; missing={missing[:20]} "
             f"unexpected={unexpected[:20]}"
         )
+    if tied:
+        # assign=True replaces Parameters and can separate an omitted frozen head
+        # from its freshly loaded embedding. Restore the architecture's ownership
+        # before HF serialization deduplicates tied storage.
+        model.tie_weights()
     params = dict(model.named_parameters())  # values: [*shape]
     changed = sum(
         1 for k in probe_keys if not torch.equal(base_probe[k].to(params[k].dtype), params[k].detach())

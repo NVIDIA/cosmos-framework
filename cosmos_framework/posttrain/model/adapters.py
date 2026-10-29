@@ -47,6 +47,8 @@ def _selected(net: nn.Module, group: Any) -> dict[str, nn.Module]:
         if wrong:
             raise ValueError(f"selector {selector!r} selects outside {group.component}: {wrong}")
         if layers is not None:
+            if any(len(n.split(".")) < 4 or not n.split(".")[3].isdigit() for n in matches):
+                raise ValueError(f"selector {selector!r} cannot apply layer restrictions to non-layer modules")
             matches = {n: m for n, m in matches.items() if int(n.split(".")[3]) in layers}
         if not matches:
             raise ValueError(f"adapter selector {selector!r} matched no modules after component/layer restrictions")
@@ -159,6 +161,8 @@ def validate_adapter_profile(cfg: Any, model_config: Any, pdims: Any, adapters: 
         raise ValueError("quantized adapter training is a separate contribution; use a dense BF16/FP32 base")
     if cfg.dtype not in ("float32", "bfloat16") or cfg.activation_checkpointing not in ("none", "full"):
         raise ValueError("adapters require float32/bfloat16 base storage and activation_checkpointing=none|full")
+    if cfg.attn_impl not in ("eager", "sdpa"):
+        raise ValueError("posttrain adapters require attn_impl=eager|sdpa; other attention backends are not qualified")
     if pdims is not None and int(pdims.dp_replicate) != 1:
         raise ValueError("adapter distributed profile supports pure FSDP2 dp_replicate=1; HSDP is not qualified")
     if resume and adapters.warm_start:
@@ -254,6 +258,13 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
         raise RuntimeError("posttrain adapters require non-mutating merged export; in-place merge is disabled")
 
 
+def _preserve_normalization_output_dtype(module: nn.Module, inputs: tuple, output: torch.Tensor) -> torch.Tensor:
+    # Native RMSNorm multiplies its FP32 trainable weight after restoring the
+    # activation dtype. Preserve the base forward boundary for the next BF16
+    # projection while keeping the normalization parameter/update in FP32.
+    return output.to(inputs[0].dtype)
+
+
 def install_adapters(
     net: nn.Module, config: AdapterConfig, *, initialize: bool = True, distributed: bool = False
 ) -> dict[str, Any]:
@@ -297,10 +308,15 @@ def install_adapters(
         if layer.method == "dora":
             layer.magnitude.requires_grad_(True)
     parameters = dict(net.named_parameters(remove_duplicate=False))
+    extra_modules = set()
     for row in manifest["extra_parameters"]:
         parameter = parameters[row["name"]]
         parameter.data = parameter.data.float()
         parameter.requires_grad_(True)
+        module = net.get_submodule(row["name"].rsplit(".", 1)[0])
+        if id(module) not in extra_modules:
+            module.register_forward_hook(_preserve_normalization_output_dtype)
+            extra_modules.add(id(module))
     net._posttrain_adapter_manifest = manifest
     assert_trainability(net)
     return manifest

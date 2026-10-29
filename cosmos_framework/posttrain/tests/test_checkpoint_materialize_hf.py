@@ -224,7 +224,7 @@ def test_identity_fields_and_digest(base: Path) -> None:
         "source_bytes": 10,
         "base_digest": base_id["digest"],
     }
-    assert mat.CONVERSION_VERSION == "materialize_model_pt_to_hf/4", "the bumped contract refuses older markers"
+    assert mat.CONVERSION_VERSION == "materialize_model_pt_to_hf/5", "the bumped contract refuses older markers"
     assert ident_b != ident_a and ident_b["source_bytes"] == ident_a["source_bytes"]
     assert mat.identity_digest(ident_a) == mat.identity_digest(dict(reversed(list(ident_a.items()))))
     assert mat.identity_digest(ident_a) != mat.identity_digest(ident_b)

@@ -33,6 +33,14 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    if any(
+        row["name"] != row["owner"]
+        for row in [*identity["resolved"]["targets"], *identity["resolved"]["extra_parameters"]]
+    ):
+        raise ValueError(
+            "stock HF merged export cannot reconstruct custom adapter weight aliases; "
+            "use portable reload into the same tied architecture or a model with independent target weights"
+        )
     base_dtype = identity.get("base_storage_dtype")
     if base_dtype not in ("float32", "bfloat16"):
         raise ValueError(
@@ -64,6 +72,13 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
             )
     weights.update(state)
     merged = prepare_merged_state(weights, identity)
+    config = json.loads((root / "config.json").read_text())
+    if config.get("tie_word_embeddings", False) and "lm_head.weight" in merged:
+        embedding = "model.language_model.embed_tokens.weight"
+        if embedding not in merged or not torch.equal(merged[embedding], merged["lm_head.weight"]):
+            raise ValueError("base declares tied embeddings but embedding/head tensors disagree")
+        # Stock HF serializes one owner and reconstructs this frozen alias.
+        del merged["lm_head.weight"]
     with tempfile.TemporaryDirectory(prefix="cosmos-adapter-merge-") as temporary:
         torch.save({"net": merged}, os.path.join(temporary, "model.pt"))
         result = run_request(

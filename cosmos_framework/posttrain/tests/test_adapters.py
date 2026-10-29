@@ -157,6 +157,7 @@ def test_independent_components_and_optimizer_membership():
         ([Component(targets=["model.visual.blocks.*.attn.qkv"])], "outside language"),
         ([Component(targets=[LANG], rank=2), Component(targets=[LANG], rank=3)], "conflicting"),
         ([Component(targets=["model.language_model.norm"])], "plain nn.Linear"),
+        ([Component(targets=["model.language_model.norm"], layers=[0])], "non-layer modules"),
         ([Component(targets=[LANG], layers=[0, 99])], "indices matched no"),
     ],
 )
@@ -170,7 +171,7 @@ def test_resolution_refuses_before_mutation(components, match):
 
 
 @pytest.mark.parametrize("same_module", [False, True])
-def test_shared_parameters_and_module_aliases(same_module):
+def test_shared_parameters_and_module_aliases(same_module, tmp_path):
     net = tiny_net()
     attention = net.model.language_model.layers[0].self_attn
     if same_module:
@@ -193,6 +194,27 @@ def test_shared_parameters_and_module_aliases(same_module):
     assert attention.q_proj.magnitude is attention.v_proj.magnitude
     merged = prepare_merged_state(net.state_dict(), identity(manifest))
     assert merged[FIRST + ".weight"] is merged[second + ".weight"]
+    from cosmos_framework.posttrain.checkpoint.adapters import load_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+
+    ident = identity(manifest)
+    portable = tmp_path / "portable"
+    write_adapter_artifact(str(portable), ident, {n: net.state_dict()[n] for n in state_spec(ident)})
+    restored = tiny_net()
+    other = restored.model.language_model.layers[0].self_attn
+    if same_module:
+        other.v_proj = other.q_proj
+    else:
+        other.v_proj.weight = other.q_proj.weight
+    install_adapters(restored, AdapterConfig(components=[Component(targets=[FIRST, second], rank=2, method="dora")]))
+    restored._posttrain_adapter_identity = ident
+    load_adapter_artifact(restored, str(portable))
+    assert other.q_proj.weight is other.v_proj.weight
+    assert other.q_proj.lora_A is other.v_proj.lora_A
+    assert other.q_proj.magnitude is other.v_proj.magnitude
+    torch.testing.assert_close(other.q_proj.lora_A.weight, attention.q_proj.lora_A.weight, atol=0, rtol=0)
+    with pytest.raises(ValueError, match="cannot reconstruct custom adapter weight aliases"):
+        export_merged_adapter(str(portable), str(tmp_path / "base"), str(tmp_path / "merged"))
 
 
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
@@ -259,6 +281,22 @@ def test_base_identity_hashes_weights_not_only_sizes(tmp_path):
 def test_unsupported_combinations_fail(kwargs):
     with pytest.raises(ValueError):
         Component(targets=[FIRST], **kwargs)
+
+
+def test_profile_rejects_unqualified_attention():
+    from types import SimpleNamespace
+
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.adapters import validate_adapter_profile
+
+    with pytest.raises(ValueError, match="attn_impl=eager"):
+        validate_adapter_profile(
+            Qwen3VLModelConfig(attn_impl="flash_attention_2"),
+            SimpleNamespace(model_type="qwen3_vl"),
+            None,
+            AdapterConfig(components=[Component(targets=[FIRST])]),
+            False,
+        )
 
 
 def test_dora_forward_and_gradients_match_peft_reference():

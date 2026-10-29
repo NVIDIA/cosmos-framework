@@ -23,6 +23,7 @@ import torch
 import torch.distributed as dist
 
 from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
 from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
 from cosmos_framework.posttrain.data.packer.sft import build_sft_packer
 from cosmos_framework.posttrain.entrypoints.sft import build_trainer, evaluate, train_step, validate_config
@@ -52,6 +53,8 @@ def attest(wheel: str, record: str) -> dict:
                 checked += 1
     return {
         **build,
+        "container_sha256": os.environ.get("ADAPTER_CONTAINER_SHA256"),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "verified_package_files": checked,
         "versions": {
             name: importlib.metadata.version(name) for name in ("torch", "transformers", "safetensors", "torchcodec")
@@ -85,6 +88,10 @@ def trainable_state(net):
 
 def runtime(recipe, opts, output):
     config = load_config(recipe, ["--", *opts])
+    if os.environ.get("SFT_QUALIFY_EXTRA_NORM") == "1":
+        config.rl.adapters.extra_modules = [
+            AdapterExtraModuleConfig(component="language", targets=["model.language_model.norm"])
+        ]
     rl = validate_config(config)
     coordinates = {"rank": dist.get_rank(), "world_size": dist.get_world_size()}
     data = build_sft_env(rl.data, rl.seed, **coordinates)
@@ -140,8 +147,10 @@ def main():
     parser.add_argument("--build-record", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--method", choices=["lora", "rslora", "dora", "pissa", "mixed"], required=True)
+    parser.add_argument("--activation-checkpointing", choices=["none", "full"], default="full")
     args = parser.parse_args()
     evidence = attest(args.wheel, args.build_record)
+    assert evidence["container_sha256"] and len(evidence["container_sha256"]) == 64
     init_local_process_group()
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -153,6 +162,7 @@ def main():
     recipe = "cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py"
     os.environ["SFT_ADAPTER_METHOD"] = "lora" if args.method in ("rslora", "mixed") else args.method
     os.environ["SFT_ADAPTER_RSLORA"] = "1" if args.method == "rslora" else "0"
+    os.environ["SFT_QUALIFY_EXTRA_NORM"] = "1" if args.method == "mixed" else "0"
     opts = [
         "rl.resume=off",
         "rl.max_steps=8",
@@ -161,6 +171,7 @@ def main():
         "rl.optimizer.lr=0.0001",
         "rl.validation.every_steps=0",
         "rl.validation.before_training=False",
+        f"model.model_config.activation_checkpointing={args.activation_checkpointing}",
     ]
     if args.method == "mixed":
         opts += [
@@ -239,6 +250,7 @@ def main():
     record = {
         **evidence,
         "method": args.method,
+        "activation_checkpointing": args.activation_checkpointing,
         "world_size": world,
         "rank": rank,
         "resolved": trainer.model.net._posttrain_adapter_manifest,

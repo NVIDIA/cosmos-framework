@@ -1230,7 +1230,13 @@ class Qwen3VLCausalLMOutputWithPast(ModelOutput):
 
 class Qwen3VLForConditionalGeneration(Qwen3VLPreTrainedModel, GenerationMixin):
     _checkpoint_conversion_mapping = {}
-    _tied_weights_keys = ["lm_head.weight"]
+    # Transformers 5 requires a target->source mapping during post_init; the
+    # Transformers 4 native workflow still consumes the list representation.
+    _tied_weights_keys = (
+        {"lm_head.weight": "model.language_model.embed_tokens.weight"}
+        if hasattr(PreTrainedModel, "get_expanded_tied_weights_keys")
+        else ["lm_head.weight"]
+    )
     # Reference: fix gemma3 grad acc #37208
     accepts_loss_kwargs = False
     config: Qwen3VLConfig

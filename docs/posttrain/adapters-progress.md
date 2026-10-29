@@ -18,9 +18,9 @@ Previous WTS/AutoML results used unchanged framework code and do not qualify thi
 | Merged HF export | Existing HF materializer reused; bundled processor and single-shard handling extended | Implemented and CPU validated, including fresh-process HF reload |
 | Vision gradients, media and activation checkpointing | Native tiny Qwen3-VL plus real PNG/MP4 through SFT packer, with/without AC | Implemented and CPU validated; real-model GPU pending |
 | FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | Awaiting multi-step GPU tests; no qualification claim yet |
-| Wheel/container revision provenance | Pending build after correctness gates | Incomplete |
+| Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented; first image check exposed and fixed a pre-existing wheel omission of `roles/env`; replacement image validation pending |
 | Full WTS epoch and held-out evaluation | Existing experiments preserved | Pending feature qualification; no new HPO |
-| Recipes, documentation and PR | Runnable native adapter recipe, WTS converter, adapter guide | Implemented; PR and GPU evidence pending |
+| Recipes, documentation and PR | Runnable native adapter recipe, WTS converter, adapter guide; [draft PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342) | Implemented; GPU evidence pending |
 
 Initial execution profile: dense native Qwen3-VL / staged Cosmos3-Nano-VLM,
 BF16 frozen base, FP32 adapters, AdamW, eager/SDPA, non-reentrant full activation
@@ -34,3 +34,11 @@ suite; 2 additional DoRA-reference/PiSSA-principal-component tests passed. Envir
 Python 3.12.3, torch 2.10.0+cpu, Transformers 5.8.1, TorchCodec 0.10.0,
 safetensors 0.8.0; PEFT 0.21.2 is a test reference only, not the implementation.
 The SFT test root path was corrected after the posttrain directory migration.
+
+Additional correctness coverage checks separately trained FP32 normalization with
+BF16 activations, and native/portable/HF preservation of declared embedding ties.
+The latter exposed two compatibility defects: the native Transformers 4 tie-key
+list needed the Transformers 5 mapping form, and HF's `assign=True` overlay needed
+to restore tying before serialization. The converter format advances to version 5.
+The installed-wheel check runs outside the checkout: `.gitignore` previously
+caused Hatch to omit the tracked `posttrain/roles/env` runtime package.

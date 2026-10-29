@@ -204,7 +204,7 @@ MARKER_PROTOCOL = "posttrain.materialized-hf.v1"
 # Contract of the bytes this module produces (overlay with strict accounting, experts in the checkpoint layout on
 # disk, base sidecars verbatim, source proven by sha256 + bytes for archived artifacts too). Bump whenever any of that
 # changes: outputs built under the old contract then stop satisfying the idempotent skip and are refused until --force.
-CONVERSION_VERSION = "materialize_model_pt_to_hf/4"  # /4: config.json = the base's (R125-D-08); every tensor verified bitwise with digests (R125-D-09)
+CONVERSION_VERSION = "materialize_model_pt_to_hf/5"  # /5: restore declared embedding ties after assign=True; index single-shard HF exports
 SOURCE_STAMP = ".overlay_source.json"  # written into <out>.tmp right after the overlay: the identity that built it
 STAGING_SUFFIX = ".tmp"  # <out>.tmp: the staging directory the whole build happens in, beside an existing output
 PREVIOUS_SUFFIX = ".previous"  # <out>.previous: the old output during the swap; a leftover is refused unless --force

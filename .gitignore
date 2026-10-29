@@ -157,6 +157,9 @@ celerybeat.pid
 .env
 .venv
 env/
+# This is a tracked runtime package, not a virtual environment. Hatch honors
+# gitignore when building wheels, so keep the SFT data environment in releases.
+!cosmos_framework/posttrain/roles/env/
 venv/
 ENV/
 env.bak/
