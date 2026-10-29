@@ -196,7 +196,7 @@ the output, Edge / Super / 4-Step run settings).
 ## Variant 3 — vLLM-Omni (Docker server + OpenAI-style client)
 
 Reference: [`references/vllm-omni.md`](references/vllm-omni.md) — read it before
-the first command (§ 1 Prerequisites, § 2 Start the Server, § 6 request helpers).
+the first command (§ 1 Prerequisites, § 2 Start the Server — also the published Nano/Super FP8 "Quantized Checkpoints", § 6 request helpers).
 
 The notebook's Nano launch (its `t2i` case runs against `Cosmos3-Nano`; the § 2
 "Docker Image: Cosmos3-Edge" block differs only in the model name), with

@@ -586,7 +586,9 @@ upstream documentation." Hard prerequisite (eval-verified): Cosmos3 VisualGen is
 stable PyPI tensorrt-llm 1.2.x (`trtllm-serve` has no `--visual_gen_args`; Edge fails in
 the generic loader with `KeyError` / `ValueError` `cosmos3_edge`). Use a pre-release wheel
 that contains commit bca6761 — first: 1.3.0rc27 — or the devel-container source build. Do
-not reuse the Reasoner section's `release:1.3.0rc22`.
+not reuse the Reasoner section's `release:1.3.0rc22`. Skill note (not in the notebook): the setup guide pins TensorRT-LLM
+commit `cc63e66` since #332; this skill's routes were validated at `bca6761` / 1.3.0rc27 and keep those pins until a
+re-run moves them together.
 
 ### 7.2 Skill launch script (not in the notebook) — Route A: prebuilt wheel on a bare GPU host (SKILL.md Variant 5)
 
@@ -688,13 +690,13 @@ release binaries.
 
 **Only if you keep guardrails on** (not the smoke path: the serve blocks (§ 7.7 below)
 `export TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` and the request bodies send `use_guardrails: false`).
-Setup guide, TensorRT-LLM Generator: `pip install cosmos_guardrail==0.3.0`. It requires
-`transformers>=5`, so it resolves only on a VisualGen-capable TensorRT-LLM (1.3.0rc26+ pins
+Setup guide, TensorRT-LLM Generator: `pip install cosmos_guardrail==0.3.2` — 0.3.2 copies its NLTK data
+out of the Hugging Face cache on first use, so the guide's former "Server-side NLTK data setup" step is gone
+(#332). It requires `transformers>=5`, so it resolves only on a VisualGen-capable TensorRT-LLM (1.3.0rc26+ pins
 `transformers==5.5.4`); on the stable 1.2.1 wheel (`transformers==4.57.3`) pip refuses it. On
-headless servers follow with the headless OpenCV swap of Variant 1
-(`pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93`), then do
-the guide's "Server-side NLTK data setup"
-(<../../cookbooks/cosmos3/README.md#tensorrt-llm-generator>).
+headless servers follow with the guide's headless OpenCV swap
+(`pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93`,
+<../../cookbooks/cosmos3/README.md#tensorrt-llm-generator>).
 
 ### 7.7 Skill launch script (not in the notebook) — serve commands: Edge, Nano, Super (SKILL.md Variant 5)
 
