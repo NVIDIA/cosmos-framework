@@ -144,6 +144,8 @@ hold:
 not_on_site:
   # How to maintain the docs, for doc developers.
   - docs/README.md
+  # Migration record: where each retired cookbook notebook and README went in its agent skill.
+  - docs/cookbook_to_skill_migration.md
   # AutoML guides.
   - docs/automl.md
   - docs/automl-*.md
