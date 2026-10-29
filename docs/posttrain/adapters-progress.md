@@ -16,9 +16,9 @@ Previous WTS/AutoML results used unchanged framework code and do not qualify thi
 | Fresh, warm start and exact resume lifecycle | `Qwen3VLBuildHooks.after_load_before_parallelize`, SFT `build_trainer` | Implemented and CPU validated: bitwise controlled continuation through trainer and full SFT recipe |
 | Portable export / strict reload | `posttrain/checkpoint/adapters.py` | Implemented and CPU validated in fresh processes |
 | Merged HF export | Existing HF materializer reused; bundled processor and single-shard handling extended | Implemented and CPU validated; FP32 export implemented; real-model BF16 export failed and is excluded (see below) |
-| Vision gradients, media and activation checkpointing | Native tiny Qwen3-VL plus real PNG/MP4 through SFT packer, with/without AC | Implemented and CPU validated; real-model GPU pending |
-| FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | Awaiting multi-step GPU tests; no qualification claim yet |
-| Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented and validated: all 1,838 package files match; 53 tests passed from installed c888582 outside the checkout; FP32-export build pending |
+| Vision gradients, media and activation checkpointing | Native tiny Qwen3-VL plus real PNG/MP4 through SFT packer, with/without AC | Implemented and CPU validated; two-GPU first/final vision cases now pass FP32 export and fresh reload with AC on/off; broader matrix running |
+| FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | Multi-step two-rank training/continuation checks passed in completed cases; full method/AC/FP32-export matrix running |
+| Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented and validated: all 1,838 package files match; 184 tests passed from installed f29da1c outside the checkout |
 | Full WTS epoch and held-out evaluation | Existing experiments preserved | Pending feature qualification; no new HPO |
 | Recipes, documentation and PR | Runnable native adapter recipe, WTS converter, adapter guide; [draft PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342) | Implemented; GPU evidence pending |
 
@@ -34,6 +34,9 @@ suite; 2 additional DoRA-reference/PiSSA-principal-component tests passed. Envir
 Python 3.12.3, torch 2.10.0+cpu, Transformers 5.8.1, TorchCodec 0.10.0,
 safetensors 0.8.0; PEFT 0.21.2 is a test reference only, not the implementation.
 The SFT test root path was corrected after the posttrain directory migration.
+The final adapter-disabled regression run on `f29da1c` passed 205 tests, with two
+optional tests skipped, in 22.47 seconds. This covers SFT configuration, entrypoint,
+objective, packer, trainer validation, native Qwen3-VL loading and HF export.
 
 Additional correctness coverage checks separately trained FP32 normalization with
 BF16 activations, and native/portable/HF preservation of declared embedding ties.
@@ -82,5 +85,14 @@ training-base values before promotion. The existing materializer records precisi
 in its identity, verifies every floating shard and writes matching Transformers
 4/5 config precision metadata. Strict FP32 native/HF equivalence and a fresh
 `dtype="auto"` load are required. BF16 merged inference is excluded; portable
-reload remains the exact training-precision path. New installed-package and GPU
-export qualification is pending. Full WTS training remains gated; no new HPO.
+reload remains the exact training-precision path. Installed-package job `37633097` passed all 184 adapter/export tests in 123.99
+seconds for `f29da1ccf4f201e1ed73c2c26800908c392256d1`. Wheel SHA-256
+`66b66fad810a2b998b5c8347bb6c8528c5842a43aae5c10205a758776390f302`;
+container SHA-256 `6861377c581a16585d6c5510d6e2064cb9709589c90d6d7efe130ef1691ab574`.
+FP32 export jobs `37633099` and `37633101` are running. First/final vision
+job `37633104` completed both two-rank AC-on/off cases, with exact portable reload,
+750 bitwise-correct FP32 serialized tensors, 64/64 argmax agreement and maximum
+HF logit error `1.74e-4`. All-component single-GPU LoRA and language-only LoRA
+also passed the new export checks. Single-GPU all-component rsLoRA, DoRA and
+PiSSA have also passed; the complete matrix is still pending. Full WTS training
+remains gated; no new HPO.

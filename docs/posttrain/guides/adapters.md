@@ -10,14 +10,35 @@ See the [qualification record](../adapters-progress.md) for what has actually
 been tested. CPU correctness is not real-model GPU qualification. Four-bit
 training, generic HF wrappers, native MoE/expert tensors, HSDP, TP/EP/CP/PP,
 compilation, stacked adapters and arbitrary linear/embedding `modules_to_save`
-are outside this execution profile. Plain native `nn.Linear` targets and optional
-native normalization modules are supported. Fused vision QKV is one whole
+are outside this execution profile. GPU qualification covers one node with one or
+two A100 80 GB GPUs, SDPA,
+BF16 frozen bases and FP32 adapters. Larger worlds, multiple nodes, and the
+separate Torch 2.11 environment are not included in these results. Plain native
+`nn.Linear` targets and optional native normalization modules are supported. CPU fixtures additionally cover FP32
+training bases, eager attention, exact-SVD PiSSA and rsLoRA scaling with DoRA/PiSSA;
+these are not additional real-model GPU qualification claims. Fused vision QKV is one whole
 linear target, not independently selectable Q/K/V slices.
 
 ## Recipe and component selection
 
-Use the posttrain SFT environment from [the SFT guide](sft.md), including
-Transformers 5.8.1. Set `SFT_MODEL_PATH` to a complete immutable local snapshot
+The qualified CUDA 12.8 profile uses Python 3.13, torch 2.10.0+cu128,
+torchvision 0.25.0+cu128, Transformers 5.8.1, safetensors 0.8.0, av 18.0.0 and
+the CPU TorchCodec 0.10.0 wheel. The general [SFT environment](sft.md) instead
+pins torch 2.11 / TorchCodec 0.11; that is a separate qualification case.
+Starting from an isolated Framework CUDA 12.8 environment with torch 2.10,
+install the implementation wheel and the SFT processor versions explicitly:
+
+```bash
+# SFT_PYTHON names that environment's interpreter. Do not modify a shared RL venv.
+uv pip install --python "$SFT_PYTHON" --no-deps /path/to/cosmos_framework-1.2.2-py3-none-any.whl
+uv pip install --python "$SFT_PYTHON" transformers==5.8.1 safetensors==0.8.0 av==18.0.0
+uv pip install --python "$SFT_PYTHON" --no-deps torchcodec==0.10.0 \
+  --index-url https://download.pytorch.org/whl/cpu
+"$SFT_PYTHON" -c 'import torch, transformers; assert torch.__version__ == "2.10.0+cu128"; assert transformers.__version__ == "5.8.1"; assert torch.cuda.is_available()'
+```
+
+PEFT 0.21.2 is used only for a test reference, not for adapter installation.
+Set `SFT_MODEL_PATH` to a complete immutable local snapshot
 (config, safetensors, tokenizer, processor and template). The initial recipe
 uses Cosmos3-Nano-VLM's last vision block, index 26; other dense Qwen3-VL
 checkpoints must select indices that actually exist.
@@ -25,10 +46,10 @@ checkpoints must select indices that actually exist.
 ```bash
 export SFT_MODEL_PATH=/models/Cosmos3-Nano-VLM
 export SFT_DATA_ROOT=/data/adapter-example
-python -m cosmos_framework.posttrain.scripts.prepare_sft_example --output "$SFT_DATA_ROOT"
+"$SFT_PYTHON" -m cosmos_framework.posttrain.scripts.prepare_sft_example --output "$SFT_DATA_ROOT"
 export SFT_ADAPTER_METHOD=lora   # lora, dora, pissa
 export SFT_ADAPTER_RSLORA=0      # 1 uses alpha/sqrt(rank), including with DoRA/PiSSA
-python -m torch.distributed.run --standalone --nproc_per_node=1 \
+"$SFT_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=1 \
   -m cosmos_framework.posttrain.entrypoints.sft \
   --config=cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py
 ```
@@ -144,7 +165,7 @@ synced first, and the manifest commits last. Interrupted reservations are reject
 by readers and cannot be overwritten; retry at a fresh output path.
 
 ```bash
-python -m cosmos_framework.posttrain.checkpoint.tools.adapters \
+"$SFT_PYTHON" -m cosmos_framework.posttrain.checkpoint.tools.adapters \
   --checkpoint /runs/example/checkpoints/iter_000006 --out /exports/adapter
 # In a recipe, for a new training run:
 # config.rl.adapters.warm_start = "/exports/adapter"
@@ -162,7 +183,7 @@ inference exceeded real-model qualification bounds and is outside the supported
 export profile; the tool does not produce BF16 merged models.
 
 ```bash
-python -m cosmos_framework.posttrain.checkpoint.tools.adapters \
+"$SFT_PYTHON" -m cosmos_framework.posttrain.checkpoint.tools.adapters \
   --adapter /exports/adapter --base "$SFT_MODEL_PATH" \
   --merged --out /exports/merged
 ```
