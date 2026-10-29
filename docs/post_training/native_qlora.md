@@ -111,7 +111,7 @@ Run the equivalent control with `--config cosmos_framework/posttrain/configs/sft
 
 The allowlist contains 252 language attention/MLP matrices; vision, projectors, embeddings, output head, and normalization parameters remain frozen BF16. NF4 uses packed UINT8 storage, block size 64, and nested scale quantization. Optimizer membership is exactly the 504 adapter tensors. A failed capability or kernel check has no dense fallback.
 
-The default comparison recipe is 300 updates, accumulation 8, sequence limit 4096, image area budget 65,536–262,144 pixels, and eight video frames with area budget 4,096–65,536 pixels. A short canary changes those schedule/batch settings and is a separate experiment. Do not extend it by changing its horizon during exact resume.
+The default comparison recipe is 300 updates, accumulation 8, sequence limit 4096, and image area budget 65,536–262,144 pixels. The pinned Transformers 5.8.1 Qwen3-VL video processor bounds the total `T × H × W`: eight frames use budgets 32,768–524,288, equivalent to 4,096–65,536 pixels per frame before resize rounding. Change both total budgets when changing frame count, and record the actual resized dimensions and visual-token count. A short canary changes those schedule/batch settings and is a separate experiment. Do not extend it by changing its horizon during exact resume.
 
 ## Reload, resume, and portable artifacts
 

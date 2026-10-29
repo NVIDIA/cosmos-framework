@@ -180,6 +180,7 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
     from cosmos_framework.posttrain.data.packer.sft import build_sft_packer
     from cosmos_framework.posttrain.entrypoints.sft import sft_policy_source, validate_config
     from cosmos_framework.posttrain.model.quantization.loader import tensor_digest
+    from cosmos_framework.posttrain.utils.adapter_identity import adapter_processor_identity
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
     from cosmos_framework.posttrain.utils.dist import destroy_process_group_if_initialized, init_local_process_group
     from cosmos_framework.utils import misc
@@ -210,7 +211,9 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
         model = build_backbone(config)
         optimizer = build_optimizer(model.net, rl.optimizer)
         codec = model.net._cosmos_adapter_checkpoint_codec
-        codec.bind_processor_identity(packer.validation_semantics_identity())
+        codec.bind_processor_identity(
+            adapter_processor_identity(packer, source_path=source, source_identity=codec.identity["base"])
+        )
         codec.assert_live(model.net, optimizer)
         if saved is not None:
             load_adapter_weights(args.checkpoint, codec, manager=CheckpointManager(checkpoint_format="dcp"))
@@ -238,7 +241,7 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
         report = {
             "protocol": "cosmos.qlora-integration-probe.v1",
             "identity_sha256": _json_digest(identity),
-            "processor_contract": packer.validation_semantics_identity(),
+            "processor_contract": codec.identity["processor_contract"],
             "quantized_matrices": len(identity["quantized_tensors"]),
             "trainable_tensors": len(adapters),
             "trainable_elements": identity["trainable_elements"],

@@ -104,10 +104,16 @@ def build_config(*, quantized: bool = False) -> PosttrainSFTConfig:
         seed=42,
         data=SFTDatasetConfig(path=os.path.join(data_root, "validation.jsonl"), shuffle=False),
     )
+    video_frames = 8
     config.rl.processor_kwargs = {
-        # Qwen processor size values are pixel areas, despite the *_edge names.
+        # Image size values are pixel areas. The pinned Transformers 5.8.1 Qwen3-VL
+        # video processor compares T*H*W with size, so multiply per-frame area by T.
         "images_kwargs": {"size": {"shortest_edge": 65_536, "longest_edge": 262_144}},
-        "videos_kwargs": {"size": {"shortest_edge": 4096, "longest_edge": 65_536}, "num_frames": 8, "fps": None},
+        "videos_kwargs": {
+            "size": {"shortest_edge": video_frames * 4096, "longest_edge": video_frames * 65_536},
+            "num_frames": video_frames,
+            "fps": None,
+        },
     }
     return config
 

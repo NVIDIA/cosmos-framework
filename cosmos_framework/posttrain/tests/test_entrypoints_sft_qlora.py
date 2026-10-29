@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -25,6 +26,22 @@ from cosmos_framework.posttrain.tests.test_checkpoint_adapter import TinyAdapter
 def _installed_build(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COSMOS_TRAINING_CODE_REVISION", "a" * 40)
     monkeypatch.setenv("COSMOS_TRAINING_WHEEL_SHA256", "b" * 64)
+
+
+@pytest.fixture(autouse=True)
+def _portable_processor_identity(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    """Exercise entrypoint wiring; actual snapshot proofs live in test_adapter_identity."""
+    from cosmos_framework.posttrain.utils import adapter_identity
+
+    def identity(packer, *, source_path, source_identity):
+        return {
+            **copy.deepcopy(packer.validation_semantics_identity()),
+            "adapter_processor_identity": {"protocol": "controlled-portable-processor"},
+        }
+
+    helper = Mock(side_effect=identity)
+    monkeypatch.setattr(adapter_identity, "adapter_processor_identity", helper)
+    return helper
 
 
 def _packer(config: Any) -> SimpleNamespace:
@@ -81,6 +98,25 @@ def test_adapter_contract_is_finite_json_and_binds_processor_separately() -> Non
     assert "processor_kwargs" not in training
 
 
+def test_adapter_contract_forwards_verified_source_and_preserves_helper_result(
+    _portable_processor_identity: Mock,
+) -> None:
+    config = make_config()
+    packer = _packer(config)
+    portable = {"proof": "verified-content-identity", "settings": {"video_frames": 8}}
+    _portable_processor_identity.side_effect = None
+    _portable_processor_identity.return_value = portable
+
+    processor, _ = sft._adapter_run_contract(config, packer, _objective_identity(config))
+
+    _portable_processor_identity.assert_called_once_with(
+        packer,
+        source_path=config.model.model_id,
+        source_identity=config.model.model_config.source_identity,
+    )
+    assert processor is portable
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -99,13 +135,16 @@ def test_adapter_contract_requires_immutable_installed_build_receipt(
         sft._adapter_run_contract(config, _packer(config), _objective_identity(config))
 
 
-def test_dense_path_does_not_require_adapter_receipt_or_processor_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dense_path_does_not_require_adapter_receipt_or_processor_contract(
+    monkeypatch: pytest.MonkeyPatch, _portable_processor_identity: Mock
+) -> None:
     monkeypatch.delenv("COSMOS_TRAINING_CODE_REVISION")
     monkeypatch.delenv("COSMOS_TRAINING_WHEEL_SHA256")
     config = make_config()
     config.model.model_config.adapter = None
     config.model.model_config.quantized_base = None
     assert sft._adapter_run_contract(config, object(), {}) is None
+    _portable_processor_identity.assert_not_called()
 
 
 def test_adapter_contract_survives_typed_dotlist_round_trip() -> None:
@@ -273,7 +312,9 @@ def test_build_trainer_resume_refuses_before_backbone_allocation(tmp_path: Path,
     assert events == []
 
 
-def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(tmp_path: Path, monkeypatch) -> None:
+def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(
+    tmp_path: Path, monkeypatch, _portable_processor_identity: Mock
+) -> None:
     from cosmos_framework.posttrain.config import build
     from cosmos_framework.posttrain.roles.trainer import llm
 
@@ -281,6 +322,26 @@ def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(
     checkpoint = _checkpoint(config, tmp_path)
     events = []
     _patch_construction(monkeypatch, config, events)
+    identity_helper = _portable_processor_identity.side_effect
+    expected_processor = None
+
+    def processor_identity(packer, *, source_path, source_identity):
+        nonlocal expected_processor
+        events.append("processor_identity")
+        assert source_path == config.model.model_id
+        assert source_identity is config.model.model_config.source_identity
+        expected_processor = identity_helper(packer, source_path=source_path, source_identity=source_identity)
+        return expected_processor
+
+    _portable_processor_identity.side_effect = processor_identity
+    original_preflight = sft._preflight_adapter_resume
+
+    def preflight(config, checkpoint, processor, training):
+        events.append("preflight")
+        assert processor is expected_processor
+        return original_preflight(config, checkpoint, processor, training)
+
+    monkeypatch.setattr(sft, "_preflight_adapter_resume", preflight)
     net = TinyAdapterModel()
     codec = net._cosmos_adapter_checkpoint_codec
     codec.identity.pop("processor_contract")
@@ -310,7 +371,7 @@ def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(
 
     def restore(policy, component):
         assert component == "data"
-        assert "processor_contract" in policy._adapter_checkpoint_codec().identity
+        assert policy._adapter_checkpoint_codec().identity["processor_contract"] == expected_processor
         assert "training_contract" in policy._adapter_checkpoint_codec().identity
         events.append("restore")
         return 0, {"cursor": 0}
@@ -325,6 +386,8 @@ def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(
     )
     sft.build_trainer(config, config.rl, data, None, checkpoint)
     assert events == [
+        "processor_identity",
+        "preflight",
         "seed:False",
         "backbone",
         "optimizer",
@@ -335,6 +398,30 @@ def test_build_trainer_binds_identities_before_trainer_and_authoritative_resume(
         "restore",
         "cursor",
     ]
+
+
+def test_processor_identity_failure_refuses_before_backbone_allocation(
+    monkeypatch: pytest.MonkeyPatch, _portable_processor_identity: Mock
+) -> None:
+    from cosmos_framework.posttrain.checkpoint import CheckpointManager
+    from cosmos_framework.posttrain.config import build
+
+    config = make_config()
+    events = []
+    _patch_construction(monkeypatch, config, events)
+    _portable_processor_identity.side_effect = ValueError("processor source identity proof failed")
+    backbone = Mock(side_effect=AssertionError("processor identity must be verified before allocation"))
+    monkeypatch.setattr(build, "build_backbone", backbone)
+    checkpoint = SimpleNamespace(manager=CheckpointManager(checkpoint_format="dcp"), resume_checkpoint=None)
+
+    with pytest.raises(ValueError, match="processor source identity proof failed"):
+        sft.build_trainer(
+            config, config.rl, SimpleNamespace(source_fingerprint="immutable-training-data"), None, checkpoint
+        )
+
+    _portable_processor_identity.assert_called_once()
+    backbone.assert_not_called()
+    assert events == []
 
 
 def test_native_entrypoint_resume_restores_real_cursor_optimizer_and_rng(tmp_path: Path, monkeypatch) -> None:

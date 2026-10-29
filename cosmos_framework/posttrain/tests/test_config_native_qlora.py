@@ -159,7 +159,13 @@ def test_paired_recipes_preserve_objective_data_processor_and_schedule(monkeypat
     assert not control.rl.validation.data.shuffle
     assert control.rl.mask_think_opener is False
     assert control.rl.ce_exponent == 0.0
-    assert control.rl.processor_kwargs["videos_kwargs"]["num_frames"] == 8
+    video = control.rl.processor_kwargs["videos_kwargs"]
+    assert video["num_frames"] == 8
+    assert video["fps"] is None
+    # Qwen3-VL's pinned video resize bounds total T*H*W, not per-frame H*W.
+    assert video["size"] == {"shortest_edge": 32_768, "longest_edge": 524_288}
+    assert video["size"]["shortest_edge"] // video["num_frames"] == 4096
+    assert video["size"]["longest_edge"] // video["num_frames"] == 65_536
     assert control.rl.processor_kwargs["images_kwargs"]["size"]["longest_edge"] == 262_144
 
 

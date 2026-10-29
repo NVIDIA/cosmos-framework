@@ -157,6 +157,11 @@ celerybeat.pid
 .env
 .venv
 env/
+# This is a source package, not a virtual environment. Hatch respects these
+# patterns even for tracked files; include only its direct Python modules.
+!cosmos_framework/posttrain/roles/env/
+cosmos_framework/posttrain/roles/env/*
+!cosmos_framework/posttrain/roles/env/*.py
 venv/
 ENV/
 env.bak/

@@ -151,6 +151,7 @@ def _adapter_run_contract(
     import re
 
     from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.utils.adapter_identity import adapter_processor_identity
     from cosmos_framework.posttrain.utils.identity import canonical_config_value, normalize_json_dict
 
     selection = select_policy_backend(config)
@@ -177,7 +178,9 @@ def _adapter_run_contract(
             "native adapter training requires COSMOS_TRAINING_CODE_REVISION (40 hex) and "
             "COSMOS_TRAINING_WHEEL_SHA256 (64 hex) from the installed build receipt"
         )
-    processor = normalize_json_dict(packer.validation_semantics_identity(), context="adapter processor identity")
+    processor = adapter_processor_identity(
+        packer, source_path=selection.model_id, source_identity=spec.model_config.source_identity
+    )
     training = normalize_json_dict(
         {
             "objective": objective_identity,
