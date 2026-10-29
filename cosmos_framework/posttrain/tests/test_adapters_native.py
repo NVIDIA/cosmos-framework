@@ -327,6 +327,53 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
         torch.testing.assert_close(dense(**batch).logits, expected, atol=3e-5, rtol=3e-5)
 
 
+def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monkeypatch):
+    from cosmos_framework.posttrain.scripts.prepare_sft_example import prepare_example
+    from cosmos_framework.posttrain.tests import qualify_adapters as harness
+
+    base, data, output = tmp_path / "base", tmp_path / "data", tmp_path / "output"
+    tiny_snapshot(base)
+    prepare_example(data, train_samples=8, validation_samples=8)
+    monkeypatch.setenv("SFT_MODEL_PATH", str(base))
+    monkeypatch.setenv("SFT_DATA_ROOT", str(data))
+    for key, value in [("SFT_ADAPTER_METHOD", "lora"), ("SFT_ADAPTER_RSLORA", "0"), ("SFT_QUALIFY_EXTRA_NORM", "0")]:
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(harness, "attest", lambda *_: {"container_sha256": "0" * 64})
+    monkeypatch.setattr(harness, "init_local_process_group", lambda: None)
+    monkeypatch.setattr(harness.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(harness.dist, "get_world_size", lambda: 1)
+    monkeypatch.setattr(harness.dist, "barrier", lambda: None)
+    monkeypatch.setattr(harness.dist, "destroy_process_group", lambda: None)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    original_load = harness.load_config
+
+    def tiny_recipe(recipe, opts):
+        config = original_load(recipe, opts)
+        config.model.model_config.dtype = "float32"
+        config.rl.adapters.components[2].layers = [0]
+        for group in ("images_kwargs", "videos_kwargs"):
+            config.rl.processor_kwargs[group]["size"] = {"shortest_edge": 16, "longest_edge": 64}
+        config.rl.processor_kwargs["videos_kwargs"]["num_frames"] = 2
+        return config
+
+    monkeypatch.setattr(harness, "load_config", tiny_recipe)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["qualify", "--wheel", "fixture", "--build-record", "fixture", "--out", str(output), "--method", "mixed"],
+    )
+    previous = torch.are_deterministic_algorithms_enabled()
+    try:
+        harness.main()
+    finally:
+        torch.use_deterministic_algorithms(previous)
+    report = json.loads((output / "training-rank0.json").read_text())
+    assert report["changed_tensors"] == report["trainable_tensors"]
+    assert report["resume_max_abs_parameter_error"] == 0
+    assert len(report["train"]) == 9
+    assert (output / "portable/adapter_manifest.json").is_file()
+
+
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
 def test_sft_recipe_real_media_and_checkpoint_exports(tmp_path, monkeypatch, method):
     from cosmos_framework.posttrain.checkpoint.adapters import read_adapter_artifact

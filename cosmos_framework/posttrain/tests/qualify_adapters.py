@@ -25,6 +25,7 @@ import torch.distributed as dist
 from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
 from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
 from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
+from cosmos_framework.posttrain.control.validation.lifecycle import ValidationTrigger
 from cosmos_framework.posttrain.data.packer.sft import build_sft_packer
 from cosmos_framework.posttrain.entrypoints.sft import build_trainer, evaluate, train_step, validate_config
 from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, assert_trainability, canonical_name
@@ -192,7 +193,9 @@ def main():
     before = trainable_state(trainer.model.net)
     frozen = frozen_digest(trainer.model.net)
     assert_trainability(trainer.model.net, trainer.opt)
-    validation_before = evaluate({"validation": validation, "policy": trainer}, rl, 0, frozenset()).metrics
+    validation_before = evaluate(
+        {"validation": validation, "policy": trainer}, rl, 0, frozenset({ValidationTrigger.BEFORE_TRAINING})
+    ).metrics
     reports = []
     # Eight rows include real text, PNG, MP4 and WTS videos. Rank 0 and rank 1
     # encounter different modality combinations on the same FSDP collective path.
@@ -235,7 +238,9 @@ def main():
                     torch.testing.assert_close(local_value(value), expected_optimizer[name][key], atol=1e-7, rtol=1e-5)
     assert_trainability(trainer.model.net, trainer.opt)
     assert frozen_digest(trainer.model.net) == frozen
-    validation_after = evaluate({"validation": validation, "policy": trainer}, rl, len(reports), frozenset()).metrics
+    validation_after = evaluate(
+        {"validation": validation, "policy": trainer}, rl, len(reports), frozenset({ValidationTrigger.FINAL})
+    ).metrics
     snapshot = trainable_state(trainer.model.net)
     save_adapter_artifact(trainer.model.net, str(root / "portable"), provenance=evidence)
     exported_state = trainable_state(trainer.model.net)
