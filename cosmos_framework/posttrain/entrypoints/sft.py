@@ -107,6 +107,23 @@ def validate_config_structure(config: Any) -> SFTConfig:
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
     # of the value (the recipe variant, a YAML, a ``--`` override; review round 142b, review threads b196e5e99f / 12f2ce563b).
     rl.__post_init__()
+    if rl.adapters is not None:
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+
+        selection = select_policy_backend(config)
+        if (
+            selection.native_spec is None
+            or selection.native_spec.builder != "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
+        ):
+            raise ValueError(
+                "SFT adapters require the native dense Qwen3-VL builder; generic HF and MoE are unsupported"
+            )
+        if rl.optimizer.train_keys or rl.optimizer.decay_groups or rl.optimizer.lr_multipliers:
+            raise ValueError(
+                "adapter component settings own optimizer membership/lr/decay; clear optimizer train_keys/decay_groups/lr_multipliers"
+            )
+        if rl.optimizer.name != "adamw":
+            raise ValueError("posttrain FP32 adapters currently support optimizer.name='adamw' only")
     if rl.lr_schedule.kind == "cosine" and (rl.lr_schedule.cycle_steps or rl.max_steps) <= rl.optimizer.warmup_steps:
         # Legal (a short canary of a long warmup) but worth one line: the run never leaves the warmup ramp.
         info0(
@@ -135,14 +152,14 @@ def validate_config(config: Any) -> SFTConfig:
     from cosmos_framework.posttrain.config.build import refuse_rounding_or_unavailable_optimizer
 
     rl = validate_config_structure(config)
-    refuse_rounding_or_unavailable_optimizer(config, rl.optimizer)
+    if rl.adapters is None:
+        refuse_rounding_or_unavailable_optimizer(config, rl.optimizer)
     for data in enabled_sources(rl):
         require_source_available(data)
     return rl
 
 
 def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None, checkpoint: Any) -> Any:
-    from cosmos_framework.utils import misc
     from cosmos_framework.posttrain.algorithm.sft import make_objective
     from cosmos_framework.posttrain.config.build import (
         build_backbone,
@@ -155,6 +172,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     from cosmos_framework.posttrain.roles.trainer.validation.sft import evaluate_sft_batch
     from cosmos_framework.posttrain.roles.trainer.validation.state import ValidationState
     from cosmos_framework.posttrain.utils.dist import run_rank_converged, world_size_or_1
+    from cosmos_framework.utils import misc
 
     name_or_path, trust_remote_code = sft_policy_source(config)
     packer = run_rank_converged(
@@ -183,8 +201,30 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "precision": asdict(resolve_precision(config)),
     }
     misc.set_random_seed(seed=rl.seed, by_rank=False)
-    model = build_backbone(config)
-    optimizer = build_optimizer(model.net, rl.optimizer)
+    if rl.adapters is None:
+        model = build_backbone(config)
+        optimizer = build_optimizer(model.net, rl.optimizer)
+    else:
+        from cosmos_framework.posttrain.model.adapters import assert_trainability, optimizer_groups
+
+        model = build_backbone(
+            config,
+            native_build_kwargs={
+                "adapters": rl.adapters,
+                "adapter_resume": bool(checkpoint.resume_checkpoint),
+                "adapter_media_identity": {
+                    "packer": packer.validation_semantics_identity(),
+                    "processor_kwargs": rl.processor_kwargs,
+                    "max_length": rl.max_length,
+                    "serve_contract": rl.serve_contract,
+                },
+            },
+        )
+        objective.identity = {**objective.identity, "adapters": model.net._posttrain_adapter_identity}
+        optimizer = build_optimizer(
+            model.net, rl.optimizer, parameter_groups=optimizer_groups(model.net, rl.optimizer.lr)
+        )
+        assert_trainability(model.net, optimizer)
     groups = []
     for index, group in enumerate(optimizer.param_groups):
         lr = group["lr"]
@@ -262,10 +302,10 @@ def held_out_census(data: Any, validation: Any) -> dict[str, Any]:
 
 def make_setup(config_path: str, opts: list[str]) -> Any:
     def setup() -> dict[str, Any]:
-        from cosmos_framework.utils.config import load_config
         from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
         from cosmos_framework.posttrain.roles.env.sft import build_sft_env
         from cosmos_framework.posttrain.utils.dist import rank_identical, rank_or_0, run_rank_converged, world_size_or_1
+        from cosmos_framework.utils.config import load_config
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
@@ -392,7 +432,6 @@ def _evaluate(
 
 
 def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]:
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.termination import TerminationWatch
     from cosmos_framework.posttrain.control.validation import ValidationSchedule
@@ -406,6 +445,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data, policy = units["data"], units["policy"]

@@ -416,6 +416,7 @@ class OptimizerParameterGroup:
     name: str
     parameter_names: tuple[str, ...]
     lr: float
+    weight_decay: float | None = None
 
 
 def _explicit_parameter_groups(
@@ -443,8 +444,15 @@ def _explicit_parameter_groups(
     for group in parameter_groups:
         if not group.name or not group.parameter_names or not math.isfinite(group.lr) or group.lr <= 0:
             raise ValueError(f"invalid optimizer parameter group {group.name!r}")
+        if group.weight_decay is not None and (not math.isfinite(group.weight_decay) or group.weight_decay < 0):
+            raise ValueError(f"invalid optimizer weight decay for group {group.name!r}")
     return [
-        {"params": [names[name] for name in group.parameter_names], "lr": group.lr, "name": group.name}
+        {
+            "params": [names[name] for name in group.parameter_names],
+            "lr": group.lr,
+            "name": group.name,
+            **({"weight_decay": group.weight_decay} if group.weight_decay is not None else {}),
+        }
         for group in parameter_groups
     ]
 
@@ -1046,7 +1054,9 @@ def _resolve_dotted_callable(path: str) -> Any:
     return builder
 
 
-def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> tuple[Any, Any]:
+def _build_native_from_spec(
+    config: Any, pdims: Any, *, builder_field: str, build_kwargs: dict | None = None
+) -> tuple[Any, Any]:
     """Invoke one model-family builder from the selected native spec."""
     from cosmos_framework.utils.lazy_config import instantiate
 
@@ -1061,10 +1071,10 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
         raise ValueError(f"config.model.{builder_field} must be configured for this native role")
     model_config = instantiate(getattr(spec, "model_config"))
     builder = _resolve_dotted_callable(builder_path)
-    return builder(str(getattr(spec, "model_id")), model_config, pdims), model_config
+    return builder(str(getattr(spec, "model_id")), model_config, pdims, **(build_kwargs or {})), model_config
 
 
-def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
+def build_native_policy(config: Any, pdims: Any = None, *, build_kwargs: dict | None = None) -> tuple[Any, Any]:
     """Build the generic i4-native online policy and return the exact builder config used."""
     spec = select_policy_backend(config).native_spec
     if spec is None:
@@ -1081,7 +1091,7 @@ def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
             "explicit policy mesh disagrees with config.model.parallelism: "
             f"pdims={(pdims.dp_replicate, pdims.dp_shard)}, configured={configured_parallelism}"
         )
-    return _build_native_from_spec(config, pdims, builder_field="builder")
+    return _build_native_from_spec(config, pdims, builder_field="builder", build_kwargs=build_kwargs)
 
 
 def build_native_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
@@ -1094,7 +1104,9 @@ def build_native_value_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
     return _build_native_from_spec(config, pdims, builder_field="value_builder")
 
 
-def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
+def build_backbone(
+    config: Any, world_size: int = 1, pdims: Any = None, *, native_build_kwargs: dict | None = None
+) -> Any:
     """Backend dispatch to a legacy i4 model, generic native policy, or HF model.
 
     A legacy ``model_backend='i4'`` config still instantiates ``config.model`` and moves it to CUDA.
@@ -1118,7 +1130,9 @@ def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
             return instantiate(config.model).cuda()
         # Native construction owns its mesh resolution. Keeping that in one place avoids validating
         # the same generic spec once here and again immediately inside build_native_policy().
-        return build_native_policy(config, pdims)[0]
+        if native_build_kwargs is None:
+            return build_native_policy(config, pdims)[0]
+        return build_native_policy(config, pdims, build_kwargs=native_build_kwargs)[0]
 
     policy_world = pdims.world_size if pdims is not None else world_size_or_1()
     parallelism = resolve_policy_parallelism(config, int(policy_world))

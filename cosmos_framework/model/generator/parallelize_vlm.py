@@ -29,7 +29,6 @@ from torch.utils.checkpoint import (
     create_selective_checkpoint_contexts,
 )
 
-from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import (
@@ -39,6 +38,7 @@ from cosmos_framework.configs.base.defaults.parallelism import (
 from cosmos_framework.model.generator.context_parallel import ContextParallelBatchPolicy, shard_decoder_inputs
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.reasoner.qwen35_caption import qwen35_fp32_decay_modules
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 # (parent, attribute name, module) — the module currently registered at that slot, plus what
@@ -433,6 +433,8 @@ def apply_fsdp(
     parallel_dims: ParallelDims,
     parallelism_config: ParallelismConfig,
     precision: str,
+    *,
+    mp_policy_override: MixedPrecisionPolicy | None = None,
 ) -> None:
     """Apply FSDP2 to an HFModel in-place.
 
@@ -511,7 +513,7 @@ def apply_fsdp(
     # ``fsdp_reduce_dtype`` overrides the gradient-reduction dtype; ``None`` follows the
     # master dtype, so the reduced gradient lands in the dtype of the shard it writes back
     # into -- the shard the optimizer steps, and the dtype HFModel meta-init stored it in.
-    mp_policy = MixedPrecisionPolicy(
+    mp_policy = mp_policy_override or MixedPrecisionPolicy(
         param_dtype=PRECISION_TO_TORCH_DTYPE[precision],
         reduce_dtype=_resolve_reduce_dtype(parallelism_config),
     )

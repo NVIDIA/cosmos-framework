@@ -687,7 +687,7 @@ def preflight(base: str, *, unified_chat_template: bool) -> dict[str, Any]:
     try:
         for name in REQUIRED_FILES:
             path = os.path.join(base, name)
-            if not os.path.isfile(path):
+            if not hf.required_file_present(base, name):
                 _refuse(
                     f"the base {base} lacks {name} (no regular file at {path}), which the teacher directory must carry; the "
                     f"overlay and every loader read it in the staged build"

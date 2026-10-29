@@ -2,10 +2,13 @@
 
 ## 1. When to choose it
 
-Full-parameter supervised fine-tuning of Qwen conversations through the existing `LLMTrainer`.
+Supervised fine-tuning of Qwen conversations through the existing `LLMTrainer`.
 The [multimodal recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3p8_27b_multimodal.py) targets `Qwen/Qwen3.8-27B`
 (the dense `qwen3_5` architecture), with text, images, videos and multiple assistant turns.
-Local/torchrun FSDP is supported; Ray execution, LoRA, sequence packing and MTP training are not.
+Local/torchrun FSDP is supported. Native dense Qwen3-VL also has an
+[adapter recipe](adapters.md) for LoRA/rsLoRA, DoRA and PiSSA with explicit language,
+merger and vision selection; its qualification matrix is separate from full-parameter SFT.
+Ray execution, sequence packing and MTP training are not supported.
 There is no rollout engine, reference model or reward function.
 
 SFT opts into Transformers 5.8.1; existing RL/GR00T defaults stay on 4.57.6. The SFT builder
@@ -17,10 +20,11 @@ objective sits on. Qwen3.5/3.8 sits on the HF backend (`model_backend='hf'`,
 build_qwen3_vl_native_policy, ...)`, see [the native recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3_vl_moe_native.py)):
 the HF backend refuses MoE VLMs because the general weight loader has no fused-expert handling and
 Transformers 5 stores the MoE expert tensors transposed relative to a Transformers 4 checkpoint.
-On the native seat the parameters are stored in bfloat16 (the MoE expert kernel requires it), so the
+For full-parameter training on the native seat the parameters are stored in bfloat16 (the MoE expert kernel requires it), so the
 recipe uses `attn_impl='sdpa'` and `OptimizerConfig(name='fusedadam')` (apex fp32 master weights and
 moments inside the optimizer); `validate_config` refuses `adamw` there because its bfloat16 moments
-round most updates to zero. The seat's masking contract is pinned against the official Qwen3-VL
+round most updates to zero. Adapter training freezes the BF16 base and uses FP32 adapter
+parameters with AdamW. The seat's masking contract is pinned against the official Qwen3-VL
 processor template in `tests/test_data_packer_sft.py` (the collated `attention_mask` is `torch.int64`
 0/1, the contract `main` pins in `test_model_qwen3_vl.py`; the native eager mask casts it to bool); its
 GPU training path reuses the online adapters.

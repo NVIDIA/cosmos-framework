@@ -347,12 +347,10 @@ class ModelConfig(BaseModel):
     lora_enabled: bool = Field(
         default=False,
         description=(
-            "Inject LoRA adapters into the generation pathway BEFORE FSDP "
-            "wraps the network. Pair with optimizer.keys_to_select=['lora_'] "
-            "(train only adapters) and checkpoint.keys_to_skip_loading=["
-            "..., 'lora_'] (don't load missing adapter tensors). Used by "
-            "SUPER-tier configs (e.g. vision_sft_super); NANO-tier leaves "
-            "it off. Skipped on VLM."
+            "Inject LoRA adapters before FSDP registration. Supported by native "
+            "generation and reasoner/VLM policies. Generation defaults target the "
+            "MoE-gen projections; VLM recipes must select their own linear modules. "
+            "The native VLM policy applies adapter trainability and initialization."
         ),
     )
     lora_rank: int = Field(
@@ -365,14 +363,14 @@ class ModelConfig(BaseModel):
         default=32,
         description=(
             "LoRA scaling factor. Effective magnitude of the adapter update "
-            "is alpha/rank; rank=16 alpha=32 gives a 2× scale."
+            "is alpha/rank, or alpha/sqrt(rank) when lora_use_rslora=true."
         ),
     )
     lora_target_modules: str = Field(
         default="q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen",
         description=(
-            "Comma-separated substrings of param names that get a LoRA "
-            "adapter. Defaults target the four MoE-gen projection matrices."
+            "Comma-separated leaf module names or dotted path suffixes that get "
+            "LoRA adapters. Defaults target the four MoE-gen projection matrices."
         ),
     )
     lora_dropout: float = Field(default=0.0, ge=0.0, lt=1.0)

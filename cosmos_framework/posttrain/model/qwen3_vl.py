@@ -308,6 +308,9 @@ class Qwen3VLBuildHooks:
     parallelize: Callable[[nn.Module, Any], None] | None = None
     materialize: Callable[[nn.Module], None] | None = None
     load_weights: Callable[[nn.Module, str, str | None, Any], None] | None = None
+    # An opt-in loaded-base transformation, before distributed parameter registration.
+    # Used by weight-dependent adapter initialization; absent preserves the legacy order.
+    after_load_before_parallelize: Callable[[nn.Module], None] | None = None
 
 
 def validate_qwen3_vl_parallelism(parallel_dims: Any | None) -> None:
@@ -653,14 +656,20 @@ def build_qwen3_vl_policy(
 
     if hooks.prepare_model is not None:
         hooks.prepare_model(net)
-    if hooks.parallelize is not None:
+    if hooks.parallelize is not None and hooks.after_load_before_parallelize is None:
         hooks.parallelize(net, parallel_dims)
     (hooks.materialize or _default_materialize)(net)
     _tie_embeddings(net, native_config)
     if checkpoint_path:
-        (hooks.load_weights or _default_load_weights)(net, checkpoint_path, credential_path, parallel_dims)
+        (hooks.load_weights or _default_load_weights)(
+            net, checkpoint_path, credential_path, None if hooks.after_load_before_parallelize else parallel_dims
+        )
     elif hooks.load_weights is not None:
         hooks.load_weights(net, "", credential_path, parallel_dims)
+    if hooks.after_load_before_parallelize is not None:
+        hooks.after_load_before_parallelize(net)
+        if hooks.parallelize is not None:
+            hooks.parallelize(net, parallel_dims)
     if model_type == "qwen3_vl_moe":
         from cosmos_framework.posttrain.model.qwen3_vl_moe import Qwen3VLMoePolicy
 
@@ -672,6 +681,7 @@ def build_qwen3_vl_native_policy(
     model_id: str,
     cfg: "Qwen3VLModelConfig",
     pdims: Any = None,
+    **build_kwargs: Any,
 ) -> Qwen3VLPolicy:
     """Build from the generic native seam's single policy/tokenizer identity.
 
@@ -684,7 +694,7 @@ def build_qwen3_vl_native_policy(
             f"{model_id!r} and {cfg.name_or_path!r}"
         )
     cfg.name_or_path = model_id
-    return build_qwen3_vl_model(cfg, pdims)
+    return build_qwen3_vl_model(cfg, pdims, **build_kwargs)
 
 
 @register_native_sft_source(f"{__name__}.{build_qwen3_vl_native_policy.__name__}")
@@ -720,7 +730,14 @@ def build_qwen3_vl_native_value_model(
     return DenseValueModel(build_qwen3_vl_native_policy(model_id, cfg, pdims), pdims=pdims)
 
 
-def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3VLPolicy:
+def build_qwen3_vl_model(
+    cfg: "Qwen3VLModelConfig",
+    pdims: Any = None,
+    *,
+    adapters: Any = None,
+    adapter_resume: bool = False,
+    adapter_media_identity: dict | None = None,
+) -> Qwen3VLPolicy:
     """Build an i4-native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup."""
     if not cfg.name_or_path:
         raise ValueError("Qwen3VLModelConfig.name_or_path must be non-empty")
@@ -748,7 +765,11 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             "Qwen3VLModelConfig.dtype must be 'bfloat16' for qwen3_vl_moe; the native grouped-mm "
             f"expert kernel does not support {cfg.dtype!r}"
         )
-    if bool(getattr(model_config, "tie_word_embeddings", False)):
+    if adapters is not None:
+        from cosmos_framework.posttrain.model.adapters import validate_adapter_profile
+
+        validate_adapter_profile(cfg, model_config, pdims, adapters, adapter_resume)
+    if adapters is None and bool(getattr(model_config, "tie_word_embeddings", False)):
         raise ValueError(
             "native Qwen3-VL OPD requires tie_word_embeddings=False: publishing one tied policy tensor "
             "into the rollout engine's live embedding/head namespace is not supported"
@@ -788,10 +809,46 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             sound_und: bool = False
             hf_config: Any = model_config
 
+            def parameters(self):
+                return self.model.parameters()
+
         shim = NativeVLMShim()
         slots = apply_ac(shim, activation_checkpointing)
         if parallel_dims is not None:
-            apply_fsdp(shim, slots, parallel_dims, parallelism_config, cfg.dtype)
+            if adapters is None:
+                apply_fsdp(shim, slots, parallel_dims, parallelism_config, cfg.dtype)
+            else:
+                from torch.distributed.fsdp import MixedPrecisionPolicy
+
+                apply_fsdp(
+                    shim,
+                    slots,
+                    parallel_dims,
+                    parallelism_config,
+                    cfg.dtype,
+                    mp_policy_override=MixedPrecisionPolicy(
+                        param_dtype=None, reduce_dtype=torch.float32, cast_forward_inputs=False
+                    ),
+                )
+
+    def install_native_adapters(net: nn.Module) -> None:
+        from cosmos_framework.posttrain.checkpoint.adapters import load_adapter_artifact, make_adapter_identity
+        from cosmos_framework.posttrain.model.adapters import install_adapters
+
+        install_adapters(
+            net,
+            adapters,
+            initialize=not adapter_resume and not adapters.warm_start,
+            distributed=pdims is not None and int(pdims.world_size) > 1,
+        )
+        net._posttrain_adapter_identity = make_adapter_identity(
+            cfg.checkpoint_path or cfg.name_or_path,
+            cfg.name_or_path,
+            net._posttrain_adapter_manifest,
+            adapter_media_identity or {},
+        )
+        if adapters.warm_start:
+            load_adapter_artifact(net, adapters.warm_start)
 
     return build_qwen3_vl_policy(
         model_type=resolved_model_type,
@@ -801,7 +858,11 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
         parallel_dims=pdims,
         dtype=getattr(torch, cfg.dtype),
         attn_implementation=cfg.attn_impl,
-        hooks=Qwen3VLBuildHooks(prepare_model=prepare_native, parallelize=parallelize_native),
+        hooks=Qwen3VLBuildHooks(
+            prepare_model=prepare_native,
+            parallelize=parallelize_native,
+            after_load_before_parallelize=install_native_adapters if adapters is not None else None,
+        ),
         initialize_on_meta=True,
     )
 

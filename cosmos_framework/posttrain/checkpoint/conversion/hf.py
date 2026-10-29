@@ -52,6 +52,24 @@ REQUIRED_FILES = (
     "tokenizer.json",
     "tokenizer_config.json",
 )
+
+
+def required_file_present(directory: str, name: str) -> bool:
+    """Transformers 5 may bundle image/video preprocessing in processor_config.json."""
+    if os.path.isfile(os.path.join(directory, name)):
+        return True
+    if name != "preprocessor_config.json":
+        return False
+    try:
+        with open(os.path.join(directory, "processor_config.json")) as handle:
+            config = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(config, dict) and isinstance(config.get("image_processor"), dict) and bool(config["image_processor"])
+    )
+
+
 # Every tokenizer / processor / generation sidecar transformers reads or writes. The output must present EXACTLY the
 # base's set: files the base has are copied verbatim (over what save_pretrained re-serialized), files the base lacks
 # are removed (chat_template.jinja shadows tokenizer_config.json's chat_template on load, processor_config.json shadows
@@ -914,6 +932,16 @@ def overlay_consolidated_onto_hf(
     _log(f"writing HF-format directory: {staging_dir}")
     os.makedirs(staging_dir, exist_ok=True)
     model.save_pretrained(staging_dir, safe_serialization=True)
+    # Small qualification models fit one shard; HF omits their index. The shared
+    # materializer uses an indexed contract for both small and production models.
+    if not os.path.isfile(os.path.join(staging_dir, INDEX_FILE)):
+        from safetensors import safe_open
+
+        single = os.path.join(staging_dir, "model.safetensors")
+        with safe_open(single, framework="pt") as handle:
+            weight_map = {name: "model.safetensors" for name in handle.keys()}
+        with open(os.path.join(staging_dir, INDEX_FILE), "w") as handle:
+            json.dump({"metadata": {}, "weight_map": weight_map}, handle)
     AutoProcessor.from_pretrained(model_id).save_pretrained(staging_dir)
     if expert_orig:
         rewritten = rewrite_expert_shards(staging_dir, expert_orig)
@@ -1167,7 +1195,7 @@ def verify_index(
     """Torch-free structural checks on ``out``: required files, complete shards holding exactly the indexed tensors,
     tensor-count floor (and exact count when ``expect_tensors`` > 0), weight-map coverage of ``expect_keys``."""
     for name in REQUIRED_FILES:
-        if not os.path.isfile(os.path.join(out, name)):
+        if not required_file_present(out, name):
             raise ConversionError(f"verify: {out}/{name} missing")
     index_path = os.path.join(out, INDEX_FILE)
     with open(index_path) as handle:

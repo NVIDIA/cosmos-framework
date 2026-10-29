@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+"""Export a committed SFT checkpoint to portable adapters or a merged HF model.
+
+Portable exports contain no optimizer/RNG/data cursor and cannot resume training.
+Merged exports pass through the existing identity-bound HF materializer, including
+its locking, staged verification, sidecars and atomic publication.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+from pathlib import Path
+
+import torch
+from safetensors.torch import load_file
+
+from cosmos_framework.posttrain.checkpoint.adapters import (
+    checkpoint_adapter_state,
+    prepare_merged_state,
+    read_adapter_artifact,
+    snapshot_identity,
+    state_spec,
+    write_adapter_artifact,
+)
+
+
+def export_merged_adapter(adapter: str, base: str, out: str) -> str:
+    """One adapter into its exact original base. No stacking or in-place merging."""
+    from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
+
+    identity, state = read_adapter_artifact(adapter)
+    if snapshot_identity(base, weights=True) != identity["base"]:
+        raise ValueError("wrong base identity for adapter merge; stage the exact original weight snapshot")
+    if snapshot_identity(base, weights=False) != identity["processor"]:
+        raise ValueError("merged export requires the recorded processor/tokenizer/template beside the base")
+    root = Path(base)
+    index = root / "model.safetensors.index.json"
+    shards = (
+        sorted(set(json.loads(index.read_text())["weight_map"].values())) if index.is_file() else ["model.safetensors"]
+    )
+    weights = {}
+    for shard in shards:
+        for name, tensor in load_file(str(root / shard), device="cpu").items():
+            if name in weights:
+                raise ValueError(f"duplicate base tensor {name!r}")
+            weights[name] = tensor
+    for row in identity["resolved"]["targets"]:
+        name = row["name"] + ".weight"
+        if name not in weights or list(weights[name].shape) != row["shape"]:
+            raise ValueError(
+                f"base cannot resolve native adapter target {name}; packed/renamed HF conversions are unsupported"
+            )
+    weights.update(state)
+    merged = prepare_merged_state(weights, identity)
+    with tempfile.TemporaryDirectory(prefix="cosmos-adapter-merge-") as temporary:
+        torch.save({"net": merged}, os.path.join(temporary, "model.pt"))
+        result = run_request(
+            base=base, out=out, ckpt_dir=temporary, min_tensors=1, expect_tensors=len(merged), verify=True
+        )
+    return result
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--checkpoint", help="committed local consolidated/DCP training checkpoint")
+    source.add_argument("--adapter", help="portable adapter directory (merged export only)")
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--merged", action="store_true")
+    parser.add_argument("--base", help="exact immutable local base snapshot, required for merged export")
+    args = parser.parse_args(argv)
+    if args.merged != bool(args.base) or (args.adapter and not args.merged):
+        parser.error("merged export requires --base; --adapter is accepted only with --merged")
+    if args.checkpoint:
+        identity, state, provenance = checkpoint_adapter_state(args.checkpoint)
+        portable = {name: state[name] for name in state_spec(identity)}
+        if not args.merged:
+            write_adapter_artifact(args.out, identity, portable, provenance=provenance)
+            return
+        with tempfile.TemporaryDirectory(prefix="cosmos-portable-") as temporary:
+            path = os.path.join(temporary, "adapter")
+            write_adapter_artifact(path, identity, portable, provenance=provenance)
+            export_merged_adapter(path, args.base, args.out)
+    else:
+        export_merged_adapter(args.adapter, args.base, args.out)
+
+
+if __name__ == "__main__":
+    main()
