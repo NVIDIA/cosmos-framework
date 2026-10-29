@@ -62,6 +62,7 @@ def test_hf_model_construction_applies_public_streaming_cache_settings(
                     }
                 },
                 "per_view_captions": True,
+                "per_view_caption_task": "av_joint_camera_lidar_transfer",
             }
         )
     )
@@ -117,6 +118,7 @@ def test_hf_model_construction_applies_public_streaming_cache_settings(
     assert pipe.model_config.kv_cache_inference_size == expected_window
     assert pipe.model_config.attention_sink_size == expected_sink
     assert pipe.per_view_captions is True
+    assert pipe.model_config._auto_camera_fps == 30
     assert config_path.read_text() == saved_config
 
 

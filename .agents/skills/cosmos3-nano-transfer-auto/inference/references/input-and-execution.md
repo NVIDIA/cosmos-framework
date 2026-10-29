@@ -214,10 +214,12 @@ Budget additional compute and input/output memory for longer runs.
 
 ### Source timing, model FPS and playback FPS
 
-The released Transfer-Auto model was trained on **30-FPS videos only**. Keep
-its FPS conditioning at **30**, including when using 10-FPS camera inputs.
-Using `--fps 10` changes the Transformer's temporal conditioning and has been
-reported to produce poorer, jumpier results.
+The released Transfer-Auto model was trained on **30-FPS videos only**; Sim-Auto
+retains this camera clock. Framework defaults both models' conditioning `fps` to
+**30** and rejects other explicit values, including values in input JSON or a
+custom defaults file. In previous versions, using `--fps 10` changed the
+Transformer's temporal conditioning and was reported to produce poorer, jumpier
+results.
 
 The **model's FPS conditioning** (`fps` / `--fps`) is separate from the
 **video's sampling and playback rate**. The loader reads multiview frames by
@@ -226,28 +228,30 @@ throughput.
 
 #### Recommended inference configuration for 10-FPS inputs
 
-For **RGB-only Transfer-Auto**:
+For **RGB-only Transfer-Auto or Sim-Auto**:
 
 1. **Use synchronized 10-FPS inputs unchanged.** Render WSM at 10 FPS and keep
    any RGB conditioning aligned. Do not duplicate or interpolate frames.
-2. **Set `fps: 30` in the request, or pass `--fps 30`.** Keep the input frame
-   sequence and caption frame bounds unchanged; do not triple the frame count.
-3. **Encode the generated frames at 10 FPS**, preserving every frame, to play
-   the result at the intended speed.
+2. **Pass `--output-fps 10`**, or set top-level `"output_fps": 10` in the
+   request. Omit `fps` or keep it at 30; remove any stale `"fps": 10` setting.
+   Keep caption frame bounds and the frame sequence unchanged; do not triple
+   the frame count.
+3. **Use the saved RGB and WSM videos directly.** Framework saves every output
+   frame at 10 FPS without dropping, duplicating or interpolating frames.
+   No separate FFmpeg conversion is needed.
 
-Framework currently saves Auto videos at the request FPS and has no separate
-`multiview.output_fps` field. After generation, create a 10-FPS copy of each
-30-FPS output, for example:
+For example, add this flag to the normal inference command:
 
 ```bash
-ffmpeg -n -i generated_30fps.mp4 -an \
-  -vf "setpts=3*(PTS-STARTPTS)" -r 10 -fps_mode cfr \
-  -c:v libx264 -crf 18 -preset slow generated_10fps.mp4
+--output-fps 10
 ```
 
-Do not use `-r 10` alone: that drops frames instead of slowing playback.
-Check that both files have the same frame count. For example, 297 frames last
-9.9 seconds at 30 FPS and 29.7 seconds at 10 FPS. Preserve the original output.
+`output_fps` changes only playback, not model conditioning, input selection or
+caption timing. Omitted, it defaults to the model FPS, preserving 30-FPS output.
+A 297-frame sequence lasts 9.9 seconds at 30 FPS and 29.7 seconds at 10 FPS.
+Both clocks are recorded in the saved arguments. Verify the actual saved frame
+count, rate and duration; this configuration does not guarantee quality for every
+10-FPS source sequence.
 
 For timestamped caption text, express event times on the model's 30-FPS clock:
 an event at input frame 60 is at 2 seconds for conditioning and 6 seconds in
@@ -257,7 +261,9 @@ separately. This changes text timing, not the input frames or their indices.
 **Joint RGB/LiDAR needs separate clock/alignment handling.** This configuration
 is not a joint-generation recipe: camera FPS also determines LiDAR sweep counts
 and alignment. Keep the supported 30-FPS camera / 10-Hz LiDAR setup for joint
-generation; current joint Sim-Auto rejects camera FPS other than 30.
+generation. Both Auto models reject camera FPS other than 30 and reject joint
+`output_fps` values different from 30. Other model families keep their existing
+FPS behavior; `output_fps` is currently an Auto camera-only option.
 
 ### What guidance means
 

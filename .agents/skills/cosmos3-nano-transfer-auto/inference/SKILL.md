@@ -127,9 +127,10 @@ before extending a request, especially for joint RGB/LiDAR.
 
 For 10-FPS RGB-only inputs, follow the
 [recommended inference configuration](references/input-and-execution.md#recommended-inference-configuration-for-10-fps-inputs):
-keep the input frames unchanged, use `--fps 30` for model conditioning, and
-encode the generated frames at 10 FPS for playback. Joint RGB/LiDAR requires
-separate clock/alignment handling; do not apply this configuration unchanged.
+keep the input frames unchanged and pass `--output-fps 10`. Model conditioning
+defaults to 30 FPS; an explicit different `fps` is rejected. Generated RGB and
+WSM previews are saved at 10 FPS without resampling. Joint RGB/LiDAR retiming is
+unsupported; keep its output FPS at 30.
 
 For separate per-view captions, route the supplied
 [negative text](assets/negative-prompt.txt) through `per_view_negative_prompt`,
