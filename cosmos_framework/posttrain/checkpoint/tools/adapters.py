@@ -19,6 +19,7 @@ import torch
 from safetensors.torch import load_file
 
 from cosmos_framework.posttrain.checkpoint.adapters import (
+    MANIFEST,
     checkpoint_adapter_state,
     prepare_merged_state,
     read_adapter_artifact,
@@ -26,6 +27,18 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     state_spec,
     write_adapter_artifact,
 )
+
+
+def merged_export_metadata(adapter: str, identity: dict) -> dict:
+    """Retain the validated portable contract in the materializer's commit marker."""
+    manifest = json.loads((Path(adapter) / MANIFEST).read_text())
+    if manifest.get("kind") != "portable_adapter" or manifest.get("identity") != identity:
+        raise ValueError("portable adapter manifest changed during export; use an immutable artifact")
+    return {
+        "format": "cosmos-merged-adapter-v1",
+        "adapter_identity": identity,
+        "adapter_weights_sha256": manifest["weights_sha256"],
+    }
 
 
 def export_merged_adapter(adapter: str, base: str, out: str) -> str:
@@ -39,6 +52,7 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    metadata = merged_export_metadata(adapter, identity)
     if any(
         row["name"] != row["owner"]
         for row in [*identity["resolved"]["targets"], *identity["resolved"]["extra_parameters"]]
@@ -95,6 +109,7 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
             expect_tensors=len(merged),
             verify=True,
             output_dtype="float32",
+            export_metadata=metadata,
         )
     return result
 

@@ -332,8 +332,13 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
 
 
 def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path):
-    from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.adapters import (
+        read_adapter_artifact,
+        save_adapter_artifact,
+        write_adapter_artifact,
+    )
     from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+    from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import MaterializeRefusedError
     from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
     from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
     from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
@@ -360,6 +365,12 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     from cosmos_framework.posttrain.checkpoint.conversion.hf import config_with_export_dtype
 
     merged_path = tmp_path / "merged"
+    marker = merged_path / ".materialized"
+    metadata = json.loads(marker.read_text())["identity"]["export_metadata"]
+    assert metadata["format"] == "cosmos-merged-adapter-v1"
+    assert metadata["adapter_identity"] == identity
+    portable_manifest = json.loads((tmp_path / "portable/adapter_manifest.json").read_text())
+    assert metadata["adapter_weights_sha256"] == portable_manifest["weights_sha256"]
     original_config = json.loads((base / "config.json").read_text())
     assert json.loads((merged_path / "config.json").read_text()) == config_with_export_dtype(original_config, "float32")
     dense = AutoModelForImageTextToText.from_pretrained(merged_path, dtype="auto")
@@ -367,6 +378,16 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     # Repeated export remains identity-bound and does not rewrite the original base.
     assert export_merged_adapter(str(tmp_path / "portable"), str(base), str(merged_path)) == "skipped"
     assert json.loads((base / "config.json").read_text()) == original_config
+    # Identical tensors with different media semantics are a different export.
+    _, state = read_adapter_artifact(str(tmp_path / "portable"))
+    changed_identity = copy.deepcopy(identity)
+    changed_identity["media"]["max_length"] = 512
+    changed = tmp_path / "different-media"
+    write_adapter_artifact(str(changed), changed_identity, state)
+    before = marker.read_bytes()
+    with pytest.raises(MaterializeRefusedError, match="export_metadata"):
+        export_merged_adapter(str(changed), str(base), str(merged_path))
+    assert marker.read_bytes() == before
     control = verify_promoted_merge(
         policy, identity, [{"input_ids": torch.tensor([[30, 31, 32, 33]])}], str(tmp_path / "merged")
     )

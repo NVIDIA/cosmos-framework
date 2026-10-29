@@ -572,6 +572,40 @@ def test_explicit_export_dtype_is_identity_bound_and_verified_before_publication
         mat.run_request(out=invalid, output_dtype="bfloat16", **request)
 
 
+def test_export_metadata_survives_transaction_and_binds_reuse(tmp_path, base, monkeypatch):
+    calls = _install_fake_overlay(monkeypatch)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "model.pt").write_bytes(b"\0" * 10)
+    output = str(tmp_path / "export")
+    request = dict(base=str(base), ckpt_dir=str(checkpoint), min_tensors=3, verify=False)
+    metadata = {"format": "test-export-v1", "media": {"num_frames": 4}}
+    assert mat.run_request(out=output, export_metadata=metadata, **request) == "built"
+    marker = Path(output, mat.MATERIALIZED_MARKER)
+    before = marker.read_bytes()
+    assert json.loads(before)["identity"]["export_metadata"] == metadata
+    assert mat.run_request(out=output, export_metadata=metadata, **request) == "skipped"
+    assert len(calls) == 1
+    for changed in (None, {"format": "test-export-v1", "media": {"num_frames": 8}}):
+        with pytest.raises(mat.MaterializeRefusedError, match="export_metadata"):
+            mat.run_request(out=output, export_metadata=changed, **request)
+        assert marker.read_bytes() == before
+    # A legacy marker cannot silently satisfy a metadata-bound request.
+    legacy = json.loads(before)
+    del legacy["identity"]["export_metadata"]
+    marker.write_text(json.dumps(legacy))
+    with pytest.raises(mat.MaterializeRefusedError, match="missing export_metadata"):
+        mat.run_request(out=output, export_metadata=metadata, **request)
+
+
+@pytest.mark.parametrize("metadata", [[], {}, {"nonfinite": float("nan")}, {"not_json": object()}])
+def test_invalid_export_metadata_fails_before_publication(tmp_path, metadata):
+    output = tmp_path / "export"
+    with pytest.raises(ValueError, match="export_metadata"):
+        mat.run_request(base="unused", ckpt_dir="unused", out=str(output), export_metadata=metadata)
+    assert not output.exists()
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 

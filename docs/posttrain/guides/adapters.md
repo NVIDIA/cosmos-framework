@@ -177,6 +177,13 @@ and applies the pure FP32 merge. It reuses the existing locked/staged HF
 materializer, extends its identity with output precision, and verifies both shard
 precision and config metadata before publication. `dtype="auto"` loads FP32.
 The base's architecture and all processor/template sidecars are preserved.
+The committed `.materialized.identity.export_metadata` record has format
+`cosmos-merged-adapter-v1` and retains the complete portable adapter identity and
+adapter weight digest: original base, resolved targets, method settings, extra
+modules, processor/tokenizer/template and effective media settings. This metadata
+participates in output/staging identity checks; identical weights with different
+media settings cannot silently reuse an existing export. Legacy merged artifacts
+without this record must be re-exported to a fresh destination.
 Export leaves live parameters, optimizer membership and tensor versions unchanged.
 Stock HF reload is tested separately from native portable reload. BF16 merged
 inference exceeded real-model qualification bounds and is outside the supported
@@ -222,3 +229,34 @@ held-out multiple-choice accuracy/invalid answers, samples and supervised tokens
 per second, setup time, peak CUDA memory, checkpoint/export size and latency,
 checkpoint SHA, wheel SHA and source revision. Full WTS runs begin only after the
 focused installed-package and GPU gates pass; AutoML is not a substitute.
+
+For the 5,555-row WTS training split and 2,676-row evaluation split, the prepared
+full-epoch profile uses one GPU, five microbatches per update and 1,111 updates.
+Every training row is consumed exactly once. Set `SFT_DATA_ROOT` to a new output
+directory; conversion refuses to overwrite existing JSONL files.
+
+```bash
+"$SFT_PYTHON" -m cosmos_framework.posttrain.scripts.prepare_wts_sft \
+  --annotations /data/wts_train/annotations.json --media-root /data/wts_train/videos \
+  --out "$SFT_DATA_ROOT/train.jsonl"
+"$SFT_PYTHON" -m cosmos_framework.posttrain.scripts.prepare_wts_sft \
+  --annotations /data/wts_eval/annotations.json --media-root /data/wts_eval/videos \
+  --out "$SFT_DATA_ROOT/validation.jsonl"
+export SFT_ADAPTER_METHOD=lora SFT_ADAPTER_RSLORA=0
+export IMAGINAIRE_OUTPUT_ROOT=/runs/wts-adapters
+"$SFT_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=1 \
+  -m cosmos_framework.posttrain.entrypoints.sft \
+  --config=cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py -- \
+  job.name=wts_full_epoch_all_components rl.run_ts=epoch1 \
+  rl.max_steps=1111 rl.micro_batch_size=1 rl.grad_accum=5 \
+  rl.save_every=111 rl.keep_model_last=2 rl.keep_optim_last=2 rl.resume=off \
+  rl.validation.every_steps=0 rl.validation.batch_size=1 \
+  rl.processor_kwargs.videos_kwargs.size.shortest_edge=200704 \
+  rl.processor_kwargs.videos_kwargs.size.longest_edge=327680
+```
+
+The four-frame total-pixel bounds above correspond to 50,176–81,920 pixels per
+frame in the pinned processor version. Validation runs over the full evaluation
+split before training and after the final update. Continue an interrupted run
+with the same output directory and recipe, changing only `rl.resume=auto`; a
+portable warm start is a different operation and cannot continue its data cursor.

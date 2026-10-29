@@ -85,9 +85,15 @@ def main():
     if args.merged:
         from transformers import AutoModelForImageTextToText
 
+        from cosmos_framework.posttrain.checkpoint.tools.adapters import merged_export_metadata
+
         marker = json.loads((Path(args.merged) / ".materialized").read_text())
         if marker["identity"].get("output_dtype") != "float32":
             raise ValueError("merged qualification requires FP32 export; re-export with the current adapter tool")
+        if marker["identity"].get("export_metadata") != merged_export_metadata(str(root / "portable"), identity):
+            raise ValueError(
+                "merged artifact adapter/base/processor/media identity differs; re-export with the current tool"
+            )
         policy.net.float()
         expected = logits(policy, batches)
         control = verify_promoted_merge(policy, identity, batches, args.merged, reference=expected)
@@ -104,7 +110,7 @@ def main():
     mode = "merged" if args.merged else "portable"
     report = {
         **evidence,
-        "verification_protocol": "cosmos-adapter-numerics-v3-fp32-export",
+        "verification_protocol": "cosmos-adapter-numerics-v4-bound-export-metadata",
         "training_artifact_provenance": source,
         "probe_run": args.probe_run or args.run,
         "mode": mode,

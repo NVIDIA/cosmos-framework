@@ -112,6 +112,11 @@ def verify_promoted_merge(
     merged = prepare_merged_state(state, {**identity, "base_storage_dtype": "float32"})
     path = Path(exported)
     marker = json.loads((path / ".materialized").read_text())
+    metadata = marker["identity"].get("export_metadata", {})
+    if metadata.get("format") != "cosmos-merged-adapter-v1" or metadata.get("adapter_identity") != identity:
+        raise ValueError(
+            "merged export lacks matching adapter/base/processor/media identity; re-export with the current tool"
+        )
     export_dtype = marker["identity"].get("output_dtype", identity["base_storage_dtype"])
     index = json.loads((path / "model.safetensors.index.json").read_text())
     expected_keys = set(merged)

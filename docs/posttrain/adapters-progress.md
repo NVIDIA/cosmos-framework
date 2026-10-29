@@ -10,14 +10,14 @@ Previous WTS/AutoML results used unchanged framework code and do not qualify thi
 | Requirement | Code / tests | Status |
 |---|---|---|
 | Component selectors, independent settings, aliases/ties | `posttrain/config/adapters.py`, `posttrain/model/adapters.py`, `tests/test_adapters.py` | Implemented and CPU validated (selectors, independent settings, aliases, counts and optimizer membership) |
-| LoRA / rsLoRA | Native `LoraInjectedLinear` reused; posttrain builder integration | Implemented; CPU validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
-| DoRA magnitude, optimization and pure merge | `PosttrainAdapterLinear`, `optimizer_groups` | Implemented; CPU reference gradients/reload/merge validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
-| PiSSA residual contract and saved initial factors | `PosttrainAdapterLinear.initial_A/initial_B`; portable format v1 | Implemented; CPU principal components/recovery/merge validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
+| LoRA / rsLoRA | Native `LoraInjectedLinear` reused; posttrain builder integration | Implemented; CPU validated; all 35 real-model training/continuation cases passed, FP32 export/reload matrix running |
+| DoRA magnitude, optimization and pure merge | `PosttrainAdapterLinear`, `optimizer_groups` | Implemented; CPU reference gradients/reload/merge validated; all 35 real-model training/continuation cases passed, FP32 export/reload matrix running |
+| PiSSA residual contract and saved initial factors | `PosttrainAdapterLinear.initial_A/initial_B`; portable format v1 | Implemented; CPU principal components/recovery/merge validated; all 35 real-model training/continuation cases passed, FP32 export/reload matrix running |
 | Fresh, warm start and exact resume lifecycle | `Qwen3VLBuildHooks.after_load_before_parallelize`, SFT `build_trainer` | Implemented and CPU validated: bitwise controlled continuation through trainer and full SFT recipe |
 | Portable export / strict reload | `posttrain/checkpoint/adapters.py` | Implemented and CPU validated in fresh processes |
 | Merged HF export | Existing HF materializer reused; bundled processor and single-shard handling extended | Implemented and CPU validated; FP32 export implemented; real-model BF16 export failed and is excluded (see below) |
 | Vision gradients, media and activation checkpointing | Native tiny Qwen3-VL plus real PNG/MP4 through SFT packer, with/without AC | Implemented and CPU validated; two-GPU first/final vision cases now pass FP32 export and fresh reload with AC on/off; broader matrix running |
-| FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | Multi-step two-rank training/continuation checks passed in completed cases; full method/AC/FP32-export matrix running |
+| FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | All 35 training/continuation cases passed, including two-rank mixed modalities and AC on/off; FP32 export/reload matrix running |
 | Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented and validated: all 1,838 package files match; 184 tests passed from installed f29da1c outside the checkout |
 | Full WTS epoch and held-out evaluation | Existing experiments preserved | Pending feature qualification; no new HPO |
 | Recipes, documentation and PR | Runnable native adapter recipe, WTS converter, adapter guide; [draft PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342) | Implemented; GPU evidence pending |
@@ -89,10 +89,26 @@ reload remains the exact training-precision path. Installed-package job `3763309
 seconds for `f29da1ccf4f201e1ed73c2c26800908c392256d1`. Wheel SHA-256
 `66b66fad810a2b998b5c8347bb6c8528c5842a43aae5c10205a758776390f302`;
 container SHA-256 `6861377c581a16585d6c5510d6e2064cb9709589c90d6d7efe130ef1691ab574`.
-FP32 export jobs `37633099` and `37633101` are running. First/final vision
+FP32 export jobs `37633099` and `37633101` preserved 15 completed cases before
+their unfinished work was redistributed across `37636040`, `37636045`,
+`37636047` and `37636052`; the two interrupted attempts were archived. First/final vision
 job `37633104` completed both two-rank AC-on/off cases, with exact portable reload,
 750 bitwise-correct FP32 serialized tensors, 64/64 argmax agreement and maximum
 HF logit error `1.74e-4`. All-component single-GPU LoRA and language-only LoRA
 also passed the new export checks. Single-GPU all-component rsLoRA, DoRA and
 PiSSA have also passed; the complete matrix is still pending. Full WTS training
 remains gated; no new HPO.
+
+All 35 training/continuation cases now pass: 53 rank reports contain 386 finite,
+applied update reports. Every intended trainable tensor changed over multiple
+updates; initialization and controlled resumed parameter values have zero maximum
+absolute error. Export/reload qualification remains pending for the full matrix.
+
+The final artifact audit found that merged exports verified the portable identity
+at conversion time but did not retain it in the committed marker. The exporter
+now records the full adapter/processor/media identity and adapter weight digest
+inside the materializer's transaction identity. Missing or conflicting metadata
+refuses reuse. The expanded adapter/export suite passes 189 tests locally; the
+installed build and real-model metadata-contract gate are pending. The full-WTS
+launcher is paused until this additional artifact check passes. Numerical merge
+arithmetic and training/portable runtime are unchanged.

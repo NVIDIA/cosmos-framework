@@ -308,12 +308,15 @@ def make_identity(
     *,
     unified_chat_template: bool = False,
     output_dtype: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The fields a reuse (final output or ``<out>.tmp``) must reproduce exactly.
 
     Verification thresholds are NOT identity: they are re-enforced on every skip with the current invocation's values.
     ``unified_chat_template`` IS identity (the bytes of ``tokenizer_config.json`` differ) and is recorded only when on, so
     every marker written before the option existed keeps its identity.
+    Optional ``export_metadata`` binds a caller's artifact contract to the same transaction; it is never attached after
+    publication. Adapter exports use it for their original base, methods, targets, processor and media semantics.
     """
     identity = {
         "conversion": CONVERSION_VERSION,
@@ -325,6 +328,8 @@ def make_identity(
         identity["unified_chat_template"] = True
     if output_dtype is not None:
         identity["output_dtype"] = output_dtype
+    if export_metadata is not None:
+        identity["export_metadata"] = json.loads(json.dumps(export_metadata, sort_keys=True, allow_nan=False))
     return identity
 
 
@@ -510,7 +515,7 @@ def inventory_mismatch(out: str, want: list[dict[str, Any]]) -> str | None:
 def marker_status(out: str, want: dict[str, Any], probe: dict[str, Any]) -> tuple[str, str]:
     """Early-skip decision on a final output directory: ``("absent"|"match"|"mismatch"|"damaged", reason)``.
 
-    ``want`` = ``{"conversion", "base_digest"[, "base_path", "unified_chat_template"]}``; ``probe`` = the requested
+    ``want`` = conversion/base identity plus optional template/precision/export-metadata fields; ``probe`` = the requested
     source's ``sha256`` + ``bytes``. A marker without the ``unified_chat_template`` key was built without the option.
       absent   -> no marker (partial output): rebuilt.
       match    -> conversion, base digest and source sha256 + bytes agree AND the recorded shards are on disk unchanged.
@@ -550,6 +555,8 @@ def marker_status(out: str, want: dict[str, Any], probe: dict[str, Any]) -> tupl
         )
     if identity.get("output_dtype") != want.get("output_dtype"):
         return "mismatch", f"{marker_path} has a different merged export output_dtype"
+    if identity.get("export_metadata") != want.get("export_metadata"):
+        return "mismatch", f"{marker_path} has different or missing export_metadata; re-export to a fresh destination"
     source = marker.get("source") if isinstance(marker.get("source"), dict) else {}
     if identity.get("source_sha256") != probe["sha256"] or identity.get("source_bytes") != probe["bytes"]:
         requested = probe.get("path") or probe.get("artifact_uri")
@@ -1106,6 +1113,7 @@ def run_request(
     unified_chat_template: bool = False,
     lock_wait_seconds: float | None = None,
     output_dtype: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> str:
     """Idempotent entry point: ``"skipped"`` (``out`` provably holds this request) or ``"built"``.
 
@@ -1126,6 +1134,16 @@ def run_request(
         raise ValueError("pass exactly one of ckpt_dir or artifact_uri")
     if output_dtype not in (None, "float32"):
         raise ValueError("explicit merged export output_dtype currently supports float32 only")
+    if export_metadata is not None:
+        if not isinstance(export_metadata, dict) or not export_metadata:
+            raise ValueError("export_metadata must be a non-empty JSON object")
+        # Capture immutable, finite JSON before acquiring the output lock. Adapter
+        # callers use this to retain method/base/processor/media identity in the
+        # same staged transaction as the merged weights, including recovery/skip.
+        try:
+            export_metadata = json.loads(json.dumps(export_metadata, sort_keys=True, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise ValueError("export_metadata must contain only finite JSON values") from error
     if lock_wait_seconds is not None and not (math.isfinite(lock_wait_seconds) and lock_wait_seconds >= 0):
         raise ValueError(f"lock_wait_seconds must be a finite number >= 0, got {lock_wait_seconds!r}")
     out = os.path.abspath(out.rstrip("/"))
@@ -1146,6 +1164,7 @@ def run_request(
         "base_path": base_id["path"],
         "unified_chat_template": unified_chat_template,
         "output_dtype": output_dtype,
+        "export_metadata": export_metadata,
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with (
@@ -1243,7 +1262,11 @@ def run_request(
             "manifest_sha256": probe.get("manifest_sha256"),
         }
         identity = make_identity(
-            source, base_id, unified_chat_template=unified_chat_template, output_dtype=output_dtype
+            source,
+            base_id,
+            unified_chat_template=unified_chat_template,
+            output_dtype=output_dtype,
+            export_metadata=export_metadata,
         )
         _log(f"identity {identity_digest(identity)[:12]}: {_short(identity)}")
         tmp_out = out + STAGING_SUFFIX
