@@ -505,7 +505,7 @@ run_vllm_payload(<use_case>_payload, <use_case>_output, model="<Model>")
 ### Quickstart
 
 Set up the environment and start the server:
-[vLLM-Omni setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#vllm-omni) (Docker recommended). Run the
+[vLLM-Omni setup](../../cookbooks/cosmos3/README.md#vllm-omni) (Docker recommended). Run the
 Docker command from this folder (`COSMOS3_WORKDIR` defaults to the current
 directory) with **`COSMOS3_HOST_PORT=8000`** unless you already have another
 server on that port.
@@ -588,9 +588,21 @@ Path("/tmp/cosmos3_v2v.mp4").write_bytes(response.content)
 
 ### Notebook walkthrough
 
-[`run_with_vllm_omni.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_vllm_omni.ipynb) is the full tutorial for
+`run_with_vllm_omni.ipynb` is the full tutorial for
 the vLLM-Omni backend: it walks through text-to-image, text-to-video, and
 image-to-video requests with audio on or off plus standard video-to-video
 requests. Server launch options (Nano and
 Super, tensor parallelism, layerwise offload, and CFG-parallel variants) live in
-the [shared environment setup guide](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#vllm-omni).
+the [shared environment setup guide](../../cookbooks/cosmos3/README.md#vllm-omni).
+
+## 7. Skill notes (not in the notebook) — `HF_TOKEN` (from SKILL.md Variant 3)
+
+Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; wording unchanged). Nothing in this section is notebook text; SKILL.md keeps a one-line pointer at each former location.
+
+### 7.1 Why the `-e HF_TOKEN` line (SKILL.md Variant 3)
+
+The notebook's final version (#329) passes `HF_TOKEN` into the container in every launch above; this skill had added the
+line before that (eval run 2026-10-26, cold cache on a fresh node): the first launch downloads `nvidia/Cosmos3-<model>`
+into `HF_HOME`, and anonymous Hub calls are rate-limited — the container crashed with HTTP 429 and its log asked
+for `HF_TOKEN`; with guardrails enabled the token must also be authorised for the gated guardrail repo ("also set
+and pass `HF_TOKEN` to the container").

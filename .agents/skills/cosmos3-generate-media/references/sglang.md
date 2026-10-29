@@ -1,7 +1,5 @@
 # Cosmos3 Generator Audiovisual with SGLang — distilled from the cookbook notebook
 
-Source: `run_with_sglang.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_sglang.ipynb> (pinned commit; this file supersedes it and is complete on its own)
-
 Scope: everything SGLang-specific in the notebook — prerequisites, server launch (Nano, Super, CFG Parallel, Edge, Distil), endpoint verification, the SGLang request helpers (`video_api_url`, `image_api_url`, `build_sglang_video_form`, `build_sglang_image_body`, `post_video`, `post_image`, `run_sglang_payload`) and all 14 use cases in one table; the material the notebook shares with the other backend notebooks (licence header, asset catalogue, path configuration, `FIXED_SAMPLING`, `ASSET_SETS`, `payload_dimensions`, `create_payload`, endpoints, output naming) lives in payloads.md and is referenced here, not repeated.
 
 Licence header: see payloads.md § 2.1.
@@ -20,6 +18,10 @@ The notebook's export block (`COSMOS3_SGLANG_BASE_URL`, `COSMOS3_SGLANG_NANO_BAS
 
 Run the SGLang server before running the request cells. Use the Docker image for every modality on this page. Mount any directory that contains local media or action files you want the server to read.
 
+Skill note (not in the notebook): readiness — poll `GET http://localhost:30000/health` until it returns HTTP 200 `{"status":"ok"}`. It returns 503 after `Application startup complete.` while the warm-up runs and turns 200 after `The server is fired up and ready to roll!` (observed 60–171 s for Edge on 1x H100 across four eval runs, 2026-10-21/23; the long end includes the in-container weight download). Headless automation: `docker run -d --name cosmos3-sglang …` with the rest of the block unchanged, poll `/health`, then `docker stop cosmos3-sglang && docker rm cosmos3-sglang` (pattern in skill-notes.md § 4).
+
+Skill note (not in the notebook): the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` lines in the four `docker run` blocks below, and the `export SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` before the bare `sglang serve` CFG-Parallel command, are skill additions verified against `lmsysorg/sglang:dev` by the eval runs — the notebook passes no `-e` at all; every other line is the notebook's command verbatim. The variable is read by the image's Cosmos3 pipeline at startup (`cosmos3_pipeline.py`); the HF-cache note below says why both lines are needed.
+
 ### Set up HF Cache
 
 SGLang container is run under root by default. User can create a writable cache directory on host, or start the container with host user id.
@@ -30,10 +32,14 @@ mkdir -p "$SGLANG_HF_CACHE"
 chmod 777 "$SGLANG_HF_CACHE"
 ```
 
+Skill note (not in the notebook): pass `-e HF_TOKEN` to every `docker run` below — the first launch downloads `nvidia/Cosmos3-<model>` into `SGLANG_HF_CACHE`, and anonymous Hub calls are rate-limited (HTTP 429 → the server exits with an incomplete-checkpoint ValueError). With a token authorised for `nvidia/Cosmos-1.0-Guardrail` the server can keep guardrails enabled; otherwise keep the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` line the blocks below already carry (drop it only with an authorised token) — the gated guardrail is loaded at startup, and without the switch the server exits with GatedRepoError 401.
+
 ### Docker Image: Cosmos3-Nano
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$(pwd):/workspace" \
   -p 30000:30000 \
@@ -52,6 +58,8 @@ For example, on four GPUs:
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$(pwd):/workspace" \
   -p 30000:30000 \
@@ -69,6 +77,7 @@ docker run --runtime nvidia --gpus all \
 Use `--cfg-parallel-size 2` to run the positive and negative CFG branches in parallel on two GPUs:
 
 ```bash
+export SGLANG_DISABLE_COSMOS3_GUARDRAILS=1
 sglang serve \
   --model-path nvidia/Cosmos3-Nano \
   --host 0.0.0.0 \
@@ -83,6 +92,8 @@ For Cosmos3, set CFG strength with the request-level `guidance_scale` field. Do 
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$(pwd):/workspace" \
   -p 30000:30000 \
@@ -97,6 +108,8 @@ docker run --runtime nvidia --gpus all \
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$(pwd):/workspace" \
   -p 30000:30000 \
@@ -355,6 +368,8 @@ def run_sglang_payload(payload_path: Path, output_dir: str | Path, *, model: str
     return output_path
 ```
 
+Skill note (not in the notebook): `build_sglang_video_form` and `build_sglang_image_body` above send `"guardrails": True` in `extra_params` — the notebook's value, kept verbatim. When the server runs with `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` (§ 2) send `False` instead; the request-level flag alone does not prevent the startup exit described in § 2, and SKILL.md Variant 4 shows the smoke-run body.
+
 ### 6.3 Viewer helpers (not migrated)
 
 `display_video` and `view_run` are Jupyter display plumbing and are not migrated; the `view_run` discovery rule is in payloads.md § 4.2 ("`view_run` discovery").
@@ -397,3 +412,15 @@ Use cases for the smaller `Cosmos3-Distil` model. This section is self-contained
 | Edge: Image to Video Without Audio — Edge image-to-video generation using its paired image asset, with audio disabled.     | `i2v_edge_noaudio`              | `Cosmos3-Edge`                  | `image2video` | `assets/prompts/image2video/car_driving.json`              | `assets/images/image2video/car_driving.jpg`                        | `assets/negative_prompts/image2video/neg_prompt.json`                                | `False`        | 35 / — / — / 24 / 189 / `"480"` / `"16,9"` / 0 → `832x480`                                                                                  | `post_video` + `-F input_reference=@assets/images/image2video/car_driving.jpg`                                                          | `payloads/i2v_edge_noaudio/i2v_edge_noaudio.json`, `i2v_edge_noaudio/i2v_edge_noaudio.mp4`         |
 | Distil: Text to Image — Distil text-to-image generation using the same structured JSON prompt.                             | `t2i_distil`                    | `Cosmos3-Distil`                | `text2image`  | `assets/prompts/text2image/robot_draping.json`             | —                                                                  | `""`                                                                                 | `False`        | — / — / — / 24 / 189 / `"720"` / `"16,9"` / 0 → `1280x720`                                                                                  | `post_image`                                                                                                                            | `payloads/t2i_distil/t2i_distil.json`, `t2i_distil/t2i_distil.png`                                 |
 | Distil: Image to Video Without Audio — Distil image-to-video generation using its paired image asset, with audio disabled. | `i2v_distil_noaudio`            | `Cosmos3-Distil`                | `image2video` | `assets/prompts/image2video/car_driving.json`              | `assets/images/image2video/car_driving.jpg`                        | `assets/negative_prompts/image2video/neg_prompt.json`                                | `False`        | — / — / — / 24 / 189 / `"720"` / `"16,9"` / 0 → `1280x720`                                                                                  | `post_video` + `-F input_reference=@assets/images/image2video/car_driving.jpg`                                                          | `payloads/i2v_distil_noaudio/i2v_distil_noaudio.json`, `i2v_distil_noaudio/i2v_distil_noaudio.mp4` |
+
+## 7. Skill notes (not in the notebook) — port and readiness figures (from SKILL.md Variant 4)
+
+Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; wording unchanged apart from pointers and lead-ins that had to follow the text). Nothing in this section is notebook text; SKILL.md keeps a one-line pointer at each former location.
+
+### 7.1 Port and readiness figures (SKILL.md Variant 4)
+
+Keep `--host 0.0.0.0` and `-p 30000:30000` exactly as in the notebook's Docker serve
+blocks (`COSMOS3_SGLANG_BASE_URL` defaults to `http://localhost:30000`).
+
+Readiness poll timing: (observed 60–171 s for Edge across four runs;
+the long end includes the in-container weight download).

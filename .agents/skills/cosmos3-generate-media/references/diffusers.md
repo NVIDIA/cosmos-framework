@@ -1,16 +1,14 @@
 # Diffusers — distilled from the cookbook notebook
 
-Source: run_with_diffusers.ipynb and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_diffusers.ipynb> (pinned commit; this file supersedes it and is complete on its own)
-
 Scope: the in-process Diffusers backend — the README "Run with Diffusers" quickstart and walkthrough, then the notebook's environment, venv install, verification, pipeline loader (`get_pipe` / `release_pipe`), `run_diffusers_payload`, and every use case it runs with `Cosmos3OmniPipeline` and `Cosmos3DistilledModularPipeline`; everything shared with the other backend notebooks (assets, `ASSET_SETS`, sampling tables, `payload_dimensions`, `create_payload`, model ids, path/output/env-var conventions) is in `payloads.md` and is pointed to, not repeated.
 
 ## Quickstart (cookbook README)
 
-README section "Run with Diffusers". Its relative links (`../../README.md#diffusers`, `./run_with_diffusers.ipynb`) are rewritten to the same files at the pinned commit (payloads.md path-translation note).
+README section "Run with Diffusers". Its relative links (`../../README.md#diffusers`, `./run_with_diffusers.ipynb`) are rewritten to the same files in this repository (`../../cookbooks/cosmos3/README.md#diffusers`); the notebook link is dropped — this file replaces the notebook (payloads.md path-translation note).
 
 ### Quickstart
 
-Set up the environment: [Diffusers setup](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/README.md#diffusers).
+Set up the environment: [Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers).
 Run a text-to-video generation with `Cosmos3OmniPipeline`:
 
 ```python
@@ -55,7 +53,7 @@ single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
 
 ### Notebook walkthrough
 
-[`run_with_diffusers.ipynb`](https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_diffusers.ipynb) is the full tutorial for
+`run_with_diffusers.ipynb` is the full tutorial for
 the Diffusers backend: it provisions a dedicated venv, then walks through
 text-to-image, text-to-video, image-to-video, and video-to-video generation (with
 and without audio) using `Cosmos3OmniPipeline`, including a dedicated Cosmos3-Edge
@@ -73,7 +71,7 @@ Run the Cosmos3-Nano, Cosmos3-Super, or Cosmos3-Edge examples independently. Cos
 
 - Machine, Hugging Face model access, `uvx hf@latest auth login` / `HF_TOKEN`: see payloads.md § 2.2 (`run_with_diffusers.ipynb` § 1 entry).
 - Guardrail prerequisite and the per-backend disable switches as this notebook words them: see payloads.md § 2.3 (`run_with_diffusers.ipynb` row).
-- Headless servers and uv version blockquotes, in this notebook's wording: see payloads.md § 2.4.
+- Headless servers and uv version blockquotes, in this notebook's wording: see payloads.md § 2.4, and the headless OpenCV swap in SKILL.md Variant 1 (skill note after the § 3 install block below).
 
 ## 2. Configure Paths and Environment
 
@@ -135,9 +133,9 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
-uv venv "$COSMOS3_DIFFUSERS_VENV" --python 3.13 --seed --managed-python --allow-existing
+uv venv "$COSMOS3_DIFFUSERS_VENV" --python 3.13 --seed --managed-python --allow-existing --no-config
 source "$COSMOS3_DIFFUSERS_VENV/bin/activate"
-uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND" \
+uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" --torch-backend="$COSMOS3_TORCH_BACKEND" \
   "diffusers @ git+https://github.com/huggingface/diffusers.git" \
   accelerate \
   av \
@@ -148,11 +146,19 @@ uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND" \
   ipykernel \
   torch \
   torchvision \
-  transformers
+  transformers \
+  && uv pip uninstall --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python \
+  && uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python-headless==5.0.0.93
 
 echo
 echo "Installed dependencies into: $COSMOS3_DIFFUSERS_VENV"
 ```
+
+Skill note (not in the notebook): the `--no-config` on the `uv venv` and `uv pip install` lines above, the `--python "$COSMOS3_DIFFUSERS_VENV"` on the three `uv pip` commands (next-but-one note), and the `&& uv pip uninstall … opencv-python && uv pip install … opencv-python-headless==5.0.0.93` continuation that closes the `uv pip install` command (next note), are skill additions (declared deviations from the notebook, like the `-e` lines in sglang.md § 2) — the notebook's lines carry neither, and every other line of the block is the notebook's verbatim. It is needed because this skill sits inside a cosmos-framework checkout whose `pyproject.toml` pins `[tool.uv] required-version = "==0.11.29"`, and uv applies that pin from any cwd under the checkout: without the flag, any other uv (0.13.0 in the eval image) exits 2 on both commands with `error: Required uv version ==0.11.29 does not match the running version …`. `--no-config` (or `UV_NO_CONFIG=1`, or running both commands from a cwd outside the checkout with an absolute `COSMOS3_DIFFUSERS_VENV`) keeps that pin, and the framework's other `[tool.uv]` settings, away from this standalone venv; `UV_*` environment variables such as the exported `UV_LINK_MODE` still apply. The presence check above (`command -v uv`) does not catch the pin, and the notebook's remedy `uv self update 0.11.29` refuses for a pip/apt/vendored uv (`Self-update is only available for uv binaries installed via the standalone installation scripts`). This standalone venv does not need 0.11.29 at all; SKILL.md Variant 1 carries the same two flags.
+
+Skill note (not in the notebook): `Cosmos3OmniPipeline` imports `cosmos_guardrail` → `cv2` at import time (diffusers' `pipeline_cosmos3_omni.py` does so at module scope once the package is installed), also with `enable_safety_checker=False`, and `cosmos_guardrail` pulls the GUI `opencv-python` wheel, which needs libxcb/libGL. The setup guide's swap (TensorRT-LLM section) — `uv pip uninstall --no-config opencv-python && uv pip install --no-config opencv-python-headless==5.0.0.93` — is therefore folded into the block's `uv pip install` command above as its closing `&& …` continuation (a declared deviation, same mechanism as the `--no-config` of the previous note), so it cannot be skipped: with the swap as separate lines after the install, an agent that copies this block instead of SKILL.md's can run the import check first and hit the `libxcb.so.1` ImportError (eval run 2026-10-24). Then check `python -c "from diffusers import Cosmos3OmniPipeline; print('pipeline import OK')"` before any checkpoint download. The apt fallback of § 1 / payloads.md § 2.4 (`apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0 ffmpeg`) needs root and, on minimal images, the `apt-get update` first.
+
+Skill note (not in the notebook): the `--python "$COSMOS3_DIFFUSERS_VENV"` on the three `uv pip` commands of the block is a skill addition (declared deviation, same mechanism as the two notes above). The notebook runs the block in one kernel cell, where `source "$COSMOS3_DIFFUSERS_VENV/bin/activate"` makes the venv the target of the following `uv pip` lines. An agent that runs the lines in separate shell calls loses the export and the activation between them: in the eval run of 2026-10-26 the `uv pip install` of a later call went into the evaluator's own venv, and the agent's import check then ran against that interpreter. With the explicit target the command installs into this venv whether or not it is activated, and with `COSMOS3_DIFFUSERS_VENV` unset it stops (`error: No virtual environment found …`) instead of installing elsewhere. Run the block as one shell call; a line re-run on its own needs the `export COSMOS3_DIFFUSERS_VENV=…` line with it, and the import check (SKILL.md Variant 1) and the generation snippets of § 8.2 / § 8.4 below run with `"$COSMOS3_DIFFUSERS_VENV/bin/python"` for the same reason.
 
 ## 4. Select the Diffusers Kernel
 
@@ -421,3 +427,99 @@ followed by `view_run(<use_case>_output)` (Jupyter viewer, not migrated). `backe
 Cosmos3-Edge runs on a single GPU and has no audio tokenizer, so the Edge video example keeps audio disabled. The Edge checkpoint is trained for 480p generation; this example uses 832x480, 121 frames, 20 denoising steps, guidance scale 5.0, and flow shift 8.0.
 
 Its single use case, `i2v_edge_noaudio`, is row 13 of the table above (notebook sub-heading "Edge: Image to Video Without Audio").
+
+## 8. Skill notes (not in the notebook) — headless fallback, snippets and Edge settings (from SKILL.md Variant 1)
+
+Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; wording unchanged apart from pointers and lead-ins that had to follow the text). Nothing in this section is notebook text; SKILL.md keeps a one-line pointer at each former location.
+
+### 8.1 Headless servers — the apt fallback (SKILL.md Variant 1)
+
+> **Headless servers** (notebook § 1, verbatim in payloads.md § 2.4; the apt line below is
+> reworded from the setup guide's Framework section — `apt-get update`, `ffmpeg` and the root
+> caveat are not the notebook's): if you see an error like `libxcb.so.1: cannot open
+> shared object file` when importing or running the pipeline, install the required
+> system libraries — the fallback for hosts that want GUI OpenCV:
+> `apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0 ffmpeg` (needs root:
+> NGC and training containers run as root, otherwise prefix `sudo`; without root use the
+> headless swap above, which needs no system packages. `ffmpeg` is for `ffprobe` — see
+> SKILL.md Verify the output; the swap does not provide it, the venv's `av` does). Setup guide
+> (TensorRT-LLM section): `pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93`.
+
+### 8.2 Skill launch script (not in the notebook) — Nano text-to-image snippet (SKILL.md Variant 1)
+
+Text-to-image as the notebook runs it (`get_pipe` + the `text2image` branch of
+`run_diffusers_payload`; `FIXED_SAMPLING`: 35 steps, guidance 6.0, shift 10.0, 720 × 1280,
+seed 1234; `get_pipe` loads with `enable_safety_checker=True` — `False` is the § 1 switch; output path per § 4.2).
+Save the snippet as a file and run it with the venv's interpreter, `"$COSMOS3_DIFFUSERS_VENV/bin/python" <file>.py`,
+from this skill directory (the one with `assets/`) — `python` alone is the venv's only in a shell that activated it:
+
+```python
+import json, os, torch
+from diffusers import Cosmos3OmniPipeline
+from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+
+pipe = Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Nano", torch_dtype=torch.bfloat16,
+                                           safety_checker=None, enable_safety_checker=False)
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=10.0)
+pipe.to("cuda")
+prompt = json.dumps(json.load(open("assets/prompts/text2image/robot_draping.json")),   # run from this skill directory (the one with assets/)
+                    ensure_ascii=True, separators=(",", ":"))
+result = pipe(prompt=prompt, negative_prompt="", num_frames=1, height=720, width=1280,
+              num_inference_steps=35, guidance_scale=6.0,
+              add_resolution_template=False, add_duration_template=False,
+              generator=torch.Generator(device="cuda").manual_seed(1234))
+os.makedirs("outputs/diffusers/t2i", exist_ok=True)   # output_dir.mkdir(parents=True, exist_ok=True)
+result.video[0].save("outputs/diffusers/t2i/t2i.png")
+```
+
+### 8.3 Edge settings and video modes, from the README (SKILL.md Variant 1)
+
+README: "To run **Cosmos3-Edge** instead, load `nvidia/Cosmos3-Edge` and use its
+single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
+`num_inference_steps=20`, `guidance_scale=5.0`, and `flow_shift=8.0`" (`num_frames=1`
+for text2image). Video modes pass the text2video prompt asset, `negative_prompt=json.dumps(<neg asset>)`,
+`num_frames=189` (Nano/Super), `fps=24`, and `export_to_video(result.video, "<path>.mp4", fps=24)`,
+then verify with ffprobe or the venv's `av` (see SKILL.md Verify the output).
+
+### 8.4 Skill launch script (not in the notebook) — Edge text-to-image / text-to-video snippet (SKILL.md Variant 1)
+
+Edge, composed from the README sentence above and the text2image / video branches of
+`run_diffusers_payload` (diffusers.md § 7; the diffusers notebook has no `t2i_edge` /
+`t2v_edge_noaudio` case, payloads.md § 8.2). Run the setup block, then ONE mode block — the one the task asks for — in the
+same Python process; text-to-video needs more GPU time and memory than a single frame:
+
+```python
+# setup — shared by both modes
+import json, os, torch
+from diffusers import Cosmos3OmniPipeline
+from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+from diffusers.utils import export_to_video
+
+compact = lambda p: json.dumps(json.load(open(p)), ensure_ascii=True, separators=(",", ":"))   # run from this skill directory (the one with assets/)
+pipe = Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16,
+                                           safety_checker=None, enable_safety_checker=False)
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
+pipe.to("cuda")
+gen = torch.Generator(device="cuda").manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
+```
+
+```python
+# t2i_edge — text-to-image, one frame
+result = pipe(prompt=compact("assets/prompts/text2image/robot_draping.json"), negative_prompt="",
+              num_frames=1, height=480, width=832, num_inference_steps=20, guidance_scale=5.0,
+              add_resolution_template=False, add_duration_template=False, generator=gen)
+os.makedirs("outputs/diffusers/t2i_edge", exist_ok=True)
+result.video[0].save("outputs/diffusers/t2i_edge/t2i_edge.png")
+```
+
+```python
+# t2v_edge_noaudio — text-to-video without audio (instead of the t2i block)
+gen.manual_seed(1234)   # fresh seed per run — the notebook's run_diffusers_payload seeds a generator per call
+result = pipe(prompt=compact("assets/prompts/text2video/robot_kitchen.json"),
+              negative_prompt=compact("assets/negative_prompts/text2video/neg_prompt.json"),
+              image=None, num_frames=121, height=480, width=832, fps=24,
+              num_inference_steps=20, guidance_scale=5.0, enable_sound=False,
+              add_resolution_template=False, add_duration_template=False, generator=gen)
+os.makedirs("outputs/diffusers/t2v_edge_noaudio", exist_ok=True)
+export_to_video(result.video, "outputs/diffusers/t2v_edge_noaudio/t2v_edge_noaudio.mp4", fps=24, macro_block_size=1)
+```
