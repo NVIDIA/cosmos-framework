@@ -1,5 +1,8 @@
 # Cosmos3 Generator Transfer Examples
 
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
+
 Cosmos3 video **transfer** examples — **Nano** (single GPU) and **Super** (multi-GPU, 32B) — on
 the native PyTorch (Cosmos Framework) path, the Diffusers modular pipeline, and the
 OpenAI-compatible TensorRT-LLM and vLLM-Omni server paths.
@@ -199,9 +202,7 @@ reuses the previews from [`preview_helpers.py`](./preview_helpers.py), writing o
 ### Quickstart
 
 Set up and launch Nano or Super as described in the shared
-[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator), including the
-[server-side NLTK data setup](../../README.md#server-side-nltk-data-setup).
-Keep `NLTK_DATA` exported in the server's shell. TensorRT-LLM
+[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator). TensorRT-LLM
 accepts a raw source video as multipart `video_reference` when edge or blur will
 be computed on the server. The checked-in assets are already precomputed
 controls, so this example base64-encodes the control inside its hint and does

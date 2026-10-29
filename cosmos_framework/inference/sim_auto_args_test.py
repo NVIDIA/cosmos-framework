@@ -396,7 +396,7 @@ def test_lidar_sweep_count_without_a_prefix(
 @pytest.mark.parametrize(
     "field,value,message",
     [
-        ("fps", 24, "requires fps=30 to match the MADS/Hyperion source-frame clock"),
+        ("fps", 24, "requires fps=30 to match the trained source-frame clock"),
         ("normalize_cfg", True, "requires normalize_cfg=False"),
     ],
 )

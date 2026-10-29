@@ -1,5 +1,8 @@
 # vLLM-Omni — distilled from the cookbook notebook
 
+Source: `run_with_vllm_omni.ipynb` and the cookbook README at <https://github.com/NVIDIA/cosmos/blob/6e2c69afafd6444c1ca14a021aba93fcc6b7996a/cookbooks/cosmos3/generator/audiovisual/run_with_vllm_omni.ipynb> (pinned commit; this file supersedes it and is complete on its own) § 2 (the server launches and the Quantized Checkpoints section) and the § 3 note follow the notebook's last version in this
+repository, main `7738e9e` (NVIDIA/cosmos-framework#329: launch mounts, `HF_TOKEN`, FP8 checkpoints) — the version this skill retires.
+
 Scope: the vLLM-Omni backend — the notebook's prerequisites, Docker server launches (Nano, Edge, Super with tensor parallelism and layerwise offload, the two Super 4-Step students, CFG parallel), endpoint verification, the `curl`-based request helpers (`video_api_url`, `image_api_url`, `build_vllm_form`, `build_vllm_image_body`, `post_video`, `post_image`, `run_vllm_payload`), its twelve run sections collapsed into one use-case table, and the README's vLLM-Omni Quickstart and Notebook walkthrough; content shared with the other backends (`ASSET_SETS`, `FIXED_SAMPLING`, `payload_dimensions`, `create_payload`, endpoint variables, output naming) is in payloads.md and is referenced by section.
 
 ## Cosmos3 Generator Audiovisual with vLLM Omni
@@ -20,16 +23,17 @@ Local-default endpoint exports (`COSMOS3_VLLM_BASE_URL`, `COSMOS3_VLLM_NANO_BASE
 
 ## 2. Start the Server
 
-Run the vLLM Omni server before running the request cells. Use the Docker image for every modality on this page. Mount any directory that contains local media or action files you want the server to read.
-
-Skill note (not in the notebook): every `docker run` below carries one added line, `-e HF_TOKEN` — the first launch downloads the model into the mounted `HF_HOME` and anonymous Hub calls are rate-limited (eval run 2026-10-26, cold cache: the container exited with HTTP 429 and its log asked for `HF_TOKEN`); every other line is the notebook's. Skill note (not in the notebook): readiness is `GET http://localhost:8000/v1/models` (setup guide: the server prints `Application startup complete.` when the API is up; observed ~45–73 s for Edge on 1x H100 across four eval runs, 2026-10-21/23). For automation run detached — `docker run -d --name cosmos3-vllm …` with the rest of the block unchanged — poll `/v1/models`, then `docker stop cosmos3-vllm && docker rm cosmos3-vllm` (pattern in skill-notes.md § 4).
+Run the vLLM Omni server before running the request cells. Use the Docker image for every modality on this page. Run the launch commands from `cosmos-framework/.agents/skills`. Mount this cookbook root at `/workspace` and retain the host absolute path so client media paths resolve in Docker.
 
 ### Docker Image: Cosmos3-Nano
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
@@ -45,8 +49,11 @@ docker run --runtime nvidia --gpus all \
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
@@ -66,8 +73,11 @@ For example, on four GPUs:
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
@@ -91,8 +101,11 @@ Start one model at a time on port 8000 and run its matching example below. Both 
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
@@ -110,8 +123,11 @@ docker run --runtime nvidia --gpus all \
 
 ```bash
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
@@ -141,9 +157,111 @@ vllm serve nvidia/Cosmos3-Nano \
 
 For Cosmos3, set CFG strength with the request-level `guidance_scale` field. Do not use `true_cfg_scale` for CFG Parallel with these Cosmos3 examples.
 
+### Quantized Checkpoints
+
+Published [Nano FP8](https://huggingface.co/nvidia/Cosmos3-Nano-FP8) and
+[Super FP8](https://huggingface.co/nvidia/Cosmos3-Super-FP8) checkpoints can be
+downloaded to a local directory. Or use an output from the
+[quantization walkthrough](../../cookbooks/cosmos3/quantization/README.md).
+Serve that directory with the original `--served-model-name` so the request
+cells keep their existing model IDs. Do not select FP8 with `--revision` alone:
+the Cosmos3 vLLM-Omni pipeline must receive a materialized local checkpoint.
+
+These are static checkpoint FP8 weights and calibrated scales, exported with
+`calibration_behavior="framework"`; this is separate from quantizing BF16 weights
+at server load time. The exporter records the activation policy in
+`transformer/config.json` under `quantization_config.runtime.diffusion_step_policy`.
+The default policy requests A16 activations for the first/last three denoising
+iterations and the generator reasoner, and native FP8 in the middle. Overlapping
+first/last windows use A16, so a four-step student uses A16 throughout. Weights
+remain FP8. Standalone vLLM reasoner inference uses ModelOpt FP8 independently of
+this diffusion policy. Backend support for the exported policy must be checked
+with the chosen runtime image.
+
+Run these commands from the **Framework checkout root**. Choose one model at a
+time. For a generated output set `FP8_MODEL_DIR` to its absolute directory and
+`FP8_SOURCE_DIR` to the absolute source checkpoint directory, or a common parent
+containing its snapshot and backing blobs. The source mount preserves exported
+symlinks. If another cache holds symlink targets, mount that cache at its original
+absolute path too. Keep `HF_HOME` consistent with the quantization run.
+
+| Local output under `OUTPUT_ROOT` | `SERVED_MODEL`                           | Matching example                   |
+| -------------------------------- | ---------------------------------------- | ---------------------------------- |
+| `nano-fp8`                       | `nvidia/Cosmos3-Nano`                    | Nano image/video                   |
+| `super-fp8`                      | `nvidia/Cosmos3-Super`                   | Super video                        |
+| `super-t2i-fp8`                  | `nvidia/Cosmos3-Super-Text2Image`        | Super text-to-image, base sampler  |
+| `super-t2i-distilled-fp8`        | `nvidia/Cosmos3-Super-Text2Image-4Step`  | Super-4Step text-to-image          |
+| `super-i2v-fp8`                  | `nvidia/Cosmos3-Super-Image2Video`       | Super image-to-video, base sampler |
+| `super-i2v-distilled-fp8`        | `nvidia/Cosmos3-Super-Image2Video-4Step` | Super-4Step image-to-video         |
+
+For specialized base models, run the matching Super T2I or I2V example against
+the server at `COSMOS3_VLLM_SUPER_BASE_URL`. These request bodies omit a model ID;
+the single model loaded at that endpoint handles the request. Verify its served
+ID with `/v1/models`. The preserved generic request payloads send 35 steps and
+guidance 6.0. For a distilled checkpoint, the Cosmos3 runtime overrides these:
+it reads the fixed four-step schedule from the checkpoint and forces guidance
+to 1.0 (CFG off). Verify this behavior in the selected image; do not infer the
+student's effective sampler from those generic request fields.
+No published `fp8` revision is assumed for the four specialized Super models.
+
+```bash
+# Download published Nano FP8; use Cosmos3-Super-FP8 and its served ID for Super.
+export FP8_MODEL_DIR="${FP8_MODEL_DIR:-$PWD/models/cosmos3-nano-fp8}"
+export SERVED_MODEL="${SERVED_MODEL:-nvidia/Cosmos3-Nano}"
+# Skip this download when FP8_MODEL_DIR is a locally generated checkpoint.
+python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("nvidia/Cosmos3-Nano-FP8", local_dir=os.environ["FP8_MODEL_DIR"])
+PY
+```
+
+```bash
+export HF_HOME="$(realpath -m "${HF_HOME:-$HOME/.cache/huggingface}")"
+FP8_MODEL_DIR="$(realpath "$FP8_MODEL_DIR")"
+test -f "$FP8_MODEL_DIR/hf_quant_config.json"
+# Mount each destination once, including on hosts whose HOME is /root.
+MOUNTS=()
+declare -A MOUNT_DESTINATIONS=()
+add_mount() {
+  local source_path="$1" destination="$2" mode="${3:-rw}"
+  if [[ -z "${MOUNT_DESTINATIONS[$destination]+present}" ]]; then
+    MOUNTS+=(-v "$source_path:$destination:$mode")
+    MOUNT_DESTINATIONS[$destination]=1
+  fi
+}
+add_mount "$HF_HOME" /root/.cache/huggingface
+add_mount "$HF_HOME" "$HF_HOME" ro
+add_mount "$PWD/.agents/skills" /workspace
+add_mount "$PWD" "$PWD"
+add_mount "$FP8_MODEL_DIR" "$FP8_MODEL_DIR" ro
+if [ -n "${FP8_SOURCE_DIR:-}" ]; then
+  FP8_SOURCE_DIR="$(realpath "$FP8_SOURCE_DIR")"
+  add_mount "$FP8_SOURCE_DIR" "$FP8_SOURCE_DIR" ro
+fi
+docker run --runtime nvidia --gpus all \
+  -e HF_TOKEN \
+  "${MOUNTS[@]}" \
+  -w /workspace \
+  -p 8000:8000 --ipc=host \
+  vllm/vllm-omni:cosmos3 \
+  vllm serve "$FP8_MODEL_DIR" \
+    --served-model-name "$SERVED_MODEL" \
+    --omni --model-class-name Cosmos3OmniDiffusersPipeline \
+    --allowed-local-media-path / --port 8000 --init-timeout 1800
+```
+
+For Super, add the upstream `--tensor-parallel-size 4` and
+`--enable-layerwise-offload` options if needed. Poll
+`curl http://localhost:8000/v1/models` until ready and verify the ID equals
+`SERVED_MODEL`, then run the matching request and visualization cells below.
+The image and activation policy require runtime validation on your GPU setup.
+
 ## 3. Configure Paths and Endpoints
 
-This setup cell only configures repo/output paths and vLLM endpoint settings.
+This setup cell only configures repo/output paths and vLLM endpoint settings. (The notebook's final version resolves the
+Framework checkout root — the directory with `pyproject.toml` and `cosmos_framework/` — and anchors `COSMOS_ROOT` at its
+`.agents/skills`; the skill's path convention below stands in for that cell.)
 
 Paths: a plain output directory `OUT=outputs` replaces the notebook's output-root plumbing (payloads.md § 4.1). Endpoints (`DEFAULT_VLLM_BASE_URL`, `VLLM_ENDPOINTS`, `COSMOS3_VLLM_API_KEY`): see payloads.md § 4.5.
 
@@ -483,8 +601,8 @@ Skill-authored text moved here from SKILL.md on 2026-10-27 (layout change only; 
 
 ### 7.1 Why the `-e HF_TOKEN` line (SKILL.md Variant 3)
 
-The `-e HF_TOKEN` line is a skill
-addition (eval run 2026-10-26, cold cache on a fresh node): the first launch downloads `nvidia/Cosmos3-<model>`
+The notebook's final version (#329) passes `HF_TOKEN` into the container in every launch above; this skill had added the
+line before that (eval run 2026-10-26, cold cache on a fresh node): the first launch downloads `nvidia/Cosmos3-<model>`
 into `HF_HOME`, and anonymous Hub calls are rate-limited — the container crashed with HTTP 429 and its log asked
 for `HF_TOKEN`; with guardrails enabled the token must also be authorised for the gated guardrail repo ("also set
 and pass `HF_TOKEN` to the container").

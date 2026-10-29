@@ -6,6 +6,9 @@ Path translation (said once for the whole skill): the notebooks resolved assets 
 
 ## 1. Introduction (cookbook README)
 
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cookbooks/cosmos3/quantization/README.md)
+and the **Quantized Checkpoints** section in the vLLM-Omni notebooks (here: `vllm-omni.md` § 2).
+
 Generate images and video (with optional audio) from text, image or video prompts with
 `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Edge`, and the published four-step
 distilled Cosmos3-Super students across Cosmos Framework, Diffusers, vLLM-Omni, TRT-LLM

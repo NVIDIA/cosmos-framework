@@ -1751,6 +1751,7 @@ def test_plan_mode_posts_the_comment_and_emits_matrices_without_cached_cells(
             "dashboard_run_id": "cached-run",  # the shown result's identity: refresh_from_catalog compares against it
             "created_at": "2026-10-17T01:00:00Z",
             "job": False,  # the plan's decision: reused, not this run's job (True for every queued cell)
+            "env_changed": None,  # reused: the result's image and model match the config
         }
     ]
     assert all(c["job"] is True for c in plan["cells"] if c["state"] == "queued")
@@ -1774,6 +1775,7 @@ def test_plan_mode_posts_the_comment_and_emits_matrices_without_cached_cells(
         "cells": [],
         "group": None,
         "errors": [],
+        "invalid_selection": False,
     }
     assert plan["skills"][SKILL]["content_sha256"] == rm.skill_content_sha256(checkout / ".agents" / "skills" / SKILL)
     assert plan["skills"][SKILL]["group_id"] == f"ci-pr128-{SHA7}" and plan["skills"][SKILL]["tree_sha"] is None
@@ -2801,6 +2803,7 @@ def test_plan_mode_trigger_args_rerun_failed_anchors_the_group_and_exports_it_to
         "cells": [],
         "group": None,
         "errors": [],
+        "invalid_selection": False,
     }
     assert plan["skills"][SKILL]["group_id"] == "ci-pr128-0000000" and plan["skills"][SKILL]["equivalent_commits"] == [
         SHA
@@ -3289,3 +3292,86 @@ def test_matrix_entries_pin_serial_backends_to_their_runner_label(tmp_path: Path
     )
     workflow = (github_dir / "workflows" / "skill-eval.yml").read_text(encoding="utf-8")
     assert workflow.count("runs-on: ${{ fromJSON(matrix.runs_on) }}") == 2  # the canary and the cells jobs
+
+
+def test_parse_trigger_args_flags_an_invalid_cell_selection():
+    # a malformed or empty explicit selection must stop the plan: an empty `cells` list selects EVERY cell, so a typo
+    # such as `force cells=codex` would otherwise launch the whole matrix without cache reuse
+    options = rm.parse_trigger_args("force cells=codex")
+    assert options.force and options.cells == [] and options.invalid_selection
+    assert rm.parse_trigger_args("cells=codex,cursor/x").invalid_selection  # one bad pattern taints the list
+    assert rm.parse_trigger_args("rerun force").invalid_selection  # `rerun` without a list
+    assert not rm.parse_trigger_args("cells=codex/x,cursor/*").invalid_selection
+    assert not rm.parse_trigger_args("forc").invalid_selection  # an unknown token can only narrow a run: defaults
+    assert not rm.parse_trigger_args("").invalid_selection
+    assert rm.TriggerOptions.from_dict(options.to_dict()) == options
+    assert "nothing was scheduled" in rm.invalid_selection_message(options)
+
+
+def test_plan_mode_stops_on_an_invalid_cell_selection(tmp_path: Path, checkout: Path, launcher: Path):
+    # `force cells=codex` has no valid pattern: without the guard `cells` stays empty, selects every cell, and `force`
+    # drops cache reuse — a typo would launch the whole matrix. The plan posts the reason on the PR and stops.
+    config = write_config(tmp_path, launcher, skills=[SKILL])
+    github, dashboard = FakeGitHub(), FakeDashboard({SKILL: []})
+    args = ["plan", "--config", str(config), "--checkout", str(checkout), "--plan-out", str(tmp_path / "plan.json")]
+    args += ["--trigger-args", "force cells=codex"]
+    assert rm.main(args, make_deps(plan_env(tmp_path), github, dashboard)) == 2
+    assert github.count("POST") == 1 and "the explicit cell selection is invalid" in github.bodies("POST")[0]
+    assert not (tmp_path / "plan.json").exists() and not (tmp_path / "github_output").exists()
+
+
+def test_apply_cache_sets_aside_results_from_another_environment(tmp_path: Path, checkout: Path, launcher: Path):
+    from datetime import datetime, timezone
+
+    config = rm.load_config(write_config(tmp_path, launcher))  # image …:v1, codex model openai/openai/gpt-6-astra
+    plans = rm.load_skill_plans(checkout, [SKILL], smoke=False)
+
+    def with_env(run, *, image=None, model=None, backend="cursor"):
+        if image:
+            run["env"] = {"image": image}
+        if model:
+            run["backends"] = [{"backend": backend, "model": model}]
+        return run
+
+    image_v1 = "registry.example.com/cosmos-skill-eval:v1"
+    runs = [
+        with_env(
+            catalog_run("same-env", SHA, "hello", "cursor", "PASS", "2026-10-17T01:00:00Z"),
+            image=image_v1,
+            model="cursor/claude-sonnet-5-5-medium",
+        ),
+        with_env(
+            catalog_run("old-image", SHA, "world", "cursor", "PASS", "2026-10-17T01:00:00Z"),
+            image="registry.example.com/cosmos-skill-eval:v0",
+        ),
+        with_env(
+            catalog_run("old-model", SHA, "hello", "codex", "PASS", "2026-10-17T01:00:00Z"),
+            image=image_v1,
+            model="azure/openai/gpt-5.2-codex",
+            backend="codex",
+        ),
+        catalog_run("legacy", SHA, "world", "codex", "PASS", "2026-10-17T01:00:00Z"),  # pre-0.3.3: no env, reused
+    ]
+    cells = rm.build_cells(plans, BACKENDS)
+    assert rm.apply_cache(cells, run_info(), FakeDashboard({SKILL: runs}), config=config) == 2
+    by = {(cell.case, cell.backend): cell for cell in cells}
+    assert by[("hello", "cursor")].state is rm.CellState.CACHED and by[("hello", "cursor")].env_changed is None
+    assert by[("world", "codex")].state is rm.CellState.CACHED  # a manifest without env.image is matched on content
+    assert by[("world", "cursor")].state is rm.CellState.QUEUED and by[("world", "cursor")].env_changed == "image v0 → v1"
+    assert by[("hello", "codex")].state is rm.CellState.QUEUED
+    assert by[("hello", "codex")].env_changed == "codex model azure/openai/gpt-5.2-codex → openai/openai/gpt-6-astra"
+    # without a config (older callers) nothing changes: content match only
+    assert rm.apply_cache(rm.build_cells(plans, BACKENDS), run_info(), FakeDashboard({SKILL: runs})) == 4
+    # the comment names the set-aside results; the plan JSON carries the marker to the cell and report jobs
+    now = datetime(2026, 10, 17, 3, 0, tzinfo=timezone.utc)
+    body = rm.render_comment(
+        run_info(), plans, cells, BACKENDS, started_at=now, now=now, seq=None, options=rm.TriggerOptions()
+    )
+    assert "♻️ Cache: 2 published results of this skill version not reused — environment changed (codex model" in body
+    assert "→ openai/openai/gpt-6-astra); the cells run again" in body  # the first set-aside cell names the reason
+    plan = rm.plan_to_dict(run_info(), plans, cells, BACKENDS, now, rm.TriggerOptions())
+    assert sorted(c["env_changed"] for c in plan["cells"] if c["env_changed"]) == [
+        "codex model azure/openai/gpt-5.2-codex → openai/openai/gpt-6-astra",
+        "image v0 → v1",
+    ]
+

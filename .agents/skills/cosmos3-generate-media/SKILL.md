@@ -201,14 +201,17 @@ the first command (§ 1 Prerequisites, § 2 Start the Server, § 6 request helpe
 The notebook's Nano launch (its `t2i` case runs against `Cosmos3-Nano`; the § 2
 "Docker Image: Cosmos3-Edge" block differs only in the model name), with
 `--no-guardrails` (§ 1: "To disable guardrails server-wide, pass `--no-guardrails`
-to `vllm serve`") and the setup guide's Hugging Face cache mount (notes: `references/vllm-omni.md` § 7.1):
+to `vllm serve`"); the launch mounts the Hugging Face cache and the working directory at its host path and passes
+`HF_TOKEN` through (export it — with guardrails enabled § 1 says "also set and pass `HF_TOKEN` to the container";
+why the token matters: `references/vllm-omni.md` § 7.1).
 
 ```bash
-export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 docker run --runtime nvidia --gpus all \
+  -v "$PWD:/workspace" \
+  -v "$PWD:$PWD" \
+  -w /workspace \
   -e HF_TOKEN \
-  -v "${HF_HOME}:/root/.cache/huggingface" \
-  -v "$(pwd):/workspace" \
+  -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
   vllm/vllm-omni:cosmos3 \
