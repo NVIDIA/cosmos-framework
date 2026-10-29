@@ -460,7 +460,8 @@ class TextDataOverrides(OverridesBase):
 
 
 Fps = Annotated[int, pydantic.Field(ge=1)]
-VideoSaveQuality = Annotated[int, pydantic.Field(ge=0, le=10)]
+# imageio-ffmpeg asserts 1 <= quality <= 10; rejecting 0 here fails fast instead of after generation.
+VideoSaveQuality = Annotated[int, pydantic.Field(ge=1, le=10)]
 ImageSaveQuality = Annotated[int, pydantic.Field(ge=0, le=100)]
 VideoSaveCrf = Annotated[int, pydantic.Field(ge=0, le=51)]
 
@@ -590,7 +591,7 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     Cosmos3-Edge is documented as 50-150 video frames.
     """
     video_save_quality: VideoSaveQuality | None = None
-    """Quality of the saved video (0-10)."""
+    """Quality of the saved video (1-10)."""
     image_save_quality: Training[ImageSaveQuality | None] = None
     """Quality of the saved image (0-100)."""
     save_preview: Training[bool | None] = None
@@ -639,7 +640,8 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
             if self.fps is None:
                 self.fps = 1
             if self.video_save_quality is None:
-                self.video_save_quality = 0
+                # Any in-range value works; 0 is outside the encoder's 1-10 range.
+                self.video_save_quality = 10
             if self.image_save_quality is None:
                 self.image_save_quality = 0
             self._fill_save_compression_defaults(enable_preview=False)

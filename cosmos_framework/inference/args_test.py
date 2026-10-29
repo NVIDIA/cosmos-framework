@@ -843,6 +843,22 @@ def test_save_preview_defaults_off_and_is_resolved_on_build(tmp_path: Path) -> N
         OmniSampleOverrides(preview_crf=52)
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("quality", [1, 5, 10])
+def test_video_save_quality_accepts_encoder_range(quality: int) -> None:
+    assert OmniSampleOverrides(video_save_quality=quality).video_save_quality == quality
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("quality", [-1, 0, 11])
+def test_video_save_quality_rejects_values_the_encoder_cannot_take(quality: int) -> None:
+    # imageio-ffmpeg asserts 1 <= quality <= 10, so 0 used to fail only after a full generation.
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(video_save_quality=quality)
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
