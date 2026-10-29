@@ -55,7 +55,10 @@ bit-reproducible): exact match 0.548 before, 0.632 and 0.620 after. Details:
 | Smoke (`--smoke`) | the six bundled clips, 2 updates | `setup` to `before` on any GPU that holds the 8B model in bfloat16 (16.3 GiB); `train`, `export`, `after` need the same 150 GB GPU | environments plus about 15 minutes | measured by this skill's eval |
 
 Disk: about 110 GB for the full run, about 75 GB for the smoke variant (environments, model, checkpoint, export).
-x86_64 hosts take the `nvidia-npp` wheel from PyPI in `setup`; that route is unverified.
+x86_64 hosts take the `nvidia-npp` wheel from PyPI in `setup`; that route is unverified. On a host with several
+GPUs the script uses the one with the most memory for every GPU step (it sets `CUDA_VISIBLE_DEVICES` unless the
+caller already did). The bundled clips are Git LFS objects: `download --smoke` fetches them when the clone holds
+pointer files, and asks for `git-lfs` to be installed when it is missing.
 
 ## Bundled assets
 
@@ -85,8 +88,9 @@ compiler's output is in the logs folder as apex-build.log.
 bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh download
 ```
 
-Qwen3-VL-8B-Instruct (17 GB) and RoboVQA (3.5 GB, skipped with `--smoke`), both at fixed revisions. No token needed.
-Expected last line: `model on disk: 17G   dataset: 9999 clips` (`6 clips` with `--smoke`).
+Qwen3-VL-8B-Instruct (17 GB) and RoboVQA (3.5 GB), both at fixed revisions; no token needed. With `--smoke` the
+dataset stage instead makes sure the six bundled clips are real videos, not Git LFS pointers. Expected last line:
+`model on disk: 17G   dataset: 9999 clips` (`6 clips` with `--smoke`).
 
 ### 3. data — training rows (about 25 minutes)
 

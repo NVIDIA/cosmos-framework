@@ -30,6 +30,12 @@ if [ ! -f pyproject.toml ] || [ ! -d cosmos_framework ]; then
 fi
 
 export PATH="$HOME/.local/bin:$PATH"
+# On a host with several GPUs, use the one with the most memory for every GPU step (training needs about 150 GB).
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ] && command -v nvidia-smi >/dev/null; then
+  GPU_INDEX=$(nvidia-smi --query-gpu=index,memory.total --format=csv,noheader,nounits | sort -t, -k2 -n -r | head -1 | cut -d, -f1)
+  export CUDA_VISIBLE_DEVICES=$GPU_INDEX
+fi
+gpu() { nvidia-smi -i "${CUDA_VISIBLE_DEVICES:-0}" "$@"; }   # the selected GPU
 SKILL_DIR="$PWD/.agents/skills/cosmos3-qwen3-vl-robovqa-sft"
 UV="uvx --from uv==0.11.29 uv"  # the checkout pins uv 0.11.29
 ART="$PWD/artifacts/qwen3-vl-robovqa"
@@ -58,7 +64,7 @@ stage() {
   local label=$1 log="$ART/logs/$2$TAG.log" start
   shift 2
   start=$(date +%s)
-  printf '  %-62s' "$label"
+  printf '  %-58s' "$label"
   if "$@" >"$log" 2>&1; then
     printf 'done  %3d s\n' $(( $(date +%s) - start ))
   else
@@ -107,15 +113,15 @@ eval_env() {
 
 setup() {
   say "setup: two Python environments and the apex optimizer (about 12 minutes on a fresh machine)"
-  echo "  GPU: $(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
+  echo "  GPU: $(gpu --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
   stage "host: CUDA 13 driver, git, ffmpeg, g++, uv" setup-host check_host
-  stage "SFT environment: torch 2.11, transformers 5.8.1, torchcodec 0.11 (about 270 packages)" setup-sft-env sft_env
+  stage "SFT environment: torch 2.11, transformers 5.8.1" setup-sft-env sft_env
   if "$SFT_PY" -c "import torch, amp_C" 2>/dev/null; then
-    printf '  %-62s%s\n' "apex" "already installed"
+    printf '  %-58s%s\n' "apex optimizer" "already installed"
   else
-    stage "apex: compiled from source for this GPU (about 10 minutes)" apex-build build_apex
+    stage "apex optimizer, compiled for this GPU (about 10 min)" apex-build build_apex
   fi
-  stage "evaluation environment: torch 2.10, transformers 4.57.6, torchcodec 0.10" setup-eval-env eval_env
+  stage "evaluation environment: torch 2.10, transformers 4.57.6" setup-eval-env eval_env
   echo
   LD_LIBRARY_PATH="$SFT_LIBS" "$SFT_PY" -c \
     "import torch, transformers, torchcodec.decoders, amp_C; print('  SFT environment:       ', torch.__version__, transformers.__version__, 'apex ok')"
@@ -144,7 +150,7 @@ build_apex() {
   # One compile job per 4 GiB of free host memory, at most 32 and at most one per CPU; built for this GPU.
   local jobs arch
   jobs=$(awk -v n="$(nproc)" '/MemAvailable/ {m = int($2 / 4194304); if (m > n) m = n; if (m > 32) m = 32; print m}' /proc/meminfo)
-  arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
+  arch=$(gpu --query-gpu=compute_cap --format=csv,noheader | head -1)
   echo "compiling apex for compute capability $arch with $jobs parallel jobs"
   # Running setup.py directly (not through pip) keeps the compiler's output, which the stage writes to the log.
   $UV pip install --python "$SFT_PY" wheel  # bdist_wheel needs it; not in the SFT lock
@@ -171,11 +177,32 @@ hf_dataset() {
     --include "videos/*" "json/*" "LICENSE.txt" --local-dir "$SRC"
 }
 
+bundled_clips() {
+  # The six clips are Git LFS objects. A clone made without git-lfs holds 130-byte pointer files instead of videos.
+  local pointer
+  pointer=$(grep -l '^version https://git-lfs' "$SKILL_DIR"/assets/robovqa/videos/*.mp4 2>/dev/null | head -1)
+  if [ -z "$pointer" ]; then
+    echo "the six bundled clips are present"
+    return
+  fi
+  echo "the bundled clips are Git LFS pointers; fetching the videos"
+  if ! command -v git-lfs >/dev/null; then
+    echo "git-lfs is not installed: install it (sudo apt-get install -y git-lfs), then run this step again" >&2
+    return 1
+  fi
+  git lfs install --local
+  git lfs pull --include ".agents/skills/cosmos3-qwen3-vl-robovqa-sft/assets/**"
+  if grep -q '^version https://git-lfs' "$pointer"; then
+    echo "git lfs pull did not replace the pointer files" >&2
+    return 1
+  fi
+}
+
 download() {
   say "download: model and dataset at fixed revisions (no token needed)"
   stage "Qwen3-VL-8B-Instruct, 17 GB" download-model hf_model
   if [ "$SMOKE" = 1 ]; then
-    printf '  %-62s%s\n' "RoboVQA" "skipped: --smoke uses the skill's six bundled clips"
+    stage "RoboVQA: the skill's six bundled clips (Git LFS)" download-clips bundled_clips
   else
     stage "RoboVQA, 3.5 GB (9,999 clips)" download-dataset hf_dataset
   fi
@@ -186,10 +213,10 @@ data() {
   say "data: split, training frames, check (about 25 minutes on the full dataset)"
   stage "split 80/10/10 by clip, one question per clip" data-split \
     "$EVAL_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" split --src "$SRC" --out "$DATA"
-  stage "frames: each training clip's evaluation frames, written losslessly" data-frames \
+  stage "frames: each training clip's evaluation frames, lossless" data-frames \
     env CUDA_VISIBLE_DEVICES= LD_LIBRARY_PATH="$EVAL_LIBS" \
     "$EVAL_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" frames --out "$DATA"
-  stage "verify: the training stack sees exactly the evaluator's frames" data-verify \
+  stage "verify: training stack sees the evaluator's frames" data-verify \
     env CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" verify --out "$DATA" --model "$SFT_MODEL_PATH"
   echo
@@ -217,16 +244,17 @@ score() {  # score <model directory> <name>
 
 before() {
   say "before: score the untouched model on the held-out clips (about 14 minutes for 1,000 clips)"
-  stage "greedy answers, then exact match / token F1 / yes-no accuracy" before score "$SFT_MODEL_PATH" before
+  stage "greedy answers, then exact match / F1 / yes-no" before score "$SFT_MODEL_PATH" before
   echo
   echo "  $(tail -n 1 "$ART/logs/before$TAG.log")"
 }
 
 train() {
   local free
-  free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1)
+  free=$(gpu --query-gpu=memory.free --format=csv,noheader,nounits | head -1)
   if [ "$free" -lt 150000 ]; then
-    echo "${free} MiB free on the GPU; training the 8B model needs about 150 GB (measured peak 143,566 MiB)" >&2
+    echo "${free} MiB free on GPU ${CUDA_VISIBLE_DEVICES:-0} ($(gpu --query-gpu=name --format=csv,noheader));" >&2
+    echo "training the 8B model needs about 150 GB (measured peak 143,566 MiB)" >&2
     exit 1
   fi
   say "train: $STEPS updates of 64 clips on one GPU"
@@ -261,7 +289,7 @@ export_hf() {
 
 after() {
   say "after: score the fine-tuned model the same way"
-  stage "greedy answers, then exact match / token F1 / yes-no accuracy" after score "$EXPORT" after
+  stage "greedy answers, then exact match / F1 / yes-no" after score "$EXPORT" after
   echo
   echo "  $(tail -n 1 "$ART/logs/after$TAG.log")"
 }
