@@ -241,6 +241,44 @@ class QuantizedBaseTrainingConfig:
             raise ValueError("QuantizedBaseTrainingConfig.nested must be True")
 
 
+# Native adapter SAC must match the names dispatched by torch's SDPA backend,
+# rather than the custom flash-attn names used by other model families. Keep this
+# policy dependency-light and versioned in checkpoint execution identities.
+NATIVE_ADAPTER_SAC_SAVE_OPS: tuple[str, ...] = (
+    r"^_scaled_dot_product_(?:flash_attention|efficient_attention|cudnn_attention|attention_math)(?:\.|$)",
+    r"^(?:mm|addmm|bmm)(?:\.|$)",
+)
+
+
+def native_adapter_execution_policy(cfg: Any) -> dict[str, Any] | None:
+    """Describe opt-in execution changes without invalidating legacy default artifacts."""
+    mode = cfg.activation_checkpointing
+    adapter_compute_dtype = getattr(cfg, "adapter_compute_dtype", "float32")
+    logits_mode = getattr(cfg, "sft_logits_mode", "full")
+    compile_language = getattr(cfg, "compile_language_model", False)
+    if mode == "full" and adapter_compute_dtype == "float32" and logits_mode == "full" and not compile_language:
+        return None
+    return {
+        "protocol": "cosmos.native-adapter-execution.v1",
+        "activation_checkpointing": {
+            "mode": mode,
+            "implementation": "none" if mode == "none" else "nonreentrant",
+            "preserve_rng_state": True,
+            "determinism_check": "default",
+            "save_ops_regex": list(NATIVE_ADAPTER_SAC_SAVE_OPS) if mode == "selective" else [],
+        },
+        "adapter_compute_dtype": adapter_compute_dtype,
+        "sft_logits_mode": logits_mode,
+        "language_compile": {
+            "enabled": compile_language,
+            "dynamic": True,
+            "fullgraph": False,
+            "backend": "inductor",
+            "fail_on_recompile_limit_hit": True,
+        },
+    }
+
+
 @dataclass
 class Qwen3VLModelConfig:
     """Model-family config carried by a Qwen3-VL ``NativePolicyBuildSpec``.
@@ -259,6 +297,12 @@ class Qwen3VLModelConfig:
     dtype: str = "bfloat16"
     attn_impl: str = "eager"
     activation_checkpointing: str = "full"
+    # Parameters and optimizer moments stay FP32; only adapter GEMM arithmetic changes.
+    # OmegaConf structured configs do not support Literal annotations. Keep the
+    # accepted values explicit in __post_init__, as for the other model enums.
+    adapter_compute_dtype: str = "float32"
+    sft_logits_mode: str = "full"
+    compile_language_model: bool = False
     fsdp_reduce_dtype: str = "float32"
     adapter: NativeLoRAConfig | None = None
     quantized_base: QuantizedBaseTrainingConfig | None = None
@@ -281,6 +325,16 @@ class Qwen3VLModelConfig:
                 "model_qwen3_vl.activation_checkpointing must be none|full|selective, got "
                 f"{self.activation_checkpointing!r}"
             )
+        if self.adapter_compute_dtype not in ("float32", "bfloat16"):
+            raise ValueError("model_qwen3_vl.adapter_compute_dtype must be float32|bfloat16")
+        if self.sft_logits_mode not in ("full", "supervised"):
+            raise ValueError("model_qwen3_vl.sft_logits_mode must be full|supervised")
+        if type(self.compile_language_model) is not bool:
+            raise TypeError("model_qwen3_vl.compile_language_model must be a bool")
+        if self.adapter is None and (
+            self.adapter_compute_dtype != "float32" or self.sft_logits_mode != "full" or self.compile_language_model
+        ):
+            raise ValueError("native adapter execution optimizations require an explicit adapter")
         if not isinstance(self.source_identity, Mapping):
             raise TypeError("model_qwen3_vl.source_identity must be a dictionary")
         self.source_identity = dict(self.source_identity)
@@ -290,8 +344,8 @@ class Qwen3VLModelConfig:
             self.adapter.__post_init__()
             if self.dtype != "bfloat16" or self.fsdp_reduce_dtype != "float32":
                 raise ValueError("native LoRA requires BF16 base dtype and FP32 reduce dtype")
-            if self.attn_impl != "sdpa" or self.activation_checkpointing != "full":
-                raise ValueError("native LoRA initially requires attn_impl='sdpa' and activation_checkpointing='full'")
+            if self.attn_impl != "sdpa":
+                raise ValueError("native LoRA requires attn_impl='sdpa'")
             if self.trust_remote_code:
                 raise ValueError("native LoRA does not support trust_remote_code")
         if self.quantized_base is not None:

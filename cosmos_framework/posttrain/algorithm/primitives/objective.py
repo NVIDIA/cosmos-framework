@@ -321,6 +321,12 @@ class Objective:
     reference_scorer: Any = None
     metric_adapter: Callable[[dict[str, Any], str], dict[str, Any]] | None = None
     identity: dict[str, Any] = field(default_factory=dict)
+    # Optional deterministic CPU preprocessing over ONE completed-update window.
+    # The driver owns cursor advancement; these hooks cannot read the data source.
+    prepare_window: Callable[[list[list[Any]]], None] | None = None
+    finish_window: Callable[[], None] | None = None
+    close: Callable[[], None] | None = None
+    pipeline_stats: Callable[[], dict[str, Any]] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> "tuple[torch.Tensor, dict[str, Any]]":
         return self.fn(*args, **kwargs)

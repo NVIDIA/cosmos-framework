@@ -135,6 +135,15 @@ def read_adapter_metadata(
         raise ValueError("unsupported adapter checkpoint metadata schema or topology")
     # Reject tensors, non-JSON state, NaN, and accidental backend Python objects in the manifest.
     json.dumps(metadata, allow_nan=False)
+    identity = metadata["identity"]
+    if identity.get("model_format") == "cosmos_native_qwen3_vl" or str(identity.get("format", "")).startswith(
+        "cosmos.adapter-model."
+    ):
+        from cosmos_framework.posttrain.model.quantization.loader import execution_config_from_identity
+
+        if identity.get("format") not in ("cosmos.adapter-model.v1", "cosmos.adapter-model.v2"):
+            raise ValueError("native adapter metadata requires a supported model identity format")
+        execution_config_from_identity(identity)
     for name, descriptor in metadata["parameters"].items():
         if (
             not isinstance(name, str)

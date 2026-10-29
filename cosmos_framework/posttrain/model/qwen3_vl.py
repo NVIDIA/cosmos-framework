@@ -23,7 +23,7 @@ from transformers.cache_utils import Cache
 from transformers.utils.import_utils import is_torchdynamo_compiling
 
 from cosmos_framework.posttrain.comm.weight_transfer import WeightWitnessSpec
-from cosmos_framework.posttrain.model.protocol import VLMPolicyOutput
+from cosmos_framework.posttrain.model.protocol import SelectedSFTPolicyOutput, VLMPolicyOutput
 from cosmos_framework.posttrain.model.sft_source import register_native_sft_source
 
 if TYPE_CHECKING:
@@ -551,10 +551,15 @@ def _move_to_device(value: Any, device: torch.device) -> Any:
 class Qwen3VLPolicy:
     """Posttrain capability adapter over an i4-native Qwen3-VL family module."""
 
-    def __init__(self, net: nn.Module, model_type: str) -> None:
+    def __init__(self, net: nn.Module, model_type: str, *, sft_logits_mode: str = "full") -> None:
         if model_type not in _SUPPORTED_MODEL_TYPES:
             raise ValueError(f"unsupported Qwen3-VL model_type {model_type!r}")
+        if sft_logits_mode not in {"full", "supervised"}:
+            raise ValueError(f"unsupported SFT logits mode {sft_logits_mode!r}")
+        if sft_logits_mode == "supervised" and model_type != "qwen3_vl":
+            raise ValueError("supervised-position SFT logits require the native dense Qwen3-VL")
         self.net = net
+        self.sft_logits_mode = sft_logits_mode
         config = getattr(net, "config", None)
         self.weight_mapper = Qwen3VLWeightMapper(
             model_type,
@@ -609,6 +614,38 @@ class Qwen3VLPolicy:
         logits = cast(torch.Tensor, raw_logits)  # [B,T,V] (validated by the objective)
         return VLMPolicyOutput(logits=logits)
 
+    def forward_sft_batch(self, batch: dict[str, Any], valid: torch.Tensor) -> SelectedSFTPolicyOutput:
+        """Run the complete native VLM, projecting only shifted supervised positions.
+
+        ``valid`` is owned by the objective: labels, both attention-mask positions,
+        and validation weights have already been combined. No second label shift
+        or independent mask computation is permitted here. This capability is
+        initially enabled only by the single-device frozen-base adapter builder.
+        """
+        if self.sft_logits_mode != "supervised":
+            raise ValueError("forward_sft_batch requires sft_logits_mode='supervised'")
+        self.validate_policy_batch(batch)
+        input_ids = batch["input_ids"]
+        if (
+            not isinstance(valid, torch.Tensor)
+            or valid.dtype != torch.bool
+            or tuple(valid.shape) != (input_ids.shape[0], input_ids.shape[1] - 1)
+            or valid.device != input_ids.device
+        ):
+            raise ValueError("supervised-position SFT requires a bool [B,T-1] mask on the input device")
+        backbone, head = getattr(self.net, "model", None), getattr(self.net, "lm_head", None)
+        if not isinstance(backbone, nn.Module) or not isinstance(head, nn.Linear):
+            raise TypeError("supervised-position SFT requires the native VLM backbone and linear lm_head")
+        if any(parameter.requires_grad for parameter in head.parameters()):
+            raise ValueError("supervised-position SFT initially requires a frozen output head")
+        model_batch = {key: value for key, value in batch.items() if key not in _NON_MODEL_BATCH_KEYS}
+        output = backbone(**model_batch, use_cache=False, return_dict=True)
+        hidden = output.last_hidden_state  # [B,T,H]; all context/media remain in the backward graph
+        if hidden.ndim != 3 or tuple(hidden.shape[:2]) != tuple(input_ids.shape):
+            raise ValueError("native VLM backbone must return hidden states aligned with input_ids")
+        selected = hidden[:, :-1][valid]  # [N,H], including a graph-connected empty [0,H] lane
+        return SelectedSFTPolicyOutput(logits=head(selected))  # [N,V]
+
 
 def build_qwen3_vl_policy(
     *,
@@ -621,6 +658,7 @@ def build_qwen3_vl_policy(
     attn_implementation: str = "eager",
     hooks: Qwen3VLBuildHooks | None = None,
     initialize_on_meta: bool = True,
+    sft_logits_mode: str = "full",
 ) -> Qwen3VLPolicy:
     """Build a native Qwen3-VL in explicit lifecycle order.
 
@@ -630,6 +668,10 @@ def build_qwen3_vl_policy(
     rank is forbidden.
     """
     validate_qwen3_vl_parallelism(parallel_dims)
+    if sft_logits_mode not in {"full", "supervised"}:
+        raise ValueError(f"unsupported SFT logits mode {sft_logits_mode!r}")
+    if sft_logits_mode == "supervised" and (model_type != "qwen3_vl" or parallel_dims is not None):
+        raise ValueError("supervised-position SFT requires a dense native model without distributed wrapping")
     hooks = hooks or Qwen3VLBuildHooks()
     config_cls, model_cls = _native_qwen3_vl_classes(model_type)
     _override_native_attention_mask_compatibility(model_type)
@@ -668,7 +710,7 @@ def build_qwen3_vl_policy(
         from cosmos_framework.posttrain.model.qwen3_vl_moe import Qwen3VLMoePolicy
 
         return Qwen3VLMoePolicy(net)
-    return Qwen3VLPolicy(net, model_type)
+    return Qwen3VLPolicy(net, model_type, sft_logits_mode=sft_logits_mode)
 
 
 def build_qwen3_vl_native_policy(
@@ -736,8 +778,10 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
     from cosmos_framework.configs.base.defaults.activation_checkpointing import (
         ActivationCheckpointingConfig,
     )
+    from cosmos_framework.configs.base.defaults.compile import CompileConfig
     from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-    from cosmos_framework.model.generator.parallelize_vlm import apply_ac, apply_fsdp
+    from cosmos_framework.model.generator.parallelize_vlm import apply_ac, apply_compile, apply_fsdp
+    from cosmos_framework.posttrain.config.model import NATIVE_ADAPTER_SAC_SAVE_OPS
 
     # One artifact owns both architecture semantics and rollout identity. A separate config path
     # would let RoPE/vision defaults drift while parameter names and shapes still appeared valid.
@@ -755,6 +799,10 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             "Qwen3VLModelConfig.name_or_path must resolve to model_type qwen3_vl|qwen3_vl_moe before "
             f"meta/FSDP construction, got {resolved_model_type!r}"
         )
+    if getattr(cfg, "sft_logits_mode", "full") == "supervised" and (
+        not adapter_enabled or resolved_model_type != "qwen3_vl" or pdims is not None
+    ):
+        raise ValueError("supervised-position SFT requires the native dense single-device adapter path")
     if resolved_model_type == "qwen3_vl_moe" and cfg.dtype != "bfloat16":
         raise ValueError(
             "Qwen3VLModelConfig.dtype must be 'bfloat16' for qwen3_vl_moe; the native grouped-mm "
@@ -771,6 +819,14 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
 
         adapter_lifecycle = NativeAdapterLifecycle(cfg, model_config, pdims)
     activation_checkpointing = ActivationCheckpointingConfig(mode=cfg.activation_checkpointing)
+    if adapter_enabled and cfg.activation_checkpointing == "selective":
+        activation_checkpointing.save_ops_regex = list(NATIVE_ADAPTER_SAC_SAVE_OPS)
+    compile_language = getattr(cfg, "compile_language_model", False)
+    if compile_language:
+        if not adapter_enabled or resolved_model_type != "qwen3_vl" or pdims is not None:
+            raise ValueError("language compilation currently requires a single-device native dense Qwen3-VL adapter")
+        if torch._dynamo.config.suppress_errors:
+            raise ValueError("native adapter language compilation requires torch._dynamo.config.suppress_errors=False")
     parallelism_config = ParallelismConfig(
         data_parallel_shard_degree=1 if pdims is None else int(pdims.dp_shard),
         data_parallel_replicate_degree=1 if pdims is None else int(pdims.dp_replicate),
@@ -809,6 +865,35 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
 
         shim = NativeVLMShim()
         slots = apply_ac(shim, activation_checkpointing)
+        if compile_language:
+            layers = net.model.language_model.layers
+            language_slots = [slot for slot in slots if slot[0] is layers]
+            if not language_slots or len(language_slots) != len(layers):
+                raise ValueError("language compilation requires every native language layer to have one block slot")
+            # Compilation wraps the AC wrapper, never its inner block. It may
+            # not replace/move Parameters or touch packed quantization storage.
+            parameter_contract = {
+                id(p): (type(p), tuple(p.shape), p.dtype, p.device, p.requires_grad) for p in net.parameters()
+            }
+            compiled = apply_compile(language_slots, CompileConfig(enabled=True, compile_dynamic=True))
+            from cosmos_framework.posttrain.utils.native_compile import (
+                guard_native_compiled_call,
+                native_compile_diagnostics,
+            )
+
+            for _, _, block in compiled:
+                guard_native_compiled_call(block)
+            replacements = {(id(parent), attribute): block for parent, attribute, block in compiled}
+            slots = [
+                (parent, attribute, replacements.get((id(parent), attribute), block))
+                for parent, attribute, block in slots
+            ]
+            if parameter_contract != {
+                id(p): (type(p), tuple(p.shape), p.dtype, p.device, p.requires_grad) for p in net.parameters()
+            }:
+                raise RuntimeError("language compilation changed native model parameter identity or representation")
+            net._cosmos_compiled_language_blocks = len(compiled)
+            net._cosmos_compile_diagnostics = lambda: native_compile_diagnostics(block for _, _, block in compiled)
         if parallel_dims is not None:
             apply_fsdp(shim, slots, parallel_dims, parallelism_config, cfg.dtype)
 
@@ -828,6 +913,7 @@ def build_qwen3_vl_model(cfg: "Qwen3VLModelConfig", pdims: Any = None) -> Qwen3V
             finalize_model=adapter_lifecycle.finalize if adapter_lifecycle is not None else None,
         ),
         initialize_on_meta=True,
+        sft_logits_mode=getattr(cfg, "sft_logits_mode", "full"),
     )
 
 

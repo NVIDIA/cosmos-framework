@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import torch
@@ -20,6 +21,8 @@ from cosmos_framework.posttrain.algorithm.primitives.policy_forward import (
     forward_policy,
     policy_logits,
     prepare_policy_capability,
+    selected_sft_forward,
+    selected_sft_logits,
 )
 from cosmos_framework.posttrain.config.sft import SFT_SERVE_CONTRACT_DEFAULT, SFT_SERVE_CONTRACTS
 from cosmos_framework.posttrain.data.packer.base import DataPacker, PackerSemanticsIdentity
@@ -27,6 +30,7 @@ from cosmos_framework.posttrain.model.protocol import LoadBalancingPolicy
 from cosmos_framework.posttrain.schema import SFTTarget, Trajectory
 from cosmos_framework.posttrain.utils.dist import rank_sum_count, run_rank_converged, world_size_or_1
 from cosmos_framework.posttrain.utils.identity import normalize_json_dict
+from cosmos_framework.posttrain.utils.training_profile import profile_range
 
 _IGNORE_LABEL = -100
 _METRIC_ADAPTER = MetricAdapter(
@@ -143,14 +147,16 @@ def make_objective(
             # The serve contract the run declared (``rl.serve_contract``, review threads b196e5e99f / 12f2ce563b): present
             # only when it is not the default, so every existing run's identity is unchanged.
             **({"serve_contract": serve_contract} if serve_contract != SFT_SERVE_CONTRACT_DEFAULT else {}),
-            "packer_class": f"{type(packer).__module__}.{type(packer).__qualname__}",
+            "packer_class": getattr(
+                packer, "semantic_packer_class", f"{type(packer).__module__}.{type(packer).__qualname__}"
+            ),
             "packer": packer.validation_semantics_identity(),
         },
         context="SFT objective identity",
     )
 
     def objective(model: Any, trajectories: list[Trajectory]) -> tuple[torch.Tensor, dict[str, Any]]:
-        def prepare() -> tuple[Any, dict[str, Any], torch.Tensor, torch.Tensor, int, int, torch.Tensor]:
+        def prepare() -> tuple[Any, dict[str, Any], torch.Tensor, torch.Tensor, int, int, torch.Tensor, Any]:
             if not trajectories:
                 raise ValueError("SFT requires a nonempty physical batch on every rank")
             metadata = read_validation_batch_metadata(trajectories)
@@ -194,11 +200,22 @@ def make_objective(
             device = next(net.parameters()).device
             batch["input_ids"] = input_ids.to(device)  # [B,L]
             prepared = prepare_policy_capability(model, batch)
-            return net, prepared, input_ids, labels[:, 1:].to(device), token_count, sequence_count, valid.to(device)
+            selected_forward = selected_sft_forward(model)
+            return (
+                net,
+                prepared,
+                input_ids,
+                labels[:, 1:].to(device),
+                token_count,
+                sequence_count,
+                valid.to(device),
+                selected_forward,
+            )
 
-        net, prepared, input_ids, labels, token_count, sequence_count, valid = run_rank_converged(
-            prepare, "SFT objective preparation"
-        )
+        with profile_range("sft.prepare"):
+            net, prepared, input_ids, labels, token_count, sequence_count, valid, selected_forward = run_rank_converged(
+                prepare, "SFT objective preparation"
+            )
         # Count in int64 before forming the DP mean; large token batches must not
         # round their denominator through the default float32 collective dtype.
         global_tokens = rank_sum_count(token_count, labels.device)
@@ -224,7 +241,12 @@ def make_objective(
                     "(LoadBalancingPolicy.begin_lbl_collection switched 0 blocks)"
                 )
         # Collective-bearing forwards are not wrapped in a recoverable-error consensus.
-        output = forward_policy(model, net, prepared)
+        with profile_range("sft.forward"):
+            output = (
+                selected_forward(prepared, valid)
+                if selected_forward is not None
+                else forward_policy(model, net, prepared)
+            )
         lbl_term: torch.Tensor | None = None
         load_max_rel: torch.Tensor | None = None
         if moe_lbl_coeff > 0:
@@ -235,8 +257,11 @@ def make_objective(
             lbl_term, load_max_rel = load_balancing_loss(per_layer, coeff=moe_lbl_coeff, method=moe_lbl_method)
 
         def finalize() -> tuple[torch.Tensor, dict[str, Any]]:
-            logits = policy_logits(output, input_ids, owner="SFT policy")  # [B,L,V]
-            selected_logits = logits[:, :-1][valid].float()  # [N,V]
+            if selected_forward is not None:
+                selected_logits = selected_sft_logits(output, token_count).float()  # [N,V]
+            else:
+                logits = policy_logits(output, input_ids, owner="SFT policy")  # [B,L,V]
+                selected_logits = logits[:, :-1][valid].float()  # [N,V]
             selected_labels = labels[valid]  # [N]
             # Sum reduction on an empty local selection yields a graph-connected zero.
             per_token = F.cross_entropy(selected_logits, selected_labels, reduction="none")  # [N]
@@ -265,9 +290,32 @@ def make_objective(
                 metrics["sft_objective"] = loss.detach()
             return loss, metrics
 
-        return run_rank_converged(finalize, "SFT objective finalization")
+        with profile_range("sft.loss"):
+            return run_rank_converged(finalize, "SFT objective finalization")
 
-    return Objective(objective, reduction=Reduction.TOKEN_SUM, metric_adapter=_METRIC_ADAPTER, identity=identity)
+    prepare_window = getattr(packer, "prepare_window", None)
+
+    def prepare_input_window(batches: list[list[Trajectory]]) -> None:
+        targets = []
+        for batch in batches:
+            for trajectory in batch:
+                if len(trajectory.transitions) != 1 or not isinstance(trajectory.transitions[0].targets, SFTTarget):
+                    raise ValueError("SFT preprocessing windows require one SFTTarget transition per row")
+                targets.append(trajectory.transitions[0].targets)
+        prepare_window(targets)
+
+    return Objective(
+        objective,
+        reduction=Reduction.TOKEN_SUM,
+        metric_adapter=_METRIC_ADAPTER,
+        identity=identity,
+        prepare_window=prepare_input_window if callable(prepare_window) else None,
+        finish_window=getattr(packer, "finish_window", None),
+        close=getattr(packer, "close", None),
+        pipeline_stats=(lambda: deepcopy(packer.preprocessing_stats))
+        if hasattr(packer, "preprocessing_stats")
+        else None,
+    )
 
 
 def _dp_mean(local_value: float, device: torch.device) -> float:

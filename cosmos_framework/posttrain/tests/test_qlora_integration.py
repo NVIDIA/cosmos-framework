@@ -16,6 +16,7 @@ from cosmos_framework.posttrain.tests.qlora_integration import (
     _load_flat_dcp,
     _portable_trainer_controls,
     _probe_rows,
+    _restore_probe_execution,
 )
 from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
 
@@ -110,3 +111,44 @@ def test_memory_telemetry_is_opt_in_and_does_not_initialize_cuda(tmp_path, monke
     assert record["host_peak_rss_bytes"] > 0
     assert "cuda" not in record
     assert json.loads(path.read_text()) == record
+
+
+def test_probe_reconstructs_execution_options_and_rejects_explicit_conflicts():
+    from cosmos_framework.posttrain.configs.sft_qwen3_vl_8b_lora import build_config
+    from cosmos_framework.posttrain.model.quantization.loader import resolved_execution_policy
+
+    reference = build_config()
+    reference.model.model_config.adapter_compute_dtype = "bfloat16"
+    reference.model.model_config.sft_logits_mode = "supervised"
+    identity = {
+        "format": "cosmos.adapter-model.v2",
+        "execution_policy": resolved_execution_policy(reference.model.model_config),
+    }
+    restored = build_config()
+    _restore_probe_execution(restored, identity, [])
+    assert restored.model.model_config.adapter_compute_dtype == "bfloat16"
+    assert restored.model.model_config.sft_logits_mode == "supervised"
+    with pytest.raises(ValueError, match="explicit adapter reload override"):
+        _restore_probe_execution(build_config(), identity, ["model.model_config.adapter_compute_dtype=float32"])
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_controlled_probe_observes_real_objective_full_and_selected_forward(selected):
+    from cosmos_framework.posttrain.algorithm.sft import make_objective
+    from cosmos_framework.posttrain.tests.helpers.sft_objective import MemoryPacker
+    from cosmos_framework.posttrain.tests.qlora_integration import _evaluate_row
+    from cosmos_framework.posttrain.tests.test_sft_selected_logits import _policies
+
+    full, compact = _policies()
+    policy = compact if selected else full
+    packer = MemoryPacker()
+    sample = packer.add([1, 2, 3, 4], [-100, -100, 3, 4])
+    row = {"messages": sample.transitions[0].targets.messages}
+    report, logits = _evaluate_row(policy, packer, make_objective(packer), row)
+    assert report["supervised_tokens"] == 2
+    assert report["logit_positions"] == [1, 2]
+    assert logits.shape == (2, 16)
+    assert torch.isfinite(logits).all()
+    assert not policy.net._forward_hooks
+    assert not policy.net.model._forward_pre_hooks
+    assert not policy.net.lm_head._forward_hooks

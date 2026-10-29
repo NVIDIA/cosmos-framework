@@ -9,9 +9,38 @@ fallback, but that fallback must never receive side inputs it would silently dro
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
+
+from cosmos_framework.posttrain.model.protocol import SelectedSFTPolicy, SelectedSFTPolicyOutput
+
+
+def selected_sft_forward(
+    model: Any,
+) -> Callable[[dict[str, Any], torch.Tensor], SelectedSFTPolicyOutput] | None:
+    """Resolve the opt-in capability during the rank-converged input preflight."""
+    mode = getattr(model, "sft_logits_mode", "full")
+    if mode == "full":
+        return None
+    if mode != "supervised":
+        raise ValueError(f"unsupported SFT logits mode {mode!r}; expected 'full' or 'supervised'")
+    if not isinstance(model, SelectedSFTPolicy):
+        raise TypeError("sft_logits_mode='supervised' requires the SelectedSFTPolicy capability")
+    return model.forward_sft_batch
+
+
+def selected_sft_logits(output: Any, expected_tokens: int) -> torch.Tensor:
+    """Validate an SFT-only projection without weakening the full-logit contract."""
+    if not isinstance(output, SelectedSFTPolicyOutput) or not isinstance(output.logits, torch.Tensor):
+        raise TypeError("selected SFT forward must return SelectedSFTPolicyOutput with tensor logits")
+    logits = output.logits
+    if logits.ndim != 2 or logits.shape[0] != expected_tokens or logits.shape[1] < 1:
+        raise ValueError(
+            f"selected SFT forward must return logits [N,V] for {expected_tokens} tokens, got {tuple(logits.shape)}"
+        )
+    return logits
 
 
 def forward_policy(model: Any, net: Any, batch: dict[str, Any]) -> Any:

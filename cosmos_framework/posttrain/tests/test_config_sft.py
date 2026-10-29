@@ -20,7 +20,7 @@ from cosmos_framework.posttrain.config.rl import OptimizerConfig
 from cosmos_framework.posttrain.config.sft import SFTConfig, SFTDatasetConfig, SFTValidationConfig
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
-_ROOT = Path(__file__).resolve().parents[4]
+_ROOT = Path(__file__).resolve().parents[3]
 _POSTTRAIN = _ROOT / "cosmos_framework/posttrain"
 # The served generation prefix of the path of record (tools present: no <think>), recorded live; review R138-01.
 _SERVED_PREFIX_FIXTURE = _POSTTRAIN / "tests" / "fixtures" / "served_prefix_with_tools.json"
@@ -45,11 +45,11 @@ def test_data_selection_and_validation_require_explicit_sources() -> None:
 
 @pytest.mark.parametrize("remote", [False, True], ids=["local", "s3"])
 def test_recipe_preflight_and_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote: bool) -> None:
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.control.bind import bind_check
     from cosmos_framework.posttrain.control.recipe import sft_manifest
     from cosmos_framework.posttrain.entrypoints.sft import role_specs, validate_config
     from cosmos_framework.posttrain.utils import object_store
+    from cosmos_framework.utils.config import load_config
 
     data_root = "s3://test-bucket/sft" if remote else str(tmp_path)
     monkeypatch.setenv("SFT_DATA_ROOT", data_root)
@@ -239,8 +239,8 @@ def test_native_recipe_carries_the_canary_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
     """configs/sft_qwen3_vl_moe_native.py: sdpa, fusedadam, bf16 storage, and research document section 5's fields."""
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
+    from cosmos_framework.utils.config import load_config
 
     model_dir = tmp_path / "model"
     model_dir.mkdir()
@@ -267,8 +267,8 @@ def test_validate_config_refuses_adamw_below_fp32_master_on_the_hf_seat(
 ) -> None:
     """The rounding mechanism is seat-agnostic: the dense HF recipe at a bfloat16 master (set, or unset and falling
     back to the model dtype) with adamw is refused; the recipe's own fp32 master is accepted."""
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
+    from cosmos_framework.utils.config import load_config
 
     for split in ("train", "validation"):
         (tmp_path / f"{split}.jsonl").write_text("{}\n")
@@ -855,8 +855,8 @@ def test_decay_grouping_references_on_the_real_parameter_names() -> None:
     from torch import nn
     from transformers.trainer_pt_utils import get_parameter_names
 
-    from cosmos_framework.utils.generator.optimizer import _build_params_with_metadata
     from cosmos_framework.posttrain.config.build import qwen_moe_decays
+    from cosmos_framework.utils.generator.optimizer import _build_params_with_metadata
 
     names = _qwen3_vl_moe_parameter_names()
     net = _module_with_parameters(names)
@@ -894,9 +894,9 @@ def test_warmup_cosine_schedule_matches_the_backbone_scheduler_and_reaches_the_o
     the first update runs at lr * f_start, the warmup ends at lr, the cycle ends at lr * f_min."""
     import torch
 
-    from cosmos_framework.utils.functional.lr_scheduler import LambdaWarmUpCosineScheduler
     from cosmos_framework.posttrain.config.build import build_sft_lr_scheduler, warmup_cosine_factor
     from cosmos_framework.posttrain.config.sft import SFTLRScheduleConfig
+    from cosmos_framework.utils.functional.lr_scheduler import LambdaWarmUpCosineScheduler
 
     reference = LambdaWarmUpCosineScheduler(
         warm_up_steps=[1000], f_min=[0.1], f_max=[1.0], f_start=[0.01], cycle_lengths=[2847]

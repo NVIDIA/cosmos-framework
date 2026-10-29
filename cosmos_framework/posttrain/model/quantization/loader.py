@@ -16,7 +16,7 @@ import platform
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import torch
@@ -29,6 +29,118 @@ PROFILE = "qwen3_vl_8b_language_v1"
 REPOSITORY = "Qwen/Qwen3-VL-8B-Instruct"
 REVISION = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 SOURCE_ELEMENTS = 6_945_767_424
+
+
+def runtime_precision_policy() -> dict[str, Any]:
+    """Observe backend math policy without changing global state or initializing CUDA.
+
+    Tensor dtypes alone do not specify FP32 matmul arithmetic. Legacy artifacts
+    never recorded these flags, so observations are diagnostic-only for their
+    default execution path; do not infer a historical policy from today's flags.
+    """
+    return {
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "fp32_precision": {
+            "global": torch.backends.fp32_precision,
+            "cuda_matmul": torch.backends.cuda.matmul.fp32_precision,
+            "cudnn": torch.backends.cudnn.fp32_precision,
+            "cudnn_conv": torch.backends.cudnn.conv.fp32_precision,
+            "cudnn_rnn": torch.backends.cudnn.rnn.fp32_precision,
+        },
+        "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+        "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
+        "allow_bf16_reduced_precision_reduction": torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction,
+        "environment": {
+            name: os.environ.get(name) for name in ("NVIDIA_TF32_OVERRIDE", "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE")
+        },
+    }
+
+
+def resolved_execution_policy(cfg: Any) -> dict[str, Any] | None:
+    """Bind opt-in execution settings to observed math policy; preserve legacy identity."""
+    from cosmos_framework.posttrain.config.model import native_adapter_execution_policy
+
+    configured = native_adapter_execution_policy(cfg)
+    return None if configured is None else {**configured, "math_precision": runtime_precision_policy()}
+
+
+def _validate_precision_record(record: Any) -> None:
+    expected = runtime_precision_policy()
+    if not isinstance(record, dict) or set(record) != set(expected):
+        raise ValueError("adapter execution_policy requires complete math_precision metadata")
+    fp32 = record["fp32_precision"]
+    environment = record["environment"]
+    if (
+        record["float32_matmul_precision"] not in ("highest", "high", "medium")
+        or not isinstance(fp32, dict)
+        or set(fp32) != set(expected["fp32_precision"])
+        or any(value not in ("none", "ieee", "tf32") for value in fp32.values())
+        or any(
+            type(record[name]) is not bool
+            for name in ("cuda_matmul_allow_tf32", "cudnn_allow_tf32", "allow_bf16_reduced_precision_reduction")
+        )
+        or not isinstance(environment, dict)
+        or set(environment) != set(expected["environment"])
+        or any(value is not None and not isinstance(value, str) for value in environment.values())
+    ):
+        raise ValueError("adapter execution_policy contains unsupported math_precision metadata")
+
+
+def execution_config_from_identity(identity: dict[str, Any]) -> dict[str, Any]:
+    """Recover explicit native model options from a portable artifact, failing closed.
+
+    The caller must still call ``validate_execution_policy_identity`` before
+    construction. Math settings are checked against the process, never silently
+    changed while another model may share it.
+    """
+    from cosmos_framework.posttrain.config.model import native_adapter_execution_policy
+
+    policy = identity.get("execution_policy")
+    model_format = identity.get("format")
+    if model_format not in (None, "cosmos.adapter-model.v1", "cosmos.adapter-model.v2"):
+        raise ValueError("unsupported native adapter model identity format")
+    if model_format == "cosmos.adapter-model.v2" and "execution_policy" not in identity:
+        raise ValueError("native adapter model v2 requires complete execution_policy metadata")
+    if model_format == "cosmos.adapter-model.v1" and "execution_policy" in identity:
+        raise ValueError("native adapter execution_policy requires model identity v2")
+    legacy = {
+        "activation_checkpointing": "full",
+        "adapter_compute_dtype": "float32",
+        "sft_logits_mode": "full",
+        "compile_language_model": False,
+    }
+    if "execution_policy" not in identity:
+        return legacy
+    if not isinstance(policy, dict):
+        raise ValueError("adapter execution_policy must be a complete mapping")
+    try:
+        options = {
+            "activation_checkpointing": policy["activation_checkpointing"]["mode"],
+            "adapter_compute_dtype": policy["adapter_compute_dtype"],
+            "sft_logits_mode": policy["sft_logits_mode"],
+            "compile_language_model": policy["language_compile"]["enabled"],
+        }
+        if (
+            options["activation_checkpointing"] not in ("none", "full", "selective")
+            or options["adapter_compute_dtype"] not in ("float32", "bfloat16")
+            or options["sft_logits_mode"] not in ("full", "supervised")
+            or type(options["compile_language_model"]) is not bool
+        ):
+            raise ValueError("unsupported adapter execution options")
+        configured = native_adapter_execution_policy(SimpleNamespace(**options))
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise ValueError("unsupported or incomplete adapter execution_policy") from error
+    if configured is None or {key: value for key, value in policy.items() if key != "math_precision"} != configured:
+        raise ValueError("unsupported or incomplete adapter execution_policy")
+    _validate_precision_record(policy.get("math_precision"))
+    return options
+
+
+def validate_execution_policy_identity(cfg: Any, identity: dict[str, Any]) -> None:
+    """Reject changed/missing execution or math settings before allocating a base."""
+    execution_config_from_identity(identity)
+    if identity.get("execution_policy") != resolved_execution_policy(cfg):
+        raise ValueError("adapter checkpoint execution policy or runtime math precision differs from configuration")
 
 
 def canonical_targets() -> dict[str, tuple[int, int]]:
@@ -231,11 +343,17 @@ def validate_runtime(cfg: Any, model_config: Any, pdims: Any) -> torch.device:
         getattr(model_config, "model_type", None) != "qwen3_vl"
         or cfg.dtype != "bfloat16"
         or cfg.attn_impl != "sdpa"
-        or cfg.activation_checkpointing != "full"
+        or cfg.activation_checkpointing not in ("full", "none", "selective")
     ):
         raise ValueError(
-            "native adapter qualification requires dense Qwen3-VL, BF16, SDPA and full activation checkpointing"
+            "native adapter qualification requires dense Qwen3-VL, BF16, SDPA and supported activation checkpointing"
         )
+    if getattr(cfg, "adapter_compute_dtype", "float32") not in ("float32", "bfloat16"):
+        raise ValueError("native adapter compute dtype must be float32 or bfloat16")
+    if getattr(cfg, "sft_logits_mode", "full") not in ("full", "supervised"):
+        raise ValueError("native adapter SFT logits mode must be full or supervised")
+    if type(getattr(cfg, "compile_language_model", False)) is not bool:
+        raise ValueError("native language compile must be an explicit boolean")
     if bool(getattr(model_config, "tie_word_embeddings", False)):
         raise ValueError("native adapter qualification excludes tied embeddings/output weights")
     text = model_config.text_config
@@ -308,12 +426,21 @@ class NativeAdapterLifecycle:
         self.source_identity = validate_adapter_source(cfg)
         self.device = validate_runtime(cfg, model_config, pdims)
         self.cfg = cfg
+        self.adapter_compute_dtype = getattr(torch, getattr(cfg, "adapter_compute_dtype", "float32"))
+        self.runtime_precision = runtime_precision_policy()
+        self.execution_policy = resolved_execution_policy(cfg)
         self.quantized = cfg.quantized_base is not None
         self.canary = None
         if self.quantized:
             from cosmos_framework.posttrain.model.quantization.bnb import kernel_preflight
 
-            self.canary = kernel_preflight(self.device, cfg.adapter, cfg.quantized_base)
+            self.canary = kernel_preflight(
+                self.device,
+                cfg.adapter,
+                cfg.quantized_base,
+                adapter_compute_dtype=self.adapter_compute_dtype,
+                compile_model=getattr(cfg, "compile_language_model", False),
+            )
         self.targets: dict[str, NativeLoRAMixin] = {}
         self.slots: dict[str, TensorSlot] = {}
         self.buffers: list[TensorSlot] = []
@@ -329,7 +456,12 @@ class NativeAdapterLifecycle:
             if self.quantized:
                 from cosmos_framework.posttrain.model.quantization.bnb import NativeLoraLinear4bit
 
-                replacement = NativeLoraLinear4bit(base, self.cfg.adapter, self.cfg.quantized_base)
+                replacement = NativeLoraLinear4bit(
+                    base,
+                    self.cfg.adapter,
+                    self.cfg.quantized_base,
+                    adapter_compute_dtype=self.adapter_compute_dtype,
+                )
             else:
                 replacement = LoraInjectedLinear(
                     base,
@@ -337,6 +469,7 @@ class NativeAdapterLifecycle:
                     self.cfg.adapter.alpha,
                     dropout=self.cfg.adapter.dropout,
                     adapter_dtype=torch.float32,
+                    adapter_compute_dtype=self.adapter_compute_dtype,
                 )
             parent, _, attribute = name.rpartition(".")
             net.get_submodule(parent).register_module(attribute, replacement)
@@ -436,7 +569,11 @@ class NativeAdapterLifecycle:
             "strategy": {
                 "world_size": 1,
                 "kind": "single_device",
-                "activation_checkpointing": "full_nonreentrant",
+                "activation_checkpointing": (
+                    "none"
+                    if self.cfg.activation_checkpointing == "none"
+                    else f"{self.cfg.activation_checkpointing}_nonreentrant"
+                ),
                 "determinism_mode": "strict",
             },
             "precision": {"base_dense": "bfloat16", "adapter": "float32", "optimizer_moments": "float32"},
@@ -452,13 +589,19 @@ class NativeAdapterLifecycle:
                 **({"bitsandbytes": version("bitsandbytes")} if self.quantized else {}),
             },
         }
+        if self.execution_policy is not None:
+            metadata["format"] = "cosmos.adapter-model.v2"
+            metadata["execution_policy"] = self.execution_policy
         # Plain mappings keep references without registering a second model subtree.
         net._cosmos_adapter_parameters = parameters
         net._native_adapter_parameter_names = tuple(parameters)
         net._cosmos_adapter_metadata = metadata
         net._cosmos_quantization_canary = self.canary
+        net._cosmos_adapter_runtime_precision = self.runtime_precision
 
         def validate_frozen_base() -> None:
+            if runtime_precision_policy() != self.runtime_precision:
+                raise RuntimeError("native adapter runtime math precision changed after model construction")
             for name, expected in frozen.items():
                 if tensor_digest(self.source_slots[name].tensor) != expected:
                     raise RuntimeError(f"frozen native base tensor changed during adapter training: {name}")

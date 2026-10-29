@@ -35,6 +35,7 @@ class NativeLoRAMixin:
     _lora_rank: int
     _lora_alpha: float
     _lora_use_rslora: bool
+    _adapter_compute_dtype: torch.dtype | None
 
     @property
     def _lora_scale(self) -> float:
@@ -45,6 +46,17 @@ class NativeLoRAMixin:
         return {"lora_A.weight": self.lora_A.weight, "lora_B.weight": self.lora_B.weight}
 
     def adapter_delta(self, x: torch.Tensor, *, output_dtype: torch.dtype) -> torch.Tensor:
+        if self._adapter_compute_dtype == torch.bfloat16:
+            # Cast differentiably for this branch only: the leaf Parameters,
+            # their gradients, and Adam moments remain FP32. Never convert the
+            # module/base weight, which can carry packed quantized storage.
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                adapter_input = self.lora_dropout(x).to(dtype=torch.bfloat16)
+                hidden = F.linear(adapter_input, self.lora_A.weight.to(dtype=torch.bfloat16))
+                delta = F.linear(hidden, self.lora_B.weight.to(dtype=torch.bfloat16))
+            return self._lora_scale * delta.to(dtype=output_dtype)
+        # Preserve the historical arithmetic and ambient-autocast behavior for
+        # callers that have not opted into the native BF16 compute policy.
         adapter_input = self.lora_dropout(x).to(dtype=self.lora_A.weight.dtype)
         return self._lora_scale * self.lora_B(self.lora_A(adapter_input)).to(dtype=output_dtype)
 
@@ -77,7 +89,12 @@ class LoraInjectedLinear(NativeLoRAMixin, nn.Linear):
         dropout: float = 0.0,
         use_rslora: bool = False,
         adapter_dtype: torch.dtype | None = None,
+        adapter_compute_dtype: torch.dtype | None = None,
     ) -> None:
+        if adapter_compute_dtype not in (None, torch.float32, torch.bfloat16):
+            raise ValueError("native adapter compute dtype must be float32 or bfloat16")
+        if adapter_compute_dtype is not None and adapter_dtype != torch.float32:
+            raise ValueError("explicit native adapter compute requires FP32 adapter parameters")
         # Reuse base's geometry. Inherit nn.Linear so ``super().forward(x)``
         # dispatches to the standard F.linear path.
         super().__init__(
@@ -114,6 +131,7 @@ class LoraInjectedLinear(NativeLoRAMixin, nn.Linear):
         self._lora_rank = int(rank)
         self._lora_alpha = float(alpha)
         self._lora_use_rslora = bool(use_rslora)
+        self._adapter_compute_dtype = adapter_compute_dtype
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base_out = F.linear(x, self.weight, self.bias)

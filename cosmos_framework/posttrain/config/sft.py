@@ -126,6 +126,10 @@ class SFTConfig(HFRunConfig):
     micro_batch_size: int = 1
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Optional deterministic local-Qwen preprocessing. Caches are bounded CPU
+    # acceleration state; only the consumed source cursor is checkpointed.
+    preprocessing_cache_bytes: int = 0
+    preprocessing_prefetch: bool = False
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
     # did not expose (review R125-D-01). Framework defaults = the pre-existing behaviour; the native recipe
     # (``configs/sft_qwen3_vl_moe_native.py``) documents its own values per knob.
@@ -176,6 +180,10 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if type(self.preprocessing_cache_bytes) is not int or self.preprocessing_cache_bytes < 0:
+            raise ValueError("SFT preprocessing_cache_bytes must be a nonnegative integer")
+        if type(self.preprocessing_prefetch) is not bool:
+            raise TypeError("SFT preprocessing_prefetch must be bool")
         for name in ("micro_batch_size", "max_length"):
             value = getattr(self, name)
             minimum = 2 if name == "max_length" else 1

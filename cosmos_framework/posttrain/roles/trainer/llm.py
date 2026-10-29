@@ -317,6 +317,8 @@ class LLMTrainer(BaseTrainer):
         # COLLECTED-BATCH clock (once per n_mini attempts), matching cosmos-rl, so a batch's n_mini
         # sequential updates all run at one LR. Zero-gradient skips still consume an attempt.
         self._sched_accum = 0
+        self._input_window_active = False
+        self._input_window_start_update: int | None = None
         self.callbacks = callbacks if isinstance(callbacks, CallbackList) else CallbackList(callbacks)
         # Gradient clipping is DTensor-aware; finite checks reject the whole window.
         self.max_grad_norm = float(max_grad_norm)
@@ -664,6 +666,47 @@ class LLMTrainer(BaseTrainer):
         # Only retire the guard once SOME rank actually compared something. All-reduce MAX so
         # every rank agrees; a run where no rank held data re-probes on the next batch.
         self._forward_determinism_checked = rank_any(compared)
+
+    def prepare_input_window(self, batches: list[list[Trajectory]]) -> None:
+        """Prefetch only caller-owned batches in the next optimizer update."""
+        self._raise_if_partial_update_poisoned()
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
+            raise ValueError("input prefetch currently supports one training rank")
+        if (
+            self._input_window_active
+            or self._accum != 0
+            or len(batches) != self.grad_accum
+            or any(not batch for batch in batches)
+        ):
+            raise ValueError("input prefetch requires one nonempty complete optimizer-update window")
+        if self.objective.prepare_window is None:
+            raise ValueError("this objective does not support input prefetch")
+        # Cursor acquisition already happened in the driver. Even a failed CPU
+        # preparation must remain uncheckpointable until a fresh-process restore.
+        self._input_window_active = True
+        self._input_window_start_update = self._iter
+        self.objective.prepare_window(batches)
+
+    def finish_input_window(self) -> None:
+        """No queued input may cross a completed-update checkpoint boundary."""
+        self._raise_if_partial_update_poisoned()
+        if self._accum != 0:
+            raise RuntimeError("input window cannot finish inside gradient accumulation")
+        if not self._input_window_active:
+            raise RuntimeError("no prepared input window is active")
+        if self._input_window_start_update is None or self._iter != self._input_window_start_update + 1:
+            raise RuntimeError("input window requires exactly one completed optimizer update")
+        if self.objective.finish_window is not None:
+            self.objective.finish_window()
+        self._input_window_active = False
+        self._input_window_start_update = None
+
+    def close_input_pipeline(self) -> None:
+        if self.objective.close is not None:
+            self.objective.close()
+
+    def input_pipeline_stats(self) -> dict[str, Any]:
+        return {} if self.objective.pipeline_stats is None else self.objective.pipeline_stats()
 
     def train(self, batch: list[Trajectory]) -> dict[str, Any]:
         """Objective → backward → (deferred normalize) → clip → step, one call per micro-batch.
@@ -1236,16 +1279,20 @@ class LLMTrainer(BaseTrainer):
         self.validation_state.progress.complete(model_step)
 
     def _require_checkpoint_boundary(self) -> None:
-        """Reject checkpoints while a poisoned mini-batch still has chunks to discard."""
+        """Reject checkpoints with prefetched inputs or poisoned chunks still outstanding."""
         super()._require_checkpoint_boundary()
         from cosmos_framework.posttrain.utils.dist import raise_if_any_rank_failed
 
         error = (
-            RuntimeError(
-                f"checkpoint save requires the poisoned mini-batch to finish; skip_remaining={self._skip_remaining}"
+            RuntimeError("cannot checkpoint while a prefetched input window is uncommitted")
+            if self._input_window_active
+            else (
+                RuntimeError(
+                    f"checkpoint save requires the poisoned mini-batch to finish; skip_remaining={self._skip_remaining}"
+                )
+                if self._skip_remaining
+                else None
             )
-            if self._skip_remaining
-            else None
         )
         raise_if_any_rank_failed(error, "LLM trainer checkpoint boundary")
 
@@ -1544,6 +1591,9 @@ class LLMTrainer(BaseTrainer):
     def load(self, path: str) -> int:
         """Restore model, optimizer, and exact trainer state."""
         import os
+
+        if self._input_window_active:
+            raise RuntimeError("cannot load during an active input window; restore in a fresh trainer")
 
         if self._adapter_checkpoint_codec() is not None:
             resumed = self._load_adapter_checkpoint(path)

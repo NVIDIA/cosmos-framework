@@ -27,7 +27,16 @@ class NativeLoraLinear4bit(NativeLoRAMixin, bnb.nn.Linear4bit):
     attached together. No model-wide conversion is involved.
     """
 
-    def __init__(self, base: nn.Linear, adapter: Any, quantization: Any) -> None:
+    def __init__(
+        self,
+        base: nn.Linear,
+        adapter: Any,
+        quantization: Any,
+        *,
+        adapter_compute_dtype: torch.dtype = torch.float32,
+    ) -> None:
+        if adapter_compute_dtype not in (torch.float32, torch.bfloat16):
+            raise ValueError("native adapter compute dtype must be float32 or bfloat16")
         if not base.weight.is_meta or base.bias is not None:
             raise ValueError("native NF4 replacement requires an unmaterialized, bias-free linear")
         super().__init__(
@@ -55,6 +64,7 @@ class NativeLoraLinear4bit(NativeLoRAMixin, bnb.nn.Linear4bit):
         self._lora_rank = adapter.rank
         self._lora_alpha = adapter.alpha
         self._lora_use_rslora = False
+        self._adapter_compute_dtype = adapter_compute_dtype
         self.logical_shape = (base.out_features, base.in_features)
 
     @torch.no_grad()
@@ -107,7 +117,14 @@ class NativeLoraLinear4bit(NativeLoRAMixin, bnb.nn.Linear4bit):
         return base + self.adapter_delta(x, output_dtype=base.dtype)
 
 
-def kernel_preflight(device: torch.device, adapter: Any, quantization: Any) -> dict[str, Any]:
+def kernel_preflight(
+    device: torch.device,
+    adapter: Any,
+    quantization: Any,
+    *,
+    adapter_compute_dtype: torch.dtype = torch.float32,
+    compile_model: bool = False,
+) -> dict[str, Any]:
     """Exercise real NF4 forward/input backward and several FP32 adapter updates.
 
     Fork RNG and leave backend/determinism settings unchanged. This is a kernel
@@ -115,19 +132,31 @@ def kernel_preflight(device: torch.device, adapter: Any, quantization: Any) -> d
     """
     from cosmos_framework.posttrain.model.quantization.loader import quantized_state_record, tensor_digest
 
+    if compile_model and torch._dynamo.config.suppress_errors:
+        raise ValueError("native NF4 compile qualification forbids suppress_errors and silent eager fallback")
     with torch.random.fork_rng(devices=[device.index]):
         generator = torch.Generator(device="cpu").manual_seed(9817)
         weight = torch.randn(128, 128, generator=generator, dtype=torch.bfloat16) * 0.02
-        module = NativeLoraLinear4bit(nn.Linear(128, 128, bias=False, device="meta"), adapter, quantization)
+        module = NativeLoraLinear4bit(
+            nn.Linear(128, 128, bias=False, device="meta"),
+            adapter,
+            quantization,
+            adapter_compute_dtype=adapter_compute_dtype,
+        )
         module.lora_A.weight = nn.Parameter(torch.empty(adapter.rank, 128, dtype=torch.float32, device=device))
         module.lora_B.weight = nn.Parameter(torch.empty(128, adapter.rank, dtype=torch.float32, device=device))
         module.load_dense_weight_once(weight, device)
         module.reset_adapter_parameters(generator=torch.Generator(device=device).manual_seed(9817))
+        forward = torch.compile(module, dynamic=True, fullgraph=False) if compile_model else module
+        if compile_model:
+            from cosmos_framework.posttrain.utils.native_compile import guard_native_compiled_call
+
+            guard_native_compiled_call(forward)
         before = quantized_state_record(module)
         x = torch.randn(2, 7, 128, generator=generator, dtype=torch.bfloat16).to(device).requires_grad_(True)
         control_x = x.detach().clone().requires_grad_(True)
         effective = bnb.functional.dequantize_4bit(module.weight.data, module.weight.quant_state).detach()
-        actual, expected = module(x), F.linear(control_x, effective)
+        actual, expected = forward(x), F.linear(control_x, effective)
         if not torch.allclose(actual, expected, rtol=0.02, atol=0.02):
             raise RuntimeError("NF4 canary forward differs from its dequantized effective base")
         actual_grad = torch.autograd.grad(actual.float().square().mean(), x)[0]
@@ -140,17 +169,26 @@ def kernel_preflight(device: torch.device, adapter: Any, quantization: Any) -> d
         saw_a_gradient = False
         for _ in range(3):
             optimizer.zero_grad(set_to_none=True)
-            loss = module(x.detach()).float().square().mean()
+            loss = forward(x.detach()).float().square().mean()
             if not torch.isfinite(loss):
                 raise RuntimeError("non-finite NF4 canary loss")
             loss.backward()
             if any(
-                parameter.grad is None or not torch.isfinite(parameter.grad).all()
+                parameter.dtype != torch.float32
+                or parameter.grad is None
+                or parameter.grad.dtype != torch.float32
+                or not torch.isfinite(parameter.grad).all()
                 for parameter in module.adapter_parameters().values()
             ):
                 raise RuntimeError("NF4 canary did not propagate finite adapter gradients")
             saw_a_gradient |= bool(torch.count_nonzero(module.lora_A.weight.grad).item())
             optimizer.step()
+            if any(
+                state[name].dtype != torch.float32
+                for state in optimizer.state.values()
+                for name in ("exp_avg", "exp_avg_sq")
+            ):
+                raise RuntimeError("NF4 canary optimizer moments must remain FP32")
         if (
             not saw_a_gradient
             or initial_a == tensor_digest(module.lora_A.weight)
@@ -172,6 +210,8 @@ def kernel_preflight(device: torch.device, adapter: Any, quantization: Any) -> d
             "backend": "bitsandbytes",
             "version": bnb.__version__,
             "steps": 3,
+            "adapter_compute_dtype": str(adapter_compute_dtype).removeprefix("torch."),
+            "compiled": compile_model,
             "forward_max_abs": float((actual - expected).abs().max().item()),
             "input_gradient_max_abs": float((actual_grad - expected_grad).abs().max().item()),
         }

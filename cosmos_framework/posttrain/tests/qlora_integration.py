@@ -128,22 +128,37 @@ def _evaluate_row(model: Any, packer: Any, objective: Any, row: dict[str, Any]) 
     input_records = {name: tensor_digest(tensor.contiguous()) for name, tensor in sorted(batch.items())}
     captured: dict[str, torch.Tensor] = {}
 
-    def capture(_module, _args, kwargs, output):
+    def check_inputs(_module, _args, kwargs):
         for name, expected in input_records.items():
             if name == "labels":
                 continue
             if name not in kwargs or tensor_digest(kwargs[name].contiguous()) != expected:
                 raise RuntimeError(f"native objective preprocessing changed the controlled {name} input")
+
+    def capture(_module, _args, kwargs, output):
+        check_inputs(_module, _args, kwargs)
         logits = output if isinstance(output, torch.Tensor) else output.logits
         captured["logits"] = logits[0, positions.to(logits.device)].detach().float().cpu()
 
-    handle = model.net.register_forward_hook(capture, with_kwargs=True)
+    def capture_selected(_module, _args, output):
+        if not isinstance(output, torch.Tensor) or output.ndim != 2 or output.shape[0] != int(valid.sum()):
+            raise RuntimeError("controlled selected-head probe requires one full-vocabulary row per valid position")
+        captured["logits"] = output[: positions.numel()].detach().float().cpu()
+
+    if getattr(model, "sft_logits_mode", "full") == "supervised":
+        handles = [
+            model.net.model.register_forward_pre_hook(check_inputs, with_kwargs=True),
+            model.net.lm_head.register_forward_hook(capture_selected),
+        ]
+    else:
+        handles = [model.net.register_forward_hook(capture, with_kwargs=True)]
     try:
         metrics = evaluate_sft_batch(
             model, objective, [Trajectory(transitions=[Transition(obs=ObsBundle(), targets=target)])]
         )
     finally:
-        handle.remove()
+        for handle in handles:
+            handle.remove()
     logits = captured["logits"]
     if not torch.isfinite(logits).all():
         raise RuntimeError("controlled native probe produced nonfinite logits")
@@ -172,6 +187,28 @@ def _evaluate_row(model: Any, packer: Any, objective: Any, row: dict[str, Any]) 
     return result, logits
 
 
+def _restore_probe_execution(config: Any, identity: dict[str, Any], overrides: list[str]) -> None:
+    """Reconstruct recorded execution options, refusing contradictory explicit dotlists."""
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.model.quantization.loader import (
+        execution_config_from_identity,
+        validate_execution_policy_identity,
+    )
+    from cosmos_framework.utils.lazy_config import instantiate
+
+    selection = select_policy_backend(config)
+    if selection.native_spec is None:
+        raise ValueError("adapter reload requires an explicit native policy build specification")
+    cfg = selection.model_config
+    recorded = execution_config_from_identity(identity)
+    explicit = {item.split("=", 1)[0].lstrip("+") for item in overrides if "=" in item}
+    for name, value in recorded.items():
+        if f"model.model_config.{name}" in explicit and getattr(cfg, name) != value:
+            raise ValueError(f"explicit adapter reload override {name} differs from the checkpoint")
+        setattr(cfg, name, value)
+    validate_execution_policy_identity(instantiate(cfg), identity)
+
+
 def probe(args: argparse.Namespace) -> dict[str, Any]:
     from cosmos_framework.posttrain.algorithm.sft import make_objective
     from cosmos_framework.posttrain.checkpoint.adapter import load_adapter_weights, read_adapter_metadata
@@ -183,18 +220,22 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
     from cosmos_framework.posttrain.utils.adapter_identity import adapter_processor_identity
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
     from cosmos_framework.posttrain.utils.dist import destroy_process_group_if_initialized, init_local_process_group
+    from cosmos_framework.posttrain.utils.native_compile import native_compile_diagnostics
     from cosmos_framework.utils import misc
     from cosmos_framework.utils.config import load_config
 
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     config = load_config(args.config, ["--", *args.override])
+    # Refuse incomplete/wrong-format artifacts and reconstruct their model-side
+    # execution policy before constructing a processor or the 8B base.
+    saved = read_adapter_metadata(args.checkpoint) if args.checkpoint else None
+    if saved is not None:
+        _restore_probe_execution(config, saved["identity"], args.override)
     rl = validate_config(config)
     if not rl.deterministic:
         raise ValueError("controlled integration probes require rl.deterministic=True")
     enable_determinism(strict=True)
-    # Refuse incomplete/wrong-format artifacts before constructing the 8B base.
-    saved = read_adapter_metadata(args.checkpoint) if args.checkpoint else None
     rows = _probe_rows(args.data, args.video_row, args.image, output)
     init_local_process_group()
     try:
@@ -252,6 +293,8 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
             "peak_reserved_bytes": torch.cuda.max_memory_reserved(),
             "checkpoint": args.checkpoint,
             "optimizer_parameters": sum(len(group["params"]) for group in optimizer.param_groups),
+            "runtime_precision": model.net._cosmos_adapter_runtime_precision,
+            "compile_diagnostics": native_compile_diagnostics(model.net.modules()),
         }
         torch.save(logits, output / "logits.pt")
         _write_json(output / "probe.json", report)

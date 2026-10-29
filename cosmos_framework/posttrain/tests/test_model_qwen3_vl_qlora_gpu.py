@@ -35,7 +35,9 @@ def restore_determinism_state(monkeypatch):
         torch.backends.cudnn.benchmark = cudnn_benchmark
 
 
-def test_nf4_kernel_training_canary_preserves_rng_and_global_flags():
+@pytest.mark.parametrize("adapter_compute_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("compile_model", [False, True], ids=["eager", "compiled"])
+def test_nf4_kernel_training_canary_preserves_rng_and_global_flags(adapter_compute_dtype, compile_model):
     # Import failure/version mismatch must fail a CUDA qualification, never skip
     # to a different backend or a mocked/dense calculation.
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
@@ -51,9 +53,17 @@ def test_nf4_kernel_training_canary_preserves_rng_and_global_flags():
     deterministic = torch.are_deterministic_algorithms_enabled()
     warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     assert deterministic and not warn_only
-    result = kernel_preflight(device, NativeLoRAConfig(), QuantizedBaseTrainingConfig())
+    result = kernel_preflight(
+        device,
+        NativeLoRAConfig(),
+        QuantizedBaseTrainingConfig(),
+        adapter_compute_dtype=adapter_compute_dtype,
+        compile_model=compile_model,
+    )
     assert result["backend"] == "bitsandbytes" and result["version"] == "0.49.2"
     assert result["steps"] == 3
+    assert result["compiled"] is compile_model
+    assert result["adapter_compute_dtype"] == str(adapter_compute_dtype).removeprefix("torch.")
     assert torch.equal(cpu_rng, torch.get_rng_state())
     assert torch.equal(cuda_rng, torch.cuda.get_rng_state(device))
     assert precision == torch.get_float32_matmul_precision()

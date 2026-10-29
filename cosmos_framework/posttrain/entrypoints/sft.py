@@ -230,11 +230,12 @@ def _preflight_adapter_resume(
         return
     from cosmos_framework.posttrain.checkpoint.adapter import read_adapter_metadata
     from cosmos_framework.posttrain.config.build import select_policy_backend
+    from cosmos_framework.posttrain.model.quantization.loader import validate_execution_policy_identity
     from cosmos_framework.posttrain.utils.identity import canonical_config_value
     from cosmos_framework.utils.lazy_config import instantiate
 
     cfg = instantiate(select_policy_backend(config).native_spec.model_config)
-    read_adapter_metadata(
+    metadata = read_adapter_metadata(
         checkpoint.resume_checkpoint,
         expected_identity={
             "base": canonical_config_value(cfg.source_identity),
@@ -246,6 +247,7 @@ def _preflight_adapter_resume(
         require_resume=True,
         manager=checkpoint.manager,
     )
+    validate_execution_policy_identity(cfg, metadata["identity"])
 
 
 def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None, checkpoint: Any) -> Any:
@@ -275,6 +277,32 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         ),
         "SFT tokenizer/processor setup",
     )
+    if rl.preprocessing_cache_bytes or rl.preprocessing_prefetch:
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.data.packer.sft_preprocess import build_sft_preprocessing
+
+        spec = select_policy_backend(config).native_spec
+        if spec is None or getattr(spec.model_config, "adapter", None) is None or world_size_or_1() != 1:
+            raise ValueError("SFT preprocessing optimization initially requires a single-device native adapter")
+        media_hashes: dict[str, str] = {}
+        for source in (data, validation):
+            if source is None:
+                continue
+            for path, digest in getattr(source.dataset, "media_hashes", {}).items():
+                if path in media_hashes and media_hashes[path] != digest:
+                    raise ValueError("training and validation disagree about verified media content")
+                media_hashes[path] = digest
+        packer = run_rank_converged(
+            lambda: build_sft_preprocessing(
+                packer,
+                name_or_path=name_or_path,
+                cache_bytes=rl.preprocessing_cache_bytes,
+                prefetch=rl.preprocessing_prefetch,
+                media_hashes=media_hashes,
+                max_pending=rl.micro_batch_size * rl.grad_accum,
+            ),
+            "SFT deterministic preprocessing setup",
+        )
     objective = make_objective(
         packer,
         ce_exponent=rl.ce_exponent,
@@ -290,6 +318,13 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "dp_world": world_size_or_1(),
         "precision": asdict(resolve_precision(config)),
     }
+    if rl.preprocessing_cache_bytes or rl.preprocessing_prefetch:
+        objective.identity["preprocessing"] = {
+            "protocol": "cosmos.sft-preprocessing.v1",
+            "cache_bytes": rl.preprocessing_cache_bytes,
+            "prefetch": rl.preprocessing_prefetch,
+            "window_examples": rl.micro_batch_size * rl.grad_accum,
+        }
     adapter_contract = _adapter_run_contract(config, packer, objective.identity)
     if adapter_contract is not None:
         _preflight_adapter_resume(config, checkpoint, *adapter_contract)
@@ -423,9 +458,16 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
     from cosmos_framework.posttrain.utils.training_profile import profile_range
 
     reports: list[dict[str, Any]] = []
+    window = None
+    if getattr(rl, "preprocessing_prefetch", False):
+        # Read exactly this update, never the next. Only completed updates may be
+        # checkpointed; a failed partial window restarts from its prior checkpoint.
+        with profile_range("sft.prefetch_window"):
+            window = [resolve(data.get_samples(rl.micro_batch_size)) for _ in range(rl.grad_accum)]
+            resolve(policy.prepare_input_window(window))
     for micro in range(rl.grad_accum):
         with profile_range("sft.data_fetch"):
-            batch = data.get_samples(rl.micro_batch_size)
+            batch = window[micro] if window is not None else data.get_samples(rl.micro_batch_size)
         with profile_range("sft.microbatch"):
             metrics = resolve(policy.train(batch))
         expected = "applied" if micro == rl.grad_accum - 1 else "accumulating"
@@ -434,14 +476,21 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
                 f"SFT rejected update at microbatch {micro}: {metrics.get('optim/skip_reason', metrics)}"
             )
         reports.append(metrics)
+    if window is not None:
+        resolve(policy.finish_input_window())
     # The clip record (``train/grad_clipped``, ``train/grad_clip_coef``) arrives in the applying microbatch's metrics
     # from ``LLMTrainer``, computed from the norm the clip measured (review thread b9037df15d); the loop adds the run's
     # ``train/grad_clip_fraction``.
-    return merge_training_metric_window(
+    merged = merge_training_metric_window(
         reports,
         sum_keys=frozenset(SUMMED_TRAIN_COUNT_KEYS),
         weighted_mean_by={"train/loss_avg": "train/valid_token_count"},
     )
+    if window is not None or getattr(rl, "preprocessing_cache_bytes", 0):
+        for kind, counters in resolve(policy.input_pipeline_stats()).items():
+            for name, value in counters.items():
+                merged[f"data/preprocessing_{kind}_{name}"] = value
+    return merged
 
 
 def evaluate(
@@ -609,8 +658,14 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                     info0(f"termination trigger ({stopped}) — already checkpointed, exiting")
                 return {"final_step": final_step, "preempted": stopped}
     finally:
-        profiler.close()
-        finish_best_effort(reporters, failed_reporters=failures)
+        try:
+            if getattr(rl, "preprocessing_prefetch", False) or getattr(rl, "preprocessing_cache_bytes", 0):
+                resolve(policy.close_input_pipeline())
+        finally:
+            try:
+                profiler.close()
+            finally:
+                finish_best_effort(reporters, failed_reporters=failures)
     return {"start": start, "final_step": final_step, "final_loss": final_loss}
 
 
