@@ -71,7 +71,7 @@ setup() {
   fi
   command -v uvx >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 
-  say "SFT environment (docs/posttrain/guides/sft.md section 2)"
+  say "SFT environment (docs/posttrain/guides/sft.md section 2): about 270 packages, 1 to 2 minutes"
   # --python 3.13: with --project, uv does not read the checkout's .python-version.
   # --group cu130-aarch64 adds NVIDIA NPP on aarch64. --inexact keeps apex when this is re-run.
   local arch=()
@@ -83,7 +83,7 @@ setup() {
   say "apex (the recipe's FusedAdam optimizer)"
   if "$SFT_PY" -c "import torch, amp_C" 2>/dev/null; then echo "already installed"; else build_apex; fi
 
-  say "evaluation environment (plain Transformers, the stack the scores were measured with)"
+  say "evaluation environment (plain Transformers, the stack the scores were measured with): 1 to 2 minutes"
   $UV venv --allow-existing --python 3.12 "$EVAL_VENV"
   $UV pip install --python "$EVAL_PY" torch==2.10.0 torchvision==0.25.0 torchcodec==0.10.0 \
     --index-url https://download.pytorch.org/whl/cu130
@@ -115,17 +115,24 @@ build_apex() {
   [ -d "$ART/apex/.git" ] || git clone https://github.com/NVIDIA/apex.git "$ART/apex"
   git -C "$ART/apex" checkout --detach 575968bc1f9127ccd61003a681472a83af4ff1a1
   # One compile job per 4 GiB of free host memory, at most one per CPU; built for this GPU's architecture.
-  local jobs
+  local jobs arch
   jobs=$(awk -v n="$(nproc)" '/MemAvailable/ {m = int($2 / 4194304); print (m < n ? m : n)}' /proc/meminfo)
-  TORCH_CUDA_ARCH_LIST="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)" \
-    APEX_CPP_EXT=1 APEX_CUDA_EXT=1 MAX_JOBS="$jobs" \
-    $UV pip install --python "$SFT_PY" --no-build-isolation "$ART/apex"
+  arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
+  echo "compiling apex for compute capability $arch with $jobs parallel jobs: about 10 minutes on a GB300."
+  echo "Each line below is one source file being compiled; the last step links the extensions."
+  # -v shows the compiler's progress line by line instead of a silent "Building apex" for ten minutes.
+  TORCH_CUDA_ARCH_LIST="$arch" APEX_CPP_EXT=1 APEX_CUDA_EXT=1 MAX_JOBS="$jobs" \
+    $UV pip install -v --python "$SFT_PY" --no-build-isolation "$ART/apex" 2>&1 |
+    grep --line-buffered -E '^\[[0-9]+/[0-9]+\]|Successfully built|Installed|error|Error' |
+    sed -u 's/^\[\([0-9]*\)\/\([0-9]*\)\].*\/\([^/ ]*\.\(cu\|cpp\)\).*/[\1\/\2] \3/'
+  "$SFT_PY" -c "import torch, amp_C" 2>/dev/null || { echo "apex did not build; the full log is above" >&2; exit 1; }
 }
 
 download() {
-  say "Qwen3-VL-8B-Instruct"
+  say "Qwen3-VL-8B-Instruct (17 GB, 16 files; one progress bar per file)"
   "$EVAL_VENV/bin/hf" download Qwen/Qwen3-VL-8B-Instruct --revision 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b \
     --local-dir "$SFT_MODEL_PATH"
+  du -sh "$SFT_MODEL_PATH" | sed 's/^/model on disk: /'
   if [ "$SMOKE" = 1 ]; then
     echo "smoke: RoboVQA comes from the skill's bundled clips"
     return
@@ -173,6 +180,8 @@ train() {
     exit 1
   fi
   say "train: $STEPS updates of 64 clips on one GPU"
+  echo "loading the model and warming up: the first 'step 1/$STEPS' line appears after about 3 minutes,"
+  echo "then one line per update, about a minute each. Watch train/loss_avg fall from about 1.0."
   PYTHONPATH=. IMAGINAIRE_OUTPUT_ROOT="$RUN" LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" -m torch.distributed.run --standalone --nproc_per_node=1 \
     -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" -- rl.max_steps="$STEPS" rl.save_every="$STEPS"
