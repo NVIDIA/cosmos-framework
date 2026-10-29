@@ -91,6 +91,27 @@ def enabled_sources(rl: SFTConfig) -> list[SFTDatasetConfig]:
     return [rl.data, *([rl.validation.data] if rl.validation.enabled else [])]
 
 
+def _validate_determinism(config: Any) -> bool:
+    """Return whether native adapters require strict execution, rejecting an opt-out early."""
+    from cosmos_framework.posttrain.config.build import select_policy_backend
+
+    spec = select_policy_backend(config).native_spec
+    adapter = spec is not None and getattr(spec.model_config, "adapter", None) is not None
+    if adapter and config.rl.deterministic is not True:
+        raise ValueError("native adapter SFT requires rl.deterministic=True with strict deterministic algorithms")
+    return adapter
+
+
+def _enable_sft_determinism(config: Any, *, adapter_only: bool = False) -> None:
+    """Enforce strict adapters while preserving the existing general SFT policy."""
+    from cosmos_framework.posttrain.utils.determinism import enable_determinism
+
+    if _validate_determinism(config):
+        enable_determinism(strict=True)
+    elif config.rl.deterministic and not adapter_only:
+        enable_determinism()
+
+
 def validate_config_structure(config: Any) -> SFTConfig:
     """Configuration-only preflight: backend, grid, model source and source wiring; imports no factory and opens no
     data file (on the native seat the resolver reads the model's ``config.json``, the metadata read the packer
@@ -105,6 +126,7 @@ def validate_config_structure(config: Any) -> SFTConfig:
         raise ValueError("SFT local/torchrun placement does not support grid.gpu_node_domains")
     if config.grid.backend != "local" or config.grid.grouping != "single":
         raise ValueError("SFT currently supports local/torchrun with grid.grouping='single' only")
+    _validate_determinism(config)
     sft_policy_source(config)
     rl = instantiate(config.rl)
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
@@ -159,6 +181,7 @@ def _adapter_run_contract(
     if spec is None or getattr(spec.model_config, "adapter", None) is None:
         return None
     rl = config.rl
+    _validate_determinism(config)
     if rl.checkpoint_format != "dcp" or rl.save_async or rl.checkpoint_store.backend != "local":
         raise ValueError("native adapter training requires synchronous local DCP checkpoints")
     from cosmos_framework.posttrain.config.rl import FULL_CHECKPOINT_COMPONENTS
@@ -189,6 +212,7 @@ def _adapter_run_contract(
             "max_steps": rl.max_steps,
             "seed": rl.seed,
             "deterministic": rl.deterministic,
+            "determinism_mode": "strict",
             "validation": canonical_config_value(rl.validation),
             "code_revision": revision,
             "wheel_sha256": wheel_sha256,
@@ -364,10 +388,7 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
-        if rl.deterministic:
-            from cosmos_framework.posttrain.utils.determinism import enable_determinism
-
-            enable_determinism()
+        _enable_sft_determinism(config)
         checkpoint = CheckpointLifecycle.from_config(config, rl)
         coordinates = {"rank": rank_or_0(), "world_size": world_size_or_1()}
         data = run_rank_converged(lambda: build_sft_env(rl.data, rl.seed, **coordinates), "SFT training source")
@@ -594,6 +615,9 @@ def run(config: Any, config_path: str, opts: list[str], run_out_dir: str) -> dic
     from cosmos_framework.posttrain.utils.entry import pin_run_attempt
 
     validate_config(config)
+    # The driver initializes CUDA/NCCL before setup; strict adapter policy must precede it.
+    # Setup applies the same policy in every worker before model construction and resume.
+    _enable_sft_determinism(config, adapter_only=True)
     specs = role_specs(config)
     bind_check(sft_manifest(specs)).raise_for_status()
     units: dict[str, Any] = {}

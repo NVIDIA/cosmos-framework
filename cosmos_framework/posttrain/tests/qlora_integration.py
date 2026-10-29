@@ -192,7 +192,7 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
     rl = validate_config(config)
     if not rl.deterministic:
         raise ValueError("controlled integration probes require rl.deterministic=True")
-    enable_determinism()
+    enable_determinism(strict=True)
     # Refuse incomplete/wrong-format artifacts before constructing the 8B base.
     saved = read_adapter_metadata(args.checkpoint) if args.checkpoint else None
     rows = _probe_rows(args.data, args.video_row, args.image, output)

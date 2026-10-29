@@ -93,6 +93,7 @@ def test_adapter_contract_is_finite_json_and_binds_processor_separately() -> Non
     assert training["max_steps"] == config.rl.max_steps
     assert training["seed"] == config.rl.seed
     assert training["deterministic"] is True
+    assert training["determinism_mode"] == "strict"
     assert training["code_revision"] == "a" * 40
     assert training["wheel_sha256"] == "b" * 64
     assert "processor_kwargs" not in training
@@ -145,6 +146,118 @@ def test_dense_path_does_not_require_adapter_receipt_or_processor_contract(
     config.model.model_config.quantized_base = None
     assert sft._adapter_run_contract(config, object(), {}) is None
     _portable_processor_identity.assert_not_called()
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_native_adapter_refuses_determinism_opt_out_before_source_setup(monkeypatch, quantized):
+    config = make_config()
+    if not quantized:
+        config.model.model_config.quantized_base = None
+    config.rl.deterministic = False
+    source = Mock(side_effect=AssertionError("invalid execution policy must fail before source setup"))
+    monkeypatch.setattr(sft, "sft_policy_source", source)
+    with pytest.raises(ValueError, match="native adapter SFT requires rl.deterministic=True"):
+        sft.validate_config_structure(config)
+    source.assert_not_called()
+    with pytest.raises(ValueError, match="strict deterministic algorithms"):
+        sft._adapter_run_contract(config, _packer(config), _objective_identity(config))
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_native_adapter_driver_enables_strict_before_cuda_process_group(monkeypatch, quantized):
+    from cosmos_framework.posttrain.utils import determinism, dist
+
+    config = make_config()
+    config.rl.validation.enabled = False
+    if not quantized:
+        config.model.model_config.quantized_base = None
+    events = []
+    monkeypatch.setattr(sft, "validate_config", lambda cfg: cfg.rl)
+    monkeypatch.setattr(determinism, "enable_determinism", lambda **kwargs: events.append(("determinism", kwargs)))
+
+    class StopBeforeCuda(RuntimeError):
+        pass
+
+    def initialize():
+        events.append(("process_group", {}))
+        raise StopBeforeCuda
+
+    monkeypatch.setattr(dist, "init_local_process_group", initialize)
+    with pytest.raises(StopBeforeCuda):
+        sft.run(config, "recipe.py", [], "/unused-output")
+    assert events == [("determinism", {"strict": True}), ("process_group", {})]
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_native_adapter_worker_enables_strict_before_construction_and_resume(monkeypatch, quantized, resumed):
+    from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
+    from cosmos_framework.posttrain.roles.env import sft as data_env
+    from cosmos_framework.posttrain.utils import determinism
+    from cosmos_framework.utils import config as config_loader
+
+    config = make_config()
+    config.rl.validation.enabled = False
+    if not quantized:
+        config.model.model_config.quantized_base = None
+    events = []
+    monkeypatch.setattr(config_loader, "load_config", lambda *args: config)
+    monkeypatch.setattr(sft, "validate_config", lambda cfg: cfg.rl)
+    monkeypatch.setattr(determinism, "enable_determinism", lambda **kwargs: events.append(("determinism", kwargs)))
+
+    def checkpoint(*args):
+        events.append(("checkpoint", {}))
+        return SimpleNamespace(resume_checkpoint="committed-checkpoint" if resumed else None)
+
+    def dataset(*args, **kwargs):
+        events.append(("data", {}))
+        return SimpleNamespace(source_fingerprint="controlled-training-source")
+
+    def trainer(cfg, rl, data, validation, state):
+        events.append(("model", {}))
+        if state.resume_checkpoint:
+            events.append(("restore", {}))
+        return "controlled-trainer"
+
+    monkeypatch.setattr(CheckpointLifecycle, "from_config", checkpoint)
+    monkeypatch.setattr(data_env, "build_sft_env", dataset)
+    monkeypatch.setattr(sft, "build_trainer", trainer)
+    assert sft.make_setup("recipe.py", [])()["policy"] == "controlled-trainer"
+    assert events == [
+        ("determinism", {"strict": True}),
+        ("checkpoint", {}),
+        ("data", {}),
+        ("model", {}),
+        *([("restore", {})] if resumed else []),
+    ]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_general_sft_retains_default_determinism_enforcement(monkeypatch, enabled):
+    from cosmos_framework.posttrain.utils import determinism
+
+    config = make_config()
+    config.model.model_config.adapter = None
+    config.model.model_config.quantized_base = None
+    config.rl.deterministic = enabled
+    helper = Mock()
+    monkeypatch.setattr(determinism, "enable_determinism", helper)
+    sft._enable_sft_determinism(config, adapter_only=True)
+    helper.assert_not_called()
+    sft._enable_sft_determinism(config)
+    if enabled:
+        helper.assert_called_once_with()
+    else:
+        helper.assert_not_called()
+
+
+def test_resume_rejects_a_different_determinism_mode_before_loading(tmp_path):
+    config = make_config()
+    checkpoint = _checkpoint(config, tmp_path)
+    processor, training = sft._adapter_run_contract(config, _packer(config), _objective_identity(config))
+    training["determinism_mode"] = "warn_only"
+    with pytest.raises(ValueError, match="determinism_mode.*differs"):
+        sft._preflight_adapter_resume(config, checkpoint, processor, training)
 
 
 def test_adapter_contract_survives_typed_dotlist_round_trip() -> None:

@@ -52,7 +52,7 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export IMAGINAIRE_OUTPUT_ROOT="$QLORA_WORK/outputs"
 ```
 
-Set the determinism variables **before** starting Python or torchrun. Native SFT initializes CUDA before its setup-time determinism check. Do not change the driver library search path to conceal a kernel-loading failure.
+Set the determinism variables **before** starting Python or torchrun. Native adapter SFT requires `rl.deterministic=True` and enables strict deterministic algorithms before CUDA initialization; an operation without deterministic support fails. PyTorch's warning-only mode can use nondeterministic Flash Attention backward kernels and does not qualify exact resume. The matched BF16 adapter control uses the same strict mode. Do not change the driver library search path to conceal a kernel-loading failure.
 
 ## Prepare the immutable base and WTS data on CPU
 

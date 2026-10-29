@@ -2,7 +2,7 @@
 
 This proposal adds adapter training on a frozen four-bit language backbone to the native Cosmos posttrain SFT path. The first qualification target is Qwen3-VL-8B-Instruct on one A100-SXM4-80GB. Success requires real image/video conditioning, measured lifecycle memory savings, useful held-out quality, and fresh-process adapter reload and resume.
 
-**Status: design only; runtime support is not qualified.** Configuration acceptance, the static inventory below, and upstream quantizer examples are not execution evidence. This change introduces documentation only. Source changes, dependency changes, downloads, accelerator tests, and benchmarks belong to the staged implementation patches.
+**Status: historical design baseline; full-model runtime qualification is pending.** This document records the original audit and proposal at commit `1a2f03ab6111b457633827736f94f67d55bd5202` on `design/qlora-vlm`. The audited table and proposed interfaces below describe that baseline. An experimental implementation now exists; see the [native QLoRA guide](native_qlora.md) for its current configuration, loading, and checkpoint contracts. Configuration acceptance, CPU tests, and kernel canaries do not establish full-model training, reload/resume parity, memory savings, or held-out quality.
 
 ## Audited starting point
 

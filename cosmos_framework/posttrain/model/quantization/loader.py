@@ -218,6 +218,11 @@ def validate_runtime(cfg: Any, model_config: Any, pdims: Any) -> torch.device:
     adapter, quantization = cfg.adapter, cfg.quantized_base
     if adapter is None:
         raise ValueError("quantized base training requires ordinary native LoRA")
+    if not torch.are_deterministic_algorithms_enabled() or torch.is_deterministic_algorithms_warn_only_enabled():
+        raise ValueError(
+            "native adapter qualification requires strict deterministic algorithms; "
+            "call enable_determinism(strict=True) before CUDA initialization"
+        )
     if getattr(cfg, "credential_path", ""):
         raise ValueError(
             "native adapter training loads a verified local snapshot; remote credential loading is unsupported"
@@ -428,13 +433,19 @@ class NativeAdapterLifecycle:
             "quantized_tensors": quantized_records,
             "initial_adapters": {name: tensor_digest(parameter) for name, parameter in parameters.items()},
             "trainable_elements": sum(parameter.numel() for parameter in parameters.values()),
-            "strategy": {"world_size": 1, "kind": "single_device", "activation_checkpointing": "full_nonreentrant"},
+            "strategy": {
+                "world_size": 1,
+                "kind": "single_device",
+                "activation_checkpointing": "full_nonreentrant",
+                "determinism_mode": "strict",
+            },
             "precision": {"base_dense": "bfloat16", "adapter": "float32", "optimizer_moments": "float32"},
             "hardware": {
                 "name": torch.cuda.get_device_name(self.device),
                 "capability": list(torch.cuda.get_device_capability(self.device)),
             },
             "torch_version": torch.__version__,
+            "torch_git_version": torch.version.git_version,
             "dependencies": {
                 "python": platform.python_version(),
                 **{name: version(name) for name in ("torch", "transformers", "safetensors", "accelerate")},

@@ -23,10 +23,83 @@ from cosmos_framework.posttrain.model.quantization.loader import (
     parameter_slots,
     resolve_targets,
     tensor_digest,
+    validate_runtime,
 )
 from cosmos_framework.utils.generator.lora import LoraInjectedLinear, NativeLoRAMixin
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
+
+
+@pytest.fixture
+def restore_determinism_flags():
+    enabled = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    try:
+        yield
+    finally:
+        torch.use_deterministic_algorithms(enabled, warn_only=warn_only)
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+@pytest.mark.parametrize("enabled,warn_only", [(False, False), (True, True)])
+def test_adapter_runtime_refuses_non_strict_execution_before_cuda(
+    monkeypatch, restore_determinism_flags, quantized, enabled, warn_only
+):
+    cfg = SimpleNamespace(adapter=object(), quantized_base=object() if quantized else None)
+    torch.use_deterministic_algorithms(enabled, warn_only=warn_only)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: pytest.fail("rejected execution must not query CUDA"))
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: pytest.fail("reject before distribution checks"))
+    with pytest.raises(ValueError, match=r"enable_determinism\(strict=True\)"):
+        validate_runtime(cfg, object(), None)
+    assert torch.are_deterministic_algorithms_enabled() is enabled
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is warn_only
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_strict_adapter_runtime_retains_supported_configuration_checks(
+    monkeypatch, restore_determinism_flags, quantized
+):
+    from cosmos_framework.posttrain.config.model import NativeLoRAConfig, QuantizedBaseTrainingConfig
+    from cosmos_framework.posttrain.model.quantization import loader
+
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    cfg = SimpleNamespace(
+        adapter=NativeLoRAConfig(),
+        quantized_base=QuantizedBaseTrainingConfig() if quantized else None,
+        dtype="bfloat16",
+        attn_impl="sdpa",
+        activation_checkpointing="full",
+    )
+    model_config = SimpleNamespace(
+        model_type="qwen3_vl",
+        tie_word_embeddings=False,
+        text_config=SimpleNamespace(
+            num_hidden_layers=36,
+            hidden_size=4096,
+            intermediate_size=12288,
+            num_attention_heads=32,
+            num_key_value_heads=8,
+            head_dim=128,
+        ),
+    )
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setattr(loader.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(loader.dist, "get_world_size", lambda: 1)
+    monkeypatch.setattr(loader.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(loader.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda device: SimpleNamespace(name="A100", total_memory=80_000_000_000)
+    )
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (8, 0))
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    assert validate_runtime(cfg, model_config, None) == torch.device("cuda", 0)
+    with pytest.raises(ValueError, match="FSDP/DTensor"):
+        validate_runtime(cfg, model_config, object())
+    assert torch.are_deterministic_algorithms_enabled()
+    assert not torch.is_deterministic_algorithms_warn_only_enabled()
 
 
 def _profile_model() -> nn.Module:
