@@ -10,15 +10,15 @@ Previous WTS/AutoML results used unchanged framework code and do not qualify thi
 | Requirement | Code / tests | Status |
 |---|---|---|
 | Component selectors, independent settings, aliases/ties | `posttrain/config/adapters.py`, `posttrain/model/adapters.py`, `tests/test_adapters.py` | Implemented and CPU validated (selectors, independent settings, aliases, counts and optimizer membership) |
-| LoRA / rsLoRA | Native `LoraInjectedLinear` reused; posttrain builder integration | Implemented and CPU validated; awaiting installed-wheel GPU qualification |
-| DoRA magnitude, optimization and pure merge | `PosttrainAdapterLinear`, `optimizer_groups` | Implemented and CPU validated, including PEFT reference gradients/reload/merge; awaiting GPU qualification |
-| PiSSA residual contract and saved initial factors | `PosttrainAdapterLinear.initial_A/initial_B`; portable format v1 | Implemented and CPU validated (principal components, immutable initial factors, strict recovery and merged HF reload); awaiting GPU qualification |
+| LoRA / rsLoRA | Native `LoraInjectedLinear` reused; posttrain builder integration | Implemented; CPU validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
+| DoRA magnitude, optimization and pure merge | `PosttrainAdapterLinear`, `optimizer_groups` | Implemented; CPU reference gradients/reload/merge validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
+| PiSSA residual contract and saved initial factors | `PosttrainAdapterLinear.initial_A/initial_B`; portable format v1 | Implemented; CPU principal components/recovery/merge validated; real-model single-GPU training/resume assertions passed, export/reload requalification running |
 | Fresh, warm start and exact resume lifecycle | `Qwen3VLBuildHooks.after_load_before_parallelize`, SFT `build_trainer` | Implemented and CPU validated: bitwise controlled continuation through trainer and full SFT recipe |
 | Portable export / strict reload | `posttrain/checkpoint/adapters.py` | Implemented and CPU validated in fresh processes |
-| Merged HF export | Existing HF materializer reused; bundled processor and single-shard handling extended | Implemented and CPU validated, including fresh-process HF reload |
+| Merged HF export | Existing HF materializer reused; bundled processor and single-shard handling extended | Implemented and CPU validated; real-model BF16 logit gate failed, precision controls in progress (see below) |
 | Vision gradients, media and activation checkpointing | Native tiny Qwen3-VL plus real PNG/MP4 through SFT packer, with/without AC | Implemented and CPU validated; real-model GPU pending |
 | FSDP2 and mixed modality ranks | FP32 adapter storage/accumulation policy added | Awaiting multi-step GPU tests; no qualification claim yet |
-| Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented and validated: all 1,837 package files match; 44 tests pass from the installed wheel outside the checkout |
+| Wheel/container revision provenance | Sealed wheel and byte-by-byte installed-package attestation | Implemented and validated: all 1,837 package files match; 51 tests pass from the latest installed wheel outside the checkout |
 | Full WTS epoch and held-out evaluation | Existing experiments preserved | Pending feature qualification; no new HPO |
 | Recipes, documentation and PR | Runnable native adapter recipe, WTS converter, adapter guide; [draft PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342) | Implemented; GPU evidence pending |
 
@@ -65,3 +65,32 @@ publication now falls back to exclusive directory reservation and a commit-last
 manifest; interruption and competing-writer tests cover that contract. Real
 filesystem and GPU requalification of this fix are pending. Other method/world
 cases continue independently, with their failure logs preserved.
+
+Commit `3a58c98e4cafe24c73c4392571953c855b69833c`, wheel SHA-256
+`88eeb16b59156577ade24b60f5a324bd489f3692f66a05445d3c1813521265fb`:
+installed-package job `37629424` passed 51 tests in 83.60 seconds and passed the
+portable publication/no-overwrite probe on the actual Lustre output mount.
+Its saved container SHA-256 is
+`64269714b74a6ee720b081cb24be2e3dbb3911fee0acef675dcc03d88b66838e`.
+The next GPU gates are `37629559` (20 method/world/AC cases) and `37629560`
+(12 isolated component/world/AC cases plus the full WTS media/accumulation
+profile). They must pass fresh-process portable and merged reload before full
+WTS training starts. Earlier run `37628322` also reached portable export after
+the two-GPU LoRA controlled-continuation checks; its common Lustre export failure
+does not count as completed qualification.
+
+GPU portable reload is bitwise exact for completed cases; the proposed BF16
+merged-output tolerance failed. Diagnostic job `37630400` isolates native BF16
+adapter-to-dense rounding (maximum logit error 0.9375 on the four LoRA probes,
+32/32 argmax tokens unchanged). Native/HF unadapted outputs match exactly for
+text, image-only and video-only inputs; combined image/video evaluation has an
+additional numerical difference. FP32 control `37630661` verifies all 750 serialized
+tensors bitwise against the FP32 merge rounded once; maximum unmerged-to-native
+error is `1.40e-4`, maximum unmerged-to-HF error `3.16e-4`, with 32/32 argmax tokens
+unchanged. Protocol v2 now checks serialized tensors and promoted FP32 native/HF
+forwards, then separately bounds BF16 probability drift and reports near ties.
+The fixed bounds and their interpretation are in the adapter guide; the old
+absolute-logit-only gate remains a recorded failure, not a qualification result.
+All-method/component v2 GPU qualification and full-epoch WTS remain pending. The
+separate `37629971` run passed two-GPU first-and-final vision-layer training and
+exact continuation with AC on/off; it encountered the same merged-output gate.

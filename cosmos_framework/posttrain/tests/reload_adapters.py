@@ -5,16 +5,48 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 from pathlib import Path
 
 import torch
 
 from cosmos_framework.posttrain.checkpoint.adapters import read_adapter_artifact
+from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig, AdapterExtraModuleConfig
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 from cosmos_framework.posttrain.model.qwen3_vl import Qwen3VLPolicy, build_qwen3_vl_model
-from cosmos_framework.posttrain.tests.qualify_adapters import attest
+from cosmos_framework.posttrain.tests.adapter_numerics import (
+    assert_bf16_deployment_drift,
+    compare_logits,
+    verify_promoted_merge,
+)
+from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
+
+
+def portable_policy(base: str, directory: str, identity: dict):
+    components = [
+        AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
+        for row in identity["resolved"]["targets"]
+    ]
+    extras = [
+        AdapterExtraModuleConfig(
+            component=row["component"],
+            targets=[row["name"].rsplit(".", 1)[0]],
+            lr_multiplier=row["lr_multiplier"],
+            weight_decay=row["weight_decay"],
+        )
+        for row in identity["resolved"]["extra_parameters"]
+        if row["owner"] == row["name"]
+    ]
+    config = Qwen3VLModelConfig(
+        name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa", activation_checkpointing="none"
+    )
+    return build_qwen3_vl_model(
+        config,
+        adapters=AdapterConfig(components=components, extra_modules=extras, warm_start=directory),
+        adapter_media_identity=identity["media"],
+    )
 
 
 def main():
@@ -22,76 +54,74 @@ def main():
     parser.add_argument("--run", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--merged")
+    parser.add_argument("--probe-run", help="reuse input probes for a different trained adapter; merged checks only")
+    parser.add_argument("--report-dir", help="write new evidence separately from immutable training outputs")
     parser.add_argument("--wheel", required=True)
     parser.add_argument("--build-record", required=True)
     args = parser.parse_args()
+    if args.probe_run and not args.merged:
+        parser.error("--probe-run requires --merged; portable exact reload needs its own saved reference outputs")
     evidence = attest(args.wheel, args.build_record)
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = False
     root = Path(args.run)
     identity, _ = read_adapter_artifact(str(root / "portable"))
+    source = json.loads((root / "portable/adapter_manifest.json").read_text())["provenance"]
+    batches, references = [], []
+    for path in sorted(Path(args.probe_run or root).glob("probes-rank*.pt")):
+        record = torch.load(path, map_location="cpu", weights_only=True)
+        for key in ("base", "processor", "media", "base_storage_dtype"):
+            if record["identity"][key] != identity[key]:
+                raise ValueError(f"probe input compatibility differs in {key}; use matching media/base inputs")
+        batches.extend(record["batches"])
+        references.extend(record["logits"])
+    if not batches:
+        raise ValueError("no controlled probe inputs found")
+    policy = portable_policy(args.base, str(root / "portable"), identity)
+    native = logits(policy, batches)
+    if not args.probe_run:
+        for value, expected in zip(native, references):
+            torch.testing.assert_close(value, expected, atol=2e-5, rtol=2e-5)
+    control = None
     if args.merged:
         from transformers import AutoModelForImageTextToText
 
+        control = verify_promoted_merge(policy, identity, batches, args.merged)
+        del policy
+        gc.collect()
+        torch.cuda.empty_cache()
         model = AutoModelForImageTextToText.from_pretrained(
-            args.merged, dtype=torch.bfloat16, attn_implementation="sdpa"
+            args.merged, dtype=getattr(torch, identity["base_storage_dtype"]), attn_implementation="sdpa"
         ).cuda()
-        policy = Qwen3VLPolicy(model, "qwen3_vl")
+        actual = logits(Qwen3VLPolicy(model, "qwen3_vl"), batches)
+        expected = native
     else:
-        components = [
-            AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
-            for row in identity["resolved"]["targets"]
-        ]
-        extras = [
-            AdapterExtraModuleConfig(
-                component=row["component"],
-                targets=[row["name"].rsplit(".", 1)[0]],
-                lr_multiplier=row["lr_multiplier"],
-                weight_decay=row["weight_decay"],
-            )
-            for row in identity["resolved"]["extra_parameters"]
-            if row["owner"] == row["name"]
-        ]
-        config = Qwen3VLModelConfig(
-            name_or_path=args.base, dtype="bfloat16", attn_impl="sdpa", activation_checkpointing="none"
-        )
-        policy = build_qwen3_vl_model(
-            config,
-            adapters=AdapterConfig(components=components, extra_modules=extras, warm_start=str(root / "portable")),
-            adapter_media_identity=identity["media"],
-        )
-    policy.net.eval()
-    maximum, absolute_sum, count, argmax_equal, positions = 0.0, 0.0, 0, 0, 0
-    with torch.no_grad():
-        for path in sorted(root.glob("probes-rank*.pt")):
-            record = torch.load(path, map_location="cpu", weights_only=True)
-            for batch, expected in zip(record["batches"], record["logits"]):
-                actual = policy.forward_policy_batch(policy.prepare_policy_batch(batch)).logits[:, -8:].float().cpu()
-                error = (actual - expected).abs()
-                maximum = max(maximum, error.max().item())
-                absolute_sum += error.sum().item()
-                count += error.numel()
-                argmax_equal += int((actual.argmax(-1) == expected.argmax(-1)).sum())
-                positions += actual.shape[0] * actual.shape[1]
-                # BF16 merged weights round the completed FP32 direction once.
-                # Portable reload has no such rounding and uses a tighter bound.
-                torch.testing.assert_close(
-                    actual, expected, atol=0.05 if args.merged else 2e-5, rtol=0.02 if args.merged else 2e-5
-                )
-    mean = absolute_sum / count
-    assert mean <= (0.005 if args.merged else 2e-6), mean
-    assert argmax_equal == positions, (argmax_equal, positions)
+        actual, expected = native, references
     mode = "merged" if args.merged else "portable"
     report = {
         **evidence,
+        "verification_protocol": "cosmos-adapter-numerics-v2",
+        "training_artifact_provenance": source,
+        "probe_run": args.probe_run or args.run,
         "mode": mode,
-        "maximum_logit_error": maximum,
-        "mean_absolute_logit_error": mean,
-        "argmax_equal": argmax_equal,
-        "positions": positions,
-        "status": "passed",
+        **compare_logits(actual, expected),
+        "fp32_merge_control": control,
+        "status": "measured_awaiting_drift_gate",
     }
-    (root / f"{mode}-reload.json").write_text(json.dumps(report, indent=2))
+    output = Path(args.report_dir or root)
+    output.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(str(output / f"{mode}-reload.json"), report)
+    if args.merged and identity["base_storage_dtype"] == "bfloat16":
+        assert_bf16_deployment_drift(report)
+    else:
+        for value, reference in zip(actual, expected):
+            torch.testing.assert_close(
+                value, reference, atol=5e-4 if args.merged else 2e-5, rtol=2e-4 if args.merged else 2e-5
+            )
+        assert report["mean_absolute_logit_error"] <= (5e-5 if args.merged else 2e-6), report
+        assert report["argmax_equal"] == report["positions"], report
+    report["status"] = "passed"
+    atomic_write_json(str(output / f"{mode}-reload.json"), report)
 
 
 if __name__ == "__main__":

@@ -150,6 +150,22 @@ def test_independent_components_and_optimizer_membership():
         assert_trainability(net, optimizer)
 
 
+def test_merge_probability_gate_reports_near_ties_and_rejects_changed_confident_decisions():
+    from cosmos_framework.posttrain.tests.adapter_numerics import assert_bf16_deployment_drift, compare_logits
+
+    reference = [torch.tensor([[[10.0, 10.005, -30.0]]])]
+    actual = [reference[0][..., [1, 0, 2]]]
+    measured = compare_logits(actual, reference)
+    assert measured["argmax_equal"] == 0 and measured["positions"] == 1
+    assert 0 < measured["maximum_argmax_probability_regret"] < 0.02
+    assert_bf16_deployment_drift(measured)
+    confident = [torch.tensor([[[20.0, 0.0, -30.0]]])]
+    with pytest.raises(AssertionError, match="drift"):
+        assert_bf16_deployment_drift(compare_logits([confident[0][..., [1, 0, 2]]], confident))
+    with pytest.raises(ValueError, match="finite"):
+        compare_logits([torch.full_like(confident[0], float("nan"))], confident)
+
+
 @pytest.mark.parametrize(
     "components,match",
     [

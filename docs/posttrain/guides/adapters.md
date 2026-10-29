@@ -162,12 +162,31 @@ python -m cosmos_framework.posttrain.checkpoint.tools.adapters \
 ```
 
 Small FP32 fixtures require output agreement within `atol=3e-5, rtol=3e-5` and
-bitwise controlled next-update recovery. GPU qualification records measured errors;
-BF16 merge permits `atol=.05, rtol=.02`, mean absolute logit error at most `.005`,
-and identical argmax on controlled probes. Portable GPU reload uses `2e-5` and a
+bitwise controlled next-update recovery. Portable GPU reload uses `2e-5` and a
 `2e-6` mean bound; controlled GPU continuation uses `atol=1e-7, rtol=1e-5` on
-trainable parameters and optimizer state. Passing a backward call alone is not a
-quality or resource qualification.
+trainable parameters and optimizer state.
+
+Merged export has three separate numerical gates. Every serialized tensor must
+equal the FP32 reference merge rounded once to the recorded base dtype. A private
+promoted FP32 copy then compares unmerged, native dense and stock HF forwards
+(`atol=5e-4, rtol=2e-4`, mean error at most `5e-5`, identical argmax). This checks
+method algebra independently of reduced-precision deployment. Small fixtures keep
+their tighter existing bounds. The control never changes a live training model.
+
+BF16 adapter and dense GEMMs round at different boundaries; combined image/video
+encoding also has different GEMM batch shapes in native and stock HF. On the real
+8.7B checkpoint these effects exceeded the initial `.05` absolute-logit proposal
+even though all exported tensors were correct. Qualification protocol v2 records
+raw errors and probability drift, with fixed deployment limits: maximum logit
+error `2`, mean absolute error `.2`, per-probe relative L2 error `.0625`, mean/max
+KL `.01/.05`, and mean/max total variation `.025/.1`. Any changed greedy token
+must have original probability within `.02` of the original best token; all actual
+argmax agreement counts are reported. These are empirical bounds for the qualified
+checkpoint/profile, not a claim of identical BF16 generation. Portable reload is
+the exact-output path. The FP32 algebra and serialized-tensor gates are mandatory
+alongside these BF16 bounds; probability agreement alone cannot qualify a merge.
+See the qualification record for measured controls and pending/failed cases.
+Passing a backward call alone is not a quality or resource qualification.
 
 WTS annotations can be converted without resampling using
 `posttrain.scripts.prepare_wts_sft`. Full-epoch jobs must account for every original

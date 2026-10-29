@@ -325,6 +325,41 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
         expected = original.forward_policy_batch(batch).logits
         torch.testing.assert_close(reloaded.forward_policy_batch(batch).logits, expected, atol=0, rtol=0)
         torch.testing.assert_close(dense(**batch).logits, expected, atol=3e-5, rtol=3e-5)
+    from cosmos_framework.posttrain.tests.adapter_numerics import verify_promoted_merge
+
+    control = verify_promoted_merge(reloaded, reloaded.net._posttrain_adapter_identity, [batch], str(merged))
+    assert control["serialized_tensors_verified"] > 0
+
+
+def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path):
+    from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+    from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+    from cosmos_framework.posttrain.tests.adapter_numerics import verify_promoted_merge
+
+    base = tmp_path / "base"
+    tiny_snapshot(base)
+    config = adapter_config("lora")
+    config.components[1].method = "dora"
+    config.components[2].method = "pissa"
+    config.extra_modules = [AdapterExtraModuleConfig(targets=["model.language_model.norm"])]
+    policy = build_qwen3_vl_model(
+        Qwen3VLModelConfig(name_or_path=str(base), dtype="bfloat16", activation_checkpointing="none"), adapters=config
+    )
+    with torch.no_grad():
+        for parameter in policy.net.parameters():
+            if parameter.requires_grad:
+                parameter.add_(0.002)
+    identity = policy.net._posttrain_adapter_identity
+    save_adapter_artifact(policy.net, str(tmp_path / "portable"))
+    export_merged_adapter(str(tmp_path / "portable"), str(base), str(tmp_path / "merged"))
+    control = verify_promoted_merge(
+        policy, identity, [{"input_ids": torch.tensor([[30, 31, 32, 33]])}], str(tmp_path / "merged")
+    )
+    assert control["serialized_tensors_verified"] > 0
+    assert control["hf_fp32"]["maximum_logit_error"] < 3e-5
 
 
 @pytest.mark.parametrize("component", ["all", "language", "projector", "vision"])
@@ -515,3 +550,8 @@ with torch.no_grad():
 """
     check = subprocess.run([sys.executable, "-c", script, str(merged), str(fixture)], capture_output=True, text=True)
     assert check.returncode == 0, check.stderr
+    from cosmos_framework.posttrain.tests.adapter_numerics import verify_promoted_merge
+
+    control = verify_promoted_merge(adapted, ident, probes, str(merged))
+    assert control["serialized_tensors_verified"] > 0
+    assert control["hf_fp32"]["argmax_equal"] == control["hf_fp32"]["positions"]
