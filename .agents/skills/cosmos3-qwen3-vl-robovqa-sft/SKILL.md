@@ -223,6 +223,9 @@ Every stage's full output is in the artifacts directory's `logs` folder, named a
 - **`hf download` fetched no videos**: a newer `hf`; `download` uses the evaluation environment's (huggingface_hub
   0.36.2).
 - **The first training update takes about two minutes and nothing prints before it**: model load and warm-up.
+- **Running `train` or `export` a second time in the same checkout**: the framework refuses to start at step 0 in a
+  run directory that already holds a checkpoint, and the materializer refuses an existing output. Both steps move
+  the earlier result aside under a timestamped name and say so; nothing is deleted.
 
 ## Related skills
 

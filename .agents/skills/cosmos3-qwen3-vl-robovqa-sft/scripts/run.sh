@@ -279,6 +279,14 @@ train() {
     exit 1
   fi
   say "train: $STEPS updates of 64 clips on one GPU"
+  # The framework refuses to start at step 0 inside a run directory that already holds a finished checkpoint (it
+  # protects a result from being overwritten). A second run therefore gets a fresh directory; the old one is kept.
+  local run_dir="$RUN/posttrain_sft/qwen3_vl_8b_robovqa/seed0"
+  if [ -d "$run_dir" ]; then
+    local kept="$run_dir.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$run_dir" "$kept"
+    echo "  an earlier run was in $run_dir; moved it to $kept"
+  fi
   echo "  the first 'step 1/$STEPS' line appears after about 3 minutes, then one line per update (about a minute each);"
   echo "  full log: $ART/logs/train$TAG.log"
   echo
@@ -296,6 +304,12 @@ materialize() {
   local ckpt
   ckpt=$(ls -d "$RUN"/posttrain_sft/qwen3_vl_8b_robovqa/seed0/*/checkpoint_artifacts/iter_* | sort | tail -1)
   echo "checkpoint: $ckpt"
+  # An export from an earlier run is kept aside, the same way train keeps an earlier run directory.
+  if [ -d "$EXPORT" ]; then
+    local kept="$EXPORT.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$EXPORT" "$kept"
+    echo "an earlier export was in $EXPORT; moved it to $kept"
+  fi
   CUDA_VISIBLE_DEVICES= PYTHONPATH=. LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" -m cosmos_framework.posttrain.checkpoint.tools.materialize_hf \
     --ckpt-dir "$ckpt" --base "$SFT_MODEL_PATH" --out "$EXPORT" --expect-tensors 750 --min-tensors 750
