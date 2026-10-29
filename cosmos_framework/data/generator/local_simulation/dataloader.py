@@ -18,13 +18,13 @@ from typing import Any
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 
+from cosmos_framework.utils import log
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader, custom_collate_fn
 from cosmos_framework.data.generator.local_simulation.dataset import LocalSimulationDataset
 from cosmos_framework.data.generator.local_simulation.resume import (
     LOCAL_SIMULATION_RESUME_KEY,
     consume_local_resume_state,
 )
-from cosmos_framework.utils import log
 
 
 class _ResumeDistributedSampler(DistributedSampler):

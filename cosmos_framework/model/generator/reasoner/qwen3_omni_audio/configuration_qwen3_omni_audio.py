@@ -15,6 +15,8 @@ from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
     Qwen3OmniMoeAudioEncoderConfig,
 )
 
+_ENCODER_OUTPUT_MODES = ("native", "pre_projection")
+
 
 def get_qwen3_omni_thinking_audio_encoder_config() -> Qwen3OmniMoeAudioEncoderConfig:
     """Return the released Qwen3-Omni-30B-A3B-Thinking audio-tower config."""
@@ -56,6 +58,7 @@ class Qwen3OmniAudioConfig(PretrainedConfig):
         encoder_config: Qwen3OmniMoeAudioEncoderConfig | dict[str, Any] | None = None,
         projection_hidden_size: int = 4096,
         out_hidden_size: int = 2688,
+        encoder_output_mode: str = "native",
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -73,10 +76,19 @@ class Qwen3OmniAudioConfig(PretrainedConfig):
         _validate_positive_integer("encoder_config.output_dim", encoder_config.output_dim)
         _validate_positive_integer("projection_hidden_size", projection_hidden_size)
         _validate_positive_integer("out_hidden_size", out_hidden_size)
-
+        if encoder_output_mode not in _ENCODER_OUTPUT_MODES:
+            raise ValueError(f"encoder_output_mode must be one of {_ENCODER_OUTPUT_MODES}, got {encoder_output_mode!r}")
         self.encoder_config = encoder_config
         self.projection_hidden_size = int(projection_hidden_size)
         self.out_hidden_size = int(out_hidden_size)
+        self.encoder_output_mode: str = encoder_output_mode
+
+    @property
+    def encoder_output_size(self) -> int:
+        """Return the feature width emitted by the selected encoder output."""
+        if self.encoder_output_mode == "pre_projection":
+            return int(self.encoder_config.d_model)
+        return int(self.encoder_config.output_dim)
 
 
 __all__ = ["Qwen3OmniAudioConfig", "get_qwen3_omni_thinking_audio_encoder_config"]

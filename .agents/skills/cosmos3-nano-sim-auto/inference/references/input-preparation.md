@@ -73,6 +73,13 @@ A 21-frame first check needs matching media and caption spans; 297 frames needs
 full-length controls and captions. Do not change only a filename or FPS tag to
 make mismatched recordings appear synchronized.
 
+For RGB-only 10-FPS inputs, keep synchronized frames unchanged and set top-level
+`output_fps: 10` (CLI `--output-fps 10`). Model conditioning defaults to 30 FPS;
+explicit different `fps` values are rejected. This retimes saved RGB/WSM videos,
+not model inputs or caption timestamps. Follow the shared
+[timing guide](../../../cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps).
+Joint RGB/LiDAR must retain 30-FPS output; joint retiming is not supported.
+
 Optional measured LiDAR uses `lidar.condition_path` and a single initial sweep;
 longer target prefixes and view completion are not supported by this causal
 workflow. HD-map controls are not measured initial observations.

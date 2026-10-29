@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import copy
+
 import pytest
 
 from cosmos_framework.data.generator.augmentors.reasoner.prompt_format import PromptFormat
+from cosmos_framework.utils.generator.structured_conversation import REASONING_PREFILL_KEY
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
@@ -73,3 +76,35 @@ def test_strip_thinking_drops_sample_without_assistant_supervision() -> None:
 def test_strip_thinking_rejects_invalid_probability(probability: float) -> None:
     with pytest.raises(ValueError, match=r"must be in \[0, 1\]"):
         PromptFormat(strip_thinking_prob=probability)
+
+
+@pytest.mark.parametrize("mask_prefix", [False, True])
+def test_reasoning_prefix_supervision_is_explicit(mask_prefix: bool) -> None:
+    source = {
+        "texts": [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "reasoning_content": "Reasoning", "content": "Answer", "loss": False},
+        ]
+    }
+    original = copy.deepcopy(source)
+    source_messages = source["texts"]
+    result = PromptFormat(mask_inserted_reasoning_prefix=mask_prefix)(source)
+    assert result is not None
+    message = result["conversation"][1]
+    assert message.get(REASONING_PREFILL_KEY, False) is mask_prefix
+    assert message["loss"] is False
+    assert "".join(item["text"] for item in message["content"]) == "<think>\nReasoning\n</think>\n\nAnswer"
+    assert source_messages == original["texts"]
+
+
+def test_reasoning_prefix_default_retains_processor_mask() -> None:
+    result = PromptFormat()(
+        {
+            "texts": [
+                {"role": "user", "content": "Question"},
+                {"role": "assistant", "reasoning_content": "Reasoning", "content": "Answer"},
+            ]
+        }
+    )
+    assert result is not None
+    assert REASONING_PREFILL_KEY not in result["conversation"][1]

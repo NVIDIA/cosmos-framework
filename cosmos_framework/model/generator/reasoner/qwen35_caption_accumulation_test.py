@@ -6,23 +6,28 @@
 from contextlib import nullcontext
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp.grad_scaler import GradScaler
 
 from cosmos_framework.utils.config import CheckpointConfig
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.model.generator.algorithm.loss import cross_entropy as ce
-from cosmos_framework.configs.base.reasoner.defaults.policy_config import PolicyConfig, VLMModelConfig
+from cosmos_framework.configs.base.reasoner.defaults.policy_config import (
+    LBLConfig,
+    PolicyConfig,
+    VLMModelConfig,
+)
 from cosmos_framework.model.generator.reasoner.qwen35_caption import Qwen35CaptionLoss
 from cosmos_framework.model.generator.vlm_model import VLMModel
 from cosmos_framework.utils.generator import flash_attn
 
-pytestmark = [pytest.mark.L1, pytest.mark.CPU]
+pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 
 class _CaptionHead(nn.Module):
@@ -56,7 +61,7 @@ class _GradientProbe(Callback):
         model: VLMModel,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler,
-        grad_scaler: torch.amp.GradScaler,
+        grad_scaler: GradScaler,
         iteration: int = 0,
     ) -> None:
         self.gradients.append({name: parameter.grad.clone() for name, parameter in model.named_parameters()})
@@ -68,11 +73,13 @@ def _no_profile(*args: Any, **kwargs: Any) -> nullcontext[None]:
     return nullcontext()
 
 
-def _make_model(monkeypatch: pytest.MonkeyPatch, exponent: float, normalize: bool = True) -> VLMModel:
+def _make_model(
+    monkeypatch: pytest.MonkeyPatch, exponent: float, normalize: bool = True, *, model_type: str = "qwen3_5"
+) -> VLMModel:
     def init_vlm(self: VLMModel, config: VLMModelConfig, checkpoint: CheckpointConfig) -> None:
-        self.model = _CaptionHead(exponent)
-        self.hf_config = SimpleNamespace(model_type="qwen3_5")
-        self.parallel_dims = None
+        setattr(self, "model", _CaptionHead(exponent))
+        self.hf_config = SimpleNamespace(model_type=model_type)
+        setattr(self, "parallel_dims", None)
 
     def scalar_ce(hidden: torch.Tensor, weight: torch.Tensor, labels: torch.Tensor, ignore_index: int) -> torch.Tensor:
         return F.cross_entropy(F.linear(hidden, weight), labels, ignore_index=ignore_index, reduction="sum")
@@ -90,7 +97,8 @@ def _make_model(monkeypatch: pytest.MonkeyPatch, exponent: float, normalize: boo
                 enable_fused_weighted_ce=True,
                 weighted_ce_exponent=exponent,
                 normalize_weighted_ce_over_accumulation_window=normalize,
-            )
+            ),
+            lbl=LBLConfig(coeff=0.1 if model_type == "qwen3_vl_moe" else None, method="global"),
         ),
         CheckpointConfig(),
     )
@@ -117,10 +125,10 @@ def test_accumulation_matches_full_batch_update(
             straggler_detection=SimpleNamespace(analyze_forward=False, analyze_backward=False, analyze_optimizer=False),
         )
     )
-    trainer.training_timer = _no_profile
-    trainer.straggler_detector = SimpleNamespace(profile_section=_no_profile)
-    trainer.callbacks = probe
-    scaler = torch.amp.GradScaler("cpu", enabled=False)
+    monkeypatch.setattr(trainer, "training_timer", _no_profile, raising=False)
+    monkeypatch.setattr(trainer, "straggler_detector", SimpleNamespace(profile_section=_no_profile), raising=False)
+    monkeypatch.setattr(trainer, "callbacks", probe, raising=False)
+    scaler = GradScaler("cpu", enabled=False)
 
     # Two consecutive windows also verify that the denominator is reset after each update.
     for window in range(2):
@@ -132,8 +140,10 @@ def test_accumulation_matches_full_batch_update(
         for row, count in enumerate(counts):
             if count and not all_ignored:
                 labels[row, -count:] = ids[row, -count:]
-        logits = reference.model.model(reference.model.embedding(ids))
+        reference_head = cast(_CaptionHead, reference.model)
+        logits = reference_head.model(reference_head.embedding(ids))
         reference_loss = ce.weighted_cross_entropy_loss(logits, labels, exponent)
+        assert isinstance(reference_loss, torch.Tensor)
         reference_loss.backward()
         expected_gradients = {name: parameter.grad.clone() for name, parameter in reference.named_parameters()}
         torch.nn.utils.clip_grad_norm_(reference.parameters(), max_norm=0.01)
@@ -172,3 +182,37 @@ def test_window_normalization_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -
     assert model._weighted_ce_window_denominator is None
     torch.testing.assert_close(output["train_objective_numerator"], loss.detach())
     assert output["train_objective_denominator"].item() == 1
+
+
+@pytest.mark.parametrize("exponent", [0.0, 0.5, 1.0])
+def test_moe_accumulation_keeps_auxiliary_objective_separate(monkeypatch: pytest.MonkeyPatch, exponent: float) -> None:
+    torch.manual_seed(917)
+    model = _make_model(monkeypatch, exponent, model_type="qwen3_vl_moe")
+    reference = deepcopy(model)
+    assert model.requires_accumulation_window
+
+    def auxiliary(self: VLMModel) -> torch.Tensor:
+        # A differentiable auxiliary objective isolates the trainer's CE/aux scaling
+        # from MoE routing kernels, whose distributed parity is tested separately.
+        return 0.1 * cast(_CaptionHead, self.model).model.weight.square().mean()
+
+    monkeypatch.setattr(VLMModel, "_moe_load_balancing_loss", auxiliary)
+    ids = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
+    labels = torch.tensor([[-100, -100, -100, -100, 5], [-100, 7, 8, 9, 10]])
+    reference_head = cast(_CaptionHead, reference.model)
+    reference_ce = ce.weighted_cross_entropy_loss(reference_head.model(reference_head.embedding(ids)), labels, exponent)
+    assert isinstance(reference_ce, torch.Tensor)
+    expected = reference_ce + auxiliary(reference)
+    expected.backward()
+    batches = tuple({"input_ids": ids[i : i + 1], "labels": labels[i : i + 1].clone()} for i in range(2))
+    model.prepare_accumulation_window(batches)
+    for batch in batches:
+        output, loss = model.training_step(batch, iteration=0)
+        (output.get("_backward_loss", loss) / len(batches)).backward()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    model.on_before_optimizer_step(optimizer, scheduler, iteration=0)
+    for actual, wanted in zip(model.parameters(), reference.parameters(), strict=True):
+        torch.testing.assert_close(actual.grad, wanted.grad, atol=2e-6, rtol=2e-5)
+    assert model._weighted_ce_window_plan is None
+    assert model._weighted_ce_window_denominator is None

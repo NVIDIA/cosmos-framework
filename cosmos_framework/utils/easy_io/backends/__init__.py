@@ -19,13 +19,17 @@ __all__ = [
 if TRAINING:
     try:
         from cosmos_framework.utils.easy_io.backends.boto3_backend import Boto3Backend
-    except ImportError:
-        pass
+    except ModuleNotFoundError as error:
+        # Only a missing optional S3 client is tolerated; any other import failure surfaces here.
+        if (error.name or "").split(".")[0] not in {"boto3", "botocore", "multistorageclient"}:
+            raise
     else:
         __all__.append("Boto3Backend")
     try:
         from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
-    except ImportError:
-        pass
+    except ModuleNotFoundError as error:
+        # Only a missing optional S3 client is tolerated; any other import failure surfaces here.
+        if (error.name or "").split(".")[0] not in {"boto3", "botocore", "multistorageclient"}:
+            raise
     else:
         __all__.append("MSCBackend")

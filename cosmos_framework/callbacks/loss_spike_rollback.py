@@ -261,14 +261,17 @@ class LossSpikeRollback(Callback):
         return True
 
     def _scale_lr(self, optimizer: torch.optim.Optimizer, scheduler: Any, factor: float) -> None:
-        """Back the learning rate off by rescaling the scheduler's ``base_lrs``.
+        """Rescale both the next update's rate and the scheduler's base rates.
 
         Writing ``param_group["lr"]`` directly would not survive: ``LambdaLR`` recomputes
         ``lr = base_lrs[i] * lr_lambda(step)`` on every ``scheduler.step()``, so a direct
         write is discarded on the very next iteration. ``base_lrs`` is the input to that
-        product and therefore the only durable place to apply the backoff.
+        product and therefore the durable place to apply the backoff. The trainer
+        has already stepped the scheduler before this hook, so the current rates
+        must also change before the next optimizer update.
         """
         schedulers = _real_schedulers(scheduler)
+        previous_scale = self._lr_scale
         if self._base_lrs is None:
             if schedulers:
                 self._base_lrs = [list(sched.base_lrs) for sched in schedulers]
@@ -289,6 +292,18 @@ class LossSpikeRollback(Callback):
         if schedulers:
             for sched, bases in zip(schedulers, self._base_lrs):
                 sched.base_lrs = [base * self._lr_scale for base in bases]
+            # Preserve the scheduler's current warmup/decay multiplier. Changing
+            # only base_lrs takes effect after the next optimizer update, too late
+            # to protect that update. The ratio also handles gradual recovery and
+            # repeated backoffs without applying the cumulative scale twice.
+            if self._lr_scale != previous_scale:
+                for opt in _real_optimizers(optimizer):
+                    for group in opt.param_groups:
+                        group["lr"] = group["lr"] * self._lr_scale / previous_scale
+            # Keep logging and checkpoint state aligned with the next update's
+            # rate without advancing the schedule or its counters.
+            for sched in schedulers:
+                sched._last_lr = [group["lr"] for group in sched.optimizer.param_groups]
             return
         for opt, bases in zip(_real_optimizers(optimizer), self._base_lrs):
             for group, base in zip(opt.param_groups, bases):

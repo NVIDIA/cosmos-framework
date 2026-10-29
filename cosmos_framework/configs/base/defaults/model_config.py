@@ -264,9 +264,9 @@ class OmniMoTModelConfig:
     # whose noised tokens share one timestep, take the unchunked path. None disables chunking.
     timestep_embedding_chunk_size: int | None = 128_000
 
-    # Keep the raw CP data window on the host and release raw video CUDA inputs
-    # immediately after slot-0 tokenization. H100 multiview experiments opt in;
-    # the model default remains disabled.
+    # Keep the raw CP data window on the host and release raw vision CUDA inputs
+    # immediately after slot-0 tokenization. Memory-constrained CP experiments
+    # opt in; the model default remains disabled.
     release_cp_raw_batch_after_preprocessing: bool = False
 
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
@@ -340,6 +340,8 @@ class OmniMoTModelConfig:
     # None preserves Auto's separate action controls and control/target item roles.
     # Opt-in batches use separate ragged RGB and full frame-rate action blocks;
     # single-view batches in the same run keep their original dense packing.
+    # This config controls packing/view codes; attention uses the resulting item
+    # layout and the shared multiview_attention settings above.
     multiview_action_conditioning: MultiviewActionConditioningConfig | None = None
 
     # Per-layer NATTEN parameters

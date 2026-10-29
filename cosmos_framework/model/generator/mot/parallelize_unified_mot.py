@@ -34,12 +34,12 @@ from torch.utils.checkpoint import (
 
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.model.generator.mot.activation_marks import enable_marking, is_mark_op
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_attention
 from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
+from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.utils.generator.activation_offloading import (
     checkpoint_with_flattened_inputs,
     offload_checkpoint_inputs,
@@ -512,6 +512,12 @@ def apply_cp(
     cp_mesh = parallel_dims.cp_mesh
     for _, block in model.model.layers.named_children():
         attn = block.self_attn
+        # Ulysses scatters query heads across ranks; KV heads can be repeated for GQA.
+        if attn.num_attention_heads % parallel_dims.cp != 0:
+            raise ValueError(
+                f"Query heads ({attn.num_attention_heads}) must be divisible by "
+                f"CP (Context Parallelism) size ({parallel_dims.cp})."
+            )
         attn.dispatch_attention_fn = ContextParallelDispatch(
             cp_mesh,
             wrapped_dispatch=attn.dispatch_attention_fn,

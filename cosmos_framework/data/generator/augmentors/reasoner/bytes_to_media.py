@@ -17,19 +17,23 @@ import torch
 from PIL import Image, UnidentifiedImageError
 from torchcodec.decoders import AudioDecoder, VideoDecoder
 
-from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
-from cosmos_framework.data.generator.reasoner.video_decoder_qwen import VideoTemporalMode, _video_decoder_qwen_func
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.reasoner.video_decoder_qwen import (
+    VideoDecodeTimeoutError,
+    VideoTemporalMode,
+    _video_decoder_qwen_func,
+)
+from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
 from cosmos_framework.utils.generator.source_video_timing import (
     SOURCE_VIDEO_TIMING_KEY,
     require_source_pts_processor,
     validate_source_video_timing,
     validate_video_timestamp_mode,
 )
-from cosmos_framework.utils.generator.torchcodec_video import probe_video
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
 from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY
+from cosmos_framework.utils.generator.torchcodec_video import probe_video
 
 
 class BytesToMedia(Augmentor):
@@ -51,10 +55,11 @@ class BytesToMedia(Augmentor):
         input_key: str = "media",
         output_key: str = "media",
         min_fps_thres: int = 4,
-        max_fps_thres: int = 60,
+        max_fps_thres: float = 60.0,
         target_fps: float = 4.0,
         min_video_token_length: int = 16,
         max_video_token_length: int = 8192,
+        max_video_frames: int | None = None,
         num_threads: int = 0,
         random_augmentation: bool = False,
         is_input_pickle_byptes: bool = True,
@@ -65,6 +70,8 @@ class BytesToMedia(Augmentor):
         audio_sample_rate: int = 16_000,
         video_timestamp_mode: str = "qwen_index",
         video_temporal_mode: VideoTemporalMode = "native",
+        decoding_timeout: int = 60,
+        raise_on_decode_timeout: bool = False,
     ) -> None:
         """
         Args:
@@ -82,8 +89,12 @@ class BytesToMedia(Augmentor):
             frame_count_random_range (list[int], optional): Random frame count range. Defaults to None.
             extract_audio (bool): Whether to decode the audio stream from video containers.
             audio_sample_rate (int): Target sample rate for decoded mono audio.
+            decoding_timeout (int): Maximum wait for decoding one chunk of video frames, in seconds.
+            raise_on_decode_timeout (bool): Keep resource failures out of immutable packing catalogs.
         """
         validate_video_timestamp_mode(video_timestamp_mode)
+        if decoding_timeout <= 0:
+            raise ValueError("decoding_timeout must be positive")
         self.video_timestamp_mode: str = video_timestamp_mode
         if video_timestamp_mode == "source_pts":
             require_source_pts_processor(processor)
@@ -98,11 +109,14 @@ class BytesToMedia(Augmentor):
             "max_fps_thres": max_fps_thres,
             "target_fps": target_fps,
             "min_video_token_length": min_video_token_length,
-            "max_video_token_length": max_video_token_length,
+            "max_video_token_length": max_video_token_length,  # per sample; _get_decoder_params splits it across videos
+            "max_video_frames": max_video_frames,
             "num_threads": num_threads,
             "random_augmentation": random_augmentation,
             "frame_count_random_range": frame_count_random_range,
             "video_temporal_mode": video_temporal_mode,
+            "decoding_timeout": decoding_timeout,
+            "raise_on_decode_timeout": raise_on_decode_timeout,
         }
         self.is_input_pickle_byptes = is_input_pickle_byptes
         self.use_start_frame_end_frame = use_start_frame_end_frame
@@ -129,7 +143,7 @@ class BytesToMedia(Augmentor):
     def _is_audio_key(name: str) -> bool:
         """Return whether a media key denotes an audio clip."""
         name_lower = name.lower()
-        return "audio" in name_lower or "sound" in name_lower or name_lower.endswith((".wav", ".flac"))
+        return "audio" in name_lower or "sound" in name_lower or name_lower.endswith((".wav", ".flac", ".mp3"))
 
     def _bytes_to_audio_waveform(
         self,
@@ -262,6 +276,10 @@ class BytesToMedia(Augmentor):
                 result["videos"], channels_first=True
             )  # 3,T,H,W -> list of PIL images
             return result
+        except VideoDecodeTimeoutError:
+            # A timeout depends on worker load, not on the source row. Packed
+            # preprocessing must stop rather than seal a different sample set.
+            raise
         except Exception as e:
             if self.video_timestamp_mode == "source_pts":
                 raise ValueError(f"source_pts failed to decode and align video {identifier!r}") from e

@@ -9,13 +9,13 @@ from typing import cast
 import torch
 from loguru import logger as log
 
+from cosmos_framework.trainer import ImaginaireTrainer
+from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.distillation.optimizer import (
     PhaseOptimizer,
     PhaseScheduler,
     iter_torch_optimizers,
 )
-from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.utils import distributed
 
 __all__: tuple[str, ...] = ("DistillationTrainer",)
 

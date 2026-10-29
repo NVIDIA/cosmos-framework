@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ludus-renderer"
+version = "0.1.0"
+description = "Ludus: GPU-native F-theta renderer for autonomous-driving scenes"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ninja>=1.13.0",
+    "numpy",
+    "pandas",
+    "pillow",
+    "pyarrow",
+    "PyNvVideoCodec",
+    "scipy",
+    "setuptools",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+cuda11 = [
+    "nvidia-nvcomp-cu11>=4,<6; sys_platform == 'linux'",
+    "nvidia-nvjpeg-cu11>=11,<12; sys_platform == 'linux'",
+]
+cuda12 = [
+    "nvidia-nvcomp-cu12>=4,<6; sys_platform == 'linux'",
+    "nvidia-nvjpeg-cu12>=12,<13; sys_platform == 'linux'",
+]
+cuda13 = [
+    "nvidia-cuda-cccl>=13.0,<13.1; sys_platform == 'linux'",
+    "nvidia-cuda-crt>=13.0,<13.1; sys_platform == 'linux'",
+    "nvidia-cuda-nvcc>=13.0,<13.1; sys_platform == 'linux'",
+    "nvidia-cuda-runtime>=13.0,<13.1; sys_platform == 'linux'",
+    "nvidia-nvcomp-cu13>=5,<6; sys_platform == 'linux'",
+    "nvidia-nvjpeg>=13.0,<13.1; sys_platform == 'linux'",
+    "nvidia-nvvm>=13.0,<13.1; sys_platform == 'linux'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cuda11" },
+    ],
+    [
+        { extra = "cpu" },
+        { extra = "cuda12" },
+    ],
+    [
+        { extra = "cpu" },
+        { extra = "cuda13" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch_cpu", extra = "cpu" }]
+torchvision = [{ index = "pytorch_cpu", extra = "cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch_cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+# The C++/CUDA sources under ludus_renderer/_cpp are JIT-compiled at import
+# time, so they ship inside the wheel.
+packages = ["ludus_renderer"]
+
+[tool.pytest.ini_options]
+markers = [
+    "L0: fast tests run on every commit/MR (< 30 sec/test).",
+    "L1: nightly tests (< 10 min/test).",
+    "L2: weekly tests (< 1 hour/test).",
+    "CPU: tests that do not require GPU resources.",
+    "GPU: tests that require GPU resources.",
+]

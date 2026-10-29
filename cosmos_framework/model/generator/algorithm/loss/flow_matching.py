@@ -100,7 +100,7 @@ def compute_flow_matching_loss(
     Returns:
         tuple: A tuple containing two elements:
             - Flow matching loss (or dummy loss for gradient consistency).
-            - Per-instance loss (or dummy loss for gradient consistency).
+            - Per-instance loss, including a zero entry per prediction when fully conditioned.
     """
     if not has_valid_tokens:
         # Dummy loss to maintain backward graph consistency across ranks
@@ -108,7 +108,9 @@ def compute_flow_matching_loss(
         if item_losses is not None:
             item_losses.weighted_losses = torch.stack([p.sum() * 0.0 for p in pred])  # [N_items]
             item_losses.valid = torch.zeros(len(pred), dtype=torch.bool, device=dummy_loss.device)  # [N_items]
-        return dummy_loss, dummy_loss.unsqueeze(0)  # make per-instance loss 1-D
+        # Policy/ID-only packs still have N vision items and N sigmas. Preserve
+        # that logging contract while keeping the scalar FSDP dummy unchanged.
+        return dummy_loss, dummy_loss.expand(len(pred))  # [N_items]
 
     # condition_mask[i] is T-first with trailing singletons: [T,1,1] vision, [T,1] action.
     # tw_i gets the same shape so w(σ_t) broadcasts element-wise over non-T dims.

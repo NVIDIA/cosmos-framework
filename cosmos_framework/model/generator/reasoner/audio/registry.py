@@ -34,7 +34,12 @@ def _build_parakeet_processor() -> Any:
     return ParakeetAudioProcessor()
 
 
-def _build_qwen3_omni_thinking_model(projection_hidden_size: int, out_hidden_size: int) -> Any:
+def _build_qwen3_omni_thinking_variant(
+    projection_hidden_size: int,
+    out_hidden_size: int,
+    *,
+    encoder_output_mode: str,
+) -> Any:
     from cosmos_framework.model.generator.reasoner.qwen3_omni_audio.configuration_qwen3_omni_audio import (
         Qwen3OmniAudioConfig,
     )
@@ -44,7 +49,24 @@ def _build_qwen3_omni_thinking_model(projection_hidden_size: int, out_hidden_siz
         Qwen3OmniAudioConfig(
             projection_hidden_size=projection_hidden_size,
             out_hidden_size=out_hidden_size,
+            encoder_output_mode=encoder_output_mode,
         )
+    )
+
+
+def _build_qwen3_omni_thinking_model(projection_hidden_size: int, out_hidden_size: int) -> Any:
+    return _build_qwen3_omni_thinking_variant(
+        projection_hidden_size,
+        out_hidden_size,
+        encoder_output_mode="native",
+    )
+
+
+def _build_qwen3_omni_thinking_pre_projection_model(projection_hidden_size: int, out_hidden_size: int) -> Any:
+    return _build_qwen3_omni_thinking_variant(
+        projection_hidden_size,
+        out_hidden_size,
+        encoder_output_mode="pre_projection",
     )
 
 
@@ -61,6 +83,10 @@ _AUDIO_ENCODER_BACKENDS = {
     ),
     "qwen3_omni_thinking": AudioEncoderBackend(
         build_model=_build_qwen3_omni_thinking_model,
+        build_processor=_build_qwen3_omni_thinking_processor,
+    ),
+    "qwen3_omni_thinking_pre_projection": AudioEncoderBackend(
+        build_model=_build_qwen3_omni_thinking_pre_projection_model,
         build_processor=_build_qwen3_omni_thinking_processor,
     ),
 }

@@ -1,6 +1,6 @@
 # AutoML on Kubernetes, Brev and Lepton
 
-These are execution adapters in the optional `nvidia-automl-core` wheel, used by
+These are execution adapters in the optional `nvidia-automl-core` package, used by
 the existing `cosmos-automl` and `cosmos-automl prompts` commands. They do not
 call a TAO runner, require a source checkout, or introduce another search loop.
 All twelve SFT modes and GEPA use the same workload, scoring and promotion

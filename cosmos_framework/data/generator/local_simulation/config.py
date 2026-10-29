@@ -10,13 +10,13 @@ from typing import Any
 
 from omegaconf import DictConfig
 
+from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.data.generator.local_simulation.dataloader import (
     LocalSimulationDataLoader,
     LocalSimulationJointDataLoader,
 )
 from cosmos_framework.data.generator.local_simulation.dataset import LocalSimulationDataset
 from cosmos_framework.data.generator.local_simulation.resume import LocalSimulationResumeCallback
-from cosmos_framework.utils.lazy_config import LazyCall as L
 
 
 def make_local_dataloader_config(

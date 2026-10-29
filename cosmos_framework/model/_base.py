@@ -20,6 +20,13 @@ class ImaginaireModel(torch.nn.Module):
     - init_optimizer_scheduler(): Creates the optimizer and scheduler for the model.
     """
 
+    # Only objectives that need future CPU labels opt into trainer lookahead.
+    requires_accumulation_window: bool = False
+
+    def prepare_accumulation_window(self, batches: tuple[dict[str, Any], ...]) -> None:
+        """Inspect one complete CPU accumulation window before its first forward."""
+        del batches
+
     def __init__(self) -> None:
         super().__init__()
         self.parallel_dims = None
