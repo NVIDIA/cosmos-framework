@@ -41,6 +41,49 @@ def merged_export_metadata(adapter: str, identity: dict) -> dict:
     }
 
 
+def validate_export_targets(base: str, identity: dict) -> None:
+    """Re-resolve the portable map against the stock export architecture on meta.
+
+    Tensor names and shapes alone cannot prove a module's type, component,
+    effective scaling or ownership. Reuse the training resolver before reading
+    base weight shards; a hand-edited manifest must not bypass its constraints.
+    """
+    from accelerate import init_on_device
+    from transformers import AutoConfig, AutoModelForImageTextToText
+
+    from cosmos_framework.posttrain.config.adapters import (
+        AdapterComponentConfig,
+        AdapterConfig,
+        AdapterExtraModuleConfig,
+    )
+    from cosmos_framework.posttrain.model.adapters import resolve_targets
+
+    config = AutoConfig.from_pretrained(base)
+    if config.model_type != "qwen3_vl":
+        raise ValueError("merged adapter export requires a dense qwen3_vl base architecture")
+    groups = [
+        AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
+        for row in identity["resolved"]["targets"]
+    ]
+    extras = [
+        AdapterExtraModuleConfig(
+            component=row["component"],
+            targets=[row["name"].rsplit(".", 1)[0]],
+            lr_multiplier=row["lr_multiplier"],
+            weight_decay=row["weight_decay"],
+        )
+        for row in identity["resolved"]["extra_parameters"]
+    ]
+    with init_on_device("meta", include_buffers=False):
+        net = AutoModelForImageTextToText.from_config(config, dtype=torch.float32, attn_implementation="sdpa")
+    resolved = resolve_targets(net, AdapterConfig(components=groups, extra_modules=extras))
+    if resolved != identity["resolved"]:
+        raise ValueError(
+            "adapter resolved-target manifest disagrees with the base architecture "
+            "(module types/shapes, scaling, ownership or trainable counts); re-export from its training checkpoint"
+        )
+
+
 def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     """One adapter into its materialized base, exported in FP32 without live mutation.
 
@@ -70,6 +113,7 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
         raise ValueError("wrong base identity for adapter merge; stage the exact original weight snapshot")
     if snapshot_identity(base, weights=False) != identity["processor"]:
         raise ValueError("merged export requires the recorded processor/tokenizer/template beside the base")
+    validate_export_targets(base, identity)
     root = Path(base)
     index = root / "model.safetensors.index.json"
     shards = (

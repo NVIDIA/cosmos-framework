@@ -395,6 +395,43 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     assert control["hf_fp32"]["maximum_logit_error"] < 3e-5
 
 
+@pytest.mark.parametrize("corruption", ["type", "component", "scaling", "trainable_count"])
+def test_merged_export_re_resolves_portable_target_manifest(tmp_path, corruption):
+    from cosmos_framework.posttrain.checkpoint.adapters import (
+        read_adapter_artifact,
+        save_adapter_artifact,
+        write_adapter_artifact,
+    )
+    from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+
+    base = tmp_path / "base"
+    tiny_snapshot(base)
+    policy = build_qwen3_vl_model(
+        Qwen3VLModelConfig(name_or_path=str(base), dtype="float32", activation_checkpointing="none"),
+        adapters=adapter_config("lora"),
+    )
+    portable = tmp_path / "portable"
+    save_adapter_artifact(policy.net, str(portable))
+    identity, state = read_adapter_artifact(str(portable))
+    row = identity["resolved"]["targets"][0]
+    if corruption == "type":
+        row["type"] = "torch.nn.Embedding"
+    elif corruption == "component":
+        row["component"] = "vision"
+    elif corruption == "scaling":
+        row["scaling"] *= 2
+    else:
+        identity["resolved"]["expected_trainable_parameters"] += 1
+    malformed = tmp_path / "malformed"
+    write_adapter_artifact(str(malformed), identity, state)
+    output = tmp_path / "merged"
+    with pytest.raises(ValueError, match="resolved-target manifest|outside vision"):
+        export_merged_adapter(str(malformed), str(base), str(output))
+    assert not output.exists() and not output.with_suffix(".tmp").exists()
+
+
 @pytest.mark.parametrize("component", ["all", "language", "projector", "vision"])
 def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monkeypatch, component):
     from cosmos_framework.posttrain.scripts.prepare_sft_example import prepare_example

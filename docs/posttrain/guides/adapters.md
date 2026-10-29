@@ -184,7 +184,10 @@ modules, processor/tokenizer/template and effective media settings. This metadat
 participates in output/staging identity checks; identical weights with different
 media settings cannot silently reuse an existing export. Legacy merged artifacts
 without this record must be re-exported to a fresh destination.
-Export leaves live parameters, optimizer membership and tensor versions unchanged.
+Before merge, the exporter re-resolves the recorded targets against the stock
+architecture on meta; mismatched types, component ownership, scaling and counts
+fail before loading base shards. Export leaves live parameters, optimizer
+membership and tensor versions unchanged.
 Stock HF reload is tested separately from native portable reload. BF16 merged
 inference exceeded real-model qualification bounds and is outside the supported
 export profile; the tool does not produce BF16 merged models.
@@ -221,6 +224,27 @@ a different compute cost. Reports also measure FP32-export versus BF16-training
 outputs, but do not claim cross-precision generation equivalence. Portable reload
 retains the original inference precision and exact controlled outputs.
 Passing a backward call alone is not a quality or resource qualification.
+
+Run the focused correctness suite from the checkout in the isolated environment:
+
+```bash
+uv pip install --python "$SFT_PYTHON" pytest peft==0.21.2
+CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 "$SFT_PYTHON" -m pytest -q -o addopts='' \
+  --confcutdir=cosmos_framework/posttrain/tests \
+  cosmos_framework/posttrain/tests/test_adapters.py \
+  cosmos_framework/posttrain/tests/test_adapters_native.py \
+  cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py \
+  cosmos_framework/posttrain/tests/test_checkpoint_hf_overlay.py \
+  cosmos_framework/posttrain/tests/test_checkpoint_hf_verification.py
+```
+
+The installed-wheel GPU harness is `posttrain.tests.qualify_adapters`, launched
+with `torchrun` and explicit `--wheel`, `--build-record`, `--method`, `--component`
+and `--activation-checkpointing` arguments. It calls the existing SFT builder and
+trainer, saves controlled probes and checkpoints, and verifies the installed
+package bytes. `posttrain.tests.reload_adapters` performs the separate-process
+portable/merged checks. Qualification records include source, wheel and container
+digests; results from an unchanged baseline package do not qualify this extension.
 
 WTS annotations can be converted without resampling using
 `posttrain.scripts.prepare_wts_sft`. Full-epoch jobs must account for every original
