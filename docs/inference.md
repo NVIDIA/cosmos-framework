@@ -224,7 +224,7 @@ For debugging, the full set of sample arguments is saved to `<output_dir>/<sampl
 Common arguments:
 
 - `model_mode`: Generation modality. See [Modes](#modes) above for all options.
-- `seed`: Random seed for reproducibility.
+- `seed`: Random seed for reproducibility, from 0 to 2**32 - 1. Without a seed, one is derived from the sample name and output directory.
 
 **Note:** Condition file paths are relative to the input file.
 

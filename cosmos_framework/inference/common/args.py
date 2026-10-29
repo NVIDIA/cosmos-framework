@@ -1076,6 +1076,12 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
         """Build setup arguments."""
 
 
+# The bidirectional sampler seeds NumPy's RandomState with the sample seed, which accepts only
+# 0..2**32-1; out-of-range seeds used to fail only after the model had loaded.
+MAX_SEED = 2**32 - 1
+Seed = Annotated[int, pydantic.Field(ge=0, le=MAX_SEED)]
+
+
 class SampleArgs(ArgsBase):
     """Inference sample arguments."""
 
@@ -1085,9 +1091,19 @@ class SampleArgs(ArgsBase):
 
     name: str
     num_outputs: pydantic.PositiveInt
-    seed: int | None
+    seed: Seed | None
     tensors_file: ResolvedFilePath | None
     pickle_file: ResolvedFilePath | None
+
+    @pydantic.model_validator(mode="after")
+    def _check_expanded_seeds(self) -> Self:
+        # Each extra output uses seed + i, so the last one must stay in range too.
+        if self.seed is not None and self.seed + self.num_outputs - 1 > MAX_SEED:
+            raise ValueError(
+                f"seed={self.seed} with num_outputs={self.num_outputs} gives per-output seeds up to "
+                f"{self.seed + self.num_outputs - 1}, above the maximum {MAX_SEED}."
+            )
+        return self
 
     def get_data(self, *, device: str | int = "cpu") -> dict[str, Any]:
         import pickle
@@ -1117,8 +1133,8 @@ class SampleOverrides(OverridesBase):
     """Name of the sample."""
     num_outputs: Training[Annotated[pydantic.PositiveInt | None, tyro.conf.arg(aliases=("-n",))]] = None
     """Number of outputs to generate per sample."""
-    seed: int | None = None
-    """Seed for the random number generator."""
+    seed: Seed | None = None
+    """Seed for the random number generator (0 to 2**32-1)."""
 
     tensors_file: ResolvedFilePath | None = None
     """Path to data tensors file."""
