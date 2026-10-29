@@ -485,9 +485,11 @@ then verify with ffprobe or the venv's `av` (see SKILL.md Verify the output).
 
 Edge, composed from the README sentence above and the text2image / video branches of
 `run_diffusers_payload` (diffusers.md § 7; the diffusers notebook has no `t2i_edge` /
-`t2v_edge_noaudio` case, payloads.md § 8.2):
+`t2v_edge_noaudio` case, payloads.md § 8.2). Run the setup block, then ONE mode block — the one the task asks for — in the
+same Python process; text-to-video needs more GPU time and memory than a single frame:
 
 ```python
+# setup — shared by both modes
 import json, os, torch
 from diffusers import Cosmos3OmniPipeline
 from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
@@ -499,13 +501,19 @@ pipe = Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Edge", torch_dtype=to
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
 pipe.to("cuda")
 gen = torch.Generator(device="cuda").manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
-# t2i_edge
+```
+
+```python
+# t2i_edge — text-to-image, one frame
 result = pipe(prompt=compact("assets/prompts/text2image/robot_draping.json"), negative_prompt="",
               num_frames=1, height=480, width=832, num_inference_steps=20, guidance_scale=5.0,
               add_resolution_template=False, add_duration_template=False, generator=gen)
 os.makedirs("outputs/diffusers/t2i_edge", exist_ok=True)
 result.video[0].save("outputs/diffusers/t2i_edge/t2i_edge.png")
-# t2v_edge_noaudio
+```
+
+```python
+# t2v_edge_noaudio — text-to-video without audio (instead of the t2i block)
 gen.manual_seed(1234)   # fresh seed per run — the notebook's run_diffusers_payload seeds a generator per call
 result = pipe(prompt=compact("assets/prompts/text2video/robot_kitchen.json"),
               negative_prompt=compact("assets/negative_prompts/text2video/neg_prompt.json"),

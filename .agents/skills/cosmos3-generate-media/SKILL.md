@@ -130,7 +130,7 @@ Notes: `references/diffusers.md` § 8.1 (headless servers — the apt fallback).
 `references/diffusers.md` (the Nano snippet) as ONE file with `"$COSMOS3_DIFFUSERS_VENV/bin/python"`, verbatim, from this
 skill directory (the one with `assets/`); do not compose the pipeline call from the prose.
 
-Edge (`t2i_edge`, `t2v_edge_noaudio`): run § 8.4 of `references/diffusers.md` the same way, verbatim; § 8.3 has the README's
+Edge (`t2i_edge`, `t2v_edge_noaudio`): run § 8.4 of `references/diffusers.md` the same way — its setup block plus only the block of the requested mode, verbatim; § 8.3 has the README's
 Edge settings and the video-mode rules (`num_frames=189`, `fps=24`, `export_to_video`).
 
 ## Variant 2 — cosmos_framework (torchrun, in-repo)
@@ -402,13 +402,13 @@ export CONTAINER_NAME="${CONTAINER_NAME:-cosmos3-generator}"; export NIM_PORT="$
 export NIM_IMAGE="${NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3:2.1.0}"; docker pull "$NIM_IMAGE"
 export NIM_MODEL_VARIANT="${NIM_MODEL_VARIANT:-nano}"; export NIM_PERF_PROFILE="${NIM_PERF_PROFILE:-latency}"
 export LOCAL_NIM_CACHE="${LOCAL_NIM_CACHE:-$HOME/.cache/nim}"
-mkdir -p "$LOCAL_NIM_CACHE"; chmod -R a+rwX "$LOCAL_NIM_CACHE" 2>/dev/null || true   # chmod mode from deployment.md "Prepare the Model Cache" (the README uses 777)
+mkdir -p "$LOCAL_NIM_CACHE"   # deployment.md "Prepare the Model Cache"; its chmod 777 step is replaced by the writability check below — a shared cache is not modified
 # Pre-download profile preflight (deployment.md): the launch's selectors and GPU exposure, no NGC_API_KEY; prints the selected profile
 docker run --rm --gpus '"device=0"' -e NIM_MODEL_TYPE=generator -e NIM_MODEL_VARIANT="$NIM_MODEL_VARIANT" -e NIM_PERF_PROFILE="$NIM_PERF_PROFILE" \
   --entrypoint /bin/bash "$NIM_IMAGE" -lc 'set -e; /opt/nim/.venv/bin/python -m profile_selection.startup --output /tmp/cosmos3-preflight.env; printf "Profile preflight passed.\n"; cat /tmp/cosmos3-preflight.env'
-# Cache preflight (skill addition): make the daemon-side mount writable by the NIM user (uid 1000), then test it
-docker run --rm --user 0 --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX /opt/nim/.cache'
-docker run --rm --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'touch /opt/nim/.cache/.w && rm /opt/nim/.cache/.w' || { echo "LOCAL_NIM_CACHE=$LOCAL_NIM_CACHE is not writable by the NIM user (uid 1000)"; exit 1; }
+# Cache preflight (skill addition): the NIM runs as uid 1000 and the daemon resolves the mount — test write access first; repair ownership only for an empty cache this run created, or with NIM_CACHE_REPAIR=1 (explicit opt-in) — a cache that holds anything else is never modified silently
+cache_ok() { docker run --rm --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'touch /opt/nim/.cache/.w && rm /opt/nim/.cache/.w' 2>/dev/null; }
+cache_ok || { { [ "${NIM_CACHE_REPAIR:-0}" = 1 ] || [ -z "$(ls -A "$LOCAL_NIM_CACHE")" ]; } && docker run --rm --user 0 --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX /opt/nim/.cache'; cache_ok || { echo "LOCAL_NIM_CACHE=$LOCAL_NIM_CACHE is not writable by the NIM user (uid 1000): use a directory of your own or set NIM_CACHE_REPAIR=1 to let the NIM image take ownership of it"; exit 1; }; }
 docker run -d --name "$CONTAINER_NAME" \
   --gpus '"device=0"' --shm-size 16g --ulimit memlock=-1 --ulimit stack=67108864 --ulimit nofile=65536:65536 \
   -p "${NIM_PORT}:8000" \

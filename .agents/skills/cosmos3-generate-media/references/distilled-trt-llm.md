@@ -377,10 +377,17 @@ else
                    # (`ignore` += "*embed_tokens*"; weights untouched). The image then comes from the FP8 (ModelOpt) variant, not the bf16 main revision.
   export FP8_SRC="${FP8_SRC:-${HF_HOME:-$HOME/.cache/huggingface}/local/Cosmos3-Super-Text2Image-4Step-fp8}"   # 69 GB on the large disk, not inside the checkout
   case "$FP8_SRC" in /*) ;; *) FP8_SRC="$PWD/$FP8_SRC" ;; esac   # cp -s makes relative links only inside the cwd — the source must be absolute
-  export FP8_DST="${FP8_DST:-${FP8_SRC}-patched}"
   uvx --no-config hf@latest download nvidia/Cosmos3-Super-Text2Image-4Step --revision fp8 --local-dir "$FP8_SRC" \
     || { echo "fp8 download failed"; exit 1; }   # 153 s in the eval run
-  rm -rf "$FP8_DST"; mkdir -p "$FP8_DST" && cp -rs "$FP8_SRC"/. "$FP8_DST"/ \
+  # Overlay directory: a fresh one owned by this run (mktemp -d next to the source, same disk); a caller-set FP8_DST must not exist
+  # yet and must not be the source or a path inside it — nothing is ever deleted
+  if [ -z "${FP8_DST:-}" ]; then FP8_DST="$(mktemp -d "${FP8_SRC}-patched.XXXXXX")"; else
+    case "$FP8_DST" in /*) ;; *) FP8_DST="$PWD/$FP8_DST" ;; esac
+    case "$FP8_DST/" in "$FP8_SRC/"*) echo "FP8_DST must not be FP8_SRC or a path inside it"; exit 1 ;; esac
+    [ -e "$FP8_DST" ] && { echo "FP8_DST=$FP8_DST already exists: choose a new directory (nothing is deleted)"; exit 1; }
+    mkdir -p "$FP8_DST"
+  fi; export FP8_DST
+  cp -rs "$FP8_SRC"/. "$FP8_DST"/ \
     || { echo "overlay failed (FP8_SRC must be an absolute path to the downloaded branch)"; exit 1; }   # one symlink per checkpoint file, no weights copied
   python - "$FP8_DST" <<'PY' || { echo "embed_tokens patch failed"; exit 1; }
 import json, os, sys
