@@ -32,7 +32,10 @@ def host_threads_per_local_rank() -> int:
     140 CPUs, shared with the neighbouring GPU's rank). The ranks sharing the mask are estimated
     as the node's ranks spread evenly over the node's CPUs, so both cases give 140 / 4 = 35.
     """
-    allowed_cpus = len(os.sched_getaffinity(0))
+    if hasattr(os, "sched_getaffinity"):
+        allowed_cpus = len(os.sched_getaffinity(0))
+    else:  # Windows: no CPU affinity API; the process may use every CPU
+        allowed_cpus = os.cpu_count() or 1
     node_cpus = max(os.cpu_count() or allowed_cpus, allowed_cpus)
     ranks_sharing_mask = max(1, math.ceil(_ranks_per_node() * allowed_cpus / node_cpus))
     return max(1, allowed_cpus // ranks_sharing_mask)
