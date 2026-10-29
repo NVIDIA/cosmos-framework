@@ -489,9 +489,9 @@ def test_default_recipe_supervises_the_opener_the_student_emits_after_the_served
     assert 151667 not in served["ids"] and served["count"] == len(served["ids"]) == 141
     assert served["responses_path_effort_adds_input_tokens"] == 0
     pair = served["responses_path_input_tokens"]
-    assert pair["effort_high"] == pair["no_reasoning_field"] == 157  # live probes P4 / P7, one synthetic tool
+    assert pair["effort_high"] == pair["no_reasoning_field"] == 157  # one synthetic tool
     eight = pair["eight_tools_with_wire"]
-    assert eight["effort_high"] == eight["no_reasoning_field"] == 7862  # live probes Q3 / Q4, the 8 Codex tools
+    assert eight["effort_high"] == eight["no_reasoning_field"] == 7862  # the 8 Codex tools
     tool_less = fixture["served_prefix_without_tools_enable_thinking"]
     assert tool_less["ids"][-4:] == [151644, 77091, 198, 151667] and tool_less["enable_thinking_adds_input_tokens"] == 1
     assert served["text"].endswith("<|im_end|>\n<|im_start|>assistant\n")
