@@ -573,7 +573,7 @@ _I4_CAMERA_DEFAULTS = {
 }
 
 
-def test_camera_defaults_match_imaginaire4() -> None:
+def test_camera_defaults_match_upstream() -> None:
     from cosmos_framework.inference.args import InteractiveDataArgs
 
     for field, expected in _I4_CAMERA_DEFAULTS.items():

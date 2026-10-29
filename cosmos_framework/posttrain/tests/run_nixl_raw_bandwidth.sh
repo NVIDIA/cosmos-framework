@@ -11,13 +11,13 @@
 #                                       (CONTAINER1 names the second allocation's container)
 #
 # PAIRS (default 1) producers sit on the first node's GPUs 0..PAIRS-1 and pull into the second
-# node's GPUs 0..PAIRS-1; PAIRS=4 gives the node-to-node aggregate. CONTAINER (default
-# cosmos_dev) names the pyxis container; REPO_ROOT is the cosmos-framework checkout; EXTRA_PYTHONPATH
+# node's GPUs 0..PAIRS-1; PAIRS=4 gives the node-to-node aggregate. CONTAINER (required)
+# names the pyxis container; REPO_ROOT is the cosmos-framework checkout; EXTRA_PYTHONPATH
 # is appended inside the container (e.g. a pytest install).
 set -euo pipefail
 MODE="${1:?mode: card | node | rack}"; shift
 PAIRS="${PAIRS:-1}"
-CONTAINER="${CONTAINER:-cosmos_dev}"
+CONTAINER="${CONTAINER:?set CONTAINER to your pyxis container name}"
 CONTAINER1="${CONTAINER1:-$CONTAINER}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
 PORT="${MASTER_PORT:-29611}"

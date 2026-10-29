@@ -153,7 +153,7 @@ def test_parse_checkpoint_path(tmp_path: Path):
     # Local DCP checkpoint
     dcp_path = (
         tmp_path
-        / "cosmos3_vfm/t2i_mot_0p6b_qwen3_vl_ablations/t2i_mot_exp000_015_qwen3_0p6b_256res_frozen_llm_lr_4e4_large_seq_no_llm_qknorm_gcp_bs8k_baseline_long_run_1e4/checkpoints/iter_000700000/model"
+        / "project/group/t2i_mot_exp000_015_qwen3_0p6b_256res_frozen_llm_lr_4e4_large_seq_no_llm_qknorm_gcp_bs8k_baseline_long_run_1e4/checkpoints/iter_000700000/model"
     )
     dcp_path.mkdir(parents=True, exist_ok=True)
     (dcp_path / ".metadata").touch()

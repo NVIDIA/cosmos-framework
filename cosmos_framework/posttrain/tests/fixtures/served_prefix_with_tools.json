@@ -2,9 +2,9 @@
  "what": "The served generation prefix of the lab's serving path of record (a Responses request that carries a tools array, as Codex --thinking high does on every call) measured on the A1a test deployment: vLLM 0.24 appends <|im_start|>assistant\\n and NO <think> when tools are present, whether or not reasoning.effort / enable_thinking is set; the <think> prefill exists only for requests without tools. A training row's no-think turn therefore continues the served prefix with the student's OWN <think>\\n\\n</think>\\n\\n, so the opener's loss is necessary (knob 7 of configs/sft_qwen3_vl_moe_native.py).",
  "recorded": {
   "source_fixture": {
-   "path": "packages/cosmos-agentic/tests/fixtures/export_harness_sft/served_prefix_with_tools.json (local copy /path/to/shared-storage)",
+   "path": "served_prefix_with_tools.json of the agentic export harness (kept outside this repository)",
    "sha256": "abebda1e2e323ade59992b11746097267d1fa91812119bc08b2a2f6550d3c83e",
-   "by": "fix8d/01_live_prefix_record.py",
+   "by": "a live prefix-record script (outside this repository)",
    "started": "2026-10-02T13:59:59-07:00",
    "requests": [
     "V0",
@@ -17,7 +17,7 @@
    ]
   },
   "confirmed": {
-   "by": "fix_r125/T/fix3/01_prefix_record.py (3 live requests, synthetic prompt 'hello')",
+   "by": "a prefix-record script (3 live requests, synthetic prompt 'hello')",
    "started": "2026-10-02T14:26:22-07:00",
    "requests": [
     "V0 GET /version",
@@ -34,7 +34,7 @@
  "deployment": {
   "description": "A1a test deployment, single serving node, port 8000",
   "base_url": "http://<serving-host>:8000",
-  "served_model": "cosmos35-a1a-final",
+  "served_model": "<served-model>",
   "vllm_version": "0.24.0"
  },
  "grammar": {
@@ -264,7 +264,7 @@
   }
  },
  "served_prefix_without_tools_enable_thinking": {
-  "request": "POST /tokenize, messages + add_generation_prompt + chat_template_kwargs.enable_thinking true (8d T1); the tool-less Responses path with reasoning.effort gives the same (9 -> 10 input tokens, rounds 133/134)",
+  "request": "POST /tokenize, messages + add_generation_prompt + chat_template_kwargs.enable_thinking true (request T1); the tool-less Responses path with reasoning.effort gives the same (9 -> 10 input tokens)",
   "ids": [
    151644,
    872,
