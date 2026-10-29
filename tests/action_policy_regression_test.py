@@ -28,7 +28,7 @@ Specs
   requires a pre-staged LOCAL copy via ``DROID_ROOT`` and SKIPS when unset.
   ``DROID_ROOT`` is the **versioned merged root** whose basename is a
   ``LEROBOT_ROOTS`` version key (e.g. ``…/droid_plus_lerobot_640x360_20260412``),
-  NOT its ``success/`` subdir — the recipe's upstream lazy dataset appends ``success/``
+  NOT its ``success/`` subdir — the recipe's lazy dataset appends ``success/``
   itself (``use_success_only``). The skip-check looks for
   ``<DROID_ROOT>/success/meta/info.json``.
 
@@ -365,7 +365,7 @@ def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path) -> None:
     if spec.requires_droid_root:
         droid_root = os.environ.get("DROID_ROOT", "")
         # DROID_ROOT is the versioned merged root (basename is a LEROBOT_ROOTS key);
-        # the upstream lazy dataset appends success/ (use_success_only), so meta/info.json
+        # the lazy dataset appends success/ (use_success_only), so meta/info.json
         # lives under <DROID_ROOT>/success, not at the root.
         if not droid_root or not (Path(droid_root) / "success" / "meta" / "info.json").is_file():
             pytest.skip(

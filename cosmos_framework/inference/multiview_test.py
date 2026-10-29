@@ -383,7 +383,7 @@ def test_decoder_output_is_mapped_from_minus_one_one_to_zero_one() -> None:
 
     Handing a [-1, 1] tensor to a [0, 1] consumer crushes everything the model put below 0.5 to
     black. Measured on an 11-camera run before this was fixed: 70.7% of all pixels were exactly
-    zero, and the saved video related to the upstream video's by cf = clamp(2*up - 255, 0, 255) to within
+    zero, and the saved video cf related to the upstream run's output u by cf = clamp(2*u - 255, 0, 255) to within
     0.61/255.
     """
     assert _decode_to_pixels(-1.0) == pytest.approx(0.0)

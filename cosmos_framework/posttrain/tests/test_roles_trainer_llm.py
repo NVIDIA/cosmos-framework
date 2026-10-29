@@ -101,7 +101,7 @@ def test_objective_driven_train_steps_params():
     assert isinstance(metrics, dict)
     assert metrics["train/loss_avg"] == metrics["train/loss_avg"]  # not NaN
     assert metrics["train/valid_sequence_count"] == 2
-    assert metrics["train/learning_rate"] == 1.0  # engine-truth lr exported (upstream WandBCallback parity)
+    assert metrics["train/learning_rate"] == 1.0  # engine-truth lr exported (WandBCallback parity)
     assert not torch.allclose(before, after)  # optimizer actually stepped
 
 

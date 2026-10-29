@@ -361,7 +361,7 @@ def _qwen3_vl_causal_mask(
     if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 4:
         return attention_mask  # [B,1,N_q,N_kv]
     if getattr(config, "_attn_implementation", "eager") != "eager":
-        # Native flash/upstream attention is causal internally. Policy batches are right padded, so valid
+        # Non-eager attention (flash or native kernels) is causal internally. Policy batches are right padded, so valid
         # queries never attend a future padding key; padded query outputs are masked from the loss.
         return None
     from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import eager_mask
@@ -401,11 +401,11 @@ def _qwen3_vl_default_rope(
 
 
 def _override_native_attention_mask_compatibility(model_type: str) -> None:
-    """Bind both native Qwen3-VL families to the upstream version-stable causal-mask helper.
+    """Bind both native Qwen3-VL families to this module's version-stable causal-mask helper.
 
     The dense snapshot carries an incomplete local mask registry, while the MoE snapshot imports
     the Transformers helper whose keyword contract changed in Transformers 5. The adapter helper
-    has the exact ``input_embeds`` contract both native decoders call and uses the upstream eager-mask
+    has the exact ``input_embeds`` contract both native decoders call and uses the reasoner's ``eager_mask``
     primitive without consulting the installed Transformers registry implementation.
     """
     if model_type == "qwen3_vl":

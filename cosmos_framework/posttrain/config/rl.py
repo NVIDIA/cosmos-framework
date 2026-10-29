@@ -15,7 +15,7 @@ Layering (the three-stakeholder synthesis):
     `DPOConfig` is purely the RL objective + optimizer + ref + data.
   - Orchestration (`config.grid`) is also top-level. So `DPOConfig` holds neither model
     nor grid — only what the DPO objective needs.
-  - The whole experiment dumps to one resolved YAML (upstream `LazyConfig.save_yaml`), reloadable.
+  - The whole experiment dumps to one resolved YAML (`LazyConfig.save_yaml`), reloadable.
 
 `rl` owns the training PROCESS; `model_hf` owns model IDENTITY. The line above ("model backend
 selection is not an RL concern") is about WHICH model to load — `name_or_path`, `auto_class`,
@@ -1233,7 +1233,7 @@ class RunConfig:
     # Or an explicit iter_* dir / legacy .pt (must exist, else fail loud).
     # See checkpoint.resolve_resume; a resume always logs "resumed from ...".
     resume: str = "auto"
-    # Run-attempt timestamp ("YYYYmmddHHMMSS") — the upstream convention run identity: the
+    # Run-attempt timestamp ("YYYYmmddHHMMSS") — the upstream-convention run identity: the
     # out_dir becomes <...>/<name>/<run_ts>/, the wandb id IS run_ts, and eval tooling
     # takes it as $RUN_TS. Default "" = resolve at startup (adopt the latest existing
     # attempt when resuming, mint a new one otherwise — see the checkpoint package.

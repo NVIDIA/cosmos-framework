@@ -161,7 +161,7 @@ def _to_dict_value(x: T, field_type: type, metadata: dict, field_name: str = "")
     # torch specifics
     elif field_type in (torch.memory_format, torch.dtype):
         return str(x)
-    # Upstream-specific types
+    # LazyConfig-specific types
     elif field_type == LazyCall:
         result = _to_dict_value(x, field_type._target, metadata, field_name)
         return result

@@ -977,7 +977,7 @@ class Cosmos3FlowPolicy:
         m = self.omnimot
         gdc = self._get_data_and_condition(batch, sample_encode_seeds=sample_encode_seeds)
         if "text_token_ids" in batch:
-            # iteration=1 is the upstream default; _load_and_tokenize_text_data ignores it.
+            # iteration=1 is a placeholder; _load_and_tokenize_text_data ignores it.
             text_tokens = m._load_and_tokenize_text_data(batch, iteration=1)
         else:
             text_tokens, _ = m._get_inference_text_tokens(batch, has_negative_prompt=False)

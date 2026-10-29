@@ -1520,8 +1520,8 @@ def test_census_read_refusal_is_redacted_like_the_row_reason(
 def test_census_hash_failure_names_the_side_the_row_and_its_item(
     text_packer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """("reads or hashes its rows"; FIXTURE: on the parent the ``PermissionError`` escaped
-    ``validate_sources``). The census hashes every media file by bytes (``data/datasets/sft.py::sha256_file`` through
+    """FIXTURE: on the parent the ``PermissionError`` escaped
+    ``validate_sources``. The census hashes every media file by bytes (``data/datasets/sft.py::sha256_file`` through
     ``media_digest_for``); here the hash raises ``PermissionError`` for the one image file, which exists and was read by
     the factory and the loader (so the row itself is known, item included). The entry names the side the census was
     walking -- the validation source when its row carries the image; the training source when the training factory's
@@ -1970,8 +1970,8 @@ def test_prefilled_row_is_counted_one_token_fewer_per_supervised_block(text_pack
 
 
 def test_prefilled_row_with_a_bare_supervised_turn_is_the_packers_refusal(text_packer: Any) -> None:
-    """A ``prefilled`` row whose supervised turn renders no ``<think>`` opener is refused by the packer (
-    ``_require_one_opener_per_supervised_block``), and the validator reports that refusal, verbatim, as the row's reason
+    """A ``prefilled`` row whose supervised turn renders no ``<think>`` opener is refused by the packer
+    (``_require_one_opener_per_supervised_block``), and the validator reports that refusal, verbatim, as the row's reason
     (the row is unmeasured, the split fails). B1: no reasoning turn at all under ``all_assistant`` (both blocks bare);
     B2: ``last_assistant`` with a bare last turn; B3: reasoning on turn 1 and a bare turn 2 under ``all_assistant``. On
     the rebased parent the field was dropped, so the packer saw self rows and every one of them validated."""

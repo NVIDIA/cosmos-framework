@@ -239,7 +239,7 @@ def test_dpo_cross_impl_parity_vs_cosmos_rl(policy: Cosmos3FlowPolicy, monkeypat
     reference `Cosmos3Model.compute_dpo_loss` on the SAME model, batch, and injected
     (sigma, epsilon). cosmos-rl is imported in the TEST ONLY (the production code never
     imports it). A cosmos-rl `Cosmos3Model` is built as a shell grafted onto our
-    already-instantiated upstream model (shared net + net_ref, no second random init).
+    already-instantiated model (shared net + net_ref, no second random init).
 
     Both implementations are fed identical inputs:
       - one shared encode (via our adapter; cosmos-rl's own get_data_and_condition
@@ -248,8 +248,8 @@ def test_dpo_cross_impl_parity_vs_cosmos_rl(policy: Cosmos3FlowPolicy, monkeypat
       - one injected (sigma, epsilon): mine returns RF fraction t; cosmos-rl returns
         EDM sigma = t/(1-t) (compute_dpo_loss maps t_B = sigma/(sigma+1) back to t).
     cosmos-rl's compute_dpo_loss calls `omnimot.denoise(..., fps_vision=...)`, but the
-    current upstream denoise() has no fps_vision arg (fps moved into packing), so we wrap
-    denoise to swallow it — numerically a no-op upstream. A warmup pass stabilizes the
+    current OmniMoT denoise() has no fps_vision arg (fps moved into packing), so we wrap
+    denoise to swallow it — numerically a no-op. A warmup pass stabilizes the
     attention-kernel autotuning so the grad (policy) forward is run-to-run deterministic
     (otherwise the 0.5·beta=250 factor amplifies cold-start kernel noise).
 
