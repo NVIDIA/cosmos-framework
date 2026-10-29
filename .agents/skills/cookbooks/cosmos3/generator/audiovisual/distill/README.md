@@ -187,8 +187,8 @@ a real training resume rather than only loading model weights.
 
 ## Inference with the published four-step students
 
-The audiovisual
-[the cosmos3-generate-media framework reference](../../../../../cosmos3-generate-media/references/cosmos-framework.md)
+The audiovisual generation skill's
+[Cosmos Framework reference](../../../../../cosmos3-generate-media/references/cosmos-framework.md)
 contains the published distilled T2I and I2V inference examples, including
 payload creation, four-GPU model sharding, the fixed-step sampling arguments,
 and artifact display. These are functional smoke examples, not
