@@ -27,8 +27,8 @@ Organisation membership, a read or triage role, or a PR from a fork is refused �
 and the run ends before a self-hosted runner is touched; `plan` refuses fork heads a second time. (Applying a label
 needs triage access on GitHub anyway; the gate still requires write.)
 
-After the gate the workflow has four stages, all on self-hosted runners (label `cosmos-skill-eval`; cells also need `h100`, and
-cursor cells `cursor-serial` — see [Runners](#runners)):
+After the gate the workflow has four stages, all on self-hosted runners (label `cosmos-skill-eval`; cells also need `h100` — see
+[Runners](#runners)):
 
 1. **`plan`** checks out the PR head (full history — every branch, so the base commit and the merge base that the
    git fallback of the skill detection needs are already in the clone) and runs
@@ -313,12 +313,12 @@ cell result files and the `status:` line parser accept all five values.
 ## Runners
 
 Cells run wherever a runner with the labels `self-hosted`, `cosmos-skill-eval`, `h100` (`runner_labels:` in the
-config) is idle; one runner process per node means one cell per GPU node at a time. **Cursor cells are serialised**:
-their jobs also need the label `cursor-serial` (`serial_backends: [cursor]`, `serial_runner_label: cursor-serial`),
-which today only one runner (the 4× H100 NVL node) carries, so they queue on that one runner and never run concurrently. The working
-hypothesis: a per-key concurrency cap on Cursor's side (2026-10-26: 2 of 7 cursor cells died with
-`[resource_exhausted]`, both while another cursor cell was running); the serialised runs confirm or refute it. A
-second runner can take the label later if cursor becomes the bottleneck, at the price of that concurrency.
+config) is idle; one runner process per node means one cell per GPU node at a time. No backend is pinned to a single
+runner at the moment (`serial_backends: []`). Cursor cells used to be serialised (`serial_backends: [cursor]`,
+`serial_runner_label: cursor-serial`, a label one runner carries) while the cursor backend ran Composer 2.5 and the
+Cursor service rejected concurrent sessions (2026-10-26: 2 of 7 cursor cells died with `[resource_exhausted]`); with
+Claude Sonnet 5.5 as the cursor model the 11 cursor cells ran four at a time on 2026-10-29 without a rejection, and
+since evaluator 0.3.3 such an exit is retried by the cell itself. Set `serial_backends: [cursor]` to pin them again.
 Registering a node (after the lease is populated with
 the GPU-host setup and lease onboarding scripts of the evaluator repo):
 

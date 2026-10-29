@@ -14,14 +14,14 @@
 
 backends: [claude, codex, cursor, opencode]
 # Where the cell jobs run. Every cell job's runs-on = runner_labels; a cell of a backend listed in serial_backends
-# also gets serial_runner_label. Exactly ONE runner carries that label (today the 4× H100 NVL node), so those cells queue
-# there and run one at a time. Working hypothesis for cursor: a per-key concurrency cap on Cursor's side (2026-10-26:
-# 2 of 7 cursor cells died with `[resource_exhausted]`, both while another cursor cell was running); the serialised
-# runs confirm or refute it. Give a second runner the label only if cursor becomes the bottleneck — that brings the
-# concurrency back. All three keys are optional with these values as the defaults; `serial_backends: []` switches
-# the pinning off.
+# also gets serial_runner_label, which exactly one runner carries, so those cells queue there and run one at a time.
+# Switched off: the pinning existed for cursor while that backend ran Composer 2.5 (2026-10-26: 2 of 7 concurrent cursor
+# cells died with `[resource_exhausted]`). With Claude Sonnet 5.5 as the cursor model (image >= v20261102) the 11 cursor
+# cells ran four at a time on 2026-10-29 without a rejection, and since evaluator 0.3.3 a `RetriableError` exit is
+# retried by the cell itself. To pin again: `serial_backends: [cursor]` (the label `cursor-serial` is still on one runner).
+# Without the keys the orchestrator's defaults apply (they pin cursor), so the empty list is set explicitly.
 runner_labels: [self-hosted, cosmos-skill-eval, h100]
-serial_backends: [cursor]
+serial_backends: []
 serial_runner_label: cursor-serial
 # Evaluator image. >= v20261102: evaluator 0.3.4 — the cursor backend's default model is Claude Sonnet 5.5
 # (`cursor/claude-sonnet-5-5-medium`); `cursor_model` below states the same value explicitly.

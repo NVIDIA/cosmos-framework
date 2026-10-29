@@ -79,6 +79,8 @@ CANARY_DIR = PurePosixPath(".github/scripts/skill_eval") / CANARY_SKILL  # CI-on
 # a label exactly ONE runner has, so they run one at a time. Working hypothesis behind the cursor default: a per-key
 # concurrency cap on Cursor's side (2026-10-26: 2 of 7 cursor cells died with `[resource_exhausted]`, both while
 # another cursor cell was running); the serialised runs confirm or refute it.
+# The repository's .github/skill-eval.yml sets `serial_backends: []`: with Claude Sonnet 5.5 as the cursor model the cursor
+# cells ran four at a time without a rejection (2026-10-29), so nothing is pinned there today.
 DEFAULT_RUNNER_LABELS = ("self-hosted", "cosmos-skill-eval", "h100")
 DEFAULT_SERIAL_BACKENDS = ("cursor",)
 DEFAULT_SERIAL_RUNNER_LABEL = "cursor-serial"

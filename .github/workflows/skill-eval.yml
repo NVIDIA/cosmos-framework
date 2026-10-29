@@ -15,10 +15,10 @@
 # refused (the `plan` job checks the head repository again).
 # The `plan` job detects the skills the PR touches and posts ONE comment; every eval cell (case × backend)
 # then runs as its own job, so GitHub queues the cells over all idle runners with the `cosmos-skill-eval`
-# + `h100` labels (3 nodes = 3 cells in flight) — except cursor cells, whose jobs also need `cursor-serial`, a label
-# ONE runner carries, so they run one at a time (working hypothesis: a per-key concurrency cap on Cursor's side killed
-# 2 of 7 concurrent cursor cells on 2026-10-26; the labels of each cell job come from the plan's matrix entry,
-# `runs_on`, out of .github/skill-eval.yml); the canary cells
+# + `h100` labels (4 nodes = 4 cells in flight; the labels of each cell job come from the plan's matrix entry,
+# `runs_on`, out of .github/skill-eval.yml, whose `serial_backends` can pin one backend's cells to a single runner —
+# off at the moment: the cursor backend runs Claude Sonnet 5.5 and no longer needs the serialisation that Composer 2.5
+# required); the canary cells
 # (only when asked for: `smoke-only`, `with-smoke` or `smoke: true` in .github/skill-eval.yml) go first, the
 # `report` job writes the final comment.
 # Secret: the cell jobs need the inference-gateway key for the agents and the judge as a repository secret —
@@ -219,7 +219,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.canary) }}
     # the plan's labels for this cell: `runner_labels`, plus `serial_runner_label` for a backend in `serial_backends`
-    # (.github/skill-eval.yml) — cursor cells land on the one runner labelled `cursor-serial` and run one at a time
+    # (.github/skill-eval.yml; no backend is pinned at the moment — `serial_backends: []`)
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
     steps:
@@ -266,7 +266,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.skills) }}
     # the plan's labels for this cell: `runner_labels`, plus `serial_runner_label` for a backend in `serial_backends`
-    # (.github/skill-eval.yml) — cursor cells land on the one runner labelled `cursor-serial` and run one at a time
+    # (.github/skill-eval.yml; no backend is pinned at the moment — `serial_backends: []`)
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 200  # above the orchestrator's 3 h cell timeout, so the launcher's graceful stop fires first
     steps:
