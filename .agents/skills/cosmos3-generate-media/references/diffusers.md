@@ -4,7 +4,7 @@ Scope: the in-process Diffusers backend — the README "Run with Diffusers" quic
 
 ## Quickstart (cookbook README)
 
-README section "Run with Diffusers". Its relative links (`../../README.md#diffusers`, `./run_with_diffusers.ipynb`) are rewritten to the same files in this repository (`../cookbooks/cosmos3/README.md#diffusers`); the notebook link is dropped — this file replaces the notebook (payloads.md path-translation note).
+README section "Run with Diffusers". Its relative links (`../../README.md#diffusers`, `./run_with_diffusers.ipynb`) are rewritten to the same files in this repository (`../../cookbooks/cosmos3/README.md#diffusers`); the notebook link is dropped — this file replaces the notebook (payloads.md path-translation note).
 
 ### Quickstart
 

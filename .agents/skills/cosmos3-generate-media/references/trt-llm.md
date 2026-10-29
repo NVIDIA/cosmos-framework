@@ -694,7 +694,7 @@ Setup guide, TensorRT-LLM Generator: `pip install cosmos_guardrail==0.3.0`. It r
 headless servers follow with the headless OpenCV swap of Variant 1
 (`pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93`), then do
 the guide's "Server-side NLTK data setup"
-(<../cookbooks/cosmos3/README.md#tensorrt-llm-generator>).
+(<../../cookbooks/cosmos3/README.md#tensorrt-llm-generator>).
 
 ### 7.7 Skill launch script (not in the notebook) — serve commands: Edge, Nano, Super (SKILL.md Variant 5)
 

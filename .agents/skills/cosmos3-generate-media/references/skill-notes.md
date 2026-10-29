@@ -107,7 +107,7 @@ the understanding tower).
   shell; only the NIM runs as a non-root user (uid 1000), so only its mount needs the
   preflight of Variant 7.
 - **NIM (Variant 7, `nvcr.io/nim/nvidia/cosmos3:2.1.0`)**: the detailed pages are the NIM cookbook in this checkout
-  (`../cookbooks/cosmos3/nim/`); what this skill adds to them — launch detached without `--rm` (as the cookbook does) and save
+  (`../../cookbooks/cosmos3/nim/`); what this skill adds to them — launch detached without `--rm` (as the cookbook does) and save
   `docker logs` to `<OUT>/cosmos3_generator_nim/container.log` before `docker rm` (a stopped container still holds the name); the
   uid-1000 cache preflight above (the first 1.0.0 launches failed with `ManifestDownloadError … Permission denied (os error 13)`
   when the daemon created the mount root-owned); selectors `NIM_MODEL_VARIANT` / `NIM_PRECISION` / `NIM_PERF_PROFILE` checked by the
