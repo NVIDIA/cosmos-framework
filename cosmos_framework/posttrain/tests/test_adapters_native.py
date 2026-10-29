@@ -327,7 +327,8 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
         torch.testing.assert_close(dense(**batch).logits, expected, atol=3e-5, rtol=3e-5)
 
 
-def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monkeypatch):
+@pytest.mark.parametrize("component", ["all", "language", "projector", "vision"])
+def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monkeypatch, component):
     from cosmos_framework.posttrain.scripts.prepare_sft_example import prepare_example
     from cosmos_framework.posttrain.tests import qualify_adapters as harness
 
@@ -336,6 +337,7 @@ def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monk
     prepare_example(data, train_samples=8, validation_samples=8)
     monkeypatch.setenv("SFT_MODEL_PATH", str(base))
     monkeypatch.setenv("SFT_DATA_ROOT", str(data))
+    monkeypatch.setenv("SFT_QUALIFY_COMPONENT", "all")
     for key, value in [("SFT_ADAPTER_METHOD", "lora"), ("SFT_ADAPTER_RSLORA", "0"), ("SFT_QUALIFY_EXTRA_NORM", "0")]:
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(harness, "attest", lambda *_: {"container_sha256": "0" * 64})
@@ -360,7 +362,21 @@ def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monk
     monkeypatch.setattr(
         sys,
         "argv",
-        ["qualify", "--wheel", "fixture", "--build-record", "fixture", "--out", str(output), "--method", "mixed"],
+        [
+            "qualify",
+            "--wheel",
+            "fixture",
+            "--build-record",
+            "fixture",
+            "--out",
+            str(output),
+            "--method",
+            "mixed" if component == "all" else "lora",
+            "--component",
+            component,
+            "--override",
+            "rl.grad_accum=2" if component == "all" else "rl.grad_accum=1",
+        ],
     )
     previous = torch.are_deterministic_algorithms_enabled()
     try:
@@ -369,6 +385,9 @@ def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monk
         torch.use_deterministic_algorithms(previous)
     report = json.loads((output / "training-rank0.json").read_text())
     assert report["changed_tensors"] == report["trainable_tensors"]
+    assert {row["component"] for row in report["resolved"]["targets"]} == (
+        {"language", "projector", "vision"} if component == "all" else {component}
+    )
     assert report["resume_max_abs_parameter_error"] == 0
     assert len(report["train"]) == 9
     assert (output / "portable/adapter_manifest.json").is_file()

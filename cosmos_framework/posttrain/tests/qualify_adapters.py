@@ -89,6 +89,9 @@ def trainable_state(net):
 
 def runtime(recipe, opts, output):
     config = load_config(recipe, ["--", *opts])
+    component = os.environ.get("SFT_QUALIFY_COMPONENT", "all")
+    if component != "all":
+        config.rl.adapters.components = [c for c in config.rl.adapters.components if c.component == component]
     if os.environ.get("SFT_QUALIFY_EXTRA_NORM") == "1":
         config.rl.adapters.extra_modules = [
             AdapterExtraModuleConfig(component="language", targets=["model.language_model.norm"])
@@ -149,7 +152,11 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--method", choices=["lora", "rslora", "dora", "pissa", "mixed"], required=True)
     parser.add_argument("--activation-checkpointing", choices=["none", "full"], default="full")
+    parser.add_argument("--component", choices=["all", "language", "projector", "vision"], default="all")
+    parser.add_argument("--override", action="append", default=[], help="existing recipe key=value override")
     args = parser.parse_args()
+    if args.method == "mixed" and args.component != "all":
+        parser.error("the mixed-method qualification requires --component=all")
     evidence = attest(args.wheel, args.build_record)
     assert evidence["container_sha256"] and len(evidence["container_sha256"]) == 64
     init_local_process_group()
@@ -164,6 +171,7 @@ def main():
     os.environ["SFT_ADAPTER_METHOD"] = "lora" if args.method in ("rslora", "mixed") else args.method
     os.environ["SFT_ADAPTER_RSLORA"] = "1" if args.method == "rslora" else "0"
     os.environ["SFT_QUALIFY_EXTRA_NORM"] = "1" if args.method == "mixed" else "0"
+    os.environ["SFT_QUALIFY_COMPONENT"] = args.component
     opts = [
         "rl.resume=off",
         "rl.max_steps=8",
@@ -182,6 +190,7 @@ def main():
             "rl.adapters.components.2.method=pissa",
             "rl.adapters.components.2.rank=4",
         ]
+    opts += args.override
     started = time.monotonic()
     config, rl, data, validation, trainer = runtime(recipe, opts, str(root))
     probes = probe_batches(config, data)
@@ -255,6 +264,8 @@ def main():
     record = {
         **evidence,
         "method": args.method,
+        "component": args.component,
+        "overrides": args.override,
         "activation_checkpointing": args.activation_checkpointing,
         "world_size": world,
         "rank": rank,
