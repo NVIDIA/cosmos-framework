@@ -31,9 +31,11 @@ bit-reproducible): exact match 0.548 before, 0.632 and 0.620 after. Details:
    directory with `pyproject.toml`). The script sets its own paths and pins, so each step can run in a fresh shell;
    run the steps in order. [`scripts/run.sh`](scripts/run.sh) shows every command a step runs, with comments.
 2. **Pick the variant from the GPU** (table below). The smoke variant adds `--smoke` to every step.
-3. **Check each step's expected output** (under the step) before the next step. Each step also saves its output in
-   the `logs` folder of the artifacts directory, which the script creates as artifacts/qwen3-vl-robovqa under the
-   repository root.
+3. **Check each step's expected output** (under the step) before the next step. The screen shows one line per
+   stage (`done` with its time) and a one-line result; each stage's full output goes to a file in the `logs` folder
+   of the artifacts directory, which the script creates as artifacts/qwen3-vl-robovqa under the repository root
+   (`-smoke` suffix for the smoke variant). A failing stage prints `FAILED`, the last 30 lines of its log and the
+   log's path, and the step stops there.
 4. **After a failure**, read "Things not obvious from the docs" and the troubleshooting section of
    [`references/measured-run.md`](references/measured-run.md) before changing a command.
 
@@ -71,10 +73,11 @@ The bundled directory has the layout of the full download. Six clips split 4 / 0
 bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh setup
 ```
 
-Checks the GPU, the driver (CUDA 13), `git`, `ffmpeg` and `g++`; builds the SFT environment from
-`docs/posttrain/guides/sft.md` section 2; builds apex (the recipe's optimizer) unless it is already installed;
-builds the evaluation environment (plain Transformers). Expected last lines:
-`SFT environment: 2.11.0+cu130 5.8.1 apex ok` and `evaluation environment: 2.10.0+cu130 4.57.6`.
+Four stages: the host check (CUDA 13 driver, `git`, `ffmpeg`, `g++`, uv), the SFT environment from
+`docs/posttrain/guides/sft.md` section 2, apex (the recipe's optimizer, compiled from source unless already
+installed; the long stage, about 10 minutes), and the evaluation environment (plain Transformers). Expected last
+lines: `SFT environment: 2.11.0+cu130 5.8.1 apex ok` and `evaluation environment: 2.10.0+cu130 4.57.6`. The
+compiler's output is in the logs folder as apex-build.log.
 
 ### 2. download — model and data
 
@@ -83,6 +86,7 @@ bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh download
 ```
 
 Qwen3-VL-8B-Instruct (17 GB) and RoboVQA (3.5 GB, skipped with `--smoke`), both at fixed revisions. No token needed.
+Expected last line: `model on disk: 17G   dataset: 9999 clips` (`6 clips` with `--smoke`).
 
 ### 3. data — training rows (about 25 minutes)
 
@@ -92,10 +96,10 @@ bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh data
 
 [`scripts/prepare_robovqa.py`](scripts/prepare_robovqa.py) splits the clips 80/10/10 with one question per clip and
 byte-identical clips kept in one split, writes each training clip's evaluation frames losslessly so training sees
-exactly what the evaluator scores, and checks every file in the training stack. Expected: counts
-`train 7998, val 1001, test 1000`; md5 lines equal to their seed-0 references; `"rows": 7998`; `"all_ok": true`.
-With `--smoke`: counts `train 4, val 0, test 2` (the md5 references apply to the full download only),
-`"rows": 4`, `"all_ok": true`.
+exactly what the evaluator scores, and checks every file in the training stack. Expected last lines: the counts
+`"train": 7998, "val": 1001, "test": 1000` with every `leakage_check` value 0, and `frame check: "all_ok": true,
+"bad": 0`. With `--smoke`: `"train": 4, "val": 0, "test": 2`. The split log also prints the md5 of the samples
+files next to their seed-0 references; they match on the full download only.
 
 ### 4. preflight — the recipe's CPU checks (about 13 minutes)
 
@@ -104,9 +108,9 @@ bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh preflight
 ```
 
 `--validate-manifest` and `--validate-rows` of the SFT entrypoint with the recipe
-`cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py`. Expected:
+`cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py`. Expected last line:
 `train: rows 7998 | loss_tokens == assistant_tokens on 7998/7998 | longest 4113 <= 10240 | failed 0` (`rows 4` with
-`--smoke`). The line `train: dp_world not checked` that follows is expected outside torchrun.
+`--smoke`). The log's `train: dp_world not checked` line is expected outside torchrun.
 
 ### 5. before — score the untouched model (about 14 minutes)
 
@@ -125,10 +129,10 @@ bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh train
 ```
 
 One GPU through torchrun, 125 updates of 64 clips (2 with `--smoke`). It stops before starting when the GPU has less
-than 150,000 MiB free. The first update appears after about three minutes, then one `step N/125` line about every
-minute; the loss starts near 1.0 and ends near 0.5. Expected end: `SFT DONE {'start': 0, 'final_step': 125, ...}`.
-Agents: start it detached and keep the log, for example
-`nohup bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh train > train.out 2>&1 &`.
+than 150,000 MiB free. The screen shows one line per update, `step N/125  train/loss_avg …  … s`, the first after
+about three minutes and then about one a minute; the loss starts near 1.0 and ends near 0.5. Expected end:
+`SFT DONE {'start': 0, 'final_step': 125, ...}`. The framework's full log is train.log in the logs folder. Agents: start it
+detached, for example `nohup bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh train > train.out 2>&1 &`.
 
 ### 7. export — Hugging Face format (about 2 minutes)
 
@@ -136,7 +140,7 @@ Agents: start it detached and keep the log, for example
 bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh export
 ```
 
-The framework's HF materializer on the CPU, in 5 GB shards. Expected:
+The framework's HF materializer on the CPU, in 5 GB shards. Expected last line:
 `[materialize] OK -> .../export (16.3 GiB, 750 tensors in 4 shards, 8 sidecars identical to base, ...)`.
 
 ### 8. after — score the fine-tuned model (about 11 minutes)
@@ -150,7 +154,8 @@ weights were not loaded. With `--smoke` the score is only a check that the expor
 
 ## Verify the output
 
-Every step saves its console output in the artifacts directory's `logs` folder, named after the step (with a
+Every stage's full output is in the artifacts directory's `logs` folder, named after the stage (`setup-sft-env`,
+`apex-build`, `data-split`, `data-frames`, `data-verify`, `preflight-rows`, `before`, `train`, `export`, `after`, …;
 `-smoke` suffix for the smoke variant). A run is correct when:
 
 | Step | Correct when |

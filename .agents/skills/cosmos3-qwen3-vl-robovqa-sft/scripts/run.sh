@@ -52,26 +52,42 @@ mkdir -p "$ART/logs"
 
 say() { printf '\n==> %s\n' "$*"; }
 
-setup() {
-  say "GPU and driver"
-  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
-  local cuda
+# stage <label> <log name> <command...>: one line on screen (the label, then "done" with the elapsed time), the
+# command's whole output in $ART/logs/<log name>.log. On failure the last 30 lines of the log are shown.
+stage() {
+  local label=$1 log="$ART/logs/$2$TAG.log" start
+  shift 2
+  start=$(date +%s)
+  printf '  %-62s' "$label"
+  if "$@" >"$log" 2>&1; then
+    printf 'done  %3d s\n' $(( $(date +%s) - start ))
+  else
+    printf 'FAILED after %d s\n\n' $(( $(date +%s) - start ))
+    tail -n 30 "$log"
+    echo
+    echo "full output: $log" >&2
+    exit 1
+  fi
+}
+
+check_host() {
+  local cuda missing=""
   cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9]*\)\..*/\1/p' | head -1)
   if [ "${cuda:-0}" -lt 13 ]; then
     echo "the driver supports CUDA ${cuda}; this example uses CUDA 13.0 wheels" >&2
-    exit 1
+    return 1
   fi
-  local missing=""
   for tool in git ffmpeg g++ curl; do command -v "$tool" >/dev/null || missing="$missing $tool"; done
   if [ -n "$missing" ]; then
     if [ "$(id -u)" = 0 ]; then apt-get update -q && apt-get install -y -q git ffmpeg g++ curl; else
       echo "install$missing first: sudo apt-get install -y git ffmpeg g++ curl" >&2
-      exit 1
+      return 1
     fi
   fi
   command -v uvx >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+}
 
-  say "SFT environment (docs/posttrain/guides/sft.md section 2): about 270 packages, 1 to 2 minutes"
+sft_env() {
   # --python 3.13: with --project, uv does not read the checkout's .python-version.
   # --group cu130-aarch64 adds NVIDIA NPP on aarch64. --inexact keeps apex when this is re-run.
   local arch=()
@@ -79,22 +95,33 @@ setup() {
   UV_PROJECT_ENVIRONMENT="$SFT_VENV" $UV sync --project docker/posttrain/environment --frozen --python 3.13 \
     --no-group transformers4 --group sft --group cu130-runtime "${arch[@]}" --inexact
   [ "$(uname -m)" = aarch64 ] || $UV pip install --python "$SFT_PY" "nvidia-npp==13.0.0.50"  # x86_64: unverified
+}
 
-  say "apex (the recipe's FusedAdam optimizer)"
-  if "$SFT_PY" -c "import torch, amp_C" 2>/dev/null; then echo "already installed"; else build_apex; fi
-
-  say "evaluation environment (plain Transformers, the stack the scores were measured with): 1 to 2 minutes"
+eval_env() {
   $UV venv --allow-existing --python 3.12 "$EVAL_VENV"
   $UV pip install --python "$EVAL_PY" torch==2.10.0 torchvision==0.25.0 torchcodec==0.10.0 \
     --index-url https://download.pytorch.org/whl/cu130
   $UV pip install --python "$EVAL_PY" transformers==4.57.6 accelerate==1.15.0 av==19.0.1 numpy==2.2.6 \
     pillow safetensors huggingface_hub==0.36.2 nvidia-npp==13.0.0.50
+}
 
-  say "check"
+setup() {
+  say "setup: two Python environments and the apex optimizer (about 12 minutes on a fresh machine)"
+  echo "  GPU: $(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
+  stage "host: CUDA 13 driver, git, ffmpeg, g++, uv" setup-host check_host
+  stage "SFT environment: torch 2.11, transformers 5.8.1, torchcodec 0.11 (about 270 packages)" setup-sft-env sft_env
+  if "$SFT_PY" -c "import torch, amp_C" 2>/dev/null; then
+    printf '  %-62s%s\n' "apex" "already installed"
+  else
+    stage "apex: compiled from source for this GPU (about 10 minutes)" apex-build build_apex
+  fi
+  stage "evaluation environment: torch 2.10, transformers 4.57.6, torchcodec 0.10" setup-eval-env eval_env
+  echo
   LD_LIBRARY_PATH="$SFT_LIBS" "$SFT_PY" -c \
-    "import torch, transformers, torchcodec.decoders, amp_C; print('SFT environment:', torch.__version__, transformers.__version__, 'apex ok')"
+    "import torch, transformers, torchcodec.decoders, amp_C; print('  SFT environment:       ', torch.__version__, transformers.__version__, 'apex ok')"
   LD_LIBRARY_PATH="$EVAL_LIBS" "$EVAL_PY" -c \
-    "import torch, transformers, torchcodec.decoders; print('evaluation environment:', torch.__version__, transformers.__version__)"
+    "import torch, transformers, torchcodec.decoders; print('  evaluation environment:', torch.__version__, transformers.__version__)"
+  echo "  logs: $ART/logs/setup-*.log, $ART/logs/apex-build.log"
 }
 
 build_apex() {
@@ -118,54 +145,69 @@ build_apex() {
   local jobs arch
   jobs=$(awk -v n="$(nproc)" '/MemAvailable/ {m = int($2 / 4194304); if (m > n) m = n; if (m > 32) m = 32; print m}' /proc/meminfo)
   arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
-  echo "compiling apex for compute capability $arch with $jobs parallel jobs: about 10 minutes on a GB300."
-  echo "The compiler's own output follows (one block per source file); it is also saved to $ART/logs/apex-build.log."
-  # pip's own build output stays hidden; running setup.py directly shows the compiler as it works.
+  echo "compiling apex for compute capability $arch with $jobs parallel jobs"
+  # Running setup.py directly (not through pip) keeps the compiler's output, which the stage writes to the log.
   $UV pip install --python "$SFT_PY" wheel  # bdist_wheel needs it; not in the SFT lock
   (cd "$ART/apex" && TORCH_CUDA_ARCH_LIST="$arch" APEX_CPP_EXT=1 APEX_CUDA_EXT=1 MAX_JOBS="$jobs" \
-    "$SFT_PY" setup.py bdist_wheel --dist-dir "$ART/apex-wheel" 2>&1 | tee "$ART/logs/apex-build.log") || true
+    "$SFT_PY" setup.py bdist_wheel --dist-dir "$ART/apex-wheel") || true
   local wheel
   wheel=$(ls -t "$ART"/apex-wheel/apex-*.whl 2>/dev/null | head -1)
   if [ -z "$wheel" ]; then
-    echo "apex did not build; see $ART/logs/apex-build.log (the last lines are above)" >&2
-    exit 1
+    echo "apex did not build: no wheel in $ART/apex-wheel" >&2
+    return 1
   fi
   $UV pip install --python "$SFT_PY" "$wheel"
-  "$SFT_PY" -c "import torch, amp_C" 2>/dev/null || { echo "apex installed but does not import; see $ART/logs/apex-build.log" >&2; exit 1; }
+  "$SFT_PY" -c "import torch, amp_C" || { echo "apex installed but does not import" >&2; return 1; }
 }
 
-download() {
-  say "Qwen3-VL-8B-Instruct (17 GB, 16 files; one progress bar per file)"
+hf_model() {
   "$EVAL_VENV/bin/hf" download Qwen/Qwen3-VL-8B-Instruct --revision 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b \
     --local-dir "$SFT_MODEL_PATH"
-  du -sh "$SFT_MODEL_PATH" | sed 's/^/model on disk: /'
-  if [ "$SMOKE" = 1 ]; then
-    echo "smoke: RoboVQA comes from the skill's bundled clips"
-    return
-  fi
-  say "RoboVQA (3.5 GB)"
+}
+
+hf_dataset() {
   # The evaluation environment's hf (huggingface_hub 0.36.2) reads every pattern after --include.
   "$EVAL_VENV/bin/hf" download Tianli/robovqa --repo-type dataset --revision eb5819490f0d9ec18a79774233d4b1c9ebd52eea \
     --include "videos/*" "json/*" "LICENSE.txt" --local-dir "$SRC"
 }
 
+download() {
+  say "download: model and dataset at fixed revisions (no token needed)"
+  stage "Qwen3-VL-8B-Instruct, 17 GB" download-model hf_model
+  if [ "$SMOKE" = 1 ]; then
+    printf '  %-62s%s\n' "RoboVQA" "skipped: --smoke uses the skill's six bundled clips"
+  else
+    stage "RoboVQA, 3.5 GB (9,999 clips)" download-dataset hf_dataset
+  fi
+  echo "  model on disk: $(du -sh "$SFT_MODEL_PATH" | cut -f1)   dataset: $(ls "$SRC/videos" | wc -l) clips"
+}
+
 data() {
-  say "split: 80/10/10 by clip, one question per clip"
-  "$EVAL_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" split --src "$SRC" --out "$DATA"
-  say "frames: each training clip's evaluation frames, written losslessly"
-  CUDA_VISIBLE_DEVICES= LD_LIBRARY_PATH="$EVAL_LIBS" \
+  say "data: split, training frames, check (about 25 minutes on the full dataset)"
+  stage "split 80/10/10 by clip, one question per clip" data-split \
+    "$EVAL_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" split --src "$SRC" --out "$DATA"
+  stage "frames: each training clip's evaluation frames, written losslessly" data-frames \
+    env CUDA_VISIBLE_DEVICES= LD_LIBRARY_PATH="$EVAL_LIBS" \
     "$EVAL_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" frames --out "$DATA"
-  say "verify: the training stack sees exactly the evaluator's frames"
-  CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 LD_LIBRARY_PATH="$SFT_LIBS" \
+  stage "verify: the training stack sees exactly the evaluator's frames" data-verify \
+    env CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" "$SKILL_DIR/scripts/prepare_robovqa.py" verify --out "$DATA" --model "$SFT_MODEL_PATH"
+  echo
+  echo "  $(head -n 1 "$ART/logs/data-split$TAG.log")"
+  echo "  frame check: $(tail -n 1 "$ART/logs/data-verify$TAG.log" | grep -o '"all_ok": [a-z]*, "bad": [0-9]*')"
+}
+
+sft_check() {  # sft_check <flag>: one of the SFT entrypoint's CPU checks
+  CUDA_VISIBLE_DEVICES= PYTHONPATH=. IMAGINAIRE_OUTPUT_ROOT="$RUN/preflight" LD_LIBRARY_PATH="$SFT_LIBS" \
+    "$SFT_PY" -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" "$1"
 }
 
 preflight() {
-  for check in --validate-manifest --validate-rows; do
-    say "sft $check"
-    CUDA_VISIBLE_DEVICES= PYTHONPATH=. IMAGINAIRE_OUTPUT_ROOT="$RUN/preflight" LD_LIBRARY_PATH="$SFT_LIBS" \
-      "$SFT_PY" -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" "$check"
-  done
+  say "preflight: the recipe's CPU checks before any GPU time (about 13 minutes on the full dataset)"
+  stage "config loads, roles wired (--validate-manifest)" preflight-manifest sft_check --validate-manifest
+  stage "every training row packs (--validate-rows)" preflight-rows sft_check --validate-rows
+  echo
+  echo "  $(grep -m1 '^train: rows' "$ART/logs/preflight-rows$TAG.log")"
 }
 
 score() {  # score <model directory> <name>
@@ -174,8 +216,10 @@ score() {  # score <model directory> <name>
 }
 
 before() {
-  say "score the untouched model on the held-out clips"
-  score "$SFT_MODEL_PATH" before
+  say "before: score the untouched model on the held-out clips (about 14 minutes for 1,000 clips)"
+  stage "greedy answers, then exact match / token F1 / yes-no accuracy" before score "$SFT_MODEL_PATH" before
+  echo
+  echo "  $(tail -n 1 "$ART/logs/before$TAG.log")"
 }
 
 train() {
@@ -186,30 +230,47 @@ train() {
     exit 1
   fi
   say "train: $STEPS updates of 64 clips on one GPU"
-  echo "loading the model and warming up: the first 'step 1/$STEPS' line appears after about 3 minutes,"
-  echo "then one line per update, about a minute each. Watch train/loss_avg fall from about 1.0."
+  echo "  the first 'step 1/$STEPS' line appears after about 3 minutes, then one line per update (about a minute each);"
+  echo "  full log: $ART/logs/train$TAG.log"
+  echo
+  # Only the step lines and the end marker reach the screen; the framework's full log goes to the file.
   PYTHONPATH=. IMAGINAIRE_OUTPUT_ROOT="$RUN" LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" -m torch.distributed.run --standalone --nproc_per_node=1 \
-    -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" -- rl.max_steps="$STEPS" rl.save_every="$STEPS"
+    -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" -- rl.max_steps="$STEPS" rl.save_every="$STEPS" \
+    2>&1 | tee "$ART/logs/train$TAG.log" |
+    grep --line-buffered -E ' step +[0-9]+/[0-9]+ |SFT DONE|Error|error:|Traceback' |
+    sed -u -E 's/^.*(step +[0-9]+\/[0-9]+ +train\/loss_avg [+-]?[0-9.]+).*timer\/e2e_step_s ([+-]?[0-9.]+).*$/  \1   \2 s/; s/^.*SFT DONE/  SFT DONE/'
+  grep -q "SFT DONE" "$ART/logs/train$TAG.log" || { echo "training did not finish; see $ART/logs/train$TAG.log" >&2; exit 1; }
 }
 
-export_hf() {
+materialize() {
   local ckpt
   ckpt=$(ls -d "$RUN"/posttrain_sft/qwen3_vl_8b_robovqa/seed0/*/checkpoint_artifacts/iter_* | sort | tail -1)
-  say "export $ckpt"
+  echo "checkpoint: $ckpt"
   CUDA_VISIBLE_DEVICES= PYTHONPATH=. LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" -m cosmos_framework.posttrain.checkpoint.tools.materialize_hf \
     --ckpt-dir "$ckpt" --base "$SFT_MODEL_PATH" --out "$EXPORT" --expect-tensors 750 --min-tensors 750
 }
 
-after() {
-  say "score the fine-tuned model the same way"
-  score "$EXPORT" after
+export_hf() {
+  say "export: the trained weights as a Hugging Face model (about 2 minutes, CPU)"
+  stage "materialize the last checkpoint, verify all 750 tensors" export materialize
+  echo
+  echo "  $(grep -o '\[materialize\] OK.*' "$ART/logs/export$TAG.log")"
 }
 
+after() {
+  say "after: score the fine-tuned model the same way"
+  stage "greedy answers, then exact match / token F1 / yes-no accuracy" after score "$EXPORT" after
+  echo
+  echo "  $(tail -n 1 "$ART/logs/after$TAG.log")"
+}
+
+# Each stage writes its own log under $ART/logs/ (with a -smoke suffix for the smoke variant), so the steps
+# themselves print only the short progress view.
 case "$STEP" in
-  setup | download | data | preflight | before | train | after) "$STEP" 2>&1 | tee "$ART/logs/$STEP$TAG.log" ;;
-  export) export_hf 2>&1 | tee "$ART/logs/export$TAG.log" ;;
+  setup | download | data | preflight | before | train | after) "$STEP" ;;
+  export) export_hf ;;
   *)
     echo "usage: run.sh <setup|download|data|preflight|before|train|export|after> [--smoke]" >&2
     exit 2
