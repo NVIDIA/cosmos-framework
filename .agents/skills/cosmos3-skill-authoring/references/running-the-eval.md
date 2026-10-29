@@ -1,7 +1,7 @@
 # Running the skill eval: GitHub CI, local runs, and reading the dashboard
 
-Everything here was exercised on the `cosmos3-generate-media` skill (PRs #128 and #250, October 2026); the
-eval-derived fixes and the 44/44 result cited in § 4 come from the stacked PR #250, which merges into the #128
+Everything here was exercised on the `cosmos3-generate-media` skill (PRs #324 and #327, October 2026); the
+eval-derived fixes and the 44/44 result cited in § 4 come from the stacked PR #327, which merges into the #324
 branch before that branch reaches `main`. The evaluator is `cosmos-skill-eval` (Harbor-based); its image and the dashboard URL are the `image:` and
 `dashboard:` values of `.github/skill-eval.yml` (CI reads them from the repository variables `COSMOS_SKILL_EVAL_IMAGE` and
 `COSMOS_SKILL_EVAL_DASHBOARD` when set).
@@ -158,8 +158,8 @@ pieces are already in place (`~/cosmos-skill-eval-src`, `~/cosmos-skill-eval.env
   and B to compare"). It shows per-cell deltas (improved / regressed / changed / same), first-attempt deltas,
   "Static · A" and "Static · B" tiles next to the Passed tiles (the delta on B, e.g. "−5 vs A")
   and "Copy as Markdown" (= `/api/skills/<skill>/compare?a=…&b=…&format=md`) for a PR description. Examples:
-  `compare?a=group:ci-pr128-0ba391d&b=group:ci-pr250-a292f5e` (the baseline group vs the final run of the fix
-  PR) and `compare?a=branch:skills/generate-media-migration-and-eval&b=branch:skills/generate-media-fixes`
+  `compare?a=group:ci-pr324-b50b766&b=group:ci-pr327-b7ad087` (the baseline group vs the final run of the fix
+  PR) and `compare?a=branch:skills/generate-media-migration-and-eval-public&b=branch:skills/generate-media-fixes-public`
   (the newest result per cell on each branch).
 - **API** for scripts: `/api/skills/<skill>/groups/<group>` (`cells[case][backend]`: `status`, `first_attempt`,
   `status_reason`, `run_id`), `/runs/<run_id>/files/report.json`,
@@ -195,10 +195,7 @@ budget — and runs after their confirmation; nothing is pushed to the skill PR 
    affected cells' reports before the fix, result = the cells in the proof run) and the compare link in the fixes PR
    body, plus the sentence that `eval/eval.config` is unchanged.
 
-Worked example (PRs #128 → #250, October 2026): baseline group `ci-pr128-0ba391d` 39/44 PASS, 7/44 first-attempt;
-five iterations of fixes with per-cell reruns; forced full run on a292f5e (group `ci-pr250-a292f5e`) 44/44 PASS,
-43/44 first-attempt; the remaining cell (`opencode/diffusers-nano-t2i`) fixed (1613b32) and re-verified by a
-manual rerun on the runner class that exposed it (group `loop5-1613b32`) and by a CI rerun of that one cell
-(`force cells=opencode/diffusers-nano-t2i`, group `ci-pr250-c797955`), both PASS and first-attempt PASS; the branch
-compare view shows the newest result per cell: 44/44 first-attempt. A later layout change (SKILL.md brought under
-the 500-line budget) was measured again with a forced full run on its head.
+Worked example (PRs #324 → #327, October 2026): baseline group `ci-pr324-b50b766` 42/44 PASS, 14/44 first-attempt;
+the fixes were developed in five iterations of per-cell reruns (a failing cell is re-run alone after each fix, the
+full matrix only once the last cell passes), then proven with a full run on the fixes PR's head (group
+`ci-pr327-b7ad087`): 44/44 PASS, 44/44 first-attempt; the branch compare view shows the newest result per cell.
