@@ -71,6 +71,25 @@ def test_prepare_failure_never_applies_an_optimizer_update(tmp_path):
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_preprocessing_counters_cross_native_reporter_boundary(tmp_path, prefetch):
+    from cosmos_framework.posttrain.utils.report import reportable_metrics, validate_metric_frame
+
+    config, units, trainer = _runtime(tmp_path, preprocessing_cache_bytes=1024, preprocessing_prefetch=prefetch)
+    trainer.objective.prepare_window = lambda batches: None
+    trainer.objective.finish_window = lambda: None
+    trainer.objective.pipeline_stats = lambda: {
+        "samples": {"bytes": 64, "limit": 256, "hits": 2, "misses": 1},
+        "videos": {"bytes": 128, "limit": 768, "hits": 1, "misses": 2},
+    }
+    frame = reportable_metrics(train_step(units["data"], units["policy"], config.rl))
+    # The public reporter rejects undeclared namespaces before checkpointing.
+    validate_metric_frame(frame)
+    assert frame["train/preprocessing_samples_bytes"] == 64
+    assert frame["train/preprocessing_videos_hits"] == 1
+    assert trainer.iteration() == 1
+
+
 @pytest.mark.parametrize("value", [-1, True, 1.5, "1024"])
 def test_cache_limit_requires_nonnegative_integer(value):
     with pytest.raises(ValueError, match="preprocessing_cache_bytes"):

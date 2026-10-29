@@ -226,6 +226,37 @@ def test_spawned_prefetch_preserves_order_identity_rng_and_cold_resume(tmp_path)
         resumed.close()
 
 
+@pytest.mark.parametrize("relative", [False, True], ids=["absolute-alias", "relative-alias"])
+def test_spawned_worker_preserves_processor_source_alias_and_construction_cwd(tmp_path, monkeypatch, relative):
+    source = tmp_path / "source"
+    source.mkdir()
+    local_tokenizer().save_pretrained(source)
+    (source / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
+    alias = tmp_path / "alias"
+    alias.symlink_to(source, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    name = "alias" if relative else str(alias)
+    packer = build_sft_packer(name, max_length=128)
+    pipeline = build_sft_preprocessing(
+        packer, name_or_path=name, cache_bytes=100_000, prefetch=True, media_hashes={}, max_pending=1
+    )
+    row = _text_row("A")
+    expected = packer.sft_process_sample(row)
+    identity = packer.validation_semantics_identity()
+    # ProcessPoolExecutor starts lazily. Relative source names must still resolve
+    # against the directory where their parent processor was constructed.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    try:
+        pipeline.prepare_window([row])
+        assert pipeline.sft_process_sample(row) == expected
+        pipeline.finish_window()
+        assert pipeline.validation_semantics_identity() == identity
+    finally:
+        pipeline.close()
+
+
 def test_prefetch_bounds_unconsumed_window_and_worker_failure(tmp_path):
     _, pipeline = _local_pipeline(tmp_path, prefetch=True)
     row = _text_row("A")

@@ -245,6 +245,7 @@ class _PreprocessingCache:
 @dataclass(frozen=True)
 class _WorkerSpec:
     name_or_path: str
+    source_cwd: str
     max_length: int
     processor_kwargs: dict[str, Any]
     mask_think_opener: bool
@@ -264,6 +265,11 @@ def _initialize_worker(spec: _WorkerSpec) -> None:
     torch.set_num_threads(1)
     if torch.cuda.is_initialized():
         raise RuntimeError("spawned SFT preprocessing workers must never initialize CUDA")
+    # Tokenizer identities include source spelling. Resolving a symlink or a
+    # filesystem alias here changes the contract even when file bytes match.
+    # The pool starts lazily, so retain the source directory for relative names
+    # if the parent changes cwd after constructing the pipeline.
+    os.chdir(spec.source_cwd)
     packer = build_sft_packer(
         spec.name_or_path,
         max_length=spec.max_length,
@@ -405,7 +411,8 @@ def build_sft_preprocessing(
     if not Path(name_or_path).is_dir():
         raise ValueError("preprocessing workers require a prepared local processor snapshot")
     spec = _WorkerSpec(
-        str(Path(name_or_path).resolve()),
+        str(name_or_path),
+        os.getcwd(),
         packer.max_length,
         copy.deepcopy(packer.processor_kwargs),
         packer.mask_think_opener,

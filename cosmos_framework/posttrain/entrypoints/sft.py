@@ -489,7 +489,7 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
     if window is not None or getattr(rl, "preprocessing_cache_bytes", 0):
         for kind, counters in resolve(policy.input_pipeline_stats()).items():
             for name, value in counters.items():
-                merged[f"data/preprocessing_{kind}_{name}"] = value
+                merged[f"train/preprocessing_{kind}_{name}"] = value
     return merged
 
 
