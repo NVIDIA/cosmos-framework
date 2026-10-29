@@ -322,7 +322,7 @@ def _metadata(counts: list[int], probs: list[float], top_k: int = 2) -> Any:
 
 
 def test_sft_objective_reads_load_balancing_through_the_model_protocol() -> None:
-    """FIXTURE: on 02fed8cbea ``algorithm/sft.py`` imported ``model.qwen3_vl_moe`` inside the objective and called its
+    """FIXTURE: on the parent ``algorithm/sft.py`` imported ``model.qwen3_vl_moe`` inside the objective and called its
     module functions over ``net``. The objective asks the policy for the ``LoadBalancingPolicy`` capability
     (``model/protocol.py``): a toy policy that implements it yields ``sft_lbl_loss`` equal to
     :func:`load_balancing_loss` over the metadata it hands back; a policy without it is refused with ``TypeError``

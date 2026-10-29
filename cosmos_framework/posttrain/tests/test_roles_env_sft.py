@@ -198,7 +198,7 @@ def test_opener_prefilled_rows_require_reasoning_on_every_supervised_turn_and_me
     (B1: no reasoning at all; B2: a bare last turn under ``last_assistant``; B3: mixed; whitespace-only reasoning counts
     as none), names the bare messages with the row's label, and accepts the rows with reasoning where it is required; a
     ``meta.supervise`` that disagrees with the row's ``supervise`` field is refused, an agreeing or defaulted one accepted.
-    On cd2f6fddac67 every one of these rows passes the loader (no rule)."""
+    On the parent every one of these rows passes the loader (no rule)."""
     call = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "lookup", "arguments": {"q": 1}}}]}
     reasoned_call = {**call, "reasoning_content": "Look."}
     tool = {"role": "tool", "content": "found"}

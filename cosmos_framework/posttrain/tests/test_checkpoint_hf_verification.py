@@ -282,9 +282,9 @@ def test_default_verification_consumes_the_held_payload_when_the_path_is_replace
     SUPPORTED merge tool and the REAL torch verifier: merge -> A; during the overlay a forced merge replaces the path with B
     (os.remove, tmp, os.replace); the staged shards are A (the overlay consumed the held payload; here the real overlay minus the
     HF model: the pre-made export of A is copied into the staging directory). [path_replaced_build_correct]: the build publishes,
-    verified bitwise against A, marker A, the path holds B; on 65fe976387c verification reopened the path and REFUSED the correct
+    verified bitwise against A, marker A, the path holds B; on the parent verification reopened the path and REFUSED the correct
     build ("verify: 2 of 2 tensors differ bitwise"). [shards_follow_the_path]: an overlay that had read the path would have written
-    B; verification against the payload A refuses that wrong build; on 65fe976387c it PASSED (B compared with B at the path).
+    B; verification against the payload A refuses that wrong build; on the parent it PASSED (B compared with B at the path).
     [wrong_shards]: no replacement, one staged tensor corrupted: verification refuses on both (the check keeps its teeth)."""
     import hashlib
     import os
@@ -334,7 +334,7 @@ def test_default_verification_consumes_the_held_payload_when_the_path_is_replace
     err = capsys.readouterr().err
     if scenario == "path_replaced_build_correct":
         assert code == 0, (
-            "a correct build verifies against the held payload (on 65fe976387c: refused, 'verify: 2 of 2 tensors differ "
+            "a correct build verifies against the held payload (on the parent: refused, 'verify: 2 of 2 tensors differ "
             f"bitwise', because verification reopened the path, by then B): {err}"
         )
         marker = json.loads((out / mat.MATERIALIZED_MARKER).read_text())
@@ -347,7 +347,7 @@ def test_default_verification_consumes_the_held_payload_when_the_path_is_replace
         assert all(torch.equal(at_path[k], state_b[k]) for k in state_b)
     else:
         assert code == 1, (
-            "a wrong build is refused (on 65fe976387c the shards-follow-the-path case PASSED: B compared with B at the "
+            "a wrong build is refused (on the parent the shards-follow-the-path case PASSED: B compared with B at the "
             f"path): {err}"
         )
         assert "FATAL: the staged build failed at the verification (torch) stage" in err and "differ bitwise" in err, (

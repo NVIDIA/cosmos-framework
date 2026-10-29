@@ -211,7 +211,7 @@ def _stop_after_two_calls(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_loop_termination_emergency_save_honours_the_run_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review of c2af017642d (thread 0069d0e0): the SFT loop called `ensure_resumable` at a termination trigger, so
+    """The SFT loop called `ensure_resumable` at a termination trigger, so
     `rl.emergency_checkpoint_components="run"` was silently ignored. Through `save_emergency`, "run" with a model-only
     cadence plan writes the model-only artifact (`checkpoint_artifacts/iter_*`) and no full checkpoint; the default
     "full" still writes the exact-resume checkpoint (`checkpoints/iter_*`) and no artifact."""
@@ -387,7 +387,7 @@ def test_loop_writes_the_metrics_file_with_norm_lr_tokens_time_and_clip(
         assert row["train/grad_clipped"] == float(row["train/grad_clip_coef"] < 1.0), "one rule: clipped <=> coef < 1"
         assert row["train/learning_rate"] == 0.01
     # The clip record is the TRAINER's, in the raw metrics of the applying microbatch, computed
-    # from the norm the clip measured (on b1373b88db the entrypoint re-derived it from the logged float after merging and
+    # from the norm the clip measured (on the parent the entrypoint re-derived it from the logged float after merging and
     # the trainer emitted no clip key); an accumulating microbatch and a trainer without a clip carry none.
     from cosmos_framework.posttrain.entrypoints import sft as entry
     from cosmos_framework.posttrain.utils.entry import resolve
@@ -470,8 +470,8 @@ def _census_worker(rank: int, rendezvous: str, out_dir: str) -> None:
 
 
 def test_held_out_census_runs_once_on_rank_zero_and_refuses_on_every_rank(tmp_path: Path) -> None:
-    """FIXTURE: on 22aa60eda8 ``make_setup`` ran ``require_disjoint_sources`` through ``run_rank_converged`` on EVERY
-    rank, so each rank walked both corpora: (6, 6) row reads per rank on the parent of the fix, 27fdda692271, MEASURED
+    """FIXTURE: on the parent ``make_setup`` ran ``require_disjoint_sources`` through ``run_rank_converged`` on EVERY
+    rank, so each rank walked both corpora: (6, 6) row reads per rank on the parent of the fix, MEASURED
     by a two-rank probe, not by this test, whose run on that parent stops at the ImportError of ``held_out_census``.
     ``held_out_census`` computes the census on rank 0 only and broadcasts it: rank 0 reads the 4 + 2 rows, rank 1 reads
     none, both hold the same census; an overlapping pair is refused on both ranks with the setup's message, collectively
@@ -558,7 +558,7 @@ def test_setup_refuses_a_validation_source_overlapping_the_training_rows(tmp_pat
 
 
 def test_disjointness_guard_requires_item_ids_and_hashes_media_bytes(tmp_path: Path) -> None:
-    """The two bypasses of the row-level guard on 22bfce78f40 (cases 4
+    """The two bypasses of the row-level guard on the parent (cases 4
     and 5): a validation row WITHOUT ``meta.item`` that differed from a training row by one trailing space was ACCEPTED
     (its only identity was the content hash), and the same image row under a media root holding a COPY of the training
     image was ACCEPTED (``normalize_row`` rewrites the path to the resolved absolute path, so the path-based hash
@@ -604,7 +604,7 @@ def test_disjointness_guard_requires_item_ids_and_hashes_media_bytes(tmp_path: P
         ),
         "1 shared item",
     )
-    # Bypass 4 of 22bfce78f40: same content, no meta, one trailing space -> ACCEPTED there. Refused for the missing item.
+    # Bypass 4 (pre-fix): same content, no meta, one trailing space -> ACCEPTED there. Refused for the missing item.
     trailing = {
         "messages": [{"role": "user", "content": "q0"}, {"role": "assistant", "content": "a0 "}],
         "tools": base_row["tools"],
@@ -631,7 +631,7 @@ def test_disjointness_guard_requires_item_ids_and_hashes_media_bytes(tmp_path: P
             {"role": "assistant", "content": "a"},
         ]
     }
-    # Bypass 5 of 22bfce78f40: the same image row, media COPIED under another root, no meta on either side (so the item
+    # Bypass 5 (pre-fix): the same image row, media COPIED under another root, no meta on either side (so the item
     # rule is vacuous and the bytes rule alone must catch it) -> ACCEPTED there.
     train_image = env("trainA.jsonl", [img_row], media_root=tmp_path / "mrA")
     refused(train_image, env("v5.jsonl", [img_row], media_root=tmp_path / "mrB", training=False), "1 shared row")
@@ -680,7 +680,7 @@ def test_disjointness_guard_requires_item_ids_and_hashes_media_bytes(tmp_path: P
 def test_metrics_file_survives_a_relaunch_past_the_last_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run 1 trains steps 1-2 and saves at 2; run 2 resumes from
     ``iter_000002``, commits step 3 and ends before a save (``save_every=0``: the crash-past-the-last-save state); run 3
-    relaunches from ``iter_000002`` again. The append-only file of 22bfce78f40 then held steps ``[1, 2, 3, 3, 4]`` and
+    relaunches from ``iter_000002`` again. The pre-fix append-only file then held steps ``[1, 2, 3, 3, 4]`` and
     ``train/grad_clip_fraction`` restarted at the relaunch. Now the resumed attempt drops the rows it re-emits
     (``[1, 2, 3, 4]``) and the clip counters continue from the kept rows: with steps 1-2 clipped and steps 3-4 not, the
     fraction reads 1.0, 1.0, 2/3, 2/4 instead of restarting at 0."""

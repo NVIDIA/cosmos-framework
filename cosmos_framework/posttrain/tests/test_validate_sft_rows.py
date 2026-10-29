@@ -291,8 +291,8 @@ def _p_layout_row(supervise: str | None = "last_assistant") -> dict[str, Any]:
     S_type_mcq_v0/00835be2aabec1ba@..._hA_s01_aoi_train_dev_HOWTO_min/dsh_xtf_th/r1/call1 has four messages: system, the task
     turn, the runtime-context turn, the supervised assistant turn = one tool call with empty content. The exemption the row
     exercises trusts the exporter's ``supervise`` field: the consumers that catch a wrongly-labelled row are the exporter's
-    episode gate and the pool census (LAST-TURN-NOT-ASSISTANT: 0 rows in DSH_P_v4). The P arms' integration pin carries V7
-    (b821fb850fe); V7b and V7c change tests, docstrings and gate scripts only (whitespace and words), never the rule."""
+    episode gate and the pool census (LAST-TURN-NOT-ASSISTANT: 0 rows in DSH_P_v4). The P arms' integration pin carries V7;
+    V7b and V7c change tests, docstrings and gate scripts only (whitespace and words), never the rule."""
     row: dict[str, Any] = {
         "id": "S_type_mcq_v0/00835be2aabec1ba@root/dsh_xtf_th/r1/call1",
         "messages": [
@@ -314,8 +314,8 @@ def _p_layout_row(supervise: str | None = "last_assistant") -> dict[str, Any]:
 
 def test_v7_last_assistant_row_may_end_on_its_own_tool_call() -> None:
     """V7: under supervise last_assistant the dangling call of the LAST assistant turn is the completion; the same messages under
-    the whole-episode rule (no supervise, or all_assistant) still fail exactly as on 92f8cab6175. The first assertion calls the
-    rule WITHOUT the keyword, so on the parent 92f8cab6175 it is reached and passes (the mechanism-level check); the keyword
+    the whole-episode rule (no supervise, or all_assistant) still fail exactly as on the parent. The first assertion calls the
+    rule WITHOUT the keyword, so on the parent it is reached and passes (the mechanism-level check); the keyword
     calls that follow raise TypeError there (the parent's one-argument signature), which is the FAIL-on-old of this test."""
     messages = _p_layout_row()["messages"]
     dangling = "message 3: conversation ends with 1 tool call(s) and no result"
@@ -331,7 +331,7 @@ def test_v7_last_assistant_row_may_end_on_its_own_tool_call() -> None:
 def test_v7_exemption_covers_only_the_final_supervised_turn() -> None:
     """A last_assistant row with a call left unanswered in an EARLIER turn, one that ends on a tool result, and a whole-episode
     row that ends in a call all still fail: the exemption is the final supervised turn's own calls, nothing else. On the parent
-    92f8cab6175 this test fails at the first keyword call (TypeError: the one-argument signature), not at the mechanism; the
+    commit this test fails at the first keyword call (TypeError: the one-argument signature), not at the mechanism; the
     mechanism-level FAIL-on-old lives in test_v7_last_assistant_row_may_end_on_its_own_tool_call (its first assertion) and in
     test_v7_last_assistant_tool_call_row_validates_with_the_mask_unchanged (the parent refuses the row with the dangling reason)."""
     user = {"role": "user", "content": "q"}
@@ -354,7 +354,7 @@ def test_v7_exemption_covers_only_the_final_supervised_turn() -> None:
 
 def test_v7_last_assistant_tool_call_row_validates_with_the_mask_unchanged(text_packer: Any) -> None:
     """The real P-layout shape through the validator: no reason, and the loss tokens are the supervised turn's own tokens (one
-    block); the same row under all_assistant carries the grammar reason. On the parent 92f8cab6175 this test fails at the
+    block); the same row under all_assistant carries the grammar reason. On the parent this test fails at the
     MECHANISM: validate_dataset refuses the last_assistant row with "conversation ends with 1 tool call(s) and no result"."""
     reports, summary = validator.validate_dataset(text_packer, [_p_layout_row()], max_length=4096)
     (report,) = reports
@@ -374,7 +374,7 @@ def test_v7_malformed_final_turn_call_entry_is_still_refused_by_the_packer(text_
     grammar never inspected call entries on any turn (the count rule), and under V7 its final-turn dangling reason no longer
     fires for a last_assistant row, so the packer is the only guard left for this shape (the review's
     grammar-shape table called this message list "shape (m)").
-    FAIL-on-old at the mechanism: on the parent 92f8cab6175 the same row carries TWO reasons, the whole-episode rule's
+    FAIL-on-old at the mechanism: on the parent the same row carries TWO reasons, the whole-episode rule's
     "message 3: conversation ends with 2 tool call(s) and no result" before the packer's, so the exact-list assertion fails."""
     row = _p_layout_row()
     row["messages"][-1]["tool_calls"] = [1, 2]
@@ -1439,11 +1439,11 @@ def test_census_read_error_of_any_class_is_the_rows_failure_like_the_per_row_rea
     record must not depend on which class the factory's own code happens to raise: a record without ``messages``
     (``KeyError``), a string content part (``AttributeError``), a ``__len__`` that over-counts (``IndexError`` from the
     list), a vendor decoder's own ``Exception`` subclass, a ``RuntimeError`` of the factory's code, a ``StopIteration``
-    of it (FIXTURE: on 544e3c9b38a1 the census walked the factory through
+    of it (FIXTURE: on the parent the census walked the factory through
     ``source_overlap``'s generator expression, which turned the ``StopIteration`` into
     ``RuntimeError: generator raised StopIteration`` -- PEP 479 -- while the per-row reader named ``StopIteration``;
     both now read the row through ``_read_row``, which names it for both), and a SUBCLASS of ``StopIteration`` a
-    vendor's code raises (FIXTURE: on b01a38cde21e ``_read_row`` hardcoded the base
+    vendor's code raises (FIXTURE: on the parent ``_read_row`` hardcoded the base
     name, so ``_NoImagePart`` was filed as ``StopIteration: ...`` by both readers while ``_refusal`` names every other
     subclass by its own name; ``_read_row`` now names the class that was raised). Each is the validation split's
     ``census_error`` with the class and the message the per-row reader files for that row; the rows are still inspected,
@@ -1656,7 +1656,7 @@ def test_census_len_failure_names_the_side_and_the_call_not_a_row(
 
 def test_census_attribute_read_failure_names_the_side_and_the_attribute() -> None:
     """``source_overlap`` asks each side for ``media_hashes`` (its digest cache) before any row and for ``rows`` (a JSONL
-    source's in-memory list) when that side's walk starts (FIXTURE: on the parent 544e3c9b38a1 both sentences below read
+    source's in-memory list) when that side's walk starts (FIXTURE: on the parent both sentences below read
     ``training source``, no call named, the wrong side for the first). A source whose attribute read fails is named by its
     side and that call -- the validation one for ``media_hashes``, asked right after the training one's; the training one for
     ``rows`` -- never by a row. The same sources with nothing broken pass the census."""
@@ -1675,7 +1675,7 @@ def test_census_attribute_read_failure_names_the_side_and_the_attribute() -> Non
 def test_census_failure_before_any_source_call_is_not_a_sources_and_propagates(
     text_packer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The edge of the last-call rule, a control (FIXTURE: on the parent 544e3c9b38a1 both halves were filed as ``held-out
+    """The edge of the last-call rule, a control (FIXTURE: on the parent both halves were filed as ``held-out
     census could not read training source: ...``, a source that had not been asked). ``source_overlap`` is stood in for by a
     function that fails before it asks either source for anything -- the setup's own helper cannot, its first statement reads
     both sides' ``media_hashes`` -- and that failure is the census's own, not a source's: it propagates out of
@@ -2144,7 +2144,7 @@ def test_run_level_opener_mask_is_counted_like_the_rows_prefilled_rule(text_pack
     """The run-level knob and the row's ``opener: prefilled`` are one rule the packer applies once: the ``<think>``
     that opens a supervised body is left at -100. Under a knob packer a self row with reasoning on both turns validates
     with 116 = [101, 15] (118 = [102, 16] without the knob) and a ``last_assistant`` row with 15 = [15]: the validator reads
-    the packer's knob and takes the opener off every supervised block that opens with it. On 401d0564c97 the validator did
+    the packer's knob and takes the opener off every supervised block that opens with it. On the parent the validator did
     not read the knob, so the row was a mismatch: 'loss tokens 116 != independent assistant tokens 118; per assistant block
     [101, 15] vs [102, 16]'."""
     knob = _knob_packer(text_packer)
@@ -2176,7 +2176,7 @@ def test_run_level_opener_mask_leaves_a_bare_block_whole_and_subtracts_a_prefill
     """The prefilled-row rule under the knob: a block that opens with anything but ``<think>`` loses nothing (the packer masks nothing
     there and refuses nothing). A bare self row validates with 96 = [91, 5], nothing off; the mixed row (turn 1 reasoning,
     turn 2 bare) with 106 = [101, 5], per block; a ``prefilled`` row under the knob with 116 = [101, 15], the opener
-    subtracted once, never twice. On 401d0564c97 the mixed row was a mismatch ('loss tokens 106 != independent assistant
+    subtracted once, never twice. On the parent the mixed row was a mismatch ('loss tokens 106 != independent assistant
     tokens 107; per assistant block [101, 5] vs [102, 5]'); the bare and the prefilled rows pass there too and pin the
     per-block rule against a count that would take one off every supervised block or stack the knob on ``prefilled``."""
     knob = _knob_packer(text_packer)
@@ -2210,7 +2210,7 @@ def test_validate_from_config_builds_the_packer_with_the_runs_opener_mask(
     ``entrypoints.sft.build_trainer`` does, so the counts it reports are the counts that train: under
     ``rl.mask_think_opener=true`` (declared with the typed field ``rl.serve_contract=prefills_opener``, which the seat's
     ``SFTConfig`` requires where the config is built) a self row with reasoning on both turns reports 116 = [101, 15]
-    and a bare row 96 = [91, 5]; without the knob the same rows report 118 and 96. On 401d0564c97 the validator built
+    and a bare row 96 = [91, 5]; without the knob the same rows report 118 and 96. On the parent the validator built
     its packer without the knob and reported 118 under it (the opener counted as the student's where training leaves it
     at -100)."""
     _packer_module()

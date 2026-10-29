@@ -231,7 +231,7 @@ def test_collate_attention_mask_is_int64_and_feeds_the_native_eager_mask(text_pa
     """The collated ``attention_mask`` follows ``main``'s contract, ``torch.int64`` 0/1
     (``tests/test_model_qwen3_vl.py::test_native_causal_mask_accepts_sft_padding_masks`` pins it), and the native eager
     path accepts it because ``model/qwen3_vl.py::_qwen3_vl_causal_mask`` casts a 2-D mask to bool before ``eager_mask``
-    (``torch.where``). On 05389b0e6d this branch emitted ``torch.bool`` for that path instead; after a rebase
+    (``torch.where``). On the parent this branch emitted ``torch.bool`` for that path instead; after a rebase
     ``main``'s test refused it (its six parametrizations failed on both heads and passed on main)."""
     from types import SimpleNamespace
 
@@ -877,7 +877,7 @@ def test_think_opener_mask_unsupervises_the_prefilled_opener_only() -> None:
     exporter's rendering of a turn without reasoning, or a single-newline ``\n</think>\n``) stay supervised, because the
     student emits them in either case. Checked on
     the base's own chat template (``tests/fixtures/qwen3_vl_chat_template.jinja`` == the base's ``chat_template.json``
-    byte for byte) with a tokenizer whose ``\n\n`` is one token like the base's (id 271): 22bfce78f40's Nemo-Chat rule
+    byte for byte) with a tokenizer whose ``\n\n`` is one token like the base's (id 271): the earlier Nemo-Chat rule
     masked the single-newline closer (``['Ċ', 'Answer', ...]`` left supervised), and the
     template strips a ``<think></think>`` content prefix, so that turn has no opener to mask. The default supervises the
     opener (what the A1 arms trained, and what the path of record needs)."""
@@ -920,7 +920,7 @@ def test_think_opener_mask_unsupervises_the_prefilled_opener_only() -> None:
     assert masked.input_ids[second : second + 4] == [think, two, think_end, two]
     assert masked.labels[second + 1 : second + 4] == [two, think_end, two]
     assert masked.input_ids[third : third + 4] == [think, newline, think_end, newline]
-    assert masked.labels[third + 1 : third + 4] == [newline, think_end, newline]  # 22bfce78f40 masked these three
+    assert masked.labels[third + 1 : third + 4] == [newline, think_end, newline]  # the earlier rule masked these three
     supervised = _supervised(packer, masked)
     assert "Reason one." in supervised and "</think>" in supervised and "Answer four." in supervised
     identity = QwenSFTDataPacker(tokenizer, max_length=4096, mask_think_opener=True).validation_semantics_identity()
@@ -1509,7 +1509,7 @@ def test_mask_think_openers_reads_the_boundary_from_the_original_labels(text_pac
     """``_mask_think_openers`` read the supervision boundary from the list it was mutating, so a body that begins with
     two consecutive openers masked both (the first, once ignored, became the ignored neighbour of the second). The
     boundary is read from the ORIGINAL labels: ids ``[5, T, T, 7]`` with labels ``[-100, T, T, 7]`` give
-    ``[-100, -100, T, 7]`` (on c0d4306271 and 0153cf2f7727: ``[-100, -100, -100, 7]``). Controls that must not change:
+    ``[-100, -100, T, 7]`` (on both parents: ``[-100, -100, -100, 7]``). Controls that must not change:
     an inline ``<think>`` after text stays supervised; two blocks with one opener each mask one per block; an opener at
     position 0 is masked."""
     packer = QwenSFTDataPacker(text_packer.tokenizer, max_length=4096, mask_think_opener=True)
@@ -1526,7 +1526,7 @@ def test_consecutive_think_openers_mask_exactly_one_token_per_supervised_block(t
     """The original-labels boundary of ``_mask_think_openers``, the row through the packer: an assistant body that
     starts with ``<think><think>`` under the run-level ``mask_think_opener=True`` changes exactly ONE label (the first
     opener); the second ``<think>`` stays supervised. The same row as an ``opener=prefilled`` row packs with one removal
-    in its block (on c0d4306271 the knob dropped both labels silently and the prefilled row was refused for two
+    in its block (on the parent the knob dropped both labels silently and the prefilled row was refused for two
     removals)."""
     messages = [
         {"role": "user", "content": "Question"},
@@ -1554,7 +1554,7 @@ def test_opener_prefilled_refuses_a_supervised_block_without_an_opener(text_pack
     ``_opener_prefilled_v1`` contract string. B1: ``all_assistant`` with no reasoning turn at all (both blocks bare);
     B2: ``last_assistant`` with a bare last turn; B3: mixed, turn 1 with reasoning and turn 2 bare. The same rows pack as
     self rows, and the run-level ``mask_think_opener`` on the mixed row masks the one opener it finds and records the run's
-    variant in the packer identity, not a prefilled row contract. On cd2f6fddac67 all three rows pack (DID NOT RAISE)."""
+    variant in the packer identity, not a prefilled row contract. On the parent all three rows pack (DID NOT RAISE)."""
     bare_last = [
         _REASONING_THREE_TURN[0],
         {key: value for key, value in _REASONING_THREE_TURN[1].items() if key != "reasoning_content"},
@@ -1603,7 +1603,7 @@ def test_unified_export_tokenizer_loads_the_canonical_text_and_a_divergent_jinja
     files, so the materializer refuses that base (``unified_template_conflicts`` names the file) and the rule refuses
     such an export; a Jinja equal to the canonical text is allowed and effective. Real loader, toy tokenizer
     (``local_tokenizer().save_pretrained``): the base ships its templates in the two JSON files, as the base of record
-    does. On 7e5523cabe5 ``unified_template_conflicts`` does not exist."""
+    does. On the parent ``unified_template_conflicts`` does not exist."""
     import shutil
 
     from transformers import AutoTokenizer

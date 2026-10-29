@@ -63,8 +63,7 @@ Objective-level knobs and the recorded decision per knob (written 2026-10-02). T
   ``<|im_start|>assistant\n`` (ids 151644, 77091, 198) and nothing more, so the student must emit ``<think>``
   itself; a ``<think>`` prefill exists only for requests WITHOUT tools, where a present effort sets
   ``enable_thinking`` (``vllm/entrypoints/openai/responses/protocol.py:314-315``) and the template appends
-  ``<think>`` (10 input tokens where 9 are rendered without the flag; ``fix_r125/S/C04_generation_prompt.md``
-  section 2) -- the measurement, which holds for
+  ``<think>`` (10 input tokens where 9 are rendered without the flag) -- the measurement, which holds for
   tool-less requests only (the earlier ruling of a prefill on every turn is superseded); "a no-think turn"
   = an assistant turn whose completion carries no ``<think>...</think>`` span (45.5 % of the A1 file's turns);
 - "pin" vs "fixture" (tests): a fixture FAILS on the parent commit and PASSES on the child (it proves a change);

@@ -514,7 +514,7 @@ class PreferenceEnvConfig:
 
 
 # vLLM's multimodal modality vocabulary (`vllm.multimodal` input keys). `rollout.limit_mm_per_prompt` keys are
-# refused at config time when outside it (reviewer thread on rl.py:549: an unknown or mistyped key such as
+# refused at config time when outside it (an unknown or mistyped key such as
 # "images" or " image" is otherwise converted to a generic dummy option and silently ignored by the model's
 # `allowed_mm_limits`, which iterates only its supported modalities). The model-specific supported set is
 # checked a second time against the BUILT engine in `roles/rollout/vllm.py::VLLMRollout`.

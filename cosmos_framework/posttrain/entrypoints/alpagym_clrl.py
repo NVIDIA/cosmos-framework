@@ -17,7 +17,7 @@ recipe's scene source is smaller than `gpus` and `DatasetEnv` rejects sharding i
 single-cell and rides the registered `("rollout","generate","prompts")` split instead. Reusing that
 function is a real option once the scene source is large enough to shard.
 
-Sharding the policy is a REQUIREMENT, not a tuning choice: measured on cw-dfw, an unsharded
+Sharding the policy is a REQUIREMENT, not a tuning choice: as measured, an unsharded
 trainer is 54.62 GiB and does not fit beside the rollout's 20.64 GiB on one 80 GiB card.
 
 CONFIG. This entry reads AlpaGym's already-resolved run config (`alpagym_host.config.

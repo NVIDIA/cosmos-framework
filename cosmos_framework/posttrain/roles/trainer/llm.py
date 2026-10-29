@@ -676,8 +676,8 @@ class LLMTrainer(BaseTrainer):
         # The π_old record -> replay transition is NOT done here. It happens ONCE per collected batch
         # in `begin_replay_window()`, which the driver calls on EVERY cell after the ahead pass. Doing
         # it here meant the first train() flipped the mode and the second saw "replay" and treated it
-        # as a missed ahead pass — aborting every n_mini > 1 batch on its second chunk (Codex round
-        # 8). By this point the window is already frozen and rewound; train() only consumes it via the
+        # as a missed ahead pass — aborting every n_mini > 1 batch on its second chunk.
+        # By this point the window is already frozen and rewound; train() only consumes it via the
         # objective's `old_for`. No ahead pass ⇒ cache mode stays "off" ⇒ the objective falls back to
         # `cur.detach()`, which is exact at n_mini == 1 and is the pre-change behaviour everywhere else.
         self._begin_update_attempt()

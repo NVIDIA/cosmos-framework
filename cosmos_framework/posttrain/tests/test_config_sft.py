@@ -184,7 +184,7 @@ def test_validate_config_refuses_native_specs_outside_the_qwen3_vl_seat(tmp_path
 def test_sft_support_is_declared_by_the_model_family_not_by_an_entrypoint_allowlist(
     tmp_path: Path, apex_present: None
 ) -> None:
-    """FIXTURE: on de636dcaa5 ``entrypoints/sft.py`` defined ``NATIVE_SFT_BUILDER`` and ``NATIVE_SFT_MODEL_TYPES`` and
+    """FIXTURE: on the parent ``entrypoints/sft.py`` defined ``NATIVE_SFT_BUILDER`` and ``NATIVE_SFT_MODEL_TYPES`` and
     refused any other builder with "supports the native builder ... only". The declaration lives beside the builder:
     ``model/qwen3_vl.py`` registers its SFT source in ``model/sft_source.py`` and owns the ``qwen3_vl`` /
     ``qwen3_vl_moe`` check; the entrypoint defines no ``NATIVE_SFT_*`` name and only consumes the registry. An
@@ -356,7 +356,7 @@ def test_native_recipe_a1_and_a1a_variants_reproduce_the_arms_of_record(
     """``SFT_RECIPE_VARIANT=a1`` / ``a1a`` = the values the A1 / A1a arms trained with (their ``config_resolved.yaml``):
     constant lr 1e-5 without warmup, betas (0.9, 0.999), weight decay 0.01 in one group, no multipliers, token-mean CE,
     no load-balancing term, the opener supervised, the 4,147,200-px budget; A1 validated every 50 steps and A1a every
-    step, the one field the two resolved configs differ in (22bfce78f40's single ``a1`` variant carried
+    step, the one field the two resolved configs differ in (the earlier single ``a1`` variant carried
     A1a's cadence). ``prefilled_opener`` = the defaults with the opener masked (for a serve that prefills it; not the
     path of record; it sets the typed field ``rl.serve_contract=prefills_opener``);
     the earlier name ``nemo_chat_opener`` and an unknown variant are refused."""
@@ -395,7 +395,7 @@ def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with
     returned as reasoning in full, tool-call turns unaffected), the prefill exists only for tool-less
     requests, the ``prefilled_opener`` variant is scoped as not the path of record and guarded (it sets the typed field
     ``rl.serve_contract=prefills_opener``; ``recipe_variant`` in provenance) -- instead of the superseded
-    "PREFILLED on every turn" (cef891c3e46) and the unmeasured consequence 4821e1d9943 stated for
+    "PREFILLED on every turn" and the unmeasured consequence earlier commits stated for
     every no-think turn; this FIXTURE fails on both parents. The terms the rows use are defined in the Terms block above
     the table."""
     text = (Path(__file__).resolve().parents[1] / "configs" / "sft_qwen3_vl_moe_native.py").read_text()
@@ -441,7 +441,7 @@ def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with
         "so the student never generates it",
         "prefills it on every turn",
         "harmless; on a serve without the effort field",
-        "break every",  # the unlabelled consequence of 4821e1d9943
+        "break every",  # the earlier unlabelled consequence
         "rest on the base's prior alone",
         "SFT_SERVE_PREFILLS_OPENER",  # the environment-variable acknowledgement
     ):
@@ -462,7 +462,7 @@ def test_default_recipe_supervises_the_opener_the_student_emits_after_the_served
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
     """Knob 7's mechanism. PIN for the behaviour and FIXTURE for the record: the packer's labels did not
-    change in the commit that adds this test (with the fixture file copied beside it, it passes on the parent cef891c3e46),
+    change in the commit that adds this test (with the fixture file copied beside it, it passes on the parent),
     while ``tests/fixtures/served_prefix_with_tools.json`` did not exist there and the recipe text stated the opposite
     mechanism. The fixture is the served prefix of the path of record, measured live on the A1a deployment (vLLM 0.24) with
     a tools array present: ``/tokenize`` ids that end in ``<|im_start|>assistant\n`` with NO ``<think>`` (141 ids; the
@@ -567,7 +567,7 @@ def test_real_base_sidecars_render_the_served_prefix_ids_with_tools() -> None:
 def test_prefilled_opener_variant_sets_the_typed_serve_contract_and_is_recorded_in_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """FIXTURE: on d8c7213d0a the variant was refused without the environment variable ``SFT_SERVE_PREFILLS_OPENER=1``
+    """FIXTURE: on the parent the variant was refused without the environment variable ``SFT_SERVE_PREFILLS_OPENER=1``
     and accepted with it, and neither the resolved config nor the provenance recorded that acknowledgement.
     ``SFT_RECIPE_VARIANT=prefilled_opener`` resolves ``mask_think_opener=True`` with
     ``rl.serve_contract="prefills_opener"`` and reads no environment variable; the field is in the resolved config
@@ -599,7 +599,7 @@ def test_prefilled_opener_variant_sets_the_typed_serve_contract_and_is_recorded_
 def test_sft_config_refuses_an_opener_mask_outside_the_prefills_opener_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """FIXTURE: on d8c7213d0a the
+    """FIXTURE: on the parent the
     override ``rl.mask_think_opener=True`` was ACCEPTED whenever ``SFT_SERVE_PREFILLS_OPENER=1`` stood in the shell, and
     the resolved config of the accepted run was byte-identical to a refused one's. The refusal lives in
     ``SFTConfig.__post_init__``, so a ``--`` override on the ``default`` variant, a YAML and the recipe variant are judged
@@ -943,7 +943,7 @@ def test_warmup_cosine_schedule_matches_the_backbone_scheduler_and_reaches_the_o
 
 
 def test_optimizer_preflight_and_schedule_factory_live_below_the_entrypoint(tmp_path: Path, apex_present: None) -> None:
-    """FIXTURE: on b1373b88db ``refuse_rounding_or_unavailable_optimizer``, ``build_sft_lr_scheduler`` and
+    """FIXTURE: on the parent ``refuse_rounding_or_unavailable_optimizer``, ``build_sft_lr_scheduler`` and
     ``add_clip_metrics`` were defined in ``entrypoints/sft.py``. The optimizer/storage refusal lives beside
     ``build_optimizer`` and the SFT schedule factory beside the scheduler builders in ``config/build.py``; the clip
     record is the trainer's; the entrypoint defines none of the three and keeps role construction and the loop. The

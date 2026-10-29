@@ -531,8 +531,8 @@ class _HostImpl:
     actor's BulkStore; when that actor's own body is blocked inside a collective (e.g. an FSDP
     forward all-gather) waiting on its SPMD peers, those peers issue `fetch_bulk` RPCs back to
     it to pull the shared payload. With a single-threaded actor the RPC queues behind the
-    blocked `invoke` → mutual wait → deadlock (bisected regression: the ranks=1 data shape at
-    b75a2b7e07 reintroduced this; see tests/helpers/hf_fsdp_grpo.py's grpo_loop docstring). The
+    blocked `invoke` → mutual wait → deadlock (bisected regression: an earlier change to the ranks=1 data shape
+    reintroduced this; see tests/helpers/hf_fsdp_grpo.py's grpo_loop docstring). The
     "bulk" group serves those pulls off a second thread, so a collective-blocked peer is always
     served. Consequence: BulkStore is now touched from >1 thread ⇒ it carries its own lock
     (comm/bulk.py). Actor state touched only from `_default` methods (`_pending_releases` sweep

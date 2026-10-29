@@ -974,7 +974,7 @@ def inode_signature(st: os.stat_result) -> tuple[int, int, int]:
     """``(inode, size, mtime_ns)`` of an fstat'd open file: what a write INTO that inode changes. Not ctime: the merge tool's rebuild
     unlinks the path before writing the new file (``merge.py``: ``os.remove``, then tmp + ``os.replace``), and unlinking the inode a
     reader holds open moves its link count and so its ctime without touching one byte of it (an earlier candidate included ctime
-    and refused the reviewer's own scenario on it, on Lustre); a replacement of the PATH never matters to a reader holding the inode
+    and refused this exact scenario on Lustre); a replacement of the PATH never matters to a reader holding the inode
     open."""
     return (st.st_ino, st.st_size, st.st_mtime_ns)
 

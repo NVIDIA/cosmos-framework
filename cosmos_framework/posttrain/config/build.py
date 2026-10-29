@@ -553,7 +553,7 @@ def build_optimizer(
                 p.requires_grad_(False)
         # train_keys was set but matched nothing → we just froze everything; the all-params
         # fallback below would also be empty and AdamW([]) errors opaquely. Fail loud instead
-        # (a model rename / wrong keys is the usual cause). (Greptile #17)
+        # (a model rename / wrong keys is the usual cause).
         if not params:
             raise ValueError(
                 f"OptimizerConfig.train_keys={list(opt_cfg.train_keys)} matched no parameter in "

@@ -846,7 +846,7 @@ def test_jsonl_reporter_keeps_only_the_rows_the_attempt_will_not_re_emit(tmp_pat
     """``keep_through`` is the step the attempt resumes at. ``start`` keeps the rows with ``step <=
     keep_through`` (the relaunch re-emits the later ones, so the file stays one row per step), seeds ``prior_clip_counts``
     from the kept clip record, and ``-1`` (a fresh attempt) empties the file; a row without an integer step fails the
-    start. 22bfce78f40's reporter only created the directory and appended."""
+    start. The earlier reporter only created the directory and appended."""
     import json
 
     from cosmos_framework.posttrain.utils.report import JsonlReporter, prior_clip_counts
