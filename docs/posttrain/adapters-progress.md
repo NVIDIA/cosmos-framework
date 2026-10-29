@@ -56,3 +56,12 @@ failed because the qualification harness supplied an empty validation trigger.
 This was before the first update. The harness now uses the existing BEFORE_TRAINING
 and FINAL reasons and has a complete tiny-model harness regression test; GPU rerun
 is pending. No GPU training or full-epoch qualification claim is made.
+
+The corrected installed-wheel gate passed 45 tests (job `37628309`, commit
+`15800a91e240c359129f8f829688f1d80ed467f6`). GPU job `37628322` passed the
+single-GPU LoRA update, frozen-base and controlled-resume assertions before
+portable export exposed Lustre's unsupported `RENAME_NOREPLACE`. Portable
+publication now falls back to exclusive directory reservation and a commit-last
+manifest; interruption and competing-writer tests cover that contract. Real
+filesystem and GPU requalification of this fix are pending. Other method/world
+cases continue independently, with their failure logs preserved.

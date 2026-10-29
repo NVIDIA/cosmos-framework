@@ -138,6 +138,10 @@ extra modules, method configuration, effective processor arguments and relevant
 dependency/format versions. A same-size different base is rejected. Export is an
 atomic no-replace publication using checkpoint IO primitives. These artifacts
 contain no optimizer or data state and cannot resume training.
+On filesystems without `RENAME_NOREPLACE` (including the qualification Lustre
+mount), exclusive `mkdir` reserves the destination, weights are installed and
+synced first, and the manifest commits last. Interrupted reservations are rejected
+by readers and cannot be overwritten; retry at a fresh output path.
 
 ```bash
 python -m cosmos_framework.posttrain.checkpoint.tools.adapters \

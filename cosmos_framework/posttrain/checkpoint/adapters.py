@@ -10,6 +10,7 @@ and non-mutating merge preparation for the existing HF conversion pipeline.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.metadata
 import json
@@ -173,7 +174,22 @@ def write_adapter_artifact(
                 "provenance": provenance or {},
             },
         )
-        rename_directory_noreplace(staging, target)
+        try:
+            rename_directory_noreplace(staging, target)
+        except OSError as error:
+            if error.errno != errno.EOPNOTSUPP:
+                raise
+            # Lustre may not implement renameat2(RENAME_NOREPLACE). mkdir still
+            # reserves the destination atomically: a competing writer can never
+            # replace its owner. Readers require the commit-last manifest, so an
+            # interrupted reservation is explicitly incomplete, never loadable.
+            # Keep that reservation on failure; retry at a new immutable path.
+            os.mkdir(target)
+            fsync_directory(parent)
+            os.rename(os.path.join(staging, WEIGHTS), os.path.join(target, WEIGHTS))
+            fsync_directory(target)
+            os.rename(os.path.join(staging, MANIFEST), os.path.join(target, MANIFEST))
+            fsync_directory(target)
         fsync_directory(parent)
 
 

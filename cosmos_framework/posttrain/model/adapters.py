@@ -20,7 +20,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig
-from cosmos_framework.utils.generator.lora import LoraInjectedLinear
+from cosmos_framework.utils.generator.lora import LoraInjectedLinear, init_lora_weights_post_materialization
 
 
 def canonical_name(name: str) -> str:
@@ -190,8 +190,7 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
             self.register_buffer("initial_A", torch.zeros_like(self.lora_A.weight))
             self.register_buffer("initial_B", torch.zeros_like(self.lora_B.weight))
         # Even resume placeholders are initialized; exact restoration remains strict.
-        nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
-        nn.init.zeros_(self.lora_B.weight)
+        init_lora_weights_post_materialization(self)
         if initialize:
             self.initialize_method(config)
 

@@ -23,6 +23,7 @@ import torch
 import torch.distributed as dist
 
 from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
 from cosmos_framework.posttrain.config.adapters import AdapterExtraModuleConfig
 from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
 from cosmos_framework.posttrain.control.validation.lifecycle import ValidationTrigger
@@ -250,17 +251,6 @@ def main():
     validation_after = evaluate(
         {"validation": validation, "policy": trainer}, rl, len(reports), frozenset({ValidationTrigger.FINAL})
     ).metrics
-    snapshot = trainable_state(trainer.model.net)
-    save_adapter_artifact(trainer.model.net, str(root / "portable"), provenance=evidence)
-    exported_state = trainable_state(trainer.model.net)
-    assert all(torch.equal(v, exported_state[n]) for n, v in snapshot.items())
-    # Fresh-process reload and merged HF inference consume these exact media
-    # tensors and outputs after this process exits, so no live module can leak in.
-    expected_logits = logits(trainer.model, probes)
-    torch.save(
-        {"batches": probes, "logits": expected_logits, "identity": trainer.model.net._posttrain_adapter_identity},
-        root / f"probes-rank{rank}.pt",
-    )
     record = {
         **evidence,
         "method": args.method,
@@ -282,9 +272,27 @@ def main():
         "peak_cuda_allocated": torch.cuda.max_memory_allocated(),
         "peak_cuda_reserved": torch.cuda.max_memory_reserved(),
         "elapsed_seconds": time.monotonic() - started,
-        "status": "training_and_resume_passed_reload_pending",
+        "status": "training_and_resume_passed_export_pending",
     }
-    (root / f"training-rank{rank}.json").write_text(json.dumps(record, indent=2))
+    atomic_write_json(str(root / f"training-rank{rank}.json"), record)
+    snapshot = trainable_state(trainer.model.net)
+    save_adapter_artifact(trainer.model.net, str(root / "portable"), provenance=evidence)
+    exported_state = trainable_state(trainer.model.net)
+    assert all(torch.equal(v, exported_state[n]) for n, v in snapshot.items())
+    # Fresh-process reload and merged HF inference consume these exact media
+    # tensors and outputs after this process exits, so no live module can leak in.
+    expected_logits = logits(trainer.model, probes)
+    torch.save(
+        {"batches": probes, "logits": expected_logits, "identity": trainer.model.net._posttrain_adapter_identity},
+        root / f"probes-rank{rank}.pt",
+    )
+    record.update(
+        status="training_and_resume_passed_reload_pending",
+        elapsed_seconds=time.monotonic() - started,
+        peak_cuda_allocated=torch.cuda.max_memory_allocated(),
+        peak_cuda_reserved=torch.cuda.max_memory_reserved(),
+    )
+    atomic_write_json(str(root / f"training-rank{rank}.json"), record)
     dist.barrier()
     dist.destroy_process_group()
 

@@ -283,6 +283,78 @@ def test_unsupported_combinations_fail(kwargs):
         Component(targets=[FIRST], **kwargs)
 
 
+@pytest.mark.parametrize("interrupt_commit", [False, True])
+def test_portable_commit_last_when_noreplace_rename_is_unsupported(tmp_path, monkeypatch, interrupt_commit):
+    import errno
+
+    from cosmos_framework.posttrain.checkpoint import adapters as artifacts
+
+    net = tiny_net()
+    ident = identity(install_adapters(net, AdapterConfig(components=[Component(targets=[FIRST], rank=2)])))
+    state = {n: net.state_dict()[n] for n in state_spec(ident)}
+
+    def unsupported(*_):
+        raise OSError(errno.EOPNOTSUPP, "fixture: filesystem lacks renameat2")
+
+    monkeypatch.setattr(artifacts, "rename_directory_noreplace", unsupported)
+    target = tmp_path / "portable"
+    rename = artifacts.os.rename
+
+    def checked_move(source, destination):
+        if str(destination).endswith(artifacts.MANIFEST):
+            with pytest.raises(ValueError, match="incomplete"):
+                read_adapter_artifact(str(target))
+            if interrupt_commit:
+                raise OSError(errno.EIO, "fixture: interrupted before manifest commit")
+        return rename(source, destination)
+
+    monkeypatch.setattr(artifacts.os, "rename", checked_move)
+    if interrupt_commit:
+        with pytest.raises(OSError, match="interrupted"):
+            write_adapter_artifact(str(target), ident, state)
+        with pytest.raises(ValueError, match="incomplete"):
+            read_adapter_artifact(str(target))
+    else:
+        write_adapter_artifact(str(target), ident, state)
+        _, actual = read_adapter_artifact(str(target), expected_identity=ident)
+        assert all(torch.equal(actual[n], state[n]) for n in state)
+    # Successful and interrupted reservations both remain immutable to retries.
+    with pytest.raises(FileExistsError):
+        write_adapter_artifact(str(target), ident, state)
+
+
+def test_portable_fallback_competing_writers_do_not_replace(tmp_path, monkeypatch):
+    import errno
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from cosmos_framework.posttrain.checkpoint import adapters as artifacts
+
+    net = tiny_net()
+    ident = identity(install_adapters(net, AdapterConfig(components=[Component(targets=[FIRST], rank=2)])))
+    state = {n: net.state_dict()[n] for n in state_spec(ident)}
+    barrier = threading.Barrier(2)
+
+    def unsupported(*_):
+        barrier.wait(timeout=10)
+        raise OSError(errno.EOPNOTSUPP, "fixture: filesystem lacks renameat2")
+
+    monkeypatch.setattr(artifacts, "rename_directory_noreplace", unsupported)
+    target = str(tmp_path / "portable")
+
+    def publish():
+        try:
+            write_adapter_artifact(target, ident, state)
+            return "committed"
+        except FileExistsError:
+            return "exists"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda _: publish(), range(2))) == ["committed", "exists"]
+    _, actual = read_adapter_artifact(target, expected_identity=ident)
+    assert all(torch.equal(actual[n], state[n]) for n in state)
+
+
 def test_profile_rejects_unqualified_attention():
     from types import SimpleNamespace
 
