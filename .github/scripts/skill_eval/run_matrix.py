@@ -520,6 +520,9 @@ class Cell:
     # run's `created_at` as the catalog lists it; how refresh_from_catalog tells the cell's own result from a newer one
     run_id: str | None = None
     created_at: str | None = None
+    # set by apply_cache when the version's newest result was NOT reused because the evaluator image or the configured
+    # agent model changed since it was produced (environment_mismatch); shown as a note under the comment header
+    env_changed: str | None = None
     # the plan's decision, kept apart from the state shown: True = this run executes the cell (a job), False = reused /
     # not selected / not re-run, None = not decided (a hand-built cell, a plan without the field): read the state. A
     # later refresh_from_catalog may show another run's newer result in an own cell (CACHED); the header's
@@ -635,6 +638,8 @@ class CachedResult:
     verdict: str | None = None  # the evaluator's verdict; a pre-v2 manifest may say FAIL with verdict NO-REPORT
     group_id: str | None = None
     source_run_id: str | None = None  # source.github.run_id: the Actions run that published it
+    image: str | None = None  # manifest `env.image`: the evaluator image that produced the result (0.3.3+ manifests)
+    model: str | None = None  # manifest `backends[].model` for this backend: the agent model that ran the cell
 
 
 def fetch_catalog(
@@ -710,6 +715,15 @@ def _run_result(run: dict, case: str, backend: str, dashboard: str) -> CachedRes
         return None
     source = run.get("source") if isinstance(run.get("source"), dict) else {}
     github = source.get("github") if isinstance(source.get("github"), dict) else {}
+    env = run.get("env") if isinstance(run.get("env"), dict) else {}
+    model = next(
+        (
+            str(entry["model"])
+            for entry in run.get("backends") or []
+            if isinstance(entry, dict) and entry.get("backend") == backend and entry.get("model")
+        ),
+        None,
+    )
     status, verdict = found
     return CachedResult(
         status=status,
@@ -719,6 +733,8 @@ def _run_result(run: dict, case: str, backend: str, dashboard: str) -> CachedRes
         verdict=verdict,
         group_id=str(run["group_id"]) if run.get("group_id") else None,
         source_run_id=str(github["run_id"]) if github.get("run_id") else None,
+        image=str(env["image"]) if env.get("image") else None,
+        model=model,
     )
 
 
@@ -791,6 +807,22 @@ def reusable(result: CachedResult | None, cacheable: frozenset[str]) -> bool:
     return result is not None and result.status in cacheable and result.verdict not in (NO_REPORT, ERROR_STATUS)
 
 
+def environment_mismatch(result: CachedResult, backend: str, config: Config | None) -> str | None:
+    """Why a published result may not stand in for a run in the current environment: the evaluator image or the
+    agent model configured for the backend differs from what produced it (`.github/skill-eval.yml`, the repository
+    variables). None when both agree, when no config is at hand, or when the manifest predates the fields (no
+    `env.image` before evaluator 0.3.3; a backend without a configured model is matched on skill content only)."""
+    if config is None:
+        return None
+    reasons = []
+    if result.image and config.image and result.image != config.image:
+        reasons.append(f"image {result.image.rsplit(':', 1)[-1]} → {config.image.rsplit(':', 1)[-1]}")
+    configured = {"codex": config.codex_model, "cursor": config.cursor_model}.get(backend)
+    if configured and result.model and result.model != configured:
+        reasons.append(f"{backend} model {result.model} → {configured}")
+    return ", ".join(reasons) or None
+
+
 def find_cached_result(
     runs: list[dict],
     version: SkillVersion,
@@ -842,9 +874,10 @@ def apply_cache(
     sleep: Callable[[float], None] = time.sleep,
     catalogs: Mapping[str, list[dict]] | None = None,
     options: TriggerOptions | None = None,
+    config: Config | None = None,
 ) -> int:
     """Decide every cell from the dashboard. `(reused)` when its newest version-matching result passes the cache
-    rule, otherwise it runs. A cell the trigger's `cells=` leaves out is `(not selected)` — and then takes the
+    rule AND was produced in the current environment (environment_mismatch), otherwise it runs. A cell the trigger's `cells=` leaves out is `(not selected)` — and then takes the
     version's newest result as a reused cell whatever that result's status (refresh_from_catalog, below), so a
     partial re-run's comment shows the whole matrix as the dashboard group does, with only the selected cells
     replaced. Catalogs the caller already fetched are reused. Returns the number of reused cells.
@@ -859,6 +892,15 @@ def apply_cache(
             continue
         version = info.version_for(cell.skill)
         newest = newest_result(catalogs[cell.skill], version, cell.case, cell.backend, info.dashboard)
+        mismatch = environment_mismatch(newest, cell.backend, config) if newest is not None else None
+        if mismatch:
+            # the same skill content, evaluated by another image or model: not evidence for this environment
+            cell.env_changed = mismatch
+            log(
+                f"run {cell.label}: the newest result {newest.status} ({newest.run_id}) is not reused —"
+                f" environment changed: {mismatch}"
+            )
+            continue
         if reusable(newest, options.cacheable):
             cell.adopt(newest, CellState.CACHED)
             log(f"reused {cell.label}: {newest.status} {newest.url}")
@@ -967,6 +1009,9 @@ class TriggerOptions:
     cells: list[str] = field(default_factory=list)  # fnmatch patterns `<backend>/<case>` | `<skill>/<backend>/<case>`
     group: str | None = None  # dashboard group id for every skill of this run
     errors: list[str] = field(default_factory=list)  # tokens that were not understood (reported, defaults used)
+    # an explicit `cells=` / `rerun` list was given but is empty or malformed: the plan must stop instead of silently
+    # widening the request to the whole matrix (an empty `cells` selects every cell)
+    invalid_selection: bool = False
 
     @property
     def cacheable(self) -> frozenset[str]:
@@ -1000,6 +1045,7 @@ class TriggerOptions:
             "cells": list(self.cells),
             "group": self.group,
             "errors": list(self.errors),
+            "invalid_selection": self.invalid_selection,
         }
 
     @classmethod
@@ -1012,6 +1058,7 @@ class TriggerOptions:
             cells=[str(pattern) for pattern in data.get("cells") or []],
             group=str(data["group"]) if data.get("group") else None,
             errors=[str(error) for error in data.get("errors") or []],
+            invalid_selection=bool(data.get("invalid_selection")),
         )
 
 
@@ -1048,12 +1095,14 @@ def parse_trigger_args(text: str | None) -> TriggerOptions:
                     index += 1
                 else:
                     options.errors.append(f"`{token}`: expected a cell list, e.g. `rerun codex/my-case,cursor/*`")
+                    options.invalid_selection = True
                     continue
             patterns = [pattern for pattern in value.split(",") if pattern]
             if not patterns or any("/" not in pattern for pattern in patterns):
                 options.errors.append(
                     f"`{token}`: cells are `<backend>/<case>` or `<skill>/<backend>/<case>` patterns, comma-separated"
                 )
+                options.invalid_selection = True
             options.cells.extend(pattern for pattern in patterns if "/" in pattern)
         elif lowered == "group" and separator:
             if GROUP_ID_RE.fullmatch(value):
@@ -1836,6 +1885,12 @@ def _render_body(
         parts.append(
             "⚠️ Trigger: " + "; ".join(options.errors) + " — ignored, the run uses the defaults (syntax: README)"
         )
+    changed = [cell for cell in cells if cell.env_changed]
+    if changed:
+        parts.append(
+            f"♻️ Cache: {len(changed)} published result{'s' if len(changed) != 1 else ''} of this skill version not"
+            f" reused — environment changed ({changed[0].env_changed}); the cells run again"
+        )
     if notes:
         parts.append("🔧 " + " · ".join(notes))
     parts.append("")
@@ -2498,6 +2553,7 @@ def plan_to_dict(
                 "dashboard_run_id": cell.run_id,  # of the result shown — not the Actions run
                 "created_at": cell.created_at,
                 "job": cell.job,  # the plan's decision: True = this run executes the cell
+                "env_changed": cell.env_changed,  # why the version's newest result was not reused, if so
             }
             for cell in cells
         ],
@@ -2562,6 +2618,7 @@ def plan_from_dict(
             # the plan's decision, for every cell (a queued cell's True matters once a refresh shows another run's result
             # in it); None = a plan without the field: `is_job` then reads the state
             cell.job = raw_cell["job"] if isinstance(raw_cell.get("job"), bool) else None
+            cell.env_changed = str(raw_cell["env_changed"]) if raw_cell.get("env_changed") else None
             cells.append(cell)
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         raise OrchestrationError(f"plan: bad `plans`/`cells` entry ({type(exc).__name__}: {exc})") from exc
@@ -2989,6 +3046,14 @@ def _open_github(args: argparse.Namespace, deps: Deps, info: RunInfo) -> GitHubA
     return GitHubApi(info.server_url, info.repo, token, transport=deps.github_transport, sleep=deps.sleep)
 
 
+def invalid_selection_message(options: TriggerOptions) -> str:
+    """Why the run stops on a malformed `cells=` / `rerun` list: scheduling would widen it to the full matrix."""
+    return (
+        "⚠️ Trigger: " + "; ".join(options.errors) + " — the explicit cell selection is invalid, so nothing was"
+        " scheduled (a trigger without arguments runs the full matrix; syntax: README)"
+    )
+
+
 def trigger_options_from_args(args: argparse.Namespace) -> TriggerOptions:
     """`--trigger-args` text, with the CLI shortcuts on top: `--scope smoke`, `--group <id>`."""
     options = parse_trigger_args(getattr(args, "trigger_args", None))
@@ -3011,6 +3076,8 @@ def prepare_matrix(
 
     Returns (info with the versions filled in, plans, cells, number of reused cells).
     """
+    if options.invalid_selection:
+        raise OrchestrationError(invalid_selection_message(options))
     if options.scope == "smoke":
         log(f"scope smoke (smoke-only): only the canary {CANARY_SKILL} runs, skill detection skipped")
         skills, run_canary = [], True
@@ -3024,7 +3091,7 @@ def prepare_matrix(
     }
     info = replace(info, versions=resolve_skill_versions(checkout, info, plans, catalogs))
     cells = build_cells(plans, config.backends)
-    hits = apply_cache(cells, info, deps.urlopen, sleep=deps.sleep, catalogs=catalogs, options=options)
+    hits = apply_cache(cells, info, deps.urlopen, sleep=deps.sleep, catalogs=catalogs, options=options, config=config)
     return info, plans, cells, hits
 
 
@@ -3040,6 +3107,10 @@ def mode_plan(args: argparse.Namespace, deps: Deps) -> int:
     )
     api = _open_github(args, deps, info)
     log(f"plan: PR #{info.pr_number} · sha {info.sha7} · run {info.run_id} · {describe_trigger(options)}")
+    if options.invalid_selection:  # a typo in `cells=` must not launch the whole matrix: say so on the PR, then stop
+        if api is not None:
+            api.create_issue_comment(int(info.pr_number), invalid_selection_message(options))
+        raise OrchestrationError(invalid_selection_message(options))
     info, plans, cells, hits = prepare_matrix(config, info, checkout, api, deps, options)
     started_at = deps.now()
     canary_jobs = matrix_entries(cells, canary=True, config=config)

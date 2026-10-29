@@ -137,6 +137,10 @@ of a selected cell; add `force` to replace it.
 The comment header shows the mode when it is not the default: `· canary smoke-only`, `· canary with-smoke`,
 `· mode rerun-failed (6 selected, 46 reused)`, `· mode force`, `· cells=\`codex/*\``.
 
+A `cells=` / `rerun` list that is empty or malformed (a pattern without `/`, e.g. `cells=codex`) stops the plan: the
+reason is posted on the PR and no cell job is scheduled, because an empty selection would otherwise select every cell
+(with `force`, without cache reuse). Other unrecognised tokens are reported and ignored; they can only narrow a run.
+
 ## Which skills run
 
 There is no skill list in the config. Every run evaluates, in this order:
@@ -403,6 +407,12 @@ version-matching run created since the plan started. An older result of the vers
 is about to run (in `force` mode it is exactly the result being replaced). Every cell that is **not** about to run
 follows the newest-result rule instead ([What it does](#what-it-does), "Newest result per cell"): the comment shows
 the version's newest published result for it, whichever run produced it.
+
+**Environment check.** A published result is reused only if it was produced in the current evaluation environment:
+its manifest's `env.image` must equal the configured evaluator image and, for a backend with a configured model
+(`codex_model`, `cursor_model`), its recorded `backends[].model` must equal that model. Otherwise the cell runs again and
+the comment header says `♻️ Cache: n published results … not reused — environment changed (image v20261101 → v20261102)`.
+Manifests from evaluator images before 0.3.3 carry no `env.image` and are matched on skill content only.
 
 ## Config
 
