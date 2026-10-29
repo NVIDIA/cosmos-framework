@@ -1,6 +1,8 @@
 # Native QLoRA for Qwen3-VL
 
-This experimental path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. Exact reload/resume checks and a matched 300-update WTS comparison completed on one GPU per run, with measured memory savings and a four-arm held-out diagnostic. **The release quality gate is not satisfied: trained NF4's token-NLL point estimate was 4.18% worse than BF16, exceeding the proposed 2% margin.** The evidence below is limited to one training seed and its stated workload and runtime.
+This experimental path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. A measured cache/prefetch recipe reduced the median trial mean for NF4 update time by **42.7%** across three paired trials while preserving the original final adapter/optimizer state and held-out score rows exactly. Both optimized precision arms completed 300 updates, fresh-process reload checks and frozen/trained 256-row evaluations.
+
+**The release quality gate is not satisfied: trained NF4's token-NLL point estimate was 4.18% worse than BF16, exceeding the proposed 2% margin.** Faster preprocessing preserved that result. Quality evidence remains limited to one training seed and the stated diagnostic workload; the full release protocol is outstanding.
 
 The initial candidate is `Qwen/Qwen3-VL-8B-Instruct` at revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, on **one Linux x86-64 A100 80GB, one torchrun process**. FSDP/HSDP, additional GPUs, offload, MoE, DoRA/PiSSA, other quantizers, and merged serving exports are rejected or unqualified. See the [design and release evidence requirements](qlora_native_vlm_design.md).
 
@@ -115,7 +117,9 @@ The default comparison recipe is 300 updates, accumulation 8, sequence limit 409
 
 ## Experimental performance controls
 
-These opt-in controls are implemented for the single-device native adapter path. **Their new GPU/WTS numerical, reload/resume, quality, and speed qualification is pending.** Configuration acceptance and CPU tests do not establish accelerator support or speedup. The completed 300-update results below used the original defaults; their measurements and unsatisfied release quality gate are unchanged.
+These opt-in controls are implemented for the single-device native adapter path. On the sealed `a406ea1d32c95277c57ac8e7ec274784bed3aaf7` runtime, **14 real CUDA tests and 13 four-update native lifecycle cases passed**. Each lifecycle case compared uninterrupted training with its own fresh-process resume, then compared DCP and portable reloads on text, image and video inputs. Adapter/optimizer state and controlled reload outputs matched with `atol=0, rtol=0`; this is parity within each recorded configuration, not equality between different execution settings. The [lifecycle and input-shape evidence](evidence/native_qlora_lifecycle_a406ea1.json) records the exact configurations, source digests and measurement limits.
+
+Those checks establish bounded numerical and lifecycle evidence, not held-out quality or a speed benefit for every option. The original 300-update results below used the original defaults; their measurements and unsatisfied release quality gate are unchanged. Benchmark each option on the intended workload before selecting it.
 
 Append selected dotlist overrides after `--` in the native canary command above. Use a fresh job/output for each recipe, keep the data, processor, media limits, effective batch and schedule matched, and qualify individual changes before combining them.
 
@@ -179,9 +183,61 @@ torchrun --standalone --nproc-per-node=1 \
 
 It checks text, image, and real video losses/logits, media sensitivity, trainable coverage, adapter changes, and frozen-base fingerprints. Use `compare-probes` for reload parity and `compare-checkpoints` for interrupted-versus-uninterrupted resume; both require explicit predeclared `--atol` and `--rtol`. Resume comparison also checks RNG and data/control state exactly. Passing a probe alone does not establish held-out task quality or total training memory savings.
 
+## Performance qualification
+
+The selected performance recipe adds a 1 GiB CPU cache and ordered prefetch to the original model settings: full non-reentrant activation checkpointing, FP32 adapter arithmetic/parameters/gradients/moments, full logits, microbatch one, accumulation eight, and compilation disabled. Run it through the same native entrypoint, using a new output name:
+
+```bash
+torchrun --standalone --nproc-per-node=1 \
+    -m cosmos_framework.posttrain.entrypoints.sft --config "$QLORA_CONFIG" -- \
+    job.name=qlora_pipeline_seed42 \
+    rl.preprocessing_cache_bytes=1073741824 rl.preprocessing_prefetch=true
+```
+
+Use the matched BF16 recipe and a distinct output name with the same overrides. These controls preserve the base, processor, loss masks, target modules, rank, effective batch, optimizer and schedule. CPU preprocessing overlaps with training; the NF4 storage format itself does not establish a speedup.
+
+The [performance experiment report](evidence/native_qlora_performance_a406ea1.json) retains individual ablations, failed attempts and three separately scoped repeated comparisons. The selected cache/prefetch comparison used three paired 30-update trials per precision, with the predeclared untraced timing window at updates 6–30. Each pair used the same allocation; trial order alternated. The confidence interval uses 10,000 paired hierarchical bootstrap replicates, resampling repeats and fixed five-update blocks, with seed 2026.
+
+| Precision | Control median trial mean, s/update | Cache/prefetch median trial mean, s/update | Reduction | Optimized/control ratio, 95% CI |
+| --------- | ----------------------------------: | -----------------------------------------: | --------: | ------------------------------: |
+| NF4       |                              20.971 |                                     12.016 |    42.70% |                [0.5388, 0.6121] |
+| BF16      |                              19.988 |                                     11.830 |    40.82% |                [0.5423, 0.6367] |
+
+Both pass the task-specific speed filter: at least 5% lower median trial mean and an upper ratio confidence bound below one. Three trials provide limited uncertainty evidence. Requested CPU counts were identical, but actual SMT/physical-core and NUMA placement differed between precision arms; cross-arm absolute timing is descriptive. Filesystem/page-cache state was uncontrolled. Profile traces are diagnostic and are excluded from these throughput comparisons.
+
+Across all three selected matched pairs, NF4's maximum allocated GPU memory was 9.597 GiB lower and its sampled owned-process GPU peak was 9.703 GiB lower than BF16. The performance candidate filter uses allocator peaks. The original release criterion uses maximum device-process memory; sampled peaks are lower bounds, and their difference does not establish the difference between unsampled true peaks. Neither result completes the three-seed release gate.
+
+Compilation has separate tradeoffs. In the larger-batch, no-checkpointing combination, compilation's incremental speed confidence interval included parity with eager execution in both precision arms. Compiled NF4 used 3.328–3.330 GiB more allocated memory than matched compiled BF16 in all three pairs and failed the memory filter. Selective checkpointing with compilation passed the within-arm speed filter against its own control and the NF4-versus-BF16 allocated-memory filter, but used about 15.10 GiB allocated in NF4's 30-update trials. The selected cache/prefetch recipe retains the original lower GPU footprint. These different plans do not establish a controlled ranking between all combinations; held-out quality for the alternative model-execution settings remains unqualified.
+
+The selected NF4 and BF16 recipes also completed 300 updates each. A separate [read-only checkpoint comparison](evidence/native_qlora_cross_build_a406ea1.json) found byte-identical adapter tensors, optimizer state, scheduler/RNG, data position and update controls against each precision's original `c5b8d49` run, after allowing only the exact build-receipt differences and the recorded preprocessing-identity additions. All 504 adapter tensors and 1,525 optimizer entries matched in each arm. This diagnostic does not relax production resume checks or establish cross-build compatibility in general. Default model identities retain legacy v1, which did not record observed TF32/math flags; the demonstrated parity is limited to the sealed runtimes and measured runs.
+
+### Completed optimized 300-update runs
+
+Both selected recipes completed 300 finite, applied optimizer updates with zero skipped attempts, the same final data cursor, and all seven 64-row validation points. They consumed the same first 2,400 training examples under seed 42, with full DCP saves every 50 updates. The [training and evaluation report](evidence/native_qlora_wts_pipeline_a406ea1.json) records source/runtime identities, raw-evidence hashes, phase measurements and limitations.
+
+| Training measurement                | NF4 LoRA | BF16 LoRA |
+| ----------------------------------- | -------: | --------: |
+| CUDA allocated peak, GiB            |    7.769 |    17.367 |
+| CUDA reserved peak, GiB             |    8.201 |    18.078 |
+| Owned-process NVML sample peak, GiB |    9.199 |    19.076 |
+| Process-tree PSS sample peak, GiB   |    9.117 |     8.769 |
+| Mean update time, updates 1–300, s  |   10.938 |    10.907 |
+| Mean update time, updates 31–300, s |   10.752 |    10.669 |
+| Native training command elapsed, s  | 3,678.12 |  3,789.58 |
+| Final full adapter checkpoint, GiB  |    0.492 |     0.492 |
+| Portable adapter artifact, GiB      |    0.163 |     0.163 |
+
+Update timing excludes validation and checkpoint publication; native command elapsed includes them and loading. Parent preflight precedes that command and is recorded separately. These are single-seed end-to-end observations, not additional bootstrap trials. Historical `c5b8d49` runs requested four CPUs; these runs requested eight. Actual CPU/NUMA placement and filesystem cache state also differed across jobs, so use the within-allocation paired trials above for the controlled optimization claim. Sampled GPU/host peaks are lower bounds; process-tree RSS may double-count shared pages, and unmapped filesystem page-cache memory was not measured.
+
+A separate CPU replay verified the exact 2,400-row training cursor against both original checkpoints. Actual sequences were 317–362 tokens (median 331, p95 345), with two supervised tokens each and no microbatch-one padding. Every training video had grid `[4,12,20]`: eight processed temporal slots at 192×320, yielding 240 merged visual tokens. Source-frame indices/timestamps were not recorded, so the number of unique decoded source frames is unknown. This does not qualify sustained 4,096-token training.
+
+The 1 GiB cache limit bounds retained entries, not total host memory. The native trainer's PSS stayed near 2.4 GiB, while the spawned worker's anonymous memory grew during the run; observed worker PSS peaks were 5.870 GiB for NF4 and 5.579 GiB for BF16. A separate 1,000-row CPU replay retained the identical live cache and RNG state while an end-only `malloc_trim(0)` released 2.169 GiB after garbage collection had little effect. This demonstrates freed glibc page retention in that replay. Its worker had two threads versus 32 in the live runs, so it does not prove the complete live-worker cause, bound longer-run residency, or qualify a production allocator change. No allocator intervention was applied to training.
+
+Both final step-300 DCP/portable reload comparisons passed on text, image and video probes with `atol=0, rtol=0`. All four held-out arms then completed the same 256 rows and 512 supervised tokens per arm. Every complete scored-row dictionary and controlled input matched its archived `c5b8d49` counterpart exactly. The [four-arm reference metrics](#four-arm-held-out-diagnostic-and-release-status) were therefore reproduced: trained NF4 scored 229/256 (89.4531%) with token NLL 0.153532; trained BF16 scored 230/256 (89.8438%) with NLL 0.147372. These are teacher-forced measurements with each question's actual two, three or four choices, not free-generation accuracy. The 4.18% relative NLL regression and unsatisfied release quality gate remain unchanged.
+
 ## Qualification evidence
 
-The [machine-readable experiment report](evidence/native_qlora_wts_c5b8d49.json) contains the completed training and four-arm evaluation measurements, source/runtime identities, per-update metrics, and measurement limitations.
+The original [machine-readable experiment report](evidence/native_qlora_wts_c5b8d49.json) contains the completed `c5b8d49` training and four-arm evaluation measurements, source/runtime identities, per-update metrics, and measurement limitations. The following reference results predate the performance controls above.
 
 The experiments tested commit `c5b8d49bcc219d1cceb76bee42d4eb20daa766f7`, installed from wheel SHA256 `afbeb228bd42ba9582e53d427c20ba59d0b166706ffd98ccaa6ed73d8f149047`. Each run used one NVIDIA A100-SXM4-80GB and one torchrun process. Runtime: Python 3.12.12, Torch 2.11.0+cu128 (source commit `70d99e998b4955e0049d13a98d77ae1b14db1f45`), CUDA 12.8, Transformers 5.8.1, bitsandbytes 0.49.2, and TorchCodec 0.11.0+cpu. The host reported driver 535.129.03; the loaded CUDA compatibility driver library was `libcuda.so.570.124.06`. Both training arms used strict deterministic algorithms.
 
