@@ -420,10 +420,14 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
 def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
     from cosmos_framework.posttrain.schema.metrics import SUMMED_TRAIN_COUNT_KEYS
     from cosmos_framework.posttrain.utils.report import merge_training_metric_window
+    from cosmos_framework.posttrain.utils.training_profile import profile_range
 
     reports: list[dict[str, Any]] = []
     for micro in range(rl.grad_accum):
-        metrics = resolve(policy.train(data.get_samples(rl.micro_batch_size)))
+        with profile_range("sft.data_fetch"):
+            batch = data.get_samples(rl.micro_batch_size)
+        with profile_range("sft.microbatch"):
+            metrics = resolve(policy.train(batch))
         expected = "applied" if micro == rl.grad_accum - 1 else "accumulating"
         if metrics.get("optim/update_outcome") != expected:
             raise RuntimeError(
@@ -522,6 +526,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.posttrain.utils.training_profile import NativeStepProfiler
     from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
@@ -559,11 +564,13 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
     # The clip counters continue from the kept rows of the metrics file (rank 0, the rank that writes it), so the
     # fraction below is the share of the RUN's updates, not of this attempt's (review R134-05).
     clipped_steps, counted_steps = prior_clip_counts(reporters)
+    profiler = NativeStepProfiler()
     try:
         initial = boundary.resume_or_initial(start, resumed_from_checkpoint=resumed)
         record_qlora_phase("initial_validation", reset_peak=True)
         if initial.preempted:
             return {"final_step": start, "preempted": initial.preempted}
+        profiler.start()
         for step in range(start, rl.max_steps):
             began = time.monotonic()
             metrics = train_step(data, policy, rl)
@@ -575,6 +582,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
             if not math.isfinite(final_loss):
                 raise RuntimeError("SFT applied a non-finite update")
             metrics["timer/e2e_step_s"] = time.monotonic() - began
+            profiler.step()
             if "train/grad_clipped" in metrics:
                 # The share of this run's updates the clip has set the step size of, so far, across attempts (R125-D-07).
                 counted_steps += 1
@@ -601,6 +609,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                     info0(f"termination trigger ({stopped}) — already checkpointed, exiting")
                 return {"final_step": final_step, "preempted": stopped}
     finally:
+        profiler.close()
         finish_best_effort(reporters, failed_reporters=failures)
     return {"start": start, "final_step": final_step, "final_loss": final_loss}
 

@@ -54,6 +54,7 @@ from cosmos_framework.posttrain.utils.identity import json_identity_equal, norma
 from cosmos_framework.posttrain.utils.log import info0
 from cosmos_framework.posttrain.utils.profile import ProfileRecord, live_cuda_tensor_summary
 from cosmos_framework.posttrain.utils.residency import HostOffload, make_offload
+from cosmos_framework.posttrain.utils.training_profile import profile_range
 
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.checkpoint.store import CheckpointStore
@@ -706,7 +707,8 @@ class LLMTrainer(BaseTrainer):
         # objective's `old_for`. No ahead pass ⇒ cache mode stays "off" ⇒ the objective falls back to
         # `cur.detach()`, which is exact at n_mini == 1 and is the pre-change behaviour everywhere else.
         self._begin_update_attempt()
-        loss, metrics = self.objective(self.model, batch)
+        with profile_range("trainer.objective"):
+            loss, metrics = self.objective(self.model, batch)
         self._replay_pinned(active=bool(batch))
         metrics.update(self._replay_metrics())
         # Consensus precedes FSDP backward so a bad rank cannot strand its peers.
@@ -715,7 +717,8 @@ class LLMTrainer(BaseTrainer):
         # The reduction owns normalize+backprop (TOKEN_SUM: as-is at grad_accum==1, else the
         # chunk SUM recovered via the objective's own divisor; MEAN: /grad_accum).
         denom = metrics.get(OBJECTIVE_WEIGHT_SUM)
-        reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
+        with profile_range("trainer.backward"):
+            reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
         self._accum += 1
         self._denom_accum += float(denom or 0.0)
         if self._accum == self.grad_accum:
@@ -773,7 +776,8 @@ class LLMTrainer(BaseTrainer):
                 metrics["train/learning_rate"] = update_learning_rate
                 metrics.update(self._outcome_metrics("skipped"))
                 return metrics
-            self._run_partial_update_stage(stage="optimizer_step", action=self.opt.step)
+            with profile_range("trainer.optimizer"):
+                self._run_partial_update_stage(stage="optimizer_step", action=self.opt.step)
             self._run_partial_update_stage(
                 stage="post_optimizer_step",
                 action=self._validate_post_optimizer_step,
