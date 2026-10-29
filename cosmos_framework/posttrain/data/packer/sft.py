@@ -617,7 +617,7 @@ class QwenSFTDataPacker(DataPacker):
         ``prefilled``, row rule R4; one rule, applied once): the tokens after it -- reasoning text, a second ``<think>``, or
         the closer of an empty block -- stay supervised. This fits only a serve that prefills the opener (a request without tools): on the
         serving path of record (tools present) vLLM 0.24 prefills nothing after ``<|im_start|>assistant\n``, the
-        student must emit the opener itself, and the default keeps it supervised. (the earlier rule
+        student must emit the opener itself, and the default keeps it supervised. (The earlier rule
         also masked an empty ``<think>`` + newline + ``</think>`` block token for token as Nemo-Chat does; its newline
         was ``encode("\n")``, so under the exporter's ``<think>\n\n</think>\n\n`` rendering, where ``\n\n`` is ONE
         token, it masked only the opener, while under a single-newline rendering it masked the closer the student has
@@ -625,8 +625,7 @@ class QwenSFTDataPacker(DataPacker):
         assert self._think_id is not None
         # The boundary is read from the ORIGINAL labels, never from ``out``: a body that begins with two consecutive
         # openers (``<think><think>``) masks its first token only. Reading ``out`` made the first masked opener an
-        # ignored neighbour of the second, which then satisfied the boundary test and was masked too (review thread
-        # 19bf3c650f; probe: labels [-100, T, T, 7] -> [-100, -100, -100, 7] before, [-100, -100, T, 7] now).
+        # ignored neighbour of the second, which then satisfied the boundary test and was masked too (probe: labels [-100, T, T, 7] -> [-100, -100, -100, 7] before, [-100, -100, T, 7] now).
         out = list(labels)
         for pos, token in enumerate(ids):
             if token == self._think_id and labels[pos] != _IGNORE and (pos == 0 or labels[pos - 1] == _IGNORE):

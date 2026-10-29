@@ -25,7 +25,7 @@ RUN_CMD="${RUN_CMD:?set RUN_CMD to the torchrun payload, e.g. -m ...entrypoints.
 # NODE-LOCAL compile caches. Both inductor AND triton default to shared paths ($TMPDIR on $HOME,
 # ~/.triton/cache on $HOME): concurrent jobs then race/replace each other's kernels — truncated
 # .so ("ImportError: ....main.so: file too short") or, when a sibling job is cancelled mid-read,
-# "InductorError: OSError: [Errno 116] Stale file handle" (observed 2026-07-06, job 1568874).
+# "InductorError: OSError: [Errno 116] Stale file handle" (observed 2026-07-06).
 VENV_ACTIVATE="${VENV_ACTIVATE:-}"
 
 nnodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l)

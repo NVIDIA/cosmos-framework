@@ -146,8 +146,8 @@ run inside the training container). This module owns everything around it:
   staged ``config.json`` is repaired from the base through a temporary file and a rename, the sidecars are re-synced the same way
   (files through ``.copying`` + replace, the template directory through a staged copy and renames; never a shard), then the
   verification a fresh build gets, the marker and the swap; a failure at any of these refuses by name and KEEPS the tree: its
-  shards and its marker untouched, its sidecars possibly repaired from the base before the check (
-  under ``--unified-chat-template`` the two template files are re-synced to the base's form at the sidecar-sync stage and rewritten
+  shards and its marker untouched, its sidecars possibly repaired from the base before the check
+  (under ``--unified-chat-template`` the two template files are re-synced to the base's form at the sidecar-sync stage and rewritten
   with the unified text through a ``.writing`` temporary, so a failure there leaves ``<template>.writing`` beside base-form files:
   the refusal names "a .copying or .writing temporary"; the refusal's third clause for the state
   at ``<out>``, a complete marked export standing there, is unreachable by construction: the skip / mismatch decision in

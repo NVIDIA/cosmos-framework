@@ -9,7 +9,7 @@ round-tripped through OmegaConf on its own. General config mapping/dispatch live
 
 Layering (the three-stakeholder synthesis):
   - The model/data half is the inherited LazyConfig tree at top-level `config.model`
-    (researchers `defaults: [<i4 experiment>]`); reflected via `instantiate`.
+    (researchers `defaults: [<experiment>]`); reflected via `instantiate`.
   - Model backend selection and shared load specs are top-level too (`config.model_backend`,
     `config.model_hf`, and `config.model_qwen3_vl`; schemas in `config/model.py`), NOT an RL concern.
     `DPOConfig` is purely the RL objective + optimizer + ref + data.

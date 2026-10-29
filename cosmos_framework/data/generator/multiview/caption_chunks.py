@@ -38,7 +38,7 @@ LEGACY_CAPTION_KEYS: tuple[str, ...] = ("long", "av_long", "medium", "av_medium"
 
 
 def chunks_from_structured_captions(payload: Mapping[str, Any]) -> list[MultiviewCaptionChunk]:
-    """Read the ``caption_structured`` chunk map that Tier-1 bundles and Lance rows carry.
+    """Read the ``caption_structured`` chunk map that structured caption bundles and Lance rows carry.
 
     Shape is ``{"chunk_<start>_<end>": {"caption": str, "start_frame": int, "end_frame": int}}``
     with ``end_frame`` exclusive. Chunks are sorted by frame span rather than trusted in key

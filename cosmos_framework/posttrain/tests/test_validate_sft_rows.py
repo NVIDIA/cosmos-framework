@@ -874,7 +874,7 @@ def test_student_template_rows_pass_the_validator() -> None:
     assert "<tool_call>" in supervised and "<think>" in supervised and "<tool_response>" not in supervised
 
 
-# ----------------------------------------------------------------------------- fix round (review 117)
+# ----------------------------------------------------------------------------- row validation fixes
 
 
 def _stub_jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:

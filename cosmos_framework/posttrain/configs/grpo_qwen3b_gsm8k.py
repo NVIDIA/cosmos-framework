@@ -338,7 +338,7 @@ def build_config() -> PosttrainGRPOConfig:
 
 
 def make_config() -> PosttrainGRPOConfig:
-    """The upstream `--config` entry point (`cosmos_framework.utils.config.load_config` calls `make_config()`).
+    """The `--config` entry point (`cosmos_framework.utils.config.load_config` calls `make_config()`).
 
     Alias of `build_config` so this recipe can be launched directly:
 

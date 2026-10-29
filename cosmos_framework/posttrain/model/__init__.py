@@ -10,7 +10,7 @@ model stack. The toy `FlowMatchingPolicy` used by tests is constructed directly 
 """
 
 from cosmos_framework.posttrain.model import (
-    cosmos3,  # noqa: F401  (registers "cosmos3"; no native policy imports at load time)
+    cosmos3,  # noqa: F401  (registers "cosmos3"; no heavy model imports at load time)
 )
 from cosmos_framework.posttrain.model.protocol import (
     EMAFlowMatchingPolicy,

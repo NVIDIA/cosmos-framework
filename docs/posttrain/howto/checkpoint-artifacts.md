@@ -240,7 +240,7 @@ optional `__metadata__` object), so a malformed header is a named refusal before
 output verifier; asks the pinned safetensors reader itself for every base shard the index lists
 (`safe_open` on the header: dtype names, string metadata values, contiguous offsets, byte count per tensor, file
 length) and decodes every Jinja template the loaders read (`chat_template.jinja`, `additional_chat_templates/*.jinja`)
-as strict UTF-8, refusing by file and reader message / decode position. the
+as strict UTF-8, refusing by file and reader message / decode position. The
 construction is STAGED: the whole build (overlay, sidecar sync, `config.json <- base`, verification, marker) happens
 in `<out>.tmp` beside an existing output, which is replaced only afterwards by a rename swap (`<out>` ->
 `<out>.previous`, `<out>.tmp` -> `<out>`, `<out>.previous` removed); on any failure before the swap the staging

@@ -535,7 +535,7 @@ def test_multiview_condition_vision_mode_comes_from_the_views(tmp_path: Path):
     its first frames live in multiview.views[].vision_path. The mode resolved to None,
     _get_multiview_condition_pixel_frames returned [None, ...], and the conditioning was dropped,
     so an image2video sample produced text2video output byte-identical to the t2v run with no
-    error anywhere (measured: parity job 2041279, all 11 views identical to the t2v run).
+    error anywhere (measured: all 11 views identical to the t2v run).
     """
     sample_meta = _multiview_sample_meta(tmp_path, with_vision=True)
 

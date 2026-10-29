@@ -1668,8 +1668,8 @@ class _SampleDataBase:
         # single-view path reads, so the top-level mode stays None for a multiview i2v
         # sample. Leaving it None makes _get_multiview_condition_pixel_frames return
         # [None, ...] and an image2video sample then generates text2video output --
-        # byte-identical to the t2v run, with no error anywhere. Measured: parity job
-        # 2041279, all 11 views identical to the t2v run.
+        # byte-identical to the t2v run, with no error anywhere. Measured: all 11 views
+        # identical to the t2v run.
         if self.multiview is not None:
             condition_vision_mode = self.multiview.condition_vision_mode
         return SampleMeta(

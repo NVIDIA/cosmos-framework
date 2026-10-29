@@ -161,7 +161,7 @@ def build_root(
 ) -> _C:
     """Build a per-algorithm root of type `cls`: reuse cosmos3's config-group registration, register
     posttrain experiments when requested (so `experiment=` selects them; inherited upstream experiments
-    stay available so a posttrain experiment can `defaults: [/experiment/<i4>]`), and stamp the
+    stay available so a posttrain experiment can `defaults: [/experiment/<name>]`), and stamp the
     posttrain job/trainer defaults. Concrete recipes that fully populate the root disable experiment
     registration so they do not import unrelated projects and their optional dependencies. Idempotent
     — the ConfigStore registration is safe to repeat. ``register_base_configs=False`` selects a

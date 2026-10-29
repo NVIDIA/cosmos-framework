@@ -2,7 +2,7 @@
 # Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # -----------------------------------------------------------------------------
 
-"""Active RopeRigPE, ported from an internal research implementation.
+"""Active RopeRigPE, ported from a research implementation.
 
 By default direction and moment are independently normalized as in that source.
 The spatial ablation instead scales the raw moment by a fixed distance in metres.

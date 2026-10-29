@@ -260,8 +260,8 @@ def read_processor_template(base: str) -> str:
     """The processor chat template's text: ``<base>/chat_template.json``'s ``chat_template`` string, what the processor
     loader's legacy path indexes as ``chat_template_json["chat_template"]`` (processing_utils.py 4.57.6:1072, 5.8.1:1083; a
     KeyError at load when the key is absent). ``ConversionError`` when the file is missing or unreadable or is not a JSON
-    object (``_read_json_file``'s texts), or when the key is not a non-empty string, naming what was found (
-    ``{}`` used to pass the materializer's preflight and fail the loader, after the removal of those rounds)."""
+    object (``_read_json_file``'s texts), or when the key is not a non-empty string, naming what was found
+    (``{}`` used to pass the materializer's preflight and fail the loader, after an earlier fix)."""
     path = os.path.join(base, PROCESSOR_TEMPLATE_FILE)
     payload, _ = _read_json_file(path)
     template = payload.get(CHAT_TEMPLATE_KEY)
@@ -318,7 +318,7 @@ def decode_json_bytes(raw: bytes) -> Any:
     then ``json.loads`` (what ``model_identity``, ``_read_json_file`` and transformers' ``open(..., encoding="utf-8")`` readers do
     in the staged build). ``ByteOrderMarkError`` (a ``ValueError``) when the bytes start with the UTF-8 byte-order
     mark, named: the case where the preflight's ``json.loads(bytes)`` stripped the mark and passed a ``config.json`` that
-    ``write_config_from_base`` then refused, after the removal of those rounds; ``UnicodeDecodeError`` / ``JSONDecodeError`` (both ``ValueError``)
+    ``write_config_from_base`` then refused, after an earlier fix; ``UnicodeDecodeError`` / ``JSONDecodeError`` (both ``ValueError``)
     for bytes that are not UTF-8 JSON."""
     if raw.startswith(UTF8_BOM):
         raise ByteOrderMarkError(

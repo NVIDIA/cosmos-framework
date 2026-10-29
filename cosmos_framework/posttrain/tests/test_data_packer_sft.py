@@ -231,8 +231,8 @@ def test_collate_attention_mask_is_int64_and_feeds_the_native_eager_mask(text_pa
     """The collated ``attention_mask`` follows ``main``'s contract, ``torch.int64`` 0/1
     (``tests/test_model_qwen3_vl.py::test_native_causal_mask_accepts_sft_padding_masks`` pins it), and the native eager
     path accepts it because ``model/qwen3_vl.py::_qwen3_vl_causal_mask`` casts a 2-D mask to bool before ``eager_mask``
-    (``torch.where``). On 05389b0e6d this branch emitted ``torch.bool`` for that path instead; after the rebase of fix
-    round 1 ``main``'s test refused it (job 877999: its six parametrizations failed on both heads and passed on main)."""
+    (``torch.where``). On 05389b0e6d this branch emitted ``torch.bool`` for that path instead; after a rebase
+    ``main``'s test refused it (its six parametrizations failed on both heads and passed on main)."""
     from types import SimpleNamespace
 
     from cosmos_framework.posttrain.model.qwen3_vl import _qwen3_vl_causal_mask

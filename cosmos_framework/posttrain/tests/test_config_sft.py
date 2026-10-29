@@ -604,7 +604,7 @@ def test_sft_config_refuses_an_opener_mask_outside_the_prefills_opener_contract(
     the resolved config of the accepted run was byte-identical to a refused one's). The refusal lives in
     ``SFTConfig.__post_init__``, so a ``--`` override on the ``default`` variant, a YAML and the recipe variant are judged
     by the same typed field: ``mask_think_opener=True`` under the default contract ``tools_no_prefill`` is refused naming
-    and ``rl.serve_contract=prefills_opener`` whatever the environment says, and it is refused where the
+    the serving path of record and ``rl.serve_contract=prefills_opener`` whatever the environment says, and it is refused where the
     config is BUILT (``load_config`` constructs ``SFTConfig``; on the parent the override built and the entrypoint's
     guard judged it later); with the contract it is accepted; an unknown contract is refused; the default variant is
     unaffected."""

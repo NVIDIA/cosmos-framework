@@ -341,8 +341,8 @@ def refuse_source_overlap(census: Mapping[str, Any]) -> None:
     fingerprint comparison catches a byte-identical copy only; a subset of the training file passed it,
     so the census is per row. The content hash covers media by file bytes (a copy of the training media
     under another root is the same row), and a validation row without ``meta.item`` is refused when the training rows
-    carry items: its only identity would be the content hash, which one changed character defeats (
-    bypasses 4 and 5).
+    carry items: its only identity would be the content hash, which one changed character defeats
+    (bypasses 4 and 5).
     """
     if census["shared_rows"] or census["shared_items"]:
         raise ValueError(
