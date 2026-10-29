@@ -85,7 +85,9 @@ def assert_bf16_deployment_drift(report: dict) -> None:
             raise AssertionError(f"BF16 merged deployment drift {name}={report[name]:.8g} exceeds {limit}")
 
 
-def verify_promoted_merge(policy, identity: dict, batches: list[dict], exported: str) -> dict:
+def verify_promoted_merge(
+    policy, identity: dict, batches: list[dict], exported: str, *, reference: list[torch.Tensor] | None = None
+) -> dict:
     """Control a private loaded copy in FP32 and account for every exported tensor.
 
     Promoting a BF16 base preserves its already-rounded values. This isolates the
@@ -104,10 +106,13 @@ def verify_promoted_merge(policy, identity: dict, batches: list[dict], exported:
 
     device = next(policy.net.parameters()).device
     policy.net.float().eval()
-    reference = logits(policy, batches)
+    if reference is None:
+        reference = logits(policy, batches)
     state = {name: value.detach().cpu() for name, value in policy.net.state_dict().items()}
     merged = prepare_merged_state(state, {**identity, "base_storage_dtype": "float32"})
     path = Path(exported)
+    marker = json.loads((path / ".materialized").read_text())
+    export_dtype = marker["identity"].get("output_dtype", identity["base_storage_dtype"])
     index = json.loads((path / "model.safetensors.index.json").read_text())
     expected_keys = set(merged)
     if policy.net.config.tie_word_embeddings and "lm_head.weight" not in index["weight_map"]:
@@ -118,7 +123,7 @@ def verify_promoted_merge(policy, identity: dict, batches: list[dict], exported:
     for shard in sorted(set(index["weight_map"].values())):
         tensors = load_file(str(path / shard))
         for name, value in tensors.items():
-            expected = merged[name].to(getattr(torch, identity["base_storage_dtype"]))
+            expected = merged[name].to(getattr(torch, export_dtype))
             assert value.dtype == expected.dtype and torch.equal(value, expected), f"merged tensor mismatch: {name}"
             verified += 1
         del tensors

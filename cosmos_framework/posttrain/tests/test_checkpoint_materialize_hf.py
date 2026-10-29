@@ -552,6 +552,26 @@ def _marker(out: str) -> dict:
     return json.loads(Path(out, mat.MATERIALIZED_MARKER).read_text())
 
 
+def test_explicit_export_dtype_is_identity_bound_and_verified_before_publication(tmp_path, base, monkeypatch):
+    _install_fake_overlay(monkeypatch)  # Produces BF16 shards deliberately.
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "model.pt").write_bytes(b"\0" * 10)
+    output = str(tmp_path / "default")
+    request = dict(base=str(base), ckpt_dir=str(checkpoint), min_tensors=3, verify=False)
+    assert mat.run_request(out=output, **request) == "built"
+    before = Path(output, mat.MATERIALIZED_MARKER).read_bytes()
+    with pytest.raises(mat.MaterializeRefusedError, match="output_dtype"):
+        mat.run_request(out=output, output_dtype="float32", **request)
+    assert Path(output, mat.MATERIALIZED_MARKER).read_bytes() == before
+    invalid = str(tmp_path / "wrong-precision")
+    with pytest.raises(ConversionError, match="dtype BF16; expected float32"):
+        mat.run_request(out=invalid, output_dtype="float32", **request)
+    assert not Path(invalid).exists() and not Path(invalid + ".tmp").exists()
+    with pytest.raises(ValueError, match="supports float32 only"):
+        mat.run_request(out=invalid, output_dtype="bfloat16", **request)
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 

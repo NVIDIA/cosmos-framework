@@ -355,6 +355,18 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     identity = policy.net._posttrain_adapter_identity
     save_adapter_artifact(policy.net, str(tmp_path / "portable"))
     export_merged_adapter(str(tmp_path / "portable"), str(base), str(tmp_path / "merged"))
+    from transformers import AutoModelForImageTextToText
+
+    from cosmos_framework.posttrain.checkpoint.conversion.hf import config_with_export_dtype
+
+    merged_path = tmp_path / "merged"
+    original_config = json.loads((base / "config.json").read_text())
+    assert json.loads((merged_path / "config.json").read_text()) == config_with_export_dtype(original_config, "float32")
+    dense = AutoModelForImageTextToText.from_pretrained(merged_path, dtype="auto")
+    assert all(p.dtype == torch.float32 for p in dense.parameters())
+    # Repeated export remains identity-bound and does not rewrite the original base.
+    assert export_merged_adapter(str(tmp_path / "portable"), str(base), str(merged_path)) == "skipped"
+    assert json.loads((base / "config.json").read_text()) == original_config
     control = verify_promoted_merge(
         policy, identity, [{"input_ids": torch.tensor([[30, 31, 32, 33]])}], str(tmp_path / "merged")
     )

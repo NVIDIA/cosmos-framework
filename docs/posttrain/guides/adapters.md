@@ -75,7 +75,7 @@ settings own those policies. `lr_multiplier` multiplies the global optimizer LR;
 FP32 adapter storage/accumulation, BF16 or FP32 frozen base, eager/SDPA and full
 non-reentrant activation checkpointing or none. BF16 adapter storage is refused.
 Separately trained normalization parameters remain FP32 while their output keeps
-the input activation dtype. Merged BF16 exports round these parameters once.
+the input activation dtype. The supported merged export retains these parameters in FP32.
 
 ## Methods and lifecycle
 
@@ -150,10 +150,16 @@ python -m cosmos_framework.posttrain.checkpoint.tools.adapters \
 # config.rl.adapters.warm_start = "/exports/adapter"
 ```
 
-**Merged HF models** use pure merge preparation, then the existing locked/staged
-HF materializer and sidecar verification. Export leaves live parameters, optimizer
-membership and tensor versions unchanged. Stock HF reload is tested separately
-from native portable reload.
+**Merged HF models** use FP32 weights and inference. The exporter first reproduces
+the recorded training-base values (including BF16 rounding), then promotes them
+and applies the pure FP32 merge. It reuses the existing locked/staged HF
+materializer, extends its identity with output precision, and verifies both shard
+precision and config metadata before publication. `dtype="auto"` loads FP32.
+The base's architecture and all processor/template sidecars are preserved.
+Export leaves live parameters, optimizer membership and tensor versions unchanged.
+Stock HF reload is tested separately from native portable reload. BF16 merged
+inference exceeded real-model qualification bounds and is outside the supported
+export profile; the tool does not produce BF16 merged models.
 
 ```bash
 python -m cosmos_framework.posttrain.checkpoint.tools.adapters \
@@ -166,26 +172,26 @@ bitwise controlled next-update recovery. Portable GPU reload uses `2e-5` and a
 `2e-6` mean bound; controlled GPU continuation uses `atol=1e-7, rtol=1e-5` on
 trainable parameters and optimizer state.
 
-Merged export has three separate numerical gates. Every serialized tensor must
-equal the FP32 reference merge rounded once to the recorded base dtype. A private
-promoted FP32 copy then compares unmerged, native dense and stock HF forwards
-(`atol=5e-4, rtol=2e-4`, mean error at most `5e-5`, identical argmax). This checks
-method algebra independently of reduced-precision deployment. Small fixtures keep
-their tighter existing bounds. The control never changes a live training model.
+Merged export has three mandatory checks: every serialized tensor equals the
+FP32 reference merge exactly; native merged and stock HF forwards match the
+portable adapter evaluated in FP32 (`atol=5e-4, rtol=2e-4`, mean error at most
+`5e-5`, identical argmax); and a fresh stock HF load with `dtype="auto"` reproduces
+those controlled outputs. Small fixtures retain their tighter existing bounds.
+The control uses a private evaluation copy and never changes a live training model.
+For a BF16-trained adapter, build/reload at its recorded base dtype first, then
+call `policy.net.float().eval()` for this FP32 reference. Constructing directly
+from the original FP32 base would undo training-time rounding and is incorrect.
 
 BF16 adapter and dense GEMMs round at different boundaries; combined image/video
-encoding also has different GEMM batch shapes in native and stock HF. On the real
-8.7B checkpoint these effects exceeded the initial `.05` absolute-logit proposal
-even though all exported tensors were correct. Qualification protocol v2 records
-raw errors and probability drift, with fixed deployment limits: maximum logit
-error `2`, mean absolute error `.2`, per-probe relative L2 error `.0625`, mean/max
-KL `.01/.05`, and mean/max total variation `.025/.1`. Any changed greedy token
-must have original probability within `.02` of the original best token; all actual
-argmax agreement counts are reported. These are empirical bounds for the qualified
-checkpoint/profile, not a claim of identical BF16 generation. Portable reload is
-the exact-output path. The FP32 algebra and serialized-tensor gates are mandatory
-alongside these BF16 bounds; probability agreement alone cannot qualify a merge.
-See the qualification record for measured controls and pending/failed cases.
+encoding also has different GEMM batch shapes in native and stock HF. Real-model
+BF16 exports failed both the initial absolute-logit proposal and later fixed
+probability-drift gates (including a `.0475` probability loss for a changed rsLoRA
+greedy token). Those failures are retained in the qualification record. Their
+limits were not widened to declare success. The supported FP32 export instead
+uses same-precision equivalence; it costs twice the BF16 weight storage and has
+a different compute cost. Reports also measure FP32-export versus BF16-training
+outputs, but do not claim cross-precision generation equivalence. Portable reload
+retains the original inference precision and exact controlled outputs.
 Passing a backward call alone is not a quality or resource qualification.
 
 WTS annotations can be converted without resampling using

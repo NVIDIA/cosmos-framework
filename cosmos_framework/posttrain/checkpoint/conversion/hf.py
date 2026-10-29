@@ -224,7 +224,39 @@ def overlay_compatibility_files(
     return copied
 
 
-def write_config_from_base(export: str, base: str, backup_suffix: str = TRAINER_BACKUP_SUFFIX) -> dict[str, Any]:
+def config_with_export_dtype(config: dict[str, Any], output_dtype: str) -> dict[str, Any]:
+    """Change only precision metadata; preserve the base's architecture dialect."""
+    if output_dtype != "float32":
+        raise ValueError("explicit merged export precision currently supports float32 only")
+    result = json.loads(json.dumps(config))
+    for section in [result, *[result[k] for k in ("text_config", "vision_config") if isinstance(result.get(k), dict)]]:
+        # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
+        # same value for both so dtype='auto' cannot silently downcast this export.
+        section["dtype"] = section["torch_dtype"] = output_dtype
+    return result
+
+
+def verify_export_dtype(export: str, base: str, output_dtype: str) -> dict[str, Any]:
+    """Torch-free verification of explicit precision, including idempotent skips."""
+    with open(os.path.join(base, "config.json")) as handle:
+        expected = config_with_export_dtype(json.load(handle), output_dtype)
+    with open(os.path.join(export, "config.json")) as handle:
+        if json.load(handle) != expected:
+            raise ConversionError("merged export config differs beyond its declared output dtype")
+    with open(os.path.join(export, INDEX_FILE)) as handle:
+        shards = set(json.load(handle)["weight_map"].values())
+    for shard in shards:
+        header, _ = safetensors_header(os.path.join(export, shard))
+        for name, tensor in header.items():
+            dtype = tensor["dtype"]
+            if (dtype.startswith("F") or dtype == "BF16") and dtype != "F32":
+                raise ConversionError(f"merged export {name} has dtype {dtype}; expected float32")
+    return {"output_dtype": output_dtype}
+
+
+def write_config_from_base(
+    export: str, base: str, backup_suffix: str = TRAINER_BACKUP_SUFFIX, *, output_dtype: str | None = None
+) -> dict[str, Any]:
     """Make ``<export>/config.json`` the base's ``config.json`` verbatim, keeping the file transformers wrote once as
     ``config.json<backup_suffix>``.
 
@@ -234,6 +266,10 @@ def write_config_from_base(export: str, base: str, backup_suffix: str = TRAINER_
     transformers 4.57 reads as a different model (review R125-D-08). The weights are the base's architecture, so the
     base's config is the one true description. Requires equal structural identity; idempotent (a kept backup is never
     overwritten).
+
+    ``output_dtype='float32'`` is the explicit adapter-export exception: preserve
+    every architecture field but write matching Transformers 4/5 precision keys.
+    The materializer records this option in its identity and verifies shard dtype.
     """
     validate_model_identity(export, base)
     source, destination = os.path.join(base, "config.json"), os.path.join(export, "config.json")
@@ -244,7 +280,14 @@ def write_config_from_base(export: str, base: str, backup_suffix: str = TRAINER_
             shutil.copy2(destination, backup)
             kept = True
     part = destination + ".copying"
-    shutil.copy2(source, part)
+    if output_dtype is None:
+        shutil.copy2(source, part)
+    else:
+        with open(source) as handle:
+            config = config_with_export_dtype(json.load(handle), output_dtype)
+        with open(part, "w") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
     os.replace(part, destination)
     return {
         "config_source": "base",

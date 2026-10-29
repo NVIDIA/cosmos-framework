@@ -29,7 +29,13 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
 
 
 def export_merged_adapter(adapter: str, base: str, out: str) -> str:
-    """One adapter into its exact original base. No stacking or in-place merging."""
+    """One adapter into its materialized base, exported in FP32 without live mutation.
+
+    BF16 dense GEMMs do not reproduce BF16 adapter forwards within the real-model
+    qualification bounds. FP32 is the supported merged inference precision; its
+    reference is the portable adapter promoted to FP32, preserving the already
+    rounded training-base values. Portable reload retains the training precision.
+    """
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
@@ -63,7 +69,7 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
             # Native materialization converts all floating parameters before loading.
             # Apply that same conversion before merging, even when source shards are
             # FP32 or mix FP32 normalization weights with BF16 projections.
-            weights[name] = tensor.to(getattr(torch, base_dtype)) if tensor.is_floating_point() else tensor
+            weights[name] = tensor.to(getattr(torch, base_dtype)).float() if tensor.is_floating_point() else tensor
     for row in identity["resolved"]["targets"]:
         name = row["name"] + ".weight"
         if name not in weights or list(weights[name].shape) != row["shape"]:
@@ -71,7 +77,7 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
                 f"base cannot resolve native adapter target {name}; packed/renamed HF conversions are unsupported"
             )
     weights.update(state)
-    merged = prepare_merged_state(weights, identity)
+    merged = prepare_merged_state(weights, {**identity, "base_storage_dtype": "float32"})
     config = json.loads((root / "config.json").read_text())
     if config.get("tie_word_embeddings", False) and "lm_head.weight" in merged:
         embedding = "model.language_model.embed_tokens.weight"
@@ -82,7 +88,13 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     with tempfile.TemporaryDirectory(prefix="cosmos-adapter-merge-") as temporary:
         torch.save({"net": merged}, os.path.join(temporary, "model.pt"))
         result = run_request(
-            base=base, out=out, ckpt_dir=temporary, min_tensors=1, expect_tensors=len(merged), verify=True
+            base=base,
+            out=out,
+            ckpt_dir=temporary,
+            min_tensors=1,
+            expect_tensors=len(merged),
+            verify=True,
+            output_dtype="float32",
         )
     return result
 

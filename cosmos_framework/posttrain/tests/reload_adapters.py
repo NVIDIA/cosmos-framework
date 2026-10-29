@@ -17,7 +17,6 @@ from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, A
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 from cosmos_framework.posttrain.model.qwen3_vl import Qwen3VLPolicy, build_qwen3_vl_model
 from cosmos_framework.posttrain.tests.adapter_numerics import (
-    assert_bf16_deployment_drift,
     compare_logits,
     verify_promoted_merge,
 )
@@ -86,40 +85,44 @@ def main():
     if args.merged:
         from transformers import AutoModelForImageTextToText
 
-        control = verify_promoted_merge(policy, identity, batches, args.merged)
+        marker = json.loads((Path(args.merged) / ".materialized").read_text())
+        if marker["identity"].get("output_dtype") != "float32":
+            raise ValueError("merged qualification requires FP32 export; re-export with the current adapter tool")
+        policy.net.float()
+        expected = logits(policy, batches)
+        control = verify_promoted_merge(policy, identity, batches, args.merged, reference=expected)
         del policy
         gc.collect()
         torch.cuda.empty_cache()
         model = AutoModelForImageTextToText.from_pretrained(
-            args.merged, dtype=getattr(torch, identity["base_storage_dtype"]), attn_implementation="sdpa"
+            args.merged, dtype="auto", attn_implementation="sdpa"
         ).cuda()
+        assert all(p.dtype == torch.float32 for p in model.parameters())
         actual = logits(Qwen3VLPolicy(model, "qwen3_vl"), batches)
-        expected = native
     else:
         actual, expected = native, references
     mode = "merged" if args.merged else "portable"
     report = {
         **evidence,
-        "verification_protocol": "cosmos-adapter-numerics-v2",
+        "verification_protocol": "cosmos-adapter-numerics-v3-fp32-export",
         "training_artifact_provenance": source,
         "probe_run": args.probe_run or args.run,
         "mode": mode,
         **compare_logits(actual, expected),
         "fp32_merge_control": control,
+        "reference_precision": "float32" if args.merged else identity["base_storage_dtype"],
+        "versus_training_precision": compare_logits(actual, native) if args.merged else None,
         "status": "measured_awaiting_drift_gate",
     }
     output = Path(args.report_dir or root)
     output.mkdir(parents=True, exist_ok=True)
     atomic_write_json(str(output / f"{mode}-reload.json"), report)
-    if args.merged and identity["base_storage_dtype"] == "bfloat16":
-        assert_bf16_deployment_drift(report)
-    else:
-        for value, reference in zip(actual, expected):
-            torch.testing.assert_close(
-                value, reference, atol=5e-4 if args.merged else 2e-5, rtol=2e-4 if args.merged else 2e-5
-            )
-        assert report["mean_absolute_logit_error"] <= (5e-5 if args.merged else 2e-6), report
-        assert report["argmax_equal"] == report["positions"], report
+    for value, reference in zip(actual, expected):
+        torch.testing.assert_close(
+            value, reference, atol=5e-4 if args.merged else 2e-5, rtol=2e-4 if args.merged else 2e-5
+        )
+    assert report["mean_absolute_logit_error"] <= (5e-5 if args.merged else 2e-6), report
+    assert report["argmax_equal"] == report["positions"], report
     report["status"] = "passed"
     atomic_write_json(str(output / f"{mode}-reload.json"), report)
 

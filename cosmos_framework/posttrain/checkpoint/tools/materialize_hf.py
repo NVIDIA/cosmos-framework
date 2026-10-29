@@ -303,7 +303,11 @@ def base_identity(base: str) -> dict[str, Any]:
 
 
 def make_identity(
-    source: dict[str, Any], base_id: dict[str, Any], *, unified_chat_template: bool = False
+    source: dict[str, Any],
+    base_id: dict[str, Any],
+    *,
+    unified_chat_template: bool = False,
+    output_dtype: str | None = None,
 ) -> dict[str, Any]:
     """The fields a reuse (final output or ``<out>.tmp``) must reproduce exactly.
 
@@ -319,6 +323,8 @@ def make_identity(
     }
     if unified_chat_template:
         identity["unified_chat_template"] = True
+    if output_dtype is not None:
+        identity["output_dtype"] = output_dtype
     return identity
 
 
@@ -542,6 +548,8 @@ def marker_status(out: str, want: dict[str, Any], probe: dict[str, Any]) -> tupl
             f"{marker_path} was built {built} --unified-chat-template, this request is {asked} it; tokenizer_config.json's "
             f"chat_template differs between the two"
         )
+    if identity.get("output_dtype") != want.get("output_dtype"):
+        return "mismatch", f"{marker_path} has a different merged export output_dtype"
     source = marker.get("source") if isinstance(marker.get("source"), dict) else {}
     if identity.get("source_sha256") != probe["sha256"] or identity.get("source_bytes") != probe["bytes"]:
         requested = probe.get("path") or probe.get("artifact_uri")
@@ -1097,6 +1105,7 @@ def run_request(
     credentials: str | None = None,
     unified_chat_template: bool = False,
     lock_wait_seconds: float | None = None,
+    output_dtype: str | None = None,
 ) -> str:
     """Idempotent entry point: ``"skipped"`` (``out`` provably holds this request) or ``"built"``.
 
@@ -1115,6 +1124,8 @@ def run_request(
     """
     if bool(ckpt_dir) == bool(artifact_uri):
         raise ValueError("pass exactly one of ckpt_dir or artifact_uri")
+    if output_dtype not in (None, "float32"):
+        raise ValueError("explicit merged export output_dtype currently supports float32 only")
     if lock_wait_seconds is not None and not (math.isfinite(lock_wait_seconds) and lock_wait_seconds >= 0):
         raise ValueError(f"lock_wait_seconds must be a finite number >= 0, got {lock_wait_seconds!r}")
     out = os.path.abspath(out.rstrip("/"))
@@ -1134,6 +1145,7 @@ def run_request(
         "base_digest": base_id["digest"],
         "base_path": base_id["path"],
         "unified_chat_template": unified_chat_template,
+        "output_dtype": output_dtype,
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with (
@@ -1164,6 +1176,8 @@ def run_request(
         if status == "match" and not force:
             report = verify_index(out, expect_tensors=expect_tensors, min_tensors=min_tensors)
             report.update(verify_sidecars(out, base, unified_chat_template=unified_chat_template))
+            if output_dtype is not None:
+                report.update(hf.verify_export_dtype(out, base, output_dtype))
             _log(
                 f"already materialized: {out}: {why}; {report['n_tensors']} tensors, {report['sidecars_identical']} sidecars re-checked"
             )
@@ -1228,7 +1242,9 @@ def run_request(
             "artifact_uri": probe.get("artifact_uri"),
             "manifest_sha256": probe.get("manifest_sha256"),
         }
-        identity = make_identity(source, base_id, unified_chat_template=unified_chat_template)
+        identity = make_identity(
+            source, base_id, unified_chat_template=unified_chat_template, output_dtype=output_dtype
+        )
         _log(f"identity {identity_digest(identity)[:12]}: {_short(identity)}")
         tmp_out = out + STAGING_SUFFIX
 
@@ -1312,7 +1328,9 @@ def run_request(
             sync = sync_sidecars(base, tmp_out)
             # Idempotent on a reused staging dir; returns what config.json is and where the transformers-written one is kept.
             stage = "config.json <- base"
-            sync["config"] = hf.write_config_from_base(tmp_out, base)
+            sync["config"] = hf.write_config_from_base(
+                tmp_out, base, **({"output_dtype": output_dtype} if output_dtype is not None else {})
+            )
             if unified_chat_template:
                 # After the sync, which re-copied the base's tokenizer_config.json (on a reused staging dir too): the one ruled
                 # sidecar difference, tokenizer_config.json's chat_template = the processor template's text.
@@ -1349,6 +1367,8 @@ def run_request(
             report["verify"] = verify_index(tmp_out, expect_tensors=expect_tensors, min_tensors=min_tensors)
             stage = "verification (sidecars)"
             report["verify"].update(verify_sidecars(tmp_out, base, unified_chat_template=unified_chat_template))
+            if output_dtype is not None:
+                report["verify"].update(hf.verify_export_dtype(tmp_out, base, output_dtype))
             report["verify"]["torch"] = verify
             if verify:
                 stage = "verification (torch)"
