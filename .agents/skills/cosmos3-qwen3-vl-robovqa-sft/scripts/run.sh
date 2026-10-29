@@ -114,18 +114,24 @@ build_apex() {
   export PATH="$CUDA_HOME/bin:$tc/bin:$PATH"
   [ -d "$ART/apex/.git" ] || git clone https://github.com/NVIDIA/apex.git "$ART/apex"
   git -C "$ART/apex" checkout --detach 575968bc1f9127ccd61003a681472a83af4ff1a1
-  # One compile job per 4 GiB of free host memory, at most one per CPU; built for this GPU's architecture.
+  # One compile job per 4 GiB of free host memory, at most 32 and at most one per CPU; built for this GPU.
   local jobs arch
-  jobs=$(awk -v n="$(nproc)" '/MemAvailable/ {m = int($2 / 4194304); print (m < n ? m : n)}' /proc/meminfo)
+  jobs=$(awk -v n="$(nproc)" '/MemAvailable/ {m = int($2 / 4194304); if (m > n) m = n; if (m > 32) m = 32; print m}' /proc/meminfo)
   arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
   echo "compiling apex for compute capability $arch with $jobs parallel jobs: about 10 minutes on a GB300."
-  echo "Each line below is one source file being compiled; the last step links the extensions."
-  # -v shows the compiler's progress line by line instead of a silent "Building apex" for ten minutes.
-  TORCH_CUDA_ARCH_LIST="$arch" APEX_CPP_EXT=1 APEX_CUDA_EXT=1 MAX_JOBS="$jobs" \
-    $UV pip install -v --python "$SFT_PY" --no-build-isolation "$ART/apex" 2>&1 |
-    grep --line-buffered -E '^\[[0-9]+/[0-9]+\]|Successfully built|Installed|error|Error' |
-    sed -u 's/^\[\([0-9]*\)\/\([0-9]*\)\].*\/\([^/ ]*\.\(cu\|cpp\)\).*/[\1\/\2] \3/'
-  "$SFT_PY" -c "import torch, amp_C" 2>/dev/null || { echo "apex did not build; the full log is above" >&2; exit 1; }
+  echo "The compiler's own output follows (one block per source file); it is also saved to $ART/logs/apex-build.log."
+  # pip's own build output stays hidden; running setup.py directly shows the compiler as it works.
+  $UV pip install --python "$SFT_PY" wheel  # bdist_wheel needs it; not in the SFT lock
+  (cd "$ART/apex" && TORCH_CUDA_ARCH_LIST="$arch" APEX_CPP_EXT=1 APEX_CUDA_EXT=1 MAX_JOBS="$jobs" \
+    "$SFT_PY" setup.py bdist_wheel --dist-dir "$ART/apex-wheel" 2>&1 | tee "$ART/logs/apex-build.log") || true
+  local wheel
+  wheel=$(ls -t "$ART"/apex-wheel/apex-*.whl 2>/dev/null | head -1)
+  if [ -z "$wheel" ]; then
+    echo "apex did not build; see $ART/logs/apex-build.log (the last lines are above)" >&2
+    exit 1
+  fi
+  $UV pip install --python "$SFT_PY" "$wheel"
+  "$SFT_PY" -c "import torch, amp_C" 2>/dev/null || { echo "apex installed but does not import; see $ART/logs/apex-build.log" >&2; exit 1; }
 }
 
 download() {
