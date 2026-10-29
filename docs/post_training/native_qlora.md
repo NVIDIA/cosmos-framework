@@ -113,6 +113,39 @@ The allowlist contains 252 language attention/MLP matrices; vision, projectors, 
 
 The default comparison recipe is 300 updates, accumulation 8, sequence limit 4096, and image area budget 65,536–262,144 pixels. The pinned Transformers 5.8.1 Qwen3-VL video processor bounds the total `T × H × W`: eight frames use budgets 32,768–524,288, equivalent to 4,096–65,536 pixels per frame before resize rounding. Change both total budgets when changing frame count, and record the actual resized dimensions and visual-token count. A short canary changes those schedule/batch settings and is a separate experiment. Do not extend it by changing its horizon during exact resume.
 
+## Experimental performance controls
+
+These opt-in controls are implemented for the single-device native adapter path. **Their new GPU/WTS numerical, reload/resume, quality, and speed qualification is pending.** Configuration acceptance and CPU tests do not establish accelerator support or speedup. The completed 300-update results below used the original defaults; their measurements and unsatisfied release quality gate are unchanged.
+
+Append selected dotlist overrides after `--` in the native canary command above. Use a fresh job/output for each recipe, keep the data, processor, media limits, effective batch and schedule matched, and qualify individual changes before combining them.
+
+| Native override                                     | Default     | Experimental behavior                                                                                                                                                                                        |
+| --------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `model.model_config.activation_checkpointing=none`  | `full`      | Disable activation recomputation, trading additional memory for a possible speed benefit. `full` retains non-reentrant checkpointing; `selective` uses the recorded native SDPA/matrix-multiply save policy. |
+| `model.model_config.sft_logits_mode=supervised`     | `full`      | Run the complete multimodal backbone, then project only the positions selected by the existing shifted labels, attention masks and validation weights. The ordinary full-logit API remains available.        |
+| `model.model_config.adapter_compute_dtype=bfloat16` | `float32`   | Use BF16 adapter matrix arithmetic through differentiable casts. Adapter parameters, their gradients and optimizer moments remain FP32; packed base storage is unchanged.                                    |
+| `model.model_config.compile_language_model=true`    | `false`     | Compile native language blocks with Inductor, dynamic shapes and `fullgraph=False`, outside any activation-checkpoint wrapper. Vision and the output head remain outside this compilation scope.             |
+| `rl.preprocessing_cache_bytes=1073741824`           | `0`         | Example 1 GiB CPU cache budget: one quarter for processed samples and three quarters for complete video-processor outputs, including frame metadata and timestamps.                                          |
+| `rl.preprocessing_prefetch=true`                    | `false`     | Use one spawned CPU worker to prepare the current optimizer update's rows in order while training consumes them.                                                                                             |
+| `rl.micro_batch_size=2 rl.grad_accum=4`             | `1` and `8` | Keep eight examples per update with fewer microbatches. `rl.micro_batch_size=4 rl.grad_accum=2` is another candidate. Padding, memory peaks and floating-point reductions require separate checks.           |
+
+The model options and selective policy are defined by [Qwen3VLModelConfig and native_adapter_execution_policy](../../cosmos_framework/posttrain/config/model.py). The implementations are [Qwen3VLPolicy.forward_sft_batch and build_qwen3_vl_model](../../cosmos_framework/posttrain/model/qwen3_vl.py) and [NativeLoRAMixin.adapter_delta](../../cosmos_framework/utils/generator/lora.py). Compilation permits graph breaks; [guard_native_compiled_call](../../cosmos_framework/posttrain/utils/native_compile.py) makes compiler errors and recompile-limit fallback fatal during invocation. Compilation counters do not prove complete graph capture or fusion. This work does **not** introduce a fused NF4 training kernel.
+
+[build_sft_preprocessing](../../cosmos_framework/posttrain/data/packer/sft_preprocess.py) keys cache entries by processor/target semantics and verified media content, returns independent CPU copies, and rejects preprocessing that consumes RNG state. Cache contents are disposable and rebuilt after resume. The byte limit covers retained cache entries, including tensor backing storage; queued results, decoder buffers, worker runtime and filesystem cache require additional host memory. [train_step](../../cosmos_framework/posttrain/entrypoints/sft.py) reads only the current accumulation window. The [trainer's input-window and checkpoint guards](../../cosmos_framework/posttrain/roles/trainer/llm.py) require its optimizer update and ordered consumption to finish before publishing a checkpoint; failed or unfinished prefetch cannot publish an advanced data cursor.
+
+Changing model execution controls writes a `cosmos.adapter-model.v2` identity containing the complete execution policy and observed math-precision settings. Unchanged model defaults retain the legacy identity. Batch and preprocessing settings are bound separately to the training identity, while caching preserves the processor/masking identity. [execution_config_from_identity and validate_execution_policy_identity](../../cosmos_framework/posttrain/model/quantization/loader.py) reconstruct and validate recorded model options before loading; missing or incompatible settings fail. Reloading an optimized artifact must preserve its recorded policy, and exact resume must also preserve its training configuration.
+
+For a bounded diagnostic trace, set these variables before the native launch:
+
+```bash
+export COSMOS_SFT_PROFILE_DIR="$QLORA_WORK/profiles/new-trial"
+export COSMOS_SFT_PROFILE_WAIT=2
+export COSMOS_SFT_PROFILE_WARMUP=1
+export COSMOS_SFT_PROFILE_ACTIVE=2
+```
+
+[NativeStepProfiler](../../cosmos_framework/posttrain/utils/training_profile.py) records one window measured in optimizer updates, with preparation, forward, loss, backward and optimizer ranges. It writes runtime settings, a compressed Chrome trace and an operator summary beneath `rank_0`; an existing rank directory is refused. Leave `COSMOS_SFT_PROFILE_DIR` unset to disable profiling. Trace timings are diagnostic: measure comparative throughput in separate untraced runs, including compilation/loading costs and actual GPU and host peaks.
+
 ## Reload, resume, and portable artifacts
 
 Run outputs include a timestamped attempt beneath the configured project/group/job. Use the committed checkpoint path reported by the native run; full checkpoints are under its `checkpoints/iter_*` directory. Saves occur at completed optimizer-update boundaries, through the existing synchronous local DCP commit/recovery path.
