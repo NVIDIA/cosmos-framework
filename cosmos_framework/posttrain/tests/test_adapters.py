@@ -58,6 +58,8 @@ def identity(manifest: dict) -> dict:
     return dict(
         format=FORMAT,
         architecture="qwen3_vl",
+        base_storage_dtype="float32",
+        dependencies={},
         base={"sha256": "fixture"},
         processor={"sha256": "fixture"},
         resolved=manifest,

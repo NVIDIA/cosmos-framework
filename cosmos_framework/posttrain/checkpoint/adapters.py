@@ -63,7 +63,7 @@ def snapshot_identity(directory: str, *, weights: bool) -> dict[str, Any]:
     return {"sha256": digest, "files": files}
 
 
-def make_adapter_identity(base: str, processor: str, targets: dict, media: dict) -> dict[str, Any]:
+def make_adapter_identity(base: str, processor: str, targets: dict, media: dict, *, base_dtype: str) -> dict[str, Any]:
     dependencies = {}
     for name in ("torch", "transformers", "safetensors", "torchcodec", "av"):
         try:
@@ -73,6 +73,7 @@ def make_adapter_identity(base: str, processor: str, targets: dict, media: dict)
     return {
         "format": FORMAT,
         "architecture": "qwen3_vl",
+        "base_storage_dtype": base_dtype,
         "base": snapshot_identity(base, weights=True),
         "processor": snapshot_identity(processor, weights=False),
         "resolved": targets,
@@ -83,6 +84,22 @@ def make_adapter_identity(base: str, processor: str, targets: dict, media: dict)
 
 
 def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
+    required = {
+        "format",
+        "architecture",
+        "base_storage_dtype",
+        "base",
+        "processor",
+        "resolved",
+        "media",
+        "dependencies",
+        "pissa_representation",
+    }
+    if not isinstance(identity, dict) or required - set(identity):
+        missing = sorted(required - set(identity)) if isinstance(identity, dict) else sorted(required)
+        raise ValueError(f"incomplete adapter identity: missing {missing}")
+    if identity["base_storage_dtype"] not in ("float32", "bfloat16"):
+        raise ValueError("unsupported adapter materialized base dtype")
     if identity.get("format") != FORMAT or identity.get("architecture") != "qwen3_vl":
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     if identity.get("pissa_representation") != "original_base_plus_trained_minus_initial_factors":

@@ -846,6 +846,7 @@ def build_qwen3_vl_model(
             cfg.name_or_path,
             net._posttrain_adapter_manifest,
             adapter_media_identity or {},
+            base_dtype=cfg.dtype,
         )
         if adapters.warm_start:
             load_adapter_artifact(net, adapters.warm_start)

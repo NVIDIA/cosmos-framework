@@ -33,6 +33,11 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    base_dtype = identity.get("base_storage_dtype")
+    if base_dtype not in ("float32", "bfloat16"):
+        raise ValueError(
+            "adapter artifact lacks a supported materialized base dtype; re-export from its training checkpoint"
+        )
     if snapshot_identity(base, weights=True) != identity["base"]:
         raise ValueError("wrong base identity for adapter merge; stage the exact original weight snapshot")
     if snapshot_identity(base, weights=False) != identity["processor"]:
@@ -47,7 +52,10 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
         for name, tensor in load_file(str(root / shard), device="cpu").items():
             if name in weights:
                 raise ValueError(f"duplicate base tensor {name!r}")
-            weights[name] = tensor
+            # Native materialization converts all floating parameters before loading.
+            # Apply that same conversion before merging, even when source shards are
+            # FP32 or mix FP32 normalization weights with BF16 projections.
+            weights[name] = tensor.to(getattr(torch, base_dtype)) if tensor.is_floating_point() else tensor
     for row in identity["resolved"]["targets"]:
         name = row["name"] + ".weight"
         if name not in weights or list(weights[name].shape) != row["shape"]:
