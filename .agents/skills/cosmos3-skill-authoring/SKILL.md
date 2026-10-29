@@ -122,13 +122,12 @@ forward workflow test; run them against the finished skill with a fresh agent.
   migrated from a notebook or README keeps the source wording and headings;
   every eval-derived addition sits next to the source text as a marked note
   ("Skill note (not in the source): …"), and every deviation from the source
-  is recorded in the skill's migration record.
+  is declared in the block that carries it and listed in the fixes PR.
 
 Before/after evidence for each rule: the worked example
-`../cosmos3-generate-media/SKILL.md` and its migration record,
-`docs/cookbook_to_skill_migration.md` § "Eval-derived fixes". Those fixes and
-the 44/44 result cited below come from the stacked PR #250, which merges into
-the #128 branch before that branch reaches `main`.
+`../cosmos3-generate-media/SKILL.md`; its fixes and the 44/44 result cited
+below come from the stacked fixes PR (#327), which merges into the #324 branch
+before that branch reaches `main`.
 
 ## Writing steps a human can follow and an agent can execute
 
