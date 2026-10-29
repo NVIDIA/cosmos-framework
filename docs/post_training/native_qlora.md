@@ -1,6 +1,6 @@
 # Native QLoRA for Qwen3-VL
 
-This experimental path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. A bounded one-GPU canary has passed real training, exact resume, and fresh-process adapter reload, with measured memory use. **Longer-run memory and held-out task-quality release gates remain pending.** The evidence below qualifies only its stated workload and runtime.
+This experimental path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. Exact reload/resume checks and a matched 300-update WTS comparison completed on one GPU per run, with measured memory savings and a four-arm held-out diagnostic. **The release quality gate is not satisfied: trained NF4's token-NLL point estimate was 4.18% worse than BF16, exceeding the proposed 2% margin.** The evidence below is limited to one training seed and its stated workload and runtime.
 
 The initial candidate is `Qwen/Qwen3-VL-8B-Instruct` at revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, on **one Linux x86-64 A100 80GB, one torchrun process**. FSDP/HSDP, additional GPUs, offload, MoE, DoRA/PiSSA, other quantizers, and merged serving exports are rejected or unqualified. See the [design and release evidence requirements](qlora_native_vlm_design.md).
 
@@ -148,41 +148,76 @@ It checks text, image, and real video losses/logits, media sensitivity, trainabl
 
 ## Qualification evidence
 
-The completed canary tested commit `c5b8d49bcc219d1cceb76bee42d4eb20daa766f7`, installed from wheel SHA256 `afbeb228bd42ba9582e53d427c20ba59d0b166706ffd98ccaa6ed73d8f149047`, on one NVIDIA A100-SXM4-80GB. Runtime: Python 3.12.12, Torch 2.11.0+cu128 (source commit `70d99e998b4955e0049d13a98d77ae1b14db1f45`), CUDA 12.8, Transformers 5.8.1, bitsandbytes 0.49.2, and TorchCodec 0.11.0+cpu. Both arms used strict deterministic algorithms.
+The [machine-readable experiment report](evidence/native_qlora_wts_c5b8d49.json) contains the completed training and four-arm evaluation measurements, source/runtime identities, per-update metrics, and measurement limitations.
 
-The matched NF4 and BF16 runs completed **four optimizer updates, microbatch one, accumulation two, seed 42**, with four-update schedules and validation/checkpoint boundaries at updates two and four. Actual WTS sequences were at most **354 tokens**, with eight video frames resized to 192 × 320 and 240 visual tokens. The configured 4096-token ceiling was not exercised; these results do not qualify 4096-token training or establish steady-state behavior.
+The experiments tested commit `c5b8d49bcc219d1cceb76bee42d4eb20daa766f7`, installed from wheel SHA256 `afbeb228bd42ba9582e53d427c20ba59d0b166706ffd98ccaa6ed73d8f149047`. Each run used one NVIDIA A100-SXM4-80GB and one torchrun process. Runtime: Python 3.12.12, Torch 2.11.0+cu128 (source commit `70d99e998b4955e0049d13a98d77ae1b14db1f45`), CUDA 12.8, Transformers 5.8.1, bitsandbytes 0.49.2, and TorchCodec 0.11.0+cpu. The host reported driver 535.129.03; the loaded CUDA compatibility driver library was `libcuda.so.570.124.06`. Both training arms used strict deterministic algorithms.
 
-- All three real CUDA tests passed: NF4 forward/input backward and adapter updates, plus exact repeatability of BF16 Flash SDPA forward/backward for language and vision shapes.
-- Runtime inventory matched all 252 quantized language matrices and exactly 504 FP32 adapter tensors in the optimizer. Both LoRA factors updated; frozen weights, buffers, packed data, and nested quantization state passed fingerprint checks at save/probe boundaries.
-- A fresh process resumed from update two and completed updates three and four. Final adapter and optimizer tensors matched the uninterrupted run exactly; scheduler, RNG, data cursor, and update/validation controls also matched. Only storage-publication identities were excluded.
-- Separate fresh-process loads from DCP and the portable adapter artifact produced identical controlled text, image, and video logits/losses on the same reconstructed quantized base. Both resume and reload comparisons used `atol=0, rtol=0`; maximum observed differences were zero. Media-sensitivity checks also passed.
+All four evaluation arms verified the same pinned base revision recorded above, source-weight manifest digest `69368621649dca3287fe9587bcac3d1d2fb6380974d9b59ade8c80aaa9879daf`, and processor/template manifest digest `9d674c4ab12ba55505f763912e1fadf3d8660125dcb774c20462743582d8b180`. The resolved contracts matched 252 language targets, 504 FP32 adapter tensors containing 43,646,976 trainable parameters, rank 16/alpha 32, and full non-reentrant activation checkpointing. NF4 used nested quantization, UINT8 packed storage and BF16 compute; excluded base components remained BF16, and optimizer moments were FP32. The matched control kept the same targets in frozen BF16.
 
-The following peaks cover each **fresh training stage**, including loading, validation, and checkpoint writes. All memory values are GiB (`2^30` bytes); the resume stage and separate evaluation probes are excluded from this matched table.
+### Exact reload and resume canary
 
-| Measurement                              | NF4 LoRA | BF16 LoRA |
-| ---------------------------------------- | -------: | --------: |
-| CUDA allocated peak                      |    7.748 |    17.345 |
-| CUDA reserved peak                       |    7.893 |    17.580 |
-| NVML run-owned process-sum sample peak   |    8.891 |    18.578 |
-| NVML whole-device sample peak            |    9.574 |    19.262 |
-| Host process-tree RSS-sum sample peak    |    6.330 |     5.404 |
-| Maximum individual-process RSS, GNU time |    6.188 |     5.892 |
+The controlled canary used **four optimizer updates, microbatch one, accumulation two, seed 42**, with saves at updates two and four. Actual WTS sequences were at most 354 tokens, with eight video frames resized to 192 × 320 and 240 visual tokens.
 
-CUDA peaks are PyTorch allocator measurements. NVML and process-tree RSS use one-second sampling, so their peaks are lower bounds and can miss short spikes. GPU UUID and run-owned PID checks establish attribution; whole-device usage can include unrelated allocations. Summed host RSS can double-count shared pages. GNU time reports a process-lifetime high-water mark, not a phase-local peak. NF4 used more host memory in this canary. Do not subtract independently timed allocator and NVML maxima to estimate external allocations.
+- All three real CUDA tests passed: NF4 forward/input backward and adapter updates, plus exact repeated BF16 Flash SDPA forward/backward for language and vision shapes.
+- The optimizer contained exactly the 504 FP32 adapter tensors. All 252 A and 252 B factors updated; frozen weights, buffers, packed data and nested quantization state passed fingerprint checks at save/probe boundaries.
+- A fresh process resumed from update two and completed updates three and four. Final adapter/optimizer tensors, scheduler, RNG, data cursor, and update/validation controls matched the uninterrupted run. Only storage-publication identities were excluded.
+- Separate fresh-process DCP and portable-artifact reloads produced identical controlled text, image and video logits/losses on the reconstructed quantized base. Resume and reload both used `atol=0, rtol=0`, with maximum differences zero. Media-sensitivity checks passed.
+
+These are four-update parity results, not evidence of a separate 300-update interrupted/resumed comparison. The [archived canary report](https://github.com/ramanathan831/cosmos-framework/blob/59d4ddb383c20960e4ebb214ac6c90c095475b99/docs/post_training/native_qlora.md#qualification-evidence) retains its loading, training, checkpoint and resume memory measurements.
+
+### Completed 300-update training comparison
+
+Both native recipes completed **300 optimizer updates, seed 42, microbatch one, accumulation eight**, processing 2,400 training examples. They used the same accepted data, processor/loss masks, adapter initialization, optimizer, 300-update schedule with 30 warmup updates, and validation/checkpoint boundaries every 50 updates. The jobs overlapped on different A100 nodes; frozen/trained evaluation pairs subsequently ran sequentially within each precision. Filesystem/cache state was uncontrolled.
+
+All 300 logged losses and gradient norms were finite. Final full checkpoints were committed at update 300; the strict cross-arm comparator verified zero skipped update attempts, the same final data cursor, optimizer membership/static options, schedule, and update-control policy. Frozen-base checks passed at saves and after evaluation; evaluation left adapters unchanged.
+
+| Training lifecycle measurement               | NF4 LoRA | BF16 LoRA |
+| -------------------------------------------- | -------: | --------: |
+| CUDA allocated peak, GiB                     |    7.769 |    17.367 |
+| CUDA reserved peak, GiB                      |    8.201 |    18.078 |
+| NVML run-owned process-sum sample peak, GiB  |    9.199 |    19.076 |
+| NVML whole-device sample peak, GiB           |    9.883 |    19.760 |
+| Host process-tree RSS-sum sample peak, GiB   |    5.903 |     5.957 |
+| GNU-time maximum individual-process RSS, GiB |    6.428 |     5.912 |
+| Mean optimizer-update time, s                |   23.498 |    21.848 |
+| Supervised tokens/s during updates           |    0.681 |     0.732 |
+| Examples/s during updates                    |    0.340 |     0.366 |
+| Full native-process elapsed time, s          |     8246 |      7865 |
+| Final full adapter checkpoint, GiB           |    0.492 |     0.492 |
+| Portable adapter artifact, GiB               |    0.163 |     0.163 |
+
+Memory uses GiB (`2^30` bytes) and covers loading, training, validation, and checkpoint writes; separate evaluation processes are excluded. The observed run-owned GPU sample peaks differed by **9.877 GiB**. This exceeds the proposed 6 GiB benefit for this seed's observed samples, but does not establish a difference in unsampled true peaks or the required three-seed release result.
 
 | CUDA allocated peak by phase, GiB | NF4 LoRA | BF16 LoRA |
 | --------------------------------- | -------: | --------: |
 | Loading                           |    7.065 |    16.505 |
 | First optimizer update            |    7.460 |    17.057 |
-| Later observed updates            |    7.748 |    17.345 |
+| Later observed updates            |    7.769 |    17.367 |
 | Checkpoint writes                 |    7.460 |    17.057 |
 
-The separate NF4 resume stage peaked at 7.784 GiB allocated, 8.775 GiB reserved, and 9.773 GiB sampled run-owned GPU process memory. Its sampled host RSS sum was 5.694 GiB and individual-process high-water mark 6.404 GiB. These resume peaks must not be replaced by the lower fresh-run measurements.
+CUDA peaks come from synchronized PyTorch allocator counters. NVML and host RSS used nominal one-second sampling, with 7,489 NF4 and 7,133 BF16 valid run-owned GPU samples, no rejected UUIDs or unavailable owned-memory values, and maximum whole-run gaps of 1.296 s and 2.044 s respectively. Sampled peaks are lower bounds and can miss short spikes; setup intervals with no external samples remain unknown. Whole-device usage can include unrelated allocations. Do not subtract independently timed allocator and NVML maxima to infer external allocations.
 
-Mean update time was 5.595 s for NF4 and 4.825 s for BF16; full fresh-stage elapsed time was 231.39 s and 163.90 s respectively. Update timing includes instrumentation and excludes loading, validation, and checkpoint writes. Full resumable adapter checkpoints were approximately 0.492 GiB; the portable adapter artifact was 0.163 GiB. Final supervised-token CE on just four validation rows/eight supervised tokens was 0.726570 for NF4 and 0.336116 for BF16. This small diagnostic does not establish useful held-out task quality or an acceptable quality regression.
+Summed host RSS can double-count shared pages. GNU-time RSS is a process-lifetime high-water mark, not a phase-local peak; it shows a higher NF4 host peak than the sampled RSS sum. Host RSS/PSS/HWM cover process memory: **unmapped filesystem page-cache memory was not measured**. Media hashing and decoding can populate material cache memory outside those figures.
 
-Completion of the **300-update seed-42 runs and 256-row held-out evaluation remains pending**. Longer sequences, sustained training, multi-seed task quality, baseline-capability regressions, and the predeclared release gates below remain unqualified. No smaller-GPU or distributed-strategy support follows from this canary.
+Update timing includes instrumentation and excludes loading, validation and checkpoint writes. The fixed post-warmup window, updates 31–300, averaged 23.692 s for NF4 and 21.916 s for BF16. Supervised-token throughput counts assistant answer/end-token targets, not input or visual tokens. Native validation on the same first 64 held-out rows/128 supervised tokens had initial/final CE **0.374107 / 0.201907** for NF4 and **0.315462 / 0.217662** for BF16; this is distinct from the 256-row task diagnostic below.
 
-Keep the matched BF16 and NF4 arms identical in source revision, data/splits, processor/template, LoRA targets/rank, media/sequence limits, effective batch, schedule, optimizer, and seeds. Record unavoidable differences. Measure loading, first-step, steady-state, and checkpoint-write peaks: per-rank CUDA allocated/reserved memory, device/process memory outside the allocator, and host RSS. Also record throughput, elapsed time, checkpoint size, held-out task quality, and baseline-capability regressions.
+### Four-arm held-out diagnostic and release status
 
-Declare the acceptable quality regression and required memory benefit before the release comparison. Retain hardware/driver/package versions, build receipts, resolved configurations, dataset manifests, kernel results, fresh-process reload evidence, and controlled resume comparisons. The [design](qlora_native_vlm_design.md#reproducible-benchmark-and-release-evidence) describes the full gate; no generic percentage saving or support for smaller GPUs is claimed.
+All four arms completed the same 256 preselected rows from a 2,676-row held-out pool, with subset seed 2026 and training/model seed 42. The strict comparator checked source/model/processor identities, initial factors, permitted quantization differences, exact processed inputs and masks, score digests, and each trained model's own step-300 portable artifact. The frozen arms used the exact initial zero-B adapters.
+
+Questions had two, three or four choices: 16, 72 and 168 rows respectively. Restricted-choice accuracy selects the highest-logit letter among the actual choices at the first assistant answer position. Full-vocabulary first-token accuracy matched it in all four arms, and valid-letter rate was 100% throughout. These are teacher-forced next-token measurements, not free-generation accuracy. Native token-weighted CE preserves the answer and assistant end-token mask, totaling 512 supervised tokens.
+
+| Arm          | Correct / 256 | Choice and first-token accuracy | Token-weighted CE | Answer-token NLL | Restricted-choice NLL |
+| ------------ | ------------: | ------------------------------: | ----------------: | ---------------: | --------------------: |
+| Frozen NF4   |           131 |                        51.1719% |          1.067917 |         2.135813 |              2.135810 |
+| Trained NF4  |           229 |                        89.4531% |          0.153532 |         0.307051 |              0.306780 |
+| Frozen BF16  |           144 |                        56.2500% |          1.123509 |         2.246974 |              2.246972 |
+| Trained BF16 |           230 |                        89.8438% |          0.147372 |         0.294720 |              0.294388 |
+
+Tie counts in the table's row order were 7, 0, 4 and 2 for both accuracy readouts. Ties use canonical choice order for restricted scoring and the lowest token ID for full-vocabulary scoring. The selected rows covered 133 exact video-content hashes; related events or camera views may require broader clustering for release uncertainty estimates. Evaluator source SHA256 was `3b16133a77643f1585470e4a38a5fdfd5d1709eb679a22ee30db4fb928142ac9`.
+
+Observed evaluation sequences ranged from **304 to 365 tokens** (median 342, p95 356). Video pixel tensor shapes were `[960,1536]` for 252 rows and `[864,1536]` for four rows. The processor requested eight frames with the total pixel budgets documented above; decoded grid values/frame counts were not recorded. Actual training input-length and frame distributions were also not recorded. The configured 4096-token ceiling and these short evaluation sequences do not qualify sustained 4096-token training.
+
+**The release quality gate is not satisfied.** Trained NF4 improved the diagnostic accuracy over frozen NF4 by 38.2813 percentage points, but scored one fewer correct answer than trained BF16 (−0.3906 percentage points). Its token-weighted NLL was **4.18% higher** than trained BF16, already exceeding the proposed 2% relative margin at the point-estimate level. This is an observed quality regression in addition to incomplete release sampling; the required one-sided confidence bound has not been evaluated.
+
+The [predeclared release protocol](qlora_native_vlm_design.md#reproducible-benchmark-and-release-evidence) additionally requires paired training seeds 17, 42 and 123, full held-out evaluation with clustered paired uncertainty, and relevant text/image/video capability regressions. Those remain unqualified. The implementation remains experimental; these results do not establish support for smaller GPUs, other distributed strategies, merged exports, or serving backends.
