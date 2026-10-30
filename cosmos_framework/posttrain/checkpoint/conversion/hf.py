@@ -18,7 +18,7 @@ every other key of each file unchanged, verified as that rule instead of byte id
 (``unified_template_conflicts``) and ``verify_sidecars`` decide about ``additional_chat_templates/`` through ONE helper,
 ``unified_template_directory_conflict`` (the directory is refused whatever it holds). ``safetensors_header``, ``shard_status``
 and ``verify_index`` check the shards' shape torch-free and ``safetensors_reader_error`` asks the pinned safetensors reader
-itself (fix round T6j); ``verify_with_torch`` probes config identity, the on-disk expert
+itself; ``verify_with_torch`` probes config identity, the on-disk expert
 layout, one tensor bitwise and the processor identity on the OUTPUT directory.
 
 Every failure raises ``ConversionError`` with a message naming the real path. torch, transformers and safetensors
@@ -97,7 +97,7 @@ TRAINER_BACKUP_SUFFIX = ".trainer.bak"
 PROCESSOR_TEMPLATE_FILE = "chat_template.json"  # the processor template: what ``AutoProcessor`` renders with
 TOKENIZER_CONFIG_FILE = "tokenizer_config.json"  # its ``chat_template`` key: what a tokenizer-only loader renders with
 CHAT_TEMPLATE_KEY = "chat_template"
-# Recorded in .materialized beside the template shas of a unified export (review R151-05): the serve must set no
+# Recorded in .materialized beside the template shas of a unified export: the serve must set no
 # enable_thinking. Under the unified (processor) template a request with enable_thinking=true is prefilled with the opener
 # token itself, <|im_start|>assistant\n<think> (id 151667, no newline after it; 251 vs 250 ids on the round's probe; row
 # rule R4), while the rows supervise the opener as the student's first token; dsh sends no enable_thinking and the
@@ -107,7 +107,7 @@ UNIFIED_SERVE_ASSUMPTION = (
     "prefilled with the opener token <think> itself (no newline after it) while the rows supervise the opener as the "
     "student's first token (review R151-05)"
 )
-# Row rule R1 of record (the lab's brain program, 2026-10-02, review round 147c): the unified template is the processor
+# Row rule R1 of record (the lab's brain program, 2026-10-02): the unified template is the processor
 # template with ONE change in its reasoning branch, the replayed ``reasoning_content`` rendered trimmed, so a replay string
 # that arrives with a newline at both ends (dsh's form) renders the canonical block ``<think>\n<text>\n</think>\n`` = the
 # student's own emission form (on the captured request the four positions 7248 / 7254 / 8016 / 8025 read 198 / 624 / 198 /
@@ -116,7 +116,7 @@ UNIFIED_SERVE_ASSUMPTION = (
 PROCESSOR_REASONING_LINE = "{{- '<think>\\n' ~ message.reasoning_content ~ '\\n</think>\\n' }}"
 CANONICAL_REASONING_LINE = "{{- '<think>\\n' ~ (message.reasoning_content | trim) ~ '\\n</think>\\n' }}"
 TEMPLATE_MODE_CANONICAL = "processor-canonical"
-# The two template files a unified export rewrites (fix round T6b): a tokenizer-only loader (vLLM with a tools array) reads
+# The two template files a unified export rewrites: a tokenizer-only loader (vLLM with a tools array) reads
 # tokenizer_config.json, a processor loader (vLLM without tools, AutoProcessor) reads chat_template.json; with both carrying
 # the canonical text a request with or without tools renders the same reasoning form. In SIDECAR_FILES order.
 UNIFIED_TEMPLATE_FILES = (TOKENIZER_CONFIG_FILE, PROCESSOR_TEMPLATE_FILE)
@@ -135,7 +135,7 @@ PREFERRED_TEMPLATE_SIDECARS = (
     "processor_config.json:chat_template",
 )
 # The preferred_by texts of the named-template conflict records: one file under the directory, and the directory itself
-# (fix round T6f: the directory is a conflict whatever it holds; see unified_template_directory_conflict).
+# (the directory is a conflict whatever it holds; see unified_template_directory_conflict).
 NAMED_TEMPLATE_PREFERRED_BY = (
     "the tokenizer loader, as a named template over tokenizer_config.json's key; beside "
     "chat_template.json the processor loader refuses the combination (4.57.6 and 5.8.1)"
@@ -263,7 +263,7 @@ def write_config_from_base(
     Why: ``save_pretrained`` under transformers 5 re-serializes the config in its own format (``num_local_experts`` for
     ``num_experts``, ``rope_parameters`` for ``rope_scaling`` + ``rope_theta``, ``vision_config.model_type`` renamed,
     ``text_config.tie_word_embeddings: true`` added beside the top-level ``false``), which the evaluation service's
-    transformers 4.57 reads as a different model (review R125-D-08). The weights are the base's architecture, so the
+    transformers 4.57 reads as a different model. The weights are the base's architecture, so the
     base's config is the one true description. Requires equal structural identity; idempotent (a kept backup is never
     overwritten).
 
@@ -321,8 +321,8 @@ def read_processor_template(base: str) -> str:
     """The processor chat template's text: ``<base>/chat_template.json``'s ``chat_template`` string, what the processor
     loader's legacy path indexes as ``chat_template_json["chat_template"]`` (processing_utils.py 4.57.6:1072, 5.8.1:1083; a
     KeyError at load when the key is absent). ``ConversionError`` when the file is missing or unreadable or is not a JSON
-    object (``_read_json_file``'s texts), or when the key is not a non-empty string, naming what was found (review R149E-02:
-    ``{}`` used to pass the materializer's preflight and fail the loader, after the removal of those rounds)."""
+    object (``_read_json_file``'s texts), or when the key is not a non-empty string, naming what was found
+    (``{}`` used to pass the materializer's preflight and fail the loader, after an earlier fix)."""
     path = os.path.join(base, PROCESSOR_TEMPLATE_FILE)
     payload, _ = _read_json_file(path)
     template = payload.get(CHAT_TEMPLATE_KEY)
@@ -378,8 +378,8 @@ def decode_json_bytes(raw: bytes) -> Any:
     """The ONE JSON decoder of the materializer's preflight and of this module's readers: the bytes decoded as strict UTF-8 text,
     then ``json.loads`` (what ``model_identity``, ``_read_json_file`` and transformers' ``open(..., encoding="utf-8")`` readers do
     in the staged build). ``ByteOrderMarkError`` (a ``ValueError``) when the bytes start with the UTF-8 byte-order
-    mark, named: review R149F-01, where the preflight's ``json.loads(bytes)`` stripped the mark and passed a ``config.json`` that
-    ``write_config_from_base`` then refused, after the removal of those rounds; ``UnicodeDecodeError`` / ``JSONDecodeError`` (both ``ValueError``)
+    mark, named: the case where the preflight's ``json.loads(bytes)`` stripped the mark and passed a ``config.json`` that
+    ``write_config_from_base`` then refused, after an earlier fix; ``UnicodeDecodeError`` / ``JSONDecodeError`` (both ``ValueError``)
     for bytes that are not UTF-8 JSON."""
     if raw.startswith(UTF8_BOM):
         raise ByteOrderMarkError(
@@ -434,7 +434,7 @@ def _dumps_like(mapping: dict[str, Any], reference: dict[str, Any], raw: bytes) 
 def read_base_template_file(base: str, name: str) -> tuple[dict[str, Any], bytes, str]:
     """``(mapping, raw bytes, the file's own template text)`` of ``<base>/<name>`` for a name in ``UNIFIED_TEMPLATE_FILES``:
     what ``write_unified_chat_template`` reads, exposed so the materializer's preflight can refuse a base it cannot unify
-    before anything is published or removed (fix round T6f). ``ConversionError`` when the file is missing, unreadable, not
+    before anything is published or removed. ``ConversionError`` when the file is missing, unreadable, not
     an object or carries no ``chat_template`` string."""
     mapping, raw = _read_json_file(os.path.join(base, name))
     template = mapping.get(CHAT_TEMPLATE_KEY)
@@ -464,7 +464,7 @@ def write_unified_chat_template(out: str, base: str) -> dict[str, Any]:
     ``<out>/tokenizer_config.json`` and ``<out>/chat_template.json``, as the base's mappings with ``chat_template`` set to
     the base's PROCESSOR template in its CANONICAL form (``canonicalize_processor_template``: the one reasoning-branch
     change of row rule R1, ``template_mode`` ``processor-canonical``), every other key of each file unchanged and, when
-    the base's file is a plain ``json.dumps`` rendering, every other line byte-equal (fix round T6b: before it only the
+    the base's file is a plain ``json.dumps`` rendering, every other line byte-equal (before it only the
     tokenizer file was rewritten and a request without tools still rendered the base's padded form).
 
     Why: a tokenizer-only loader (vLLM's chat path for a request that carries a tools array) renders the tokenizer
@@ -502,7 +502,7 @@ def chat_template_record(out: str, base: str, *, unified_chat_template: bool) ->
     sha256 (None when the base ships no ``chat_template.json`` and the option is off), the base's tokenizer template
     sha256 and the export's tokenizer template sha256 (the shipped canonical text's under the option), and under the
     option the ``template_mode``, the two ``files`` with the ``shipped`` sha256 of each, the one-hunk ``canonical_diff``
-    (row rule R1) and the serve assumption ``UNIFIED_SERVE_ASSUMPTION`` (review R151-05)."""
+    (row rule R1) and the serve assumption ``UNIFIED_SERVE_ASSUMPTION``."""
     try:
         processor_template: str | None = read_processor_template(base)
     except ConversionError:
@@ -531,7 +531,7 @@ def chat_template_record(out: str, base: str, *, unified_chat_template: bool) ->
         record["canonical_diff"] = canonical_template_diff(processor_template)
         record["serve_assumption"] = UNIFIED_SERVE_ASSUMPTION
         # The loader-preferred sidecars the base carries with the canonical text (none for the base of record); a divergent
-        # one was refused before the build (fix round T6e).
+        # one was refused before the build.
         record["preferred_sidecars"] = unified_template_conflicts(base)[1]
     return record
 
@@ -582,8 +582,8 @@ def unified_template_directory_conflict(root: str, name: str = SIDECAR_DIRS[0]) 
     final verifier must allow. A sub-directory whose NAME ends in ``.jinja`` is NOT ignored: ``Path.glob("*.jinja")``
     returns it, the tokenizer's ``open()`` on it raises IsADirectoryError (4.57.6:2195, 5.8.1:1802) and the processor refuses
     the combination beside ``chat_template.json`` (4.57.6:1073-1079, 5.8.1:1084-1090); the record lists it as ``kind``
-    ``directory`` and both checks refuse it before a loader sees it (review R149D-03). The default path reads the same
-    record to refuse a directory with entries that are not regular files (the materializer's ``preflight``, R149D-01)."""
+    ``directory`` and both checks refuse it before a loader sees it. The default path reads the same
+    record to refuse a directory with entries that are not regular files (the materializer's ``preflight``)."""
     directory = os.path.join(root, name)
     if not os.path.isdir(directory):
         return None
@@ -622,7 +622,7 @@ def unified_template_conflicts(base: str) -> tuple[list[dict[str, Any]], list[di
     (``PREFERRED_TEMPLATE_SIDECARS``), each as ``{file, sha256, preferred_by, equals_canonical}``: ``chat_template.jinja``
     and a ``chat_template`` key in ``processor_config.json`` are allowed when their text equals the canonical processor
     template; the ``additional_chat_templates/`` DIRECTORY is a conflict whatever it holds (the record of
-    ``unified_template_directory_conflict``, the helper the final verifier decides by too; fix round T6f), followed by one
+    ``unified_template_directory_conflict``, the helper the final verifier decides by too), followed by one
     record per direct regular file in it with its sha256 (the tokenizer loader prefers named templates over the config
     key; beside ``chat_template.json`` the processor loader refuses the combination outright). Torch-free; reads the BASE
     only, so the materializer can refuse before anything is published or removed."""
@@ -687,8 +687,8 @@ def refuse_unified_template_conflicts(base: str) -> list[dict[str, Any]]:
 
 
 def preflight_unified_base(base: str) -> list[dict[str, Any]]:
-    """Every torch-free refusal of unified mode that reads the BASE alone, in one call for the materializer's preflight
-    (fix round T6f): both template files parse and carry a template string (``read_base_template_file``, what
+    """Every torch-free refusal of unified mode that reads the BASE alone, in one call for the materializer's preflight:
+    both template files parse and carry a template string (``read_base_template_file``, what
     ``write_unified_chat_template`` needs after the overlay), the processor template canonicalizes and no loader-preferred
     sidecar conflicts (``refuse_unified_template_conflicts``, which calls ``canonical_processor_template``). Returns the
     allowed sidecars."""
@@ -742,7 +742,7 @@ def verify_unified_tokenizer_config(out: str, base: str) -> None:
 
 
 def verify_unified_template_files(out: str, base: str) -> list[str]:
-    """The rule for BOTH template files of a unified export (fix round T6b), in ``SIDECAR_FILES`` order; returns the
+    """The rule for BOTH template files of a unified export, in ``SIDECAR_FILES`` order; returns the
     names checked."""
     for name in UNIFIED_TEMPLATE_FILES:
         _verify_unified_file(out, base, name)
@@ -754,7 +754,7 @@ def service_processor_config(base: str) -> dict[str, Any]:
     ``preprocessor_config.json`` (its ``image_processor_type`` included, verbatim), the video block the base's
     ``video_preprocessor_config.json``; ``processor_class`` is the base's. Per-call media kwargs a run sets
     (``rl.processor_kwargs``) are call-time overrides recorded in its ``config_resolved.yaml``, not processor defaults,
-    and are deliberately not baked in (review R125-D-10).
+    and are deliberately not baked in.
 
     Scope of record (this helper's output was measured against the file served beside the A1a export): a unit-tested
     helper with NO production caller. The materializer CLI copies the base's sidecars verbatim and removes a
@@ -810,8 +810,8 @@ def maybe_transpose_expert(
 
 def open_file_reference(payload: BinaryIO) -> str | None:
     """The path through which the file ``payload`` has open can be opened AGAIN as the same inode: ``/proc/self/fd/<fd>`` on Linux
-    (the kernel resolves it to the open file description, whatever the original path names now), else None. Fix round T6r
-    (review thread 524355e746): ``torch.load(mmap=True)`` takes only a path (torch 2.11: "f must be a file path in order to use
+    (the kernel resolves it to the open file description, whatever the original path names now), else None.
+    ``torch.load(mmap=True)`` takes only a path (torch 2.11: "f must be a file path in order to use
     the mmap argument"), so this is how the loader memory-maps exactly the file object the materializer hashed."""
     reference = f"/proc/self/fd/{payload.fileno()}"
     return reference if os.path.exists(reference) else None
@@ -822,7 +822,7 @@ def load_consolidated_state_dict(
 ) -> dict[str, torch.Tensor]:  # values: [*shape]
     """Memory-map one consolidated ``model.pt`` and return its ``net`` state dict (``net_ema`` is tolerated, not used).
 
-    With ``payload`` (fix round T6r, review thread 524355e746) the tensors come from THAT open file object, never from a fresh
+    With ``payload`` the tensors come from THAT open file object, never from a fresh
     resolution of ``model_pt``: the file is memory-mapped through ``open_file_reference`` (``/proc/self/fd/<fd>``, the same inode
     even after the path was replaced by the merge tool's tmp + os.replace), or, where that reference does not exist, read whole
     through the file object (no mmap; the payload is held in memory). ``model_pt`` then only names the file in messages.
@@ -905,7 +905,7 @@ def overlay_consolidated_onto_hf(
     Strict key accounting: after the overlay only ``lm_head.weight`` may be missing or unexpected, and only when the
     base ties word embeddings. Fused expert tensors are transposed for the in-memory module and written back to the
     saved shards in the checkpoint layout. Returns ``staging_dir``. Peak memory is the bf16 base plus the transposed
-    expert copies; the mmap'd checkpoint pages are reclaimable. With ``payload`` (an open ``model.pt``; fix round T6r)
+    expert copies; the mmap'd checkpoint pages are reclaimable. With ``payload`` (an open ``model.pt``)
     the state dict is loaded from that file object, so the caller's identity of the bytes is the identity of what is
     overlaid, whatever ``<ckpt_dir>/model.pt`` names by the time the load runs.
     """
@@ -1012,15 +1012,15 @@ def _is_count(value: Any) -> bool:
 
 
 def safetensors_header_shape_error(header: Any) -> str | None:
-    """None when ``header`` has the SHAPE of a safetensors header, else the reason (review R149F-02: any JSON used to be accepted,
+    """None when ``header`` has the SHAPE of a safetensors header, else the reason (any JSON used to be accepted,
     and a tensor entry without ``data_offsets`` escaped as KeyError, an entry that is ``5`` as TypeError, a list header as TypeError
     and ``data_offsets`` = ``["x", "y"]`` as an unprefixed ValueError, out of ``shard_status`` and so out of the materializer's
     preflight and the output verifier). The shape, and only the shape: a JSON object whose entries are objects carrying a string
     ``dtype``, a ``shape`` list of non-negative integers and ``data_offsets`` = two non-negative integers with begin <= end, plus
     an optional ``__metadata__`` object (the safetensors format's string map). Names the first tensor that breaks it. It claims
-    no more than the shape (review R149G-01): the dtype names, string metadata values, contiguous offsets and the byte count of
+    no more than the shape: the dtype names, string metadata values, contiguous offsets and the byte count of
     each tensor are the pinned reader's verdict, ``safetensors_reader_error``, which the materializer's preflight asks for every
-    base shard (fix round T6j)."""
+    base shard."""
     if not isinstance(header, dict):
         return f"the header is {describe_json_value(header)}, not a JSON object"
     for name, entry in header.items():
@@ -1072,8 +1072,7 @@ def safetensors_header(path: str) -> tuple[dict[str, Any], int]:
 def shard_status(path: str, expect_keys: set[str] | None = None) -> str | None:
     """Return None when ``path`` is a safetensors file whose header has the shape, whose size is 8 + header + data and which
     holds exactly ``expect_keys``, else the reason. Cheap checks, not a validation of the format's semantics: that is
-    ``safetensors_reader_error`` (the pinned reader), which the materializer's preflight runs after this on every base shard
-    (fix round T6j)."""
+    ``safetensors_reader_error`` (the pinned reader), which the materializer's preflight runs after this on every base shard."""
     if not os.path.isfile(path):
         return f"{path} does not exist"
     try:
@@ -1143,7 +1142,7 @@ def sync_sidecars(base: str, out: str) -> dict[str, list[str]]:
     """Make ``out``'s sidecars EXACTLY the base's: copy every base sidecar verbatim, remove every one the base lacks.
 
     Idempotent; ``config.json``, the shards and the index are never touched; every file lands through a temporary and a
-    replace, the template directory through a staged copy and renames (fix round T6m: a recovery never half-writes). Returns
+    replace, the template directory through a staged copy and renames (a recovery never half-writes). Returns
     ``{"copied", "removed"}``.
     """
     copied, removed = [], []
@@ -1160,7 +1159,7 @@ def sync_sidecars(base: str, out: str) -> dict[str, list[str]]:
     for name in SIDECAR_DIRS:
         src, dst = os.path.join(base, name), os.path.join(out, name)
         if os.path.isdir(src):
-            # Through a staged copy and renames (fix round T6m): the directory is never absent or half-written in ``out``.
+            # Through a staged copy and renames: the directory is never absent or half-written in ``out``.
             part, replaced = dst + ".copying", dst + ".replaced"
             for leftover in (part, replaced):
                 if os.path.isdir(leftover):
@@ -1183,7 +1182,7 @@ def verify_sidecars(out: str, base: str, *, unified_chat_template: bool = False)
     ``unified_chat_template`` the ruled exceptions are the two template files (``UNIFIED_TEMPLATE_FILES``): checked by
     ``_verify_unified_file`` instead of byte identity and listed under ``sidecars_unified_chat_template``; and the
     ``additional_chat_templates/`` directory is refused, in the base and in the export, by the helper the preflight uses
-    (``unified_template_directory_conflict``: whatever it holds; fix round T6f)."""
+    (``unified_template_directory_conflict``: whatever it holds)."""
     n = 0
     unified: list[str] = []
     for name in SIDECAR_FILES:
@@ -1199,7 +1198,7 @@ def verify_sidecars(out: str, base: str, *, unified_chat_template: bool = False)
                 raise ConversionError(f"verify: {dst} differs from base {src}")
             if unified_chat_template and name == "chat_template.jinja":
                 # The tokenizer loader prefers this file over tokenizer_config.json: under the option it may exist only
-                # with the canonical text (fix round T6e).
+                # with the canonical text.
                 with open(dst, encoding="utf-8") as handle:
                     if handle.read() != canonical_processor_template(base):
                         raise ConversionError(
@@ -1215,7 +1214,7 @@ def verify_sidecars(out: str, base: str, *, unified_chat_template: bool = False)
     for name in SIDECAR_DIRS:
         src, dst = os.path.join(base, name), os.path.join(out, name)
         if unified_chat_template:
-            # ONE rule with the preflight (fix round T6f): the directory is refused whatever it holds, base and export.
+            # ONE rule with the preflight: the directory is refused whatever it holds, base and export.
             for role, root in (("base", base), ("export", out)):
                 record = unified_template_directory_conflict(root, name)
                 if record is not None:
@@ -1316,13 +1315,13 @@ def verify_with_torch(
     tokenizer identity ``build_vllm_teacher`` demands (processor type, chat templates, full vocabulary, special ids,
     image and video processor dicts).
 
-    With ``payload`` (fix round T6t, review thread 524355e746) the checkpoint tensors come from THAT open file object
+    With ``payload`` the checkpoint tensors come from THAT open file object
     (``load_consolidated_state_dict``; the same one the materializer hashed under its lock and the overlay consumed), never
     from a fresh resolution of ``model_pt``: a path replaced by the merge tool meanwhile can neither fail a correct build
     nor pass a wrong one. Without it the path is loaded, for standalone callers.
 
     The earlier single-tensor probe (``model.language_model.norm.weight``) was the one tensor a bf16 run does not move,
-    so it passed against the base too (review R125-D-09 / B-04); the full comparison runs before any caller deletes
+    so it passed against the base too; the full comparison runs before any caller deletes
     ``model.pt``. Dense checkpoints have no expert layout to check. The base's weight index, not absence in a possibly
     incomplete checkpoint, determines whether expert tensors are required. The caller applies its configured
     tensor-count floor; this check instead requires exact output/checkpoint key equality.

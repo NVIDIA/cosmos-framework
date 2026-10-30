@@ -54,7 +54,7 @@ def test_precision_fields_default_to_empty_so_the_block_is_a_no_op():
 def test_hf_backend_algorithms_carry_precision_and_the_i4_one_does_not():
     """`GRPOConfig`/`OPDConfig` (backend=hf) own the block; `DPOConfig` (backend=i4) must not.
 
-    DPO's model is the inherited i4 LazyConfig tree, which carries its own dtype — precision fields
+    DPO's model is the inherited LazyConfig tree, which carries its own dtype — precision fields
     there would be silently ignored. Excluding them makes `rl.master_dtype=...` on a DPO run an
     unknown-key error at load instead of a no-op.
     """

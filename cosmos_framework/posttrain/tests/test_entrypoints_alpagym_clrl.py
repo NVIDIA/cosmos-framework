@@ -12,7 +12,7 @@ The transposed shape is not a workaround. `comm/weight_pairing.py::full_tensor_a
 cells by flat bundle index, so policy cell (0,k) pushes to rollout cell (k,0) on the same GPU, and
 its docstring names transposed meshes as the case it exists for.
 
-FSDP on the policy side is a REQUIREMENT here, not a tuning choice: measured on cw-dfw, an
+FSDP on the policy side is a REQUIREMENT here, not a tuning choice: as measured, an
 unsharded trainer is 54.62 GiB and cannot sit beside the rollout's 20.64 GiB on one 80 GiB card.
 The symmetric alternative — policy (4,1), one full replica per GPU — is arithmetically impossible,
 which is what `test_policy_is_sharded_not_replicated` guards.

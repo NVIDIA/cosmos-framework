@@ -977,7 +977,7 @@ def _infer_multiview_caption_path(
             return f"{caption_root.rstrip('/')}/{match.group('sample_id')}_c{match.group('camera_index')}.json"
         clip_match = _MADS_CLIP_MEDIA_RE.match(filename)
         if clip_match is not None:
-            # Clip-level MADS assets (hdmap/lidar rangemap tars) have no _cN suffix.
+            # Clip-level assets (hdmap/lidar rangemap tars) have no _cN suffix.
             # Front-wide captions are the lidar-transfer training text source.
             return f"{caption_root.rstrip('/')}/{clip_match.group('sample_id')}_c0.json"
         raise ValueError(
@@ -1668,8 +1668,8 @@ class _SampleDataBase:
         # single-view path reads, so the top-level mode stays None for a multiview i2v
         # sample. Leaving it None makes _get_multiview_condition_pixel_frames return
         # [None, ...] and an image2video sample then generates text2video output --
-        # byte-identical to the t2v run, with no error anywhere. Measured: parity job
-        # 2041279, all 11 views identical to the t2v run.
+        # byte-identical to the t2v run, with no error anywhere. Measured: all 11 views
+        # identical to the t2v run.
         if self.multiview is not None:
             condition_vision_mode = self.multiview.condition_vision_mode
         return SampleMeta(

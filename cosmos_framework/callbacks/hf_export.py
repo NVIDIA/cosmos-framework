@@ -107,7 +107,7 @@ def _gather_full(parameter: torch.Tensor) -> torch.Tensor:
 def _upload_folder_to_s3(local_folder: str, bucket: str, s3_prefix: str, credential_path: str) -> None:
     """Upload every file under *local_folder* to ``s3://{bucket}/{s3_prefix}/...``.
 
-    Uses the i4 ``easy_io`` S3 backend (Boto3Backend), which reads credentials from
+    Uses the built-in ``easy_io`` S3 backend (Boto3Backend), which reads credentials from
     *credential_path*.  Files are uploaded as streaming transfers via boto3's
     ``upload_file()`` — the full shard is never loaded into memory.
     """

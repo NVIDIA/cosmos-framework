@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Sim-Auto TF → TF-dCM → joint SF-DMD with explicit captured MADS inputs.
+"""Sim-Auto TF → TF-dCM → joint SF-DMD with explicit captured multiview inputs.
 
-The local adapter never resolves a remote catalog. A complete MADS export can
+The local adapter never resolves a remote catalog. A complete multiview export can
 use the same data contract; a 100-sample QA bundle is not the original corpus.
 """
 

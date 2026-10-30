@@ -8,14 +8,14 @@ round-tripped through OmegaConf on its own. General config mapping/dispatch live
 `config/build.py`; concrete model construction lives in `model/*.py`.
 
 Layering (the three-stakeholder synthesis):
-  - The model/data half is the inherited i4 LazyConfig tree at top-level `config.model`
-    (researchers `defaults: [<i4 experiment>]`); reflected via `instantiate`.
+  - The model/data half is the inherited LazyConfig tree at top-level `config.model`
+    (researchers `defaults: [<experiment>]`); reflected via `instantiate`.
   - Model backend selection and shared load specs are top-level too (`config.model_backend`,
     `config.model_hf`, and `config.model_qwen3_vl`; schemas in `config/model.py`), NOT an RL concern.
     `DPOConfig` is purely the RL objective + optimizer + ref + data.
   - Orchestration (`config.grid`) is also top-level. So `DPOConfig` holds neither model
     nor grid — only what the DPO objective needs.
-  - The whole experiment dumps to one resolved YAML (i4 `LazyConfig.save_yaml`), reloadable.
+  - The whole experiment dumps to one resolved YAML (`LazyConfig.save_yaml`), reloadable.
 
 `rl` owns the training PROCESS; `model_hf` owns model IDENTITY. The line above ("model backend
 selection is not an RL concern") is about WHICH model to load — `name_or_path`, `auto_class`,
@@ -259,7 +259,7 @@ class OptimizerConfig:
     grad_clip_norm: float = 0.0
     force_finite_grads: bool = True
     # Linear LR warmup step count (0 = no warmup), then constant. cosmos-rl `optm_warmup_steps`. Validated
-    # `>= 0`: a negative value used to be accepted and silently meant "no warmup" (review R125-D-06).
+    # `>= 0`: a negative value used to be accepted and silently meant "no warmup".
     warmup_steps: int = 0
     # Weight-decay grouping: "" = one group, every trainable parameter decays (the pre-existing behavior,
     # and the Cosmos post-training recipe's: `cosmos3/utils/optimizer.py::_build_params_with_metadata`
@@ -267,7 +267,7 @@ class OptimizerConfig:
     # False and no skip pattern); "hf" = the [decay, no-decay] split of `transformers.Trainer.create_optimizer`
     # (`get_decay_parameter_names`: LayerNorm modules, biases and `*norm*` names undecayed; the embedding,
     # the head and the MoE router gates DECAY), needed to reproduce an HF-trained reference; "qwen_moe" =
-    # the SFT seat's own rule (review R125-B-01, references corrected by review R134-03): no decay on every
+    # the SFT seat's own rule: no decay on every
     # 1-D parameter (RMSNorm/LayerNorm scales and biases, as HF) AND on the token embedding (`embed_tokens`),
     # the output head (`lm_head`) and the MoE router gates (`<layer>.mlp.gate.weight`), which neither
     # reference exempts; every matrix (attention, experts, vision) decays. The native recipe's docstring
@@ -514,7 +514,7 @@ class PreferenceEnvConfig:
 
 
 # vLLM's multimodal modality vocabulary (`vllm.multimodal` input keys). `rollout.limit_mm_per_prompt` keys are
-# refused at config time when outside it (reviewer thread on rl.py:549: an unknown or mistyped key such as
+# refused at config time when outside it (an unknown or mistyped key such as
 # "images" or " image" is otherwise converted to a generic dummy option and silently ignored by the model's
 # `allowed_mm_limits`, which iterates only its supported modalities). The model-specific supported set is
 # checked a second time against the BUILT engine in `roles/rollout/vllm.py::VLLMRollout`.
@@ -1227,13 +1227,13 @@ class RunConfig:
     grad_accum: int = 1
     max_steps: int = 1000
     save_every: int = 0  # 0 ⇒ never (the loop owns cadence)
-    # Resume: "auto" (DEFAULT — matches i4/cosmos-rl convention): pick up the latest
+    # Resume: "auto" (DEFAULT — matches upstream/cosmos-rl convention): pick up the latest
     # checkpoint under this job's out dir, fresh start if none — so an unchanged command
     # survives preemption/requeue with zero config. "off" (or "") = force a fresh run.
     # Or an explicit iter_* dir / legacy .pt (must exist, else fail loud).
     # See checkpoint.resolve_resume; a resume always logs "resumed from ...".
     resume: str = "auto"
-    # Run-attempt timestamp ("YYYYmmddHHMMSS") — the i4-convention run identity: the
+    # Run-attempt timestamp ("YYYYmmddHHMMSS") — the upstream-convention run identity: the
     # out_dir becomes <...>/<name>/<run_ts>/, the wandb id IS run_ts, and eval tooling
     # takes it as $RUN_TS. Default "" = resolve at startup (adopt the latest existing
     # attempt when resuming, mint a new one otherwise — see the checkpoint package.
@@ -1445,7 +1445,7 @@ class HFRunConfig(RunConfig):
     # "" ⇒ "fsdp". How `param_dtype` reaches the forward. "fsdp": the FSDP2 MixedPrecisionPolicy cast
     # (needs an FSDP wrap whenever master_dtype != param_dtype). "autocast": parameters stay in
     # master_dtype and the forward runs under torch.autocast(param_dtype) at every world size, wrapped
-    # or not. Not supported by the native i4 backend, whose builders deliver the compute dtype only
+    # or not. Not supported by the native backend, whose builders deliver the compute dtype only
     # through their own FSDP cast; float16 autocast is refused because the trainer has no GradScaler.
     mixed_precision_mode: str = ""
 

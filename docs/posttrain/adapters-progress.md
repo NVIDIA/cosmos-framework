@@ -45,6 +45,19 @@ eager attention, exact-SVD PiSSA, and rsLoRA with DoRA/PiSSA; these are not
 additional real-model GPU claims. The general Torch 2.11 SFT environment remains
 a separate qualification case.
 
+## Final main synchronization
+
+Main advanced to `b42e1a571dd7c48dced286c837be3d0f81d43f98` during
+qualification (PRs #331 and #333: internal-reference cleanup in comments,
+documentation and test fixtures). This branch merges those changes, preserving
+the adapter lifecycle arguments and materializer format v5. Comparison with
+qualified runtime `480be5a` confirms no production execution changes: all changed
+Python ASTs outside tests are identical after removing documentation strings,
+except one removed job ID inside a generated shell comment. Dependency pins are
+unchanged. Affected checks pass again: **193 focused tests** (63.84 s) and
+**205 adapter-disabled tests, two optional skips** (23.85 s). GPU records retain
+the actual installed revision and digest; they are not relabeled as this merge.
+
 ## Correctness and numerical evidence
 
 The current focused adapter/export suite passes **193 tests** locally (64.18 s).

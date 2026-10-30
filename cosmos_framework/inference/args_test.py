@@ -535,7 +535,7 @@ def test_multiview_condition_vision_mode_comes_from_the_views(tmp_path: Path):
     its first frames live in multiview.views[].vision_path. The mode resolved to None,
     _get_multiview_condition_pixel_frames returned [None, ...], and the conditioning was dropped,
     so an image2video sample produced text2video output byte-identical to the t2v run with no
-    error anywhere (measured: parity job 2041279, all 11 views identical to the t2v run).
+    error anywhere (measured: all 11 views identical to the t2v run).
     """
     sample_meta = _multiview_sample_meta(tmp_path, with_vision=True)
 
@@ -551,18 +551,18 @@ def test_multiview_text2video_still_resolves_no_conditioning(tmp_path: Path):
     With no vision_path on any view, MultiviewOverrides.condition_vision_mode returns None --
     the same value the top-level property it replaced would have returned -- so the t2v path is
     unchanged. Verified empirically too: cosmos-framework t2v output is byte-identical before and
-    after this fix (11/11 views, parity jobs 2041278 and 2041490).
+    after this fix (11/11 views).
     """
     assert _multiview_sample_meta(tmp_path, with_vision=False).condition_vision_mode is None
 
 
-# --- camera defaults must track imaginaire4 -----------------------------------
+# --- camera defaults must track the upstream codebase -----------------------------------
 #
 # These three are a single coherent recipe, not independent knobs: global_asinh
-# requires translation_scale=1.0. imaginaire4 changed all three together in
+# requires translation_scale=1.0. The upstream codebase changed all three together in
 # 2b258f77340 ("Add production Lance camera stage-0 recipe"), and this repo kept the
 # previous values for a while afterwards. Nothing failed -- packages/cosmos3 is not
-# release-mapped, so an imaginaire4 change to it cannot propagate here, and a camera
+# release-mapped, so an upstream change to it cannot propagate here, and a camera
 # run that does not pass these flags silently produced a different rollout in each
 # runtime. Pin them so the next divergence is a failing test rather than a bad video.
 
@@ -573,13 +573,13 @@ _I4_CAMERA_DEFAULTS = {
 }
 
 
-def test_camera_defaults_match_imaginaire4() -> None:
+def test_camera_defaults_match_upstream() -> None:
     from cosmos_framework.inference.args import InteractiveDataArgs
 
     for field, expected in _I4_CAMERA_DEFAULTS.items():
         actual = InteractiveDataArgs.model_fields[field].default
         assert actual == expected, (
-            f"{field} is {actual!r} but imaginaire4 resolves {expected!r}; "
+            f"{field} is {actual!r} but upstream resolves {expected!r}; "
             "a camera run without this flag would diverge between the two runtimes"
         )
 
@@ -588,7 +588,7 @@ def test_unset_camera_overrides_fall_back_to_the_same_values(tmp_path: Path) -> 
     """The Overrides fallback must agree with the Args default.
 
     Two places encode the same recipe, so they can drift apart from each other as
-    well as from imaginaire4.
+    well as from the upstream codebase.
     """
     import types
 
@@ -625,7 +625,7 @@ def _caption_mode_transfer_overrides(tmp_path: Path, *, load_caption_from_data: 
 def test_caption_mode_withholds_the_generic_transfer_chunk_length(tmp_path: Path) -> None:
     """A caption run derives its chunk length from the span each caption describes.
 
-    The generic 93-frame transfer chunk must not stand in for it: the MADS captions cover 0-300,
+    The generic 93-frame transfer chunk must not stand in for it: the multiview captions cover 0-300,
     which derives to 297, so letting the default win generates less than a third of what the text
     covers -- with no error, and a well-formed video.
     """
@@ -663,7 +663,7 @@ def _mv_overrides(tmp_path: Path, *, per_view_captions: bool) -> dict:
 
 
 def test_each_camera_can_carry_its_own_caption_path(tmp_path: Path) -> None:
-    """The schema gap that made imaginaire4's shipped per-view inputs unloadable here.
+    """The schema gap that made the upstream codebase's shipped per-view inputs unloadable here.
 
     OverridesBase is extra="forbid", so caption_path on a view was a hard validation error rather
     than an ignored key -- 11 of them for an 11-camera rig.

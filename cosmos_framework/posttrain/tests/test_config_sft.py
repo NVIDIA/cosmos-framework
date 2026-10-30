@@ -22,7 +22,7 @@ from cosmos_framework.posttrain.config.sft import SFTConfig, SFTDatasetConfig, S
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 _ROOT = Path(__file__).resolve().parents[3]
 _POSTTRAIN = _ROOT / "cosmos_framework/posttrain"
-# The served generation prefix of the path of record (tools present: no <think>), recorded live; review R138-01.
+# The served generation prefix of the path of record (tools present: no <think>), recorded live.
 _SERVED_PREFIX_FIXTURE = _POSTTRAIN / "tests" / "fixtures" / "served_prefix_with_tools.json"
 
 
@@ -152,7 +152,7 @@ def _native_sft_config(tmp_path: Path, model_type: str, builder: str | None = No
 
 @pytest.mark.parametrize("model_type", ["qwen3_vl_moe", "qwen3_vl"])
 def test_validate_config_accepts_native_qwen3_vl_spec(tmp_path: Path, model_type: str, apex_present: None) -> None:
-    """The i4-native Qwen3-VL seat passes preflight without model_hf; the packer source is the spec's model_id."""
+    """The native Qwen3-VL seat passes preflight without model_hf; the packer source is the spec's model_id."""
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
 
     config = _native_sft_config(tmp_path, model_type)
@@ -184,7 +184,7 @@ def test_validate_config_refuses_native_specs_outside_the_qwen3_vl_seat(tmp_path
 def test_sft_support_is_declared_by_the_model_family_not_by_an_entrypoint_allowlist(
     tmp_path: Path, apex_present: None
 ) -> None:
-    """FIXTURE: on de636dcaa5 ``entrypoints/sft.py`` defined ``NATIVE_SFT_BUILDER`` and ``NATIVE_SFT_MODEL_TYPES`` and
+    """FIXTURE: on the parent ``entrypoints/sft.py`` defined ``NATIVE_SFT_BUILDER`` and ``NATIVE_SFT_MODEL_TYPES`` and
     refused any other builder with "supports the native builder ... only". The declaration lives beside the builder:
     ``model/qwen3_vl.py`` registers its SFT source in ``model/sft_source.py`` and owns the ``qwen3_vl`` /
     ``qwen3_vl_moe`` check; the entrypoint defines no ``NATIVE_SFT_*`` name and only consumes the registry. An
@@ -204,8 +204,7 @@ def test_sft_support_is_declared_by_the_model_family_not_by_an_entrypoint_allowl
         if isinstance(target, ast.Name)
     }
     assert not {name for name in assigned if name.startswith("NATIVE_SFT_")}, assigned
-    # Imported after the behavioural assertion so that a tree with the allowlist fails on it, not on this ImportError
-    # (review round 1 of fix round 1, finding F3).
+    # Imported after the behavioural assertion so that a tree with the allowlist fails on it, not on this ImportError.
     from cosmos_framework.posttrain.model.sft_source import registered_native_sft_builders
 
     qwen = "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
@@ -319,10 +318,10 @@ def _native_recipe(
 def test_native_recipe_records_the_backbone_decisions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """Review R125-D-01: every objective-level knob is an explicit, validated field with the Cosmos post-training
+    """Every objective-level knob is an explicit, validated field with the Cosmos post-training
     recipe's value as this recipe's default (the ``<think>`` opener excepted: the Nemo-Chat rule masks it, while on the
-    serving path of record -- tools present -- vLLM 0.24 prefills no opener and the student must emit it, reviews
-    R134-01 / R138-01; the decay grouping is the seat's own, review R134-03), and every one reaches the resolved SFT
+    serving path of record -- tools present -- vLLM 0.24 prefills no opener and the student must emit it;
+    the decay grouping is the seat's own), and every one reaches the resolved SFT
     config. The parent had none of these fields."""
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
 
@@ -357,10 +356,10 @@ def test_native_recipe_a1_and_a1a_variants_reproduce_the_arms_of_record(
     """``SFT_RECIPE_VARIANT=a1`` / ``a1a`` = the values the A1 / A1a arms trained with (their ``config_resolved.yaml``):
     constant lr 1e-5 without warmup, betas (0.9, 0.999), weight decay 0.01 in one group, no multipliers, token-mean CE,
     no load-balancing term, the opener supervised, the 4,147,200-px budget; A1 validated every 50 steps and A1a every
-    step, the one field the two resolved configs differ in (review R134-09: 22bfce78f40's single ``a1`` variant carried
+    step, the one field the two resolved configs differ in (the earlier single ``a1`` variant carried
     A1a's cadence). ``prefilled_opener`` = the defaults with the opener masked (for a serve that prefills it; not the
-    path of record, review R138-01; it sets the typed field ``rl.serve_contract=prefills_opener``, review R142-04 and
-    review threads b196e5e99f / 12f2ce563b); the earlier name ``nemo_chat_opener`` and an unknown variant are refused."""
+    path of record; it sets the typed field ``rl.serve_contract=prefills_opener``);
+    the earlier name ``nemo_chat_opener`` and an unknown variant are refused."""
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
 
     for variant, cadence in (("a1", 50), ("a1a", 1)):
@@ -383,20 +382,20 @@ def test_native_recipe_a1_and_a1a_variants_reproduce_the_arms_of_record(
 
 
 def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with_tools() -> None:
-    """Reviews R134-03 / R138-01 (decision-table truth, checked on the file as written, not on ``__doc__``): knob 4's
+    """Decision-table truth, checked on the file as written, not on ``__doc__``: knob 4's
     cell names both references the grouping diverges from -- the backbone's ``_build_params_with_metadata`` decays all
     882 tensors; transformers' ``get_decay_parameter_names`` decays the embedding, the head and the router gates -- and
     states what the exemption protects and costs, instead of a "HF/Qwen convention" neither reference has; knob 7's
     cell names the MEASURED serving path of record -- Codex sends the tools array on every call, with tools present
-    vLLM 0.24 prefills NO ``<think>`` (review R138-01: effort present or absent 157 = 157 input tokens), so the student
+    vLLM 0.24 prefills NO ``<think>`` (effort present or absent 157 = 157 input tokens), so the student
     must emit the opener itself and its loss is the only training signal for that token, ``True`` is a labelled RISK
     (UNMEASURED with tools present; C-04, the lab's live probe record of the served generation prompt on the A1a
     deployment, 2026-10-02, outside the repo, section 3's measured trigger quoted: an output that carries no
     ``</think>`` is
-    returned as reasoning in full, tool-call turns unaffected; review R142-01), the prefill exists only for tool-less
+    returned as reasoning in full, tool-call turns unaffected), the prefill exists only for tool-less
     requests, the ``prefilled_opener`` variant is scoped as not the path of record and guarded (it sets the typed field
-    ``rl.serve_contract=prefills_opener``; ``recipe_variant`` in provenance; review R142-04) -- instead of the superseded
-    "PREFILLED on every turn" of review R134-01 (cef891c3e46) and the unmeasured consequence 4821e1d9943 stated for
+    ``rl.serve_contract=prefills_opener``; ``recipe_variant`` in provenance) -- instead of the superseded
+    "PREFILLED on every turn" and the unmeasured consequence earlier commits stated for
     every no-think turn; this FIXTURE fails on both parents. The terms the rows use are defined in the Terms block above
     the table."""
     text = (Path(__file__).resolve().parents[1] / "configs" / "sft_qwen3_vl_moe_native.py").read_text()
@@ -428,11 +427,9 @@ def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with
         "stays supervised under ``True``",
         "the only training signal for a token the student must emit on the path of record",
         "``rl.serve_contract=prefills_opener``",
-        "``recipe_variant`` (review R142-04",
-        "round 138 P4 / P7 and review round 142 Q3 / Q4",
+        "``recipe_variant``",
         "The ``<think>`` prefill exists only for requests without tools",
-        "review R138-01",
-        "supersedes review R134-01",
+        "supersedes the earlier ruling",
         "``<think>\\n\\n</think>\\n\\n``",
         "MUST stay supervised",
         "``RECIPE_VARIANTS['prefilled_opener']``",
@@ -444,15 +441,15 @@ def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with
         "so the student never generates it",
         "prefills it on every turn",
         "harmless; on a serve without the effort field",
-        "break every",  # the unlabelled consequence of 4821e1d9943 (review R142-01)
+        "break every",  # the earlier unlabelled consequence
         "rest on the base's prior alone",
-        "SFT_SERVE_PREFILLS_OPENER",  # the environment-variable acknowledgement (review threads b196e5e99f / 12f2ce563b)
+        "SFT_SERVE_PREFILLS_OPENER",  # the environment-variable acknowledgement
     ):
         assert superseded not in text, superseded
     variant_doc = text.split("def _variant_prefilled_opener")[1].split('"""')[1]
-    assert "NOT the path of record" in variant_doc and "review R138-01" in variant_doc
-    assert "UNMEASURED with tools present" in variant_doc and "review R142-01" in variant_doc
-    assert "``rl.serve_contract=prefills_opener``" in variant_doc and "review R142-04" in variant_doc
+    assert "NOT the path of record" in variant_doc
+    assert "UNMEASURED with tools present" in variant_doc
+    assert "``rl.serve_contract=prefills_opener``" in variant_doc
     for term in ('"the serving path of record"', '"the prefill"', '"a no-think turn"', '"pin" vs "fixture"'):
         assert term in text.split("| knob |")[0], term  # defined before the table
     assert (
@@ -464,14 +461,14 @@ def test_native_recipe_table_states_the_decay_references_and_the_no_prefill_with
 def test_default_recipe_supervises_the_opener_the_student_emits_after_the_served_prefix_with_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """Review R138-01 (knob 7's mechanism). PIN for the behaviour and FIXTURE for the record: the packer's labels did not
-    change in the commit that adds this test (with the fixture file copied beside it, it passes on the parent cef891c3e46),
+    """Knob 7's mechanism. PIN for the behaviour and FIXTURE for the record: the packer's labels did not
+    change in the commit that adds this test (with the fixture file copied beside it, it passes on the parent),
     while ``tests/fixtures/served_prefix_with_tools.json`` did not exist there and the recipe text stated the opposite
     mechanism. The fixture is the served prefix of the path of record, measured live on the A1a deployment (vLLM 0.24) with
     a tools array present: ``/tokenize`` ids that end in ``<|im_start|>assistant\n`` with NO ``<think>`` (141 ids; the
-    effort field adds 0 input tokens: 157 = 157 with one synthetic tool, round 138 P4 / P7, and 7,862 = 7,862 with the 8
-    Codex tools and the wire instructions, review round 142 Q3 / Q4, the ``eight_tools_with_wire`` block added by fix
-    round T4 after review R142-02), beside the tool-less prefix that does end in ``<think>``. A no-think turn
+    effort field adds 0 input tokens: 157 = 157 with one synthetic tool, and 7,862 = 7,862 with the 8
+    Codex tools and the wire instructions, the ``eight_tools_with_wire`` block),
+    beside the tool-less prefix that does end in ``<think>``. A no-think turn
     rendered the exporter's way (``<think>\n\n</think>\n\nok``) through the packer under the default recipe
     (``mask_think_opener=False``) starts with exactly that served prompt text and continues with the student's own
     ``<think>``, ``\n\n``, ``</think>``, ``\n\n``, all four supervised; ``mask_think_opener=True`` (the ``prefilled_opener``
@@ -489,9 +486,9 @@ def test_default_recipe_supervises_the_opener_the_student_emits_after_the_served
     assert 151667 not in served["ids"] and served["count"] == len(served["ids"]) == 141
     assert served["responses_path_effort_adds_input_tokens"] == 0
     pair = served["responses_path_input_tokens"]
-    assert pair["effort_high"] == pair["no_reasoning_field"] == 157  # round 138 P4 / P7, one synthetic tool
+    assert pair["effort_high"] == pair["no_reasoning_field"] == 157  # one synthetic tool
     eight = pair["eight_tools_with_wire"]
-    assert eight["effort_high"] == eight["no_reasoning_field"] == 7862  # review round 142 Q3 / Q4, the 8 Codex tools
+    assert eight["effort_high"] == eight["no_reasoning_field"] == 7862  # the 8 Codex tools
     tool_less = fixture["served_prefix_without_tools_enable_thinking"]
     assert tool_less["ids"][-4:] == [151644, 77091, 198, 151667] and tool_less["enable_thinking_adds_input_tokens"] == 1
     assert served["text"].endswith("<|im_end|>\n<|im_start|>assistant\n")
@@ -570,12 +567,12 @@ def test_real_base_sidecars_render_the_served_prefix_ids_with_tools() -> None:
 def test_prefilled_opener_variant_sets_the_typed_serve_contract_and_is_recorded_in_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """FIXTURE: on d8c7213d0a the variant was refused without the environment variable ``SFT_SERVE_PREFILLS_OPENER=1``
+    """FIXTURE: on the parent the variant was refused without the environment variable ``SFT_SERVE_PREFILLS_OPENER=1``
     and accepted with it, and neither the resolved config nor the provenance recorded that acknowledgement.
     ``SFT_RECIPE_VARIANT=prefilled_opener`` resolves ``mask_think_opener=True`` with
     ``rl.serve_contract="prefills_opener"`` and reads no environment variable; the field is in the resolved config
-    (``config_resolved.yaml``); the resolved variant name is what ``utils/provenance.py`` records as ``recipe_variant``
-    (review R142-04). The retired variable, set to ``1`` on the ``default`` variant, changes nothing."""
+    (``config_resolved.yaml``); the resolved variant name is what ``utils/provenance.py`` records as ``recipe_variant``.
+    The retired variable, set to ``1`` on the ``default`` variant, changes nothing."""
     from cosmos_framework.posttrain.entrypoints.sft import validate_config
     from cosmos_framework.posttrain.utils import provenance
     from cosmos_framework.posttrain.utils.entry import dump_resolved
@@ -602,12 +599,12 @@ def test_prefilled_opener_variant_sets_the_typed_serve_contract_and_is_recorded_
 def test_sft_config_refuses_an_opener_mask_outside_the_prefills_opener_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apex_present: None
 ) -> None:
-    """Review round 142b, section 11, re-shaped by review threads b196e5e99f / 12f2ce563b (FIXTURE: on d8c7213d0a the
+    """FIXTURE: on the parent the
     override ``rl.mask_think_opener=True`` was ACCEPTED whenever ``SFT_SERVE_PREFILLS_OPENER=1`` stood in the shell, and
-    the resolved config of the accepted run was byte-identical to a refused one's). The refusal lives in
+    the resolved config of the accepted run was byte-identical to a refused one's. The refusal lives in
     ``SFTConfig.__post_init__``, so a ``--`` override on the ``default`` variant, a YAML and the recipe variant are judged
     by the same typed field: ``mask_think_opener=True`` under the default contract ``tools_no_prefill`` is refused naming
-    review R138-01 and ``rl.serve_contract=prefills_opener`` whatever the environment says, and it is refused where the
+    the serving path of record and ``rl.serve_contract=prefills_opener`` whatever the environment says, and it is refused where the
     config is BUILT (``load_config`` constructs ``SFTConfig``; on the parent the override built and the entrypoint's
     guard judged it later); with the contract it is accepted; an unknown contract is refused; the default variant is
     unaffected."""
@@ -640,7 +637,7 @@ def test_sft_config_refuses_an_opener_mask_outside_the_prefills_opener_contract(
 
 
 def test_optimizer_config_refuses_negative_warmup() -> None:
-    """Review R125-D-06: ``warmup_steps=-1`` was accepted and silently meant no warmup."""
+    """``warmup_steps=-1`` was accepted and silently meant no warmup."""
     with pytest.raises(ValueError, match="warmup_steps"):
         OptimizerConfig(warmup_steps=-1)
     with pytest.raises(ValueError, match="warmup_steps"):
@@ -733,7 +730,7 @@ def _module_with_parameters(names: list[tuple[str, int]], *, wrap_layers: bool =
 
 @pytest.mark.parametrize("wrap_layers", [False, True], ids=["plain_names", "ac_wrapped_names"])
 def test_qwen_moe_decay_groups_and_lr_multipliers_on_the_real_parameter_names(wrap_layers: bool) -> None:
-    """Review R125-B-01 / D-01: on the 882 tensors of the base (175 biases, 193 text norm scales + 58 vision norm scales,
+    """On the 882 tensors of the base (175 biases, 193 text norm scales + 58 vision norm scales,
     1 embedding, 1 head, 48 router gates, 192 attention, 96 expert and 118 vision matrices) ``decay_groups='qwen_moe'``
     with ``lr_multipliers={'model.visual': 0.1}`` yields four optimizer groups: decayed 1.0x (288 = attention + experts),
     undecayed 1.0x (243 = text norms + embedding + head + routers), decayed 0.1x (118 vision matrices), undecayed 0.1x
@@ -793,7 +790,7 @@ def test_qwen_moe_decay_groups_and_lr_multipliers_on_the_real_parameter_names(wr
 
 
 def test_lr_multipliers_sharing_a_factor_build_each_group_once_in_first_seen_order() -> None:
-    """Review round 142 P2: two ``lr_multipliers`` patterns sharing a factor must yield ONE pair of groups for it. The
+    """Two ``lr_multipliers`` patterns sharing a factor must yield ONE pair of groups for it. The
     parent iterated ``[1.0, *values]`` with the repeat, appended the 0.1x groups twice and raised "optimizer decay/lr
     grouping lost parameters" whenever the shared factor matched parameters. ``{'model.visual.blocks': 0.1,
     'model.visual': 0.1}`` covers exactly the tower, so the canary record's four groups [288 / 243 / 118 / 233] are
@@ -842,7 +839,7 @@ def test_lr_multipliers_sharing_a_factor_build_each_group_once_in_first_seen_ord
 
 
 def test_decay_grouping_references_on_the_real_parameter_names() -> None:
-    """PIN, not a fixture (review R134-03): it passes on the parent commit too; it records the two references knob 4 now
+    """PIN, not a fixture: it passes on the parent commit too; it records the two references knob 4 now
     names. On the 882 names of the base: the Cosmos post-training recipe's rule
     (``cosmos3/utils/optimizer.py::_build_params_with_metadata`` with ``disable_weight_decay_for_1d_params=False`` and no
     skip pattern, the recipe entry's state) decays all 882; transformers' Trainer rule (``get_parameter_names`` with the
@@ -946,7 +943,7 @@ def test_warmup_cosine_schedule_matches_the_backbone_scheduler_and_reaches_the_o
 
 
 def test_optimizer_preflight_and_schedule_factory_live_below_the_entrypoint(tmp_path: Path, apex_present: None) -> None:
-    """FIXTURE: on b1373b88db ``refuse_rounding_or_unavailable_optimizer``, ``build_sft_lr_scheduler`` and
+    """FIXTURE: on the parent ``refuse_rounding_or_unavailable_optimizer``, ``build_sft_lr_scheduler`` and
     ``add_clip_metrics`` were defined in ``entrypoints/sft.py``. The optimizer/storage refusal lives beside
     ``build_optimizer`` and the SFT schedule factory beside the scheduler builders in ``config/build.py``; the clip
     record is the trainer's; the entrypoint defines none of the three and keeps role construction and the loop. The
@@ -962,7 +959,7 @@ def test_optimizer_preflight_and_schedule_factory_live_below_the_entrypoint(tmp_
         defined
     )
     # Imported after the behavioural assertion so that a tree with the three in the entrypoint fails on it, not on this
-    # ImportError (review round 1 of fix round 1, finding F3).
+    # ImportError.
     from cosmos_framework.posttrain.config.build import build_sft_lr_scheduler, refuse_rounding_or_unavailable_optimizer
 
     native = _native_sft_config(tmp_path, "qwen3_vl_moe")
@@ -973,8 +970,8 @@ def test_optimizer_preflight_and_schedule_factory_live_below_the_entrypoint(tmp_
 
 
 def test_bf16_storage_freezes_large_scales_below_half_an_ulp() -> None:
-    """PIN, not a fixture (review R134-06): it passes on the parent commit too, because it records pure bf16 arithmetic
-    the framework did not change. Review R125-B-02, the mechanism on tiny tensors: apex FusedAdam keeps an fp32 master and refreshes the bf16 parameter
+    """PIN, not a fixture: it passes on the parent commit too, because it records pure bf16 arithmetic
+    the framework did not change. The mechanism on tiny tensors: apex FusedAdam keeps an fp32 master and refreshes the bf16 parameter
     as ``bf16(master)`` every step, so the stored value moves only when the master has drifted by more than half the
     parameter's bf16 ulp. A scale of 3.078125 (ulp 0.015625, the final RMSNorm's magnitude) is unchanged after 700 steps
     of 1e-5 (drift 0.007 < 0.0078) and flips after 800; a weight of 0.0036 (ulp 3.05e-5) moves at the first step. A1a's
@@ -1006,8 +1003,8 @@ def test_bf16_storage_freezes_large_scales_below_half_an_ulp() -> None:
 
 
 def test_deterministic_knob_reaches_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PIN, not a fixture (review R134-06): it passes on the parent commit too, because the setup path it records
-    predates the fix. Review R125-D-12: ``rl.deterministic=True`` makes setup call ``utils.determinism.enable_determinism``
+    """PIN, not a fixture: it passes on the parent commit too, because the setup path it records
+    predates the fix. ``rl.deterministic=True`` makes setup call ``utils.determinism.enable_determinism``
     before the model is built; ``False`` (the recipe default) does not."""
     from types import SimpleNamespace
 

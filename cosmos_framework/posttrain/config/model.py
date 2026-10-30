@@ -44,13 +44,13 @@ class DataPackerConfig:
 
 
 # ---------------------------------------------------------------------------
-# Native i4 policy backend
+# Native policy backend
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class NativePolicyParallelismConfig:
-    """Policy data-parallel mesh for a native i4 policy builder.
+    """Policy data-parallel mesh for a native policy builder.
 
     The policy WorkerGroup supplies the world size. ``-1`` asks posttrain to infer the matching
     dimension from that world, using the same convention as :class:`HFParallelismConfig`.
@@ -64,7 +64,7 @@ class NativePolicyParallelismConfig:
 
 @dataclass
 class NativePolicyBuildSpec:
-    """Generic construction seam for an i4-native online policy.
+    """Generic construction seam for a native online policy.
 
     ``builder`` is an absolute dotted callable with signature
     ``(model_id, model_config, pdims) -> policy``. ``value_builder`` is the matching optional
@@ -118,7 +118,7 @@ class HFParallelismConfig:
 class HFModelConfig:
     """Hugging Face backend spec (``config.model_hf``), selected via ``model_backend=hf``.
 
-    The loader lives with the backend in ``model/hf.py``. The equivalent i4 parallelism source is
+    The loader lives with the backend in ``model/hf.py``. The equivalent native parallelism source is
     the inherited LazyConfig tree at ``config.model.config.parallelism``.
     """
 
@@ -156,7 +156,7 @@ class HFModelConfig:
 class Qwen3VLModelConfig:
     """Model-family config carried by a Qwen3-VL ``NativePolicyBuildSpec``.
 
-    Dependency-light strings live here; ``model/qwen3_vl.py`` imports the native i4 model,
+    Dependency-light strings live here; ``model/qwen3_vl.py`` imports the native model,
     activation-checkpointing and FSDP implementations only inside worker setup. The model family is
     resolved from the checkpoint's ``AutoConfig.model_type`` rather than duplicated in this schema.
     ``config.model_qwen3_vl`` retains this type only for the legacy backend alias.

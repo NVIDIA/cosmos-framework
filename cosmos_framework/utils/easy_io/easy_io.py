@@ -648,7 +648,7 @@ def copyfile_to_local(
 
     Args:
         src (str or Path): A file to be copied.
-        dst (str or Path): Copy file to to local dst.
+        dst (str or Path): Copy file to local dst.
         backend_args (dict, optional): Arguments to instantiate the
             corresponding backend. Defaults to None.
 

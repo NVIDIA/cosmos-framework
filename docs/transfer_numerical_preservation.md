@@ -123,23 +123,23 @@ in both cases. After normalizing comments and absolute paths, all 69 Bimanual
 and 47 Nano generated Python code files match; 15 and 12 autotuning selections
 respectively differ. Those differences are confounders, not proven causes of
 pixel drift. These runtime checks do not establish task accuracy or performance
-for every model. They measure Framework, not a separate imaginaire4 GPU run.
+for every model. They measure Framework, not a separate upstream GPU run.
 
 CPU coverage includes request routing, gradient preservation, exact KV ordering
 at the attention boundary, CFG branches, streaming control/target/refresh
 propagation, growing histories, and independent row resets. Each repository's
 norm/compiler suite passed 30 tests plus nine subtests. Framework's selected
 frontend/KV suite passed 155 tests with four skips, and its AR dispatch suite
-passed 62 tests. The corresponding focused imaginaire4 frontend/KV selection
+passed 62 tests. The corresponding focused upstream frontend/KV selection
 passed 28 tests and AR dispatch passed 62. These suites are reported separately;
 the counts must not be added as distinct coverage. Both repositories passed
 modified-file Ruff, formatting, and code pre-commit checks. A broader
-imaginaire4 frontend run stopped after 85 passes on a radar error-message
+upstream frontend run stopped after 85 passes on a radar error-message
 assertion also reproduced on unchanged HEAD.
 
 Focused Framework norm/compiler type checks report zero errors; its nine-file
 cache/frontend check reports zero errors and one existing warning. In
-imaginaire4, the five-file core cache check reports zero errors and one existing
+the upstream codebase, the five-file core cache check reports zero errors and one existing
 warning; norm/compiler checks retain the same 42 diagnostics before and after,
 and the two-file package/frontend check retains 250 errors and one warning on
 both revisions, with no new diagnostics. These scoped checks do not establish

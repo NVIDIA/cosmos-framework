@@ -30,7 +30,7 @@ Pins, on tiny CPU tensors and a transformers-free two-layer LM:
   CONTENT identity into the objective's exact-resume identity (`reference_artifact`: another
   directory, other content at the same path, or dropping the knob refuses the resume), and makes
   `build_trainer` load the twin
-  from THAT directory (qwen3_vl alias, generic i4 spec, hf) while the policy build and the
+  from THAT directory (qwen3_vl alias, generic native spec, hf) while the policy build and the
   caller's config keep the policy's own directory;
 * the gradient bound — `rl.kl_coeff_clamp` keeps the k3 VALUE bit-identical while holding the
   per-token gradient coefficient at its `|z| = c` boundary value beyond the band (the exact
