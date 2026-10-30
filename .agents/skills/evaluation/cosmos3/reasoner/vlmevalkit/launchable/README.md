@@ -84,7 +84,16 @@ The local wrapper additionally prevents punctuation-only option tokens from rece
 
 `run.json` records scope, exact selected IDs, coverage, dataset revision/manifest hash, complete emitted native config, frame count, API concurrency, generation parameters, model/deployment revision, Framework revision, source hashes, prediction location, metric summary and state transitions. `config.json`, streamed `run.log`, native predictions, `scores/summary.json`, and `/opt/evaluation-packages.txt` provide private reproducibility artifacts. Summaries retain prediction/scorer provenance. API concurrency affects scheduling and host RAM usage, not the frame count or generation protocol. Increase it only after measuring host resources.
 
-No published-score reproduction, reference-result parity, immutable cold-launch reliability, or complete customer-data agent is implied by implementation. Full NTU coverage is a real acquisition prerequisite. This change's empirical hardware/notebook status must be established separately; do not carry forward evidence from a different benchmark. No benchmark labels/media, credentials, executed notebook outputs, or private result artifacts belong in the PR.
+### Observed validation (2026-10-29)
+
+Runtime candidate `b0861ce448a648b2eb59c41a9358980bbb5df31c` was built and exercised on native Linux x86-64:
+
+- All **28 behavioral regressions passed inside the newly built evaluator image**.
+- JupyterLab **Run All Cells** executed all six code cells against the pinned Nano endpoint on one RTX PRO 6000 Blackwell Server Edition. The fixed five-question subset produced five valid predictions with matching identities and native local scores; correctness results remain private and are not a full benchmark score.
+- The saved real predictions were rescored in a separate CPU-only container with **`--network none`**, with the same correctness counts.
+- SHA-verified current public archives were downloaded and safely extracted. Actual full preparation found media for **3,800 of 4,000 rows** and rejected the run before inference because the **200 Fine-grained Pose NTU clips** were missing. No rows were dropped and no partial full score was produced.
+
+This reused an existing warm GPU endpoint with a manually staged evaluator; it was **not a cold one-click launch**. The complete 20-task run remains blocked on authorized NTU acquisition. No published-score reproduction, reference-result parity, commercial/distribution approval, or customer-data agent implementation is claimed. No benchmark labels/media, credentials, executed notebook outputs, or private result artifacts belong in the PR.
 
 ## Stop, restart, and maintain
 
