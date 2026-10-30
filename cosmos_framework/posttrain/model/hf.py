@@ -516,7 +516,7 @@ class HFModel(nn.Module):
 
         Validation and CPU-to-device transfer happen in `prepare_policy_batch`, while peers are
         still inside the rank-converged preflight. This method only invokes the model, matching the
-        i4-native policy capability contract.
+        native policy capability contract.
 
         A text-only HF model handed image kwargs raises from its own `forward` signature. That is
         the intended outcome: loud, at the first batch, naming the unexpected argument.

@@ -28,8 +28,8 @@ invariants are preserved:
   - **identical shapes**: bucket-snap lands both sides in the same canonical (H,W); a
     residual cross-bin mismatch raises rather than silently broadcasting.
 
-The {VIDEO,IMAGE}_RES_SIZE_INFO tables are imported from i4 (`projects.cosmos3.cosmos3`) —
-the canonical resolution tables the loaded checkpoint was trained on; i4, not cosmos-rl.
+The {VIDEO,IMAGE}_RES_SIZE_INFO tables are imported from `cosmos_framework.data.generator.utils` —
+the canonical resolution tables the loaded checkpoint was trained on, not cosmos-rl's.
 
 Data format (one JSON object per line):
     {"prompt": "...", "winner_video": "a.mp4", "loser_video": "b.mp4",

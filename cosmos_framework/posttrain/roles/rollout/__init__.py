@@ -30,7 +30,7 @@ __all__ = [
 
 
 def __getattr__(name):
-    # Lazy: cosmos3.py defers heavy i4/OSS policy imports to __init__/methods, but
+    # Lazy: cosmos3.py defers heavy native/OSS policy imports to __init__/methods, but
     # keep this re-export lazy too so importing roles.rollout stays cheap.
     if name == "PolicyBody":
         from cosmos_framework.posttrain.roles.rollout import cosmos3

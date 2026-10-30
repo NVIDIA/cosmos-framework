@@ -205,7 +205,7 @@ def _camera_pose_table_from_mads_frames(
     *,
     source_fps: float,
 ) -> pa.Table:
-    """Convert one MADS camera's contiguous OpenCV camera-to-world matrices."""
+    """Convert one rig camera's contiguous OpenCV camera-to-world matrices."""
     if not frames:
         raise ValueError(f"MADS pose archive has no frames for {stream_id!r}")
     expected_indices = list(range(max(frames) + 1))
@@ -269,7 +269,7 @@ def camera_pose_tables_from_mads_archive(
     stream_id_mapping: Mapping[str, str],
     source_fps: float,
 ) -> dict[str, pa.Table]:
-    """Convert a MADS per-frame NPY pose tar into canonical per-camera tables."""
+    """Convert a per-frame NPY pose tar into canonical per-camera tables."""
     if not payload:
         raise ValueError("MADS pose archive payload is empty")
     if not np.isfinite(source_fps) or source_fps <= 0.0:

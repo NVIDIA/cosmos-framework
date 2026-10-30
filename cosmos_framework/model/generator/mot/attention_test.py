@@ -909,7 +909,7 @@ class _MultiviewShape:
 # camera is 26 latent frames (``1 + (101 - 1) // 4`` at the VAE's temporal factor of 4, the way
 # ``lance_sft_video`` computes it) of 23x40 patches (720x1280 under 16x VAE and 2x patchify, the
 # height rounded up), so 23,920 tokens per camera. The first packs 2- and 3-camera samples (130
-# latent frames, ~120k tokens); the second is the full 11-camera MADS rig beside an 8-camera
+# latent frames, ~120k tokens); the second is the full 11-camera rig beside an 8-camera
 # sample (286 and 208 latent frames, ~455k tokens between them), which is where
 # ``av_wsm_transfer_16b``'s 11-view variant lives: it packs ~1.01M tokens per sample and shards
 # them to ~253k per rank at CP=4, the same order as the 263k-token sample here. The sample is
@@ -946,7 +946,7 @@ _MULTIVIEW_SHAPES = (
     _MultiviewShape(und_lens=(340, 240), token_shapes=((40, 4, 4), (35, 4, 4)), num_views=(5, 5)),
     # 101-frame 720p: 2 and 3 cameras, 26 latent frames each, on the 23x40 patch grid.
     _MultiviewShape(und_lens=(400, 320), token_shapes=((52, 23, 40), (78, 23, 40)), num_views=(2, 3)),
-    # The same clips over the full 11-camera MADS rig, and over 8 cameras.
+    # The same clips over the full 11-camera rig, and over 8 cameras.
     _MultiviewShape(und_lens=(500, 380), token_shapes=((286, 23, 40), (208, 23, 40)), num_views=(11, 8)),
 )
 

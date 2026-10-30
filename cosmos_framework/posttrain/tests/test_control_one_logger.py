@@ -11,7 +11,7 @@ submit racing shutdown is queued ahead of the stop or counted as dropped, after 
 events are dropped while the worker lives and inline once it exits, sync mode); `on_app_start`,
 `on_train_end` and `on_app_end` are gates: stamped at the call, placed as non-droppable markers behind
 every earlier event and delivered by the worker in emission order while the caller waits its bound, so
-a full queue never loses a boundary (the reviewer's probe: park the first callback, fill the queue, call
+a full queue never loses a boundary (probe: park the first callback, fill the queue, call
 `on_app_end`, release after 50 ms: app_end is delivered), a parked observer is never entered from a
 second thread (the gates wait their bound, the controller returns, and they arrive in order once the
 observer returns, OneLogger torn down last), and the terminal timestamps are the controller's clock at
@@ -184,7 +184,7 @@ class _ParkingObserver(_RecordingObserver):
 class _SerialObserver(_RecordingObserver):
     """Records like `_RecordingObserver` and watches how many threads are inside its hooks at once: `max_inside` is
     the peak and `overlaps` the (event, thread) pairs that entered while another hook was still running. Every hook
-    holds the observer's own `hook_lock` (an observer guarding its state, the reviewer's probe), so a second thread
+    holds the observer's own `hook_lock` (an observer guarding its state), so a second thread
     entering it blocks until the first leaves. `park_on` parks that hook until `release` (`entered` is set when the
     worker is inside it, as in `_ParkingObserver`); `sleep_s` makes every hook that slow instead."""
 
@@ -691,7 +691,7 @@ def test_checkpoint_location_payload_keeps_legacy_observer_signatures() -> None:
 
 
 def test_app_end_is_delivered_after_a_full_queue_when_the_parked_observer_recovers(monkeypatch):
-    """The reviewer's probe: the first callback is parked, the queue is filled, `on_app_end()` is called and the
+    """Probe: the first callback is parked, the queue is filled, `on_app_end()` is called and the
     callback is released 50 ms later. app_end must reach the observer: the gate takes no room in the queue, so the
     full queue cannot drop it; the worker delivers it behind every queued event and is then stopped."""
     warnings: list[str] = []
@@ -1118,7 +1118,7 @@ def _real_one_logger_utils(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def test_one_logger_timers_read_the_emission_clock_behind_a_slow_observer(monkeypatch):
-    """The reviewer's probe on the real wrapper: a slow observer ahead of OneLogger in the list delays every
+    """Probe on the real wrapper: a slow observer ahead of OneLogger in the list delays every
     OneLogger delivery, so with the wrapper's own `time.time()` clock a 200 ms batch is reported as the
     microseconds between two back-to-back deliveries. With the emission clock the wrapper's `train_batch`,
     `train_iterations` and `save_checkpoint` metrics measure the controller's intervals, its `*_finish_time`

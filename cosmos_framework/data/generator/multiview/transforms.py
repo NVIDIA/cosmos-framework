@@ -3,7 +3,7 @@
 
 """RGB/LiDAR data contracts and transforms; no dataset locations or remote catalog.
 
-Adapted from the corresponding i4 implementation.
+Adapted from the corresponding upstream implementation.
 """
 
 from __future__ import annotations
@@ -214,7 +214,7 @@ class FilterMissingData(Augmentor):
 class UnpackMetas(Augmentor):
     """Unpack a single ``metas`` JSON list into per-camera meta dicts.
 
-    Used for the **transfer** MADS data where all camera metas are packed into
+    Used for the **transfer** multiview data where all camera metas are packed into
     a single ``metas`` key (a JSON list indexed by camera position).
     """
 
@@ -1086,7 +1086,7 @@ def _drop_sample(augmentor: Augmentor, reason: str, data: dict[str, Any]) -> Non
 
 
 class _ExtractRangeVideo(Augmentor):
-    """Decode one MADS nested rangemap tar over the sampled source-frame interval.
+    """Decode one nested rangemap tar over the sampled source-frame interval.
 
     Reads the interval from ``frame_indices`` and writes ``{prefix}_range`` plus
     the source-frame IDs actually found as ``{prefix}_frame_indices``; a clip
@@ -1275,7 +1275,7 @@ class DescribeLidarTargetClip(Augmentor):
 def _select_structured_caption_window(meta_dict: dict[str, Any]) -> dict[str, Any] | None:
     """Pick one ``caption_structured`` chunk and report its caption and frame bounds.
 
-    MADS v1 metas hold a chunk map keyed by chunk id, each entry carrying a
+    Multiview v1 metas hold a chunk map keyed by chunk id, each entry carrying a
     caption plus frame bounds. Chunks without both a caption and a start frame
     are unusable, so this returns ``None`` when none qualify.
     """

@@ -463,8 +463,8 @@ jobs:
       # Cache downloaded input assets in a persistent dir (outside the repo tree,
       # so the cleanup step keeps it) and reuse it across runs.
       #
-      # ``-m L0`` mirrors upstream: this suite arrives from i4 through
-      # .file_mapping.json, its level markers are i4's, and i4's own CI runs it with
+      # ``-m L0`` mirrors upstream: this suite arrives from upstream through
+      # .file_mapping.json, its level markers are upstream's, and upstream's own CI runs it with
       # ``--L0``. Level 1 is where it puts the cases sized to production geometry --
       # hundreds of thousands of tokens, tens of GB of activations, minutes apiece --
       # which are written against that runner (whole GPUs per xdist worker, its NATTEN
@@ -475,9 +475,9 @@ jobs:
       # and inference2/, are intentionally omitted to keep this single-runner job within
       # its time budget. Add an L0 marker when one of those tests should join this gate.
       # L1, L2, and unmarked cases remain available for explicit or scheduled runs.
-      # Non-GPU tests generated from i4 are already covered by i4 CI and are deselected here;
+      # Non-GPU tests generated upstream are already covered by upstream CI and are deselected here;
       # CF-owned tests plus mapped tests explicitly marked GPU or gpus(N>0) remain in this job.
-      # The independently mapped Posttrain suite is covered by i4 CI and is not collected here.
+      # The independently mapped Posttrain suite is covered by upstream CI and is not collected here.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
@@ -546,7 +546,7 @@ jobs:
       - name: Distributed unit tests - context_parallel (torchrun, 4 ranks)
         run: |
           export LD_LIBRARY_PATH=
-          # The dynamic-shape DTensor compile case is not exercised by i4's single-process L0 CI
+          # The dynamic-shape DTensor compile case is not exercised by upstream's single-process L0 CI
           # and currently fails in this public 4-rank environment. Keep the other CP L0 coverage.
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
             cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts= -m L0 \

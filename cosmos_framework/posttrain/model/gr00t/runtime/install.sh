@@ -23,7 +23,7 @@ export UV_PROJECT_ENVIRONMENT=/opt/venv/posttrain
     --group gr00t-cu130-aarch64 --group nixl-cu130-aarch64 --group dev \
     --no-install-package vllm --no-install-package nixl --no-install-package nixl-cu13
 MODEL=/opt/venv/posttrain/bin/python
-# Match the repository's fixed i4 image without changing model dependency pins.
+# Match the repository's fixed training image without changing model dependency pins.
 "$UV" --no-config pip install --python "$MODEL" --no-deps \
     --index-url https://sc-hw-artf.nvidia.com/artifactory/api/pypi/hwinf-mlwfo-pypi/simple \
     one-logger==1.5.5 toml==0.10.2

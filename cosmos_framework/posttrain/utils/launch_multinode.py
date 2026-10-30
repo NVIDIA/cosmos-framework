@@ -309,7 +309,7 @@ srun --overlap --ntasks-per-node=1 --container-image {img} --container-mounts {m
 # competing import. An attach that lands before a node's keep-alive is up still succeeds, in a
 # mount-less container, so the probe checks the mount table for every declared mount: probing
 # `true` let Ray start on a node without the repo (`No module named 'projects'` at actor creation,
-# 2026-09-30, job 725539).
+# 2026-09-30).
 ready=0
 for i in $(seq 1 60); do
   if srun --overlap --ntasks-per-node=1 --container-name {cn} {mount_probe} >/dev/null 2>&1; then ready=1; break; fi

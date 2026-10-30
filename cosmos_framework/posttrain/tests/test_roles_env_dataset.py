@@ -1183,8 +1183,8 @@ def test_jsonl_reader_reads_a_whitespace_separated_object_stream(tmp_path: Path)
     read_both(compressed, list(CONVERSATION_ROWS))
     assert positions(compressed) == opens_on
 
-    # (2) the two shapes the reader refused before this change while the Hugging Face reader read them as 2 rows
-    # (the lab's review round 3, cases D7 and D8), and two objects on one line, which share the line they open on.
+    # (2) the two shapes the reader refused before this change while the Hugging Face reader read them as 2 rows,
+    # and two objects on one line, which share the line they open on.
     rows_ab = [{"messages": "a", "reward_spec": "x"}, {"messages": "b", "reward_spec": "y"}]
     two_documents = tmp_path / "two_documents.json"
     two_documents.write_text(

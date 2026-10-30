@@ -17,18 +17,18 @@ SFT_SERVE_CONTRACTS = (SFT_SERVE_CONTRACT_DEFAULT, SFT_SERVE_CONTRACT_PREFILLS_O
 the objective identity, in place of the environment variable
 ``SFT_SERVE_PREFILLS_OPENER``, which two byte-identical resolved configs could differ by without a trace).
 ``tools_no_prefill``: the serving path of record (Codex ``--thinking high`` -> a Responses request with
-``reasoning.effort`` and the harness's tools -> vLLM 0.24), which prefills NO ``<think>`` after ``<|im_start|>assistant\n``
-(review R138-01), so the student emits the opener itself. ``prefills_opener``: a serve that prefills ``<think>`` for the
+``reasoning.effort`` and the harness's tools -> vLLM 0.24), which prefills NO ``<think>`` after ``<|im_start|>assistant\n``,
+so the student emits the opener itself. ``prefills_opener``: a serve that prefills ``<think>`` for the
 student (a tool-less request with ``reasoning.effort`` or ``enable_thinking``), the only contract under which
-``mask_think_opener=True`` is accepted (review R142-04)."""
+``mask_think_opener=True`` is accepted."""
 
 
 def refuse_unacknowledged_opener_mask(serve_contract: str) -> None:
     """Raise ``ValueError`` for ``mask_think_opener=True`` under any serve contract but ``prefills_opener``.
 
     Called from :meth:`SFTConfig.__post_init__`, so the native recipe's ``prefilled_opener`` variant, a YAML and a ``--``
-    override on the ``default`` variant are judged by the same typed field (review round 142b, section 11; review threads
-    b196e5e99f / 12f2ce563b) instead of training the opener unsupervised under ``recipe_variant: default``.
+    override on the ``default`` variant are judged by the same typed field
+    instead of training the opener unsupervised under ``recipe_variant: default``.
     """
     if serve_contract != SFT_SERVE_CONTRACT_PREFILLS_OPENER:
         raise ValueError(
@@ -127,7 +127,7 @@ class SFTConfig(HFRunConfig):
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
-    # did not expose (review R125-D-01). Framework defaults = the pre-existing behaviour; the native recipe
+    # did not expose. Framework defaults = the pre-existing behaviour; the native recipe
     # (``configs/sft_qwen3_vl_moe_native.py``) documents its own values per knob.
     lr_schedule: SFTLRScheduleConfig = field(default_factory=SFTLRScheduleConfig)
     # Cross-entropy reduction exponent ``e`` of ``algorithm/sft.py``: every row contributes ``sum_tokens(CE) / n^e`` over
@@ -136,8 +136,8 @@ class SFTConfig(HFRunConfig):
     # (``weighted_ce_exponent=0.5``, ``cosmos3/algorithm/loss/cross_entropy.py::weighted_cross_entropy_loss``): a row
     # weighs ``sqrt(n)``. ``1.0`` = every row weighs the same.
     ce_exponent: float = 0.0
-    # Unsupervise the ``<think>`` token that opens an assistant turn, and only that token (reviews R134-01 / R134-02,
-    # corrected by review R138-01). Keep ``False``: on the lab's serving path of record Codex ``--thinking high`` sends
+    # Unsupervise the ``<think>`` token that opens an assistant turn, and only that token.
+    # Keep ``False``: on the lab's serving path of record Codex ``--thinking high`` sends
     # ``reasoning.effort`` AND a tools array on every call, and with tools present vLLM 0.24 prefills no opener -- the
     # served prefix is ``<|im_start|>assistant\n`` with NO ``<think>`` (the effort field adds 0 input tokens; measured
     # live, fixture ``tests/fixtures/served_prefix_with_tools.json``) -- so the student must emit ``<think>`` itself as
@@ -145,7 +145,7 @@ class SFTConfig(HFRunConfig):
     # without reasoning (a no-think turn) is rendered with; the opener's loss is the only training signal for that
     # token. ``True`` would leave it unsupervised; what a ``True``-trained student emits there is UNMEASURED with tools
     # present (no such student exists; the first token after ``assistant\n`` with tools present was never sampled), so
-    # the consequence is a RISK, not a measurement (review R142-01): C-04 (the lab's live probe record of the served
+    # the consequence is a RISK, not a measurement: C-04 (the lab's live probe record of the served
     # generation prompt on the A1a deployment, 2026-10-02, outside the repo; primary pointer vLLM 0.24
     # ``reasoning/basic_parsers.py`` 173-181: ``extract_reasoning`` returns all-reasoning only when ``</think>`` is absent)
     # section 3's measured trigger is "an output that carries no ``</think>``" being returned as a reasoning item (a
@@ -155,10 +155,9 @@ class SFTConfig(HFRunConfig):
     # tokens instead of 9), not a path of record; there the supervised opener costs one deterministic token per turn.
     # ``True`` is accepted only under ``serve_contract="prefills_opener"`` (the field below), checked in
     # :meth:`__post_init__` through :func:`refuse_unacknowledged_opener_mask`, so the native recipe's ``prefilled_opener``
-    # variant, a YAML and a ``--`` override on the ``default`` variant are judged by the same typed field (review R142-04,
-    # review round 142b, review threads b196e5e99f / 12f2ce563b).
+    # variant, a YAML and a ``--`` override on the ``default`` variant are judged by the same typed field.
     mask_think_opener: bool = False
-    # The serving contract the trained student is declared for (review threads b196e5e99f / 12f2ce563b: a typed,
+    # The serving contract the trained student is declared for (a typed,
     # persisted field, never an environment variable). ``tools_no_prefill`` (default): the path of record, where vLLM
     # 0.24 prefills no ``<think>`` with tools present and the student emits the opener itself, so ``mask_think_opener``
     # stays ``False``. ``prefills_opener``: a serve that prefills ``<think>`` for the student (a tool-less request with

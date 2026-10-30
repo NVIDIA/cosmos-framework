@@ -47,7 +47,7 @@ Contract:
   what OneLogger measures. A save that raised gets its end and no success.
 - Every OneLogger call is best effort. The first failure is logged as a warning and turns the hooks
   into no-ops for the rest of the run; OneLogger never fails or stalls training (the same stance
-  imaginaire's callback took in 62c44d846f8). ``on_app_end`` still flushes and releases the global
+  the upstream OneLogger callback takes). ``on_app_end`` still flushes and releases the global
   OneLogger object after such a failure, and the bus delivers it as a non-droppable gate behind every
   earlier event, so it runs whatever the queue held, in order, and never while another hook of this
   observer is still running. The gates carry their emission stamps like every other event, so
