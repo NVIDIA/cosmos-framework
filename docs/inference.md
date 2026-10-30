@@ -202,7 +202,7 @@ Increasing context parallelism can reduce per-GPU activation memory and speed up
 ## Model Arguments
 
 For calibrated static FP8 checkpoint export and vLLM/vLLM-Omni serving examples,
-see the [Nano/Super quantization cookbook](../.agents/skills/cookbooks/cosmos3/quantization/README.md).
+see the [Edge/Nano/Super quantization cookbook](../.agents/skills/cookbooks/cosmos3/quantization/README.md).
 Its exported weights, scales, and activation policy are distinct from the
 load-time quantization flags below. Native Framework FP8 checkpoint inference
 compatibility is outside that cookbook's serving validation.
