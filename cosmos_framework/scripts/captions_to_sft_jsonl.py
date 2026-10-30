@@ -16,13 +16,15 @@ and a caption.  This converter emits **both** caption representations per window
 If a clip has no ``caption.json`` (e.g. produced by an older captioner), the row is
 written dense-only, exactly as before.
 
-Filters mirror what training actually consumes so dataset counts match:
+By default, filters mirror what training actually consumes so dataset counts match:
 
 * clips longer than 61 s are dropped (matches the loader's hard cap);
 * windows shorter than ``max(61, num_video_frames)`` frames are dropped.  Pass
   ``--num-video-frames`` to match your training recipe.  The default (-1) applies
   only the loader's metadata minimum of 61 frames, matching the example recipe
   (``num_video_frames=-1``) so short example clips (~85 frames) are kept.
+* for short-task datasets, pass ``--max-duration-s None --min-window-frames None``
+  and use ``--num-video-frames -1`` so metadata conversion does not discard short clips.
 
 A sibling ``<output>.summary.json`` records kept/dropped counts per reason.
 
@@ -60,8 +62,8 @@ import tyro
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 from cosmos_framework.scripts.video_metadata import probe_video_metadata
 
-_MAX_DURATION = 61.0  # seconds; matches hard-coded limit in sft_dataset.py
-_MIN_FRAMES = 61  # matches the metadata min_frames=61 in get_sft_dataset()
+_MAX_DURATION = 61.0  # seconds; matches default in sft_dataset.py
+_MIN_FRAMES = 61  # matches default metadata min_frames in get_sft_dataset()
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm")
 
 
@@ -96,10 +98,28 @@ def main(
         int,
         tyro.conf.arg(
             help="Decoded frames per window in your training recipe; windows shorter than "
-            "max(61, this) are dropped. -1 (default) applies only the 61-frame metadata "
-            "minimum, matching the example recipe."
+            "max(min_window_frames, this) are dropped when min_window_frames is set. "
+            "-1 (default) applies only the metadata minimum."
         ),
     ] = -1,
+    min_window_frames: Annotated[
+        int | None,
+        tyro.conf.arg(
+            help=(
+                f"Drop windows shorter than this metadata floor. Default {_MIN_FRAMES} matches "
+                "get_sft_dataset(). Set to None for short-task datasets."
+            ),
+        ),
+    ] = _MIN_FRAMES,
+    max_duration_s: Annotated[
+        float | None,
+        tyro.conf.arg(
+            help=(
+                f"Drop clips longer than this. Default {_MAX_DURATION} matches get_sft_dataset(). "
+                "Set to None for short-task datasets."
+            ),
+        ),
+    ] = _MAX_DURATION,
     min_short_edge: Annotated[
         int, tyro.conf.arg(help="Drop clips whose shortest spatial edge is below this value. 0 disables.")
     ] = 0,
@@ -115,7 +135,12 @@ def main(
         print(f"No caption.txt / caption.json files found under {captions_dir}", file=sys.stderr)
         sys.exit(1)
 
-    effective_min_frames = _MIN_FRAMES if num_video_frames <= 0 else max(_MIN_FRAMES, num_video_frames)
+    if min_window_frames is None:
+        effective_min_frames = None if num_video_frames <= 0 else num_video_frames
+    elif num_video_frames <= 0:
+        effective_min_frames = min_window_frames
+    else:
+        effective_min_frames = max(min_window_frames, num_video_frames)
 
     records = []
     drops: Counter[str] = Counter()
@@ -153,12 +178,12 @@ def main(
             drops["ffprobe_error"] += 1
             continue
 
-        if meta["duration"] > _MAX_DURATION:
-            print(f"  SKIP {name}: duration {meta['duration']:.1f}s > {_MAX_DURATION}s")
+        if max_duration_s is not None and meta["duration"] > max_duration_s:
+            print(f"  SKIP {name}: duration {meta['duration']:.1f}s > {max_duration_s}s")
             drops["duration_too_long"] += 1
             continue
 
-        if meta["total_frames"] < effective_min_frames:
+        if effective_min_frames is not None and meta["total_frames"] < effective_min_frames:
             print(f"  SKIP {name}: only {meta['total_frames']} frames < {effective_min_frames}")
             drops["too_few_frames"] += 1
             continue
@@ -204,10 +229,11 @@ def main(
         "records_dropped": sum(drops.values()),
         "drops_by_reason": dict(drops),
         "filters": {
-            "max_duration_s": _MAX_DURATION,
+            "max_duration_s": max_duration_s,
             "min_window_frames": effective_min_frames,
             "min_short_edge": min_short_edge,
             "num_video_frames": num_video_frames,
+            "metadata_min_window_frames": min_window_frames,
         },
     }
     summary_path = output.with_suffix(output.suffix + ".summary.json")
