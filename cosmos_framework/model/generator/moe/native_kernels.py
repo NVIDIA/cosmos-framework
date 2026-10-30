@@ -9,11 +9,13 @@ try:
     import triton
     import triton.language as tl
 except ImportError:  # pragma: no cover - platform dependent
-    # Triton publishes no official Windows wheel. The fused MoE kernels below are its only
-    # consumers here, but this module is imported *transitively* by the config graph
-    # (qwen3_vl_moe/moe_kernels.py -> here) even for dense, non-MoE models. Stub the symbols
-    # so import succeeds; any attempt to actually launch a kernel then fails loudly instead
-    # of silently degrading.
+    # The upstream ``triton`` package ships Linux wheels only; on Windows, Triton comes from
+    # the separately installed ``triton-windows`` package (maintained under the triton-lang
+    # org, with win_amd64 and win_arm64 wheels), which not every environment has. The fused
+    # MoE kernels below are the only consumers here, but this module is imported
+    # *transitively* by the config graph (qwen3_vl_moe/moe_kernels.py -> here) even for
+    # dense, non-MoE models. Stub the symbols so import succeeds; any attempt to actually
+    # launch a kernel then fails loudly instead of silently degrading.
     class _TritonUnavailable:
         """Placeholder for triton / triton.language when triton is absent."""
 
