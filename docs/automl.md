@@ -1018,9 +1018,8 @@ H100 GPUs, DCP-to-HF export and single-GPU evaluation. Both scored **8/16 (50%)*
 The approved limits were 30 minutes per trial and two hours for the search, with
 no automatic training retries or paid LLM calls.
 
-The initial source-install receipts identify Framework commit
-`def247af66f22abb45d25c3138bf13d0edcb4496` and core commit
-`bd21cbd3a6aa24e3277c0d232dab1614f935c03e`, with core distribution `0.1.0`.
+The initial source-install receipts identify the Framework and core commits of that build, with core
+distribution `0.1.0`.
 These are historical build-specific results, not a GPU rerun of later PR heads.
 
 This was a **pass after explicit controller recovery**, not an uninterrupted

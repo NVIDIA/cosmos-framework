@@ -64,7 +64,7 @@ class RangeSmoothing:
     column each sample is a different beam at a different elevation, and on the
     ground plane -- most of a sweep -- that is a steep true range gradient, so
     those neighbours disagree because the surface really is at another distance.
-    Averaging them in trades noise for distortion. Measured over 15 MADS sweeps,
+    Averaging them in trades noise for distortion. Measured over 15 recorded sweeps,
     filtering ground truth with the 5x5 window this shipped with moves a
     surviving ray 0.098 m, against 0.067 m for one row; a 5x1 column-only
     control accounts for 0.079 m of that, which is where it comes from. On truth

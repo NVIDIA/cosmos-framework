@@ -720,7 +720,7 @@ def resolve_per_view_caption_fields(
     'mode' is 'auto' (derive from the training dataloaders), 'on' or 'off'
     (explicit, for configs that do not carry dataloaders, e.g. a prepared
     student config). 'task' explicitly names the per-view tokenizer task. As in
-    i4, 'auto' mode records 'per_view_captions: false' for a config without
+    Upstream, 'auto' mode records 'per_view_captions: false' for a config without
     training dataloaders; pass 'on' for a per-view model exported from such a
     config.
     """
@@ -756,7 +756,7 @@ def resolve_per_view_caption_fields(
 
     if mode == "auto":
         if derived is None:
-            # As i4: no caption streams are derivable, so the layout is recorded as merged.
+            # As upstream: no caption streams are derivable, so the layout is recorded as merged.
             return {PER_VIEW_CAPTIONS_KEY: False}
         fields, streams, tasks = derived
         if streams:

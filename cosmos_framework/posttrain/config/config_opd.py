@@ -25,7 +25,7 @@ from cosmos_framework.posttrain.config.rl import OPDConfig
 @attrs.define(slots=False)
 class PosttrainOPDConfig(PosttrainGRPOConfig):
     algorithm: str = "opd"
-    # Preserve the established text-only OPD demo/default. Native OPD recipes select i4 explicitly.
+    # Preserve the established text-only OPD demo/default. Native OPD recipes select the native backend explicitly.
     model_backend: str = "hf"
     rl: OPDConfig = attrs.field(factory=OPDConfig)
 

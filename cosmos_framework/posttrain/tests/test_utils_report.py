@@ -116,7 +116,7 @@ def test_console_reporter_dynamic_total_seam(capture_posttrain_log: list[logging
 def test_console_reporter_prints_sub_milli_magnitudes_in_scientific_notation(
     capture_posttrain_log: list[logging.LogRecord],
 ) -> None:
-    """A learning rate of 1e-5 printed as `+0.0000` at four decimals (review R121B-01): a magnitude below 1e-3
+    """A learning rate of 1e-5 printed as `+0.0000` at four decimals: a magnitude below 1e-3
     prints in scientific notation; zero and everything from 1e-3 up keep the fixed four-decimal format."""
     keys = ("train/loss_avg", "train/learning_rate", "train/grad_norm", "train/valid_token_count", "val/loss_avg")
     ConsoleReporter(total_steps=1401, headline_keys=keys).report(
@@ -655,7 +655,7 @@ def test_wandb_reporter_log_failure_circuit_breaks(
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_wandb_run_id_from_run_ts_dir(tmp_path: Path) -> None:
-    """out_dir = <name>/<RUN_TS>/ ⇒ the wandb id IS the directory name (i4 convention,
+    """out_dir = <name>/<RUN_TS>/ ⇒ the wandb id IS the directory name (upstream convention,
     no state file); non-ts dirs keep the legacy persisted-random-id mechanism."""
     ts_dir = tmp_path / "exp" / "20260707103000"
     ts_dir.mkdir(parents=True)
@@ -811,7 +811,7 @@ def test_wandb_destination_and_safe_config_never_serialize_credentials(
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_jsonl_reporter_appends_one_row_per_committed_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review R125-B-03: a step's train and validation payloads land as ONE row (stage, stage, commit); every public key
+    """A step's train and validation payloads land as ONE row (stage, stage, commit); every public key
     is kept; ``make_reporters`` adds the channel on rank 0 when a path is given and never off rank 0."""
     import json
 
@@ -843,10 +843,10 @@ def test_jsonl_reporter_appends_one_row_per_committed_step(tmp_path: Path, monke
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_jsonl_reporter_keeps_only_the_rows_the_attempt_will_not_re_emit(tmp_path: Path) -> None:
-    """Review R134-05: ``keep_through`` is the step the attempt resumes at. ``start`` keeps the rows with ``step <=
+    """``keep_through`` is the step the attempt resumes at. ``start`` keeps the rows with ``step <=
     keep_through`` (the relaunch re-emits the later ones, so the file stays one row per step), seeds ``prior_clip_counts``
     from the kept clip record, and ``-1`` (a fresh attempt) empties the file; a row without an integer step fails the
-    start. 22bfce78f40's reporter only created the directory and appended."""
+    start. The earlier reporter only created the directory and appended."""
     import json
 
     from cosmos_framework.posttrain.utils.report import JsonlReporter, prior_clip_counts

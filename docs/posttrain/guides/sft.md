@@ -12,7 +12,7 @@ SFT opts into Transformers 5.8.1; existing RL/GR00T defaults stay on 4.57.6. The
 supports Qwen text models, dense Qwen3.5/3.8 multimodal models and the Qwen3-VL / Qwen3-VL-MoE
 families (all three ship `Qwen3VLProcessor`). A "seat" is the model construction path the SFT
 objective sits on. Qwen3.5/3.8 sits on the HF backend (`model_backend='hf'`,
-`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the i4-native policy builder
+`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the native policy builder
 (`model_backend='i4'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
 build_qwen3_vl_native_policy, ...)`, see [the native recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3_vl_moe_native.py)):
 the HF backend refuses MoE VLMs because the general weight loader has no fused-expert handling and

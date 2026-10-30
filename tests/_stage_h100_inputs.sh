@@ -5,7 +5,7 @@
 # One-shot helper: bootstraps the venv, stages the inputs the H100 regression
 # run needs into a persistent lustre directory, and writes an `env.sh` that
 # `source`s the venv + all paths needed by tests/launch_regression_test.py.
-# Intended to run inside the i4 training container (torch.25.05.sqsh).
+# Intended to run inside the training container (torch.25.05.sqsh).
 #
 # Usage (from any directory, inside the container):
 #   export HF_TOKEN=hf_...

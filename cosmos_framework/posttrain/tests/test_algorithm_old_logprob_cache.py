@@ -429,7 +429,7 @@ def test_discarded_chunks_advance_the_read_pointer_so_pairing_survives_a_poisone
     an importance ratio -- `exp(log pi(A) - log pi_old(B))` saturates the clamp and pins tokens at
     the clip boundary, which is worse than never freezing.
 
-    Shape here is the reviewer's: n_mini=2, n_micro=2, one discard in the first window.
+    Shape here: n_mini=2, n_micro=2, one discard in the first window.
     """
     import torch
 

@@ -309,7 +309,7 @@ def loop(units: dict[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
                 )
             history.append(loss)
             # Driver-perceived step wall time (data fetch + train + handle resolve) —
-            # the timer/* signal the i4 trainer's WandBCallback also exports.
+            # the timer/* signal the trainer's WandBCallback also exports.
             metrics = {**metrics, "timer/e2e_step_s": time.monotonic() - t0}
             model_step = step + 1
             restored_iteration = int(_resolve_identical(policy.iteration(), operation="policy.iteration"))
