@@ -328,15 +328,20 @@ GPUs.
 Set up the environment and start the server with the shared
 [TensorRT-LLM Reasoner setup](../README.md#tensorrt-llm-reasoner). It covers the
 prebuilt release container or a local source installation, Hugging Face
-authentication, and launch commands for **Cosmos3-Nano** on one GPU or
-**Cosmos3-Super** on four GPUs.
+authentication, and launch commands for **Cosmos3-Nano** or **Cosmos3-Edge**
+on one GPU, or **Cosmos3-Super** on four GPUs. Nano and Super use the pinned
+`release:1.3.0rc22` image. Edge uses a source build of TensorRT-LLM `main` at
+or after `39a44fab`, which includes `Cosmos3EdgeForConditionalGeneration`.
+Release images through `v1.4.0rc1` do not.
 
 The [`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) notebook
 publishes the selected server on host port **8001** and waits for `/health`
 before running the request examples. Point standalone clients at
 `http://localhost:8001/v1`.
 
-Once the server is ready, query it with the OpenAI client:
+Once the server is ready, query it with the OpenAI client. This request matches
+the Cosmos Framework Edge example: one sentence, at most 1024 tokens, and
+sampling disabled.
 
 ```python
 from pathlib import Path
@@ -354,11 +359,15 @@ response = client.chat.completions.create(
             "role": "user",
             "content": [
                 {"type": "image_url", "image_url": {"url": image_url}},
-                {"type": "text", "text": "Caption the image in detail."},
+                {
+                    "type": "text",
+                    "text": "Describe what is happening in this image in one sentence.",
+                },
             ],
         }
     ],
-    max_tokens=4096,
+    max_tokens=1024,
+    temperature=0,
     seed=0,
 )
 
@@ -367,8 +376,10 @@ print(response.choices[0].message.content)
 
 ### Notebook walkthrough
 
-[`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) launches either
-**Cosmos3-Nano** or **Cosmos3-Super**, waits for the server to become healthy,
+[`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) launches
+**Cosmos3-Nano** or **Cosmos3-Super** from the pinned release image, or
+**Cosmos3-Edge** from a TensorRT-LLM `main` build at or after `39a44fab`.
+It waits for the server to become healthy
 and walks through image and video examples covering detailed captioning,
 temporal localization, embodied reasoning, common-sense reasoning, 2D
 grounding, describe-anything, action CoT trajectories, driving scenes,
