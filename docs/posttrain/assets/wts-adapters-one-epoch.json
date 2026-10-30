@@ -1,0 +1,157 @@
+{
+  "format": "cosmos-adapter-wts-qualification-v1",
+  "model": "native dense Cosmos3-Nano-VLM (8.7B)",
+  "method": "ordinary LoRA",
+  "targets": 81,
+  "trainable_parameters": 4444160,
+  "rank": 8,
+  "alpha": 16,
+  "adapter_dtype": "float32",
+  "base_dtype": "bfloat16",
+  "seed": 42,
+  "training": {
+    "build": {
+      "source_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+      "source_base": "7738e9e7969e30160163b9d7941782fefd6eaa5c",
+      "wheel_sha256": "b764b457e629eb8a9a23054bc87b71c42a486f5e5cf16d6c2aa8fd2bb674848b",
+      "container_sha256": "8cbc7ccaf2f40391a8c5eb9f6e7c13f889c0404af1dcb1284b9934347b5c055b",
+      "verified_package_files": 1838,
+      "versions": {
+        "torch": "2.10.0+cu128",
+        "transformers": "5.8.1",
+        "safetensors": "0.8.0",
+        "torchcodec": "0.10.0"
+      }
+    },
+    "updates": 1111,
+    "unique_training_rows": 5555,
+    "padding_rows": 0,
+    "dropped_rows": 0,
+    "mean_training_loss_weighted_by_tokens": 0.18750258254385127,
+    "last_training_loss": 0.02707118045655079,
+    "step_seconds": 6358.953873460006,
+    "samples_per_step_second": 0.8735713626080193,
+    "supervised_tokens_per_step_second": 1.7471427252160385,
+    "wall_seconds_including_setup_validation_checkpoints": 11620.0,
+    "active_attempt_wall_seconds": 11450.0,
+    "between_attempt_gap_seconds": 170.0,
+    "peak_sampled_gpu_memory_mib": 20439.0,
+    "gpu_memory_sampling_interval_seconds": 10,
+    "final_checkpoint_bytes": 17590388729,
+    "all_update_losses_and_gradient_norms_finite": true,
+    "optimizer_clock_matches_every_metric_step": true,
+    "slurm_accounting": [
+      {
+        "job_id": "37640623",
+        "elapsed_seconds": "6615",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "allocated_resources": "billing=1,cpu=16,gres/gpu=1,mem=160000M,node=1"
+      },
+      {
+        "job_id": "37648509",
+        "elapsed_seconds": "4990",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "allocated_resources": "billing=1,cpu=16,gres/gpu=1,mem=160000M,node=1"
+      }
+    ],
+    "validation": [
+      {
+        "step": 0,
+        "loss": 0.6591825619353532,
+        "examples": 2676.0
+      },
+      {
+        "step": 1111,
+        "loss": 0.14688044488321564,
+        "examples": 2676.0
+      }
+    ]
+  },
+  "evaluation": {
+    "build": {
+      "source_revision": "480be5a5ba712bf0d9409ca71a7dac87a2d08101",
+      "source_base": "7738e9e7969e30160163b9d7941782fefd6eaa5c",
+      "wheel_sha256": "e32dc80bdf6336a3fad54360751ec0d04d5291ccadc9ebd353fb82b594f9c7cb",
+      "container_sha256": "02b38355a58313bfd33161db595fd7324e8bd26fb208a4ef19b0f21e1eb5f12f",
+      "verified_package_files": 1838,
+      "versions": {
+        "torch": "2.10.0+cu128",
+        "transformers": "5.8.1",
+        "safetensors": "0.8.0",
+        "torchcodec": "0.10.0"
+      }
+    },
+    "all_wts_eval": {
+      "total": 2676,
+      "correct": 2467,
+      "accuracy": 0.921898355754858,
+      "invalid": 0
+    },
+    "reserved_scene_disjoint_test": {
+      "total": 576,
+      "correct": 533,
+      "accuracy": 0.9253472222222222,
+      "invalid": 0
+    },
+    "generation_nll": 0.01411574607425195,
+    "generation_nll_note": "Generated-token NLL; teacher-forced validation loss is in training-verification.json.",
+    "evaluation_seconds": 992.0,
+    "samples_per_second": 2.6975806451612905,
+    "peak_sampled_gpu_memory_mib": {
+      "0": 43611.0,
+      "1": 34185.0
+    },
+    "gpu_memory_sampling_interval_seconds": 10,
+    "slurm_accounting": [
+      {
+        "job_id": "37652713",
+        "elapsed_seconds": "1491",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "allocated_resources": "billing=2,cpu=16,gres/gpu=2,mem=240000M,node=1"
+      },
+      {
+        "job_id": "37653787",
+        "elapsed_seconds": "118",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "allocated_resources": "cpu=2,mem=8000M,node=1"
+      }
+    ],
+    "precision": "float32",
+    "memory_measurement_scope": "Entire GPU job, including export and fresh reload before inference."
+  },
+  "exports": {
+    "status": "passed",
+    "frozen_base_tensors_verified": 750,
+    "frozen_base_sha256": "0a1e6ac90ed2a4fdc8e24e9331f307e56e9498df588fb369bf6552eacb0bc456",
+    "portable_bytes": 17844563,
+    "merged_bytes": 35084709565,
+    "portable_export_seconds_including_verification": 71.33192263299134,
+    "merged_export_seconds": 198.40819902700605,
+    "fresh_merged_reload": {
+      "status": "passed",
+      "maximum_logit_error": 0.0001678466796875,
+      "mean_absolute_logit_error": 1.2142879313614685e-05,
+      "argmax_equal": 32,
+      "positions": 32
+    },
+    "serialized_tensors_verified": 750
+  },
+  "recovery": {
+    "training": "37640623 stopped at scheduled checkpoint 666; 37648509 resumed at 667 and completed 1111. Incomplete-epoch wrapper verifier returned 1 for first allocation.",
+    "evaluation": "37652713 inference completed; wrapper verifier failed due omitted reserved-data mount. CPU job 37653787 ran the unchanged verifier with the corrected mount.",
+    "prediction_files_unchanged": true
+  },
+  "split_note": "Full evaluation has no row/video overlap with training, but 44 rows share four scene IDs. The reserved 576-row subset is scene-disjoint and was not used to select hyperparameters in this contribution.",
+  "evidence_sha256": {
+    "training_evidence_sha256": "9e6644d5595e4772801e15fc3cf107d51aef4dc425bc9de6ffda16dc953a0215",
+    "evaluation_evidence_sha256": "3a8afcbf586c23e35ab2ec4d0be7cfa272a550c807c53b51dd2405f2fbc54e4d",
+    "summary_sha256": "b0463593efd6441e0f39b1e781bb9872e45e78ef7cd66ad5a660ab6f6e1c8f70",
+    "plot_svg_sha256": "ed36bb6ffef55d1a8645c7028670f022665146b5f2ebe6efb85ad46dc2d23249",
+    "reconciliation_job": "37653787",
+    "heldout_annotation_sha256": "3cab357a0ebb9bf7292525ae6f33dd43ffef916226c0e6d8171c3f45dce71e28"
+  }
+}

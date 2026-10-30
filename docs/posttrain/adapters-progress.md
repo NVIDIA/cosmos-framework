@@ -24,8 +24,8 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Portable artifacts and failure handling | `checkpoint/adapters.py`; immutable publication, base/media identity, strict state, incomplete/wrong artifacts; all 35 fresh-process GPU reloads bitwise exact | Implemented and validated |
 | FP32 merged export | `checkpoint/tools/adapters.py`, existing HF materializer; 35 numerical cases and complete retained metadata; re-resolution rejects corrupt target manifests | Implemented and validated: complete numerical matrix plus final installed/GPU metadata/target validation |
 | Installed package provenance | Wheel/source comparison and runtime byte attestation of all 1,838 package files | Implemented and validated through final runtime revision `480be5a` |
-| Full WTS epoch and held-out evaluation | Existing SFT/evaluation entrypoints; exact 5,555-row cursor, 2,676-row validation, reserved 576-row score | Training running as Slurm `37640623`; full initial validation in progress, epoch/evaluation results pending |
-| Recipes, documentation and review | `configs/sft_cosmos3_nano_adapters.py`, WTS converter, [adapter guide](guides/adapters.md), PR #342 | Implemented; final WTS evidence pending |
+| Full WTS epoch and held-out evaluation | Existing SFT/evaluation entrypoints; exact 5,555-row cursor, 2,676-row validation, reserved 576-row score | Implemented and validated: training loss 0.18750, validation 0.65918 → 0.14688; MCQ 92.19%, reserved subset 92.53%, zero invalid answers; operational recoveries recorded below |
+| Recipes, documentation and review | `configs/sft_cosmos3_nano_adapters.py`, WTS converter, [adapter guide](guides/adapters.md), corrected general TOML/training guides, PR #342 | Implemented and validated; complete qualification and WTS evidence below |
 
 ## Qualified profile and exclusions
 
@@ -99,7 +99,8 @@ results as a new training run.
 | Installed metadata build | `52a92d9` | `37638174`: 189 tests passed; Lustre immutable-publication probe and package attestation passed |
 | Real-model metadata contract | `52a92d9` | `37638175`: passed fresh reload, full adapter/media identity and 750 tensors; merged payload SHA identical to the numerical reference |
 | Final installed/export target validation | `480be5a` | `37641221`: 193 installed tests; `37641231`: fresh reload, all 750 tensors and full metadata passed; merged payload SHA unchanged |
-| Full WTS | `52a92d9` | `37640623`: running after all preceding feature gates passed; final evaluation will use export revision `480be5a` |
+| Full WTS training | `52a92d9` | `37640623`: scheduled signal handled with full checkpoint 666; incomplete-epoch verifier exited 1 as expected. `37648509`: resumed at update 667 and completed `0:0`; all 1,111 updates and the final 2,676-row validation verified |
+| Full WTS export/evaluation | `480be5a` | `37652713`: export, fresh reload and all 2,676 predictions completed; wrapper exited 1 because the reserved-test JSON was not mounted. CPU reconciliation `37653787` completed `0:0` with the unchanged verifier and input/prediction hashes |
 
 Immutable artifact SHA-256 values:
 
@@ -118,3 +119,62 @@ accuracy, invalid answers and generated-token NLL separately. A reserved
 The full evaluation split has no row/video overlap with training, but 44 rows
 share four scene IDs; report both scores. Resource and artifact measurements
 are retained with each installed revision. No new AutoML search was started.
+
+## Full WTS result
+
+![One-epoch training and validation losses with WTS answer accuracy](assets/wts-adapters-one-epoch.png)
+
+[Machine-readable results and artifact identities](assets/wts-adapters-one-epoch.json)
+record the measured revisions, package/container digests, job outcomes and evidence
+hashes. Training uses `52a92d9`; final export and evaluation use `480be5a`.
+
+The all-component ordinary-LoRA recipe completed exactly one epoch: 5,555 unique
+rows, 1,111 applied optimizer updates, zero padding/drop, and cursor
+`epoch=1, position=5555, world_size=1, seed=42`. Every recorded loss and gradient
+norm is finite; optimizer clocks match every metric step with zero skipped updates.
+The real Slurm continuation starts at 667 after committed checkpoint 666, retaining
+the initial validation result and the continuous metric/data history.
+
+| Measurement | Result |
+|---|---:|
+| Token-weighted mean training loss | 0.18750258 |
+| Last training-batch loss | 0.02707118 |
+| Full validation loss before / after | 0.65918256 / 0.14688044 |
+| Validation examples per pass | 2,676 |
+| Sum of training step durations | 6,358.95 s |
+| Throughput over training steps | 0.87357 rows/s; 1.74714 supervised tokens/s |
+| Wall time including setup, both validations, saves and restart gap | 11,620 s |
+| Active attempt time / gap between attempts | 11,450 s / 170 s |
+| Allocated GPU time across both one-GPU jobs | 11,605 GPU-s (3.224 GPU-h) |
+| Peak sampled GPU memory (10 s sampling) | 20,439 MiB (19.96 GiB) |
+| Final resumable checkpoint size | 17,590,388,729 bytes |
+| Full WTS MCQ accuracy | 2,467 / 2,676 (92.1898%) |
+| Reserved scene-disjoint MCQ accuracy | 533 / 576 (92.5347%) |
+| Invalid answers, full / reserved | 0 / 0 |
+| Generated-token NLL (separate from teacher-forced validation) | 0.01411575 |
+| Two-GPU evaluation duration / throughput | 992 s / 2.69758 examples/s |
+| GPU allocation for export, reload and evaluation | 1,491 s × 2 GPUs (0.8283 GPU-h) |
+| Peak sampled GPU memory across that entire job, GPU 0 / 1 | 43,611 / 34,185 MiB |
+| Portable adapter size / export with verification | 17,844,563 bytes / 71.33 s |
+| FP32 merged model size / export | 35,084,709,565 bytes / 198.41 s |
+
+All 750 frozen base tensors in the completed checkpoint equal their original
+training-dtype values. The final merged export verifies all 750 serialized tensors
+exactly. Fresh-process output checks pass the unchanged FP32 bounds: maximum logit
+error `0.0001678467`, mean `0.0000121429`, and 32/32 argmax positions agree.
+Evaluation memory sampling starts before export/reload, so the GPU 0 peak includes
+that work rather than representing inference alone.
+
+The GPU evaluator completed successfully and wrote all predictions, but its batch
+wrapper returned `1:0` when the reserved-test annotation file was missing from the
+container mounts. The file existed on shared storage. After correcting the mount,
+CPU-only job `37653787` ran the original verifier unchanged, reconciled every gold
+and prediction ID, and confirmed input/prediction hashes before and after. It
+completed `0:0` in 118 s; inference was not repeated. The failed wrapper status is
+retained alongside that recovery. The reserved-test annotation SHA-256 is
+`3cab357a0ebb9bf7292525ae6f33dd43ffef916226c0e6d8171c3f45dce71e28`.
+
+The earlier TOML WTS baseline uses a different workflow, effective batch and adapter
+scope; it is not an equivalent performance comparison. All requirements above are
+validated within the stated model/method/distributed profile; excluded profiles
+remain separate qualification work.
