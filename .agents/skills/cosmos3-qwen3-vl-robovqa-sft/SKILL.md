@@ -79,10 +79,10 @@ and 2 updates (the scores then mean nothing).
 
 ## Variants and hardware
 
-| Variant | Data | GPU | Time | Status |
-| --- | --- | --- | --- | --- |
-| Full run | RoboVQA, 7,998 training clips, 125 updates | one GPU with at least 150,000 MiB free for `train` (torch peaks at 143,566 MiB reserved); every other step fits a smaller GPU | about 3.5 h, training 2 h 05 to 2 h 14 | verified twice on one GB300, October 2026 |
-| Smoke (`--smoke`) | the six bundled clips, 2 updates | `setup` to `before` on any GPU that holds the 8B model in bfloat16 (16.3 GiB); `train`, `export`, `after` need the same 150 GB GPU | environments plus about 15 minutes | measured by this skill's eval |
+| Variant           | Data                                       | GPU                                                                                                                                | Time                                   | Status                                    |
+| ----------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ----------------------------------------- |
+| Full run          | RoboVQA, 7,998 training clips, 125 updates | one GPU with at least 150,000 MiB free for `train` (torch peaks at 143,566 MiB reserved); every other step fits a smaller GPU      | about 3.5 h, training 2 h 05 to 2 h 14 | verified twice on one GB300, October 2026 |
+| Smoke (`--smoke`) | the six bundled clips, 2 updates           | `setup` to `before` on any GPU that holds the 8B model in bfloat16 (16.3 GiB); `train`, `export`, `after` need the same 150 GB GPU | environments plus about 15 minutes     | measured by this skill's eval             |
 
 Disk: about 110 GB for the full run, about 75 GB for the smoke variant (environments, model, checkpoint, export).
 x86_64 hosts take the `nvidia-npp` wheel from PyPI in `setup`; that route is unverified. On a host with several
@@ -92,8 +92,8 @@ pointer files, and asks for `git-lfs` to be installed when it is missing.
 
 ## Bundled assets
 
-| Asset | Path | Used by |
-| --- | --- | --- |
+| Asset                                                                                     | Path                                                                                            | Used by              |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------- |
 | Six RoboVQA clips with their source rows (Tianli/robovqa, Apache-2.0, revision `eb58194`) | `assets/robovqa/videos/`, `assets/robovqa/json/train/sample.json`, `assets/robovqa/LICENSE.txt` | every `--smoke` step |
 
 The bundled directory has the layout of the full download. Six clips split 4 / 0 / 2 (train / val / test).
@@ -199,23 +199,23 @@ Every stage's full output is in the artifacts directory's `logs` folder, named a
 `-smoke` suffix for the smoke variant; a re-run of a stage keeps the previous attempt's log as `<name>.log.prev`). A run
 is correct when:
 
-| Step | Correct when |
-| --- | --- |
-| data | the split manifest's `leakage_check` values are all 0 and verify prints `"all_ok": true, "bad": 0` |
-| preflight | the train gate line ends in `failed 0` |
+| Step          | Correct when                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------- |
+| data          | the split manifest's `leakage_check` values are all 0 and verify prints `"all_ok": true, "bad": 0`        |
+| preflight     | the train gate line ends in `failed 0`                                                                    |
 | before, after | the overall line reports `n=1000` (`n=2` with `--smoke`) and the scores file shows no missing predictions |
-| train | the log has a `step N/125` line per update and `SFT DONE` |
-| export | `[materialize] OK` with 750 tensors |
+| train         | the log has a `step N/125` line per update and `SFT DONE`                                                 |
+| export        | `[materialize] OK` with 750 tensors                                                                       |
 
 ## Reference files
 
-| File | What it holds |
-| --- | --- |
-| [`scripts/run.sh`](scripts/run.sh) | every step's commands, with comments |
-| [`references/measured-run.md`](references/measured-run.md) | the two measured runs: versions, timings, memory, loss, example answers, troubleshooting |
-| `cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py` | the recipe, each field with its reason |
-| [`scripts/prepare_robovqa.py`](scripts/prepare_robovqa.py) | split, frames, verify |
-| [`scripts/eval_robovqa.py`](scripts/eval_robovqa.py) | evaluator, scorer and the shared frame decoder |
+| File                                                            | What it holds                                                                            |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [`scripts/run.sh`](scripts/run.sh)                              | every step's commands, with comments                                                     |
+| [`references/measured-run.md`](references/measured-run.md)      | the two measured runs: versions, timings, memory, loss, example answers, troubleshooting |
+| `cosmos_framework/posttrain/configs/sft_qwen3_vl_8b_robovqa.py` | the recipe, each field with its reason                                                   |
+| [`scripts/prepare_robovqa.py`](scripts/prepare_robovqa.py)      | split, frames, verify                                                                    |
+| [`scripts/eval_robovqa.py`](scripts/eval_robovqa.py)            | evaluator, scorer and the shared frame decoder                                           |
 
 ## Things not obvious from the docs
 
@@ -240,8 +240,8 @@ is correct when:
 
 ## Related skills
 
-| Skill | When to use |
-| --- | --- |
-| `../cosmos3-setup/SKILL.md` | framework installation and checkpoint downloads in general |
-| `../cosmos3-post-training/SKILL.md` | post-training Cosmos3 models |
-| `../cosmos3-env-troubleshoot/SKILL.md` | import, CUDA, shared-library and download errors |
+| Skill                                  | When to use                                                |
+| -------------------------------------- | ---------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`            | framework installation and checkpoint downloads in general |
+| `../cosmos3-post-training/SKILL.md`    | post-training Cosmos3 models                               |
+| `../cosmos3-env-troubleshoot/SKILL.md` | import, CUDA, shared-library and download errors           |
