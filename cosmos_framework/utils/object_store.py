@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class ObjectStore:
-    """This is the interface class for object store, used for interacting with PBSS/AWS (S3).
+    """This is the interface class for object store, used for interacting with S3-compatible object stores.
 
     **Deprecated**. Use `easy_io` directly instead.
 

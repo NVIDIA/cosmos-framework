@@ -82,7 +82,7 @@ class _ACSafeMergeAttentionsFn(torch.autograd.Function):
 
         # Same upstream-grad contract as NATTEN: dL/dO_i = dL/dO_merged
         # for every component; dL/dLSE_i is forwarded unchanged for
-        # parity (i4 attention treats LSE as non-differentiable, so this
+        # parity (upstream attention treats LSE as non-differentiable, so this
         # gradient is silently dropped at the kernel boundary).
         grads = (None,) + (grad_merged_out,) * num + (grad_merged_lse,) * num
         return grads
@@ -96,7 +96,7 @@ def merge_attentions_ac_safe(
 
     Use at call sites that live inside an activation-checkpointed module
     boundary.  Matches NATTEN's storage-patching backward contract so
-    upstream i4 attention kernels (whose LSE is not differentiable)
+    upstream attention kernels (whose LSE is not differentiable)
     still receive correct gradients via their own saved O / LSE
     backward formulas.
     """

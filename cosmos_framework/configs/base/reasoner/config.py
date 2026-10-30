@@ -41,7 +41,7 @@ def make_config() -> Config:
     c.trainer.cudnn.benchmark = False
     c.upload_reproducible_setup = True
 
-    # Call this function to register config groups for advanced overriding. the order follows the default config groups
+    # Call this function to register config groups for advanced overriding. The order follows the default config groups
     register_model()
     register_sound_understanding()
     register_vlm_policy()

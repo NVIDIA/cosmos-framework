@@ -10,7 +10,7 @@ the posttrain sources it actually imported next to the git view, the interpreter
 context, as ``<run_dir>/provenance.<attempt_ts>.json`` and as the top-level ``provenance`` mapping
 of ``config_resolved.yaml``. When a recipe's ``build_config`` resolved a named variant it registers the
 name here (:func:`record_recipe_variant`) and the record carries it as ``recipe_variant`` (review
-R142-04: the resolved config carries the variant's VALUES -- ``rl.mask_think_opener`` tells
+The resolved config carries the variant's VALUES -- ``rl.mask_think_opener`` tells
 ``prefilled_opener`` from ``default`` today -- but not its NAME, so a readout could not name the variant
 that produced them; the name is recorded here).
 
@@ -18,8 +18,8 @@ The git view is ``git_commit`` (HEAD) and ``git_dirty``: whether the tracked fil
 ``git_dirty_scope`` differ from HEAD. The scope is the posttrain package when it lives inside the
 checkout (the tree ``tree_hash`` describes; ``git status`` limited to its pathspec stats hundreds of
 files, not the checkout's twenty thousand on a networked filesystem, which is what made the
-unscoped probe miss its time box and record ``null`` without a reason in the canaries of review
-R134-08), else the whole checkout. ``(git_commit, git_dirty=False)`` therefore names the committed
+unscoped probe miss its time box and record ``null`` without a reason in the canaries),
+else the whole checkout. ``(git_commit, git_dirty=False)`` therefore names the committed
 posttrain tree; ``tree_hash`` names its bytes either way.
 
 Failure semantics: provenance is best effort and must never fail or stall the run it describes.
@@ -74,7 +74,7 @@ class _RecipeVariant:
 
 
 def record_recipe_variant(name: str) -> None:
-    """Register the RESOLVED recipe variant name for this process's provenance record (review R142-04).
+    """Register the RESOLVED recipe variant name for this process's provenance record.
 
     ``SFT_RECIPE_VARIANT`` is not in ``ENV_KEYS`` and the resolved config carries the variant's VALUES
     (``rl.mask_think_opener`` tells ``prefilled_opener`` from ``default`` today) but not its NAME, so a readout could not
@@ -211,7 +211,7 @@ def _git(repo_root: str | os.PathLike[str], args: list[str], timeout_s: float) -
     """stdout of one git command; None when git is absent or ``repo_root`` is not inside a checkout.
 
     Raises ``GitProbeError`` when the command exceeds ``timeout_s`` or exits non-zero for any other reason, so the
-    caller's probe records why the field is ``None`` (review R134-08: the canaries' ``git_dirty: null`` carried no
+    caller's probe records why the field is ``None`` (the canaries' ``git_dirty: null`` carried no
     reason).
     """
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
@@ -320,7 +320,7 @@ def collect_provenance(
         "timestamp": now.isoformat(timespec="seconds"),
         "hostname": probe("hostname", socket.gethostname),
         # The torchrun launcher unsets SLURM_JOB_ID before the entry runs (it is the rendezvous id and must
-        # not reach the workers); it re-exports the value as POSTTRAIN_SLURM_JOB_ID first (review R125-D-04).
+        # not reach the workers); it re-exports the value as POSTTRAIN_SLURM_JOB_ID first.
         "slurm_job_id": os.environ.get("SLURM_JOB_ID") or os.environ.get("POSTTRAIN_SLURM_JOB_ID") or None,
         "python_version": platform.python_version(),
         "torch_version": probe("torch_version", _torch_version),
@@ -335,7 +335,7 @@ def collect_provenance(
             lambda: git_dirty(repo_root, paths=(scope,) if scope else (), timeout_s=remaining(GIT_TIMEOUT_S)),
         ),
         "git_dirty_scope": scope or ".",
-        # The recipe variant a config builder resolved in this process (review R142-04); None when none did.
+        # The recipe variant a config builder resolved in this process; None when none did.
         "recipe_variant": recipe_variant(),
         "tree_hash": tree.sha256 if tree is not None else None,
         "tree_files": tree.files if tree is not None else None,

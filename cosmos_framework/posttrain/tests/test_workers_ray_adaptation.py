@@ -476,7 +476,7 @@ def _materialize_invoke_setup():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_invoke_materializes_dispatched_and_refcount_pops_at_zero():
-    """Closes the reviewer-flagged gap: the two tests above run with codec=False, so
+    """Closes a coverage gap: the two tests above run with codec=False, so
     `_Host.invoke`'s real materialize gate (`self._codec and name in self._materialize`) and
     its `self._transport` were never exercised for a Dispatched arg. Here `run_setup` enables
     codec + puts "consumer" in materialize_names, so `invoke` computes `materialize=True` and
@@ -618,7 +618,7 @@ def _cross_actor_consumer_setup():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
-    """Reviewer-flagged gap: `_release_dropped`'s cross-actor branch fires `release_bulk.remote`
+    """Coverage gap: `_release_dropped`'s cross-actor branch fires `release_bulk.remote`
     and discarded the returned ObjectRef -- a remote-side failure (double release / accounting
     drift) would resolve into a Ray object nobody ever inspects, so it failed SILENTLY, unlike
     the local branch which raises inline (DESIGN §2.4's KeyError posture). Fix: stash the

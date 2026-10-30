@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Training-local readers for sparse MADS poses and native F-theta intrinsics.
+"""Training-local readers for sparse rig poses and native F-theta intrinsics.
 
 Copied from ``pipelines/sila/multiview/ingestion/av/camera_geometry.py`` at
 ``44167c4f26a``, retaining only the pose and F-theta readers used by WebDataset.
@@ -45,7 +45,7 @@ _MADS_RAW_WH_BY_CALIBRATION_WH = {
 def mads_media_from_calibration(
     coefficients: tuple[float, ...] | list[float], *, media_hw: tuple[int, int]
 ) -> list[list[float]]:
-    """Map native MADS calibration pixels into its full-frame exported video.
+    """Map native rig calibration pixels into its full-frame exported video.
 
     This applies to frozen RDS-HQ calibration and full-frame exported media.
     Calibration uses origin-zero uniform scaling from the raw rig; video resize
@@ -108,14 +108,14 @@ def parse_ftheta_intrinsic_tar(payload: bytes) -> dict[str, CanonicalCameraCalib
 
 
 def parse_ftheta_intrinsic(array: np.ndarray, *, label: str) -> CanonicalCameraCalibration:
-    """Interpret a native MADS f-theta vector, retaining optional affine lens terms.
+    """Interpret a native f-theta vector, retaining optional affine lens terms.
 
     Provider layout is ``[cx, cy, width, height, a0, a1, a2, a3, a4, a5, flag]``.
     The flag distinguishes radius-to-angle from angle-to-radius coefficients.
     The legacy equivalent focal length is retained for metadata compatibility; ray attention
     uses the complete native polynomial and optional final ``[c,d,e]`` terms.
     Pose QA cannot score ``camera_model=ftheta``; those cameras remain attached
-    because that is the native MADS image-formation model. MADS does not ingest
+    because that is the rig's native image-formation model. The rig data does not ingest
     pinhole as a substitute on the same still-distorted frames.
     """
     if array.ndim != 1 or array.size not in _FTHETA_COEFFICIENT_COUNTS:

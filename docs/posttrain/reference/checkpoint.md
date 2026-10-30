@@ -14,7 +14,7 @@ responsibilities (mirrors cosmos-rl's ModelWrapper/Checkpointer split):
   and `archive/marker.py` owns local receipts and remote inventory declarations. Offline archive,
   merge and HF materialization commands live in `tools/`; the reusable HF converter lives in
   `conversion/hf.py` ([`checkpoint-artifacts.md`](../howto/checkpoint-artifacts.md)).
-- **Engine trainers** own only STATE EXTRACTION — FSDP2 full-state gather for sharded i4 or HF
+- **Engine trainers** own only STATE EXTRACTION — FSDP2 full-state gather for sharded native or HF
   policies, and plain `state_dict` for unsharded policies
   (`roles/trainer/{diffusion,llm}.py`). Both inherit `BaseTrainer`, which owns the single
   `CheckpointManager` instance, shared lifecycle properties, update clocks, and finalizer.
@@ -58,7 +58,7 @@ user/ops view.
     .posttrain-checkpoint-artifact.json  # commit-last component/format manifest
 ```
 
-`RUN_TS` is the run-attempt timestamp (`YYYYmmddHHMMSS`, i4 convention) minted at the
+`RUN_TS` is the run-attempt timestamp (`YYYYmmddHHMMSS`, upstream convention) minted at the
 FIRST launch of an attempt and reused by every resumed window: the directory name IS the
 wandb run id and the `$RUN_TS` the shared eval tooling takes. Re-running the same
 experiment fresh (`rl.resume=off`) creates a SIBLING attempt dir — nothing is ever
@@ -232,7 +232,7 @@ rl:
     backend: object_store
     bucket: <checkpoint-experiments-bucket>
     credentials: credentials/<credential>.secret
-    prefix: ""                 # same i4-compatible mirrored layout
+    prefix: ""                 # same upstream-compatible mirrored layout
   upload:
     enabled: false
 ```
@@ -268,17 +268,17 @@ written. Normal and final teardown therefore do not leave an object-store transa
 the trainer exits.
 
 S3 and GCS use the same `s3://` URI and S3-compatible API. The endpoint in the credential selects the
-provider. Direct mode needs the same object permissions as i4 DCP: the writer finalizes
+provider. Direct mode needs the same object permissions as DCP: the writer finalizes
 `.metadata.tmp`, and later checkpoints replace `latest_checkpoint.txt`. Small trainer/data objects
-and their pointer use i4 EasyIO with the same configured backend.
+and their pointer use EasyIO with the same configured backend.
 
-The remote bulk layout matches i4 (`iter_*/model`, `iter_*/optim`, and a root
+The remote bulk layout matches upstream (`iter_*/model`, `iter_*/optim`, and a root
 `latest_checkpoint.txt`). Posttrain adds only the control state that its trainers need:
 
 ```text
 iter_000000100/
-  model/                                  # i4 DCP shards + .metadata
-  optim/                                  # i4 DCP shards + .metadata
+  model/                                  # DCP shards + .metadata
+  optim/                                  # DCP shards + .metadata
   .posttrain/generations/<id>/trainer.pt  # append-only small state
   .posttrain/generations/<id>/data.pt     # optional append-only source state
   .posttrain-manifest.json                # current bulk names + control descriptors
@@ -287,12 +287,12 @@ latest_checkpoint.txt
 
 The control manifest is deliberately small. It names the DCP components and active control
 generation, but does not duplicate DCP's shard inventory or bind the checkpoint to one endpoint,
-bucket, or prefix. Model/optimizer integrity is checked by the i4 DCP reader from each component's
+bucket, or prefix. Model/optimizer integrity is checked by the DCP reader from each component's
 `.metadata`; trainer/data bytes are checked against their manifest descriptors.
 
 Save order is DCP components, append-only control generation, control manifest, then
 `latest_checkpoint.txt`. A failure before the manifest may leave a partial `iter_*` prefix, as it
-does in i4 pre-training, but it cannot advance auto-resume to that prefix. The framework neither
+does in upstream pre-training, but it cannot advance auto-resume to that prefix. The framework neither
 cleans partial remote iterations nor claims a prefix with owner markers.
 
 The first valid manifest makes that `iter_*` an immutable full-save commit. A same-iteration retry
@@ -306,7 +306,7 @@ run-specific prefix and must not point two jobs at the same one; posttrain does 
 or protect unrelated data already present there. Explicit resume of a half-written iteration fails
 when its control manifest or a requested DCP component cannot be read.
 
-A native i4 DCP checkpoint has compatible model/optimizer paths but lacks posttrain trainer/control
+A native DCP checkpoint has compatible model/optimizer paths but lacks posttrain trainer/control
 state, so it remains a model-initialization source rather than an exact posttrain continuation. A
 complete copy of a posttrain direct checkpoint, including its hidden control objects, is an exact
 resume source at the destination because the control manifest contains only relative paths.
@@ -513,18 +513,18 @@ artifacts.
 
 ## Resume (`rl.resume`)
 
-| value                                          | behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto` (**default** — i4/cosmos-rl convention) | latest under this job's out dir; fresh start if none. An UNCHANGED command survives preemption/requeue with zero config. Every resume logs `[dpo] resumed from ... (iter N)`. When the adopted attempt dir holds committed `checkpoint_artifacts/iter_*` but no resumable checkpoint (a model-only plan), or only a full checkpoint older than the newest committed artifact, the start is refused instead of restarting into a save collision — see [checkpoint-artifacts.md](../howto/checkpoint-artifacts.md).                |
-| `off` (or `""`)                                | force a fresh run — mints a NEW `<RUN_TS>` sibling dir; older attempts are never overwritten (legacy flat-layout jobs excepted).                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `<iter dir \| legacy .pt>`                     | resume that checkpoint; MUST exist (fails loud — never silently trains from scratch). Direct-primary mode also accepts an explicit `s3://.../iter_*` carrying posttrain control state. When the adopted attempt dir holds committed `checkpoint_artifacts/iter_*`, the checkpoint must be at or beyond the newest one: its iteration is the `iter_*` segment or, for a legacy path without one, its validated trainer state (`optimizer_step`/`iter`); behind the artifact or with no derivable iteration the resume is refused. |
+| value                                                | behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto` (**default** — upstream/cosmos-rl convention) | latest under this job's out dir; fresh start if none. An UNCHANGED command survives preemption/requeue with zero config. Every resume logs `[dpo] resumed from ... (iter N)`. When the adopted attempt dir holds committed `checkpoint_artifacts/iter_*` but no resumable checkpoint (a model-only plan), or only a full checkpoint older than the newest committed artifact, the start is refused instead of restarting into a save collision — see [checkpoint-artifacts.md](../howto/checkpoint-artifacts.md).                |
+| `off` (or `""`)                                      | force a fresh run — mints a NEW `<RUN_TS>` sibling dir; older attempts are never overwritten (legacy flat-layout jobs excepted).                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `<iter dir \| legacy .pt>`                           | resume that checkpoint; MUST exist (fails loud — never silently trains from scratch). Direct-primary mode also accepts an explicit `s3://.../iter_*` carrying posttrain control state. When the adopted attempt dir holds committed `checkpoint_artifacts/iter_*`, the checkpoint must be at or beyond the newest one: its iteration is the `iter_*` segment or, for a legacy path without one, its validated trainer state (`optimizer_step`/`iter`); behind the artifact or with no derivable iteration the resume is refused. |
 
 Load runs inside each model-owning process at the end of setup. DPO resumes directly from
 `policy.iteration()`. GRPO checkpoints only at collected-batch boundaries and resumes batch
 `policy.iteration() // n_mini`; its `iter_*`, validation, and report steps remain optimizer/model
 steps while `save_every` remains a collected-batch cadence. Reaching `rl.max_steps` exits cleanly.
 The local format (`pt` file / component dir / DCP dir) is auto-detected. Direct-primary resume reads
-the small control manifest, then opens requested DCP components in place through i4's reader.
+the small control manifest, then opens requested DCP components in place through the DCP reader.
 A complete direct-primary checkpoint tree copied to another object-store prefix can resume from its
 explicit `s3://` location because its control descriptors are relative.
 
@@ -634,7 +634,7 @@ See `control/termination.py` for the full Slurm signal timeline. Key facts:
 
 Submit-side wiring is built into `utils/launch_multinode.py`'s sbatch template
 (`--signal=B:SIGUSR1@600` + trap + backgrounded launcher, double `wait`). This is
-posttrain-only: the i4 VFM submit path deliberately does not request SIGUSR1, because
+posttrain-only: the upstream VFM submit path deliberately does not request SIGUSR1, because
 its `WallClockCheckpoint` callback already bounds lost work by wall-clock time.
 
 ### Preemption on a QOS-preempting cluster (`PreemptType=preempt/qos`, `PreemptMode=REQUEUE`)

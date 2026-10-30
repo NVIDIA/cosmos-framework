@@ -133,7 +133,7 @@ def get_action_droid_sft_dataset(
         mode=mode,
         use_state=use_state,
         action_normalization=action_normalization,
-        use_image_augmentation=use_image_augmentation,  # i4: bundles random-crop+resize+ColorJitter
+        use_image_augmentation=use_image_augmentation,  # upstream: bundles random-crop+resize+ColorJitter
         jitter_after_compose=jitter_after_compose,
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
@@ -330,7 +330,7 @@ def get_action_libero_sft_dataset(
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
 ) -> Dataset:
-    """Build the LIBERO action-policy SFT dataset (GA reproduction defaults).
+    """Build the LIBERO action-policy SFT dataset (release reproduction defaults).
 
     Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d actions,
     ``quantile_rot``-normalized, concat_view third-person + wrist at 256x256 each

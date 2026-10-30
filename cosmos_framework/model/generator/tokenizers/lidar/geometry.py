@@ -9,7 +9,7 @@ import numpy as np
 
 from cosmos_framework.model.generator.tokenizers.lidar.range_projection import LidarRangeProjectionConfig
 
-# Native beam order used by the MADS / LiDARGen 128x3600 range-map format.
+# Native beam order used by the LiDARGen 128x3600 range-map format.
 PANDAR128_ELEVATIONS_DEG = (
     14.436,
     13.535,

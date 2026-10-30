@@ -1099,10 +1099,10 @@ def test_dpo_forwards_explicit_gpu_topology_to_shared_binder(monkeypatch: pytest
 def test_dpo_loop_emergency_run_plan_after_off_cadence_validation_still_writes_the_model(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The reviewer's reproduction on e11b239d02 (thread a80f9a71): `rl.emergency_checkpoint_components="run"`, run
+    """Reproduction: `rl.emergency_checkpoint_components="run"`, run
     components `[model]`, validation components `[training_state]`, `save_every=0` (every validation is off-cadence), and
     the termination signal is seen at the step-2 boundary right after the periodic validation committed its
-    training-state artifact for step 2. e11b239d02 logged "already checkpointed, exiting" and wrote no weights. Now the
+    training-state artifact for step 2. The parent logged "already checkpointed, exiting" and wrote no weights. Now the
     step's model is written: the training-state artifact of step 2 is committed and cannot be re-committed, so the
     emergency save is the full plan under `checkpoints/iter_000002`. The real config refuses this combination
     (`RunConfig.__post_init__`: under "run" a saving validation plan must include the model, so the validation artifact
@@ -1141,6 +1141,6 @@ def test_dpo_loop_emergency_run_plan_after_off_cadence_validation_still_writes_t
     saves = [(Path(path).name, kwargs.get("components")) for path, _pending, _metrics, kwargs in policy.saves]
     # The validation's training-state artifact, then the emergency save carrying the model.
     assert saves[0] == ("iter_000002", ("training_state",))
-    assert len(saves) == 2, f"e11b239d02 wrote only the validation artifact: {saves}"
+    assert len(saves) == 2, f"the parent wrote only the validation artifact: {saves}"
     assert saves[1][0] == "iter_000002" and "model" in saves[1][1]
     assert saves[1] == ("iter_000002", FULL_CHECKPOINT_COMPONENTS)

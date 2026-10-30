@@ -609,7 +609,7 @@ class _PlanCapturingBackend(WeightSync):
         return {"bucket": i, "version": version}
 
     def materialize_bucket(self, model: object, i: int) -> dict:
-        """Required by `push_stream_to_peer` since main's NIXL weight-sync change (e336cf413b).
+        """Required by `push_stream_to_peer` since main's NIXL weight-sync change.
 
         A stand-in that omits this dies with `AttributeError: ... has no attribute
         'materialize_bucket'` raised from inside `weight_transfer.py`, which reads as a production

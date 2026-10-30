@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Ported from https://invalid_url.
-
-AVAE (Audio Variational AutoEncoder) Tokenizer for Imaginaire4.
-commit hash: 80fbd8cfecb1867cc864e6d4fe0a474d8403a474
-"""
+"""AVAE (Audio Variational AutoEncoder) Tokenizer."""
 
 import os
 
@@ -300,7 +296,7 @@ class AVAEInterface(AudioTokenizerInterface):
     """
     AVAE Interface for audio tokenization.
 
-    Implements AudioTokenizerInterface for integration with the imaginaire4 framework.
+    Implements AudioTokenizerInterface for integration with Cosmos Framework.
 
     Supports two latent normalization methods:
     1. Tanh companding (normalization_type="tanh"): Soft-clips outliers using tanh function.

@@ -6,9 +6,9 @@ checks of ``checkpoint.conversion.hf`` it runs (sidecar sync and verification, i
 Everything runs on synthetic files: minimal valid safetensors shards, a fake HF base with the eight sidecars the real
 base carries, and an in-memory object store for the archived-artifact probe. ``main()`` is driven end to end with the
 overlay replaced by a fake that writes such a directory; ``overlay_consolidated_onto_hf`` itself needs a real model
-and is not exercised here. Torch-free, except the fix round T6r merge-race fixture, which runs the real merge tool and the
+and is not exercised here. Torch-free, except the merge-race fixture, which runs the real merge tool and the
 real consolidated-checkpoint loader (torch) in a subprocess and skips where torch is absent; the pinned ``safetensors`` (a
-declared dependency) must be importable: since fix round T6j the materializer's preflight asks that reader for every base
+declared dependency) must be importable: the materializer's preflight asks that reader for every base
 shard and refuses, fail closed, where it is absent.
 """
 
@@ -808,7 +808,7 @@ def test_unified_chat_template_rewrites_the_tokenizer_template_only_and_is_verif
         hf_overlay.PROCESSOR_REASONING_LINE not in produced["chat_template"]
         and produced["chat_template"] != processor_text
     )
-    # fix round T6b: the export's chat_template.json carries the same canonical text, its formatting reproduced
+    # The export's chat_template.json carries the same canonical text, its formatting reproduced
     assert (base / "chat_template.json").read_text() == BASE_FILES["chat_template.json"], "the base is never written"
     assert json.loads((hf_dir / "chat_template.json").read_text()) == {"chat_template": FAKE_CANONICAL_TEMPLATE}
     assert (hf_dir / "chat_template.json").read_bytes() == json.dumps(
@@ -937,10 +937,10 @@ def test_main_unified_chat_template_option_identity_and_skip(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The CLI option end to end on the fake base: the export's ``tokenizer_config.json`` and ``chat_template.json`` both
-    carry the canonical processor template (fix round T6b), the marker records the option under ``options``, ``identity`` and
+    carry the canonical processor template, the marker records the option under ``options``, ``identity`` and
     ``chat_template`` (both shas); the identical request skips; a request WITHOUT the option on that output is refused
     (and the reverse on a default output) until ``--force``; a staging dir stamped without the option is not reused by a
-    request with it; a base without ``chat_template.json`` fails closed. Fix round T6."""
+    request with it; a base without ``chat_template.json`` fails closed."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
@@ -1035,7 +1035,7 @@ def test_unified_chat_template_refuses_a_base_whose_preferred_template_sidecar_d
     publishes with no preferred sidecar in the export; a ``chat_template.jinja`` EQUAL to the canonical text is allowed,
     synced verbatim and recorded; an export whose Jinja diverges afterwards fails the rule; ``additional_chat_templates/``
     and a ``chat_template`` key in ``processor_config.json`` are refused the same way (the key allowed when equal). On
-    7e5523cabe5 the divergent base publishes (exit 0, marker written)."""
+    the parent the divergent base publishes (exit 0, marker written)."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
@@ -1139,14 +1139,14 @@ def _shape_template_directory(base: Path, shape: str) -> None:
 def test_unified_template_directory_rule_is_one_helper_for_preflight_and_verifier(
     shape: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """On 30ab657660af the preflight recorded only direct regular
+    """On the parent the preflight recorded only direct regular
     files under ``additional_chat_templates/``, so an EMPTY directory or one holding only sub-directories passed it while
     ``verify_sidecars`` refuses the directory itself. Now ONE helper (``unified_template_directory_conflict``) decides for
     both: the directory is a conflict whenever it is a directory, whatever it holds, so for every shape the preflight
     refuses iff the verifier refuses, with one text naming the directory and its direct entries; the per-file records
     keep their sha evidence; without the directory both accept, and the default (non-unified) build still mirrors an
     empty directory. Both loaders ignore an empty or nested-only directory (``is_dir()`` then ``glob("*.jinja")``,
-    transformers 4.57.6 and 5.8.1); the rule refuses it anyway, fail closed. On 30ab657660af ``empty`` and
+    transformers 4.57.6 and 5.8.1); the rule refuses it anyway, fail closed. On the parent ``empty`` and
     ``nested_only`` fail: no conflict is recorded while the verifier refuses, and the CLI publishes nothing only because
     the verifier fails after the overlay."""
     calls = _install_fake_overlay(monkeypatch)
@@ -1226,7 +1226,7 @@ def test_unified_template_directory_rule_is_one_helper_for_preflight_and_verifie
 def test_force_rebuild_keeps_the_existing_output_when_a_torch_free_preflight_refuses(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The reviewer's probe of fix round T6f: on 30ab657660af ``--force --unified-chat-template --no-verify`` against a base
+    """Probe: on the parent ``--force --unified-chat-template --no-verify`` against a base
     with an EMPTY ``additional_chat_templates/`` removed the existing output, ran the overlay, failed the final sidecar
     verifier and left only ``<out>.tmp``. Now every torch-free refusal that reads the base alone (``preflight``) runs
     before the removal, before ``<out>.tmp`` and before the overlay: the request is refused, the existing output is
@@ -1287,15 +1287,15 @@ def _default_export(tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch)
 def test_force_rebuild_keeps_the_existing_output_when_a_base_json_sidecar_does_not_parse(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """On aacfea0997b the DEFAULT path's preflight did not parse the
+    """On the parent the DEFAULT path's preflight did not parse the
     base's ``tokenizer_config.json``, so a malformed (``{``) or non-object (``[]``) file passed it; under ``--force --no-verify``
     the existing export was removed, the overlay ran, and the unconditional ``chat_template_record`` refused on
     ``read_tokenizer_config(base)``: exit 1, the published directory gone, only ``<out>.tmp`` left. Now the preflight parses
     every JSON sidecar the base carries (``tokenizer_config.json`` and ``chat_template.json`` as objects; the overlay's
     transformers loads and the template record read them after the overlay) before anything is removed: refused with a
     named reason, the existing output byte-identical, no ``<out>.tmp``, no overlay call; a fresh ``--out`` is refused the
-    same way with nothing created. On aacfea0997b the two tokenizer_config cases lose the output (the reviewer's
-    reproduction) and the other two publish (the default path never read those files torch-free)."""
+    same way with nothing created. On the parent the two tokenizer_config cases lose the output and the other two publish
+    (the default path never read those files torch-free)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -1321,13 +1321,13 @@ def test_force_rebuild_keeps_the_existing_output_when_a_base_json_sidecar_does_n
 def test_default_preflight_refuses_a_named_template_directory_with_entries_that_are_not_regular_files(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Reviews R149D-01 and R149D-03 (fix round T6g). The DEFAULT path copies ``additional_chat_templates/`` verbatim after the
+    """The DEFAULT path copies ``additional_chat_templates/`` verbatim after the
     overlay (``copytree``) and verifies it with ``filecmp.cmpfiles``, which reports a sub-directory as a mismatch, while a
     dangling symlink fails the copy with ``shutil.Error`` (an OSError ``main`` used to let escape as a traceback). Now the
     preflight decides it: a directory with an entry that is not a regular file is refused before anything is removed,
     naming the entry and its kind; a directory of regular files only is still accepted and mirrored. A sub-directory NAMED
-    ``*.jinja`` is the loader case of R149D-03: ``Path.glob("*.jinja")`` returns it, so the loaders do not ignore it; the
-    record lists it as a ``directory`` and the helper's docstring says so. On aacfea0997b the nested cases lose the existing
+    ``*.jinja`` is the loader case: ``Path.glob("*.jinja")`` returns it, so the loaders do not ignore it; the
+    record lists it as a ``directory`` and the helper's docstring says so. On the parent the nested cases lose the existing
     output after the overlay and the symlink case raises ``shutil.Error`` out of ``main``."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -1357,7 +1357,7 @@ def test_default_preflight_refuses_a_named_template_directory_with_entries_that_
     if case == "jinja_named_subdirectory":
         doc = hf_overlay.unified_template_directory_conflict.__doc__ or ""
         assert "*.jinja" in doc and "IsADirectoryError" in doc, (
-            "R149D-03: the loader clause for a sub-directory named *.jinja"
+            "the loader clause for a sub-directory named *.jinja"
         )
     # regular files only: the default build accepts and mirrors the directory (today's behaviour kept)
     if case == "dangling_symlink":
@@ -1372,11 +1372,11 @@ def test_default_preflight_refuses_a_named_template_directory_with_entries_that_
 def test_preflight_refuses_an_unreadable_base_with_a_named_reason_instead_of_a_traceback(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149D-02 (fix round T6g): an OSError other than FileNotFoundError raised while the preflight reads the base (an
+    """An OSError other than FileNotFoundError raised while the preflight reads the base (an
     unreadable ``additional_chat_templates/`` listed by ``base_identity``) is refused with a named reason (exit 1, the class
     and the path in the message) instead of escaping ``main`` as a traceback; the existing output stays byte-identical. The
     PermissionError is injected for the base's directory path (``os.listdir`` wrapped, so the case is deterministic as root
-    too) and, when the test does not run as root, also produced for real with mode 000. On aacfea0997b the PermissionError
+    too) and, when the test does not run as root, also produced for real with mode 000. On the parent the PermissionError
     escapes ``main``."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -1437,16 +1437,16 @@ def _unreadable_file(path: Path) -> Iterator[None]:
 def test_preflight_refuses_a_base_shard_the_safetensors_header_check_rejects_before_anything_is_removed(
     shape: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149E-01 (fix round T6h). The overlay's ``from_pretrained`` opens every base shard the index lists AFTER an
-    existing output is removed, but on f6a06b8f26c the preflight parsed no shard (``base_identity`` records sizes only): a
+    """The overlay's ``from_pretrained`` opens every base shard the index lists AFTER an
+    existing output is removed, but on the parent the preflight parsed no shard (``base_identity`` records sizes only): a
     shard truncated by one byte, one with a garbage header, one whose header lists other tensors than the index maps to it
     and an unreadable one all passed it, so ``--force --no-verify`` removed the export and the overlay failed on the shard
-    (``safetensors.safe_open``: ``incomplete metadata`` / ``header too large``, round 149e). Now the preflight runs
+    (``safetensors.safe_open``: ``incomplete metadata`` / ``header too large``). Now the preflight runs
     ``shard_status`` (the header check ``verify_index`` applies to the output) on every base shard: refused in the one
     family naming the shard and the reason, the existing output byte-identical, no ``<out>.tmp``, no overlay call; a fresh
     ``--out`` is refused with nothing created. The unreadable shard is injected (``open`` of that path raises
     PermissionError, deterministic as root, where mode 000 bars nothing) and, when the test does not run as root, also
-    produced for real with mode 000. On f6a06b8f26c every shape passes the preflight and the fake overlay rebuilds the
+    produced for real with mode 000. On the parent every shape passes the preflight and the fake overlay rebuilds the
     export (exit 0)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -1505,17 +1505,17 @@ def test_preflight_refuses_a_base_shard_the_safetensors_header_check_rejects_bef
 def test_preflight_refuses_a_json_sidecar_the_loaders_reject_although_it_parses(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149E-02 (fix round T6h). Well-formed JSON the loaders reject passed the T6g preflight, which required an
+    """Well-formed JSON the loaders reject passed the earlier preflight, which required an
     object for ``tokenizer_config.json`` and ``chat_template.json`` only: ``[]`` for ``tokenizer.json``,
     ``preprocessor_config.json``, ``video_preprocessor_config.json`` and ``processor_config.json`` (``AutoProcessor``:
     ``'list' object has no attribute 'get'``) and for ``generation_config.json`` (``GenerationConfig``: ``list indices must
     be integers``), and ``{}`` for ``chat_template.json`` (the processor loader's legacy path indexes ``["chat_template"]``:
     a KeyError, which ``main`` does not catch), read on the container's transformers 5.13.0 against the base of record's
-    sidecars (round 149e); the overlay calls these loaders after an existing output is removed. Now every JSON sidecar must
+    sidecars; the overlay calls these loaders after an existing output is removed. Now every JSON sidecar must
     be a JSON object and ``chat_template.json``, when present, must carry a non-empty ``chat_template`` string: refused in
     the one family naming the file and the rule, the existing output byte-identical, no ``<out>.tmp``, no overlay call; a
     fresh ``--out`` is refused with nothing created; the loader-accepted ``{}`` of the other sidecars stays accepted. On
-    f6a06b8f26c every case passes the preflight and the fake overlay replaces the export (exit 0)."""
+    the parent every case passes the preflight and the fake overlay replaces the export (exit 0)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -1553,7 +1553,7 @@ def test_preflight_refuses_a_json_sidecar_the_loaders_reject_although_it_parses(
     assert len(calls) == 1 and not os.path.exists(fresh) and not os.path.exists(fresh + ".tmp")
     if (
         case == "generation_config_array"
-    ):  # the rule is "a JSON object", not "non-empty": {} loads (round 149e) and builds
+    ):  # the rule is "a JSON object", not "non-empty": {} loads and builds
         (base / name).write_text("{}")
         assert mat.main([*args[:4], "--out", fresh, *args[6:]]) == 0 and len(calls) == 2
 
@@ -1564,7 +1564,7 @@ def test_preflight_refuses_a_json_sidecar_the_loaders_reject_although_it_parses(
 def test_preflight_refuses_an_index_whose_weight_map_is_not_tensor_to_shard_names_without_a_traceback(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149E-03 (fix round T6h). On f6a06b8f26c a well-formed index whose ``weight_map`` is a list escaped
+    """On the parent a well-formed index whose ``weight_map`` is a list escaped
     ``base_identity`` as ``AttributeError: 'list' object has no attribute 'values'`` and one mapping a tensor to a
     non-string as ``TypeError: join() argument must be str``, both out of ``main`` as tracebacks (before the removal, so
     the output was intact); an EMPTY ``weight_map`` passed the preflight and lost the existing output to the final
@@ -1624,8 +1624,8 @@ def test_preflight_refuses_an_index_whose_weight_map_is_not_tensor_to_shard_name
 def test_every_preflight_refusal_is_in_the_one_message_family_and_names_what_it_found(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149E-04 (fix round T6h). ``_refuse`` promised "the one message family of every preflight refusal" while on
-    f6a06b8f26c the required-file and missing-shard refusals (FileNotFoundError), the index's ValueError and the unified
+    """``_refuse`` promised "the one message family of every preflight refusal" while on
+    the parent the required-file and missing-shard refusals (FileNotFoundError), the index's ValueError and the unified
     reader's text left ``preflight`` without the prefix, and a malformed ``config.json`` was refused as "carries no
     structural identity" (it is unparseable, not identity-less). Now every refusal of ``preflight`` carries the prefix
     exactly once and says what it found (a text that already carries the prefix, the unified conflict text, is not prefixed
@@ -1679,11 +1679,11 @@ def test_every_preflight_refusal_is_in_the_one_message_family_and_names_what_it_
 def test_preflight_refuses_a_utf8_byte_order_mark_in_front_of_valid_json_as_the_loaders_do(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149F-01 (fix round T6i). The T6h preflight decoded config.json and eight JSON sidecars from BYTES
+    """The earlier preflight decoded config.json and eight JSON sidecars from BYTES
     (``json.loads(bytes)`` detects a UTF-8 byte-order mark and strips it) while every reader after the removal decodes TEXT
     and rejects the mark (``model_identity``, ``_read_json_file``, transformers' loaders: ``Unexpected UTF-8 BOM``; AutoConfig /
-    AutoProcessor / AutoTokenizer / GenerationConfig all fail on the base of record's files with a leading mark, round 149f): on
-    32f2a0c03b4 a BOM-prefixed config.json passed the preflight, ``--force`` removed the export, the overlay ran and
+    AutoProcessor / AutoTokenizer / GenerationConfig all fail on the base of record's files with a leading mark): on
+    the parent a BOM-prefixed config.json passed the preflight, ``--force`` removed the export, the overlay ran and
     ``write_config_from_base`` refused (out gone, out.tmp left); a BOM-prefixed tokenizer.json or generation_config.json passed
     and the fake overlay replaced the export; tokenizer_config.json and the index were refused with json's own text, not naming
     the mark. Now ONE decoder serves the whole preflight (``conversion.hf.decode_json_bytes``: strict UTF-8 text, the mark refused
@@ -1736,7 +1736,7 @@ def test_preflight_refuses_a_utf8_byte_order_mark_in_front_of_valid_json_as_the_
 def test_shard_status_refuses_a_header_without_the_safetensors_shape_and_the_preflight_names_it(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149F-02 (fix round T6i). ``safetensors_header`` / ``shard_status`` accepted any JSON as a header: on 32f2a0c03b4
+    """``safetensors_header`` / ``shard_status`` accepted any JSON as a header: on the parent
     a tensor entry without ``data_offsets`` escaped the preflight as KeyError, an entry that is ``5`` as TypeError, a list header
     as TypeError (``header.pop`` on a list), ``data_offsets`` = ``["x", "y"]`` was refused outside the family (ValueError from
     ``int()``), reversed offsets were refused with the size text, and a non-object ``__metadata__`` or a byte-order mark in front
@@ -1804,7 +1804,7 @@ def test_shard_status_refuses_a_header_without_the_safetensors_shape_and_the_pre
     assert mat.main([*args[:4], "--out", fresh, *args[6:]]) == 0 and len(calls) == 2
 
 
-# ---------------------------------------------------------------- fix round T6j: staged construction, the pinned reader, the Jinja decode
+# ---------------------------------------------------------------- staged construction, the pinned reader, the Jinja decode
 def _shard_bytes(header: dict, data: bytes) -> bytes:
     """A safetensors file from a hand-written header object and raw data bytes (8-byte length + JSON + data)."""
     encoded = json.dumps(header).encode()
@@ -1860,14 +1860,14 @@ def test_preflight_refuses_a_base_shard_the_pinned_safetensors_reader_rejects_an
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``shard_status`` checks the header's SHAPE, the file
-    size and the index's keys, and no more: on 3b9a465c25a a base shard whose header declares a BF16 ``[3]`` tensor over
+    size and the index's keys, and no more: on the parent a base shard whose header declares a BF16 ``[3]`` tensor over
     ``data_offsets [0, 4]`` and four data bytes, an unknown dtype string, a non-string ``__metadata__`` value and a gap (or an
     overlap) between two tensors' offsets all passed the preflight; ``--force --no-verify`` then removed the export and the
     pinned safetensors 0.8.0 parser refused the shard in the overlay. Now the preflight asks that reader itself for every base
     shard the index lists (``conversion.hf.safetensors_reader_error``: ``safe_open(path, framework="np")`` on the header, torch-
     free): refused in the one family naming the shard and the reader's own message, the existing export byte-identical, no
     staging residue (``<out>.tmp``, ``<out>.previous``), the overlay not called; a fresh ``--out`` is refused with nothing
-    created; the valid shard builds again. On 3b9a465c25a every case rebuilds the export (exit 0: the fake overlay reads no
+    created; the valid shard builds again. On the parent every case rebuilds the export (exit 0: the fake overlay reads no
     shard)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -1906,7 +1906,7 @@ def test_preflight_refuses_a_base_shard_the_pinned_safetensors_reader_rejects_an
 def test_a_failure_after_the_preflight_keeps_the_existing_export_and_removes_the_staging_directory(
     failure: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The class fix: the construction is STAGED. On 3b9a465c25a ``run_request`` removed
+    """The class fix: the construction is STAGED. On the parent ``run_request`` removed
     an existing ``--out`` BEFORE the overlay, so any failure the torch-free preflight could not foresee (the overlay on a base
     only its real readers fault, the sidecar sync, the output verification) cost the export under ``--force --no-verify``.
     Now the whole build happens in ``<out>.tmp`` beside the existing output and the swap (``publish_staging``) replaces it
@@ -1914,7 +1914,7 @@ def test_a_failure_after_the_preflight_keeps_the_existing_export_and_removes_the
     partial write, the sidecar sync to raise ``OSError`` after a partial write, and the output verifier to refuse the staged
     copy for real (``--expect-tensors 999``); each time exit 1, the error names the stage, the staging directory is gone and
     the existing export is byte-identical with its marker intact. With the cause removed the same request rebuilds through
-    the swap and leaves neither ``<out>.tmp`` nor ``<out>.previous``. On 3b9a465c25a every case ends with the export gone."""
+    the swap and leaves neither ``<out>.tmp`` nor ``<out>.previous``. On the parent every case ends with the export gone."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -1944,7 +1944,7 @@ def test_a_failure_after_the_preflight_keeps_the_existing_export_and_removes_the
     assert mat.main([*args, "--force", *extra]) == 1
     err = capsys.readouterr().err
     assert _tree_bytes(out) == before, (
-        "the existing output is byte-identical (on 3b9a465c25a: gone, removed before the overlay)"
+        "the existing output is byte-identical (on the parent: gone, removed before the overlay)"
     )
     assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous"), "no staging residue"
     assert _marker(out)["identity"]["source_sha256"] == SHA_ZERO10
@@ -1969,7 +1969,7 @@ def test_preflight_decodes_the_jinja_templates_the_loaders_read_as_strict_utf8_a
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The preflight's JSON loop skips ``chat_template.jinja``
-    and the default-mode identity only hashes it, so on 3b9a465c25a a base ``chat_template.jinja`` (or a named template under
+    and the default-mode identity only hashes it, so on the parent a base ``chat_template.jinja`` (or a named template under
     ``additional_chat_templates/``) holding byte FF passed; ``--force --no-verify`` removed the export and the tokenizer loader
     raised UnicodeDecodeError reading the file. The loaders read these files as UTF-8 TEXT: tokenization_utils_base.py opens
     ``chat_template.jinja`` with ``encoding="utf-8"`` (4.57.6:2188, 5.8.1:1795) and every ``additional_chat_templates/<name>.jinja``
@@ -1981,7 +1981,7 @@ def test_preflight_decodes_the_jinja_templates_the_loaders_read_as_strict_utf8_a
     UTF-8 (``conversion.hf.utf8_text_error``): refused in the one family naming the file and the codec's byte and position,
     the existing export byte-identical, no staging residue, the overlay not called; a fresh ``--out`` refused with nothing
     created. What the loaders accept the preflight accepts: non-ASCII UTF-8 and a byte-order mark (U+FEFF text to them) build
-    and are synced verbatim; a file without the ``.jinja`` suffix is not a template either loader discovers. On 3b9a465c25a
+    and are synced verbatim; a file without the ``.jinja`` suffix is not a template either loader discovers. On the parent
     every case rebuilds the export (exit 0)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -1995,7 +1995,7 @@ def test_preflight_decodes_the_jinja_templates_the_loaders_read_as_strict_utf8_a
     valid = b"{{ messages[0].content }}"
     path.write_bytes(valid + b"\xff")
     reason = f"'utf-8' codec can't decode byte 0xff in position {len(valid)}: invalid start byte"
-    assert mat.main([*args, "--force"]) == 1, "refused (on 3b9a465c25a: exit 0, the export rebuilt over the removal)"
+    assert mat.main([*args, "--force"]) == 1, "refused (on the parent: exit 0, the export rebuilt over the removal)"
     err = capsys.readouterr().err
     assert _tree_bytes(out) == before and len(calls) == 1, (
         "the existing output is byte-identical; the overlay never ran"
@@ -2022,11 +2022,11 @@ def test_preflight_decodes_the_jinja_templates_the_loaders_read_as_strict_utf8_a
 def test_the_swap_publishes_by_rename_and_a_leftover_previous_output_is_refused_without_force(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Fix round T6j: the swap's own contract and the policy for its name. ``<out>.previous`` holds the old output between the
+    """The swap's own contract and the policy for its name. ``<out>.previous`` holds the old output between the
     two renames; a leftover under that name (an interrupted swap, or a directory someone parked there) is reported and left on
     the idempotent skip, refused before the build without ``--force`` (nothing built, nothing removed), and discarded under
     ``--force``. ``publish_staging`` itself: ``out`` -> ``<out>.previous`` -> removed, ``tmp`` -> ``out``, no residue; without a
-    previous output a plain rename. On 3b9a465c25a the damaged export is rebuilt over the leftover without a word (exit 0)."""
+    previous output a plain rename. On the parent the damaged export is rebuilt over the leftover without a word (exit 0)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     previous = out + ".previous"
@@ -2060,9 +2060,9 @@ def test_the_swap_publishes_by_rename_and_a_leftover_previous_output_is_refused_
 def test_preflight_refuses_when_the_pinned_safetensors_reader_cannot_be_imported(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Fix round T6j, fail closed: the shard check of the preflight IS the pinned reader; an interpreter without ``safetensors``
+    """Fail closed: the shard check of the preflight IS the pinned reader; an interpreter without ``safetensors``
     (a declared dependency, ``pyproject.toml``) cannot prove a shard and cannot run the overlay either, so the request is
-    refused in the one family before anything is written, the existing export untouched. On 3b9a465c25a the rebuild runs
+    refused in the one family before anything is written, the existing export untouched. On the parent the rebuild runs
     (exit 0)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -2078,7 +2078,7 @@ def test_preflight_refuses_when_the_pinned_safetensors_reader_cannot_be_imported
     assert len(calls) == 1 and _tree_bytes(out) == before and not os.path.exists(out + ".tmp")
 
 
-# ---------------------------------------------------------------- fix round T6k: the crash state under --force; one materializer per output
+# ---------------------------------------------------------------- the crash state under --force; one materializer per output
 @pytest.mark.parametrize(
     "retry",
     ["same_request", "changed_source_transient_failure", "changed_source_success", "foreign_tmp_without_export"],
@@ -2086,24 +2086,24 @@ def test_preflight_refuses_when_the_pinned_safetensors_reader_cannot_be_imported
 def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_before_building(
     retry: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149H-01 and the reviewer's P2 of 2026-10-03 12:48 in thread 677171a12b (fix round T6k), the reproduction verbatim:
+    """The reproduction verbatim:
     build a marked export; a ``--force`` rebuild interrupted after ``out -> out.previous`` and BEFORE ``out.tmp -> out`` (a death:
     ``publish_staging`` replaced by one that does the first rename and raises ``KeyboardInterrupt``, which no cleanup catches);
-    retry without ``--force``: refused, ``--force`` suggested; retry with ``--force``. On a0f81de5b6f the retry removed the
+    retry without ``--force``: refused, ``--force`` suggested; retry with ``--force``. On the parent the retry removed the
     byte-identical marked ``out.previous`` and the verified marked ``out.tmp`` before rebuilding, so a transient overlay failure
     left ``out``, ``out.previous`` and ``out.tmp`` ALL absent. Now ``--force`` FIRST renames ``out.previous`` back to the absent
-    ``out`` and builds beside it; a complete marked ``out.tmp`` is never removed while it is the only complete tree, and (fix round
-    T6l, review R149I-01) ``--force`` REBUILDS FROM THE SOURCE: once ``out`` is complete again the kept copy is discarded whatever
+    ``out`` and builds beside it; a complete marked ``out.tmp`` is never removed while it is the only complete tree, and
+    ``--force`` REBUILDS FROM THE SOURCE: once ``out`` is complete again the kept copy is discarded whatever
     its marker says, and a kept copy is published only by a request without ``--force``. ``same_request`` (the reproduction's own
-    retry): the overlay runs again beside the restored export, the kept copy discarded, nothing left over (on 341e9d4c912 the kept
+    retry): the overlay runs again beside the restored export, the kept copy discarded, nothing left over (on the parent the kept
     copy was published with the overlay skipped); ``changed_source_transient_failure`` (the retry asks for another checkpoint, the
     overlay raises once): ``out`` back, byte-identical and marked, ``out.tmp`` gone, ``out.previous`` gone (restored); then the
     overlay succeeding -> published, nothing left over; ``changed_source_success``: published, nothing left over, the overlay ran
     beside the restored export;
     ``foreign_tmp_without_export`` (the complete marked ``out.tmp`` is the only tree and the request is for another checkpoint):
-    refused by name, nothing touched, then a request of its identity WITHOUT ``--force`` publishes it. On a0f81de5b6f: the
+    refused by name, nothing touched, then a request of its identity WITHOUT ``--force`` publishes it. On the parent: the
     same-request retry rebuilds after discarding both trees, the failing rebuild leaves no ``out`` (``{} == A``), the successful
-    rebuild ran beside nothing, the foreign copy is discarded (exit 0); on 341e9d4c912 the same-request retry publishes the kept
+    rebuild ran beside nothing, the foreign copy is discarded (exit 0); on the parent the same-request retry publishes the kept
     copy without an overlay call."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)  # A = ten zero bytes, SHA_ZERO10
     capsys.readouterr()
@@ -2153,9 +2153,9 @@ def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_be
             and _tree_bytes(out + ".tmp") == staged
         )
     if retry == "same_request":
-        # fix round T6l: --force rebuilds from the source; the kept copy is discarded once <out> is complete again
+        # --force rebuilds from the source; the kept copy is discarded once <out> is complete again
         assert mat.main([*args, "--force"]) == 0 and len(calls) == 3, (
-            "the overlay ran again (on 341e9d4c912: the kept copy published)"
+            "the overlay ran again (on the parent: the kept copy published)"
         )
         assert seen_at_overlay == [True, True], "the rebuild ran beside the restored export"
         marker = _marker(out)
@@ -2173,7 +2173,7 @@ def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_be
         assert _tree_bytes(out + ".tmp") == staged and not os.path.exists(out), "nothing touched"
         (ckpt / "model.pt").write_bytes(
             b"\0" * 10
-        )  # a request of its identity WITHOUT --force publishes it (fix round T6l)
+        )  # a request of its identity WITHOUT --force publishes it
         assert mat.main(args) == 0 and len(calls) == 2
         assert _marker(out)["identity"]["source_sha256"] == SHA_ZERO10 and _marker(out)["reused_staging"] is True
         assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous")
@@ -2187,7 +2187,7 @@ def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_be
         monkeypatch.setattr(hf_overlay, "overlay_consolidated_onto_hf", failing_once)
         assert mat.main([*args, "--force"]) == 1
         err = capsys.readouterr().err
-        assert _tree_bytes(out) == export_a, "<out> back, byte-identical and marked (on a0f81de5b6f: absent)"
+        assert _tree_bytes(out) == export_a, "<out> back, byte-identical and marked (on the parent: absent)"
         assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous"), (
             "<out>.tmp gone, <out>.previous gone"
         )
@@ -2196,7 +2196,7 @@ def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_be
         assert f"the existing output {out} was not touched by this request" in err and "Traceback" not in err, err
         monkeypatch.setattr(hf_overlay, "overlay_consolidated_onto_hf", observing_overlay)
     assert mat.main([*args, "--force"]) == 0, "the overlay succeeding: published"
-    assert seen_at_overlay[-1] is True, "the rebuild ran beside the restored export (on a0f81de5b6f: beside nothing)"
+    assert seen_at_overlay[-1] is True, "the rebuild ran beside the restored export (on the parent: beside nothing)"
     assert _marker(out)["identity"]["source_sha256"] == sha_c and _marker(out)["reused_staging"] is False
     assert not os.path.exists(out + ".previous") and not os.path.exists(out + ".tmp"), "nothing left over"
     assert "--force renames it back to" in refusal and "builds beside it" in refusal, refusal
@@ -2235,12 +2235,12 @@ sys.exit(mat.main(["--ckpt-dir", ckpt, "--base", base, "--out", out, "--min-tens
 def test_two_materializers_on_one_output_exclude_each_other_through_the_per_output_lock(
     tmp_path: Path, base: Path
 ) -> None:
-    """Review R149H-02 (fix round T6k). Two real subprocesses on one ``--out``: the first is held inside the overlay (a fake overlay
+    """Two real subprocesses on one ``--out``: the first is held inside the overlay (a fake overlay
     that waits for a file) with ``<out>.lock`` taken and its staging directory half written; the second, with ``--force``, is refused
     by name (the holder's pid, host and start time from the lock record), touches nothing (the first's staging directory is
     byte-identical, no ``<out>``); released, the first publishes. The lock file stays beside the output and blocks nobody once its
-    holder is gone: a third request skips idempotently. On a0f81de5b6f the second removes the first's staging directory as "not
-    reusable" and publishes its own build (exit 0; the reviewer's timing 1)."""
+    holder is gone: a third request skips idempotently. On the parent the second removes the first's staging directory as "not
+    reusable" and publishes its own build (exit 0; timing 1)."""
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
     (ckpt / "model.pt").write_bytes(b"\0" * 10)
@@ -2265,7 +2265,7 @@ def test_two_materializers_on_one_output_exclude_each_other_through_the_per_outp
         second = subprocess.run(
             command("now", "--force", "--lock-wait-seconds", "1"), env=env, capture_output=True, text=True, timeout=120
         )
-        assert second.returncode == 1, f"the second must be refused (on a0f81de5b6f it publishes): {second.stderr}"
+        assert second.returncode == 1, f"the second must be refused (on the parent it publishes): {second.stderr}"
         assert os.path.isfile(out + ".lock"), "the lock file stands beside the output"
         expected = (
             f"FATAL: REFUSED: {out} is being materialized by another process ({out}.lock held by pid {first.pid} on host "
@@ -2288,11 +2288,11 @@ def test_two_materializers_on_one_output_exclude_each_other_through_the_per_outp
 def test_the_per_output_lock_refuses_by_name_in_process_and_fails_closed_without_flock(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149H-02 (fix round T6k), the lock's own contract: a second ``output_lock`` on the same output (another file
+    """The lock's own contract: a second ``output_lock`` on the same output (another file
     description, the same process here) is refused naming the holder's record; the CLI under ``--force`` while the lock is held is
     refused by name with the existing export byte-identical and no staging directory; released, the same request builds; where
     flock is refused by the file system (``ENOLCK``: Lustre without the ``flock`` mount option) the request is refused by name,
-    fail closed. On a0f81de5b6f ``output_lock`` does not exist and the CLI rebuilds under a held lock."""
+    fail closed. On the parent ``output_lock`` does not exist and the CLI rebuilds under a held lock."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -2324,12 +2324,12 @@ def test_the_per_output_lock_refuses_by_name_in_process_and_fails_closed_without
     assert _tree_bytes(out) == before and not os.path.exists(out + ".tmp") and len(calls) == 2
 
 
-# ---------------------------------------------------------------- fix round T6l: --force rebuilds from the source
+# ---------------------------------------------------------------- --force rebuilds from the source
 @pytest.mark.parametrize("case", ["flipped_byte_no_verify", "base_bytes_changed_same_size"])
 def test_force_rebuilds_from_the_source_instead_of_publishing_a_death_left_copy(
     case: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149I-01 (fix round T6l), the reviewer's B1 and B2 through the CLI. On 341e9d4c912 a death-left ``<out>.tmp`` whose
+    """Both reported cases through the CLI. On the parent a death-left ``<out>.tmp`` whose
     marker matched the request was published under ``--force`` without a fresh overlay, trusting its shard bytes on size and tensor
     count and a base digest that excludes the base shards' bytes: a kept copy with one flipped data byte was published under
     ``--force --no-verify`` (B1), and after a base shard's bytes changed with the size kept the stale copy was published (B2). Now
@@ -2337,7 +2337,7 @@ def test_force_rebuilds_from_the_source_instead_of_publishing_a_death_left_copy(
     in the restore fixture), then the kept copy's last data byte flipped (B1) or the base shard's last data byte flipped with the
     base digest unchanged (B2); ``--force`` restores ``<out>.previous``, discards the kept copy, runs the overlay (which copies the
     base's shards here, as the real overlay carries the base's untouched tensors) and publishes a shard equal to a fresh overlay's
-    bytes: ``reused_staging`` False, one more overlay call, no residue. On 341e9d4c912: the kept copy published with the flipped
+    bytes: ``reused_staging`` False, one more overlay call, no residue. On the parent: the kept copy published with the flipped
     byte / the stale bytes, no overlay call."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
@@ -2377,7 +2377,7 @@ def test_force_rebuilds_from_the_source_instead_of_publishing_a_death_left_copy(
     else:
         assert kept_shard.read_bytes() != expected and "--no-verify" in args
     assert mat.main([*args, "--force"]) == 0 and len(calls) == 3, (
-        "--force rebuilt (on 341e9d4c912: the kept copy published)"
+        "--force rebuilt (on the parent: the kept copy published)"
     )
     marker = _marker(out)
     assert marker["reused_staging"] is False and marker["identity"]["base_digest"] == digest_before
@@ -2388,13 +2388,13 @@ def test_force_rebuilds_from_the_source_instead_of_publishing_a_death_left_copy(
 def test_a_death_left_copy_is_published_only_by_a_request_without_force_after_verification(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Fix round T6l, the pinned counterpart of R149I-01: the kept-copy publication without a fresh overlay remains for a request
+    """The pinned counterpart: the kept-copy publication without a fresh overlay remains for a request
     WITHOUT ``--force`` (the idempotent recovery). A first build that dies right before its single rename leaves ``<out>.tmp``
     complete and marked and no ``<out>``: ``--force`` is refused by name (the copy is the only complete tree, which ``--force`` does
     not discard; a request without ``--force`` is the way out) and touches nothing; without ``--force`` the copy is published after
     the verification a fresh build gets (index, sidecars; the torch probe unless ``--no-verify``, which trusts its bytes on size and
     tensor count): ``reused_staging`` True, the overlay not called, the published shards the kept copy's bytes, no residue. On
-    341e9d4c912 ``--force`` published the kept copy (its marker matched the request)."""
+    the parent ``--force`` published the kept copy (its marker matched the request)."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
@@ -2414,7 +2414,7 @@ def test_a_death_left_copy_is_published_only_by_a_request_without_force_after_ve
     assert len(calls) == 1 and not os.path.exists(out) and mat.complete_marked(out + ".tmp")[0]
     kept = _tree_bytes(out + ".tmp")
     assert mat.main([*args, "--force"]) == 1, (
-        "the only complete tree is not discarded by --force (on 341e9d4c912: published)"
+        "the only complete tree is not discarded by --force (on the parent: published)"
     )
     err = capsys.readouterr().err
     assert f"FATAL: REFUSED: {out}.tmp is a complete marked export (identity " in err, err
@@ -2432,7 +2432,7 @@ def test_a_death_left_copy_is_published_only_by_a_request_without_force_after_ve
     assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous")
 
 
-# ---------------------------------------------------------------- fix round T6m: the inherited sole marked copy; the decision under the lock
+# ---------------------------------------------------------------- the inherited sole marked copy; the decision under the lock
 @pytest.mark.parametrize(
     "fault",
     [
@@ -2445,16 +2445,16 @@ def test_a_death_left_copy_is_published_only_by_a_request_without_force_after_ve
 def test_a_failed_recovery_check_leaves_the_inherited_sole_marked_copy_as_found(
     fault: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The reviewer's P2 of 2026-10-03 15:17 in thread 677171a12b (fix round T6m), the reproduction verbatim: a first publication dies
+    """The reproduction verbatim: a first publication dies
     after writing ``.materialized`` and before ``tmp -> out`` (``publish_staging`` replaced by one that raises ``KeyboardInterrupt``
     before any rename), so ``<out>.tmp`` is the only completed copy; the recommended retry without ``--force`` reuses it, and on
-    78bfac182b8 a failed recovery check (an OSError injected into the index verification; a stricter tensor count, no injection; a
+    the parent a failed recovery check (an OSError injected into the index verification; a stricter tensor count, no injection; a
     transient torch-verification error) reached ``_discard_staging`` and left ``out``, ``out.tmp`` and ``out.previous`` ALL absent,
     while a missing staged ``config.json`` made the remedy discard the marked shards before rebuilding, so a transient overlay
     failure lost them too. Now the inherited sole complete marked copy is never deleted: the failed check refuses by name and the
     tree is left exactly as found (tree hash equal; no ``out``, no ``out.previous``; the overlay not run), and the retry with the
     cause gone publishes it with the shards untouched; a missing ``config.json`` is repaired from the base through a temporary file
-    and a rename, the overlay never called (its injected failure cannot bite). On 78bfac182b8: everything absent after the failed
+    and a rename, the overlay never called (its injected failure cannot bite). On the parent: everything absent after the failed
     check (``{} == found``), and the config case ends with exit 1 and the marked shards gone."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
@@ -2521,7 +2521,7 @@ def test_a_failed_recovery_check_leaves_the_inherited_sole_marked_copy_as_found(
     if fault != "config_missing_then_overlay_failure":
         assert mat.main([*args, *extra]) == 1, "the failed recovery check refuses"
         err = capsys.readouterr().err
-        assert _tree_bytes(tmp) == found, "the inherited copy is left exactly as found (on 78bfac182b8: deleted)"
+        assert _tree_bytes(tmp) == found, "the inherited copy is left exactly as found (on the parent: deleted)"
         assert not os.path.exists(out) and not os.path.exists(out + ".previous")
         assert f"FATAL: the recovery of the inherited staging directory {tmp} failed at the {stage} stage: " in err, err
         assert detail in err, err
@@ -2533,7 +2533,7 @@ def test_a_failed_recovery_check_leaves_the_inherited_sole_marked_copy_as_found(
         assert len(calls) == 1, "the overlay was not run while the copy is the sole complete tree"
     # the cause gone (the config case: no fault to remove, the repair is the remedy): the unforced retry publishes the copy
     assert mat.main(args) == 0 and len(calls) == 1, (
-        "published without an overlay call (on 78bfac182b8: rebuilt or lost)"
+        "published without an overlay call (on the parent: rebuilt or lost)"
     )
     marker = _marker(out)
     assert marker["reused_staging"] is True and marker["identity"]["source_sha256"] == SHA_ZERO10
@@ -2586,8 +2586,8 @@ sys.exit(mat.main(["--ckpt-dir", ckpt, "--base", base, "--out", out, "--min-tens
 def test_the_marker_decision_is_taken_under_the_output_lock_so_a_paused_materializer_cannot_overwrite_a_newer_export(
     tmp_path: Path, base: Path
 ) -> None:
-    """The reviewer's P2 of 2026-10-03 14:24 in thread b15dc9ef1b (fix round T6m), the race with two real subprocesses: A (source
-    A) pauses right before acquiring the output lock; B (source B) publishes and releases; A resumes. On 78bfac182b8 A had evaluated
+    """The race with two real subprocesses: A (source
+    A) pauses right before acquiring the output lock; B (source B) publishes and releases; A resumes. On the parent A had evaluated
     ``marker_status`` BEFORE the lock ("absent"), so it acquired the free lock and overwrote B with that stale decision without
     ``--force`` (B's marked identity replaced, its previous copy removed). Now the marker / skip / mismatch decision is taken under
     the lock: A sees B's marker and is refused by name ("holds a different or unproven materialization", the source sha256 named),
@@ -2622,20 +2622,20 @@ def test_the_marker_decision_is_taken_under_the_output_lock_so_a_paused_material
     finally:
         (gate / "go").write_text("go")
         first_out, first_err = first.communicate(timeout=120)
-    assert first.returncode == 1, f"A must be refused on B's marker (on 78bfac182b8 A overwrote B): {first_err}"
+    assert first.returncode == 1, f"A must be refused on B's marker (on the parent A overwrote B): {first_err}"
     assert f"FATAL: REFUSED: {out} holds a different or unproven materialization" in first_err, first_err
     assert "source sha256" in first_err and "Traceback" not in first_err, first_err
     assert _tree_bytes(out) == export_b, "B's export is intact"
     assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous")
 
 
-# ---------------------------------------------------------------- fix round T6n: the truthful recovery refusal; the bounded lock wait
+# ---------------------------------------------------------------- the truthful recovery refusal; the bounded lock wait
 @pytest.mark.parametrize("out_state", ["out_absent", "out_unmarked"])
 def test_a_repair_then_failed_recovery_check_keeps_the_shards_and_the_marker_and_says_what_it_changed(
     out_state: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149K-01 (fix round T6n). The recovery of an inherited sole complete marked ``<out>.tmp`` repairs and re-syncs BEFORE it
-    checks, so on 595d33bfe48 its refusal said "left as found" while config.json had been rewritten from the base, a differing
+    """The recovery of an inherited sole complete marked ``<out>.tmp`` repairs and re-syncs BEFORE it
+    checks, so on the parent its refusal said "left as found" while config.json had been rewritten from the base, a differing
     sidecar re-synced and a stray one removed, and said "no output exists at <out>" while an unmarked directory stood there. Now the
     refusal says what is true: the shards and the marker are untouched, the sidecars may have been repaired from the base before the
     check, and the state at ``<out>`` is named. Here: the first publication dies before its rename; the staged config.json removed,
@@ -2643,7 +2643,7 @@ def test_a_repair_then_failed_recovery_check_keeps_the_shards_and_the_marker_and
     unmarked directory put at ``<out>``); the unforced retry with ``--expect-tensors 999`` fails its index check after the repair:
     the shards, the index, the stamp and the marker byte-identical, config.json = the base's, generation_config.json = the base's,
     the stray gone, the refusal naming the repair and the state at ``<out>``; the retry without the stricter count publishes the
-    repaired copy (the unmarked directory replaced by the swap). On 595d33bfe48 the invariant holds but the words do not ("left as
+    repaired copy (the unmarked directory replaced by the swap). On the parent the invariant holds but the words do not ("left as
     found", "no output exists" beside the standing directory)."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
@@ -2752,14 +2752,14 @@ sys.exit(mat.main(["--ckpt-dir", ckpt, "--base", base, "--out", out, "--min-tens
 def test_an_identical_request_waits_for_the_lock_holder_and_skips_with_0(
     second: str, tmp_path: Path, base: Path
 ) -> None:
-    """Review R149K-02 (fix round T6n). The idempotent skip's re-check holds the output lock since T6m, so on 595d33bfe48 the
+    """The idempotent skip's re-check holds the output lock, so on the parent the
     second of two simultaneous identical requests of an already-published source exited 1 ("being materialized by another
     process") where the parent returned 0 for both: an undocumented change of the idempotent contract. Now a held lock is waited
     for, polling, up to 120 s (``--lock-wait-seconds``): two real subprocesses on a published export, the holder an identical request
     that keeps the acquired lock until the test says go; the second request is still running after 1.5 s (it waits), and once the
     holder has finished it acquires and decides under the lock: an identical request skips with 0, a differing one is refused on the
     marker ("holds a different or unproven materialization"), never with the "being materialized" text; the export byte-identical.
-    On 595d33bfe48 the second exits 1 at once."""
+    On the parent the second exits 1 at once."""
     ckpt_a, ckpt_b = tmp_path / "ckpt_a", tmp_path / "ckpt_b"
     for ckpt, byte in ((ckpt_a, b"\0"), (ckpt_b, b"\1")):
         ckpt.mkdir()
@@ -2792,7 +2792,7 @@ def test_an_identical_request_waits_for_the_lock_holder_and_skips_with_0(
         )
         time.sleep(1.5)
         assert waiter.poll() is None, (
-            f"the second request waits for the lock (on 595d33bfe48 it exits 1 at once): {waiter.communicate()}"
+            f"the second request waits for the lock (on the parent it exits 1 at once): {waiter.communicate()}"
         )
     finally:
         (gate / "go").write_text("go")
@@ -2814,10 +2814,10 @@ def test_an_identical_request_waits_for_the_lock_holder_and_skips_with_0(
 def test_the_lock_wait_is_bounded_and_the_refusal_names_the_bound(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149K-02 (fix round T6n), the bound: with the lock held by this process, an identical request with
+    """The bound: with the lock held by this process, an identical request with
     ``--lock-wait-seconds 0.6`` waits about that long and is then refused by name with the bound stated, touching nothing;
     ``output_lock(..., wait_seconds=0)`` refuses at once; a negative bound is an argument error; released, the same request skips
-    with 0. On 595d33bfe48 the option does not exist (an argument error)."""
+    with 0. On the parent the option does not exist (an argument error)."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -2844,7 +2844,7 @@ def test_the_lock_wait_is_bounded_and_the_refusal_names_the_bound(
         err = capsys.readouterr().err
         assert "not released within 0 s (--lock-wait-seconds)" in err and "-0 s" not in err, (
             err
-        )  # fix round T6p: no "-0 s"
+        )  # No "-0 s"
     assert mat.main(args) == 0 and "idempotent skip" in capsys.readouterr().out, (
         "released: the same request skips with 0"
     )
@@ -2853,15 +2853,15 @@ def test_the_lock_wait_is_bounded_and_the_refusal_names_the_bound(
     assert "--lock-wait-seconds must be >= 0 and finite" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------- fix round T6o: the .writing temporary of the unified-template writer
+# ---------------------------------------------------------------- the .writing temporary of the unified-template writer
 def test_a_failed_unified_rewrite_during_recovery_leaves_the_writing_temporary_and_the_refusal_names_it(
     tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review R149L-01 (fix round T6o). Under ``--unified-chat-template`` the recovery of an inherited sole complete marked copy
+    """Under ``--unified-chat-template`` the recovery of an inherited sole complete marked copy
     re-syncs both template files to the base's non-unified form at the sidecar-sync stage and rewrites them with the unified text
     at the unified-template stage through a ``.writing`` temporary (``hf._write_unified_file``: write ``<name>.writing``, then
     ``os.replace``); a failure between the write and the rename leaves ``tokenizer_config.json.writing`` beside both files in the
-    base's form, the shards and the marker untouched. On 4fb8a4c8d84 the refusal listed ".copying temporary" as the only
+    base's form, the shards and the marker untouched. On the parent the refusal listed ".copying temporary" as the only
     temporary. Here: a unified build whose first publication dies before its rename; the unforced unified retry with the writer
     made to fail after writing the temporary of ``tokenizer_config.json``: exit 1, the refusal names the stage and the
     ``.writing`` temporary of the unified-template writer, and the tree is as it says (shards, index, stamp and marker
@@ -2949,11 +2949,11 @@ def test_a_failed_unified_rewrite_during_recovery_leaves_the_writing_temporary_a
 def test_lock_wait_seconds_refuses_non_finite_values(
     value: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Round 149l's observation (fix round T6o), re-derived from the code: ``--lock-wait-seconds`` is ``type=float``, so argparse
-    accepted ``inf`` (``time.monotonic() + inf`` never passes: an unbounded wait, executed by the reviewer) and ``nan``
+    """Re-derived from the code: ``--lock-wait-seconds`` is ``type=float``, so argparse
+    accepted ``inf`` (``time.monotonic() + inf`` never passes: an unbounded wait) and ``nan``
     (``max(0.0, nan)`` is ``0.0``: a silent refuse-at-once). Now the CLI refuses a non-finite or negative value as an argument error
     naming it, ``run_request`` raises ``ValueError`` naming it before touching anything, and ``output_lock`` does the same; a finite
-    bound still works. On 4fb8a4c8d84 ``inf`` waited and ``nan`` acted as 0."""
+    bound still works. On the parent ``inf`` waited and ``nan`` acted as 0."""
     calls, args, out = _default_export(tmp_path, base, monkeypatch)
     capsys.readouterr()
     before = _tree_bytes(out)
@@ -2972,10 +2972,10 @@ def test_lock_wait_seconds_refuses_non_finite_values(
             pass
     assert _tree_bytes(out) == before and len(calls) == 1 and not os.path.exists(out + ".tmp")
     assert mat.main([*args, "--lock-wait-seconds", "5"]) == 0 and "idempotent skip" in capsys.readouterr().out
-    assert mat.main([*args, "--lock-wait-seconds", "-0.0"]) == 0, "-0.0 is a finite 0: accepted (fix round T6p)"
+    assert mat.main([*args, "--lock-wait-seconds", "-0.0"]) == 0, "-0.0 is a finite 0: accepted"
 
 
-# ---------------------------------------------------------------- fix round T6q: the source identity is read under the lock
+# ---------------------------------------------------------------- the source identity is read under the lock
 _SOURCE_RACE_DRIVER = r"""
 import contextlib, hashlib, json, os, struct, sys, time
 from pathlib import Path
@@ -2990,7 +2990,7 @@ def fake_overlay(ckpt_dir, model_id, staging_dir, payload=None):
     os.makedirs(staging_dir)
     shutil.copy2(os.path.join(model_id, "config.json"), os.path.join(staging_dir, "config.json"))
     shutil.copy2(os.path.join(model_id, hf.INDEX_FILE), os.path.join(staging_dir, hf.INDEX_FILE))
-    if payload is not None:  # fix round T6r: the materializer hands the overlay the file object it hashed under the lock
+    if payload is not None:  # the materializer hands the overlay the file object it hashed under the lock
         payload.seek(0)
         source = payload.read()  # the tensors carry the bytes the overlay READ
         payload.seek(0)
@@ -3029,13 +3029,13 @@ def _shard_data(path: str) -> bytes:
 def test_the_marker_records_the_source_the_overlay_read_when_the_source_changes_during_the_lock_wait(
     during_the_wait: str, tmp_path: Path, base: Path
 ) -> None:
-    """Review thread 524355e746 (fix round T6q), the reviewer's reproduction as real subprocesses: on 8137ab87fd0 ``probe_local_source``
+    """Reproduction as real subprocesses: on the parent ``probe_local_source``
     hashed ``model.pt`` BEFORE the output lock, which may wait up to 120 s; a ``merge --force`` (tmp + os.replace over model.pt) during
     the wait is not excluded by that lock, so after acquisition the overlay read the new checkpoint B while the source record and the
     published marker carried A's hash. Here a holder keeps the lock; the waiter starts and waits; model.pt is replaced with B the way the
     merge tool writes it (a temporary, then os.replace); the holder is released: the waiter builds, the marker's source sha256 is B's
     and the published tensors carry B's bytes (the driver's fake overlay writes the bytes it read into the shards). The unchanged case
-    is pinned beside it (A throughout). On 8137ab87fd0 the replaced case publishes B's tensors under A's sha."""
+    is pinned beside it (A throughout). On the parent the replaced case publishes B's tensors under A's sha."""
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
     (ckpt / "model.pt").write_bytes(b"\0" * 10)
@@ -3080,7 +3080,7 @@ def test_the_marker_records_the_source_the_overlay_read_when_the_source_changes_
         "the published tensors carry the bytes the overlay read"
     )
     assert marker["identity"]["source_sha256"] == expected_sha, (
-        "the marker names the source the overlay read (on 8137ab87fd0: A's pre-wait sha over B's tensors)"
+        "the marker names the source the overlay read (on the parent: A's pre-wait sha over B's tensors)"
     )
     assert (
         marker["source"]["sha256"] == expected_sha
@@ -3093,11 +3093,11 @@ def test_the_marker_records_the_source_the_overlay_read_when_the_source_changes_
 def test_a_source_replaced_during_the_overlay_does_not_change_what_was_built_or_recorded(
     rewrite: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fix round T6r (review thread 524355e746) supersedes T6q's post-overlay re-hash: the overlay maps the file object the
+    """This supersedes the earlier post-overlay re-hash: the overlay maps the file object the
     materializer opened and hashed under the lock, so a replacement of the PATH during the overlay (a fake overlay that writes over
     model.pt by tmp + os.replace after the build read it) changes nothing of what was built or recorded: the build publishes, the
-    marker and the source record name the opened inode's identity (A) and the path now holds the replacement. Under T6q
-    (99a5b7f02c5) the different-bytes case failed the build and the same-bytes case was "accepted" on the digest of the final file,
+    marker and the source record name the opened inode's identity (A) and the path now holds the replacement. Under the earlier re-hash
+    the different-bytes case failed the build and the same-bytes case was "accepted" on the digest of the final file,
     which does not say what the overlay consumed."""
     calls = _install_fake_overlay(monkeypatch)
     ckpt = tmp_path / "ckpt"
@@ -3117,7 +3117,7 @@ def test_a_source_replaced_during_the_overlay_does_not_change_what_was_built_or_
 
     monkeypatch.setattr(hf_overlay, "overlay_consolidated_onto_hf", replacing_overlay)
     assert mat.main(args) == 0 and len(calls) == 1, (
-        "the build publishes (on 99a5b7f02c5 the different-bytes case failed)"
+        "the build publishes (on the parent the different-bytes case failed)"
     )
     marker = _marker(out)
     assert marker["identity"]["source_sha256"] == SHA_ZERO10 and marker["source"]["sha256"] == SHA_ZERO10
@@ -3136,7 +3136,7 @@ mode, ckpt, base, out, experts_a, experts_b = sys.argv[1:7]
 
 def fake_overlay(ckpt_dir, model_id, staging_dir, payload=None):
     # The real overlay minus the HF model: the REAL consolidated-checkpoint loader reads model.pt (through the payload the
-    # materializer hands over since fix round T6r, by path before), and the bytes of the tensor it loaded go into the shards.
+    # materializer hands over; by path before), and the bytes of the tensor it loaded go into the shards.
     import shutil
     import torch
     model_pt = os.path.join(ckpt_dir, "model.pt")
@@ -3170,10 +3170,10 @@ sys.exit(mat.main(["--ckpt-dir", ckpt, "--base", base, "--out", out, "--min-tens
 def test_the_marker_names_the_bytes_the_overlay_consumed_when_forced_merges_race_the_overlay(
     during_the_overlay: str, tmp_path: Path, base: Path
 ) -> None:
-    """Review thread 524355e746 (fix round T6r), the reviewer's residual with the SUPPORTED merge tool, as a real subprocess: the
+    """The residual case with the SUPPORTED merge tool, as a real subprocess: the
     identity of record is A; during the overlay a forced merge replaces model.pt with B, the loader reads, a second forced merge
-    restores A; the final digest is A again. On 99a5b7f02c5 the loader read the PATH (B) and the post-overlay re-hash accepted the
-    final digest as "same bytes": the marker recorded A over B's tensors. Since T6r the overlay maps the file object opened under
+    restores A; the final digest is A again. On the parent the loader read the PATH (B) and the post-overlay re-hash accepted the
+    final digest as "same bytes": the marker recorded A over B's tensors. Now the overlay maps the file object opened under
     the lock, so it consumed A: the marker names A and the published tensors carry A's bytes, whatever the path held meanwhile. The
     unchanged case (no merge during the overlay) is pinned beside it. Needs torch (the merge tool, the loader); skips without it."""
     torch = pytest.importorskip("torch")
@@ -3204,12 +3204,12 @@ def test_the_marker_names_the_bytes_the_overlay_consumed_when_forced_merges_race
     )
     assert run.returncode == 0 and "MATERIALIZE DONE" in run.stdout, run.stderr
     assert hashlib.sha256(model_pt.read_bytes()).hexdigest() == sha_a, (
-        "the merge tool reproduces A byte for byte (the precondition of the reviewer's scenario)"
+        "the merge tool reproduces A byte for byte (the precondition of this scenario)"
     )
     marker = _marker(out)
     assert marker["identity"]["source_sha256"] == sha_a and marker["source"]["sha256"] == sha_a
     assert _shard_data(os.path.join(out, SHARD1)) == bytes_a, (
-        "the published tensors carry the bytes of the source the marker names (on 99a5b7f02c5: B's bytes under A's sha)"
+        "the published tensors carry the bytes of the source the marker names (on the parent: B's bytes under A's sha)"
     )
     assert _shard_data(os.path.join(out, SHARD1)) != bytes_b and not os.path.exists(out + ".tmp")
 
@@ -3218,9 +3218,9 @@ def test_the_marker_names_the_bytes_the_overlay_consumed_when_forced_merges_race
 def test_the_default_verification_receives_the_held_payload(
     kind: str, tmp_path: Path, base: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fix round T6t (review thread 524355e746): on the default verification path the materializer hands ``verify_with_torch`` the
+    """On the default verification path the materializer hands ``verify_with_torch`` the
     SAME open file object it hashed under the lock and the overlay consumed (keyword ``payload``: open, the inode of the source it
-    names), for a local checkpoint and for the fetched copy of an archived artifact; ``--no-verify`` is untouched. On 65fe976387c
+    names), for a local checkpoint and for the fetched copy of an archived artifact; ``--no-verify`` is untouched. On the parent
     ``verify_with_torch`` received the path only (``payload_given`` False)."""
     calls = _install_fake_overlay(monkeypatch)
     seen: dict[str, object] = {}
@@ -3257,7 +3257,7 @@ def test_the_default_verification_receives_the_held_payload(
         args = ["--artifact-uri", URI, "--base", str(base), "--out", out, "--min-tensors", "3"]
     assert mat.main(args) == 0 and len(calls) == 1
     assert seen == {"payload_given": True, "same_inode": True, "open": True}, (
-        f"verify_with_torch gets the held payload (on 65fe976387c: the path only): {seen}"
+        f"verify_with_torch gets the held payload (on the parent: the path only): {seen}"
     )
     marker = _marker(out)
     assert marker["verify"]["torch"] is True and marker["identity"]["source_sha256"] == SHA_ZERO10

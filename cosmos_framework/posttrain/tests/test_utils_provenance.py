@@ -165,7 +165,7 @@ def test_collect_provenance_records_every_key_and_survives_git_failure(
 
     assert RECORD_KEYS <= set(record)
     if failure == "timeout":
-        # Review R134-08: a probe that had an answer and ran out of time records the reason; the canaries' silent
+        # A probe that had an answer and ran out of time records the reason; the canaries' silent
         # ``git_dirty: null`` is gone.
         assert set(record["errors"]) == {"git_commit", "git_dirty"}
         assert record["errors"]["git_commit"].startswith("GitProbeError: git rev-parse exceeded its ")
@@ -255,7 +255,7 @@ def test_git_probes_report_the_checkout_state(tmp_path: Path) -> None:
 def test_git_dirty_is_scoped_to_the_posttrain_tree_and_a_timeout_is_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review R134-08: both canaries of 22bfce78f40 stamped ``git_dirty: null`` without a reason -- an unscoped
+    """Both earlier canaries stamped ``git_dirty: null`` without a reason -- an unscoped
     ``git status`` of a 20,873-file checkout on a networked filesystem missed its 5 s box and ``_git`` swallowed the
     ``TimeoutExpired``. Now the probe is limited to the posttrain pathspec (the tree ``tree_hash`` covers; the record
     names it as ``git_dirty_scope``): a modified file elsewhere in the checkout does not flip it, a modified posttrain file
@@ -443,7 +443,7 @@ def test_embed_provenance_round_trips_the_real_resolved_config_dump(tmp_path: Pa
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_collect_provenance_reads_the_relaunched_slurm_job_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review R125-D-04: the torchrun launcher unsets SLURM_JOB_ID (the rendezvous id) before the entry runs, so both
+    """The torchrun launcher unsets SLURM_JOB_ID (the rendezvous id) before the entry runs, so both
     arms recorded ``slurm_job_id: null``; the launcher now re-exports it as POSTTRAIN_SLURM_JOB_ID first and the record
     falls back to it. The parent read SLURM_JOB_ID only."""
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
@@ -468,7 +468,7 @@ def test_collect_provenance_reads_the_relaunched_slurm_job_id(tmp_path: Path, mo
 def test_collect_provenance_records_the_resolved_recipe_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review R142-04 (FIXTURE: 4821e1d9943 had no registry and no key). A recipe variant selected by ``SFT_RECIPE_VARIANT``
+    """FIXTURE: the parent had no registry and no key. A recipe variant selected by ``SFT_RECIPE_VARIANT``
     left no trace in the record (``ENV_KEYS`` is ``I4_ROOT`` / ``PYTHONPATH``) and the resolved config carries the
     variant's VALUES (``rl.mask_think_opener`` tells ``prefilled_opener`` from ``default`` today) but not its NAME, so a
     readout could not name the variant that produced them. A recipe's ``build_config``

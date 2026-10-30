@@ -5,7 +5,7 @@
 
 See docs/design/DESIGN.md (incl. the version history) and the README. Roles = env(dataset) /
 rollout / reward / trainer(policy) (+buffer), decoupled as model ↔ algorithm(objective) ↔
-trainer(engine); typed config over inherited i4 experiments; per-algorithm entrypoints
+trainer(engine); typed config over inherited upstream experiments; per-algorithm entrypoints
 (DPO end-to-end on the 8B); orchestration spans local(torchrun/FSDP) and Ray, single-node
 to multinode. Weight transfer is still the no-op seam (real backends in review); the
 *interfaces* are the general (final-form) ones, with TODO hooks for deferred features.

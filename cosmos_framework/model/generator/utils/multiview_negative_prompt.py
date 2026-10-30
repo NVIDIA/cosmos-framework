@@ -42,7 +42,7 @@ def multiview_negative_captions(
     *,
     video_key: str = "video",
 ) -> list[str]:
-    """Match the positive MADS metadata without multiplying duration by camera count.
+    """Match the positive multiview metadata without multiplying duration by camera count.
 
     Called before context-parallel owner rotation and before rollout truncation.
     Each logical sample owns a control and target, each in camera-major layout.
