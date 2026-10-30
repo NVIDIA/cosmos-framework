@@ -15,15 +15,16 @@ from cosmos_framework.posttrain.checkpoint.adapters import read_adapter_artifact
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig, AdapterExtraModuleConfig
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
-from cosmos_framework.posttrain.model.qwen3_vl import Qwen3VLPolicy, build_qwen3_vl_model
+from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
 from cosmos_framework.posttrain.tests.adapter_numerics import (
+    HFProbePolicy,
     compare_logits,
     verify_promoted_merge,
 )
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
 
-def portable_policy(base: str, directory: str, identity: dict):
+def portable_policy(base: str, directory: str, identity: dict, *, backend: str = "i4"):
     components = [
         AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
         for row in identity["resolved"]["targets"]
@@ -38,6 +39,15 @@ def portable_policy(base: str, directory: str, identity: dict):
         for row in identity["resolved"]["extra_parameters"]
         if row["owner"] == row["name"]
     ]
+    if backend == "hf":
+        from cosmos_framework.posttrain.config.model import HFModelConfig
+        from cosmos_framework.posttrain.model.hf import build_hf_model
+
+        return build_hf_model(
+            HFModelConfig(name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa"),
+            adapters=AdapterConfig(components=components, extra_modules=extras, warm_start=directory),
+            adapter_media_identity=identity["media"],
+        )
     config = Qwen3VLModelConfig(
         name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa", activation_checkpointing="none"
     )
@@ -57,6 +67,7 @@ def main():
     parser.add_argument("--report-dir", help="write new evidence separately from immutable training outputs")
     parser.add_argument("--wheel", required=True)
     parser.add_argument("--build-record", required=True)
+    parser.add_argument("--backend", choices=["i4", "hf"], default="i4")
     args = parser.parse_args()
     if args.probe_run and not args.merged:
         parser.error("--probe-run requires --merged; portable exact reload needs its own saved reference outputs")
@@ -76,16 +87,17 @@ def main():
         references.extend(record["logits"])
     if not batches:
         raise ValueError("no controlled probe inputs found")
-    policy = portable_policy(args.base, str(root / "portable"), identity)
+    policy = portable_policy(args.base, str(root / "portable"), identity, backend=args.backend)
     native = logits(policy, batches)
     if not args.probe_run:
         for value, expected in zip(native, references):
             torch.testing.assert_close(value, expected, atol=2e-5, rtol=2e-5)
     control = None
     if args.merged:
-        from transformers import AutoModelForImageTextToText
+        import transformers
 
         from cosmos_framework.posttrain.checkpoint.tools.adapters import merged_export_metadata
+        from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
         marker = json.loads((Path(args.merged) / ".materialized").read_text())
         if marker["identity"].get("output_dtype") != "float32":
@@ -100,11 +112,13 @@ def main():
         del policy
         gc.collect()
         torch.cuda.empty_cache()
-        model = AutoModelForImageTextToText.from_pretrained(
-            args.merged, dtype="auto", attn_implementation="sdpa"
-        ).cuda()
+        model = (
+            getattr(transformers, adapter_family(identity["architecture"]).hf_auto_class)
+            .from_pretrained(args.merged, dtype="auto", attn_implementation="sdpa")
+            .cuda()
+        )
         assert all(p.dtype == torch.float32 for p in model.parameters())
-        actual = logits(Qwen3VLPolicy(model, "qwen3_vl"), batches)
+        actual = logits(HFProbePolicy(model), batches)
     else:
         actual, expected = native, references
     mode = "merged" if args.merged else "portable"

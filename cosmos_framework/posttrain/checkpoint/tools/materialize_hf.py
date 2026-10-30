@@ -204,7 +204,7 @@ MARKER_PROTOCOL = "posttrain.materialized-hf.v1"
 # Contract of the bytes this module produces (overlay with strict accounting, experts in the checkpoint layout on
 # disk, base sidecars verbatim, source proven by sha256 + bytes for archived artifacts too). Bump whenever any of that
 # changes: outputs built under the old contract then stop satisfying the idempotent skip and are refused until --force.
-CONVERSION_VERSION = "materialize_model_pt_to_hf/5"  # /5: restore declared embedding ties after assign=True; index single-shard HF exports
+CONVERSION_VERSION = "materialize_model_pt_to_hf/6"  # /6: text architectures and immutable single-file HF bases
 SOURCE_STAMP = ".overlay_source.json"  # written into <out>.tmp right after the overlay: the identity that built it
 STAGING_SUFFIX = ".tmp"  # <out>.tmp: the staging directory the whole build happens in, beside an existing output
 PREVIOUS_SUFFIX = ".previous"  # <out>.previous: the old output during the swap; a leftover is refused unless --force
@@ -238,6 +238,10 @@ def read_index_weight_map(index_path: str) -> dict[str, str]:
     empty ``weight_map`` (no shard to open; ``verify_index`` refuses it on the output) is refused before the staged build too.
     Used on the base (``base_identity``, the preflight) and on ``<out>.tmp`` (``tmp_complete``). Decodes through the one decoder,
     ``conversion.hf.decode_json_bytes`` (strict UTF-8 text; a byte-order mark is refused by name)."""
+    if not os.path.exists(index_path) and os.path.isfile(
+        os.path.join(os.path.dirname(index_path), "model.safetensors")
+    ):
+        return hf.single_file_weight_map(os.path.dirname(index_path))
     try:
         with open(index_path, "rb") as handle:
             payload = hf.decode_json_bytes(handle.read())
@@ -288,7 +292,9 @@ def base_identity(base: str) -> dict[str, Any]:
                 path = os.path.join(directory_path, name)
                 if os.path.isfile(path):
                     files[f"{directory}/{name}"] = object_store.file_sha256(path)
-    if INDEX_FILE not in files or "config.json" not in files:
+    if "config.json" not in files or (
+        INDEX_FILE not in files and not os.path.isfile(os.path.join(base, "model.safetensors"))
+    ):
         raise FileNotFoundError(f"base model incomplete at {base}: config.json + {INDEX_FILE} required")
     index_path = os.path.join(base, INDEX_FILE)
     weight_map = read_index_weight_map(index_path)

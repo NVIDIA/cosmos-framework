@@ -58,8 +58,19 @@ def required_file_present(directory: str, name: str) -> bool:
     """Transformers 5 may bundle image/video preprocessing in processor_config.json."""
     if os.path.isfile(os.path.join(directory, name)):
         return True
+    if name == INDEX_FILE and os.path.isfile(os.path.join(directory, "model.safetensors")):
+        return True
     if name != "preprocessor_config.json":
         return False
+    try:
+        with open(os.path.join(directory, "config.json")) as handle:
+            config = json.load(handle)
+        from cosmos_framework.posttrain.model.adapter_families import adapter_family
+
+        if adapter_family(config.get("model_type")).hf_auto_class == "AutoModelForCausalLM":
+            return True  # text models have a tokenizer and no media processor
+    except (OSError, ValueError, AttributeError):
+        pass
     try:
         with open(os.path.join(directory, "processor_config.json")) as handle:
             config = json.load(handle)
@@ -788,8 +799,20 @@ def _log(msg: str) -> None:
 
 
 def _read_weight_map(index_path: str) -> dict[str, str]:
+    if not os.path.exists(index_path):
+        return single_file_weight_map(os.path.dirname(index_path))
     with open(index_path) as handle:
         return json.load(handle)["weight_map"]
+
+
+def single_file_weight_map(directory: str) -> dict[str, str]:
+    """Read a standard unindexed HF snapshot without writing into its base."""
+    path = os.path.join(directory, "model.safetensors")
+    reason = shard_status(path)
+    if reason:
+        raise ValueError(f"single-file HF snapshot is invalid: {reason}")
+    header, _ = safetensors_header(path)
+    return {key: "model.safetensors" for key in header if key != "__metadata__"}
 
 
 # ---------------------------------------------------------------- overlay -------------------------------------------
@@ -910,7 +933,7 @@ def overlay_consolidated_onto_hf(
     overlaid, whatever ``<ckpt_dir>/model.pt`` names by the time the load runs.
     """
     import torch
-    from transformers import AutoModelForImageTextToText, AutoProcessor
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
 
     model_pt = os.path.join(ckpt_dir, "model.pt")
     _log(
@@ -920,12 +943,12 @@ def overlay_consolidated_onto_hf(
     _log(f"checkpoint state dict has {len(state_dict)} keys")
 
     _log(f"loading HF base model {model_id}")
+    config = AutoConfig.from_pretrained(model_id)
+    model_cls = AutoModelForImageTextToText if getattr(config, "vision_config", None) else AutoModelForCausalLM
     try:
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.bfloat16, low_cpu_mem_usage=True)
+        model = model_cls.from_pretrained(model_id, dtype=torch.bfloat16, low_cpu_mem_usage=True)
     except TypeError:  # older transformers spell the dtype argument torch_dtype
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
-        )
+        model = model_cls.from_pretrained(model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     params = dict(model.named_parameters())  # values: [*shape]
     # A trained checkpoint should move these; bitwise equality to the base afterwards is only a warning.
     probe_keys = [k for k in ("lm_head.weight", "model.language_model.norm.weight") if k in state_dict and k in params]
@@ -1445,7 +1468,8 @@ def verify_with_torch(
             else f"base {base}"
         )
         raise ConversionError(f"verify: {out} processor chat_template differs from {against}")
-    tokenizer_out, tokenizer_base = processor_out.tokenizer, processor_base.tokenizer
+    tokenizer_out = getattr(processor_out, "tokenizer", processor_out)
+    tokenizer_base = getattr(processor_base, "tokenizer", processor_base)
     if type(tokenizer_out).__name__ != type(tokenizer_base).__name__:
         raise ConversionError(
             f"verify: {out} tokenizer type {type(tokenizer_out).__name__} differs from base {type(tokenizer_base).__name__}"

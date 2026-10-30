@@ -107,8 +107,11 @@ def runtime(recipe, opts, output):
 
 
 def probe_batches(config, data):
+    from cosmos_framework.posttrain.entrypoints.sft import sft_policy_source
+
+    source, trust = sft_policy_source(config)
     packer = build_sft_packer(
-        config.model.model_id, max_length=config.rl.max_length, processor_kwargs=config.rl.processor_kwargs
+        source, max_length=config.rl.max_length, processor_kwargs=config.rl.processor_kwargs, trust_remote_code=trust
     )
     saved = copy.deepcopy(data.state_dict())
     batches = []
@@ -155,6 +158,8 @@ def main():
     parser.add_argument("--activation-checkpointing", choices=["none", "full"], default="full")
     parser.add_argument("--component", choices=["all", "language", "projector", "vision"], default="all")
     parser.add_argument("--override", action="append", default=[], help="existing recipe key=value override")
+    parser.add_argument("--recipe", default="cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py")
+    parser.add_argument("--backend", choices=["i4", "hf"], default="i4")
     args = parser.parse_args()
     if args.method == "mixed" and args.component != "all":
         parser.error("the mixed-method qualification requires --component=all")
@@ -168,7 +173,7 @@ def main():
     rank, world = dist.get_rank(), dist.get_world_size()
     root = Path(args.out)
     root.mkdir(parents=True, exist_ok=True)
-    recipe = "cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py"
+    recipe = args.recipe
     os.environ["SFT_ADAPTER_METHOD"] = "lora" if args.method in ("rslora", "mixed") else args.method
     os.environ["SFT_ADAPTER_RSLORA"] = "1" if args.method == "rslora" else "0"
     os.environ["SFT_QUALIFY_EXTRA_NORM"] = "1" if args.method == "mixed" else "0"
@@ -181,7 +186,11 @@ def main():
         "rl.optimizer.lr=0.0001",
         "rl.validation.every_steps=0",
         "rl.validation.before_training=False",
-        f"model.model_config.activation_checkpointing={args.activation_checkpointing}",
+        (
+            f"model.model_config.activation_checkpointing={args.activation_checkpointing}"
+            if args.backend == "i4"
+            else f"model_hf.grad_ckpt={str(args.activation_checkpointing == 'full').lower()}"
+        ),
     ]
     if args.method == "mixed":
         opts += [

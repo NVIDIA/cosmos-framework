@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class AdapterComponentConfig:
-    """Full-path glob selectors, restricted to one native Qwen3-VL component.
+    """Full-path glob selectors, restricted to one architecture-owned component.
 
     ``layers`` restricts language/vision block indices; projector selectors name the
     final merger or individual deepstack mergers directly. Every selector must match.

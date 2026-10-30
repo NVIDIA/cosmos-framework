@@ -832,24 +832,19 @@ def build_qwen3_vl_model(
                 )
 
     def install_native_adapters(net: nn.Module) -> None:
-        from cosmos_framework.posttrain.checkpoint.adapters import load_adapter_artifact, make_adapter_identity
-        from cosmos_framework.posttrain.model.adapters import install_adapters
+        from cosmos_framework.posttrain.model.adapters import prepare_adapter_model
 
-        install_adapters(
+        prepare_adapter_model(
             net,
             adapters,
-            initialize=not adapter_resume and not adapters.warm_start,
-            distributed=pdims is not None and int(pdims.world_size) > 1,
-        )
-        net._posttrain_adapter_identity = make_adapter_identity(
-            cfg.checkpoint_path or cfg.name_or_path,
-            cfg.name_or_path,
-            net._posttrain_adapter_manifest,
-            adapter_media_identity or {},
+            base=cfg.checkpoint_path or cfg.name_or_path,
+            processor=cfg.name_or_path,
             base_dtype=cfg.dtype,
+            media=adapter_media_identity or {},
+            resume=adapter_resume,
+            distributed=pdims is not None and int(pdims.world_size) > 1,
+            family=resolved_model_type,
         )
-        if adapters.warm_start:
-            load_adapter_artifact(net, adapters.warm_start)
 
     return build_qwen3_vl_policy(
         model_type=resolved_model_type,

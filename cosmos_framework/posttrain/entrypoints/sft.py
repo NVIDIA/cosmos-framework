@@ -111,13 +111,11 @@ def validate_config_structure(config: Any) -> SFTConfig:
         from cosmos_framework.posttrain.config.build import select_policy_backend
 
         selection = select_policy_backend(config)
-        if (
+        if selection.backend != "hf" and (
             selection.native_spec is None
             or selection.native_spec.builder != "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
         ):
-            raise ValueError(
-                "SFT adapters require the native dense Qwen3-VL builder; generic HF and MoE are unsupported"
-            )
+            raise ValueError("SFT adapters require an HF family binding or the native Qwen3-VL builder")
         if rl.optimizer.train_keys or rl.optimizer.decay_groups or rl.optimizer.lr_multipliers:
             raise ValueError(
                 "adapter component settings own optimizer membership/lr/decay; clear optimizer train_keys/decay_groups/lr_multipliers"

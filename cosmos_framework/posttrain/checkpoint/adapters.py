@@ -64,7 +64,12 @@ def snapshot_identity(directory: str, *, weights: bool) -> dict[str, Any]:
     return {"sha256": digest, "files": files}
 
 
-def make_adapter_identity(base: str, processor: str, targets: dict, media: dict, *, base_dtype: str) -> dict[str, Any]:
+def make_adapter_identity(
+    base: str, processor: str, targets: dict, media: dict, *, base_dtype: str, architecture: str = "qwen3_vl"
+) -> dict[str, Any]:
+    from cosmos_framework.posttrain.model.adapter_families import adapter_family
+
+    adapter_family(architecture)
     dependencies = {}
     for name in ("torch", "transformers", "safetensors", "torchcodec", "av"):
         try:
@@ -73,7 +78,7 @@ def make_adapter_identity(base: str, processor: str, targets: dict, media: dict,
             dependencies[name] = None
     return {
         "format": FORMAT,
-        "architecture": "qwen3_vl",
+        "architecture": architecture,
         "base_storage_dtype": base_dtype,
         "base": snapshot_identity(base, weights=True),
         "processor": snapshot_identity(processor, weights=False),
@@ -101,8 +106,11 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         raise ValueError(f"incomplete adapter identity: missing {missing}")
     if identity["base_storage_dtype"] not in ("float32", "bfloat16"):
         raise ValueError("unsupported adapter materialized base dtype")
-    if identity.get("format") != FORMAT or identity.get("architecture") != "qwen3_vl":
+    if identity.get("format") != FORMAT:
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
+    from cosmos_framework.posttrain.model.adapter_families import adapter_family
+
+    adapter_family(identity["architecture"])
     if identity.get("pissa_representation") != "original_base_plus_trained_minus_initial_factors":
         raise ValueError("unsupported PiSSA residual-base representation")
     result = {}

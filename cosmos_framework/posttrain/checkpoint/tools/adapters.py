@@ -48,19 +48,22 @@ def validate_export_targets(base: str, identity: dict) -> None:
     effective scaling or ownership. Reuse the training resolver before reading
     base weight shards; a hand-edited manifest must not bypass its constraints.
     """
+    import transformers
     from accelerate import init_on_device
-    from transformers import AutoConfig, AutoModelForImageTextToText
+    from transformers import AutoConfig
 
     from cosmos_framework.posttrain.config.adapters import (
         AdapterComponentConfig,
         AdapterConfig,
         AdapterExtraModuleConfig,
     )
+    from cosmos_framework.posttrain.model.adapter_families import adapter_family
     from cosmos_framework.posttrain.model.adapters import resolve_targets
 
     config = AutoConfig.from_pretrained(base)
-    if config.model_type != "qwen3_vl":
-        raise ValueError("merged adapter export requires a dense qwen3_vl base architecture")
+    family = adapter_family(identity["architecture"])
+    if config.model_type != family.name or family.hf_auto_class is None:
+        raise ValueError("merged adapter export requires the artifact's exact HF architecture binding")
     groups = [
         AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
         for row in identity["resolved"]["targets"]
@@ -75,8 +78,10 @@ def validate_export_targets(base: str, identity: dict) -> None:
         for row in identity["resolved"]["extra_parameters"]
     ]
     with init_on_device("meta", include_buffers=False):
-        net = AutoModelForImageTextToText.from_config(config, dtype=torch.float32, attn_implementation="sdpa")
-    resolved = resolve_targets(net, AdapterConfig(components=groups, extra_modules=extras))
+        net = getattr(transformers, family.hf_auto_class).from_config(
+            config, dtype=torch.float32, attn_implementation="sdpa"
+        )
+    resolved = resolve_targets(net, AdapterConfig(components=groups, extra_modules=extras), family=family.name)
     if resolved != identity["resolved"]:
         raise ValueError(
             "adapter resolved-target manifest disagrees with the base architecture "
@@ -138,7 +143,9 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     merged = prepare_merged_state(weights, {**identity, "base_storage_dtype": "float32"})
     config = json.loads((root / "config.json").read_text())
     if config.get("tie_word_embeddings", False) and "lm_head.weight" in merged:
-        embedding = "model.language_model.embed_tokens.weight"
+        from cosmos_framework.posttrain.model.adapter_families import adapter_family
+
+        embedding = adapter_family(identity["architecture"]).embedding
         if embedding not in merged or not torch.equal(merged[embedding], merged["lm_head.weight"]):
             raise ValueError("base declares tied embeddings but embedding/head tensors disagree")
         # Stock HF serializes one owner and reconstructs this frozen alias.

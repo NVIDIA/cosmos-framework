@@ -16,6 +16,26 @@ from pathlib import Path
 import torch
 
 
+class HFProbePolicy:
+    """Controlled single-process stock-HF forward, without a training wrapper."""
+
+    def __init__(self, net):
+        self.net = net
+
+    def prepare_policy_batch(self, batch):
+        from cosmos_framework.posttrain.model.hf import HFModel, _move_to_device
+
+        device = next(self.net.parameters()).device
+        return {
+            k: _move_to_device(v, device)
+            for k, v in batch.items()
+            if k not in HFModel._COLLATE_NON_MODEL_KEYS and k != "logprob_masks"
+        }
+
+    def forward_policy_batch(self, batch):
+        return self.net(**batch, use_cache=False)
+
+
 def compare_logits(actual: list[torch.Tensor], expected: list[torch.Tensor]) -> dict:
     if not actual or len(actual) != len(expected):
         raise ValueError("logit comparison requires the same non-empty probe population")
@@ -95,16 +115,18 @@ def verify_promoted_merge(
     merger prepares the state; independent unmerged/native/HF forwards provide
     the numerical oracle. The caller must discard this private evaluation copy.
     """
+    import transformers
     from accelerate import init_on_device
     from safetensors.torch import load_file
-    from transformers import AutoConfig, AutoModelForImageTextToText
+    from transformers import AutoConfig
 
     from cosmos_framework.posttrain.checkpoint.adapters import prepare_merged_state
+    from cosmos_framework.posttrain.model.adapter_families import adapter_family
     from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear
-    from cosmos_framework.posttrain.model.qwen3_vl import Qwen3VLPolicy
     from cosmos_framework.posttrain.tests.qualify_adapters import logits
 
     device = next(policy.net.parameters()).device
+    family = adapter_family(identity["architecture"])
     policy.net.float().eval()
     if reference is None:
         reference = logits(policy, batches)
@@ -121,7 +143,7 @@ def verify_promoted_merge(
     index = json.loads((path / "model.safetensors.index.json").read_text())
     expected_keys = set(merged)
     if policy.net.config.tie_word_embeddings and "lm_head.weight" not in index["weight_map"]:
-        assert torch.equal(merged["lm_head.weight"], merged["model.language_model.embed_tokens.weight"])
+        assert torch.equal(merged["lm_head.weight"], merged[family.embedding])
         expected_keys.remove("lm_head.weight")
     assert set(index["weight_map"]) == expected_keys, "merged artifact tensor set differs from the promoted reference"
     verified = 0
@@ -155,13 +177,13 @@ def verify_promoted_merge(
     if device.type == "cuda":
         torch.cuda.empty_cache()
     with init_on_device("meta", include_buffers=False):
-        hf = AutoModelForImageTextToText.from_config(
+        hf = getattr(transformers, family.hf_auto_class).from_config(
             AutoConfig.from_pretrained(exported), dtype=torch.float32, attn_implementation="sdpa"
         )
     hf.load_state_dict(merged, strict=True, assign=True)
     hf.tie_weights()
     hf.to(device).eval()
-    actual = logits(Qwen3VLPolicy(hf, "qwen3_vl"), batches)
+    actual = logits(HFProbePolicy(hf), batches)
     result = {
         "serialized_tensors_verified": verified,
         "native_fp32": compare_logits(native, reference),

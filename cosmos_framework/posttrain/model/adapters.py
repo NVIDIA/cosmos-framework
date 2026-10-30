@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Resolved native Qwen3-VL adapters; preserves forward and base state-dict names.
+"""Resolved architecture-bound adapters; preserves forward and base state-dict names.
 
 LoRA and rsLoRA reuse the native implementation. DoRA adds its row magnitude;
 PiSSA represents the frozen residual as W0 - s B0 A0, retaining W0 unchanged.
@@ -10,7 +10,6 @@ No generic causal-LM wrapper, forward monkey patch, or second training loop.
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import asdict
 from fnmatch import fnmatchcase
 from typing import Any
@@ -20,6 +19,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig
+from cosmos_framework.posttrain.model.adapter_families import AdapterFamily, adapter_family, family_for_model
 from cosmos_framework.utils.generator.lora import LoraInjectedLinear, init_lora_weights_post_materialization
 
 
@@ -27,46 +27,42 @@ def canonical_name(name: str) -> str:
     return name.replace("_checkpoint_wrapped_module.", "").replace("_orig_mod.", "")
 
 
-def component_of(name: str) -> str | None:
-    if re.match(r"model\.language_model\.layers\.\d+\.", name) or name == "model.language_model.norm":
-        return "language"
-    if re.match(r"model\.visual\.(merger(?:\.|$)|deepstack_merger_list\.\d+(?:\.|$))", name):
-        return "projector"
-    if re.match(r"model\.visual\.blocks\.\d+\.", name):
-        return "vision"
-    return None
+def component_of(name: str, family: str = "qwen3_vl") -> str | None:
+    location = adapter_family(family).locate(name)
+    return location[0] if location is not None else None
 
 
-def _selected(net: nn.Module, group: Any) -> dict[str, nn.Module]:
+def _selected(net: nn.Module, group: Any, family: AdapterFamily) -> dict[str, nn.Module]:
     modules = dict(net.named_modules(remove_duplicate=False))
     selected: dict[str, nn.Module] = {}
     layers = getattr(group, "layers", None)
     for selector in group.targets:
         matches = {n: m for n, m in modules.items() if fnmatchcase(n, selector)}
-        wrong = [n for n in matches if component_of(n) != group.component]
+        wrong = [n for n in matches if (family.locate(n) or (None,))[0] != group.component]
         if wrong:
             raise ValueError(f"selector {selector!r} selects outside {group.component}: {wrong}")
         if layers is not None:
-            if any(len(n.split(".")) < 4 or not n.split(".")[3].isdigit() for n in matches):
+            if any(family.locate(n)[1] is None for n in matches):
                 raise ValueError(f"selector {selector!r} cannot apply layer restrictions to non-layer modules")
-            matches = {n: m for n, m in matches.items() if int(n.split(".")[3]) in layers}
+            matches = {n: m for n, m in matches.items() if family.locate(n)[1] in layers}
         if not matches:
             raise ValueError(f"adapter selector {selector!r} matched no modules after component/layer restrictions")
         selected.update(matches)
     if layers is not None:
-        missing = set(layers) - {int(n.split(".")[3]) for n in selected}
+        missing = set(layers) - {family.locate(n)[1] for n in selected}
         if missing:
             raise ValueError(f"adapter layer indices matched no modules: {sorted(missing)}")
     return selected
 
 
-def resolve_targets(net: nn.Module, config: AdapterConfig) -> dict[str, Any]:
+def resolve_targets(net: nn.Module, config: AdapterConfig, *, family: str | None = None) -> dict[str, Any]:
     """Resolve and validate every selector and alias before mutating anything."""
     config.__post_init__()
+    binding = family_for_model(net, family)
     resolved: dict[str, dict[str, Any]] = {}
     selected_modules: dict[str, nn.Module] = {}
     for group in config.components:
-        for name, module in _selected(net, group).items():
+        for name, module in _selected(net, group, binding).items():
             if type(module) is not nn.Linear:
                 raise ValueError(
                     f"unsupported adapter target {name}: {type(module).__name__}; requires plain nn.Linear"
@@ -113,8 +109,8 @@ def resolve_targets(net: nn.Module, config: AdapterConfig) -> dict[str, Any]:
     extras: dict[str, dict[str, Any]] = {}
     extra_parameter_owners: dict[int, str] = {}
     for group in config.extra_modules:
-        for name, module in _selected(net, group).items():
-            if not isinstance(module, nn.LayerNorm) and type(module).__name__ != "Qwen3VLTextRMSNorm":
+        for name, module in _selected(net, group, binding).items():
+            if not isinstance(module, nn.LayerNorm) and type(module).__name__ not in binding.normalization_types:
                 raise ValueError(
                     f"extra trained module {name} must be a native LayerNorm/RMSNorm; linear/embedding extras are unsupported"
                 )
@@ -153,10 +149,7 @@ def resolve_targets(net: nn.Module, config: AdapterConfig) -> dict[str, Any]:
 
 def validate_adapter_profile(cfg: Any, model_config: Any, pdims: Any, adapters: AdapterConfig, resume: bool) -> None:
     adapters.__post_init__()
-    if getattr(model_config, "model_type", None) != "qwen3_vl":
-        raise ValueError(
-            "posttrain adapters support native dense qwen3_vl only; HF and MoE/expert projections require separate qualification"
-        )
+    adapter_family(getattr(model_config, "model_type", None))
     if getattr(model_config, "quantization_config", None) is not None:
         raise ValueError("quantized adapter training is a separate contribution; use a dense BF16/FP32 base")
     if cfg.dtype not in ("float32", "bfloat16") or cfg.activation_checkpointing not in ("none", "full"):
@@ -265,13 +258,27 @@ def _preserve_normalization_output_dtype(module: nn.Module, inputs: tuple, outpu
 
 
 def install_adapters(
-    net: nn.Module, config: AdapterConfig, *, initialize: bool = True, distributed: bool = False
+    net: nn.Module,
+    config: AdapterConfig,
+    *,
+    initialize: bool = True,
+    distributed: bool = False,
+    family: str | None = None,
+    fsdp_block_types: tuple[type, ...] | None = None,
 ) -> dict[str, Any]:
-    manifest = resolve_targets(net, config)
+    binding = family_for_model(net, family)
+    manifest = resolve_targets(net, config, family=binding.name)
     if distributed:
 
         def fsdp_unit(name: str) -> str:
-            return ".".join(name.split(".")[:4]) if component_of(name) in ("language", "vision") else "root"
+            if fsdp_block_types is None:
+                return binding.locate(name)[2]
+            roots = [
+                n
+                for n, m in net.named_modules(remove_duplicate=False)
+                if n and isinstance(m, fsdp_block_types) and name.startswith(n + ".")
+            ]
+            return max(roots, key=len, default="root")
 
         for row in [*manifest["targets"], *manifest["extra_parameters"]]:
             if fsdp_unit(row["name"]) != fsdp_unit(row["owner"]):
@@ -329,6 +336,49 @@ def trainable_spec(manifest: dict[str, Any]) -> dict[str, tuple[float, float]]:
     for row in manifest["extra_parameters"]:
         expected[row["name"]] = (row["lr_multiplier"], row["weight_decay"])
     return expected
+
+
+def prepare_adapter_model(
+    net: nn.Module,
+    config: AdapterConfig,
+    *,
+    base: str,
+    processor: str,
+    base_dtype: str,
+    media: dict,
+    resume: bool = False,
+    distributed: bool = False,
+    family: str | None = None,
+    fsdp_block_types: tuple[type, ...] | None = None,
+) -> None:
+    """Shared loaded-base -> adapter/trainability/artifact seam, before FSDP.
+
+    Family builders own construction, forward semantics and sharding. This seam
+    performs no model forward, no training loop and no optimizer construction.
+    """
+    from cosmos_framework.posttrain.checkpoint.adapters import load_adapter_artifact, make_adapter_identity
+
+    if resume and config.warm_start:
+        raise ValueError("exact resume and adapter warm_start are mutually exclusive")
+    binding = family_for_model(net, family)
+    install_adapters(
+        net,
+        config,
+        initialize=not resume and not config.warm_start,
+        distributed=distributed,
+        family=binding.name,
+        fsdp_block_types=fsdp_block_types,
+    )
+    net._posttrain_adapter_identity = make_adapter_identity(
+        base,
+        processor,
+        net._posttrain_adapter_manifest,
+        media,
+        base_dtype=base_dtype,
+        architecture=binding.name,
+    )
+    if config.warm_start:
+        load_adapter_artifact(net, config.warm_start)
 
 
 def assert_trainability(net: nn.Module, optimizer: Any = None) -> None:

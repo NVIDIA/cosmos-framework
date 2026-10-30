@@ -1148,7 +1148,9 @@ def build_backbone(
 
     # `precision` splits STORAGE from COMPUTE; without it the one `model_hf.dtype` drives both
     # and fp32-master/bf16-compute -- what the reference GRPO recipe runs -- is inexpressible.
-    return build_hf_model(instantiate(config.model_hf), pdims, precision=resolve_precision(config))
+    return build_hf_model(
+        instantiate(config.model_hf), pdims, precision=resolve_precision(config), **(native_build_kwargs or {})
+    )
 
 
 def vllm_engine_kwargs(

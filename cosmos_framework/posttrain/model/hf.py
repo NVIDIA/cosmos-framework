@@ -419,7 +419,14 @@ class HFModel(nn.Module):
             recurse=True,
         )
 
-    def setup(self, pdims: ParallelDims | None) -> None:
+    def setup(
+        self,
+        pdims: ParallelDims | None,
+        *,
+        adapters=None,
+        adapter_resume: bool = False,
+        adapter_media_identity: dict | None = None,
+    ) -> None:
         """Run the load-bearing lifecycle: parallelize -> materialize -> tie -> load [-> ckpt].
 
         The ordering is required (mirrors cosmos3 ``_init_vlm``): FSDP2 wrap first so
@@ -428,6 +435,34 @@ class HFModel(nn.Module):
         stripe the pretrained safetensors into each rank's shard. Single device (pdims
         None) short-circuits parallelize/striping inside the primitives and still works.
         """
+        if adapters is not None:
+            # Weight-dependent initialization must see the loaded base, and every
+            # adapter must exist when FSDP registers parameters. Keep the original
+            # shard-before-load path intact for adapter-disabled recipes.
+            from cosmos_framework.posttrain.model.adapters import assert_trainability, prepare_adapter_model
+
+            self._materialize_meta()
+            self.tie_embeddings()
+            load_weights(self.net, self.ckpt_path, self.load_plan, None)
+            prepare_adapter_model(
+                self.net,
+                adapters,
+                base=self.ckpt_path,
+                processor=self.ckpt_path,
+                base_dtype=str(next(self.net.parameters()).dtype).removeprefix("torch."),
+                media=adapter_media_identity or {},
+                resume=adapter_resume,
+                distributed=pdims is not None and int(pdims.world_size) > 1,
+                fsdp_block_types=self.shard_plan.block_types,
+            )
+            if self.grad_ckpt:
+                self.apply_gradient_checkpointing()
+            # Preserve FP32 adapter storage and accumulation beside BF16 base
+            # weights; a global parameter cast would also round the adapters.
+            plan = ShardPlan(self.shard_plan.block_types, None, torch.float32)
+            parallelize(self.net, plan, pdims)
+            assert_trainability(self.net)
+            return
         parallelize(self.net, self.shard_plan, pdims)
         self._materialize_meta()
         self.tie_embeddings()
@@ -562,7 +597,13 @@ class HFModel(nn.Module):
 
 
 def build_hf_model(
-    hf_cfg: "HFModelConfig", pdims: ParallelDims | None = None, precision: "Precision | None" = None
+    hf_cfg: "HFModelConfig",
+    pdims: ParallelDims | None = None,
+    precision: "Precision | None" = None,
+    *,
+    adapters=None,
+    adapter_resume: bool = False,
+    adapter_media_identity: dict | None = None,
 ) -> HFModel:
     """Build the HuggingFace model body and run its model-owned FSDP lifecycle.
 
@@ -602,5 +643,37 @@ def build_hf_model(
         reduce_dtype=getattr(torch, precision.reduce),
         mixed_precision_mode=precision.mode,
     )
-    model.setup(pdims)
+    if adapters is not None:
+        from types import SimpleNamespace
+
+        from cosmos_framework.posttrain.model.adapters import validate_adapter_profile
+
+        if precision.master != precision.param:
+            raise ValueError("HF adapters require matching base storage/compute dtypes; adapters remain FP32")
+        if (
+            model.is_vlm
+            and model.hf_config.model_type not in ("qwen3_vl", "qwen3_5")
+            and pdims is not None
+            and pdims.world_size > 1
+        ):
+            raise ValueError(
+                "HF adapter sharding with missing modalities currently requires the Qwen3-VL/Qwen3.5 "
+                "synchronized vision forward; use one GPU for other VLM families"
+            )
+        validate_adapter_profile(
+            SimpleNamespace(
+                dtype=precision.master,
+                attn_impl=hf_cfg.attn_impl,
+                activation_checkpointing="full" if hf_cfg.grad_ckpt else "none",
+            ),
+            model.hf_config,
+            pdims,
+            adapters,
+            adapter_resume,
+        )
+        model.setup(
+            pdims, adapters=adapters, adapter_resume=adapter_resume, adapter_media_identity=adapter_media_identity
+        )
+    else:
+        model.setup(pdims)
     return model
