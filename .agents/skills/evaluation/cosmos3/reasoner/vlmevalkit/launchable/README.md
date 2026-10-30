@@ -1,146 +1,102 @@
-# Cosmos3 VANTAGE evaluation on Brev
+# Cosmos3-Nano MVBench evaluation on Brev
 
-Jupyter and CLI orchestration for native VLMEvalKit inference **and fully local scoring**. Use a labeled, fingerprinted local asset bundle; score existing predictions without a model endpoint or GPU. There is no external scoring submission, upload, or separate public harness.
+Authenticated Jupyter orchestration for **public download → preparation → native inference → local scoring → results**, entirely inside the notebook after host startup. Existing native predictions can also be scored on CPU without a model endpoint, GPU, private S3, API judge, or external scoring submission. This is a benchmark launchable, **not a customer-data evaluation-agent implementation**.
 
-**Release gates:** Dataset access does not grant permission to redistribute labels or media. Public inference-only inputs are insufficient for local scoring. Do not advertise published-score reproducibility until the labeled bundle is approved for distribution and a named reference result and release protocol are agreed. No private data, credentials, or benchmark outputs belong in this repository or PR.
+[MVBench](https://arxiv.org/abs/2311.17005) has **20 tasks and 4,000 annotated multiple-choice questions**. The paper's [Ask-Anything repository](https://github.com/OpenGVLab/Ask-Anything/tree/main/video_chat2) supplies its original evaluation recipe. This launchable pins public [OpenGVLab/MVBench](https://huggingface.co/datasets/OpenGVLab/MVBench/tree/230a2d4fac8900333c61754641c7a13e069ac9c6) data to `230a2d4fac8900333c61754641c7a13e069ac9c6` and reuses native VLMEvalKit MVBench task definitions, temporal bounds, sampling and prompt construction, plus the native exact-match scorer. No labeled private annotation bundle is required.
 
-This work targets the [16B BF16 Cosmos3-Nano checkpoint](https://huggingface.co/nvidia/Cosmos3-Nano/blob/e59a53c25979a090fa8706c9acc0c254a6e89b92/README.md), `nvidia/Cosmos3-Nano` at `e59a53c25979a090fa8706c9acc0c254a6e89b92`, and evaluates its reasoner. Other models and deployment tracks are outside this launchable's scope.
+**Licensing and full-data prerequisite:** read the pinned dataset card and individual source terms before downloading. Its video terms are academic-research-only; public access does not imply commercial-use or redistribution rights. The card mentions 320 NTU RGB+D videos, but this pinned revision's exact manual list contains **200 RGB AVI files**, matching its 200 Fine-grained Pose questions. Request the exact [pinned file list](https://huggingface.co/datasets/OpenGVLab/MVBench/blob/230a2d4fac8900333c61754641c7a13e069ac9c6/video/MVBench_videos_ntu.txt) through [NTU/ROSE Lab's account and release-agreement process](https://rose1.ntu.edu.sg/dataset/actionRecognition/); only RGB is needed. Supply authorized media under `video/nturgbd` in the external data root. The downloader never recovers removed media from old revisions or mirrors. Full preparation fails with an actionable coverage report while required media is missing; an incomplete download is not a full benchmark score.
 
-## Supply the scoring bundle
+## Start authenticated Jupyter
 
-Set absolute **host** paths outside every source checkout before setup:
+Use native Linux x86-64, Docker Engine/Compose v2, and NVIDIA Container Toolkit for local Nano serving. The maintained source is [NVIDIA/cosmos-framework](https://github.com/NVIDIA/cosmos-framework), not `NVIDIA/cosmos`. Select the approved branch/commit containing this launchable and retain its exact revision. Disable Brev's managed Jupyter because Compose provides its own authenticated service.
 
-```bash
-export SCORING_ASSETS_DIR=/absolute/path/to/authorized-scoring-bundle
-export LAUNCHABLE_STATE_DIR=/absolute/path/to/private-runtime-state
-```
-
-The bundle contains `scoring-assets.json`, original labels, canonical tables, and media. DVC additionally requires the pinned local roberta-large checkpoint. Compose mounts the bundle read-only at `/scoring-assets`; frame caches use `/cache/lmudata`, and results use `/results`. Do not mount AWS profiles, home directories, or credential files. No shared NVIDIA profile, NGC key, dataset-service credential, or API judge is required at evaluation time.
-
-Preparation requires a writable authorized source directory; execution requires the completed bundle mounted **read-only**, never a source checkout, credential store, or writable cache/results directory. Setup requires both exported paths and rejects checkout-local paths. Keep these exports in the host shell for later Compose lifecycle commands.
-
-Each requested task must be complete. Missing labels/media or modified fingerprints fail before inference. A VQA-only bundle is sufficient for the five-question smoke; full evaluation requires all eight tasks. Internal access and release approval are separate requirements.
-
-### Maintainers: prepare authorized sources
-
-Preparation is an offline conversion, not a dataset downloader. Keep the original filtered release layout, including `VQA`, `Temporal`, `Dense Video Caption`, `Spatial`, `2dbbox`, `datasets/Metropolis2DPointing`, `event_verification_subset`, and `tracking`. It does not copy media or rewrite original labels. Never put the source tree inside the code checkout.
-
-From the maintained Framework kit root (`.agents/skills/evaluation/cosmos3/reasoner/vlmevalkit`), build the CPU evaluator:
+From the Framework checkout root:
 
 ```bash
-docker build --platform linux/amd64 -t cosmos3-vantage-eval:local -f launchable/Dockerfile .
-```
-
-For DVC, stage the genuine public metric model first. This download needs network access but no model-serving endpoint. It does not download benchmark data:
-
-```bash
-docker run --rm --platform linux/amd64 \
-  -v "$SCORING_ASSETS_DIR:/scoring-assets" --entrypoint python cosmos3-vantage-eval:local \
-  -c 'from huggingface_hub import snapshot_download; snapshot_download("FacebookAI/roberta-large", revision="722cf37b1afa9454edce342e7895e588b6ff1d59", local_dir="/scoring-assets/metric-models/roberta-large", allow_patterns=["config.json","merges.txt","model.safetensors","tokenizer.json","tokenizer_config.json","vocab.json"])'
-
-docker run --rm --platform linux/amd64 --network none \
-  -v "$SCORING_ASSETS_DIR:/scoring-assets" --entrypoint python cosmos3-vantage-eval:local \
-  -m vlmeval.scoring_assets --assets-dir /scoring-assets --asset-id YOUR_IMMUTABLE_DATASET_VERSION \
-  --bert-score-model metric-models/roberta-large \
-  --bert-score-revision 722cf37b1afa9454edce342e7895e588b6ff1d59
-```
-
-For VQA only, omit the metric model and pass `--tasks VQA`. Preparation validates original ground truth before native conversion, including complete tracking-frame labels. Explicit VQA labels are trimmed/uppercased, never defaulted to A; binary and four-choice source questions are supported. Invalid/missing labels fail rather than manufacturing answers. Scorer-source fingerprints record this normalization; compare results only under an agreed reference protocol.
-
-Do not regenerate or modify the manifest between inference and scoring. The controller records its hash and rejects a different snapshot. DVC model files are fingerprinted separately and checked before use.
-
-## Start the launchable
-
-Use Linux x86-64, Docker Engine/Compose v2, and NVIDIA Container Toolkit for local serving. The source repository is [NVIDIA/cosmos-framework](https://github.com/NVIDIA/cosmos-framework), not `NVIDIA/cosmos`. Select the approved branch/commit containing this launchable and record its exact Framework commit; upstream `main` must not be assumed to include an unpublished branch. Brev's managed Jupyter must be disabled because Compose provides it.
-
-From the Framework checkout root, with the authorized bundle prepared and both host paths exported:
-
-```bash
+export LAUNCHABLE_STATE_DIR=/absolute/path/outside/checkouts/private-mvbench-state
+# Optional: defaults to "$LAUNCHABLE_STATE_DIR/mvbench".
+export MVBENCH_DATA_DIR=/absolute/path/outside/checkouts/mvbench-data
 bash .agents/skills/evaluation/cosmos3/reasoner/vlmevalkit/launchable/setup.sh --brev
 ```
 
-On a non-Brev host, omit `--brev`. For **existing-prediction scoring only**, add `--score-only`; this starts Jupyter without starting the GPU endpoint. Normal setup builds the evaluator and validates VQA assets before starting serving.
+Omit `--brev` on a non-Brev host. Add **`--score-only`** to start only the CPU evaluator/Jupyter service, never a GPU endpoint. Public annotations and videos can be downloaded by the notebook itself; setup does not require preexisting dataset files or start inference. Host path/configuration validation completes before starting a paid model service.
 
-Brev access must use its authenticated/secure port-8888 link. `--brev` discovers the private `wt0` mesh IPv4 address and fails without it; non-Brev defaults to loopback. An explicit private `JUPYTER_BIND_ADDRESS` takes precedence. There is no public/wildcard fallback. Setup persists only its notebook token and non-secret bind address in permission-restricted `.env`. Retrieve the login token on the host with `docker compose exec vantage-eval jupyter server list`; never share it or capture it in screenshots.
+State and data directories must be absolute, writable, outside the checkout, and separate from each other’s cache/results mounts. Compose project `cosmos3-mvbench` mounts the external data directory **read-write at `/mvbench`**, cache at `/cache`, and private results at `/results`. Keep these path exports in the host shell for subsequent lifecycle commands. No weights or dataset contents are embedded in the image/repository. No Docker socket, AWS profile, home directory, or private key is mounted.
 
-Open `/opt/vlmevalkit/launchable/Evaluate_Cosmos3.ipynb`. Jupyter's authenticated file root is `/`, allowing links to `/results`. The evaluator has no Docker socket. The model API has no host port. Container lifecycle commands belong in the host terminal.
-
-Serving uses `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55` (override with `VLLM_IMAGE`). Allow space for model weights, images, the labeled bundle, frame caches, and results.
-
-### Validation status and limits
-
-- The runtime code passed 23 native-scoring/artifact regressions on native Linux x86-64. Fixtures are synthetic and use temporary directories; no benchmark labels, media, or executed notebook outputs are included.
-- A private five-question Brev notebook smoke exercised Nano inference and native local scoring. Saved predictions were also rescored in a CPU evaluator with networking disabled.
-- Private full-coverage inference and native local scoring have now been exercised for all eight tasks with manually staged authorized assets. DVC used its genuine pinned local metric model offline on saved Nano outputs. This is recovered-run evidence, not a fresh one-click launch or published-score reproduction; detailed results remain private.
-- Preparation preserves original labels, native filtering, and ground-truth denominators. Annotation anomalies are recorded in private local diagnostics rather than repaired or silently omitted.
-- Immutable one-click cold launch, end-to-end BYOM, and named reference-score reproduction remain unverified. Scoring assets, detailed operational evidence, and benchmark results must be supplied and retained separately.
-
-## Run and score
-
-The notebook defaults to a deterministic five-question VQA inference-and-scoring smoke. `RUN_FULL = False` prevents Run All from launching full eight-task inference. Score-only mode requires an existing native prediction table and explicitly selected task; it skips endpoint checks and model construction.
-
-CLI equivalents inside the evaluator:
+`--brev` discovers the private `wt0` mesh IPv4 address and fails without it. An explicit private `JUPYTER_BIND_ADDRESS` takes precedence; non-Brev defaults to loopback. There is no public/wildcard fallback. Setup persists only the notebook token and non-secret bind address in restricted `.env`. Use Brev's authenticated secure port-8888 link or an SSH tunnel. From the launchable directory on the **host**, retrieve the login token with:
 
 ```bash
-python launchable.py prepare --benchmarks VANTAGE_VQA
-python launchable.py run --benchmarks VANTAGE_VQA --smoke --mode all --work-dir /results/smoke-unique
-python launchable.py results --work-dir /results/smoke-unique
-
-# Full native inference and local scoring, only after all task assets validate.
-python launchable.py prepare --benchmarks all
-python launchable.py run --benchmarks all --mode all --work-dir /results/full-unique
-
-# Separate inference from scoring; the latter never contacts a model endpoint.
-python launchable.py run --benchmarks VANTAGE_VQA --mode infer --work-dir /results/infer-unique
-python launchable.py score --work-dir /results/infer-unique
-
-# Native prediction files from another run: retain original identities/questions.
-python -m vlmeval.local_scoring --task VANTAGE_VQA --predictions /results/native-predictions.tsv \
-  --assets-dir /scoring-assets --output-dir /results/score-unique
+docker compose exec mvbench-eval jupyter server list
 ```
 
-All output directories must be fresh. Direct scoring requires full task coverage unless `--allow-subset` is explicitly supplied. A smoke/subset is always identified in coverage and is not a reference benchmark result. Duplicate, unknown, mismatched, blank, or failed predictions are rejected. Only verified prediction strings are transferred into trusted dataset rows: prediction-supplied labels, image dimensions, or paths cannot override ground truth.
+Never share that token or include it in screenshots. Open `/opt/vlmevalkit/launchable/Evaluate_Cosmos3.ipynb`. Jupyter's authenticated file root is `/`, so authorized NTU files can be staged via its file browser/terminal and result links work. The local model API has **no host port**, only the private container network. Host Docker commands are for setup/stop/lifecycle, not benchmark execution.
 
-`--mode all` always performs native inference first, then the same local scorer used for existing outputs. It never substitutes inference-only behavior or runs a remote scoring service. `--dry-run` composes configuration but does not prove inference or media compatibility.
+### Pinned Nano and BYOM
 
-The controller defaults to **one concurrent API/video worker** and records `api_nproc` in `run.json`. Video decoding consumes host RAM independently of GPU VRAM; increase `--api-nproc N` only after measuring available host memory. This changes scheduling, not model generation or metric parameters.
+The local service targets `nvidia/Cosmos3-Nano`, revision `e59a53c25979a090fa8706c9acc0c254a6e89b92`, with serving image `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55`. `VLLM_IMAGE` can override the image, with the override recorded. Allow storage for weights, images, public video archives, extracted media, frames, and results. The launchable does not change Ultra/LaunchPad workflows.
 
-## Metric semantics and provenance
+For BYOM, set `COSMOS_API_BASE` to the full reachable `/v1/chat/completions` URL and `COSMOS_MODEL` to the exact served ID **before setup**; optionally supply `COSMOS_API_KEY` in the environment. Setup skips local serving. Set `COSMOS_MODEL_REVISION` to your real deployment/checkpoint revision; unknown BYOM revisions remain explicitly `unknown` rather than being attributed to the pinned Nano checkpoint. Container `localhost` is not the host. The endpoint must accept sampled-image messages and expose `/v1/models`. Keys stay in the environment, never config/notebook source.
 
-| Task | Native primary metric | Unit / aggregation |
-| --- | --- | --- |
-| VQA | accuracy | Fraction; question micro |
-| EventVerification | macro F1 | Fraction; class macro |
-| Temporal | temporal IoU | Fraction; video macro of question means |
-| DVC | SODA-c | Fraction; video macro, genuine local BERTScore |
-| 2DGrounding | Acc@0.5 | Percent; expression micro |
-| 2DPointing | accuracy | Fraction; question micro |
-| SOT | success AUC | Fraction; sequence macro; initialization excluded |
-| Astro2D | F1 | Percent; unweighted sequence macro |
+## Execute one chosen notebook scope
 
-Each private `summary.json` includes native metrics, explicit units/aggregation, expected/scored row counts, asset ID and annotation hashes, prediction snapshot hash, scorer-source hashes, and DVC metric-model fingerprints. There is **no invented cross-task overall VANTAGE score** or unverified leaderboard-parity claim. DVC requires a real local model; remote endpoints and dummy semantic scores are not allowed in local scoring. Missing or silently skipped examples fail scoring. Native failures leave a private `scoring-error.log`, not a success summary.
+The notebook starts with `RUN_FULL = False`: exactly the first five Egocentric Navigation questions (stable native indices **3400–3404**), one task and five of 4,000 rows. It is prominently identified as a **smoke subset**, never a full result. Its public archive is approximately 40 MB (`video/vlnqa.zip`).
 
-Finite zero-duration and reversed predicted intervals follow each native parser and IoU implementation. The wrapper does not drop them, repair timestamps, or replace them with full-duration answers. Unparseable responses, nonfinite timestamps, missing events/captions, or skipped rows still fail rather than producing a misleading score.
+Set **`RUN_FULL = True`** to opt into full evaluation directly. The notebook downloads the chosen scope, prepares it, checks the endpoint only for inference, runs inference plus scoring, and displays coverage/metrics/provenance. It does **not** unnecessarily rerun smoke before full. Full preparation requires all 20 official JSON files, all 4,000 questions and required media, including manually acquired NTU. Downloading current public archives alone cannot meet that gate. Missing coverage is written to `/mvbench/.mvbench/coverage-full.json` and reported clearly; nothing is silently truncated or dropped.
 
-`run.json` records controller state and the exact scoring-asset manifest hash. Generated native configuration and `/opt/evaluation-packages.txt` identify runtime inputs. A BYOM endpoint's revision cannot be inferred from its display name; record its deployment revision separately. Treat predictions, native diagnostics, and summaries as private until reviewed. Nothing is uploaded automatically.
+For existing predictions, set `SCORE_ONLY = True`, choose explicit `SCORE_SCOPE = 'smoke'` or `'full'`, and provide exactly one of `PREDICTIONS_FILE` or `EXISTING_WORK`. Set `DOWNLOAD_PUBLIC = False` when using already staged inputs offline. Score-only does not check the endpoint or construct an inference model.
 
-## BYOM, stop, and restart
+### CLI equivalents inside Jupyter's evaluator environment
 
-At initial deployment, set `COSMOS_API_BASE` to the full `/v1/chat/completions` URL, `COSMOS_MODEL` to its exact served ID, and `COSMOS_API_KEY` only if required. Setup skips local serving for BYOM. The endpoint must support the native image/video requests and be reachable from the evaluator; container `localhost` is not the host. Native recipe exports intentionally retain environment placeholders; the controller supplies the checked endpoint URL before inference. The API adapter reads its key from the environment, not the generated configuration. Keep credentials in the environment, never notebook source or URLs.
+These commands can also be invoked from Jupyter's terminal; no host Docker benchmark command is necessary:
 
-From the launchable directory on the host:
+```bash
+python launchable.py download --scope smoke
+python launchable.py prepare --smoke
+python launchable.py run --smoke --mode all --work-dir /results/smoke-unique
+python launchable.py results --work-dir /results/smoke-unique
+
+# Metadata-only acquisition, without video downloads:
+python launchable.py download --scope metadata
+
+# Full scope: authorized NTU files must already be placed under /mvbench/video/nturgbd.
+python launchable.py download --scope full
+python launchable.py prepare
+python launchable.py run --mode all --work-dir /results/full-unique
+
+# Separate native inference from local scoring:
+python launchable.py run --smoke --mode infer --work-dir /results/infer-unique
+python launchable.py score --scope smoke --work-dir /results/infer-unique
+
+# Native predictions from another run, retaining original identity columns:
+python launchable.py score --scope smoke --predictions /results/native-predictions.tsv \
+  --score-dir /results/score-unique
+```
+
+`--data-root` overrides the `MVBENCH_DATA_DIR` default (`/mvbench`). `run` defaults to **full scope**, `--mode all`, `--nframe 16`, and **`--api-nproc 1`**. Full is never silently limited. All run/score output directories must be fresh. `--dry-run` still requires valid selected annotations/media and emits configuration only; it does not prove model compatibility. Score scope is mandatory and must match all expected identities exactly; there is no arbitrary partial-full option.
+
+## Protocol, metrics, and provenance
+
+The original VideoChat2 MVBench notebook uses **16 frames and resolution 224**, and computes average accuracy as total correct / total questions. This launchable starts with **16 frames** (configurable via `--nframe`), applies reference bicubic GroupScale(224) and GroupCenterCrop(224) before native frame stacking/JPEG output, and uses the existing CosmosReason2 generation recipe: temperature 0, seed 1, thinking disabled, maximum 8,192 output tokens, presence penalty unset, ten API retries, and 600-second request timeout. It preserves native MVBench temporal bounds and sampled-image prompts, avoiding lossy video re-encoding and second-stage server video sampling. Cosmos image encoding/normalization and answer parsing still differ from VideoChat2; reference-model tensor normalization is not applied to API images. This is **not a paper-score reproduction or parity claim**. Revision/media-path/temporal-bound/frame-count/preprocessing-isolated caches prevent distinct clips or protocols from sharing stale frames.
+
+Scoring uses native `model='exact_matching'`, never an LLM/API judge. The primary metric is **count-based question accuracy as a fraction**. Native counts, per-task metrics and task-macro accuracy are reported separately. A five-question subset cannot stand in for the full 20-task metric. Supplied predictions are checked for exact identities/row counts, duplicates, blanks, and failed transport outputs; trusted labels and identity columns come from pinned official annotations, never prediction-supplied answers/paths. Nonempty malformed model answers retain native wrong-answer semantics. Failed scoring is not a successful zero or fabricated result.
+
+The local wrapper additionally prevents punctuation-only option tokens from receiving the upstream matcher's accidental substring credit and preserves literal model strings such as `nan` as wrong answers rather than missing values. These guards are recorded in scorer provenance; they are not a claim of byte-for-byte VideoChat2 evaluator parity.
+
+`run.json` records scope, exact selected IDs, coverage, dataset revision/manifest hash, complete emitted native config, frame count, API concurrency, generation parameters, model/deployment revision, Framework revision, source hashes, prediction location, metric summary and state transitions. `config.json`, streamed `run.log`, native predictions, `scores/summary.json`, and `/opt/evaluation-packages.txt` provide private reproducibility artifacts. Summaries retain prediction/scorer provenance. API concurrency affects scheduling and host RAM usage, not the frame count or generation protocol. Increase it only after measuring host resources.
+
+No published-score reproduction, reference-result parity, immutable cold-launch reliability, or complete customer-data agent is implied by implementation. Full NTU coverage is a real acquisition prerequisite. This change's empirical hardware/notebook status must be established separately; do not carry forward evidence from a different benchmark. No benchmark labels/media, credentials, executed notebook outputs, or private result artifacts belong in the PR.
+
+## Stop, restart, and maintain
+
+From the launchable directory on the **host**:
 
 ```bash
 docker compose --profile local ps
 docker compose --profile local stop
-# Recreate with the same bundle and intended mode:
+# Restart only Jupyter to score retained predictions:
 bash setup.sh --score-only
 ```
 
-Stopping a container does not stop underlying Brev VM billing. Stop the instance separately after preserving authorized results. Do not delete state or volumes to stop a run. Clear notebook outputs before sharing.
+Stopping containers does not stop Brev VM billing. Stop the instance separately after preserving authorized results; do not delete state/volumes merely to stop a run. Clear notebook outputs before sharing.
 
-## Local development checks
-
-In the installed evaluator environment, run `python -m unittest discover -s launchable -p 'test_*.py'`. Behavioral fixtures exercise native scorers without private data or inference services; DVC additionally needs a smoke with the real metric checkpoint. The committed notebook contains no executed outputs.
-
-Platform limit: local ARM64 Docker's `linux/amd64` Jupyter kernel previously stalled even in a clean upstream image. Native Linux x86-64 is the supported runtime. CLI/native metric checks under emulation are not proof of notebook execution or a fresh Brev GPU deployment.
+Maintainers should run `python -m unittest discover -s launchable -p 'test_*.py'` after integration, then exercise notebook smoke, offline CPU rescore, missing-NTU full-coverage failure, and an authorized complete full run when its prerequisites are available. Behavioral fixtures use synthetic artifacts and do not establish model/hardware results. The committed notebook is unexecuted. Native Linux x86-64 is the supported runtime; local ARM64 Docker emulation is not notebook/hardware validation.

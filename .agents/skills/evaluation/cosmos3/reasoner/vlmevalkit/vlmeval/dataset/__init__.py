@@ -125,7 +125,7 @@ from .mmsibench import MMSIBench, MMSIVideoBench
 from .moat import MOAT
 from .moviechat1k import MovieChat1k
 from .mssbench import MSSBenchDataset
-from .mvbench import MVBench, MVBench_MP4
+from .mvbench import MVBench, MVBenchLocal, MVBench_MP4
 from .mvpbench import MVPBench
 from .mvu_eval import MVUEval
 from .NPMM import NPMM

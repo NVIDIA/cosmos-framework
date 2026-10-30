@@ -11,22 +11,26 @@ docker info >/dev/null
 export COSMOS_COMMIT
 COSMOS_COMMIT=$(git rev-parse HEAD)
 : "${LAUNCHABLE_STATE_DIR:?Set an absolute state directory outside the Framework checkout}"
-: "${SCORING_ASSETS_DIR:?Set an absolute authorized scoring bundle directory outside the Framework checkout}"
-export LAUNCHABLE_STATE_DIR SCORING_ASSETS_DIR
-python3 - "$LAUNCHABLE_STATE_DIR" "$SCORING_ASSETS_DIR" "$(git rev-parse --show-toplevel)" <<'PY'
+export MVBENCH_DATA_DIR="${MVBENCH_DATA_DIR:-$LAUNCHABLE_STATE_DIR/mvbench}"
+export LAUNCHABLE_STATE_DIR
+python3 - "$LAUNCHABLE_STATE_DIR" "$MVBENCH_DATA_DIR" "$(git rev-parse --show-toplevel)" <<'PY'
+import os
 from pathlib import Path
 import sys
 
 checkout = Path(sys.argv[3]).resolve()
-state, assets = (Path(value) for value in sys.argv[1:3])
-if any(not path.is_absolute() or path.resolve().is_relative_to(checkout) for path in (state, assets)):
-    raise SystemExit("State and scoring assets must use absolute paths outside the Framework checkout")
-if not assets.is_dir():
-    raise SystemExit("Scoring bundle directory is absent; prepare authorized sources first")
-if any(assets.resolve().is_relative_to((state / name).resolve()) for name in ("cache", "results")):
-    raise SystemExit("Scoring assets must not be nested in writable cache/results mounts")
+state, data = (Path(value) for value in sys.argv[1:3])
+for path in (state, data):
+    if not path.is_absolute() or path.resolve().is_relative_to(checkout):
+        raise SystemExit("State and MVBench data must use absolute paths outside the Framework checkout")
+if any(data.resolve().is_relative_to((state / name).resolve())
+       or (state / name).resolve().is_relative_to(data.resolve()) for name in ("cache", "results")):
+    raise SystemExit("MVBench data must be separate from writable cache/results mounts")
+for path in (state / "cache", state / "results", data):
+    path.mkdir(parents=True, exist_ok=True)
+    if not os.access(path, os.W_OK):
+        raise SystemExit(f"Runtime directory must be writable: {path}")
 PY
-mkdir -p "$LAUNCHABLE_STATE_DIR"/{cache,data,results}
 export EVAL_SCORE_ONLY=0
 for argument in "$@"; do
     if [[ "$argument" == "--score-only" ]]; then EVAL_SCORE_ONLY=1; fi
@@ -72,20 +76,20 @@ print(address)
 PY
 )
 chmod 600 .env
-docker compose build vantage-eval
-if [[ "$EVAL_SCORE_ONLY" == "0" ]]; then
-    # Reject missing/incomplete labels before starting a paid model service.
-    docker compose run --rm --no-deps vantage-eval python launchable.py prepare
-fi
+docker compose config --quiet
+docker compose build mvbench-eval
 if [[ "$EVAL_SCORE_ONLY" == "0" && -z "${COSMOS_API_BASE:-}" ]]; then
     nvidia-smi
+    export COSMOS_MODEL_REVISION="${COSMOS_MODEL_REVISION:-e59a53c25979a090fa8706c9acc0c254a6e89b92}"
     docker compose --profile local pull cosmos-endpoint
     docker compose --profile local up -d
 else
     # Existing-prediction scoring and BYOM never start a local model/GPU.
-    docker compose up -d vantage-eval
+    export COSMOS_MODEL_REVISION="${COSMOS_MODEL_REVISION:-unknown}"
+    docker compose up -d mvbench-eval
 fi
 printf 'Jupyter is starting on %s:8888. Open its authenticated secure link or SSH tunnel.\n' "${JUPYTER_BIND_ADDRESS:-127.0.0.1}"
 printf '%s\n' \
-    'Retrieve the notebook login token with: docker compose exec vantage-eval jupyter server list' \
-    'Use the notebook to score existing predictions or run native inference and local scoring.'
+    'Retrieve the notebook login token with: docker compose exec mvbench-eval jupyter server list' \
+    'Open Evaluate_Cosmos3.ipynb to download public MVBench data, prepare, infer, and score.' \
+    'Full evaluation also requires manually acquired authorized NTU RGB+D media; see the notebook.'

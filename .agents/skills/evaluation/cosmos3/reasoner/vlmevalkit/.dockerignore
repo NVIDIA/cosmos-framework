@@ -14,6 +14,11 @@ launchable/state
 **/*.key
 **/scoring-assets.json
 **/scoring-assets
+**/.mvbench
+**/mvbench-data
+**/*.tsv
+**/*.xlsx
+**/*.pkl
 **/results
 **/env.sh
 cosmos_eval_out

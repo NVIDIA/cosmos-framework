@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-name: cosmos3-vantage
+name: cosmos3-mvbench
 services:
   cosmos-endpoint:
     profiles: [local]
@@ -20,7 +20,6 @@ services:
       HF_HOME: /cache/huggingface
     volumes:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
-      - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/data:/data:ro
     # Deliberately no host port: only the evaluator can reach this API.
     command:
       - nvidia/Cosmos3-Nano
@@ -50,7 +49,7 @@ services:
       timeout: 10s
       retries: 120
       start_period: 60s
-  vantage-eval:
+  mvbench-eval:
     platform: linux/amd64
     build:
       context: ..
@@ -65,19 +64,20 @@ services:
       COSMOS_COMMIT: ${COSMOS_COMMIT:-unknown}
       COSMOS_API_BASE: ${COSMOS_API_BASE:-http://cosmos-endpoint:8080/v1/chat/completions}
       COSMOS_MODEL: ${COSMOS_MODEL:-nvidia/Cosmos3-Nano}
+      COSMOS_MODEL_REVISION: ${COSMOS_MODEL_REVISION:-unknown}
+      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55}
       COSMOS_API_KEY: ${COSMOS_API_KEY:-EMPTY}
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?Run bash setup.sh to generate a Jupyter token}
       LMUData: /cache/lmudata
-      SCORING_ASSETS_DIR: /scoring-assets
+      MVBENCH_DATA_DIR: /mvbench
       EVAL_SCORE_ONLY: ${EVAL_SCORE_ONLY:-0}
       AWS_CONFIG_FILE: /dev/null
       AWS_SHARED_CREDENTIALS_FILE: /dev/null
       AWS_EC2_METADATA_DISABLED: 'true'
     volumes:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
-      - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/data:/data:ro
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/results:/results
-      - ${SCORING_ASSETS_DIR:?Set an external absolute prepared bundle directory}:/scoring-assets:ro
+      - ${MVBENCH_DATA_DIR:?Set an external writable MVBench data directory}:/mvbench
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8888/login', timeout=5)"]
       interval: 15s

@@ -90,12 +90,8 @@ Answer the question based only on the visual content of the image."""
 
     def __init__(self, dataset='MetropolisVQA', pack=False, nframe=0, fps=1.0, total_pixels=None,
                  max_pixels=None, max_frames=None, test_mode=False, limit=None, verbose=False,
-                 random_state=None, include_categories=None, local_data_file=None, local_video_root=None):
+                 random_state=None, include_categories=None):
         self.test_mode = test_mode
-        self.local_data_file = local_data_file
-        self.local_video_root = local_video_root
-        if (local_data_file is None) != (local_video_root is None):
-            raise ValueError("local_data_file and local_video_root must be supplied together")
         self.category_mapping = {}
         self.limit = limit
         self.verbose = verbose
@@ -111,10 +107,8 @@ Answer the question based only on the visual content of the image."""
         self.S3_PREFIX = prefix
         self.S3_PROFILE = profile
 
-        if not test_mode or local_data_file is not None:
+        if not test_mode:
             super().__init__(dataset=dataset, pack=pack, nframe=nframe, fps=fps, total_pixels=total_pixels)
-            if local_data_file is not None and 'category' in self.data:
-                self.category_mapping = dict(zip(self.data['video'], self.data['category']))
 
             # Track original size
             original_size = len(self.data) if hasattr(self, 'data') else 0
@@ -172,10 +166,6 @@ Answer the question based only on the visual content of the image."""
         """
         Prepare the dataset by loading from S3 or local cache.
         """
-        if self.local_data_file is not None:
-            from ..scoring_assets import validate_local_video_inputs
-            return validate_local_video_inputs(self.local_data_file, self.local_video_root, 'VQA')
-
         def check_integrity(pth):
             data_file = osp.join(pth, f'{dataset_name}.tsv')
             if not osp.exists(data_file):
@@ -597,8 +587,6 @@ Answer the question based only on the visual content of the image."""
 
     def _get_category(self, video_id: str) -> str:
         """Get category for a video based on its ID from mapping."""
-        if self.local_data_file is not None and video_id in self.category_mapping:
-            return self.category_mapping[video_id]
         if not self.category_mapping:
             return "Other"
 

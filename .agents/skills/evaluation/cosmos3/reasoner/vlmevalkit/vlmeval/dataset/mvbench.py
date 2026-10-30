@@ -38,8 +38,7 @@ Based on your observations, select the best option that accurately addresses the
     TYPE = 'Video-MCQ'
     DEFAULT_JUDGE = ['chatgpt-0125', 'gpt-4-0125']
 
-    def __init__(self, dataset='MVBench', nframe=0, fps=-1):
-        self.type_data_list = {
+    TASKS = {
             'Action Sequence': ('action_sequence.json',
                                 'your_data_path/star/Charades_v1_480/', 'video', True),  # has start & end
             'Action Prediction': ('action_prediction.json',
@@ -80,7 +79,10 @@ Based on your observations, select the best option that accurately addresses the
                                    'your_data_path/tvqa/frames_fps3_hq/', 'frame', True),  # has start & end, read frame
             'Counterfactual Inference': ('counterfactual_inference.json',
                                          'your_data_path/clevrer/video_validation/', 'video', False),
-        }
+    }
+
+    def __init__(self, dataset='MVBench', nframe=0, fps=-1):
+        self.type_data_list = self.TASKS
         super().__init__(dataset=dataset, nframe=nframe, fps=fps)
 
     @classmethod
@@ -369,7 +371,7 @@ Based on your observations, select the best option that accurately addresses the
         return message
 
     @classmethod
-    def evaluate(self, eval_file, **judge_kwargs):
+    def evaluate(self, eval_file, *, trusted_data=None, **judge_kwargs):
 
         assert get_file_extension(eval_file) in ['xlsx', 'json', 'tsv'], 'data file should be an supported format (xlsx/json/tsv) file'  # noqa: E501
 
@@ -391,7 +393,9 @@ Based on your observations, select the best option that accurately addresses the
             res = {} if not osp.exists(tmp_file) else load(tmp_file)
             res = {k: v for k, v in res.items() if FAIL_MSG not in v}
 
-            data = load(eval_file)
+            # Local scoring supplies an authenticated table directly so pandas
+            # cannot reinterpret literal model strings (e.g. "nan" or "1").
+            data = load(eval_file) if trusted_data is None else trusted_data.copy()
             data_un = data[~pd.isna(data['prediction'])]
 
             for idx in data_un['index']:
@@ -411,6 +415,11 @@ Based on your observations, select the best option that accurately addresses the
 
                 if FAIL_MSG in pred:
                     data.loc[idx, 'score'] = -1
+                elif trusted_data is not None and not any(
+                        character.isalnum() for character in pred.lower().strip().split(' ')[0]):
+                    # Punctuation alone is not an option: native substring
+                    # matching otherwise grants credit for ".", "(" and ")".
+                    data.loc[idx, 'score'] = 0
                 else:
                     data.loc[idx, 'score'] = int(check_ans_with_model(
                         pred, ans, model,
@@ -431,6 +440,113 @@ Based on your observations, select the best option that accurately addresses the
         rating = get_dimension_rating(score_file)
         dump(rating, tgt_file)
         return rating
+
+class MVBenchLocal(MVBench):
+    """Pinned local MVBench, preserving native sampling and image prompts.
+
+    Unlike the generic downloader, local preparation never switches revisions or
+    drops missing NTU rows. Frame caches are clip-specific rather than keyed by
+    video basename alone. Native video conversion is deliberately disabled:
+    Cosmos receives exactly nframe sampled images and the native MCQ prompt.
+    """
+
+    def __init__(self, dataset='MVBench', data_root=None, nframe=16, smoke=False, fps=-1):
+        from pathlib import Path
+
+        if dataset != 'MVBench':
+            raise ValueError('MVBenchLocal supports dataset="MVBench" only')
+        if data_root is None:
+            raise ValueError('MVBenchLocal requires an explicit data_root')
+        if isinstance(nframe, bool) or not isinstance(nframe, int) or nframe <= 0:
+            raise ValueError('nframe must be a positive integer')
+        if fps > 0:
+            raise ValueError('MVBenchLocal uses native fixed-frame sampling, not fps sampling')
+        self._local_root = Path(data_root).expanduser().resolve()
+        self._local_smoke = bool(smoke)
+        super().__init__(dataset=dataset, nframe=nframe, fps=fps)
+        self.frame_root = str(self._local_root / '.mvbench' / 'frames')
+        os.makedirs(self.frame_root, exist_ok=True)
+
+    def prepare_dataset(self, dataset_name='MVBench', **kwargs):
+        from vlmeval.mvbench_local import FRAME_RESOLUTION, prepare_dataset
+        from .utils.mvbench import GroupCenterCrop, GroupScale
+
+        prepared = prepare_dataset(self._local_root, smoke=self._local_smoke)
+        self.local_provenance = prepared
+        self.decord_method = {
+            'video': self.read_video, 'gif': self.read_gif, 'frame': self.read_frame,
+        }
+        self.frame_fps = 3
+        # Reference sampling/cropping, but not VideoChat2 tensor normalization:
+        # the Cosmos server owns its model-specific image normalization.
+        self.transform = T.Compose([
+            GroupScale(FRAME_RESOLUTION, interpolation=Image.BICUBIC),
+            GroupCenterCrop(FRAME_RESOLUTION),
+            Stack(), ToTorchFormatTensor(),
+        ])
+        return prepared
+
+    def qa_template(self, data):
+        import ast
+
+        candidates = data['candidates']
+        if isinstance(candidates, str):
+            candidates = ast.literal_eval(candidates)
+        if (not isinstance(candidates, list)
+                or not all(isinstance(option, str) for option in candidates)
+                or candidates.count(data['answer']) != 1):
+            raise ValueError('MVBench question has invalid candidates or answer')
+        question = f"Question: {data['question']}\nOptions:\n"
+        question += '\n'.join(f'({chr(ord("A") + index)}) {option}'
+                              for index, option in enumerate(candidates))
+        answer_index = candidates.index(data['answer'])
+        return question.rstrip(), f'({chr(ord("A") + answer_index)}) {data["answer"]}'
+
+    def clip_cache_key(self, line):
+        import hashlib
+        from vlmeval.mvbench_local import (
+            DATASET_REVISION, FRAME_PREPROCESSING, FRAME_RESOLUTION, _media_content_sha256,
+        )
+
+        identity = {
+            'dataset_revision': DATASET_REVISION,
+            'dataset_root': str(self._local_root),
+            'media': str(os.path.join(line['prefix'], line['video'])),
+            'data_type': line['data_type'],
+            'bounds': [float(line['start']), float(line['end'])] if line['bound'] else None,
+            'nframe': self.nframe,
+            'sampling': 'native-MVBench.get_index-v1',
+            'resolution': FRAME_RESOLUTION, 'preprocessing': FRAME_PREPROCESSING,
+            'media_sha256': _media_content_sha256(self._local_root, line),
+        }
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+    def save_video_into_images(self, line):
+        key = self.clip_cache_key(line)
+        frame_paths = self.frame_paths(key)
+        if all(osp.isfile(path) and osp.getsize(path) > 0 for path in frame_paths):
+            return frame_paths
+        bound = (line['start'], line['end']) if line['bound'] else None
+        video_path = osp.join(self.data_root, line['prefix'], line['video'])
+        self.num_segments = self.nframe
+        images = self.decord_method[line['data_type']](video_path, bound)
+        return self.save_video_frames(images, key, self.nframe)
+
+    def build_prompt(self, line, video_llm=False):
+        return super().build_prompt(line, video_llm=False)
+
+    def evaluate(self, eval_file, **judge_kwargs):
+        from pathlib import Path
+        from vlmeval.mvbench_local import score_predictions
+
+        if judge_kwargs.get('model', 'exact_matching') != 'exact_matching':
+            raise ValueError('MVBenchLocal only permits the network-free exact_matching judge')
+        path = Path(eval_file)
+        return score_predictions(
+            path, self._local_root, path.parent / f'{path.stem}_mvbench',
+            smoke=self._local_smoke, nframe=self.nframe,
+        )
+
 
 
 class MVBench_MP4(VideoBaseDataset):

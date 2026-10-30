@@ -41,31 +41,54 @@ remain available. Missing or nonexistent grounding annotation files produce a
 clear `ValueError`. Omni3D retains its existing private configuration and can be
 pointed at another authorized dataset through `raw_image_path` and `json_path`.
 
-## Brev Nano and fully local VANTAGE scoring
+## Brev Nano and public MVBench evaluation
 
-The [Brev launchable](launchable/README.md) uses this Framework-native kit, the
-pinned Nano revision, and a caller-supplied, labeled `scoring-assets.json` bundle.
-Prepare authorized sources offline with `python -m vlmeval.scoring_assets`; that
-step writes canonical tables and a fingerprinted manifest, not original labels
-or media. Keep the bundle and runtime state outside every source checkout.
-During evaluation Compose mounts the completed bundle read-only; local scoring
-does not use an API judge, dataset downloader, credential mount, or external
-submission workflow.
+The [Brev launchable](launchable/README.md) uses the Framework-native kit,
+the pinned Nano revision, and `OpenGVLab/MVBench` at
+`230a2d4fac8900333c61754641c7a13e069ac9c6`. It provides public download,
+coverage validation, native inference, and local exact-match scoring for 20
+tasks and 4,000 annotated multiple-choice questions. No private annotation
+bundle, private S3, GPU, or model endpoint is required for score-only execution.
 
-For `MetropolisVQA`, `MetropolisTemporal`, `MetropolisEventVerification`, and
-`MetropolisDVC`, provide `local_data_file` and `local_video_root` together to
-bypass cache and remote-source discovery. The local table must include genuine
-ground truth and bundle-relative media identities; missing labels or media fail.
-`Astro2DBenchDataset` accepts a `data_roots` mapping covering all registered child
-datasets. Existing explicit local grounding, pointing, and SOT constructor paths
-are reused. Local DVC scoring requires a fingerprinted, revisioned local
-roberta-large checkpoint and never consults the remote BERTScore endpoint.
+Set `LAUNCHABLE_STATE_DIR` to an absolute writable host directory outside the
+checkout. `MVBENCH_DATA_DIR` defaults to its `mvbench` child and is mounted
+read-write at `/mvbench`; cache and results use separate mounts. The notebook
+downloads the selected public scope itself. Approved media terms restrict use
+to academic research; public access is not commercial-use or redistribution
+permission. Full coverage requires manually acquired authorized NTU RGB+D
+media under `video/nturgbd`; removed videos are never fetched from historical
+revisions or mirrors. Missing media produces a coverage error, not an incomplete
+full score. Default smoke is five fixed Egocentric Navigation rows.
 
-Use `python -m vlmeval.local_scoring` for existing native predictions without a
-model endpoint or GPU. Prediction identity columns must match trusted rows;
-prediction-supplied answers and paths cannot replace ground truth. Subsets
-require an explicit opt-in and are reported as subsets. There is no aggregate
-cross-task score or claim of official parity. Dataset distribution approval and
-a named reference result remain release gates. Original labels and native
-filtering are preserved; annotation anomalies are recorded in private local
-diagnostics rather than repaired or silently omitted.
+Native `run.py` configuration uses the local dataset class directly:
+
+```json
+{
+  "data": {
+    "MVBench": {
+      "class": "MVBenchLocal",
+      "dataset": "MVBench",
+      "data_root": "/mvbench",
+      "nframe": 16,
+      "smoke": false
+    }
+  }
+}
+```
+
+The controller composes this with `CosmosReason2` and the existing generation
+recipe, defaulting to one API worker. Temporal sampling and prompts are native
+MVBench, with sampled-image input and isolated clip/frame caches. The starting
+16-frame target and scale/center-crop-224 frame preprocessing follow the original
+recipe; Cosmos image encoding/normalization and answer parsing still differ from VideoChat2.
+Native count-based accuracy (fraction), task macro, coverage and provenance
+remain explicit. No LLM judge or published-score claim is involved.
+
+Use `launchable.py score --scope smoke|full` with either an existing controller
+`--work-dir` or native `--predictions` plus a fresh `--score-dir`. Exact selected
+identities and complete coverage are required. Trusted answers come from pinned
+annotations, never prediction-supplied fields. Score-only skips endpoint checks
+and model construction. BYOM uses `COSMOS_API_BASE`, `COSMOS_MODEL`, optional
+environment-only `COSMOS_API_KEY`, and an explicit `COSMOS_MODEL_REVISION`;
+setup then skips local serving. This launchable does not implement a
+customer-data evaluation agent or alter other model deployment tracks.

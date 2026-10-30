@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Notebook/CLI orchestration; inference and metrics remain native VLMEvalKit's."""
+"""Notebook/CLI orchestration for pinned MVBench and native VLMEvalKit scoring."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,20 +16,8 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = ROOT / "cosmos_eval"
-
-
-def manifest():
-    return json.loads((KIT / "manifest.json").read_text())
-
-
-def benchmarks(value):
-    available = [key.split("/", 1)[1] for key in manifest() if "/VANTAGE_" in key]
-    selected = available if value == "all" else value.split(",")
-    unknown = set(selected) - set(available)
-    if unknown or not selected:
-        raise ValueError(f"Unknown VANTAGE benchmark(s): {', '.join(sorted(unknown))}")
-    return [bench for bench in available if bench in selected]
+MODEL_REVISION = "e59a53c25979a090fa8706c9acc0c254a6e89b92"
+SERVING_IMAGE = "vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55"
 
 
 def endpoint(wait=0):
@@ -66,186 +55,214 @@ def endpoint(wait=0):
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
-def prepare(selected, assets_dir):
-    from vlmeval.local_scoring import build_local_dataset, load_assets
+def prepare(data_root, smoke=False):
+    from vlmeval.mvbench_local import prepare_dataset
 
-    bundle = load_assets(assets_dir, selected)
-    for bench in selected:
-        dataset = build_local_dataset(assets_dir, bench)
-        if dataset is None or dataset.data.empty:
-            raise RuntimeError(f"{bench}: no labeled dataset rows")
-        print(f"{bench}: {len(dataset.data)} local labeled rows ready", flush=True)
-        diagnostics = bundle["manifest"]["tasks"][bench.removeprefix("VANTAGE_")].get("annotation_diagnostics")
-        if diagnostics:
-            print(f"{bench}: original annotation diagnostics: {json.dumps(diagnostics, sort_keys=True)}", flush=True)
+    prepared = prepare_dataset(data_root, smoke=smoke)
+    print(json.dumps(prepared["coverage"], indent=2), flush=True)
+    return prepared
 
 
-def run_command(command, **kwargs):
+def run_command(command, log_path=None):
+    """Tee unbuffered child progress to Jupyter and a durable private run log."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("AWS_")}
     env.update(AWS_CONFIG_FILE="/dev/null", AWS_SHARED_CREDENTIALS_FILE="/dev/null",
-               AWS_EC2_METADATA_DISABLED="true", MPLBACKEND="Agg")
-    subprocess.run(command, cwd=ROOT, env=env, check=True, **kwargs)
+               AWS_EC2_METADATA_DISABLED="true", MPLBACKEND="Agg", PYTHONUNBUFFERED="1")
+    log = Path(log_path).open("w") if log_path is not None else None
+    try:
+        with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, bufsize=1) as process:
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                if log is not None:
+                    log.write(line)
+                    log.flush()
+            code = process.wait()
+            if code:
+                raise subprocess.CalledProcessError(code, command)
+    finally:
+        if log is not None:
+            log.close()
 
 
 def prediction_files(work):
-    return sorted(p for p in work.rglob("cosmos_*")
-                  if p.parent.name.startswith("T") and p.suffix in {".tsv", ".xlsx", ".json"}
-                  and p.stem in {f"cosmos_{bench}" for bench in benchmarks("all")})
+    return sorted(path for path in work.rglob("cosmos_MVBench.*")
+                  if path.parent.name.startswith("T") and path.suffix in {".tsv", ".xlsx", ".json"})
 
 
-def verify_predictions(work, bench, expected_rows=None):
+def verify_predictions(path, selected_indices):
+    """Check complete selected identities and transport failures before native scoring."""
     import pandas as pd
 
-    files = [p for p in prediction_files(work) if p.stem == f"cosmos_{bench}"]
-    if len(files) != 1:
-        raise RuntimeError(f"{bench}: expected one prediction table, found {len(files)}")
-    path = files[0]
+    path = Path(path)
+    if path.is_dir():
+        files = prediction_files(path)
+        if len(files) != 1:
+            raise RuntimeError(f"MVBench: expected one prediction table, found {len(files)}")
+        path = files[0]
     if path.suffix == ".tsv":
-        frame = pd.read_csv(path, sep="\t")
+        frame = pd.read_csv(path, sep="\t", keep_default_na=False, dtype={"index": str, "prediction": str})
     elif path.suffix == ".json":
-        frame = pd.read_json(path)
+        frame = pd.read_json(path, dtype={"index": str})
+    elif path.suffix == ".xlsx":
+        frame = pd.read_excel(path, keep_default_na=False, dtype={"index": str, "prediction": str})
     else:
-        frame = pd.read_excel(path)
-    if "prediction" not in frame or frame.empty:
-        raise RuntimeError(f"{bench}: empty or invalid prediction output")
-    if expected_rows is not None and len(frame) != expected_rows:
-        raise RuntimeError(f"{bench}: expected {expected_rows} predictions, found {len(frame)}")
+        raise ValueError("Predictions must be a native TSV, XLSX, or JSON table")
+    if not {"index", "prediction"}.issubset(frame.columns) or frame.empty:
+        raise RuntimeError("MVBench: empty or invalid prediction output")
+    expected = [str(index) for index in selected_indices]
+    if len(frame) != len(expected):
+        raise RuntimeError(f"MVBench: expected {len(expected)} predictions, found {len(frame)}")
+    indices = frame["index"].astype(str)
+    if indices.duplicated().any() or set(indices) != set(expected):
+        raise RuntimeError("MVBench: duplicate, missing, or unexpected prediction identities")
     text = frame["prediction"].astype(str).str.strip().str.lower()
     failed = (frame["prediction"].isna()
-              | text.isin(("", "nan", "none", "null", "<na>"))
+              | text.eq("")
               | text.str.contains("failed to obtain answer", regex=False)
               | text.str.contains("video_load_failed", regex=False))
     if failed.any():
-        raise RuntimeError(f"{bench}: {int(failed.sum())} failed/empty predictions; inspect the run log")
-    print(f"{bench}: {len(frame)} predictions verified", flush=True)
+        raise RuntimeError(f"MVBench: {int(failed.sum())} failed/empty predictions; inspect the run log")
+    print(f"MVBench: {len(frame)} predictions verified", flush=True)
     return path
 
 
+def source_provenance():
+    files = ("run.py", "vlmeval/mvbench_local.py", "vlmeval/dataset/video_dataset_config.py",
+             "vlmeval/dataset/mvbench.py", "vlmeval/api/cosmos_reason.py", "launchable/launchable.py")
+    return {"framework_revision": os.environ.get("COSMOS_COMMIT", "unknown"),
+            "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                              for name in files if (ROOT / name).is_file()}}
+
+
 def _write_state(work, state):
-    (work / "run.json").write_text(json.dumps(state, indent=2) + "\n")
+    (work / "run.json").write_text(json.dumps(state, indent=2, default=str) + "\n")
 
 
-def run(selected, work, mode, smoke, dry_run, assets_dir, api_nproc=1):
-    if api_nproc < 1:
-        raise ValueError("--api-nproc must be positive")
-    if smoke and selected != ["VANTAGE_VQA"]:
-        raise ValueError("--smoke requires --benchmarks VANTAGE_VQA")
+def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
+    if api_nproc < 1 or nframe < 1:
+        raise ValueError("--api-nproc and --nframe must be positive")
+    if mode not in {"infer", "all"}:
+        raise ValueError("--mode must be infer or all")
     if work.exists():
         raise ValueError(f"Use a fresh --work-dir (already exists: {work}) to avoid stale results")
-    from vlmeval.local_scoring import dataset_config, load_assets
-
-    # Missing labels fail before allocating inference work or contacting the model.
-    bundle = load_assets(assets_dir, selected)
-    local_configs = {bench: dataset_config(assets_dir, bench) for bench in selected}
+    # All media and selected identities validate before contacting a paid endpoint.
+    prepared = prepare(data_root, smoke)
     if not dry_run:
-        prepare(selected, assets_dir)
         endpoint(wait=1800)
+    recipe = json.loads((ROOT / "cosmos_eval/models/cosmos.json").read_text())
+    model = {"class": recipe["class"], **recipe["defaults"]}
+    model.update(api_base=os.environ.get("COSMOS_API_BASE", "http://cosmos-endpoint:8080/v1/chat/completions"),
+                 model=os.environ.get("COSMOS_MODEL", "nvidia/Cosmos3-Nano"))
+    config = {"model": {"cosmos": model}, "data": {"MVBench": {
+        "class": "MVBenchLocal", "dataset": "MVBench", "data_root": str(data_root),
+        "nframe": nframe, "smoke": smoke}}}
     work.mkdir(parents=True, mode=0o700)
-    configs = work / "_configs"
-    run_command([sys.executable, str(KIT / "run_all.py"), "--benchmarks", ",".join(selected),
-                 "--export-configs", str(configs)])
-    state = {"format_version": 2, "source": "local", "status": "planned" if dry_run else "running",
-             "cosmos_commit": os.environ.get("COSMOS_COMMIT", "unknown"),
-             "model": os.environ.get("COSMOS_MODEL", "${COSMOS_MODEL}"),
-             "benchmarks": selected, "mode": mode, "smoke": smoke, "dry_run": dry_run,
-             "api_nproc": api_nproc,
-             "scoring_assets": {"asset_id": bundle["manifest"]["asset_id"],
-                                "manifest_sha256": bundle["manifest_sha256"]},
-             "work_dirs": {}, "predictions": {}, "scores": {}}
+    config_path = work / "config.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    state = {"format_version": 3, "benchmark": "MVBench", "source": "mvbench-local",
+             "status": "planned" if dry_run else "running", "mode": mode,
+             "scope": "smoke" if smoke else "full", "smoke": smoke, "dry_run": dry_run,
+             "dataset_revision": prepared["dataset_revision"],
+             "manifest_sha256": prepared["manifest_sha256"], "coverage": prepared["coverage"],
+             "selected_indices": prepared["selected_indices"], "data_root": str(data_root),
+             "nframe": nframe, "api_nproc": api_nproc, "config": config,
+             "generation_parameters": {key: value for key, value in model.items()
+                                       if key not in {"class", "api_base", "model"}},
+             "model": model["model"],
+             "model_revision": os.environ.get(
+                 "COSMOS_MODEL_REVISION",
+                 MODEL_REVISION if model["api_base"] == "http://cosmos-endpoint:8080/v1/chat/completions"
+                 and model["model"] == "nvidia/Cosmos3-Nano" else "unknown"),
+             "serving_image": (os.environ.get("VLLM_IMAGE", SERVING_IMAGE)
+                               if model["api_base"] == "http://cosmos-endpoint:8080/v1/chat/completions"
+                               else os.environ.get("COSMOS_SERVING_IMAGE", "unknown")),
+             "provenance": source_provenance(), "predictions": None, "scores": None}
     _write_state(work, state)
+    command = [sys.executable, "-u", str(ROOT / "run.py"), "--config", str(config_path),
+               "--mode", "infer", "--work-dir", str(work / "native"),
+               "--api-nproc", str(api_nproc), "--verbose"]
+    if dry_run:
+        print(" ".join(command), flush=True)
+        return state
     try:
-        for index, bench in enumerate(selected):
-            config_path = configs / f"{bench}.json"
-            cfg = json.loads(config_path.read_text())
-            # Recipe exports retain placeholders; supply the endpoint already checked above.
-            cfg["model"]["cosmos"]["api_base"] = os.environ.get(
-                "COSMOS_API_BASE", cfg["model"]["cosmos"]["api_base"])
-            cfg["data"] = {bench: local_configs[bench]}
-            if smoke:
-                cfg["data"][bench].update(limit=5, random_state=0)
-            config_path.write_text(json.dumps(cfg, indent=2) + "\n")
-            out = work / f"bench_{index:02d}"
-            state["work_dirs"][bench] = out.name
-            command = [sys.executable, str(ROOT / "run.py"), "--config", str(config_path),
-                       "--mode", "infer", "--work-dir", str(out),
-                       "--api-nproc", str(api_nproc), "--verbose"]
-            if dry_run:
-                print(" ".join(command))
-                continue
-            out.mkdir(mode=0o700)
-            with (out / "run.log").open("w") as log:
-                run_command(command, stdout=log, stderr=subprocess.STDOUT)
-            path = verify_predictions(out, bench, expected_rows=5 if smoke else None)
-            state["predictions"][bench] = str(path.relative_to(work))
-            _write_state(work, state)
-        if not dry_run:
-            state["status"] = "inferred"
-            _write_state(work, state)
-            if mode == "all":
-                score(work, assets_dir)
-            else:
-                results(work)
-    except Exception:
+        run_command(command, log_path=work / "run.log")
+        path = verify_predictions(work / "native", prepared["selected_indices"])
+        state.update(status="inferred", predictions=str(path.relative_to(work)))
+        _write_state(work, state)
+        if mode == "all":
+            score(data_root, state["scope"], work=work)
+        else:
+            results(work)
+    except BaseException:
         state = json.loads((work / "run.json").read_text())
         state["status"] = "failed"
         _write_state(work, state)
         raise
+    return json.loads((work / "run.json").read_text())
 
 
-def score(work, assets_dir, score_dir=None):
-    from vlmeval.local_scoring import load_assets, score_predictions
+def score(data_root, scope, work=None, predictions=None, score_dir=None, nframe=16):
+    from vlmeval.mvbench_local import score_predictions
 
-    state = json.loads((work / "run.json").read_text())
-    if state.get("source") != "local":
-        raise ValueError("Use the native score-only CLI for predictions from older or other inference runs")
-    if state.get("dry_run") or state.get("status") not in {"inferred", "complete"}:
-        raise ValueError("Only successful inference runs can be scored")
-    selected = state["benchmarks"]
-    bundle = load_assets(assets_dir, selected)
-    if state.get("scoring_assets", {}).get("manifest_sha256") != bundle["manifest_sha256"]:
-        raise ValueError("Scoring assets changed since inference; use the original fingerprinted bundle")
-    score_dir = Path(score_dir) if score_dir is not None else work / "local-scores"
+    if scope not in {"smoke", "full"}:
+        raise ValueError("Scoring requires explicit smoke or full scope")
+    if (work is None) == (predictions is None):
+        raise ValueError("Supply exactly one of --work-dir or --predictions")
+    if nframe < 1:
+        raise ValueError("--nframe must be positive")
+    state = None
+    if work is not None:
+        state = json.loads((work / "run.json").read_text())
+        if (state.get("source") != "mvbench-local" or state.get("dry_run")
+                or state.get("status") not in {"inferred", "complete"}):
+            raise ValueError("Only successful MVBench inference runs can be scored")
+        if scope != state["scope"]:
+            raise ValueError("Scoring scope differs from inference scope")
+        nframe = state["nframe"]
+        predictions = work / state["predictions"]
+        score_dir = Path(score_dir) if score_dir is not None else work / "scores"
+    elif score_dir is None:
+        raise ValueError("--score-dir is required for existing native prediction files")
+    score_dir = Path(score_dir)
     if score_dir.exists():
         raise ValueError("Scoring output already exists; choose a fresh --score-dir")
-    predictions = {bench: verify_predictions(work / state["work_dirs"][bench], bench,
-                                            expected_rows=5 if state.get("smoke") else None)
-                   for bench in selected}
-    score_dir.mkdir(parents=True, mode=0o700)
-    state["status"] = "scoring"
-    state["scores"] = {}
-    _write_state(work, state)
+    prepared = prepare(data_root, smoke=scope == "smoke")
+    if state is not None and any(state[key] != prepared[key] for key in
+                                 ("dataset_revision", "manifest_sha256", "selected_indices")):
+        raise ValueError("Dataset identities or annotations changed since inference")
+    predictions = verify_predictions(predictions, prepared["selected_indices"])
+    if state is not None:
+        state["status"] = "scoring"
+        _write_state(work, state)
     try:
-        for index, bench in enumerate(selected):
-            output = score_dir / f"bench_{index:02d}"
-            summary = score_predictions(bench, predictions[bench], assets_dir, output,
-                                        allow_subset=bool(state.get("smoke")))
-            state["scores"][bench] = {"summary": str(output / "summary.json"),
-                                      "primary_metric": summary["primary_metric"],
-                                      "coverage": summary["coverage"]}
+        summary = score_predictions(predictions, data_root, score_dir,
+                                    smoke=scope == "smoke", nframe=nframe)
+        if state is not None:
+            state.update(status="complete", scores={"summary": str(score_dir / "summary.json"),
+                                                    "primary_metric": summary["primary_metric"],
+                                                    "coverage": summary["coverage"]})
             _write_state(work, state)
-        state["status"] = "complete"
-        _write_state(work, state)
-    except Exception:
-        state["status"] = "failed"
-        _write_state(work, state)
+            results(work)
+        else:
+            print(json.dumps(summary, indent=2, default=str), flush=True)
+        return summary
+    except BaseException:
+        if state is not None:
+            state["status"] = "failed"
+            _write_state(work, state)
         raise
-    results(work)
 
 
 def results(work):
     state = json.loads((work / "run.json").read_text())
-    print(f"Local run: {state.get('status', 'unknown')}" +
-          (" (five-question smoke subset)" if state.get("smoke") else ""))
-    for bench in state["benchmarks"]:
-        result = state.get("scores", {}).get(bench)
-        if result:
-            metric, coverage = result["primary_metric"], result["coverage"]
-            print(f"{bench}: {metric['name']}={metric['value']} {metric['unit']}; "
-                  f"{coverage['scored_rows']}/{coverage['expected_rows']} rows")
-            print(f"  Local score: {result['summary']}")
-        else:
-            print(f"{bench}: predictions only; local scoring has not completed")
-    print("Per-task native metrics only; no external scoring submission or unverified leaderboard parity.")
+    print(f"MVBench: {state['status']} ({state['scope']})", flush=True)
+    print(json.dumps({"coverage": state["coverage"], "scores": state.get("scores"),
+                      "dataset_revision": state["dataset_revision"],
+                      "model_revision": state["model_revision"], "provenance": state["provenance"]},
+                     indent=2), flush=True)
+    print("Smoke is not a full benchmark. No published-score or paper-parity claim.", flush=True)
+    return state
 
 
 def main():
@@ -254,34 +271,45 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="Wait for /v1/models and verify the requested model")
     check.add_argument("--wait", type=int, default=1800)
-    prep = sub.add_parser("prepare", help="Validate explicitly supplied local labeled scoring assets")
-    runner = sub.add_parser("run", help="Run native inference and optionally local scoring")
-    scorer = sub.add_parser("score", help="Score existing predictions locally, without a model endpoint")
-    for child in (prep, runner, scorer):
-        child.add_argument("--assets-dir", type=Path,
-                           default=Path(os.environ.get("SCORING_ASSETS_DIR", "/scoring-assets")))
+    download = sub.add_parser("download", help="Download approved pinned public inputs, never removed NTU media")
+    download.add_argument("--scope", choices=["metadata", "smoke", "full"], default="smoke")
+    prep = sub.add_parser("prepare", help="Validate pinned annotations and complete selected media coverage")
+    runner = sub.add_parser("run", help="Run native inference and optionally native exact-match scoring")
+    scorer = sub.add_parser("score", help="Score existing predictions without a GPU or model endpoint")
+    for child in (download, prep, runner, scorer):
+        child.add_argument("--data-root", type=Path,
+                           default=Path(os.environ.get("MVBENCH_DATA_DIR", "/mvbench")))
     for child in (prep, runner):
-        child.add_argument("--benchmarks", default="VANTAGE_VQA")
+        child.add_argument("--smoke", action="store_true", help="Fixed first five Egocentric Navigation IDs, not full MVBench")
     runner.add_argument("--mode", choices=["infer", "all"], default="all")
-    runner.add_argument("--api-nproc", type=int, default=1,
-                        help="Concurrent API/video workers; increase only for available host RAM")
-    runner.add_argument("--smoke", action="store_true", help="Five seeded VQA samples, not a full benchmark")
+    runner.add_argument("--api-nproc", type=int, default=1)
+    runner.add_argument("--nframe", type=int, default=16)
     runner.add_argument("--dry-run", action="store_true")
     runner.add_argument("--work-dir", type=Path, required=True)
-    scorer.add_argument("--work-dir", type=Path, required=True)
+    sources = scorer.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--work-dir", type=Path)
+    sources.add_argument("--predictions", type=Path)
+    scorer.add_argument("--scope", choices=["smoke", "full"], required=True)
     scorer.add_argument("--score-dir", type=Path)
-    report = sub.add_parser("results", help="Show verified local metric summaries")
+    scorer.add_argument("--nframe", type=int, default=16)
+    report = sub.add_parser("results", help="Show metric summaries, coverage, and provenance")
     report.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "check":
         endpoint(args.wait)
+    elif args.command == "download":
+        from vlmeval.mvbench_local import fetch_dataset
+        fetch_dataset(args.data_root.resolve(), scope=args.scope)
     elif args.command == "prepare":
-        prepare(benchmarks(args.benchmarks), args.assets_dir.resolve())
+        prepare(args.data_root.resolve(), args.smoke)
     elif args.command == "run":
-        run(benchmarks(args.benchmarks), args.work_dir.resolve(), args.mode,
-            args.smoke, args.dry_run, args.assets_dir.resolve(), args.api_nproc)
+        run(args.work_dir.resolve(), args.mode, args.smoke, args.dry_run,
+            args.data_root.resolve(), args.api_nproc, args.nframe)
     elif args.command == "score":
-        score(args.work_dir.resolve(), args.assets_dir.resolve(), args.score_dir)
+        score(args.data_root.resolve(), args.scope,
+              work=args.work_dir.resolve() if args.work_dir else None,
+              predictions=args.predictions.resolve() if args.predictions else None,
+              score_dir=args.score_dir.resolve() if args.score_dir else None, nframe=args.nframe)
     else:
         results(args.work_dir.resolve())
 

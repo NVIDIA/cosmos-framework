@@ -119,12 +119,8 @@ class MetropolisTemporal(VideoBaseDataset):
     # Question generation prefix (must match metropolis-benchmarks/code/run_qwen3_temporal_api_pt.py)
     QUESTION_PREFIX = """Localize a series of activity events in the video, output the start and end timestamp for each event. Provide the result in json format with 'mm:ss.ff' format for time depiction for this event. Use keywords 'start' and 'end' in the json output."""
 
-    def __init__(self, dataset='MetropolisTemporal', pack=False, nframe=0, fps=0, total_pixels=None, max_pixels=None, max_frames=None, test_mode=False, limit=None, verbose=False, random_state=None, include_categories=None, local_data_file=None, local_video_root=None):
+    def __init__(self, dataset='MetropolisTemporal', pack=False, nframe=0, fps=0, total_pixels=None, max_pixels=None, max_frames=None, test_mode=False, limit=None, verbose=False, random_state=None, include_categories=None):
         self.test_mode = test_mode
-        self.local_data_file = local_data_file
-        self.local_video_root = local_video_root
-        if (local_data_file is None) != (local_video_root is None):
-            raise ValueError("local_data_file and local_video_root must be supplied together")
         self.category_mapping = {}
         self.limit = limit  # Store limit parameter
         self.verbose = verbose  # Enable debug logging
@@ -138,10 +134,8 @@ class MetropolisTemporal(VideoBaseDataset):
         self.S3_BUCKET = bucket
         self.S3_PREFIX = prefix
         self.S3_PROFILE = profile
-        if not test_mode or local_data_file is not None:
+        if not test_mode:
             super().__init__(dataset=dataset, pack=pack, nframe=nframe, fps=fps, total_pixels=total_pixels)
-            if local_data_file is not None and 'category' in self.data:
-                self.category_mapping = dict(zip(self.data['video'], self.data['category']))
             # Track original size
             original_size = len(self.data) if hasattr(self, 'data') else 0
 
@@ -218,10 +212,6 @@ class MetropolisTemporal(VideoBaseDataset):
         """
         Prepare the dataset by loading from S3 or local cache.
         """
-        if self.local_data_file is not None:
-            from ..scoring_assets import validate_local_video_inputs
-            return validate_local_video_inputs(self.local_data_file, self.local_video_root, 'Temporal')
-
         def check_integrity(pth):
             data_file = osp.join(pth, f'{dataset_name}.tsv')
             if not osp.exists(data_file):
@@ -974,8 +964,6 @@ class MetropolisTemporal(VideoBaseDataset):
 
     def _get_category(self, video_id: str) -> str:
         """Get category for a video based on its ID."""
-        if self.local_data_file is not None and video_id in self.category_mapping:
-            return self.category_mapping[video_id]
         if not self.category_mapping:
             return "Other"
 
