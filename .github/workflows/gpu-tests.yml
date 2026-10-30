@@ -68,18 +68,29 @@ jobs:
         shell: bash
         run: |
           changed_files="$RUNNER_TEMP/gpu-changed-files"
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+          # A force push can leave the previous tip outside the fetched history.
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            if [[ "$sha" != "0000000000000000000000000000000000000000" ]] &&
+               ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$sha" || true
+            fi
+          done
 
-          run_gpu=false
-          while IFS= read -r path; do
-            case "$path" in
-              .agents/*|*.md) ;;
-              *)
-                run_gpu=true
-                break
-                ;;
-            esac
-          done < "$changed_files"
+          run_gpu=true
+          if git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
+            run_gpu=false
+            while IFS= read -r path; do
+              case "$path" in
+                .agents/*|*.md) ;;
+                *)
+                  run_gpu=true
+                  break
+                  ;;
+              esac
+            done < "$changed_files"
+          else
+            echo "::warning::Unable to compare revisions; running GPU tests conservatively."
+          fi
 
           echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
           echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
