@@ -23,7 +23,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Vision/projector gradients, missing modalities and AC | Isolated components plus first/final vision layers; real text, PNG, MP4 and WTS; one/two GPUs, AC on/off | Implemented and validated |
 | Portable artifacts and failure handling | `checkpoint/adapters.py`; immutable publication, base/media identity, strict state, incomplete/wrong artifacts; all 35 fresh-process GPU reloads bitwise exact | Implemented and validated |
 | FP32 merged export | `checkpoint/tools/adapters.py`, existing HF materializer; 35 numerical cases and complete retained metadata; re-resolution rejects corrupt target manifests | Implemented and validated: complete numerical matrix plus final installed/GPU metadata/target validation |
-| Installed package provenance | Wheel/source comparison and runtime byte attestation of all 1,838 package files | Implemented and validated through final runtime revision `480be5a` |
+| Installed package provenance | Wheel/source comparison and runtime byte attestation of all 1,838 package files | Implemented and validated: GPU runtime `480be5a`, merged-main CPU wheel `faa61c8` |
 | Full WTS epoch and held-out evaluation | Existing SFT/evaluation entrypoints; exact 5,555-row cursor, 2,676-row validation, reserved 576-row score | Implemented and validated: training loss 0.18750, validation 0.65918 → 0.14688; MCQ 92.19%, reserved subset 92.53%, zero invalid answers; operational recoveries recorded below |
 | Recipes, documentation and review | `configs/sft_cosmos3_nano_adapters.py`, WTS converter, [adapter guide](guides/adapters.md), corrected general TOML/training guides, PR #342 | Implemented and validated; complete qualification and WTS evidence below |
 
@@ -57,6 +57,14 @@ except one removed job ID inside a generated shell comment. Dependency pins are
 unchanged. Affected checks pass again: **193 focused tests** (63.84 s) and
 **205 adapter-disabled tests, two optional skips** (23.85 s). GPU records retain
 the actual installed revision and digest; they are not relabeled as this merge.
+
+The merged-main wheel `faa61c8ec897002f635e2a92d5c8f75ec6a67687` also passes
+all **193 installed CPU tests**, with all 1,838 packaged files byte-matched to
+source and installation. Its wheel SHA-256 is
+`2213c96f129cb2ed19d9c4b35d27ec2e96a794279a8593e1bdf49e71beb37157`.
+Subsequent main `86e1ee52f276c11d6cc66dfd17da2795dfbe937b` (PR #324) was
+inspected: generation skills, CI and documentation only, with no overlapping
+files, framework source or dependency changes.
 
 ## Correctness and numerical evidence
 
