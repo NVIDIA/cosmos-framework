@@ -106,11 +106,17 @@ The bundled directory has the layout of the full download. Six clips split 4 / 0
 bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh setup
 ```
 
-Four stages: the host check (CUDA 13 driver, `git`, `ffmpeg`, `g++`, uv), the SFT environment from
+Four stages: the host check (CUDA 13 driver, `git`, `ffmpeg`, `g++`, uv; run as root it installs the missing tools
+with apt-get itself, otherwise it prints the apt-get command and stops), the SFT environment from
 `docs/posttrain/guides/sft.md` section 2, apex (the recipe's optimizer, compiled from source unless already
 installed; the long stage, about 10 minutes), and the evaluation environment (plain Transformers). Expected last
 lines: `SFT environment: 2.11.0+cu130 5.8.1 apex ok` and `evaluation environment: 2.10.0+cu130 4.57.6`. The
-compiler's output is in the logs folder as apex-build.log.
+compiler's output is in the logs folder as apex-build.log (apex-build-smoke.log with `--smoke`).
+
+Agents: this is one command that runs for about 12 minutes. Run it as one shell call with a long timeout, or start it
+detached the way step 6 shows for `train` (`nohup bash .agents/skills/cosmos3-qwen3-vl-robovqa-sft/scripts/run.sh setup
+> setup.out 2>&1 &`) and wait for its last lines before the next step. If your shell tool stops it early, run the same
+command again: the finished environments and the apex build are kept, so the re-run continues from where it stopped.
 
 ### 2. download — model and data
 
@@ -190,7 +196,8 @@ weights were not loaded. With `--smoke` the score is only a check that the expor
 
 Every stage's full output is in the artifacts directory's `logs` folder, named after the stage (`setup-sft-env`,
 `apex-build`, `data-split`, `data-frames`, `data-verify`, `preflight-rows`, `before`, `train`, `export`, `after`, …;
-`-smoke` suffix for the smoke variant). A run is correct when:
+`-smoke` suffix for the smoke variant; a re-run of a stage keeps the previous attempt's log as `<name>.log.prev`). A run
+is correct when:
 
 | Step | Correct when |
 | --- | --- |
@@ -212,6 +219,10 @@ Every stage's full output is in the artifacts directory's `logs` folder, named a
 
 ## Things not obvious from the docs
 
+- **`could not read the CUDA version from the nvidia-smi banner`**: the host check reads the banner's `CUDA Version:`
+  label (drivers up to R595) or `CUDA UMD Version:` (R615 and later, where the old label is deprecated). Another label
+  is a format this skill has not seen: check that `nvidia-smi -q | grep -i 'cuda.*version'` reports 13 or newer, then
+  open an issue with the banner line.
 - **`libnppicc.so.13: cannot open shared object file`**: TorchCodec needs NVIDIA NPP; `setup` installs it and every
   step that decodes video points `LD_LIBRARY_PATH` at it. Do not clear `LD_LIBRARY_PATH`.
 - **`ImportError: libc10.so` importing `amp_C`**: import `torch` first; apex's extensions link against torch.
