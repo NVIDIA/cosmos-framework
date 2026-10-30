@@ -501,7 +501,8 @@ The commonly tuned knobs:
     1. `max_num_tokens_after_packing` — VFM token-packing target. `-1` disables the cap. VFM only; VLM uses `data_setting.max_tokens` (tail override).
     1. `joint_attn_implementation` — VFM attention layout: `"two_way"` / `"three_way"` (NATTEN) / `"flex"`.
     1. `attn_implementation` — VLM attention impl: `"cosmos"` / `"flash_attention_2"` / `"sdpa"` / `"eager"`. VLM only.
-    1. `lora_enabled`, `lora_rank`, `lora_alpha`, `lora_target_modules` — LoRA adapter knobs for the generation pathway. Used by SUPER-tier recipes; NANO-tier leaves `lora_enabled=false`. VFM only.
+    1. `lora_enabled`, `lora_rank`, `lora_alpha`, `lora_target_modules` — LoRA adapter knobs for native VFM and reasoner/VLM policies. Generation defaults target MoE-gen projections; VLM recipes must choose their own linear-module names or dotted suffixes, such as `q_proj,v_proj`.
+    1. `lora_dropout`, `lora_bias`, `lora_use_rslora`, `lora_modules_to_save`, `lora_precision` — Additional native VLM TOML settings. rsLoRA uses `alpha / sqrt(rank)` scaling; ordinary LoRA uses `alpha / rank`. These fields are skipped for VFM. The separate [posttrain SFT adapter workflow](posttrain/guides/adapters.md) uses `rl.adapters` for independent component settings, DoRA, PiSSA and portable artifacts.
 1. `[model.ema]`
     1. `enabled`, `rate`, `iteration_shift` — Exponential moving average of generation-pathway weights. Full fine-tunes typically enable it; LoRA recipes leave it off.
 1. `[model.parallelism]`

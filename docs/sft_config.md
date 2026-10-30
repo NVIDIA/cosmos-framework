@@ -89,11 +89,21 @@ Top-level model knobs. Lands at `model.config.*` on VFM and on VLM; sub-tree pat
 | `max_num_tokens_after_packing` | `13312`                                                         | Token-packing target: max tokens after sequence packing. `-1` disables the cap. **VFM only** — VLM uses `data_setting.max_tokens` (tail override).                                                                                               |
 | `joint_attn_implementation`    | `"two_way"`                                                     | VFM attention layout: `"two_way"` (U/G blocks with cross-attention), `"three_way"` (adds sparsity-aware third block — NATTEN), or `"flex"` (legacy). **VFM only.**                                                                               |
 | `attn_implementation`          | `"cosmos"`                                                      | VLM HF attention impl: `"cosmos"` (NATTEN/Blackwell-FMHA wrapper), `"flash_attention_2"`, `"sdpa"`, or `"eager"`. **VLM only.**                                                                                                                  |
-| `lora_enabled`                 | `false`                                                         | Inject LoRA adapters into the generation pathway BEFORE FSDP wraps the network. Pair with `optimizer.keys_to_select=["lora_"]` and `checkpoint.keys_to_skip_loading=[…, "lora_"]`. Used by SUPER-tier recipes; NANO leaves it off. **VFM only.** |
+| `lora_enabled`                 | `false`                                                         | Inject LoRA before FSDP registration in native VFM or reasoner/VLM policies. Generation defaults target MoE-gen projections; VLM recipes must select their own linear modules, for example `q_proj,v_proj`. |
 | `lora_rank`                    | `16`                                                            | LoRA rank `r`. Adapter shape is (rank × hidden_dim) per target module. Typical: 4 / 8 / 16 / 32.                                                                                                                                                 |
-| `lora_alpha`                   | `32`                                                            | LoRA scaling factor. Effective magnitude is `alpha / rank`; rank=16 alpha=32 → 2× scale.                                                                                                                                                         |
-| `lora_target_modules`          | `"q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen"` | Comma-separated substrings of param names that receive an adapter. Default targets the four MoE-gen projection matrices.                                                                                                                         |
+| `lora_alpha`                   | `32`                                                            | Effective scaling is `alpha / rank`, or `alpha / sqrt(rank)` when the native VLM policy enables `lora_use_rslora`. |
+| `lora_target_modules`          | `"q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen"` | Comma-separated exact leaf module names or dotted path suffixes. Default targets the four MoE-gen projections; select architecture-appropriate VLM targets explicitly. |
+| `lora_dropout`                 | `0.0`                                                           | Adapter dropout in `[0, 1)`. **VLM-only TOML field.** |
+| `lora_bias`                    | `"none"`                                                        | Train no biases, all biases, or target-module biases: `"none"`, `"all"`, `"lora_only"`. **VLM-only TOML field.** |
+| `lora_use_rslora`              | `false`                                                         | Use rank-stabilized `alpha / sqrt(rank)` scaling. **VLM-only TOML field.** |
+| `lora_modules_to_save`         | `""`                                                            | Comma-separated module-name suffixes to train and save alongside adapters. **VLM-only TOML field.** |
+| `lora_precision`               | unset                                                           | Adapter storage dtype: `"float32"`, `"float16"`, or `"bfloat16"`; omit to inherit the base layer dtype. **VLM-only TOML field.** |
 | `precision`                    | `"bfloat16"`                                                    | Compute dtype for forward/backward (`MixedPrecisionPolicy.param_dtype`). `"bfloat16"` is standard for Hopper/Blackwell. (Was `[model.parallelism].precision` before the `ParallelismConfig` split.)                                              |
+
+The native VLM policy owns LoRA initialization and trainability. For independent
+component settings, DoRA, PiSSA and portable adapter artifacts, use the separate
+[posttrain SFT adapter workflow](posttrain/guides/adapters.md), configured through
+`rl.adapters`. Those method/component settings are not TOML `model.lora_*` fields.
 
 ### `[model.ema]`
 
@@ -291,7 +301,9 @@ The same TOML key lands at different Hydra paths depending on `[job].task`:
 | `model.backbone.*`                                                                       | *(skipped — VLM-only)*                    | `model.config.policy.backbone.*`          |
 | `model.ema.*`                                                                            | `model.config.ema.*`                      | `model.config.ema.*`                      |
 | `model.tokenizer.*`                                                                      | `model.config.tokenizer.*`                | *(skipped — VFM-only)*                    |
-| `model.{max_num_tokens_after_packing, joint_attn_implementation, lora_*}`                | passes through                            | *(skipped — VFM-only)*                    |
+| `model.{max_num_tokens_after_packing, joint_attn_implementation}`                         | passes through                            | *(skipped — VFM-only)*                    |
+| `model.lora_{enabled,rank,alpha,target_modules}`                                         | `model.config.lora_<field>`               | `model.config.policy.lora_<field>`        |
+| `model.lora_{dropout,bias,use_rslora,modules_to_save,precision}`                           | *(skipped — VLM-only)*                    | `model.config.policy.lora_<field>`        |
 | `dataloader_train.max_samples_per_batch`                                                 | passes through                            | `dataloader_train.max_batch_size`         |
 | `dataloader_train.max_sequence_length`                                                   | passes through                            | `dataloader_train.max_tokens`             |
 | `dataloader_train.seed`                                                                  | passes through                            | *(skipped — VLM has no seed kwarg)*       |
