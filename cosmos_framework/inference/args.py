@@ -2328,6 +2328,21 @@ class OmniSetupArgs(SetupArgs):
         return self
 
 
+def _is_sf_dmd_transfer_config(config: dict[str, Any]) -> bool:
+    """Whether an exported ``model.config`` is the SF-DMD Transfer (Sim-Transfer) student."""
+    replay_policy = config.get("teacher_forcing_replay_policy")
+    if not isinstance(replay_policy, dict):
+        return False
+    return (
+        config.get("fixed_step_sampler_config") is not None
+        and config.get("video_temporal_causal") is True
+        and config.get("teacher_forcing_frames_per_chunk") == 1
+        and replay_policy.get("control_visibility") == "causal"
+        and replay_policy.get("controls_read_strict_past_clean_rgb") is True
+        and replay_policy.get("clean_pass_causality") == "frame"
+    )
+
+
 class OmniSetupOverrides(SetupOverrides):
     variant: Suppress[Literal["omni"]] = "omni"
     """Discriminator."""
@@ -2424,19 +2439,7 @@ class OmniSetupOverrides(SetupOverrides):
     def _is_sf_dmd_transfer_hf_checkpoint(self) -> bool:
         """Recognize the student inference contract without a private experiment name."""
         config = self._hf_checkpoint_model_config()
-        if config is None:
-            return False
-        replay_policy = config.get("teacher_forcing_replay_policy")
-        if not isinstance(replay_policy, dict):
-            return False
-        return (
-            config.get("fixed_step_sampler_config") is not None
-            and config.get("video_temporal_causal") is True
-            and config.get("teacher_forcing_frames_per_chunk") == 1
-            and replay_policy.get("control_visibility") == "causal"
-            and replay_policy.get("controls_read_strict_past_clean_rgb") is True
-            and replay_policy.get("clean_pass_causality") == "frame"
-        )
+        return config is not None and _is_sf_dmd_transfer_config(config)
 
     def _apply_causal_multiview_setup_contract(self, world_size: int) -> None:
         """Pin the eager rolling runtime of a causal multiview checkpoint (Cosmos3-Nano-Sim-Auto).
@@ -2549,6 +2552,42 @@ class OmniSetupOverrides(SetupOverrides):
             log.warning("CFG parallelism takes precedence over batched CFG; disabling batched CFG.")
             self.use_batched_cfg = False
 
+    def _warn_degrading_transfer_history_window(self) -> None:
+        """Warn about Sim-Transfer history windows that are known to degrade the output.
+
+        The causal Transfer window counts the frame being generated, so it exposes
+        ``kv_cache_inference_size - attention_sink_size - 1`` earlier non-sink frames. With none, the
+        output can wash out and lose fine detail. A finite window without an attention sink can let
+        brightness drift once the clip outgrows the window. Unset flags resolve to the checkpoint's
+        exported values; with neither flag set the checkpoint's own window stands and nothing is read. A sink
+        that is not smaller than the window is left to the model's own check.
+        """
+        if self.kv_cache_inference_size is None and self.attention_sink_size is None:
+            return
+        config = self._hf_checkpoint_model_config()
+        if config is None or not _is_sf_dmd_transfer_config(config):
+            return
+        window = self.kv_cache_inference_size
+        if window is None:
+            window = config.get("kv_cache_inference_size")
+        sink = self.attention_sink_size
+        if sink is None:
+            sink = config.get("attention_sink_size") or 0
+        if not window or sink >= window:
+            return
+        if window - sink - 1 < 1:
+            log.warning(
+                f"kv_cache_inference_size={window} with attention_sink_size={sink} leaves no earlier non-sink "
+                "frames in the causal history window (the window includes the frame being generated); the "
+                "output can wash out. Set kv_cache_inference_size to 0 for full history, or use a window such as 30 "
+                "with a sink of 3."
+            )
+        elif sink == 0:
+            log.warning(
+                f"kv_cache_inference_size={window} has no attention sink; once the clip outgrows the window, "
+                "brightness can drift. Set attention_sink_size to 1 or more, as in 30 with a sink of 3."
+            )
+
     @override
     def build_setup(
         self, world_size: int | None = None, local_world_size: int | None = None, device_memory_bytes: int | None = None
@@ -2567,6 +2606,7 @@ class OmniSetupOverrides(SetupOverrides):
             resolved_value = "null" if field == "kv_cache_inference_size" and value == 0 else str(value)
             self.experiment_overrides = [item for item in self.experiment_overrides if not item.startswith(key)]
             self.experiment_overrides.append(key + resolved_value)
+        self._warn_degrading_transfer_history_window()
         self._build_parallelism(
             world_size=world_size, local_world_size=local_world_size, device_memory_bytes=device_memory_bytes
         )
