@@ -910,9 +910,7 @@ def output_lock(out: str, source: str | None = None, wait_seconds: float | None 
     refused on the marker under the lock; a holder still there after the bound is refused by name, the bound stated. Yields the
     lock path."""
     lock_path = out + LOCK_SUFFIX
-    wait = (
-        LOCK_WAIT_SECONDS if wait_seconds is None else (float(wait_seconds) or 0.0)
-    )  # -0.0 renders as 0
+    wait = LOCK_WAIT_SECONDS if wait_seconds is None else (float(wait_seconds) or 0.0)  # -0.0 renders as 0
     if not (math.isfinite(wait) and wait >= 0):  # inf would wait forever, nan would silently mean 0
         raise ValueError(f"wait_seconds must be a finite number >= 0, got {wait_seconds!r}")
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)

@@ -1410,9 +1410,7 @@ def test_default_preflight_refuses_a_named_template_directory_with_entries_that_
     assert len(calls) == 1 and not os.path.exists(fresh) and not os.path.exists(fresh + ".tmp")
     if case == "jinja_named_subdirectory":
         doc = hf_overlay.unified_template_directory_conflict.__doc__ or ""
-        assert "*.jinja" in doc and "IsADirectoryError" in doc, (
-            "the loader clause for a sub-directory named *.jinja"
-        )
+        assert "*.jinja" in doc and "IsADirectoryError" in doc, "the loader clause for a sub-directory named *.jinja"
     # regular files only: the default build accepts and mirrors the directory (today's behaviour kept)
     if case == "dangling_symlink":
         (directory / entry).unlink()
@@ -1605,9 +1603,7 @@ def test_preflight_refuses_a_json_sidecar_the_loaders_reject_although_it_parses(
     fresh = str(tmp_path / "fresh")
     assert mat.main([*args[:4], "--out", fresh, *args[6:]]) == 1 and reason in capsys.readouterr().err
     assert len(calls) == 1 and not os.path.exists(fresh) and not os.path.exists(fresh + ".tmp")
-    if (
-        case == "generation_config_array"
-    ):  # the rule is "a JSON object", not "non-empty": {} loads and builds
+    if case == "generation_config_array":  # the rule is "a JSON object", not "non-empty": {} loads and builds
         (base / name).write_text("{}")
         assert mat.main([*args[:4], "--out", fresh, *args[6:]]) == 0 and len(calls) == 2
 
@@ -2225,9 +2221,7 @@ def test_force_after_a_death_between_the_swap_renames_restores_the_old_export_be
         assert f"FATAL: REFUSED: {out}.tmp is a complete marked export (identity " in err, err
         assert "--force does not discard the only complete tree" in err and "Traceback" not in err and len(calls) == 2
         assert _tree_bytes(out + ".tmp") == staged and not os.path.exists(out), "nothing touched"
-        (ckpt / "model.pt").write_bytes(
-            b"\0" * 10
-        )  # a request of its identity WITHOUT --force publishes it
+        (ckpt / "model.pt").write_bytes(b"\0" * 10)  # a request of its identity WITHOUT --force publishes it
         assert mat.main(args) == 0 and len(calls) == 2
         assert _marker(out)["identity"]["source_sha256"] == SHA_ZERO10 and _marker(out)["reused_staging"] is True
         assert not os.path.exists(out + ".tmp") and not os.path.exists(out + ".previous")
@@ -2586,9 +2580,7 @@ def test_a_failed_recovery_check_leaves_the_inherited_sole_marked_copy_as_found(
         ), err
         assert len(calls) == 1, "the overlay was not run while the copy is the sole complete tree"
     # the cause gone (the config case: no fault to remove, the repair is the remedy): the unforced retry publishes the copy
-    assert mat.main(args) == 0 and len(calls) == 1, (
-        "published without an overlay call (on the parent: rebuilt or lost)"
-    )
+    assert mat.main(args) == 0 and len(calls) == 1, "published without an overlay call (on the parent: rebuilt or lost)"
     marker = _marker(out)
     assert marker["reused_staging"] is True and marker["identity"]["source_sha256"] == SHA_ZERO10
     published = _tree_bytes(out)
@@ -2896,9 +2888,7 @@ def test_the_lock_wait_is_bounded_and_the_refusal_names_the_bound(
             pass
         assert mat.main([*args, "--lock-wait-seconds", "-0.0"]) == 1, "a held lock with a -0.0 bound: refused at once"
         err = capsys.readouterr().err
-        assert "not released within 0 s (--lock-wait-seconds)" in err and "-0 s" not in err, (
-            err
-        )  # No "-0 s"
+        assert "not released within 0 s (--lock-wait-seconds)" in err and "-0 s" not in err, err  # No "-0 s"
     assert mat.main(args) == 0 and "idempotent skip" in capsys.readouterr().out, (
         "released: the same request skips with 0"
     )
