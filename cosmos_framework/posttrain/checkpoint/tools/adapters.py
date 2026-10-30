@@ -41,7 +41,7 @@ def merged_export_metadata(adapter: str, identity: dict) -> dict:
     }
 
 
-def validate_export_targets(base: str, identity: dict) -> None:
+def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     """Re-resolve the portable map against the stock export architecture on meta.
 
     Tensor names and shapes alone cannot prove a module's type, component,
@@ -87,6 +87,7 @@ def validate_export_targets(base: str, identity: dict) -> None:
             "adapter resolved-target manifest disagrees with the base architecture "
             "(module types/shapes, scaling, ownership or trainable counts); re-export from its training checkpoint"
         )
+    return frozenset(net.state_dict())
 
 
 def export_merged_adapter(adapter: str, base: str, out: str) -> str:
@@ -118,21 +119,34 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
         raise ValueError("wrong base identity for adapter merge; stage the exact original weight snapshot")
     if snapshot_identity(base, weights=False) != identity["processor"]:
         raise ValueError("merged export requires the recorded processor/tokenizer/template beside the base")
-    validate_export_targets(base, identity)
+    architecture_keys = validate_export_targets(base, identity)
     root = Path(base)
     index = root / "model.safetensors.index.json"
     shards = (
         sorted(set(json.loads(index.read_text())["weight_map"].values())) if index.is_file() else ["model.safetensors"]
     )
     weights = {}
+    excluded = {}
     for shard in shards:
         for name, tensor in load_file(str(root / shard), device="cpu").items():
-            if name in weights:
+            if name in weights or name in excluded:
                 raise ValueError(f"duplicate base tensor {name!r}")
+            if name not in architecture_keys:
+                # Qwen3.5's public source also carries a multi-token prediction
+                # head. Transformers' Qwen3_5ForConditionalGeneration declares
+                # ^mtp.* as ignored on load; HFModel never executes or trains it.
+                # Bound this exception to that family and exact namespace. Other
+                # unexpected weights still fail instead of disappearing silently.
+                if identity["architecture"] == "qwen3_5" and name.startswith("mtp."):
+                    excluded[name] = {"shape": list(tensor.shape), "reason": "unused_source_mtp_head"}
+                    continue
+                raise ValueError(f"base tensor {name!r} is absent from the bound export architecture")
             # Native materialization converts all floating parameters before loading.
             # Apply that same conversion before merging, even when source shards are
             # FP32 or mix FP32 normalization weights with BF16 projections.
             weights[name] = tensor.to(getattr(torch, base_dtype)).float() if tensor.is_floating_point() else tensor
+    if excluded:
+        metadata["excluded_base_tensors"] = excluded
     for row in identity["resolved"]["targets"]:
         name = row["name"] + ".weight"
         if name not in weights or list(weights[name].shape) != row["shape"]:
