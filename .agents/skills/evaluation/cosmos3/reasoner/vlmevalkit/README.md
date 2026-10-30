@@ -3,16 +3,28 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# TAR and VANTAGE Benchmarks for Cosmos3 Model
+# Cosmos3 evaluation: MVBench launchable and native benchmark recipes
 
-This repository is an **NVIDIA-customized [VLMEvalKit](https://github.com/open-compass/VLMEvalKit)** that
-releases the NVIDIA Metropolis "smart infra" benchmarks and makes the cosmos-reasoner scores on them
-**publicly reproducible**. The reproduction kit lives in [`cosmos_eval/`](cosmos_eval/); the stock
-VLMEvalKit inference + scoring engine it drives is the rest of the tree (upstream toolkit docs:
-[`README-vlmevalkit.md`](README-vlmevalkit.md)).
+This directory is an **NVIDIA-customized [VLMEvalKit](https://github.com/open-compass/VLMEvalKit)**
+maintained in Cosmos Framework. It contains reference settings for NVIDIA
+Metropolis "smart infra" evaluation; [`cosmos_eval/`](cosmos_eval/) composes the
+native inference and scoring engine. Toolkit docs live in
+[`README-vlmevalkit.md`](README-vlmevalkit.md). These settings do not make private
+datasets publicly reproducible or establish official score parity.
 
 For user-hosted endpoints and local dataset inputs, see
 [Deployment and dataset configuration](EXTERNAL_CONFIGURATION.md).
+For the Nano-only Brev notebook, use the
+[MVBench launchable](launchable/README.md): 20 tasks, 4,000 public annotated
+multiple-choice questions, pinned public downloads, native inference, and local
+exact-match scoring without an API judge. Its default smoke is five Egocentric
+Navigation questions, not a full score; full evaluation is explicit opt-in.
+The approved dataset revision requires manual authorized acquisition of 320 NTU
+RGB+D videos and restricts video use to academic research. Public access does
+not establish commercial rights, redistribution permission, or published-score
+parity. Data and state stay outside the checkout. This is not a customer-data
+evaluation-agent implementation. Existing native recipes below are independent
+of this launchable and remain unchanged.
 
 The kit ships, for each benchmark, reference `run.py --config` settings —
 split into a shared dataset layer (`cosmos_eval/data/`) and a per-family model layer
