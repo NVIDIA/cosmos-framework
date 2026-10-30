@@ -11,6 +11,13 @@ merger and vision selection; its qualification matrix is separate from full-para
 Ray execution, sequence packing and MTP training are not supported.
 There is no rollout engine, reference model or reward function.
 
+Physical-action adapter SFT also uses this entry point with `rl.task="flow_bc"`.
+The [π0.5 and Alpamayo recipes](flow-adapters.md) supply model-owned action packers
+and differentiable forwards. They use the Transformers 4.57.6 robotics runtime;
+the conversational SFT runtime below is a separate dependency profile. Check the
+[family evidence table](../adapter-family-progress.md) before choosing a model or
+distributed mode: a component binding alone is not GPU qualification.
+
 SFT opts into Transformers 5.8.1; existing RL/GR00T defaults stay on 4.57.6. The SFT builder
 supports Qwen text models, dense Qwen3.5/3.8 multimodal models and the Qwen3-VL / Qwen3-VL-MoE
 families (all three ship `Qwen3VLProcessor`). A "seat" is the model construction path the SFT

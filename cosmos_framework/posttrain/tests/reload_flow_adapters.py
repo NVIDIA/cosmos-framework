@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 
-from cosmos_framework.posttrain.checkpoint.adapters import read_adapter_artifact
+from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration, read_adapter_artifact
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
@@ -23,21 +23,34 @@ def main():
     torch.set_float32_matmul_precision("highest")
     root = Path(args.run)
     identity, _ = read_adapter_artifact(str(root / "portable"))
-    if identity["architecture"] != "pi05":
-        raise ValueError("flow reload qualification currently binds pi05")
-    from cosmos_framework.posttrain.model.pi05.adapter_export import _configuration, load_merged
-    from cosmos_framework.posttrain.model.pi05.processing import Pi05ReplayInputs
-    from cosmos_framework.posttrain.model.pi05.sft import Pi05SFTModelConfig, build_pi05_sft_policy
-
-    cfg = _configuration(identity)
+    cfg = adapter_configuration(identity)
     cfg.warm_start = str(root / "portable")
-    model_config = Pi05SFTModelConfig(
-        str(Path(args.processor) / "tokenizer.model"), str(Path(args.processor) / "norm_stats.json"), "none"
-    )
-    policy = build_pi05_sft_policy(args.base, model_config, adapters=cfg, adapter_media_identity=identity["media"])
+    safe_types = []
+    if identity["architecture"] == "pi05":
+        from cosmos_framework.posttrain.model.pi05.adapter_export import load_merged
+        from cosmos_framework.posttrain.model.pi05.processing import Pi05ReplayInputs
+        from cosmos_framework.posttrain.model.pi05.sft import Pi05SFTModelConfig, build_pi05_sft_policy
+
+        safe_types = [Pi05ReplayInputs]
+        model_config = Pi05SFTModelConfig(
+            str(Path(args.processor) / "tokenizer.model"), str(Path(args.processor) / "norm_stats.json"), "none"
+        )
+        policy = build_pi05_sft_policy(args.base, model_config, adapters=cfg, adapter_media_identity=identity["media"])
+    elif identity["architecture"] == "alpamayo_r1":
+        from cosmos_framework.posttrain.model.alpamayo.adapter_export import load_merged, model_configuration
+        from cosmos_framework.posttrain.model.alpamayo.policy import build_policy
+
+        policy = build_policy(
+            args.base,
+            model_configuration(identity, args.processor),
+            adapters=cfg,
+            adapter_media_identity=identity["media"],
+        )
+    else:
+        raise ValueError(f"no flow reload qualification binding for {identity['architecture']}")
     batches, references = [], []
     for path in sorted(root.glob("probes-rank*.pt")):
-        with torch.serialization.safe_globals([Pi05ReplayInputs]):
+        with torch.serialization.safe_globals(safe_types):
             record = torch.load(path, map_location="cpu", weights_only=True)
         if record["identity"] != identity:
             raise ValueError("flow probe identity differs from its portable adapter")
@@ -69,7 +82,7 @@ def main():
         "mode": "merged" if args.merged else "portable",
         "maximum_absolute_output_error": max(x.max().item() for x in errors),
         "mean_absolute_output_error": torch.cat(errors).mean().item(),
-        "reference_precision": "float32" if args.merged else "model_defined",
+        "reference_precision": "float32" if args.merged else identity["base_storage_dtype"],
         "status": "measured_awaiting_gate",
     }
     report = root / ("merged-reload.json" if args.merged else "portable-reload.json")

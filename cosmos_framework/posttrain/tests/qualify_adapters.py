@@ -188,12 +188,14 @@ def main():
     parser.add_argument("--build-record", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--method", choices=["lora", "rslora", "dora", "pissa", "mixed"], required=True)
-    parser.add_argument("--activation-checkpointing", choices=["none", "full"], default="full")
-    parser.add_argument("--component", choices=["all", "language", "projector", "vision"], default="all")
+    parser.add_argument("--activation-checkpointing", choices=["none", "full", "vision"], default="full")
+    parser.add_argument("--component", choices=["all", "language", "projector", "vision", "action"], default="all")
     parser.add_argument("--override", action="append", default=[], help="existing recipe key=value override")
     parser.add_argument("--recipe", default="cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py")
     parser.add_argument("--backend", choices=["i4", "hf"], default="i4")
     args = parser.parse_args()
+    if args.backend == "hf" and args.activation_checkpointing == "vision":
+        parser.error("HF qualification supports only activation checkpointing none/full")
     if args.method == "mixed" and args.component != "all":
         parser.error("the mixed-method qualification requires --component=all")
     evidence = attest(args.wheel, args.build_record)

@@ -19,6 +19,7 @@ import torch
 from safetensors.torch import save_file
 
 from cosmos_framework.posttrain.checkpoint.adapters import (
+    adapter_configuration,
     load_adapter_artifact,
     make_adapter_identity,
     prepare_merged_state,
@@ -26,7 +27,6 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     read_adapter_artifact,
 )
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
-from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig, AdapterExtraModuleConfig
 from cosmos_framework.posttrain.model.adapters import install_adapters, resolve_targets
 from cosmos_framework.posttrain.model.pi05.config import Pi05ModelConfig
 from cosmos_framework.posttrain.model.pi05.modeling import Pi05Model
@@ -44,22 +44,7 @@ MERGED_FORMAT = "cosmos-pi05-merged-fp32-v1"
 MARKER = "merged_model.json"
 
 
-def _configuration(identity):
-    return AdapterConfig(
-        components=[
-            AdapterComponentConfig(component=r["component"], targets=[r["name"]], **r["settings"])
-            for r in identity["resolved"]["targets"]
-        ],
-        extra_modules=[
-            AdapterExtraModuleConfig(
-                component=r["component"],
-                targets=[r["name"].rsplit(".", 1)[0]],
-                lr_multiplier=r["lr_multiplier"],
-                weight_decay=r["weight_decay"],
-            )
-            for r in identity["resolved"]["extra_parameters"]
-        ],
-    )
+_configuration = adapter_configuration  # private compatibility alias for existing qualification fixtures
 
 
 def export_merged(adapter: str, base: str, out: str, *, processor: str | None) -> str:

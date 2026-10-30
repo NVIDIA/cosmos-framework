@@ -17,17 +17,17 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | Shared LoRA/rsLoRA/DoRA/PiSSA math | `model/adapters.py::PosttrainAdapterLinear` | Existing implementation reused; no new adapter math |
 | Architecture-owned component/layer boundaries | `model/adapter_families.py`, `resolve_targets` | Implemented; six actual HF text architectures pass small CPU update/reload/merge tests |
 | Independent settings, aliases, optimizer ownership | Existing resolver / `assert_trainability` | Existing native tests pass; new family selector failures tested |
-| HF loaded-base → initialization → FSDP → optimizer lifecycle | `HFModel.setup`, `build_hf_model`, SFT `build_trainer` | Implemented; CPU materialization, tied embeddings and activation-checkpointed updates pass; multi-GPU qualification pending |
+| HF loaded-base → initialization → FSDP → optimizer lifecycle | `HFModel.setup`, `build_hf_model`, SFT `build_trainer` | Implemented; CPU materialization and tied embeddings pass; Qwen3-0.6B passed all four methods on one/two GPUs with AC none/full |
 | Text portable reload and merged model export | `checkpoint/adapters.py`, shared HF materializer | Implemented; real tiny HF serialization, strict reload and stock merged reload pass |
 | Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; pretrained GPU qualification pending |
 | Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook and family binding | Implemented but awaiting actual grouped-mm training, resume and export qualification; fused expert tensors remain unsupported targets |
 | GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Not implemented yet. Category-specific `[embodiment,in,out]` projectors are not ordinary Linear. Official loader needs gated Cosmos-Reason2 processor/backbone metadata; unauthenticated access returned HTTP 401 |
 | π0.5 | `model/pi05/sft.py`, `Pi05Model.training_condition`, `model/pi05/adapter_export.py`, `tests/test_pi05_adapters.py` | Implemented, awaiting installed real-model GPU qualification. All four methods pass actual small SigLIP/Gemma prefix/action updates, AC, portable reload and FP32 merged-file reload. Final-prefix query/output/MLP targets are refused because only its K/V reaches the action loss. Existing PPO frozen-prefix behavior is retained |
-| Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Not implemented yet. Public AlpaGym `972d160` uses Cosmos-RL and does not contain the `alpagym_runtime.posttrain` API referenced here. A runnable Cosmos training binding and driving data are still required |
+| Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Implemented in `model/alpamayo/{sft,policy,adapter_export}.py` with public pinned R1 source; no AlpaGym runtime needed. All four methods pass small real R1/Qwen3-VL flow updates, vision AC, portable/FP32 merged reload and native stochastic continuation. Real checkpoint GPU qualification pending |
 | Physical-action SFT lifecycle | `config/sft.py::SFTConfig.task`, existing SFT loop and `flow_bc`, `roles/env/flow_sft.py` | Implemented. Shares trainer, checkpoint boundary, rank cursor and validation transaction; reports action-element counts separately from text tokens. Controlled continuation and validation-padding CPU tests pass |
 | Model-owned base autocast with FP32 adapters | Native `LoraInjectedLinear.adapter_output`, `PosttrainAdapterLinear` | Implemented. Eight method/base-dtype fixtures pass FP32-input autocast tests; ordinary native LoRA mathematics reused |
-| New installed revision and real training | Wheel byte attestation, Slurm qualification harness | Commit `3a9552b`, wheel SHA `fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d`, image SHA `4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a`; 223 installed CPU tests passed. Qwen3 job `37701630` completed all 16 four-method 1/2-GPU AC-none/full cases, including continuation and both reload types. Native Qwen3-VL job `37701632` is running: LoRA/rsLoRA matrices passed, DoRA/PiSSA in progress |
-| Qwen3.5 public checkpoint MTP export | `checkpoint/tools/adapters.py`, `test_adapter_qwen3_5_export.py` | Job `37701635` passed training/resume/portable reload, then failed merge on unused source MTP tensors. Explicit bounded exclusion implemented and CPU-tested; rebuilt-image rerun pending. Failure preserved |
+| New installed revision and real training | Wheel byte attestation, Slurm qualification harness | Commit `3a9552b`, wheel SHA `fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d`, image SHA `4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a`; 223 installed CPU tests passed. Qwen3 job `37701630` completed all 16 four-method 1/2-GPU AC-none/full cases, including continuation and both reload types. Native Qwen3-VL job `37701632` also completed all 16 cases, with text, real image/video and WTS fixtures, differing modalities across ranks, all target updates and unchanged frozen base |
+| Qwen3.5 public checkpoint MTP export | `checkpoint/tools/adapters.py`, `test_adapter_qwen3_5_export.py` | Job `37701635` passed training/resume/portable reload, then failed merge on unused source MTP tensors. Explicit bounded exclusion implemented and CPU-tested; 225 installed tests passed at `2f8d33f`; GPU rerun `37705883` queued. Failure preserved |
 
 The dense HF path currently binds Qwen2, Qwen3, Llama, Mistral, Gemma and Gemma2.
 The six small fixtures use actual Transformers implementations, three optimizer
@@ -64,8 +64,8 @@ in Slurm job `37701725` (Python 3.12.13, Torch 2.10.0+cu128, Transformers 4.57.6
 Image SHA: `08be53d092569beec66c1ad2611404fd068058d237f1a326685d609a98b727ec`.
 It is an environment build, not a training result. Public LIBERO demonstrations
 and π0.5 weights are staged. Public KITTI raw drives 0001 and 0005 and the R1
-processor dependency were staged by job `37701741`; driving preprocessing and
-training still need implementation/qualification. KITTI is a different camera
+processor dependency were staged by job `37701741`; driving preprocessing completed in job `37705800` with 15 training and 38 held-out
+trajectory windows; GPU training still needs qualification. KITTI is a different camera
 and driving domain from the gated PhysicalAI dataset, and will be reported as such.
 
 π0.5 qualification binds Transformers 4.57.6: Transformers 5 changes SigLIP's
@@ -81,5 +81,17 @@ CPU environment, covering existing π0.5 loading/processing, the real small
 SigLIP/Gemma model, all methods, action/vision gradients, file export and SFT
 continuation. The shared HF/native/adapter/export/data regression suite passed
 **246 tests** on Transformers 5.8.1. These counts overlap earlier suites and do not
-claim installed GPU qualification. Public LIBERO preparation job `37703302` is
-pending; the π0.5 training image must be rebuilt from the committed implementation.
+claim installed GPU qualification. The rebuilt π0.5 image at `90b3931` passed
+86 installed tests, 1 skip in job `37705762`; image SHA
+`7221dc9e6db5024f2d6dd0d3768a08cfbd451cc6e2c70409a991be1c42e38249`.
+It pins PyArrow 23.0.1 for the runtime’s NumPy 1.26.4; prior incompatible-image
+attempts are preserved. LIBERO preparation `37706132` produced 41 training and
+55 validation windows from separate complete episodes 0 and 1. This is a
+correctness subset, not the complete LIBERO benchmark.
+
+The Alpamayo/physical regression suite passed **50 tests, 1 skip** under
+Transformers 4.57.6; the shared HF/native regression passed **225 tests** under
+Transformers 5.8.1. Alpamayo tests restore native noise/time RNG, optimizer,
+scheduler and cursor for the next controlled update, and prohibit repeating
+PiSSA initialization on resume. These are CPU results; installed real-model
+training and held-out trajectory metrics remain outstanding.

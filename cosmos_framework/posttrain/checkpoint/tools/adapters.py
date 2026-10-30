@@ -20,6 +20,7 @@ from safetensors.torch import load_file
 
 from cosmos_framework.posttrain.checkpoint.adapters import (
     MANIFEST,
+    adapter_configuration,
     checkpoint_adapter_state,
     prepare_merged_state,
     read_adapter_artifact,
@@ -73,11 +74,6 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     from accelerate import init_on_device
     from transformers import AutoConfig
 
-    from cosmos_framework.posttrain.config.adapters import (
-        AdapterComponentConfig,
-        AdapterConfig,
-        AdapterExtraModuleConfig,
-    )
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
     from cosmos_framework.posttrain.model.adapters import resolve_targets
 
@@ -85,24 +81,11 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     family = adapter_family(identity["architecture"])
     if config.model_type != family.name or family.hf_auto_class is None:
         raise ValueError("merged adapter export requires the artifact's exact HF architecture binding")
-    groups = [
-        AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
-        for row in identity["resolved"]["targets"]
-    ]
-    extras = [
-        AdapterExtraModuleConfig(
-            component=row["component"],
-            targets=[row["name"].rsplit(".", 1)[0]],
-            lr_multiplier=row["lr_multiplier"],
-            weight_decay=row["weight_decay"],
-        )
-        for row in identity["resolved"]["extra_parameters"]
-    ]
     with init_on_device("meta", include_buffers=False):
         net = getattr(transformers, family.hf_auto_class).from_config(
             config, dtype=torch.float32, attn_implementation="sdpa"
         )
-    resolved = resolve_targets(net, AdapterConfig(components=groups, extra_modules=extras), family=family.name)
+    resolved = resolve_targets(net, adapter_configuration(identity), family=family.name)
     if resolved != identity["resolved"]:
         raise ValueError(
             "adapter resolved-target manifest disagrees with the base architecture "
@@ -122,6 +105,10 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    if identity["architecture"] == "alpamayo_r1":
+        from cosmos_framework.posttrain.model.alpamayo.adapter_export import export_merged
+
+        return export_merged(adapter, base, out, processor=processor)
     if identity["architecture"] == "pi05":
         from cosmos_framework.posttrain.model.pi05.adapter_export import export_merged
 

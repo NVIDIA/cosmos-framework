@@ -33,6 +33,27 @@ MANIFEST = "adapter_manifest.json"
 WEIGHTS = "adapter.safetensors"
 
 
+def adapter_configuration(identity: dict):
+    """Reconstruct exact selectors/settings from a validated portable manifest."""
+    from cosmos_framework.posttrain.config.adapters import AdapterConfig, AdapterExtraModuleConfig
+
+    return AdapterConfig(
+        components=[
+            AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
+            for row in identity["resolved"]["targets"]
+        ],
+        extra_modules=[
+            AdapterExtraModuleConfig(
+                component=row["component"],
+                targets=[row["name"].rsplit(".", 1)[0]],
+                lr_multiplier=row["lr_multiplier"],
+                weight_decay=row["weight_decay"],
+            )
+            for row in identity["resolved"]["extra_parameters"]
+        ],
+    )
+
+
 def snapshot_identity(directory: str, *, weights: bool) -> dict[str, Any]:
     """Hash actual bytes, including every weight shard; same-size substitutions fail.
 
