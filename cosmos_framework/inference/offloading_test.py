@@ -106,9 +106,12 @@ def test_fp8_mixed_precision_offload(offload_type, compiled, reasoner_policy):
     runtime = install_mixed_precision_runtime(net, config)
     reference_runtime = install_mixed_precision_runtime(reference, config)
     if compiled:
-        for layer, _ in pairs:
-            layer.forward = torch.compile(layer.forward, fullgraph=True)
-            layer.reasoner_forward = torch.compile(layer.reasoner_forward, fullgraph=True)
+        # Compare the same execution mode; compiled FP8 arithmetic can round
+        # differently from eager execution even without offloading.
+        for pair in pairs:
+            for layer in pair:
+                layer.forward = torch.compile(layer.forward, fullgraph=True)
+                layer.reasoner_forward = torch.compile(layer.reasoner_forward, fullgraph=True)
     offloader = offload_type(net, torch.device("cuda", 0))
     x = torch.randn(16, 16, device="cuda", dtype=torch.bfloat16)
     stream = torch.cuda.Stream()

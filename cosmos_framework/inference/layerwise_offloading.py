@@ -66,7 +66,9 @@ class Cosmos3LayerwiseOffload:
         original = getattr(layer, name)
 
         @torch.compiler.disable(recursive=False)
-        @wraps(original)
+        # Do not copy Dynamo metadata: older disable() versions unwrap it and
+        # would bypass weight staging, calling the CPU-resident layer directly.
+        @wraps(original, updated=())
         def forward(*args: Any, **kwargs: Any) -> Any:
             und_only = getattr(kwargs.get("memory_value"), "und_only", False)
             component = "reasoner" if name == "reasoner_forward" or und_only else "generator"
