@@ -67,6 +67,7 @@ say() { printf '\n==> %s\n' "$*"; }
 stage() {
   local label=$1 log="$ART/logs/$2$TAG.log" start
   shift 2
+  [ -f "$log" ] && mv -f "$log" "$log.prev"  # a re-run keeps the previous attempt's log next to the new one
   start=$(date +%s)
   printf '  %-58s' "$label"
   if "$@" >"$log" 2>&1; then
@@ -82,8 +83,14 @@ stage() {
 
 check_host() {
   local cuda missing=""
-  cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9]*\)\..*/\1/p' | head -1)
-  if [ "${cuda:-0}" -lt 13 ]; then
+  # The banner's label changed with the 6xx drivers: `CUDA Version: 13.0` (R595) became `CUDA UMD Version: 13.4`
+  # (R615, where the old label is deprecated). Accept both, and name the banner when neither is found.
+  cuda=$(nvidia-smi | sed -n -E 's/.*CUDA( UMD)? Version: *([0-9]+)\..*/\2/p' | head -1)
+  if [ -z "$cuda" ]; then
+    echo "could not read the CUDA version from the nvidia-smi banner: $(nvidia-smi | grep -m1 NVIDIA-SMI || true)" >&2
+    return 1
+  fi
+  if [ "$cuda" -lt 13 ]; then
     echo "the driver supports CUDA ${cuda}; this example uses CUDA 13.0 wheels" >&2
     return 1
   fi
@@ -131,7 +138,7 @@ setup() {
     "import torch, transformers, torchcodec.decoders, amp_C; print('  SFT environment:       ', torch.__version__, transformers.__version__, 'apex ok')"
   LD_LIBRARY_PATH="$EVAL_LIBS" "$EVAL_PY" -c \
     "import torch, transformers, torchcodec.decoders; print('  evaluation environment:', torch.__version__, transformers.__version__)"
-  echo "  logs: $ART/logs/setup-*.log, $ART/logs/apex-build.log"
+  echo "  logs: $ART/logs/setup-*$TAG.log, $ART/logs/apex-build$TAG.log"
 }
 
 build_apex() {
