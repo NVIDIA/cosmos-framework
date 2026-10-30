@@ -173,6 +173,12 @@ class FlowMatchingLossOutput:
     prediction: torch.Tensor | None = None  # optional controlled velocity output for qualification/evaluation
 
 
+# FSDP2 discovers differentiable outputs through pytree flattening when it
+# registers backward hooks. An opaque dataclass would hide the root loss and
+# prediction from that traversal even though ordinary single-device autograd works.
+torch.utils._pytree.register_dataclass(FlowMatchingLossOutput)
+
+
 @runtime_checkable
 class VLMPolicy(Protocol):
     """Narrow causal-VLM capability used by post-training objectives.
