@@ -116,29 +116,33 @@ def test_fp8_mixed_precision_offload(offload_type, compiled, reasoner_policy):
     x = torch.randn(16, 16, device="cuda", dtype=torch.bfloat16)
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(stream):
-        for _ in range(2):
-            offloader.activate("reasoner")
-            for layer, resident in pairs:
-                torch.testing.assert_close(layer.reasoner_forward(x), resident.reasoner_forward(x), rtol=0, atol=0)
-            offloader.activate("generator")
-            for step in range(3):
-                runtime.set_step(step, 3)
-                reference_runtime.set_step(step, 3)
+    try:
+        with torch.cuda.stream(stream):
+            for _ in range(2):
+                offloader.activate("reasoner")
                 for layer, resident in pairs:
-                    torch.testing.assert_close(layer(x, gen_only=True), resident(x, gen_only=True), rtol=0, atol=0)
-            runtime.reset()
-            reference_runtime.reset()
-            assert runtime.last_trace == ("W8A16", "W8A8", "W8A16")
+                    torch.testing.assert_close(layer.reasoner_forward(x), resident.reasoner_forward(x), rtol=0, atol=0)
+                offloader.activate("generator")
+                for step in range(3):
+                    runtime.set_step(step, 3)
+                    reference_runtime.set_step(step, 3)
+                    for layer, resident in pairs:
+                        torch.testing.assert_close(layer(x, gen_only=True), resident(x, gen_only=True), rtol=0, atol=0)
+                runtime.reset()
+                reference_runtime.reset()
+                assert runtime.last_trace == ("W8A16", "W8A8", "W8A16")
+                offloader.offload()
+                for parameter in net.parameters():
+                    assert parameter.device.type == "cpu"
+                    for part in parameter.__tensor_flatten__()[0]:
+                        assert getattr(parameter, part).device.type == "cpu"
+                        assert getattr(parameter, part).is_pinned()
+    finally:
+        stream.synchronize()
+        if isinstance(offloader, Cosmos3LayerwiseOffload):
+            offloader.close()
+        else:
             offloader.offload()
-            for parameter in net.parameters():
-                assert parameter.device.type == "cpu"
-                for part in parameter.__tensor_flatten__()[0]:
-                    assert getattr(parameter, part).device.type == "cpu"
-                    assert getattr(parameter, part).is_pinned()
-    stream.synchronize()
-    if isinstance(offloader, Cosmos3LayerwiseOffload):
-        offloader.close()
 
 
 def _net(model):

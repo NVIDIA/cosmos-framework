@@ -465,7 +465,8 @@ copying unchanged weights back. They require the prefill restrictions above,
 a combined BF16 or ModelOpt FP8 checkpoint without LoRA, and `--no-use-cuda-graphs`.
 `torch.compile` stays enabled. CPU RAM must hold both decoder pathways;
 embeddings, heads, rotary buffers and the VAE remain on GPU. Run one request
-at a time per model instance.
+at a time per model instance. Unused CUDA allocator cache is released after
+each completed request; component offloading also releases it at phase swaps.
 
 For ModelOpt FP8 checkpoints, use their local path as `--checkpoint-path`
 without `--quantization-method`. To run the first and last three denoising
