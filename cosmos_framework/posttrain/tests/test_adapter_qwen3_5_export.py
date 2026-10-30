@@ -8,7 +8,7 @@ import transformers
 from safetensors.torch import load_file, save_file
 
 from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
-from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
+from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter, validate_merged_export_metadata
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig
 from cosmos_framework.posttrain.config.model import HFModelConfig
 from cosmos_framework.posttrain.model.hf import build_hf_model
@@ -47,6 +47,17 @@ def test_export_explicitly_accounts_for_unused_source_head(tmp_path, monkeypatch
         assert captured["export_metadata"]["excluded_base_tensors"] == {
             extra: {"shape": [4, 4], "reason": "unused_source_mtp_head"}
         }
+        validate_merged_export_metadata(
+            captured["export_metadata"], str(portable), model.net._posttrain_adapter_identity
+        )
+        captured["export_metadata"]["excluded_base_tensors"]["model.malicious.weight"] = {
+            "reason": "unused_source_mtp_head",
+            "shape": [4, 4],
+        }
+        with pytest.raises(ValueError, match="unsupported source-tensor exclusion"):
+            validate_merged_export_metadata(
+                captured["export_metadata"], str(portable), model.net._posttrain_adapter_identity
+            )
     else:
         with pytest.raises(ValueError, match="absent from the bound export architecture"):
             export_merged_adapter(str(portable), str(base), str(tmp_path / "merged"))

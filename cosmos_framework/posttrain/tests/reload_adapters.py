@@ -96,16 +96,13 @@ def main():
     if args.merged:
         import transformers
 
-        from cosmos_framework.posttrain.checkpoint.tools.adapters import merged_export_metadata
+        from cosmos_framework.posttrain.checkpoint.tools.adapters import validate_merged_export_metadata
         from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
         marker = json.loads((Path(args.merged) / ".materialized").read_text())
         if marker["identity"].get("output_dtype") != "float32":
             raise ValueError("merged qualification requires FP32 export; re-export with the current adapter tool")
-        if marker["identity"].get("export_metadata") != merged_export_metadata(str(root / "portable"), identity):
-            raise ValueError(
-                "merged artifact adapter/base/processor/media identity differs; re-export with the current tool"
-            )
+        validate_merged_export_metadata(marker["identity"].get("export_metadata"), str(root / "portable"), identity)
         policy.net.float()
         expected = logits(policy, batches)
         control = verify_promoted_merge(policy, identity, batches, args.merged, reference=expected)

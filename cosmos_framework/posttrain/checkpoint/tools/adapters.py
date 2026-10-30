@@ -41,6 +41,27 @@ def merged_export_metadata(adapter: str, identity: dict) -> dict:
     }
 
 
+def validate_merged_export_metadata(record: dict, adapter: str, identity: dict) -> None:
+    """Validate the immutable adapter binding and any bounded source exclusions."""
+    expected = merged_export_metadata(adapter, identity)
+    if not isinstance(record, dict) or {k: v for k, v in record.items() if k != "excluded_base_tensors"} != expected:
+        raise ValueError(
+            "merged artifact adapter/base/processor/media identity differs; re-export with the current tool"
+        )
+    excluded = record.get("excluded_base_tensors", {})
+    if excluded and (
+        identity["architecture"] != "qwen3_5"
+        or not isinstance(excluded, dict)
+        or any(
+            not name.startswith("mtp.")
+            or row.get("reason") != "unused_source_mtp_head"
+            or not isinstance(row.get("shape"), list)
+            for name, row in excluded.items()
+        )
+    ):
+        raise ValueError("merged artifact contains an unsupported source-tensor exclusion")
+
+
 def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     """Re-resolve the portable map against the stock export architecture on meta.
 
