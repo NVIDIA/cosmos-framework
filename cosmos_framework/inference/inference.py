@@ -1595,6 +1595,20 @@ class OmniInference(Inference):
         attention_io_layout = setup_args.attention_io_layout
         compile_config = cls._get_compile_config(setup_args)
         quantization_config = cls._get_quantization_config(setup_args)
+        if setup_args.enable_cpu_offload and setup_args.enable_layerwise_offload:
+            raise ValueError("Choose either component CPU offload or layerwise offload, not both")
+        cpu_offload = setup_args.enable_cpu_offload or setup_args.enable_layerwise_offload
+        parallelism_config.inference_cpu_initialization = cpu_offload
+        if cpu_offload or setup_args.prefill_text_kv:
+            if setup_args.dp_shard_size * setup_args.cp_size * setup_args.cfgp_size != 1 or get_world_size() != 1:
+                raise ValueError("CPU offload and text K/V prefill support single-GPU inference only")
+            if setup_args.use_cuda_graphs:
+                raise ValueError("CPU offload and text K/V prefill require --no-use-cuda-graphs")
+        if cpu_offload and setup_args.quantization_method is not None:
+            raise ValueError("CPU offload supports ModelOpt FP8 checkpoints, not runtime quantization")
+        if cpu_offload and setup_args.mixed_precision_w8a16_cache != "none":
+            raise ValueError("CPU offload requires --mixed-precision-w8a16-cache none")
+
         # Only an exported checkpoint records these; the module-config path has no equivalent.
         exported_per_view_captions = False
         exported_per_view_caption_task: str | None = None
@@ -1754,6 +1768,17 @@ class OmniInference(Inference):
                 model.set_up_scheduler_and_sampler()
                 log.debug(f"Sampler overridden to: {sampler_override}")
 
+        model._prefill_text_kv = setup_args.prefill_text_kv or cpu_offload
+        if setup_args.enable_layerwise_offload:
+            from cosmos_framework.inference.layerwise_offloading import Cosmos3LayerwiseOffload
+
+            model._component_offloader = Cosmos3LayerwiseOffload(
+                model.net, torch.device("cuda", torch.cuda.current_device())
+            )
+        elif setup_args.enable_cpu_offload:
+            from cosmos_framework.inference.component_offloading import Cosmos3CPUOffload
+
+            model._component_offloader = Cosmos3CPUOffload(model.net, torch.device("cuda", torch.cuda.current_device()))
         _configure_vae_compile(model, setup_args)
         if hasattr(model, "maybe_install_ar_post_saturation_mode"):
             model.maybe_install_ar_post_saturation_mode()
@@ -2153,6 +2178,19 @@ class OmniInference(Inference):
     @torch.no_grad()
     @override
     def generate_batch(
+        self,
+        sample_args_list: Sequence[SampleArgs],
+        data_batch: dict[str, Any],
+        *,
+        save_outputs: bool = True,
+    ) -> list[SampleOutputs]:
+        outputs = self._generate_batch(sample_args_list, data_batch, save_outputs=save_outputs)
+        if self.setup_args.enable_cpu_offload or self.setup_args.enable_layerwise_offload:
+            # The generation frame has returned, releasing its temporary GPU tensors.
+            torch.cuda.empty_cache()
+        return outputs
+
+    def _generate_batch(
         self,
         sample_args_list: Sequence[SampleArgs],
         data_batch: dict[str, Any],

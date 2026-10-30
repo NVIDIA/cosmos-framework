@@ -366,7 +366,7 @@ def test_the_refusal_no_longer_covers_the_caption_chunk_path() -> None:
 
     from cosmos_framework.inference import inference
 
-    source = inspect.getsource(inference.OmniInference.generate_batch)
+    source = inspect.getsource(inference.OmniInference._generate_batch)
     assert "if self.per_view_captions and not mv_args.multiview.load_caption_from_data:" in source
 
 
