@@ -298,13 +298,22 @@ train() {
   echo "  full log: $ART/logs/train$TAG.log"
   echo
   # Only the step lines and the end marker reach the screen; the framework's full log goes to the file.
+  # Under pipefail a crash would end the script inside this pipeline, before the message below; so the
+  # pipeline's status is captured (grep also exits 1 when nothing matched) and judged by the end marker.
+  local status=0
   PYTHONPATH=. IMAGINAIRE_OUTPUT_ROOT="$RUN" LD_LIBRARY_PATH="$SFT_LIBS" \
     "$SFT_PY" -m torch.distributed.run --standalone --nproc_per_node=1 \
     -m cosmos_framework.posttrain.entrypoints.sft --config "$CONFIG" -- rl.max_steps="$STEPS" rl.save_every="$STEPS" \
     2>&1 | tee "$ART/logs/train$TAG.log" |
     grep --line-buffered -E ' step +[0-9]+/[0-9]+ |SFT DONE|Error|error:|Traceback' |
-    sed -u -E 's/^.*(step +[0-9]+\/[0-9]+ +train\/loss_avg [+-]?[0-9.]+).*timer\/e2e_step_s ([+-]?[0-9.]+).*$/  \1   \2 s/; s/^.*SFT DONE/  SFT DONE/'
-  grep -q "SFT DONE" "$ART/logs/train$TAG.log" || { echo "training did not finish; see $ART/logs/train$TAG.log" >&2; exit 1; }
+    sed -u -E 's/^.*(step +[0-9]+\/[0-9]+ +train\/loss_avg [+-]?[0-9.]+).*timer\/e2e_step_s ([+-]?[0-9.]+).*$/  \1   \2 s/; s/^.*SFT DONE/  SFT DONE/' \
+    || status=$?
+  if ! grep -q "SFT DONE" "$ART/logs/train$TAG.log"; then
+    echo >&2
+    echo "training did not finish (exit status $status); the last lines of $ART/logs/train$TAG.log:" >&2
+    tail -n 30 "$ART/logs/train$TAG.log" >&2
+    exit 1
+  fi
 }
 
 materialize() {
