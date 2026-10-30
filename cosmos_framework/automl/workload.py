@@ -283,8 +283,8 @@ def load(path: Path, workspace: Path) -> Experiment:
     if not required.issubset(manifest.execution.environment):
         raise ValueError(f"Declare recipe environment names in execution.environment: {sorted(required)}")
     # These are both host source and container destination names. Resolving a
-    # shared-storage symlink (e.g. /lustre/fsw -> /lustre/fs11) would leave the
-    # recipe's declared /lustre/fsw paths unmounted inside the container.
+    # shared-storage symlink (e.g. /shared/fs -> /shared/fs2) would leave the
+    # recipe's declared /shared/fs paths unmounted inside the container.
     manifest.execution.mounts = [(path.parent / p).absolute() for p in manifest.execution.mounts]
     if manifest.execution.kind == "slurm":
         if not manifest.execution.image or manifest.execution.slurm.gpus != manifest.workload.nproc_per_node:

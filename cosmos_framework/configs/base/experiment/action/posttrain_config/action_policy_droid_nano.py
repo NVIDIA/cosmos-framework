@@ -202,7 +202,7 @@ action_policy_droid_nano = LazyDict(
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
                             # SR boost: random crop+rescale + ColorJitter, applied CPU-side in the
-                            # DROIDLeRobotDataset image augmentor (matches i4's pipeline stage).
+                            # DROIDLeRobotDataset image augmentor (matches the upstream pipeline stage).
                             use_image_augmentation=True,
                             # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
                             # set use_filter_dict=True + filter_dict_path to enable.
@@ -214,7 +214,7 @@ action_policy_droid_nano = LazyDict(
                             max_action_dim="${model.config.max_action_dim}",
                             cfg_dropout_rate=0.1,
                             tokenizer_config="${model.config.vlm_config.tokenizer}",
-                            # Match i4 GA (droid_lerobot_8b_ga / MR #9995): format the action
+                            # Match the released recipe: format the action
                             # prompt as JSON via ActionPromptJsonFormatter instead of plain text.
                             format_prompt_as_json=True,
                         ),

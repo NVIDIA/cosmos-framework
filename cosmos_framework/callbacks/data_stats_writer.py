@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Checkpoint-coupled per-sample parquet logging for native i4 VLM training.
+"""Checkpoint-coupled per-sample parquet logging for native VLM training.
 
 Data stats live next to the checkpoints: ``<job>/checkpoints`` and ``<job>/data_stats``. The save that
 writes checkpoint ``checkpoints/iter_<N>`` first writes the rows recorded since the previous save to

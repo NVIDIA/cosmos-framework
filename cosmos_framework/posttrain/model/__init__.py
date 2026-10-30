@@ -3,14 +3,14 @@
 """model — model backends behind narrow capability protocols (DESIGN §6, §1.4).
 
 `FlowMatchingPolicy` and `VLMPolicy` (`protocol`) are the contracts; backends register builders in
-`registry`. Importing this package wires the i4-internal `cosmos3` OmniMoT adapter. Concrete causal
+`registry`. Importing this package wires the built-in `cosmos3` OmniMoT adapter. Concrete causal
 VLM families stay in their explicit submodules so importing a protocol does not eagerly import a
 model stack. The toy `FlowMatchingPolicy` used by tests is constructed directly from
 `tests/helpers/toy_model.py`, not registered as a backend.
 """
 
 from cosmos_framework.posttrain.model import (
-    cosmos3,  # noqa: F401  (registers "cosmos3"; no i4 imports at load time)
+    cosmos3,  # noqa: F401  (registers "cosmos3"; no heavy model imports at load time)
 )
 from cosmos_framework.posttrain.model.protocol import (
     EMAFlowMatchingPolicy,

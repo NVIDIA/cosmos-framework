@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Direct-resize integration regressions ported from the i4 Transfer workflow."""
+"""Direct-resize integration regressions ported from the upstream Transfer workflow."""
 
 import json
 from collections.abc import Generator, Iterator

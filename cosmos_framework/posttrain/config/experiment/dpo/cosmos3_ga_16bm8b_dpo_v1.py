@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Example posttrain DPO experiment — inherits an i4 experiment + adds the RL section.
+"""Example posttrain DPO experiment — inherits an upstream experiment + adds the RL section.
 
 This is the researcher-facing shape (DESIGN: config system, requirement #1): inherit the
-full model/data tree from an i4 experiment via `defaults`, then add only the typed `rl`
+full model/data tree from an upstream experiment via `defaults`, then add only the typed `rl`
 section. Launch + ablate via the unified loader:
 
     PYTHONPATH=. torchrun --nproc_per_node=4 -m cosmos_framework.posttrain.entrypoints.dpo -- \
@@ -29,7 +29,7 @@ from cosmos_framework.posttrain.config.rl import DPOConfig, OptimizerConfig, Pre
 cosmos3_ga_16bm8b_dpo_v1 = LazyDict(
     dict(
         defaults=[
-            "/experiment/t2w_mot_exp302_000_qwen3_vl_8b_multires",  # inherit i4 model/data (test exp)
+            "/experiment/t2w_mot_exp302_000_qwen3_vl_8b_multires",  # inherit the upstream model/data (test exp)
             "_self_",  # this file's keys override the inherited ones
         ],
         rl=DPOConfig(

@@ -314,7 +314,7 @@ both out of the request. `Cosmos3-Super-Image2Video-4Step` also declares
 `use_system_prompt` unset. The text-to-image student deploys at 1024x1024, the
 shape `cosmos3-t2i-1gpu.yaml` warms; the image-to-video student deploys at the
 default 720p x 189-frame omni shape and needs no config file. The
-[distilled 4-step notebook](generator/audiovisual/run_distilled_with_trt_llm.ipynb)
+[distilled 4-step reference](../../cosmos3-generate-media/references/distilled-trt-llm.md)
 runs both against a running server. These students cover text-to-image and
 image-to-video only; use the base checkpoints for text-to-video, video-to-video,
 and synchronized audio.

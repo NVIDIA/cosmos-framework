@@ -141,7 +141,7 @@ Registered native packers today (`data/packer/__init__.py`):
 | `model_type`                                         | packer                     | notes                                                                       |
 | ---------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------- |
 | `qwen2`, `qwen3`, `gpt2`, `llama`                    | `DecoderOnlyLLMDataPacker` | causal-LM text shaping; `llama` may trigger the BOS warning described below |
-| `qwen3_vl`, `qwen3_vl_moe`, `qwen3_5`, `qwen3_5_moe` | `Qwen3VLDataPacker`        | i4-native image/video shaping                                               |
+| `qwen3_vl`, `qwen3_vl_moe`, `qwen3_5`, `qwen3_5_moe` | `Qwen3VLDataPacker`        | native image/video shaping                                                  |
 
 ### Qwen3-VL video rows
 
@@ -177,7 +177,7 @@ EXIF-transposed RGB frames rather than the row's original handles.
 
 ### Generic HF VLM backend
 
-Use the generic HF path when a VLM has no i4-native model adapter and packer:
+Use the generic HF path when a VLM has no native model adapter and packer:
 
 ```python
 cfg.model_backend = "hf"
@@ -192,7 +192,7 @@ Face processor contract and emits both the vLLM `multi_modal_data` payload and o
 the collated media tensors instead of reducing the batch to token IDs. The legacy policy-gradient
 objective rejects a shaped input with non-empty `mm_kwargs` rather than relying on a packer class
 flag. The implementation is imported
-lazily, so selecting an i4-native model does not import or instantiate the generic HF VLM packer.
+lazily, so selecting a native model does not import or instantiate the generic HF VLM packer.
 
 Conversation images are passed directly to `AutoProcessor`; processor outputs such as
 `image_sizes` are preserved through collation and model forwarding. The verified generic contract
@@ -333,7 +333,7 @@ Remedies if you hit it: use a no-BOS tokenizer (Qwen), or feed vLLM pre-tokenize
 
 | symptom                                                                                                 | cause                                                                                                      | fix                                                                                           |
 | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `model_type='x' declares vision_config but has no native packer`                                        | an unregistered VLM was selected with the i4-native backend                                                | set `model_backend="hf"`, register a native packer, or pass an explicit packer                |
+| `model_type='x' declares vision_config but has no native packer`                                        | an unregistered VLM was selected with the native backend                                                   | set `model_backend="hf"`, register a native packer, or pass an explicit packer                |
 | `cannot classify HF model_type='x'`                                                                     | the HF config declares neither `vision_config` nor a recognized causal-LM architecture                     | use the correct model config or pass an explicit packer                                       |
 | `Unable to import DataPacker factory '…'`                                                               | configured dotted path is unavailable on the driver or worker `PYTHONPATH`                                 | install/mount the extension module identically on every node and correct the factory path     |
 | `DataPacker factory '…' must return a DataPacker`                                                       | a factory returned the wrong object type                                                                   | return a fresh `DataPacker` subclass instance from the zero-argument factory                  |

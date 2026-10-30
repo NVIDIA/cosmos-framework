@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Settings for the skill-eval CI matrix (.github/scripts/skill_eval/run_matrix.py).
+# Deliberately flat YAML: the orchestrator parses it without PyYAML, so only
+# `key: value` scalars and `key: [a, b]` lists are allowed (no nesting).
+#
+# Which skills run is NOT listed here: the orchestrator detects every `.agents/skills/<name>/`
+# the PR touches and evaluates the ones that have an `eval/eval.config` at the PR head. The
+# cosmos3-ci-smoke canary (.github/scripts/skill_eval/cosmos3-ci-smoke) runs first, but only when asked
+# for: trigger argument `with-smoke` (canary + skills) or `smoke-only` (canary alone). Optional keys:
+#   smoke: true|false                   # canary on every full run / never (beats `with-smoke`); unset = on request
+#   skills: [cosmos3-generate-media]    # explicit override: run exactly these, skip detection
+
+backends: [claude, codex, cursor, opencode]
+# Where the cell jobs run. Every cell job's runs-on = runner_labels; a cell of a backend listed in serial_backends
+# also gets serial_runner_label, which exactly one runner carries, so those cells queue there and run one at a time.
+# Switched off: the pinning existed for cursor while that backend ran Composer 2.5 (2026-10-26: 2 of 7 concurrent cursor
+# cells died with `[resource_exhausted]`). With Claude Sonnet 5.5 as the cursor model (image >= v20261102) the 11 cursor
+# cells ran four at a time on 2026-10-29 without a rejection, and since evaluator 0.3.3 a `RetriableError` exit is
+# retried by the cell itself. To pin again: `serial_backends: [cursor]` (the label `cursor-serial` is still on one runner).
+# Without the keys the orchestrator's defaults apply (they pin cursor), so the empty list is set explicitly.
+runner_labels: [self-hosted, cosmos-skill-eval, h100]
+serial_backends: []
+serial_runner_label: cursor-serial
+# Evaluator image. >= v20261102: evaluator 0.3.4 — the cursor backend's default model is Claude Sonnet 5.5
+# (`cursor/claude-sonnet-5-5-medium`); `cursor_model` below states the same value explicitly.
+# Evaluator image. >= v20261101: evaluator 0.3.3 — a Cursor CLI exit on `RetriableError: [<status>]` (the service rejecting
+# the session after its own resume attempts) is a transient model_api failure that the cell retries once after
+# COSMOS_EVAL_RETRY_BACKOFF_S (120 s) instead of consuming a three-strikes attempt.
+# Evaluator image. >= v20261031: the inference key is no longer baked — CI passes the `COSMOS_SKILL_EVAL_NVIDIA_API_KEY`
+# repository secret (the cell jobs export it as NVIDIA_API_KEY and the launcher forwards it into the container; the
+# container exits 2 without it); local runs pass it via the env file (~/cosmos-skill-eval.env) or `-e NVIDIA_API_KEY=…`.
+# >= v20261030: evaluator 0.3.1 (apply_patch shim for codex, ownership-free snapshot copy, ownership-aware
+# first_attempt, honest post-report reasons); >= v20261028: status taxonomy v2 (NO-REPORT / ERROR statuses, status_reason, first_attempt),
+# arm auto-retry on model-gateway errors, instruction handed over via file; >= v20261027: read-only docker
+# socket mounts. The orchestrator's statuses, cache rule and group anchoring assume >= v20261028.
+# `image:` and `dashboard:` are placeholders: CI takes the real values from the repository variables
+# COSMOS_SKILL_EVAL_IMAGE and COSMOS_SKILL_EVAL_DASHBOARD (exported by the workflow; a local run of run_matrix.py
+# exports them too, or edits the two keys).
+image: cosmos-skill-eval:set-COSMOS_SKILL_EVAL_IMAGE
+dashboard: https://set-COSMOS_SKILL_EVAL_DASHBOARD.invalid
+launcher: ~/cosmos-skill-eval-src/scripts/cosmos-skill-eval
+env_file: ~/cosmos-skill-eval.env       # used only if it exists on the runner
+codex_model: openai/openai/gpt-6-astra
+# Cursor cells run Claude Sonnet 5.5 through Cursor's backend (Cursor model slug `claude-sonnet-5-5-medium`, listed by
+# `cursor-agent --list-models`; also the evaluator's default since image v20261102) so the four backends exercise four
+# different model families. Handed to the evaluator container as COSMOS_EVAL_CURSOR_MODEL for cursor cells only.
+cursor_model: cursor/claude-sonnet-5-5-medium
+workdir: ~/ci-skill-eval
+# Runner health gate (see .github/scripts/skill_eval/README.md, "Runner health"): the check runs before every
+# cell; when it fails the repair runs once and the check is repeated. A cell whose launcher died on a docker
+# socket error is retried once; if the check still fails the run stops with exit 1 and the remaining cells
+# are marked "not run" in the comment.
+docker_check: docker info
+docker_repair: sudo -n chgrp docker /run/docker.sock

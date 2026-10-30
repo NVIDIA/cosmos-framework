@@ -685,7 +685,7 @@ def make_clipped_objective(
     # `needs_old_logprobs()` answer True. That matters beyond tidiness: the trainer derives "was an
     # ahead pass expected?" from (n_mini > 1, cache is not None), and BOTH must be rank-invariant --
     # config and objective identity are, mutable cache MODE is not. Deriving the expectation from
-    # mode is what let a restarted rank skip a collective its peers entered (Codex round 7).
+    # mode is what let a restarted rank skip a collective its peers entered.
     _uses_rollout_lp = bool(getattr(algo_cfg, "use_rollout_logprobs_for_loss", False))
     old_logp_cache = None if _uses_rollout_lp else OldLogprobCache()
     # The KL anchor's scorer slot exists iff the loss will consult it. `build_trainer` attaches the

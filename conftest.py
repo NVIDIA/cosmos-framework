@@ -51,7 +51,7 @@ def pytest_addoption(parser: pytest.Parser):
         "--skip-mapped-non-gpu-tests",
         action="store_true",
         default=False,
-        help="Skip tests generated from imaginaire4 unless they explicitly require a GPU.",
+        help="Skip tests generated from upstream sources unless they explicitly require a GPU.",
     )
     parser.addoption(
         "--num-gpus",
@@ -145,7 +145,7 @@ def _parse_gpus_marker(mark: pytest.Mark) -> int:
 
 @cache
 def _mapped_destinations(root_dir: Path) -> frozenset[str]:
-    """Return repository-relative files generated from imaginaire4 sources."""
+    """Return repository-relative files generated from upstream sources."""
     payload = json.loads((root_dir / ".file_mapping.json").read_text())
     files = payload.get("files", payload)
     if not isinstance(files, dict) or any(not isinstance(path, str) for path in files.values()):
@@ -189,7 +189,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if skip_mapped_non_gpu_tests and gpu_mark is None and gpus == 0:
             item_path = Path(str(item.path)).relative_to(config.rootpath).as_posix()
             if item_path in mapped_destinations:
-                item.add_marker(pytest.mark.skip(reason="mapped non-GPU test is covered by imaginaire4 CI"))
+                item.add_marker(pytest.mark.skip(reason="mapped non-GPU test is covered by upstream CI"))
 
     # Exclude skipped tests
     selected_items = []
