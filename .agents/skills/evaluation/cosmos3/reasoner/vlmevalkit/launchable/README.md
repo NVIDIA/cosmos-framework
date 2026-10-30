@@ -1,111 +1,203 @@
-# Cosmos3-Nano MVBench evaluation on Brev
+# Cosmos3-Nano · Perception Test validation MCQ on Brev
 
-Authenticated Jupyter orchestration for **public download → preparation → native inference → local scoring → results**, entirely inside the notebook after host startup. Existing native predictions can also be scored on CPU without a model endpoint, GPU, private S3, API judge, or external scoring submission. This is a benchmark launchable, **not a customer-data evaluation-agent implementation**.
+Run the public **Perception Test validation split**, from download to local top1,
+inside an authenticated notebook. The default smoke is five questions (IDs 0–4)
+from `video_8241`, stable indices 13404–13408. Full validation is opt-in: **19,140
+questions / 5,260 MCQ videos**. This is not the held-out test split. Source changes
+and an unexecuted notebook are not evidence of hardware execution or accuracy.
 
-[MVBench](https://arxiv.org/abs/2311.17005) has **20 tasks and 4,000 annotated multiple-choice questions**. The paper's [Ask-Anything repository](https://github.com/OpenGVLab/Ask-Anything/tree/main/video_chat2) supplies its original evaluation recipe. This launchable pins public [OpenGVLab/MVBench](https://huggingface.co/datasets/OpenGVLab/MVBench/tree/230a2d4fac8900333c61754641c7a13e069ac9c6) data to `230a2d4fac8900333c61754641c7a13e069ac9c6` and reuses native VLMEvalKit MVBench task definitions, temporal bounds, sampling and prompt construction, plus the native exact-match scorer. No labeled private annotation bundle is required.
+This launchable is a standalone public-data validation workflow, not a
+customer-ingestion evaluation agent. It needs no private annotation bundle,
+internal dataset service, dataset credentials, or API judge.
 
-**Licensing and full-data prerequisite:** read the pinned dataset card and individual source terms before downloading. Its video terms are academic-research-only; public access does not imply commercial-use or redistribution rights. The card mentions 320 NTU RGB+D videos, but this pinned revision's exact manual list contains **200 RGB AVI files**, matching its 200 Fine-grained Pose questions. Request the exact [pinned file list](https://huggingface.co/datasets/OpenGVLab/MVBench/blob/230a2d4fac8900333c61754641c7a13e069ac9c6/video/MVBench_videos_ntu.txt) through [NTU/ROSE Lab's account and release-agreement process](https://rose1.ntu.edu.sg/dataset/actionRecognition/); only RGB is needed. Supply authorized media under `video/nturgbd` in the external data root. The downloader never recovers removed media from old revisions or mirrors. Full preparation fails with an actionable coverage report while required media is missing; an incomplete download is not a full benchmark score.
+## Start on Brev
 
-## Start authenticated Jupyter
+Use a native Linux x86-64 GPU instance with Docker Compose, NVIDIA container
+support, and enough GPU capacity for the public Nano checkpoint. Full video
+archive is 75,375,143,328 bytes before extraction; provision room for the archive,
+extracted videos, model cache, and outputs. Smoke downloads the approximately
+225 MB official sample archive; only `video_8241` is selected for inference.
 
-Use native Linux x86-64, Docker Engine/Compose v2, and NVIDIA Container Toolkit for local Nano serving. The maintained source is [NVIDIA/cosmos-framework](https://github.com/NVIDIA/cosmos-framework), not `NVIDIA/cosmos`. Select the approved branch/commit containing this launchable and retain its exact revision. Disable Brev's managed Jupyter because Compose provides its own authenticated service.
-
-From the Framework checkout root:
+From this directory on the host:
 
 ```bash
-export LAUNCHABLE_STATE_DIR=/absolute/path/outside/checkouts/private-mvbench-state
-# Optional: defaults to "$LAUNCHABLE_STATE_DIR/mvbench".
-export MVBENCH_DATA_DIR=/absolute/path/outside/checkouts/mvbench-data
-bash .agents/skills/evaluation/cosmos3/reasoner/vlmevalkit/launchable/setup.sh --brev
+export LAUNCHABLE_STATE_DIR=/mnt/cosmos3-perception-test-state
+# Optional separate data disk; defaults to $LAUNCHABLE_STATE_DIR/perception-test.
+export PERCEPTION_TEST_DATA_DIR=/mnt/perception-test-data
+bash setup.sh --brev
 ```
 
-Omit `--brev` on a non-Brev host. Add **`--score-only`** to start only the CPU evaluator/Jupyter service, never a GPU endpoint. Public annotations and videos can be downloaded by the notebook itself; setup does not require preexisting dataset files or start inference. Host path/configuration validation completes before starting a paid model service.
-
-State and data directories must be absolute, writable, outside the checkout, and separate from each other’s cache/results mounts. Compose project `cosmos3-mvbench` mounts the external data directory **read-write at `/mvbench`**, cache at `/cache`, and private results at `/results`. Keep these path exports in the host shell for subsequent lifecycle commands. No weights or dataset contents are embedded in the image/repository. No Docker socket, AWS profile, home directory, or private key is mounted.
-
-`--brev` discovers the private `wt0` mesh IPv4 address and fails without it. An explicit private `JUPYTER_BIND_ADDRESS` takes precedence; non-Brev defaults to loopback. There is no public/wildcard fallback. Setup persists only the notebook token and non-secret bind address in restricted `.env`. Use Brev's authenticated secure port-8888 link or an SSH tunnel. From the launchable directory on the **host**, retrieve the login token with:
+Without Brev, `bash setup.sh` binds Jupyter to loopback by default; use an SSH
+tunnel. `--brev` discovers the private `wt0` mesh address and refuses public or
+wildcard binding. Jupyter always requires a generated token. Retrieve the login
+URL in the host terminal with:
 
 ```bash
-docker compose exec mvbench-eval jupyter server list
+docker compose exec perception-eval jupyter server list
 ```
 
-Never share that token or include it in screenshots. Open `/opt/vlmevalkit/launchable/Evaluate_Cosmos3.ipynb`. Jupyter's authenticated file root is `/`, so authorized NTU files can be staged via its file browser/terminal and result links work. The local model API has **no host port**, only the private container network. Host Docker commands are for setup/stop/lifecycle, not benchmark execution.
+Open **Evaluate_Cosmos3.ipynb** and run all cells. The notebook downloads the
+selected public data, validates coverage **before any model request**, streams
+native inference progress, scores locally, and displays top1/counts, coverage,
+and artifact links. Leave `RUN_FULL = False` for smoke; set it to `True` to run
+full validation directly, without first rerunning smoke. There is no manual
+Docker benchmark command required. Committed notebook outputs are empty.
 
-### Pinned Nano and BYOM
+Compose project is `cosmos3-perception-test`; evaluator service is
+`perception-eval`. Data is mounted read-write at `/perception-test`, cache at
+`/cache`, and fresh run directories at `/results`. Host paths must be absolute,
+outside the checkout, with data separate from cache/results. No Docker socket,
+cloud credential directory, model weights, videos, annotations, or answer-bearing
+results are baked into the evaluator. The model service has **no host port**.
+Only authenticated Jupyter is exposed on the selected private address.
 
-The local service targets `nvidia/Cosmos3-Nano`, revision `e59a53c25979a090fa8706c9acc0c254a6e89b92`, with serving image `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55`. `VLLM_IMAGE` can override the image, with the override recorded. Allow storage for weights, images, public video archives, extracted media, frames, and results. The launchable does not change Ultra/LaunchPad workflows.
+### Public model and serving pins
 
-For BYOM, set `COSMOS_API_BASE` to the full reachable `/v1/chat/completions` URL and `COSMOS_MODEL` to the exact served ID **before setup**; optionally supply `COSMOS_API_KEY` in the environment. Setup skips local serving. Set `COSMOS_MODEL_REVISION` to your real deployment/checkpoint revision; unknown BYOM revisions remain explicitly `unknown` rather than being attributed to the pinned Nano checkpoint. Container `localhost` is not the host. The endpoint must accept sampled-image messages and expose `/v1/models`. Keys stay in the environment, never config/notebook source.
+- Model: [`nvidia/Cosmos3-Nano`](https://huggingface.co/nvidia/Cosmos3-Nano), revision
+  `e59a53c25979a090fa8706c9acc0c254a6e89b92`.
+- Serving image: `vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55`.
+- Existing `CosmosReason2` generation recipe: temperature 0, seed 1, thinking
+  disabled, maximum 8,192 output tokens; default one API worker.
 
-## Execute one chosen notebook scope
+Public downloads do not require a Hugging Face token. For an existing compatible
+endpoint, export complete `COSMOS_API_BASE` (`.../v1/chat/completions`), exact
+`COSMOS_MODEL`, and explicit `COSMOS_MODEL_REVISION` before setup. Optionally set
+`COSMOS_SERVING_IMAGE` and environment-only `COSMOS_API_KEY`. Setup skips local
+GPU serving for BYOM; do not write keys into the notebook or source. An endpoint's
+model display name does not prove its checkpoint revision.
 
-The notebook starts with `RUN_FULL = False`: exactly the first five Egocentric Navigation questions (stable native indices **3400–3404**), one task and five of 4,000 rows. It is prominently identified as a **smoke subset**, never a full result. Its public archive is approximately 40 MB (`video/vlnqa.zip`).
+## Dataset identity, attribution, and source cuts
 
-Set **`RUN_FULL = True`** to opt into full evaluation directly. The notebook downloads the chosen scope, prepares it, checks the endpoint only for inference, runs inference plus scoring, and displays coverage/metrics/provenance. It does **not** unnecessarily rerun smoke before full. Full preparation requires all 20 official JSON files, all 4,000 questions and required media, including manually acquired NTU. Downloading current public archives alone cannot meet that gate. Missing coverage is written to `/mvbench/.mvbench/coverage-full.json` and reported clearly; nothing is silently truncated or dropped.
+Dataset: [Perception Test](https://github.com/google-deepmind/perception_test),
+by the Perception Test authors / Google DeepMind; see the authors' [dataset
+README](https://github.com/google-deepmind/perception_test/blob/3938d2f1ba3a6b502025741cea4cd73c7b3bdfaf/README.md)
+and [paper](https://arxiv.org/abs/2305.13786). Their repository identifies code as
+Apache 2.0 and other materials as **[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)**.
+Retain attribution, license link, and describe modifications when redistributing
+derived materials. The launchable protocol below is an adaptation, not an
+endorsement or additional commercial clearance determination.
 
-For existing predictions, set `SCORE_ONLY = True`, choose explicit `SCORE_SCOPE = 'smoke'` or `'full'`, and provide exactly one of `PREDICTIONS_FILE` or `EXISTING_WORK`. Set `DOWNLOAD_PUBLIC = False` when using already staged inputs offline. Score-only does not check the endpoint or construct an inference model.
+`vlmeval/perception_test_local.py` pins direct official public URLs and verifies
+SHA-256 before safe extraction. It retains the official README locally. The
+validation annotation is `mc_question_valid.json`; source frame bounds are
+`cut_frame_mapping_valid.json`. Source repository revision is
+`3938d2f1ba3a6b502025741cea4cd73c7b3bdfaf`. Questions are enumerated by numeric
+`video_<N>` and official question ID, retaining original option order, so full
+stable indices are 0–19139. Video and question identity are retained separately.
+The full archive may contain videos outside the MCQ selection; these are not
+additional scored questions.
 
-### CLI equivalents inside Jupyter's evaluator environment
+Prototype frame protocol:
 
-These commands can also be invoked from Jupyter's terminal; no host Docker benchmark command is necessary:
+- Exactly **16** uniformly sampled frames in the source-allowed interval.
+- Source cut `-1` means all frames; a positive cut is the **exclusive** stop
+  frame. Every selected MCQ video must have a mapping; 362 of the 5,260 MCQ
+  videos have positive cuts. Bad cuts are rejected, not silently clamped.
+- Aspect-preserving **downscale only**, maximum frame side **768**, no crop.
+- Send sampled images directly; never re-encode a video and let the endpoint
+  choose a different sampling policy.
+
+This is a **launchable prototype protocol**, not reference implementation parity
+or a published Nano score reproduction. The text-to-option parser is an adapter
+protocol, not a claim of official letter-parser parity.
+
+## Controller and native APIs
+
+The notebook calls `launchable.py`; the same public controller is available
+inside the evaluator terminal:
 
 ```bash
-python launchable.py download --scope smoke
+python launchable.py download --scope metadata  # annotations, source cuts, README
+python launchable.py download --scope smoke     # also official sample videos
+python launchable.py download --scope full      # also official validation videos
 python launchable.py prepare --smoke
-python launchable.py run --smoke --mode all --work-dir /results/smoke-unique
-python launchable.py results --work-dir /results/smoke-unique
-
-# Metadata-only acquisition, without video downloads:
-python launchable.py download --scope metadata
-
-# Full scope: authorized NTU files must already be placed under /mvbench/video/nturgbd.
-python launchable.py download --scope full
-python launchable.py prepare
-python launchable.py run --mode all --work-dir /results/full-unique
-
-# Separate native inference from local scoring:
-python launchable.py run --smoke --mode infer --work-dir /results/infer-unique
-python launchable.py score --scope smoke --work-dir /results/infer-unique
-
-# Native predictions from another run, retaining original identity columns:
-python launchable.py score --scope smoke --predictions /results/native-predictions.tsv \
-  --score-dir /results/score-unique
+python launchable.py prepare                    # full coverage required
+python launchable.py run --smoke --mode all --work-dir /results/new-smoke
+python launchable.py results --work-dir /results/new-smoke
 ```
 
-`--data-root` overrides the `MVBENCH_DATA_DIR` default (`/mvbench`). `run` defaults to **full scope**, `--mode all`, `--nframe 16`, and **`--api-nproc 1`**. Full is never silently limited. All run/score output directories must be fresh. `--dry-run` still requires valid selected annotations/media and emits configuration only; it does not prove model compatibility. Score scope is mandatory and must match all expected identities exactly; there is no arbitrary partial-full option.
+`run --mode infer` retains predictions without scoring; `--mode all` performs
+both. Every work directory and scoring directory must be fresh; failed runs and
+their logs remain available for diagnosis and are not eligible for scoring.
+`--dry-run` prepares real selected media and writes a plan without model access;
+it is never a scored run. The controller fixes `--nframe 16` to the documented
+prototype protocol.
 
-## Protocol, metrics, and provenance
+Native `run.py` configuration uses:
 
-The original VideoChat2 MVBench notebook uses **16 frames and resolution 224**, and computes average accuracy as total correct / total questions. This launchable starts with **16 frames** (configurable via `--nframe`), applies reference bicubic GroupScale(224) and GroupCenterCrop(224) before native frame stacking/JPEG output, and uses the existing CosmosReason2 generation recipe: temperature 0, seed 1, thinking disabled, maximum 8,192 output tokens, presence penalty unset, ten API retries, and 600-second request timeout. It preserves native MVBench temporal bounds and sampled-image prompts, avoiding lossy video re-encoding and second-stage server video sampling. Cosmos image encoding/normalization and answer parsing still differ from VideoChat2; reference-model tensor normalization is not applied to API images. This is **not a paper-score reproduction or parity claim**. Revision/media-path/temporal-bound/frame-count/preprocessing-isolated caches prevent distinct clips or protocols from sharing stale frames.
+```json
+{"data":{"PerceptionTest":{"class":"PerceptionTestLocal","dataset":"PerceptionTest","data_root":"/perception-test","nframe":16,"smoke":true}}}
+```
 
-Scoring uses native `model='exact_matching'`, never an LLM/API judge. The primary metric is **count-based question accuracy as a fraction**. Native counts, per-task metrics and task-macro accuracy are reported separately. A five-question subset cannot stand in for the full 20-task metric. Supplied predictions are checked for exact identities/row counts, duplicates, blanks, and failed transport outputs; trusted labels and identity columns come from pinned official annotations, never prediction-supplied answers/paths. Nonempty malformed model answers retain native wrong-answer semantics. Failed scoring is not a successful zero or fabricated result.
+The controller composes that with `cosmos_eval/models/cosmos.json`. Native
+predictions are `cosmos_PerceptionTest.tsv` (or XLSX/JSON) in the native dated run
+directory. Helper API in `vlmeval.perception_test_local`:
 
-The local wrapper additionally prevents punctuation-only option tokens from receiving the upstream matcher's accidental substring credit and preserves literal model strings such as `nan` as wrong answers rather than missing values. These guards are recorded in scorer provenance; they are not a claim of byte-for-byte VideoChat2 evaluator parity.
+- `fetch_dataset(root, scope='smoke')`: metadata / smoke / full public download.
+- `prepare_dataset(root, smoke=False, require_media=True)`: trusted annotation,
+  cut and scope manifest, stable selection, coverage, separate media hashes.
+- `score_predictions(predictions, root, output_dir, smoke=False, nframe=16)`:
+  reconstruct trusted labels/identities and score locally into a fresh directory.
 
-`run.json` records scope, exact selected IDs, coverage, dataset revision/manifest hash, complete emitted native config, frame count, API concurrency, generation parameters, model/deployment revision, Framework revision, source hashes, prediction location, metric summary and state transitions. `config.json`, streamed `run.log`, native predictions, `scores/summary.json`, and `/opt/evaluation-packages.txt` provide private reproducibility artifacts. Summaries retain prediction/scorer provenance. API concurrency affects scheduling and host RAM usage, not the frame count or generation protocol. Increase it only after measuring host resources.
+## Score existing predictions without videos or a model
 
-### Observed validation (2026-10-29)
-
-Runtime candidate `b0861ce448a648b2eb59c41a9358980bbb5df31c` was built and exercised on native Linux x86-64:
-
-- All **28 behavioral regressions passed inside the newly built evaluator image**.
-- JupyterLab **Run All Cells** executed all six code cells against the pinned Nano endpoint on one RTX PRO 6000 Blackwell Server Edition. The fixed five-question subset produced five valid predictions with matching identities and native local scores; correctness results remain private and are not a full benchmark score.
-- The saved real predictions were rescored in a separate CPU-only container with **`--network none`**, with the same correctness counts.
-- SHA-verified current public archives were downloaded and safely extracted. Actual full preparation found media for **3,800 of 4,000 rows** and rejected the run before inference because the **200 Fine-grained Pose NTU clips** were missing. No rows were dropped and no partial full score was produced.
-
-This reused an existing warm GPU endpoint with a manually staged evaluator; it was **not a cold one-click launch**. The complete 20-task run remains blocked on authorized NTU acquisition. No published-score reproduction, reference-result parity, commercial/distribution approval, or customer-data agent implementation is claimed. No benchmark labels/media, credentials, executed notebook outputs, or private result artifacts belong in the PR.
-
-## Stop, restart, and maintain
-
-From the launchable directory on the **host**:
+Start only authenticated Jupyter with `bash setup.sh --score-only` (add `--brev`
+for private mesh access). Set `SCORE_ONLY = True`, choose explicit `SCORE_SCOPE`,
+and set exactly one of `EXISTING_WORK` or `PREDICTIONS_FILE` in the notebook.
+The notebook downloads **metadata only** and prepares with
+`require_media=False`; video files, model construction, endpoint requests and GPU
+are not required. Set `DOWNLOAD_PUBLIC = False` to rescore completely offline
+with already staged pinned metadata. Equivalent evaluator-terminal commands:
 
 ```bash
-docker compose --profile local ps
-docker compose --profile local stop
-# Restart only Jupyter to score retained predictions:
-bash setup.sh --score-only
+python launchable.py score --scope smoke --work-dir /results/inferred-run \
+  --score-dir /results/fresh-rescore
+python launchable.py score --scope full --predictions /results/predictions.tsv \
+  --score-dir /results/fresh-full-score
 ```
 
-Stopping containers does not stop Brev VM billing. Stop the instance separately after preserving authorized results; do not delete state/volumes merely to stop a run. Clear notebook outputs before sharing.
+Annotation/cut/scope fingerprints must match inference even after videos are
+removed; media hashes are separate, not part of that canonical identity. Exact
+selected IDs are required: missing, duplicate, unexpected, blank, or
+transport-failure rows reject the run before scoring. A malformed or ambiguous
+**nonempty** model answer is wrong and counted invalid, never silently dropped.
+The literal model text `nan` is not treated as a missing value. Prediction-supplied
+labels never override trusted annotations. Top1 is `correct / all selected
+questions`, with per-area, per-reasoning, and per-tag diagnostics; no network judge,
+dummy answers, random answers, or partial-full-score fallback.
 
-Maintainers should run `python -m unittest discover -s launchable -p 'test_*.py'` after integration, then exercise notebook smoke, offline CPU rescore, missing-NTU full-coverage failure, and an authorized complete full run when its prerequisites are available. Behavioral fixtures use synthetic artifacts and do not establish model/hardware results. The committed notebook is unexecuted. Native Linux x86-64 is the supported runtime; local ARM64 Docker emulation is not notebook/hardware validation.
+## Results and lifecycle
+
+The notebook shows one concise human result and links to the score summary,
+run provenance and log. `run.json` records source `perception-test-local`, scope,
+annotation and media fingerprints, source hashes, model/source revisions,
+generation parameters, frame protocol, and UTC start/end plus measured elapsed
+seconds. Score artifacts include `summary.json` and `controller.json` with local
+scoring timing/provenance. No cost or peak-memory estimate is invented.
+
+```bash
+# Host terminal: preserve mounted data/results while stopping containers.
+docker compose --profile local stop
+```
+
+Stopping containers does not stop underlying Brev VM billing; stop the VM
+separately after retaining needed results. Do not commit credentials, videos,
+labels, prediction tables, or answer-bearing artifacts.
+
+## Observed validation · 2026-10-30
+
+- On an existing Brev instance with one RTX PRO 6000 Blackwell Server Edition
+  (96 GB), the actual Jupyter **Run All Cells** completed all four code cells.
+  Nano returned five valid choices for the exact smoke IDs; local top1 was
+  **4/5 (80%)**, with zero malformed answers.
+- First local score was produced about **44 seconds** after Run All, using an
+  already-running model and staged smoke inputs. Controller inference took
+  20.53 seconds and local scoring 0.74 seconds. This is **not a cold launch**.
+- A separate CPU container with **network disabled and no videos or GPU**
+  rescored the actual predictions identically, including diagnostic counts and
+  annotation/prediction identities.
+- All **43 native behavioral checks** passed in the Linux CPU evaluator.
+
+These observations cover five questions from one video, not full validation,
+the held-out test leaderboard, reference-score parity, BYOM, or a fresh-VM
+launch. Driver was 595.112.07; peak memory and cost were not measured.

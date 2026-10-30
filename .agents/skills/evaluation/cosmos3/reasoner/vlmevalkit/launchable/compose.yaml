@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-name: cosmos3-mvbench
+name: cosmos3-perception-test
 services:
   cosmos-endpoint:
     profiles: [local]
@@ -16,7 +16,6 @@ services:
               capabilities: [gpu]
     ipc: host
     environment:
-      HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /cache/huggingface
     volumes:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
@@ -26,8 +25,6 @@ services:
       - --revision
       - e59a53c25979a090fa8706c9acc0c254a6e89b92
       - --async-scheduling
-      - --allowed-local-media-path
-      - /
       - --port
       - '8080'
       - --max-model-len
@@ -49,7 +46,7 @@ services:
       timeout: 10s
       retries: 120
       start_period: 60s
-  mvbench-eval:
+  perception-eval:
     platform: linux/amd64
     build:
       context: ..
@@ -60,7 +57,6 @@ services:
     ports:
       - '${JUPYTER_BIND_ADDRESS:-127.0.0.1}:8888:8888'
     environment:
-      HF_TOKEN: ${HF_TOKEN:-}
       COSMOS_COMMIT: ${COSMOS_COMMIT:-unknown}
       COSMOS_API_BASE: ${COSMOS_API_BASE:-http://cosmos-endpoint:8080/v1/chat/completions}
       COSMOS_MODEL: ${COSMOS_MODEL:-nvidia/Cosmos3-Nano}
@@ -69,7 +65,7 @@ services:
       COSMOS_API_KEY: ${COSMOS_API_KEY:-EMPTY}
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?Run bash setup.sh to generate a Jupyter token}
       LMUData: /cache/lmudata
-      MVBENCH_DATA_DIR: /mvbench
+      PERCEPTION_TEST_DATA_DIR: /perception-test
       EVAL_SCORE_ONLY: ${EVAL_SCORE_ONLY:-0}
       AWS_CONFIG_FILE: /dev/null
       AWS_SHARED_CREDENTIALS_FILE: /dev/null
@@ -77,7 +73,7 @@ services:
     volumes:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/results:/results
-      - ${MVBENCH_DATA_DIR:?Set an external writable MVBench data directory}:/mvbench
+      - ${PERCEPTION_TEST_DATA_DIR:?Set an external writable Perception Test data directory}:/perception-test
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8888/login', timeout=5)"]
       interval: 15s

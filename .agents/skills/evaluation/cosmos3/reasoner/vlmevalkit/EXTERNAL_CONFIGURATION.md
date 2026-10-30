@@ -41,34 +41,37 @@ remain available. Missing or nonexistent grounding annotation files produce a
 clear `ValueError`. Omni3D retains its existing private configuration and can be
 pointed at another authorized dataset through `raw_image_path` and `json_path`.
 
-## Brev Nano and public MVBench evaluation
+## Brev Nano and public Perception Test validation
 
 The [Brev launchable](launchable/README.md) uses the Framework-native kit,
-the pinned Nano revision, and `OpenGVLab/MVBench` at
-`230a2d4fac8900333c61754641c7a13e069ac9c6`. It provides public download,
-coverage validation, native inference, and local exact-match scoring for 20
-tasks and 4,000 annotated multiple-choice questions. No private annotation
-bundle, private S3, GPU, or model endpoint is required for score-only execution.
+the pinned public Nano checkpoint, and Google DeepMind's public Perception Test
+validation MCQ data: 19,140 questions over 5,260 videos. Default smoke selects
+`video_8241`, official question IDs 0–4 (stable indices 13404–13408).
+Full validation is explicit opt-in, never the held-out test split.
+Dataset source revision is `3938d2f1ba3a6b502025741cea4cd73c7b3bdfaf`;
+official annotations, cut mapping, README and public archives are SHA-256 pinned
+in `vlmeval/perception_test_local.py`. No private dataset or dataset credentials
+are required. The Perception Test authors' non-code materials are
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); retain attribution to
+the [authors/source](https://github.com/google-deepmind/perception_test).
+Code is Apache 2.0. Public access is not an additional clearance determination.
 
 Set `LAUNCHABLE_STATE_DIR` to an absolute writable host directory outside the
-checkout. `MVBENCH_DATA_DIR` defaults to its `mvbench` child and is mounted
-read-write at `/mvbench`; cache and results use separate mounts. The notebook
-downloads the selected public scope itself. Approved media terms restrict use
-to academic research; public access is not commercial-use or redistribution
-permission. Full coverage requires manually acquired authorized NTU RGB+D
-media under `video/nturgbd`; removed videos are never fetched from historical
-revisions or mirrors. Missing media produces a coverage error, not an incomplete
-full score. Default smoke is five fixed Egocentric Navigation rows.
+checkout. `PERCEPTION_TEST_DATA_DIR` defaults to its `perception-test` child,
+mounted read-write at `/perception-test`; cache and results use separate mounts.
+Compose project is `cosmos3-perception-test`, evaluator service `perception-eval`.
+Authenticated Jupyter binds only to a private or loopback address. The local
+model has no host port; no Docker socket or cloud credentials are mounted.
 
 Native `run.py` configuration uses the local dataset class directly:
 
 ```json
 {
   "data": {
-    "MVBench": {
-      "class": "MVBenchLocal",
-      "dataset": "MVBench",
-      "data_root": "/mvbench",
+    "PerceptionTest": {
+      "class": "PerceptionTestLocal",
+      "dataset": "PerceptionTest",
+      "data_root": "/perception-test",
       "nframe": 16,
       "smoke": false
     }
@@ -77,18 +80,33 @@ Native `run.py` configuration uses the local dataset class directly:
 ```
 
 The controller composes this with `CosmosReason2` and the existing generation
-recipe, defaulting to one API worker. Temporal sampling and prompts are native
-MVBench, with sampled-image input and isolated clip/frame caches. The starting
-16-frame target and scale/center-crop-224 frame preprocessing follow the original
-recipe; Cosmos image encoding/normalization and answer parsing still differ from VideoChat2.
-Native count-based accuracy (fraction), task macro, coverage and provenance
-remain explicit. No LLM judge or published-score claim is involved.
+recipe, defaulting to one API worker. The launchable prototype samples 16 frames
+uniformly inside official source cutpoints: `-1` means all frames, positive cuts
+are exclusive stops and invalid cuts fail. Aspect-preserving downscale only to
+maximum side 768, without cropping, precedes direct sampled-image input. This
+protocol and text-to-option parser are adaptations, not official parser parity
+or a published-model/reference-score reproduction.
 
-Use `launchable.py score --scope smoke|full` with either an existing controller
-`--work-dir` or native `--predictions` plus a fresh `--score-dir`. Exact selected
-identities and complete coverage are required. Trusted answers come from pinned
-annotations, never prediction-supplied fields. Score-only skips endpoint checks
-and model construction. BYOM uses `COSMOS_API_BASE`, `COSMOS_MODEL`, optional
-environment-only `COSMOS_API_KEY`, and an explicit `COSMOS_MODEL_REVISION`;
-setup then skips local serving. This launchable does not implement a
-customer-data evaluation agent or alter other model deployment tracks.
+`launchable.py download --scope metadata|smoke|full` stages public inputs.
+`prepare --smoke` and `prepare` require complete smoke/full media respectively.
+`run --mode infer|all` generates predictions and optionally scores them; the
+notebook defaults to `all`, not a manual Docker benchmark command.
+`score --scope smoke|full` accepts either an existing successful inference
+`--work-dir` or native `--predictions` plus a fresh `--score-dir`. Score-only
+downloads metadata only and prepares with `require_media=False`: no video files,
+endpoint, GPU, or model construction. Canonical annotation/cut/scope fingerprints
+are independent of media presence; media hashes are recorded separately.
+
+Exact selected identities are mandatory. Missing/blank/transport-failure rows
+reject incomplete runs; nonempty malformed/ambiguous answers count wrong and
+invalid. Trusted labels come only from pinned annotations. Primary metric is
+local top1 (`correct / total selected questions`), with per-area, per-reasoning
+and per-tag diagnostics, never an API judge. Fresh outputs, failed-run artifacts,
+streamed progress, source/model revisions and UTC elapsed timings are retained.
+The notebook shows concise metrics/coverage and artifact links.
+
+BYOM uses complete `COSMOS_API_BASE`, exact `COSMOS_MODEL`, optional
+environment-only `COSMOS_API_KEY`, and explicit `COSMOS_MODEL_REVISION`;
+setup then skips local serving. Score-only setup uses `bash setup.sh --score-only`.
+This launchable does not implement a customer-ingestion evaluation agent or alter
+other model deployment tracks. Source changes are not hardware or accuracy proof.

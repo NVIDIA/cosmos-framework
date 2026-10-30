@@ -14,8 +14,8 @@ launchable/state
 **/*.key
 **/scoring-assets.json
 **/scoring-assets
-**/.mvbench
-**/mvbench-data
+**/.perception-test
+**/perception-test-data
 **/*.tsv
 **/*.xlsx
 **/*.pkl
@@ -24,3 +24,8 @@ launchable/state
 cosmos_eval_out
 out
 outputs
+**/cache
+**/*.mp4
+**/*.zip
+**/mc_question_valid.json
+**/cut_frame_mapping_valid.json

@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Cosmos3 evaluation: MVBench launchable and native benchmark recipes
+# Cosmos3 evaluation: Perception Test launchable and native benchmark recipes
 
 This directory is an **NVIDIA-customized [VLMEvalKit](https://github.com/open-compass/VLMEvalKit)**
 maintained in Cosmos Framework. It contains reference settings for NVIDIA
@@ -15,16 +15,16 @@ datasets publicly reproducible or establish official score parity.
 For user-hosted endpoints and local dataset inputs, see
 [Deployment and dataset configuration](EXTERNAL_CONFIGURATION.md).
 For the Nano-only Brev notebook, use the
-[MVBench launchable](launchable/README.md): 20 tasks, 4,000 public annotated
-multiple-choice questions, pinned public downloads, native inference, and local
-exact-match scoring without an API judge. Its default smoke is five Egocentric
-Navigation questions, not a full score; full evaluation is explicit opt-in.
-The approved dataset revision requires manual authorized acquisition of 320 NTU
-RGB+D videos and restricts video use to academic research. Public access does
-not establish commercial rights, redistribution permission, or published-score
-parity. Data and state stay outside the checkout. This is not a customer-data
-evaluation-agent implementation. Existing native recipes below are independent
-of this launchable and remain unchanged.
+[Perception Test launchable](launchable/README.md): 19,140 public validation
+multiple-choice questions across 5,260 videos, pinned public downloads, native
+inference, and local top1 scoring without an API judge. Default smoke selects
+five questions from `video_8241`; full validation is explicit opt-in, not the
+held-out test split. Public dataset materials are CC BY 4.0 with attribution to
+the Perception Test authors; code is Apache 2.0. The prototype uses 16 sampled
+images within official source cutpoints, aspect-preserving downscale to a
+maximum side of 768, and makes no reference/published-score parity claim.
+Data and state stay outside the checkout. This is not a customer-ingestion
+evaluation agent. Existing native recipes below remain independent and unchanged.
 
 The kit ships, for each benchmark, reference `run.py --config` settings —
 split into a shared dataset layer (`cosmos_eval/data/`) and a per-family model layer
