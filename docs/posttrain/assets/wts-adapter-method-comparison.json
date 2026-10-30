@@ -1,0 +1,748 @@
+{
+  "protocol": "one_epoch_fixed_recipe_seed42",
+  "comparison_limits": "Single seed and fixed rank/alpha/LR per component; no method-specific tuning or claim of optimal method performance.",
+  "merge_comparison_note": "FP32 merged export is gated against the same trained unmerged model promoted to FP32; drift versus BF16 training computation is measured separately.",
+  "split_note": "Full evaluation has 44 rows sharing four training-scene IDs; the reserved 576-row subset is scene-disjoint.",
+  "methods": {
+    "lora": {
+      "training_loss": 0.18750258254385127,
+      "rank": 8,
+      "alpha": 16,
+      "effective_low_rank_scale": 2.0,
+      "expected_trainable_parameters": 4444160,
+      "validation_before": 0.6591825619353532,
+      "validation_after": 0.14688044488321564,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2467,
+        "accuracy": 0.921898355754858,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 533,
+        "accuracy": 0.9253472222222222,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.01411574607425195,
+      "training_steps_seconds": 6358.953873460006,
+      "training_rows_per_second": 0.8735713626080193,
+      "training_gpu_hours": 3.223611111111111,
+      "export_evaluation_gpu_hours": 0.8283333333333334,
+      "peak_sampled_training_memory_gib": 19.9599609375,
+      "portable_bytes": 17844563,
+      "merged_bytes": 35084709565,
+      "merged_max_logit_error": 0.0001678466796875,
+      "merged_mean_logit_error": 1.2142879313614685e-05,
+      "merged_reference_precision": "float32",
+      "merged_versus_training_precision": {
+        "argmax_equal": 31,
+        "maximum_argmax_probability_regret": 0.022918701171875,
+        "maximum_kl": 0.06118148937821388,
+        "maximum_logit_error": 2.656963348388672,
+        "maximum_relative_l2": 0.05701952055096626,
+        "maximum_total_variation": 0.14247971773147583,
+        "mean_absolute_logit_error": 0.09942671377211809,
+        "mean_kl": 0.0029821217467542738,
+        "mean_total_variation": 0.011291891103610396,
+        "positions": 32,
+        "probes": [
+          {
+            "argmax_equal": 7,
+            "maximum_argmax_probability_regret": 0.022918701171875,
+            "maximum_kl": 0.001891076797619462,
+            "maximum_logit_error": 0.5834331512451172,
+            "maximum_total_variation": 0.02720543183386326,
+            "mean_absolute_logit_error": 0.058091018348932266,
+            "mean_kl": 0.00044888322008773685,
+            "mean_total_variation": 0.005771703086793423,
+            "positions": 8,
+            "relative_l2": 0.01740936189889908,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.014078574255108833,
+            "maximum_logit_error": 0.9013180732727051,
+            "maximum_total_variation": 0.04391167685389519,
+            "mean_absolute_logit_error": 0.08910195529460907,
+            "mean_kl": 0.0023823834490031004,
+            "mean_total_variation": 0.010074561461806297,
+            "positions": 8,
+            "relative_l2": 0.02414601668715477,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.0018709497526288033,
+            "maximum_logit_error": 1.1425323486328125,
+            "maximum_total_variation": 0.029595619067549706,
+            "mean_absolute_logit_error": 0.09531275928020477,
+            "mean_kl": 0.0004706521867774427,
+            "mean_total_variation": 0.005579810589551926,
+            "positions": 8,
+            "relative_l2": 0.03057350218296051,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.06118148937821388,
+            "maximum_logit_error": 2.656963348388672,
+            "maximum_total_variation": 0.14247971773147583,
+            "mean_absolute_logit_error": 0.15520112216472626,
+            "mean_kl": 0.008626568131148815,
+            "mean_total_variation": 0.02374148927628994,
+            "positions": 8,
+            "relative_l2": 0.05701952055096626,
+            "values": 1215488
+          }
+        ]
+      },
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "training_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+      "export_revision": "480be5a5ba712bf0d9409ca71a7dac87a2d08101",
+      "training_jobs": [
+        "37640623",
+        "37648509"
+      ],
+      "evaluation_jobs": [
+        "37652713",
+        "37653787"
+      ],
+      "full_run_final_update_replay": null
+    },
+    "rslora": {
+      "training_loss": 0.16758934024005287,
+      "rank": 8,
+      "alpha": 16,
+      "effective_low_rank_scale": 5.65685424949238,
+      "expected_trainable_parameters": 4444160,
+      "validation_before": 0.6591825619353532,
+      "validation_after": 0.15466100439171557,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2474,
+        "accuracy": 0.9245142002989537,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 533,
+        "accuracy": 0.9253472222222222,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.00926841051254414,
+      "training_steps_seconds": 5721.905044944608,
+      "training_rows_per_second": 0.9708305112312077,
+      "training_gpu_hours": 2.9616666666666664,
+      "export_evaluation_gpu_hours": 0.8844444444444445,
+      "peak_sampled_training_memory_gib": 19.9599609375,
+      "portable_bytes": 17845535,
+      "merged_bytes": 35084711509,
+      "merged_max_logit_error": 0.00023987144231796265,
+      "merged_mean_logit_error": 1.3757451824858435e-05,
+      "merged_reference_precision": "float32",
+      "merged_versus_training_precision": {
+        "argmax_equal": 31,
+        "maximum_argmax_probability_regret": 0.05309265851974487,
+        "maximum_kl": 0.029505131766200066,
+        "maximum_logit_error": 3.3689818382263184,
+        "maximum_relative_l2": 0.06793984770774841,
+        "maximum_total_variation": 0.08565628528594971,
+        "mean_absolute_logit_error": 0.10742039233446121,
+        "mean_kl": 0.002850908218533732,
+        "mean_total_variation": 0.013918654061853886,
+        "positions": 32,
+        "probes": [
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.005109706427901983,
+            "maximum_logit_error": 0.499086856842041,
+            "maximum_total_variation": 0.04695155844092369,
+            "mean_absolute_logit_error": 0.05220923572778702,
+            "mean_kl": 0.0008350613643415272,
+            "mean_total_variation": 0.008475502952933311,
+            "positions": 8,
+            "relative_l2": 0.015555891208350658,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 7,
+            "maximum_argmax_probability_regret": 0.05309265851974487,
+            "maximum_kl": 0.016036905348300934,
+            "maximum_logit_error": 1.037430763244629,
+            "maximum_total_variation": 0.08565628528594971,
+            "mean_absolute_logit_error": 0.09422557055950165,
+            "mean_kl": 0.0024065219331532717,
+            "mean_total_variation": 0.014044731855392456,
+            "positions": 8,
+            "relative_l2": 0.026146264746785164,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.008898871019482613,
+            "maximum_logit_error": 1.137068271636963,
+            "maximum_total_variation": 0.06577777117490768,
+            "mean_absolute_logit_error": 0.1040874645113945,
+            "mean_kl": 0.0015828902833163738,
+            "mean_total_variation": 0.011221928521990776,
+            "positions": 8,
+            "relative_l2": 0.0323399119079113,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.029505131766200066,
+            "maximum_logit_error": 3.3689818382263184,
+            "maximum_total_variation": 0.07540084421634674,
+            "mean_absolute_logit_error": 0.17915929853916168,
+            "mean_kl": 0.006579159293323755,
+            "mean_total_variation": 0.021932452917099,
+            "positions": 8,
+            "relative_l2": 0.06793984770774841,
+            "values": 1215488
+          }
+        ]
+      },
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "training_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+      "export_revision": "480be5a5ba712bf0d9409ca71a7dac87a2d08101",
+      "training_jobs": [
+        "37687160"
+      ],
+      "evaluation_jobs": [
+        "37697603"
+      ],
+      "full_run_final_update_replay": {
+        "status": "passed",
+        "method": "rslora",
+        "checkpoint_from": 1110,
+        "checkpoint_to": 1111,
+        "replayed_updates": 1,
+        "replayed_training_rows": 5,
+        "trainable_tensors": 162,
+        "max_parameter_error": 2.2737367544323206e-13,
+        "parameter_tolerance": {
+          "atol": 1e-07,
+          "rtol": 1e-05
+        },
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0,
+        "replayed_metrics": {
+          "train/loss_avg": 0.003220431544468738,
+          "train/valid_token_count": 10,
+          "train/valid_sequence_count": 5,
+          "train/grad_norm": 0.35586047172546387,
+          "train/grad_clip_coef": 1.0,
+          "train/grad_clipped": 0.0,
+          "train/learning_rate": 2.0000000000000003e-06,
+          "optim/update_outcome": "applied",
+          "optim/step_skipped": 0.0,
+          "optim/attempt_id": 1111,
+          "optim/optimizer_step": 1111,
+          "optim/nonfinite_skips_total": 0,
+          "optim/nonfinite_skips_consecutive": 0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/finite_gradient_check_enabled": 1.0
+        },
+        "installed": {
+          "source_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+          "source_base": "7738e9e7969e30160163b9d7941782fefd6eaa5c",
+          "source_branch": "feat/posttrain-vlm-adapters",
+          "source_dirty": false,
+          "wheel": "cosmos_framework-1.2.2-py3-none-any.whl",
+          "wheel_sha256": "b764b457e629eb8a9a23054bc87b71c42a486f5e5cf16d6c2aa8fd2bb674848b",
+          "tracked_package_files_verified": 1838,
+          "created_utc": "2026-10-29T22:27:04.923715+00:00",
+          "cpu_tests": {
+            "preceding_installed_suite_passed": 184,
+            "current_focused_suite_passed": 189,
+            "scope_harness_cases_passed": 4
+          },
+          "unchanged_training_and_portable_runtime_revision": "3a58c98e4cafe24c73c4392571953c855b69833c",
+          "changed_package_paths_since_training_reference": [
+            "cosmos_framework/posttrain/checkpoint/conversion/hf.py",
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "numerical_export_reference_revision": "f29da1ccf4f201e1ed73c2c26800908c392256d1",
+          "changed_package_paths_since_numerical_reference": [
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "export_metadata_contract": "cosmos-merged-adapter-v1",
+          "qualification_suites": [
+            "all_components_methods",
+            "isolated_components_and_wts_profile"
+          ],
+          "preparation_base_image_sha256": "11aac37e02309f52695e7b7b9e54d6eb811be98b5008619422b19d9dcf06a340",
+          "container_sha256": "8cbc7ccaf2f40391a8c5eb9f6e7c13f889c0404af1dcb1284b9934347b5c055b",
+          "slurm_job_id": "37698213",
+          "verified_package_files": 1838,
+          "versions": {
+            "torch": "2.10.0+cu128",
+            "transformers": "5.8.1",
+            "safetensors": "0.8.0",
+            "torchcodec": "0.10.0"
+          }
+        },
+        "elapsed_seconds": 255.01649374095723
+      }
+    },
+    "dora": {
+      "training_loss": 0.18554666430322087,
+      "rank": 8,
+      "alpha": 16,
+      "effective_low_rank_scale": 2.0,
+      "expected_trainable_parameters": 4666752,
+      "validation_before": 0.6591825619353532,
+      "validation_after": 0.14597261734451408,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2466,
+        "accuracy": 0.92152466367713,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 533,
+        "accuracy": 0.9253472222222222,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.01401079953147863,
+      "training_steps_seconds": 6414.237846383272,
+      "training_rows_per_second": 0.8660420977579182,
+      "training_gpu_hours": 3.2330555555555556,
+      "export_evaluation_gpu_hours": 0.9344444444444444,
+      "peak_sampled_training_memory_gib": 19.9638671875,
+      "portable_bytes": 18744979,
+      "merged_bytes": 35084709565,
+      "merged_max_logit_error": 0.00017642974853515625,
+      "merged_mean_logit_error": 1.31782423977711e-05,
+      "merged_reference_precision": "float32",
+      "merged_versus_training_precision": {
+        "argmax_equal": 32,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.06969518959522247,
+        "maximum_logit_error": 2.609848737716675,
+        "maximum_relative_l2": 0.05991955101490021,
+        "maximum_total_variation": 0.16006985306739807,
+        "mean_absolute_logit_error": 0.10229718685150146,
+        "mean_kl": 0.003062836403842084,
+        "mean_total_variation": 0.01239683642052114,
+        "positions": 32,
+        "probes": [
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.0007351951207965612,
+            "maximum_logit_error": 0.5231719017028809,
+            "maximum_total_variation": 0.01437973789870739,
+            "mean_absolute_logit_error": 0.0637323334813118,
+            "mean_kl": 0.0002547549665905535,
+            "mean_total_variation": 0.0043840473517775536,
+            "positions": 8,
+            "relative_l2": 0.018534470349550247,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.010343097150325775,
+            "maximum_logit_error": 0.9140081405639648,
+            "maximum_total_variation": 0.057374343276023865,
+            "mean_absolute_logit_error": 0.09115196019411087,
+            "mean_kl": 0.0015865362947806716,
+            "mean_total_variation": 0.011441878043115139,
+            "positions": 8,
+            "relative_l2": 0.024629248306155205,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.00199785060249269,
+            "maximum_logit_error": 1.2561688423156738,
+            "maximum_total_variation": 0.02702341414988041,
+            "mean_absolute_logit_error": 0.09731309115886688,
+            "mean_kl": 0.0005854952614754438,
+            "mean_total_variation": 0.006600360386073589,
+            "positions": 8,
+            "relative_l2": 0.03156192600727081,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.06969518959522247,
+            "maximum_logit_error": 2.609848737716675,
+            "maximum_total_variation": 0.16006985306739807,
+            "mean_absolute_logit_error": 0.1569913625717163,
+            "mean_kl": 0.009824559092521667,
+            "mean_total_variation": 0.02716105990111828,
+            "positions": 8,
+            "relative_l2": 0.05991955101490021,
+            "values": 1215488
+          }
+        ]
+      },
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "training_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+      "export_revision": "480be5a5ba712bf0d9409ca71a7dac87a2d08101",
+      "training_jobs": [
+        "37687163"
+      ],
+      "evaluation_jobs": [
+        "37698189"
+      ],
+      "full_run_final_update_replay": {
+        "status": "passed",
+        "method": "dora",
+        "checkpoint_from": 1110,
+        "checkpoint_to": 1111,
+        "replayed_updates": 1,
+        "replayed_training_rows": 5,
+        "trainable_tensors": 243,
+        "max_parameter_error": 0.0,
+        "parameter_tolerance": {
+          "atol": 1e-07,
+          "rtol": 1e-05
+        },
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0,
+        "replayed_metrics": {
+          "train/loss_avg": 0.027033622795715927,
+          "train/valid_token_count": 10,
+          "train/valid_sequence_count": 5,
+          "train/grad_norm": 3.793778419494629,
+          "train/grad_clip_coef": 0.2635893892147294,
+          "train/grad_clipped": 1.0,
+          "train/learning_rate": 2.0000000000000003e-06,
+          "optim/update_outcome": "applied",
+          "optim/step_skipped": 0.0,
+          "optim/attempt_id": 1111,
+          "optim/optimizer_step": 1111,
+          "optim/nonfinite_skips_total": 0,
+          "optim/nonfinite_skips_consecutive": 0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/finite_gradient_check_enabled": 1.0
+        },
+        "installed": {
+          "source_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+          "source_base": "7738e9e7969e30160163b9d7941782fefd6eaa5c",
+          "source_branch": "feat/posttrain-vlm-adapters",
+          "source_dirty": false,
+          "wheel": "cosmos_framework-1.2.2-py3-none-any.whl",
+          "wheel_sha256": "b764b457e629eb8a9a23054bc87b71c42a486f5e5cf16d6c2aa8fd2bb674848b",
+          "tracked_package_files_verified": 1838,
+          "created_utc": "2026-10-29T22:27:04.923715+00:00",
+          "cpu_tests": {
+            "preceding_installed_suite_passed": 184,
+            "current_focused_suite_passed": 189,
+            "scope_harness_cases_passed": 4
+          },
+          "unchanged_training_and_portable_runtime_revision": "3a58c98e4cafe24c73c4392571953c855b69833c",
+          "changed_package_paths_since_training_reference": [
+            "cosmos_framework/posttrain/checkpoint/conversion/hf.py",
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "numerical_export_reference_revision": "f29da1ccf4f201e1ed73c2c26800908c392256d1",
+          "changed_package_paths_since_numerical_reference": [
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "export_metadata_contract": "cosmos-merged-adapter-v1",
+          "qualification_suites": [
+            "all_components_methods",
+            "isolated_components_and_wts_profile"
+          ],
+          "preparation_base_image_sha256": "11aac37e02309f52695e7b7b9e54d6eb811be98b5008619422b19d9dcf06a340",
+          "container_sha256": "8cbc7ccaf2f40391a8c5eb9f6e7c13f889c0404af1dcb1284b9934347b5c055b",
+          "slurm_job_id": "37698213",
+          "verified_package_files": 1838,
+          "versions": {
+            "torch": "2.10.0+cu128",
+            "transformers": "5.8.1",
+            "safetensors": "0.8.0",
+            "torchcodec": "0.10.0"
+          }
+        },
+        "elapsed_seconds": 209.22747323429212
+      }
+    },
+    "pissa": {
+      "training_loss": 0.15602594533160272,
+      "rank": 8,
+      "alpha": 16,
+      "effective_low_rank_scale": 2.0,
+      "expected_trainable_parameters": 4444160,
+      "validation_before": 0.6591825619353532,
+      "validation_after": 0.17113492194439853,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2462,
+        "accuracy": 0.9200298953662183,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 534,
+        "accuracy": 0.9270833333333334,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.009301462873800863,
+      "training_steps_seconds": 5771.096730303951,
+      "training_rows_per_second": 0.9625553442607833,
+      "training_gpu_hours": 2.9205555555555556,
+      "export_evaluation_gpu_hours": 0.8855555555555555,
+      "peak_sampled_training_memory_gib": 20.1044921875,
+      "portable_bytes": 35641876,
+      "merged_bytes": 35084709727,
+      "merged_max_logit_error": 0.00017786026000976562,
+      "merged_mean_logit_error": 1.3245961326902034e-05,
+      "merged_reference_precision": "float32",
+      "merged_versus_training_precision": {
+        "argmax_equal": 32,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.0744093805551529,
+        "maximum_logit_error": 3.854520797729492,
+        "maximum_relative_l2": 0.06467008590698242,
+        "maximum_total_variation": 0.16511009633541107,
+        "mean_absolute_logit_error": 0.10826279781758785,
+        "mean_kl": 0.0055556835868628696,
+        "mean_total_variation": 0.01853446615859866,
+        "positions": 32,
+        "probes": [
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.0010552415624260902,
+            "maximum_logit_error": 0.5847306251525879,
+            "maximum_total_variation": 0.018055254593491554,
+            "mean_absolute_logit_error": 0.06488840281963348,
+            "mean_kl": 0.0002828538999892771,
+            "mean_total_variation": 0.0037518758326768875,
+            "positions": 8,
+            "relative_l2": 0.017452813684940338,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.050292789936065674,
+            "maximum_logit_error": 0.9780731201171875,
+            "maximum_total_variation": 0.133846715092659,
+            "mean_absolute_logit_error": 0.08644749969244003,
+            "mean_kl": 0.006701606325805187,
+            "mean_total_variation": 0.020878072828054428,
+            "positions": 8,
+            "relative_l2": 0.02429710142314434,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.016477344557642937,
+            "maximum_logit_error": 1.2528018951416016,
+            "maximum_total_variation": 0.06212512403726578,
+            "mean_absolute_logit_error": 0.11296725273132324,
+            "mean_kl": 0.0032406060490757227,
+            "mean_total_variation": 0.015627969056367874,
+            "positions": 8,
+            "relative_l2": 0.035953085869550705,
+            "values": 1215488
+          },
+          {
+            "argmax_equal": 8,
+            "maximum_argmax_probability_regret": 0.0,
+            "maximum_kl": 0.0744093805551529,
+            "maximum_logit_error": 3.854520797729492,
+            "maximum_total_variation": 0.16511009633541107,
+            "mean_absolute_logit_error": 0.16874803602695465,
+            "mean_kl": 0.011997668072581291,
+            "mean_total_variation": 0.033879946917295456,
+            "positions": 8,
+            "relative_l2": 0.06467008590698242,
+            "values": 1215488
+          }
+        ]
+      },
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "training_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+      "export_revision": "480be5a5ba712bf0d9409ca71a7dac87a2d08101",
+      "training_jobs": [
+        "37687166"
+      ],
+      "evaluation_jobs": [
+        "37697555"
+      ],
+      "full_run_final_update_replay": {
+        "status": "passed",
+        "method": "pissa",
+        "checkpoint_from": 1110,
+        "checkpoint_to": 1111,
+        "replayed_updates": 1,
+        "replayed_training_rows": 5,
+        "trainable_tensors": 162,
+        "max_parameter_error": 7.275957614183426e-12,
+        "parameter_tolerance": {
+          "atol": 1e-07,
+          "rtol": 1e-05
+        },
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0,
+        "replayed_metrics": {
+          "train/loss_avg": 0.023757603370177093,
+          "train/valid_token_count": 10,
+          "train/valid_sequence_count": 5,
+          "train/grad_norm": 9.687495231628418,
+          "train/grad_clip_coef": 0.10322584660576485,
+          "train/grad_clipped": 1.0,
+          "train/learning_rate": 2.0000000000000003e-06,
+          "optim/update_outcome": "applied",
+          "optim/step_skipped": 0.0,
+          "optim/attempt_id": 1111,
+          "optim/optimizer_step": 1111,
+          "optim/nonfinite_skips_total": 0,
+          "optim/nonfinite_skips_consecutive": 0,
+          "optim/nonfinite_loss": 0.0,
+          "optim/nonfinite_gradient": 0.0,
+          "optim/finite_gradient_check_enabled": 1.0
+        },
+        "installed": {
+          "source_revision": "52a92d9b995a454e03c215b041af49b23e3b593a",
+          "source_base": "7738e9e7969e30160163b9d7941782fefd6eaa5c",
+          "source_branch": "feat/posttrain-vlm-adapters",
+          "source_dirty": false,
+          "wheel": "cosmos_framework-1.2.2-py3-none-any.whl",
+          "wheel_sha256": "b764b457e629eb8a9a23054bc87b71c42a486f5e5cf16d6c2aa8fd2bb674848b",
+          "tracked_package_files_verified": 1838,
+          "created_utc": "2026-10-29T22:27:04.923715+00:00",
+          "cpu_tests": {
+            "preceding_installed_suite_passed": 184,
+            "current_focused_suite_passed": 189,
+            "scope_harness_cases_passed": 4
+          },
+          "unchanged_training_and_portable_runtime_revision": "3a58c98e4cafe24c73c4392571953c855b69833c",
+          "changed_package_paths_since_training_reference": [
+            "cosmos_framework/posttrain/checkpoint/conversion/hf.py",
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "numerical_export_reference_revision": "f29da1ccf4f201e1ed73c2c26800908c392256d1",
+          "changed_package_paths_since_numerical_reference": [
+            "cosmos_framework/posttrain/checkpoint/tools/adapters.py",
+            "cosmos_framework/posttrain/checkpoint/tools/materialize_hf.py",
+            "cosmos_framework/posttrain/tests/adapter_numerics.py",
+            "cosmos_framework/posttrain/tests/reload_adapters.py",
+            "cosmos_framework/posttrain/tests/test_adapters_native.py",
+            "cosmos_framework/posttrain/tests/test_checkpoint_materialize_hf.py"
+          ],
+          "export_metadata_contract": "cosmos-merged-adapter-v1",
+          "qualification_suites": [
+            "all_components_methods",
+            "isolated_components_and_wts_profile"
+          ],
+          "preparation_base_image_sha256": "11aac37e02309f52695e7b7b9e54d6eb811be98b5008619422b19d9dcf06a340",
+          "container_sha256": "8cbc7ccaf2f40391a8c5eb9f6e7c13f889c0404af1dcb1284b9934347b5c055b",
+          "slurm_job_id": "37698213",
+          "verified_package_files": 1838,
+          "versions": {
+            "torch": "2.10.0+cu128",
+            "transformers": "5.8.1",
+            "safetensors": "0.8.0",
+            "torchcodec": "0.10.0"
+          }
+        },
+        "elapsed_seconds": 214.79547026613727
+      }
+    }
+  },
+  "evidence_sha256": {
+    "/localhome/local-rarunachalam/cosmos-posttrain-adapters-20261029/releases/52a92d9/collected-results/training.json": "9e6644d5595e4772801e15fc3cf107d51aef4dc425bc9de6ffda16dc953a0215",
+    "/localhome/local-rarunachalam/cosmos-posttrain-adapters-20261029/releases/52a92d9/collected-results/evaluation.json": "3a8afcbf586c23e35ab2ec4d0be7cfa272a550c807c53b51dd2405f2fbc54e4d",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/rslora/training.json": "a3d5834017516e67c69b8517c195c94edb217e8dc49496b6bb7ad9e621318c16",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/rslora/evaluation.json": "ea7e3f001c8eff434d812be03a8b865a3dbebba0c5ae832decd025abac461062",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/dora/training.json": "9af9ef92093cc5dbe84ddbeb592ffc00375c59d4b39458097cba4ee8299e0c37",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/dora/evaluation.json": "3825f64509656e01833b9da774bab4f0e156521580f5170f782a57f4c09d66a8",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/pissa/training.json": "2c450d8d05bbcd8ed9e0d3ffeb5ddb1e77b944ce953f3e2db820566d3b900978",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/results/pissa/evaluation.json": "22e2c7c7203502f7090f827c7857a8a5885b3b6899657c212e07621db5f76874",
+    "/localhome/local-rarunachalam/cosmos-adapter-methods-wts-20261030/resume-verification/collected.json": "7ec99f5fde08353403806fb02d11c5d65c7f4cccde29759cb1102686e4765e4b"
+  },
+  "shared_full_run_replay_gpu_hours": 0.21805555555555556,
+  "shared_full_run_replay_job": [
+    {
+      "job_id": "37698213",
+      "elapsed_seconds": "785",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_resources": "billing=1,cpu=16,gres/gpu=1,mem=160000M,node=1",
+      "start_utc": "2026-10-30T21:27:25",
+      "end_utc": "2026-10-30T21:40:30",
+      "nodes": "batch-block7-00123"
+    }
+  ]
+}

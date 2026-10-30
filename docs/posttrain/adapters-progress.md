@@ -1,6 +1,9 @@
 # Posttrain adapter implementation qualification
 
-Branch `feat/posttrain-vlm-adapters`; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342).
+Branch `feat/posttrain-vlm-adapters`; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)
+was closed, unmerged, at the user’s request on 2026-10-30. The implementation
+and qualification artifacts remain available on the branch; this report does
+not claim that the new adapter extension has landed on main.
 Implementation starts from main `7738e9e7969e30160163b9d7941782fefd6eaa5c`.
 The audited baseline was `1a2f03ab6111b457633827736f94f67d55bd5202`;
 intervening changes affect quantization/docs, not the SFT builder or adapters.
@@ -24,7 +27,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Portable artifacts and failure handling | `checkpoint/adapters.py`; immutable publication, base/media identity, strict state, incomplete/wrong artifacts; all 35 fresh-process GPU reloads bitwise exact | Implemented and validated |
 | FP32 merged export | `checkpoint/tools/adapters.py`, existing HF materializer; 35 numerical cases and complete retained metadata; re-resolution rejects corrupt target manifests | Implemented and validated: complete numerical matrix plus final installed/GPU metadata/target validation |
 | Installed package provenance | Wheel/source comparison and runtime byte attestation of all 1,838 package files | Implemented and validated: GPU runtime `480be5a`, merged-main CPU wheel `faa61c8` |
-| Full WTS epoch and held-out evaluation | Existing SFT/evaluation entrypoints; exact 5,555-row cursor, 2,676-row validation, reserved 576-row score | Implemented and validated: training loss 0.18750, validation 0.65918 → 0.14688; MCQ 92.19%, reserved subset 92.53%, zero invalid answers; operational recoveries recorded below |
+| Full WTS epoch and held-out evaluation | Existing SFT/evaluation entrypoints; exact 5,555-row cursor, 2,676-row validation, reserved 576-row score | Implemented and validated for LoRA, rsLoRA, DoRA and PiSSA; full comparison and job receipts below |
 | Recipes, documentation and review | `configs/sft_cosmos3_nano_adapters.py`, WTS converter, [adapter guide](guides/adapters.md), corrected general TOML/training guides, PR #342 | Implemented and validated; complete qualification and WTS evidence below |
 
 ## Qualified profile and exclusions
@@ -141,7 +144,7 @@ The full evaluation split has no row/video overlap with training, but 44 rows
 share four scene IDs; report both scores. Resource and artifact measurements
 are retained with each installed revision. No new AutoML search was started.
 
-## Full WTS result
+## Original ordinary-LoRA full WTS result
 
 ![One-epoch training and validation losses with WTS answer accuracy](assets/wts-adapters-one-epoch.png)
 
@@ -199,3 +202,106 @@ The earlier TOML WTS baseline uses a different workflow, effective batch and ada
 scope; it is not an equivalent performance comparison. All requirements above are
 validated within the stated model/method/distributed profile; excluded profiles
 remain separate qualification work.
+
+## Full WTS method comparison (2026-10-30)
+
+![Full-epoch losses and WTS accuracy for all four adapter methods](assets/wts-adapter-method-comparison.png)
+
+[Machine-readable comparison and artifact provenance](assets/wts-adapter-method-comparison.json)
+and the [vector figure](assets/wts-adapter-method-comparison.svg) preserve the
+measured revisions, job outcomes, numerical checks and evidence hashes.
+This extends the ordinary-LoRA baseline above with separate full rsLoRA, DoRA
+and PiSSA runs. All new training and evaluation jobs completed `0:0`, without
+training restarts or evaluation reconciliation.
+
+Each method consumes the same 5,555 unique training rows in the same order,
+with 1,111 applied updates, seed 42, rank 8, alpha 16, dropout zero, the same
+component learning rates, media preprocessing and 81 targets. Training uses one
+A100 80 GB GPU, BF16 base storage, FP32 adapters and full activation checkpointing;
+merged-model evaluation uses two A100 80 GB GPUs and FP32 inference. rsLoRA's
+effective scale is `16/sqrt(8) = 5.656854`; the other low-rank branches use
+`16/8 = 2`. This is one fixed recipe and seed, with no method-specific tuning.
+All initial validation losses equal **0.6591825619353532** exactly.
+
+| Method | Mean training loss | Final validation loss | Full WTS accuracy (2,676) | Scene-disjoint accuracy (576) |
+|---|---:|---:|---:|---:|
+| LoRA | 0.18750258 | 0.14688044 | 2467/2676 (92.1898%) | 533/576 (92.5347%) |
+| rsLoRA | 0.16758934 | 0.15466100 | 2474/2676 (92.4514%) | 533/576 (92.5347%) |
+| DoRA | 0.18554666 | 0.14597262 | 2466/2676 (92.1525%) | 533/576 (92.5347%) |
+| PiSSA | 0.15602595 | 0.17113492 | 2462/2676 (92.0030%) | 534/576 (92.7083%) |
+
+Every loss and gradient norm is finite, every optimizer clock matches its metric
+step, and no update was skipped. All four methods produced zero invalid answers.
+The full evaluation split includes 44 rows sharing four training-scene IDs;
+the reserved subset is scene-disjoint. The differences are small: rsLoRA gains
+seven full-set answers over LoRA, DoRA loses one, and PiSSA loses five while
+gaining one reserved-subset answer. These single-seed observations do not
+establish a generally superior method. PiSSA's lower training loss is accompanied
+by higher validation loss under this recipe.
+
+The completed new checkpoints verify all 750 base tensors against their original
+BF16 values. Every rsLoRA/PiSSA trainable tensor changed (162 each). All 243 DoRA
+trainable tensors changed, including all 81 magnitude tensors. All 162 PiSSA
+initial-factor buffers remain unchanged from the preserved step-111 checkpoint.
+Portable reload in a fresh process reproduces controlled text, image and video
+outputs exactly for each new method. All 750 serialized merged-model tensors
+are checked exactly for each export.
+
+| Method | FP32 merged maximum / mean logit error | FP32 argmax match | Final-update replay maximum parameter error |
+|---|---:|---:|---:|
+| rsLoRA | 0.0002398714 / 0.0000137575 | 32/32 | 2.274e-13 |
+| DoRA | 0.0001764297 / 0.0000131782 | 32/32 | 0 |
+| PiSSA | 0.0001778603 / 0.0000132460 | 32/32 | 7.276e-12 |
+
+The FP32 comparison promotes the trained unmerged model to FP32 before comparing
+it with the merged model. The existing bounds remain `atol=5e-4, rtol=2e-4`,
+mean error at most `5e-5`, with exact argmax agreement. BF16-to-FP32 compute drift
+is recorded separately: LoRA and rsLoRA each change one of the 32 probe argmaxes;
+DoRA and PiSSA change none. This is not a claim of BF16/FP32 generation equivalence.
+BF16 merged export remains outside the qualified profile.
+
+A separate read-only job restores checkpoint 1,110 and replays update 1,111
+through the existing SFT builder and `train_step`, then loads the uninterrupted
+checkpoint 1,111 for comparison. All three losses match exactly. Adapter and
+optimizer tensors meet the existing continuation tolerance (`atol=1e-7,
+rtol=1e-5`); optimizer groups, scheduler, RNG, data cursor and update clocks match
+exactly. Frozen weights and PiSSA initial factors remain unchanged. The harness
+rejects any method initialization during either restore, so PiSSA decomposition
+cannot silently repeat. The original checkpoints are mounted read-only.
+
+| Method | Training job | Export/reload/evaluation job | Training GPU-h | Export/evaluation GPU-h | Sampled peak training GiB | Portable MB |
+|---|---|---|---:|---:|---:|---:|
+| rsLoRA | `37687160` | `37697603` | 2.9617 | 0.8844 | 19.960 | 17.846 |
+| DoRA | `37687163` | `37698189` | 3.2331 | 0.9344 | 19.964 | 18.745 |
+| PiSSA | `37687166` | `37697555` | 2.9206 | 0.8856 | 20.104 | 35.642 |
+
+Continuation job `37698213` completed `0:0` in 785 seconds (0.2181 GPU-h shared
+across the three methods). Memory is sampled every ten seconds; it is not an
+allocator-level peak. Timings include each allocation's setup and verification
+work, and are observations from different cluster nodes. All merged models are
+about 35.08 GB. Training and continuation use byte-attested revision `52a92d9`;
+export/reload/evaluation use `480be5a`. The wheel/container hashes are listed above
+and retained in every result. No new hyperparameter search was run.
+
+## Extension to other model families
+
+The low-rank operations are reusable beyond Cosmos3; this adapter integration is
+currently qualified only for the native dense Qwen3-VL path and the model above.
+`model/adapters.py::component_of` classifies Qwen3-VL paths,
+`validate_adapter_profile` enforces its profile, and
+`checkpoint/adapters.py::make_adapter_identity` records `qwen3_vl`.
+Changing that guard alone does not establish another model family's support.
+
+The broader framework already contains GR00T and Alpamayo integration:
+
+| Family | Existing integration | Work needed for this adapter extension |
+|---|---|---|
+| Other dense HF models | Existing HF model builders, separate from this native SFT binding | Family-specific target/component mapping, gradient-path validation, loading/tying and artifact/export qualification |
+| GR00T | `model/gr00t/policy.py::Gr00tHeads` exposes the action head (projector and diffusion model); language and vision are frozen | Bind actual action-head targets and publication format; widening to language/vision also changes trainable ownership, wire prefixes and sharding; qualify robotics metrics |
+| Alpamayo | `entrypoints/alpagym_clrl.py::_build_trainer` constructs external `alpagym_runtime.posttrain.model.AlpamayoTrainModel` and uses `LLMTrainer` | Install adapters through that model/runtime bridge before `model.setup` and optimizer construction; qualify replay, rollout publication, processor identity and driving metrics |
+| Native MoE/custom fused operators | Separate model/operator implementations | Explicit target geometry and expert ownership/sharding support; the current adapter accepts plain two-dimensional `nn.Linear` targets |
+
+Use a shared adapter runtime with explicit family bindings. LoRA, rsLoRA, DoRA
+and PiSSA can share that architecture while retaining method-specific magnitude
+and initial-factor state. The new adapter methods have not been implemented or
+qualified on GR00T, Alpamayo, generic HF or MoE models by this contribution.
