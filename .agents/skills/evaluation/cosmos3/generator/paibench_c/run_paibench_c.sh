@@ -609,7 +609,9 @@ for row in shard_rows:
         vision_mp4.unlink()
     pending.append(row)
 
-shard_jsonl.write_text("\n".join(json.dumps(r) for r in pending))
+# One newline per row, including the last: the launcher below counts rows with
+# `wc -l`, which counts newlines, so an unterminated one-row shard read as 0.
+shard_jsonl.write_text("".join(json.dumps(r) + "\n" for r in pending))
 skipped = len(shard_rows) - len(pending)
 print(f"Shard {shard_idx}/{num_shards}: {len(pending)} to generate, {skipped} already done")
 PY
