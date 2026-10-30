@@ -65,7 +65,14 @@ def snapshot_identity(directory: str, *, weights: bool) -> dict[str, Any]:
 
 
 def make_adapter_identity(
-    base: str, processor: str, targets: dict, media: dict, *, base_dtype: str, architecture: str = "qwen3_vl"
+    base: str,
+    processor: str,
+    targets: dict,
+    media: dict,
+    *,
+    base_dtype: str,
+    architecture: str = "qwen3_vl",
+    source_identity: dict | None = None,
 ) -> dict[str, Any]:
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
@@ -76,17 +83,22 @@ def make_adapter_identity(
             dependencies[name] = importlib.metadata.version(name).split("+")[0]
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = None
-    return {
+    result = {
         "format": FORMAT,
         "architecture": architecture,
         "base_storage_dtype": base_dtype,
-        "base": snapshot_identity(base, weights=True),
-        "processor": snapshot_identity(processor, weights=False),
+        "base": snapshot_identity(base, weights=True) if source_identity is None else source_identity["base"],
+        "processor": snapshot_identity(processor, weights=False)
+        if source_identity is None
+        else source_identity["processor"],
         "resolved": targets,
         "media": media,
         "dependencies": dependencies,
         "pissa_representation": "original_base_plus_trained_minus_initial_factors",
     }
+    if source_identity is not None:
+        result["model_contract"] = source_identity["model_contract"]
+    return result
 
 
 def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
@@ -104,8 +116,12 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
     if not isinstance(identity, dict) or required - set(identity):
         missing = sorted(required - set(identity)) if isinstance(identity, dict) else sorted(required)
         raise ValueError(f"incomplete adapter identity: missing {missing}")
-    if identity["base_storage_dtype"] not in ("float32", "bfloat16"):
+    if identity["base_storage_dtype"] not in ("float32", "bfloat16", "model_defined"):
         raise ValueError("unsupported adapter materialized base dtype")
+    if identity["base_storage_dtype"] == "model_defined" and not identity.get("model_contract", {}).get(
+        "parameter_dtypes"
+    ):
+        raise ValueError("model-defined adapter base precision requires the materialized parameter dtype map")
     if identity.get("format") != FORMAT:
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
@@ -182,23 +198,31 @@ def write_adapter_artifact(
                 "provenance": provenance or {},
             },
         )
-        try:
-            rename_directory_noreplace(staging, target)
-        except OSError as error:
-            if error.errno != errno.EOPNOTSUPP:
-                raise
-            # Lustre may not implement renameat2(RENAME_NOREPLACE). mkdir still
-            # reserves the destination atomically: a competing writer can never
-            # replace its owner. Readers require the commit-last manifest, so an
-            # interrupted reservation is explicitly incomplete, never loadable.
-            # Keep that reservation on failure; retry at a new immutable path.
-            os.mkdir(target)
-            fsync_directory(parent)
-            os.rename(os.path.join(staging, WEIGHTS), os.path.join(target, WEIGHTS))
-            fsync_directory(target)
-            os.rename(os.path.join(staging, MANIFEST), os.path.join(target, MANIFEST))
-            fsync_directory(target)
+        publish_staged_artifact(staging, target, commit_file=MANIFEST)
+
+
+def publish_staged_artifact(staging: str, target: str, *, commit_file: str) -> None:
+    """Shared no-replace publication for portable and native merged artifacts.
+
+    Writers fsync payloads first; readers require the commit marker and its file
+    digests. The Lustre fallback reserves a unique directory and commits last.
+    Interrupted reservations stay visibly incomplete and cannot be overwritten.
+    """
+    parent = os.path.dirname(os.path.abspath(target))
+    try:
+        rename_directory_noreplace(staging, target)
+    except OSError as error:
+        if error.errno != errno.EOPNOTSUPP:
+            raise
+        os.mkdir(target)
         fsync_directory(parent)
+        for name in sorted(os.listdir(staging)):
+            if name != commit_file:
+                os.rename(os.path.join(staging, name), os.path.join(target, name))
+        fsync_directory(target)
+        os.rename(os.path.join(staging, commit_file), os.path.join(target, commit_file))
+        fsync_directory(target)
+    fsync_directory(parent)
 
 
 def read_adapter_artifact(
@@ -268,7 +292,10 @@ def prepare_merged_state(state: dict[str, torch.Tensor], identity: dict) -> dict
         # Stock HF normalization must retain its base activation boundary. A
         # merged BF16 model rounds these trained FP32 values just like merged
         # projection weights; the portable artifact retains full FP32 precision.
-        result[name] = state[name].to(getattr(torch, identity["base_storage_dtype"]))
+        dtype = identity["base_storage_dtype"]
+        if dtype == "model_defined":
+            dtype = identity["model_contract"]["parameter_dtypes"][name]
+        result[name] = state[name].to(getattr(torch, dtype))
     merged = {}
     for row in identity["resolved"]["targets"]:
         name, owner = row["name"], row["owner"]

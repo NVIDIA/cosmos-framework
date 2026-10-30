@@ -44,7 +44,9 @@ _METRIC_ADAPTER = MetricAdapter(
 )
 
 
-def make_objective(collate: Callable[[list[Trajectory]], dict], *, training_prefix: int, action_dim: int) -> Objective:
+def make_objective(
+    collate: Callable[[list[Trajectory]], dict], *, training_prefix: int, action_dim: int, sft_metrics: bool = False
+) -> Objective:
     """`collate` rebuilds the model inputs, including the supervision mask over `[:training_prefix, :action_dim]`;
     the two ints are recorded in the identity so a resume cannot silently change the loss."""
 
@@ -52,13 +54,35 @@ def make_objective(collate: Callable[[list[Trajectory]], dict], *, training_pref
         out = model.flow_matching_loss(collate(batch))
         masked = int(out.action_mask.float().sum().item())  # the mask arrives in bf16 under the parameter-cast mode
         denom = rank_mean_count(masked, out.loss.device)  # DP-mean supervised count; == masked outside a process group
+        if denom <= 0:
+            raise ValueError("flow_bc batch contains no supervised action elements on any rank")
         loss = out.loss * (masked / denom)  # x/x is exactly 1.0 in IEEE 754: equal shards stay bitwise identical
         metrics = {"flow_bc_loss": float(loss.detach()), "flow_bc_masked_elements": masked, OBJECTIVE_WEIGHT_SUM: denom}
+        if sft_metrics:
+            metrics["flow_bc_valid_action_count"] = masked
+            metrics["flow_bc_valid_sequence_count"] = int(
+                out.action_mask.reshape(out.action_mask.shape[0], -1).any(dim=1).sum().item()
+            )
+            if not model.net.training:
+                # The SFT validation transaction combines local masked sums,
+                # unlike training's average of DP-normalized rank losses.
+                metrics["flow_bc_loss"] = float(out.loss.detach())
         return loss, metrics
 
     return Objective(
         fn=fn,
         reduction=Reduction.TOKEN_SUM,
-        metric_adapter=_METRIC_ADAPTER,
+        metric_adapter=MetricAdapter(
+            names={
+                **_METRIC_ADAPTER.names,
+                "flow_bc_valid_action_count": "valid_action_count",
+                "flow_bc_valid_sequence_count": "valid_sequence_count",
+            },
+            internal_prefix="flow_bc_",
+            phases=frozenset({"train", "val"}),
+            ignored=frozenset({OBJECTIVE_WEIGHT_SUM}),
+        )
+        if sft_metrics
+        else _METRIC_ADAPTER,
         identity={"algorithm": "flow_bc", "training_prefix": int(training_prefix), "action_dim": int(action_dim)},
     )

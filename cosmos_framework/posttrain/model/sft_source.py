@@ -24,6 +24,35 @@ SFTSourceResolver = Callable[["NativePolicyBuildSpec"], tuple[str, bool]]
 after the family's own checks (model type, sidecars); no model or processor is constructed."""
 
 _RESOLVERS: dict[str, SFTSourceResolver] = {}
+_FLOW_PACKERS: dict[str, Callable] = {}
+
+
+def register_flow_sft_packer(builder: str):
+    """Bind a native flow model's collator beside its existing SFT source.
+
+    The factory receives the native build spec and typed SFT config. Its result
+    is callable over trajectories and exposes validation_semantics_identity().
+    It owns preprocessing, never an optimizer or a training loop.
+    """
+
+    def register(factory):
+        if builder in _FLOW_PACKERS and _FLOW_PACKERS[builder] is not factory:
+            raise ValueError(f"a flow SFT packer is already registered for {builder!r}")
+        _FLOW_PACKERS[builder] = factory
+        return factory
+
+    return register
+
+
+def native_sft_task(spec: NativePolicyBuildSpec) -> str:
+    resolve_native_sft_source(spec)
+    return "flow_bc" if spec.builder in _FLOW_PACKERS else "conversation"
+
+
+def build_flow_sft_packer(spec: NativePolicyBuildSpec, config):
+    if native_sft_task(spec) != "flow_bc":
+        raise ValueError(f"native builder {spec.builder!r} has no supervised-flow SFT packer")
+    return _FLOW_PACKERS[spec.builder](spec, config)
 
 
 def register_native_sft_source(builder: str) -> Callable[[SFTSourceResolver], SFTSourceResolver]:

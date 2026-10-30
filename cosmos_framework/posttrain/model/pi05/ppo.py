@@ -127,6 +127,25 @@ def validate_selected_trace(trace: Pi05PPOTrace, config: Pi05ModelConfig, *, bat
         raise ValueError("pi05 PPO trace.denoise_index is outside the denoising schedule")
 
 
+def predict_velocity(expert, action_in_proj, action_out_proj, time_mlp_in, time_mlp_out, condition, latent, time):
+    """Shared OpenPI expert forward for PPO replay and differentiable offline SFT."""
+    width = action_in_proj.out_features
+    fraction = torch.linspace(0, 1, width // 2, dtype=torch.float64, device=time.device)
+    periods = 4e-3 * (4.0 / 4e-3) ** fraction
+    phases = (1.0 / periods * 2 * math.pi)[None, :] * time[:, None]
+    embedding = torch.cat((torch.sin(phases), torch.cos(phases)), dim=1).to(time.dtype)
+    adaptive = F.silu(time_mlp_out(F.silu(time_mlp_in(embedding))))
+    suffix = action_in_proj(latent)
+    batch, horizon = latent.shape[:2]
+    prefix_mask = condition.prefix_mask[:, None, :].expand(batch, horizon, -1)
+    suffix_mask = torch.ones((batch, horizon, horizon), dtype=torch.bool, device=latent.device)
+    mask = torch.cat((prefix_mask, suffix_mask), dim=2)
+    attention = additive_attention_mask(mask)
+    positions = condition.prefix_mask.sum(dim=1)[:, None] + torch.arange(horizon, device=latent.device)[None]
+    output, _ = expert(suffix, attention, positions, condition=adaptive, prefix_cache=condition.prefix_cache)
+    return action_out_proj(output.float())
+
+
 class Pi05Heads(nn.Module):
     """Borrow trainable modules from the loaded full tree; the owner outlives this view."""
 
@@ -141,21 +160,16 @@ class Pi05Heads(nn.Module):
         self.value_head = model.value_head
 
     def velocity(self, condition: Pi05PPOCondition, latent: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
-        width = self.action_in_proj.out_features
-        fraction = torch.linspace(0, 1, width // 2, dtype=torch.float64, device=time.device)
-        periods = 4e-3 * (4.0 / 4e-3) ** fraction
-        phases = (1.0 / periods * 2 * math.pi)[None, :] * time[:, None]
-        embedding = torch.cat((torch.sin(phases), torch.cos(phases)), dim=1).to(time.dtype)
-        adaptive = F.silu(self.time_mlp_out(F.silu(self.time_mlp_in(embedding))))
-        suffix = self.action_in_proj(latent)
-        batch, horizon = latent.shape[:2]
-        prefix_mask = condition.prefix_mask[:, None, :].expand(batch, horizon, -1)
-        suffix_mask = torch.ones((batch, horizon, horizon), dtype=torch.bool, device=latent.device)
-        mask = torch.cat((prefix_mask, suffix_mask), dim=2)
-        attention = additive_attention_mask(mask)
-        positions = condition.prefix_mask.sum(dim=1)[:, None] + torch.arange(horizon, device=latent.device)[None]
-        output, _ = self.expert(suffix, attention, positions, condition=adaptive, prefix_cache=condition.prefix_cache)
-        return self.action_out_proj(output.float())
+        return predict_velocity(
+            self.expert,
+            self.action_in_proj,
+            self.action_out_proj,
+            self.time_mlp_in,
+            self.time_mlp_out,
+            condition,
+            latent,
+            time,
+        )
 
     def values(self, condition: Pi05PPOCondition) -> torch.Tensor:
         return self.value_head(condition.value_features)[:, 0].float()

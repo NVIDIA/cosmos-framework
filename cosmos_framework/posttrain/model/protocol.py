@@ -170,6 +170,7 @@ class FlowMatchingLossOutput:
 
     loss: torch.Tensor  # []  masked mean over the supervised region
     action_mask: torch.Tensor  # [B, horizon, action_dim]  ones over the supervised region
+    prediction: torch.Tensor | None = None  # optional controlled velocity output for qualification/evaluation
 
 
 @runtime_checkable

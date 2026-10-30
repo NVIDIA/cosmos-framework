@@ -118,6 +118,15 @@ class Pi05Model(nn.Module):
 
     @torch.no_grad()
     def prepare_condition(self, inputs: Pi05Inputs) -> Pi05PPOCondition:
+        """The existing PPO invocation's frozen prefix remains unchanged."""
+        return self.training_condition(inputs)
+
+    def training_condition(self, inputs: Pi05Inputs) -> Pi05PPOCondition:
+        """Fresh prefix with its gradient graph for language/projector/vision SFT.
+
+        No feature cache is reused across updates. Read-only K/V tensors remain
+        attached through the action expert; checkpointing recomputes their owner.
+        """
         from cosmos_framework.posttrain.model.pi05.ppo import Pi05PPOCondition
 
         paligemma = self.paligemma_with_expert.paligemma.model
@@ -144,3 +153,39 @@ class Pi05Model(nn.Module):
         # the missing third camera's 256 slots. A pad-mask mean is different.
         pooled = torch.cat((output[:, :512], output[:, 768:]), dim=1).mean(dim=1).float()
         return Pi05PPOCondition(cache, mask, pooled)
+
+    def forward(self, inputs: Pi05Inputs, actions, action_mask, *, time=None, noise=None):
+        """OpenPI supervised flow loss through the full, registered model root.
+
+        Time/noise can be supplied for controlled evaluation. The default Beta
+        schedule and noise-to-data direction follow OpenPI PI0Pytorch.forward.
+        """
+        from cosmos_framework.posttrain.model.pi05.ppo import predict_velocity
+        from cosmos_framework.posttrain.model.protocol import FlowMatchingLossOutput
+
+        if actions.ndim != 3 or actions.shape[1:] != (10, 32) or action_mask.shape != actions.shape:
+            raise ValueError("pi05 flow SFT requires actions and mask [B,10,32]")
+        if noise is None:
+            noise = torch.randn_like(actions)
+        if time is None:
+            time = (
+                torch.distributions.Beta(
+                    torch.tensor(1.5, device=actions.device), torch.tensor(1.0, device=actions.device)
+                ).sample((actions.shape[0],))
+                * 0.999
+                + 0.001
+            )
+        condition = self.training_condition(inputs)
+        latent = time[:, None, None] * noise + (1 - time[:, None, None]) * actions
+        velocity = predict_velocity(
+            self.paligemma_with_expert.gemma_expert.model,
+            self.action_in_proj,
+            self.action_out_proj,
+            self.time_mlp_in,
+            self.time_mlp_out,
+            condition,
+            latent,
+            time,
+        )
+        loss = ((velocity.float() - (noise - actions)) ** 2 * action_mask).sum() / action_mask.sum().clamp_min(1)
+        return FlowMatchingLossOutput(loss, action_mask, velocity.float())

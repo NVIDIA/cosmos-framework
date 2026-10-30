@@ -1,4 +1,4 @@
-# Native Qwen3-VL adapter SFT
+# Adapter SFT
 
 The posttrain SFT workflow can adapt dense native Qwen3-VL, including
 Cosmos3-Nano-VLM, with language, final/deepstack merger and selected vision-block
@@ -6,9 +6,17 @@ adapters. It reuses `LLMTrainer`, the conversation packer, data cursor and check
 transactions. The native TOML workflow already supported LoRA/rsLoRA before this
 contribution; this is an extension of the separate posttrain workflow.
 
+The family extension also binds dense HF text architectures, HF Qwen3.5 and
+native Qwen3-VL MoE's ordinary projections through
+`configs/sft_family_adapters.py`. Their qualification is tracked separately in
+[adapter-family-progress.md](../adapter-family-progress.md). Physical-action
+models use their own native forward and processor through the same SFT lifecycle;
+see [physical-action adapters](flow-adapters.md). Support is specific to the
+recorded checkpoint and execution profile, not every model sharing its family name.
+
 See the [qualification record](../adapters-progress.md) for what has actually
 been tested. CPU correctness is not real-model GPU qualification. Four-bit
-training, generic HF wrappers, native MoE/expert tensors, HSDP, TP/EP/CP/PP,
+training, unregistered HF architectures, fused expert tensors, HSDP, TP/EP/CP/PP,
 compilation, stacked adapters and arbitrary linear/embedding `modules_to_save`
 are outside this execution profile. GPU qualification covers one node with one or
 two A100 80 GB GPUs, SDPA,

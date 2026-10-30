@@ -35,6 +35,7 @@ PUBLIC_METRIC_NAMESPACES = frozenset({"train", "rollout", "val", "optim", "timer
 SUMMED_TRAIN_COUNT_KEYS: tuple[str, ...] = (
     "train/valid_sequence_count",
     "train/valid_token_count",
+    "train/valid_action_count",
     "train/routing_replay_pinned_tokens",
     "train/logprob_gap_token_count",
     "train/response_count",

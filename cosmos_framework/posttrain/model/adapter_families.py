@@ -71,6 +71,36 @@ _FAMILIES.update(
     }
 )
 
+_FAMILIES["pi05"] = AdapterFamily(
+    "pi05",
+    (
+        ("language", r"^paligemma_with_expert\.paligemma\.model\.language_model\.layers\.(?P<layer>\d+)\."),
+        ("language", r"^paligemma_with_expert\.paligemma\.model\.language_model\.norm(?:\.|$)"),
+        ("projector", r"^paligemma_with_expert\.paligemma\.model\.multi_modal_projector(?:\.|$)"),
+        (
+            "vision",
+            r"^paligemma_with_expert\.paligemma\.model\.vision_tower\.vision_model\.encoder\.layers\.(?P<layer>\d+)\.",
+        ),
+        ("action", r"^paligemma_with_expert\.gemma_expert\.model\.layers\.(?P<layer>\d+)\."),
+        ("action", r"^(?:action_in_proj|action_out_proj|time_mlp_in|time_mlp_out)(?:\.|$)"),
+    ),
+    # Adaptive Pi05RMSNorm owns an additional dense modulation layer; it is not
+    # a normalization-only extra. Select that Linear explicitly as an adapter.
+    embedding="paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight",
+)
+
+_FAMILIES["alpamayo_r1"] = AdapterFamily(
+    "alpamayo_r1",
+    tuple((component, pattern.replace("^model", r"^vlm\.model")) for component, pattern in _VLM)
+    + (
+        ("action", r"^expert\.layers\.(?P<layer>\d+)\."),
+        ("action", r"^expert\.norm(?:\.|$)"),
+        ("action", r"^(?:action_in_proj|action_out_proj)(?:\.|$)"),
+    ),
+    ("Qwen3VLTextRMSNorm",),
+    embedding="vlm.model.language_model.embed_tokens.weight",
+)
+
 
 def adapter_family(name: str) -> AdapterFamily:
     try:

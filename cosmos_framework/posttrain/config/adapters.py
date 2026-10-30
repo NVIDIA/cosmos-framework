@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -38,17 +39,19 @@ class AdapterComponentConfig:
         self.targets = list(self.targets)
         if self.layers is not None:
             self.layers = list(self.layers)
-        if self.component not in ("language", "projector", "vision"):
+        if self.component not in ("language", "projector", "vision", "action"):
             raise ValueError(f"unknown adapter component {self.component!r}")
-        if not self.targets or any(not isinstance(t, str) or not t.startswith("model.") for t in self.targets):
-            raise ValueError("adapter targets must be non-empty full module paths/globs starting with 'model.'")
+        if not self.targets or any(
+            not isinstance(t, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.*?\[\]-]*", t) for t in self.targets
+        ):
+            raise ValueError("adapter targets must be non-empty full module paths/globs with an explicit root")
         if self.layers is not None:
             if (
                 self.component == "projector"
                 or not self.layers
                 or any(type(i) is not int or i < 0 for i in self.layers)
             ):
-                raise ValueError("layers must be non-empty non-negative language/vision block indices")
+                raise ValueError("layers must be non-empty non-negative language/vision/action block indices")
             if len(set(self.layers)) != len(self.layers):
                 raise ValueError("duplicate adapter layer indices")
         if self.method not in ("lora", "dora", "pissa"):

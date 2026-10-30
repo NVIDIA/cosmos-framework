@@ -38,6 +38,7 @@ SFT_CONSOLE_KEYS: tuple[str, ...] = (
     "train/grad_norm",
     "train/learning_rate",
     "train/valid_token_count",
+    "train/valid_action_count",
     "timer/e2e_step_s",
     "val/loss_avg",
 )
@@ -107,13 +108,34 @@ def validate_config_structure(config: Any) -> SFTConfig:
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
     # of the value (the recipe variant, a YAML, a ``--`` override).
     rl.__post_init__()
+    if rl.task == "flow_bc":
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.model.sft_source import native_sft_task
+
+        selection = select_policy_backend(config)
+        if selection.native_spec is None or native_sft_task(selection.native_spec) != "flow_bc":
+            raise ValueError("flow_bc SFT requires a native model with a registered supervised-flow packer")
+        if any(not source.path or source.factory or source.path.startswith("s3://") for source in enabled_sources(rl)):
+            raise ValueError("flow_bc SFT requires staged local demonstration JSONL sources")
+    else:
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.model.sft_source import native_sft_task
+
+        selection = select_policy_backend(config)
+        if selection.native_spec is not None and native_sft_task(selection.native_spec) != "conversation":
+            raise ValueError("the selected model owns a flow_bc objective; set rl.task=flow_bc")
     if rl.adapters is not None:
         from cosmos_framework.posttrain.config.build import select_policy_backend
 
         selection = select_policy_backend(config)
-        if selection.backend != "hf" and (
-            selection.native_spec is None
-            or selection.native_spec.builder != "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
+        if (
+            rl.task != "flow_bc"
+            and selection.backend != "hf"
+            and (
+                selection.native_spec is None
+                or selection.native_spec.builder
+                != "cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy"
+            )
         ):
             raise ValueError("SFT adapters require an HF family binding or the native Qwen3-VL builder")
         if rl.optimizer.train_keys or rl.optimizer.decay_groups or rl.optimizer.lr_multipliers:
@@ -172,24 +194,37 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     from cosmos_framework.posttrain.utils.dist import run_rank_converged, world_size_or_1
     from cosmos_framework.utils import misc
 
-    name_or_path, trust_remote_code = sft_policy_source(config)
-    packer = run_rank_converged(
-        lambda: build_sft_packer(
-            name_or_path,
-            max_length=rl.max_length,
-            processor_kwargs=rl.processor_kwargs,
-            trust_remote_code=trust_remote_code,
-            mask_think_opener=rl.mask_think_opener,
-        ),
-        "SFT tokenizer/processor setup",
-    )
-    objective = make_objective(
-        packer,
-        ce_exponent=rl.ce_exponent,
-        moe_lbl_coeff=rl.moe_lbl_coeff,
-        moe_lbl_method=rl.moe_lbl_method,
-        serve_contract=rl.serve_contract,
-    )
+    if rl.task == "flow_bc":
+        from cosmos_framework.posttrain.algorithm.flow_bc import make_objective as flow_objective
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.model.sft_source import build_flow_sft_packer
+
+        packer = run_rank_converged(
+            lambda: build_flow_sft_packer(select_policy_backend(config).native_spec, rl), "SFT flow processor setup"
+        )
+        objective = flow_objective(
+            packer, training_prefix=rl.flow_training_prefix, action_dim=rl.flow_action_dim, sft_metrics=True
+        )
+        objective.identity = {**objective.identity, "preprocessing": packer.validation_semantics_identity()}
+    else:
+        name_or_path, trust_remote_code = sft_policy_source(config)
+        packer = run_rank_converged(
+            lambda: build_sft_packer(
+                name_or_path,
+                max_length=rl.max_length,
+                processor_kwargs=rl.processor_kwargs,
+                trust_remote_code=trust_remote_code,
+                mask_think_opener=rl.mask_think_opener,
+            ),
+            "SFT tokenizer/processor setup",
+        )
+        objective = make_objective(
+            packer,
+            ce_exponent=rl.ce_exponent,
+            moe_lbl_coeff=rl.moe_lbl_coeff,
+            moe_lbl_method=rl.moe_lbl_method,
+            serve_contract=rl.serve_contract,
+        )
     objective.identity = {
         **objective.identity,
         "training_source": data.source_fingerprint,
@@ -223,6 +258,8 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
             model.net, rl.optimizer, parameter_groups=optimizer_groups(model.net, rl.optimizer.lr)
         )
         assert_trainability(model.net, optimizer)
+    if rl.task == "flow_bc":
+        objective.identity = {**objective.identity, "precision": asdict(model.precision)}
     groups = []
     for index, group in enumerate(optimizer.param_groups):
         lr = group["lr"]
@@ -288,8 +325,12 @@ def held_out_census(data: Any, validation: Any) -> dict[str, Any]:
     ``refuse_source_overlap`` on the identical census inside ``run_rank_converged``, so a refusal stays collective and
     the census is rank-identical by construction. The caller has already proven both source fingerprints rank-identical.
     """
+    from cosmos_framework.posttrain.data.datasets.flow_sft import FlowSFTDataset, flow_source_overlap
     from cosmos_framework.posttrain.data.datasets.sft import refuse_source_overlap, source_overlap
     from cosmos_framework.posttrain.utils.dist import broadcast_from_rank0, run_rank_converged
+
+    if isinstance(data.dataset, FlowSFTDataset):
+        return broadcast_from_rank0(lambda: flow_source_overlap(data, validation), context="flow SFT held-out census")
 
     census = broadcast_from_rank0(
         lambda: source_overlap(data.dataset, validation.dataset), context="SFT held-out census"
@@ -307,6 +348,8 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
+        if rl.task == "flow_bc":
+            from cosmos_framework.posttrain.roles.env.flow_sft import build_flow_sft_env as build_sft_env
         if rl.deterministic:
             from cosmos_framework.posttrain.utils.determinism import enable_determinism
 
@@ -358,7 +401,9 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
     return merge_training_metric_window(
         reports,
         sum_keys=frozenset(SUMMED_TRAIN_COUNT_KEYS),
-        weighted_mean_by={"train/loss_avg": "train/valid_token_count"},
+        weighted_mean_by={
+            "train/loss_avg": f"train/{'valid_action_count' if rl.task == 'flow_bc' else 'valid_token_count'}"
+        },
     )
 
 
@@ -388,6 +433,7 @@ def _evaluate(
 
     started = time.monotonic()
     source, policy = units["validation"], units["policy"]
+    count_key = "val/valid_action_count" if rl.task == "flow_bc" else "val/valid_token_count"
     count = resolve(source.validation_batch_count(rl.validation.batch_size, rl.validation.max_samples))
     rank_identical(count, "SFT validation batch count")
     local = {"numerator": 0.0, "tokens": 0.0, "sequences": 0.0}
@@ -396,7 +442,7 @@ def _evaluate(
         metrics = resolve(policy.evaluate_objective(batch))
 
         def collect() -> None:
-            tokens = float(metrics["val/valid_token_count"])
+            tokens = float(metrics[count_key])
             loss = float(metrics["val/loss_avg"])
             if not math.isfinite(loss) or not math.isfinite(tokens) or tokens < 0:
                 raise ValueError("SFT held-out objective returned invalid loss/token count")
@@ -419,7 +465,7 @@ def _evaluate(
         sample_count=int(sequences),
         metrics={
             "val/loss_avg": loss,
-            "val/valid_token_count": int(tokens),
+            count_key: int(tokens),
             "val/valid_sequence_count": int(sequences),
             "timer/validation_s": duration,
         },

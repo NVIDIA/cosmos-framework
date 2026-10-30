@@ -162,3 +162,15 @@ class Pi05Processor:
         low_tensor = torch.as_tensor(low, device=values.device)
         high_tensor = torch.as_tensor(high, device=values.device)
         return values.to(torch.float64) * (high_tensor - low_tensor + 1e-6) + low_tensor
+
+    def encode_actions(self, actions: torch.Tensor) -> torch.Tensor:
+        """Inverse of the physical-action quantile transform, with padded width.
+
+        Demonstration actions retain the dataset's LIBERO gripper convention;
+        this method performs no sign, frame, or delta-action conversion.
+        """
+        if actions.ndim != 3 or actions.shape[1:] != (10, 7) or not torch.isfinite(actions).all():
+            raise ValueError("pi05 demonstration actions must be finite [B,10,7]")
+        low, high = (torch.as_tensor(x, device=actions.device) for x in self.quantiles["actions"])
+        values = (actions.to(torch.float64) - low) / (high - low + 1e-6) * 2 - 1
+        return F.pad(values.float(), (0, 25))

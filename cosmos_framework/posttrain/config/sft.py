@@ -125,6 +125,11 @@ class SFTConfig(HFRunConfig):
     data: SFTDatasetConfig = field(default_factory=SFTDatasetConfig)
     validation: SFTValidationConfig = field(default_factory=SFTValidationConfig)
     adapters: AdapterConfig | None = None
+    # Model-owned supervised flow matching shares the trainer, update loop,
+    # data cursor and checkpoint/validation transactions with conversation SFT.
+    task: str = "conversation"
+    flow_training_prefix: int = 10
+    flow_action_dim: int = 7
     micro_batch_size: int = 1
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -177,6 +182,18 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.task not in ("conversation", "flow_bc"):
+            raise ValueError("SFT task must be conversation or flow_bc")
+        if self.task == "flow_bc":
+            if self.grad_accum != 1:
+                raise ValueError("flow_bc SFT currently requires grad_accum=1")
+            if self.ce_exponent or self.moe_lbl_coeff or self.mask_think_opener:
+                raise ValueError("conversation loss settings cannot be applied to flow_bc")
+            if self.processor_kwargs:
+                raise ValueError("flow_bc preprocessing is owned by the selected model configuration")
+            for name in ("flow_training_prefix", "flow_action_dim"):
+                if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                    raise ValueError(f"SFT {name} must be a positive integer")
         if isinstance(self.adapters, dict):
             self.adapters = AdapterConfig(**self.adapters)
         if self.adapters is not None:

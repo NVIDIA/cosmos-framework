@@ -90,7 +90,7 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     return frozenset(net.state_dict())
 
 
-def export_merged_adapter(adapter: str, base: str, out: str) -> str:
+def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str | None = None) -> str:
     """One adapter into its materialized base, exported in FP32 without live mutation.
 
     BF16 dense GEMMs do not reproduce BF16 adapter forwards within the real-model
@@ -101,6 +101,14 @@ def export_merged_adapter(adapter: str, base: str, out: str) -> str:
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    if identity["architecture"] == "pi05":
+        from cosmos_framework.posttrain.model.pi05.adapter_export import export_merged
+
+        return export_merged(adapter, base, out, processor=processor)
+    if processor is not None:
+        raise ValueError(
+            "HF merged adapters require the processor beside the base; --processor is for native model-owned formats"
+        )
     metadata = merged_export_metadata(adapter, identity)
     if any(
         row["name"] != row["owner"]
@@ -187,6 +195,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--merged", action="store_true")
     parser.add_argument("--base", help="exact immutable local base snapshot, required for merged export")
+    parser.add_argument("--processor", help="native model processor assets, when stored separately from its base")
     args = parser.parse_args(argv)
     if args.merged != bool(args.base) or (args.adapter and not args.merged):
         parser.error("merged export requires --base; --adapter is accepted only with --merged")
@@ -199,9 +208,9 @@ def main(argv: list[str] | None = None) -> None:
         with tempfile.TemporaryDirectory(prefix="cosmos-portable-") as temporary:
             path = os.path.join(temporary, "adapter")
             write_adapter_artifact(path, identity, portable, provenance=provenance)
-            export_merged_adapter(path, args.base, args.out)
+            export_merged_adapter(path, args.base, args.out, processor=args.processor)
     else:
-        export_merged_adapter(args.adapter, args.base, args.out)
+        export_merged_adapter(args.adapter, args.base, args.out, processor=args.processor)
 
 
 if __name__ == "__main__":

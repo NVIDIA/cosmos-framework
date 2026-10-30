@@ -99,8 +99,13 @@ def runtime(recipe, opts, output):
         ]
     rl = validate_config(config)
     coordinates = {"rank": dist.get_rank(), "world_size": dist.get_world_size()}
-    data = build_sft_env(rl.data, rl.seed, **coordinates)
-    validation = build_sft_env(rl.validation.data, rl.validation.seed, training=False, **coordinates)
+    env_builder = build_sft_env
+    if rl.task == "flow_bc":
+        from cosmos_framework.posttrain.roles.env.flow_sft import build_flow_sft_env
+
+        env_builder = build_flow_sft_env
+    data = env_builder(rl.data, rl.seed, **coordinates)
+    validation = env_builder(rl.validation.data, rl.validation.seed, training=False, **coordinates)
     lifecycle = CheckpointLifecycle.from_config(config, rl, run_out_dir=output)
     trainer = build_trainer(config, rl, data, validation, lifecycle)
     return config, rl, data, validation, trainer
@@ -109,6 +114,22 @@ def runtime(recipe, opts, output):
 def probe_batches(config, data):
     from cosmos_framework.posttrain.entrypoints.sft import sft_policy_source
 
+    if config.rl.task == "flow_bc":
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.model.sft_source import build_flow_sft_packer
+
+        packer = build_flow_sft_packer(select_policy_backend(config).native_spec, config.rl)
+        saved = copy.deepcopy(data.state_dict())
+        batches = []
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed(321)
+            for _ in range(4):
+                batch = packer(data.get_samples(1))
+                batch["noise"] = torch.randn_like(batch["actions"])
+                batch["time"] = torch.full((batch["actions"].shape[0],), 0.3)
+                batches.append(batch)
+        data.load_state_dict(saved)
+        return batches
     source, trust = sft_policy_source(config)
     packer = build_sft_packer(
         source, max_length=config.rl.max_length, processor_kwargs=config.rl.processor_kwargs, trust_remote_code=trust
@@ -135,10 +156,22 @@ def logits(policy, batches, *, base_only=False):
             module.forward = MethodType(lambda self, x: torch.nn.functional.linear(x, self.weight, self.bias), module)
     try:
         with torch.no_grad():
-            result = [
-                policy.forward_policy_batch(policy.prepare_policy_batch(batch)).logits[:, -8:].float().cpu()
-                for batch in batches
-            ]
+            if hasattr(policy, "flow_matching_loss"):
+                result = []
+                for batch in batches:
+                    output = policy.flow_matching_loss(batch)
+                    if output.prediction is None:
+                        raise ValueError(
+                            "flow adapter qualification requires controlled predictions, not only a scalar loss"
+                        )
+                    result.append(
+                        torch.cat((output.prediction.float().flatten(), output.loss.float().reshape(1))).cpu()
+                    )
+            else:
+                result = [
+                    policy.forward_policy_batch(policy.prepare_policy_batch(batch)).logits[:, -8:].float().cpu()
+                    for batch in batches
+                ]
     finally:
         if base_only:
             for module in adapters:
@@ -272,6 +305,7 @@ def main():
         "trainable_tensors": len(after),
         "changed_tensors": sum(changed.values()),
         "initial_max_abs_logit_error": init_error,
+        "controlled_output_kind": "flow_velocity_and_loss" if rl.task == "flow_bc" else "language_logits",
         "resume_max_abs_parameter_error": resume_error,
         "frozen_sha256": frozen,
         "train": reports,

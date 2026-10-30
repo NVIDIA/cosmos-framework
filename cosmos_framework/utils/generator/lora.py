@@ -86,10 +86,14 @@ class LoraInjectedLinear(nn.Linear):
         denominator = math.sqrt(self._lora_rank) if self._lora_use_rslora else self._lora_rank
         return self._lora_alpha / denominator
 
+    def adapter_output(self, x: torch.Tensor) -> torch.Tensor:
+        """Unscaled adapter branch; subclasses may own its precision context."""
+        adapter_input = self.lora_dropout(x).to(dtype=self.lora_A.weight.dtype)
+        return self.lora_B(self.lora_A(adapter_input))
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base_out = F.linear(x, self.weight, self.bias)
-        adapter_input = self.lora_dropout(x).to(dtype=self.lora_A.weight.dtype)
-        lora_out = self.lora_B(self.lora_A(adapter_input)).to(dtype=base_out.dtype)
+        lora_out = self.adapter_output(x).to(dtype=base_out.dtype)
         return base_out + self._lora_scale * lora_out
 
     @torch.no_grad()

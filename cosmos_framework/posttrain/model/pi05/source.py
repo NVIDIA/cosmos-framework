@@ -57,6 +57,10 @@ class Pi05Source:
     @classmethod
     def resolve(cls, config: Pi05ModelConfig) -> Pi05Source:
         directory = Path(config.checkpoint_path).expanduser().resolve()
+        if (directory / "merged_model.json").exists():
+            raise ValueError(
+                "pi05 merged FP32 artifacts require model.pi05.adapter_export.load_merged; the original-source loader would re-round them to BF16"
+            )
         result = cls(
             _checkpoint_file(directory),
             Path(config.tokenizer_path).expanduser().resolve(),

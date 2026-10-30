@@ -207,14 +207,21 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
                 self.initial_A.copy_(self.lora_A.weight)
                 self.initial_B.copy_(self.lora_B.weight)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # FSDP keeps adapter storage FP32; disable enclosing autocast for the native
-        # low-rank math. The frozen base and its input retain their compute dtype.
+    def adapter_output(self, x: torch.Tensor) -> torch.Tensor:
+        # Reuse the native low-rank math, with FP32 adapter accumulation even
+        # when a family owns an autocast forward around its frozen base.
         with torch.autocast(device_type=x.device.type, enabled=False):
-            if self.method == "lora":
-                return super().forward(x)
-            base = F.linear(x, self.weight, self.bias)
-            dropped = self.lora_dropout(x)
+            return super().adapter_output(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.method == "lora":
+            return super().forward(x)
+        # Preserve the family's base autocast boundary (e.g. FP32 GR00T master
+        # weights or Alpamayo's FP32 Fourier inputs feeding BF16 projections).
+        base = F.linear(x, self.weight, self.bias)
+        dropped = self.lora_dropout(x)
+        base_dropped = F.linear(dropped, self.weight, None) if self.method == "dora" else None
+        with torch.autocast(device_type=x.device.type, enabled=False):
             delta = self.lora_B(self.lora_A(dropped.float())) * self._lora_scale
             if self.method == "pissa":
                 initial = F.linear(F.linear(x.float(), self.initial_A), self.initial_B) * self._lora_scale
@@ -224,8 +231,7 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
             direction = super().merged_weight(self.weight, self.lora_A.weight, self.lora_B.weight, dtype=torch.float32)
             norm = direction.norm(dim=1).clamp_min(torch.finfo(torch.float32).tiny)
             ratio = self.magnitude / norm
-            base_dropped = F.linear(dropped, self.weight, None).float()
-            return (base.float() + (ratio - 1) * base_dropped + ratio * delta).to(base.dtype)
+            return (base.float() + (ratio - 1) * base_dropped.float() + ratio * delta).to(base.dtype)
 
     @torch.no_grad()
     def merged_state_weight(self, state: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
@@ -350,6 +356,7 @@ def prepare_adapter_model(
     distributed: bool = False,
     family: str | None = None,
     fsdp_block_types: tuple[type, ...] | None = None,
+    source_identity: dict | None = None,
 ) -> None:
     """Shared loaded-base -> adapter/trainability/artifact seam, before FSDP.
 
@@ -376,6 +383,7 @@ def prepare_adapter_model(
         media,
         base_dtype=base_dtype,
         architecture=binding.name,
+        source_identity=source_identity,
     )
     if config.warm_start:
         load_adapter_artifact(net, config.warm_start)
