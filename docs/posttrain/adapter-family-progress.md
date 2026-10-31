@@ -28,7 +28,8 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | Physical-action SFT lifecycle | `config/sft.py::SFTConfig.task`, existing SFT loop and `flow_bc`, `roles/env/flow_sft.py` | Implemented. Shares trainer, checkpoint boundary, rank cursor and validation transaction; reports action-element counts separately from text tokens. Controlled continuation and validation-padding CPU tests pass |
 | Model-owned base autocast with FP32 adapters | Native `LoraInjectedLinear.adapter_output`, `PosttrainAdapterLinear` | Implemented. Eight method/base-dtype fixtures pass FP32-input autocast tests; ordinary native LoRA mathematics reused |
 | New installed revision and real training | Wheel byte attestation, Slurm qualification harness | Commit `3a9552b`, wheel SHA `fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d`, image SHA `4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a`; 223 installed CPU tests passed. Qwen3 job `37701630` completed all 16 four-method 1/2-GPU AC-none/full cases, including continuation and both reload types. Native Qwen3-VL job `37701632` also completed all 16 cases, with text, real image/video and WTS fixtures, differing modalities across ranks, all target updates and unchanged frozen base |
-| Qwen3.5 public checkpoint MTP export | `checkpoint/tools/adapters.py`, `test_adapter_qwen3_5_export.py` | Job `37701635` passed training/resume/portable reload, then failed merge on unused source MTP tensors. Explicit bounded exclusion implemented and CPU-tested; 225 installed tests passed at `2f8d33f`; GPU rerun `37705883` queued. Failure preserved |
+| Qwen3.5 public checkpoint MTP export | `checkpoint/tools/adapters.py`, `test_adapter_qwen3_5_export.py` | Job `37701635` passed training/resume/portable reload, then failed merge on unused source MTP tensors. Explicit bounded exclusion implemented and CPU-tested; 225 installed tests passed at `2f8d33f`; per-method GPU reruns listed below. Failure preserved |
+| Local GPU environment identity | `tests/qualify_adapters.py::installed_environment`, `test_qualification_environment.py` | Implemented at `5eecf10`; 34 environment/native harness tests pass. Host results bind a separately validated interpreter/package/CUDA/wheel manifest; they never report it as a container image |
 
 The dense HF path currently binds Qwen2, Qwen3, Llama, Mistral, Gemma and Gemma2.
 The six small fixtures use actual Transformers implementations, three optimizer
@@ -101,13 +102,12 @@ PiSSA initialization on resume. These are CPU results; installed real-model
 training and held-out trajectory metrics remain outstanding.
 
 
-Current Slurm submissions (pending is not a training result): π0.5 matrix
-`37706304`; Qwen3.5 corrected export matrix `37705883`; native Qwen3-VL full WTS
+Current Slurm submissions (pending is not a training result): native Qwen3-VL full WTS
 LoRA `37706319`, rsLoRA `37706324`, DoRA `37706326`, PiSSA `37706327`. Every WTS
 job first gates its full-resolution/gradient-accumulation profile. Alpamayo
 image `af407d4`, job `37706329`, passed **105 installed tests, 1 skip**;
 image SHA `2198e81619a314702217cdf42d71b663b5bfc7ccb0df26ce80ecb6e99a2f0280`.
-Alpamayo's actual KITTI matrix is queued as `37706970`. GR00T source `e207c5c`
+Alpamayo's actual KITTI method jobs are listed below. GR00T source `e207c5c`
 passed installed tests in image job `37707039`; this does not remove the
 gated backbone-metadata requirement. The first pending MoE payload
 `37706615` was cancelled before execution: its generic merged checker attempted
@@ -126,9 +126,9 @@ on Transformers 5.8.1. Real MoE GPU qualification is still outstanding.
 GR00T image `e207c5c` completed with **130 installed tests, 1 skip** and SHA
 `92bf607dadf8d3d320c7ca93bd25deb62f473a184edf9de66d7f4d1a4a386bda`.
 The reproducible x86 flow installer in `docker/posttrain/flow-environment` was
-built from a fresh prefix in job `37707556`; all pinned distributions and native
-source hashes matched and the same 130 tests passed (1 skip). Container publication
-is separate from these installed-test results.
+built from a fresh prefix in completed job `37707556`; all pinned distributions and native
+source hashes matched and the same 130 tests passed (1 skip). Published image SHA:
+`fe6aa5a8d1779cb01018eb58c40b68295ea4d173254120fa81b58d2cb3883eca`.
 
 Public dense checkpoints staged by job `37707555`: Qwen2.5-0.5B-Instruct
 `7ae557604adf67be50417f59c2c2f167def9a775`, SmolLM2-135M-Instruct (Llama
@@ -141,3 +141,27 @@ The extended shared regression suite passed **380 tests, 1 skip**, including
 targets, all four methods, frozen-base checks and exact next-update restoration.
 The source-tracing tests reject dropped/reordered messages and unsupported text
 templates. This remains separate from the queued pretrained GPU matrices.
+
+The pending monolithic qualification jobs `37705883`, `37706304`, `37706970`
+and `37707878` were cancelled with no start and zero elapsed time, then replaced
+by shorter independent method jobs. Their sealed inputs and cancellation evidence
+are preserved. Every replacement retains its original training, continuation,
+portable reload and merged reload gates.
+
+| Family | LoRA | rsLoRA | DoRA | PiSSA | Cases per job |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3.5 | 37707970 | 37707974 | 37707976 | 37707978 | 1/2 GPU × AC none/full |
+| π0.5 | 37707983 | 37707984 | 37707986 | 37707987 | 1/2 GPU × AC none/full |
+| Alpamayo | 37707992 | 37707994 | 37708001 | 37708005 | 1/2 GPU × AC none/vision |
+| Qwen3-VL-MoE | 37708008 | 37708009 | 37708011 | 37708012 | 2 GPU, AC full |
+| Qwen2.5 | 37708301 | 37708306 | 37708308 | 37708309 | 1/2 GPU × AC none/full |
+| SmolLM2 (Llama architecture) | 37708310 | 37708311 | 37708312 | 37708313 | 1/2 GPU × AC none/full |
+| Mistral | 37708398 | 37708399 | 37708400 | 37708401 | 1/2 GPU, AC full |
+
+The text-family image at `db7c2ab` passed **380 installed tests, 1 skip** in
+completed job `37707982`; SHA:
+`ce9759d95698b4fc716c225e4cbe1bc2d3d0e8e122e31cfc28fcfa1bbf340bf7`.
+The WTS evaluation jobs `37707298`, `37707302`, `37707305`, `37707306`
+depend on their corresponding successful full-epoch training jobs. They evaluate
+all 2,676 validation examples and report the reserved 576-example scene-disjoint
+slice separately. No queued job is counted as a passing result.
