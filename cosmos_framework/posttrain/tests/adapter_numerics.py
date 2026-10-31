@@ -11,9 +11,38 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 from pathlib import Path
 
 import torch
+
+
+def configure_qualification_numerics() -> dict:
+    """Use the same kernels for controlled training, reload and merge probes.
+
+    Native MoE's BF16 scatter reduction is order-sensitive. Comparing a
+    deterministic training probe with the default atomic inference reduction
+    measures a kernel change, even when every saved tensor is identical. This
+    only configures qualification processes; normal model loading is unchanged.
+    """
+    workspace = os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    if workspace not in (":4096:8", ":16:8"):
+        raise ValueError(
+            "controlled adapter qualification requires CUBLAS_WORKSPACE_CONFIG=:4096:8 or :16:8; "
+            "set it before launching the process"
+        )
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    return {
+        "format": "cosmos-adapter-qualification-numerics-v1",
+        "deterministic_algorithms": True,
+        "float32_matmul_precision": "highest",
+        "matmul_allow_tf32": False,
+        "cudnn_benchmark": False,
+        "cublas_workspace_config": workspace,
+    }
 
 
 class HFProbePolicy:

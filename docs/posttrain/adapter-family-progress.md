@@ -24,7 +24,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Component/layer selection and independent settings | `model/adapter_families.py`, `resolve_targets`; `test_adapter_families.py`, `test_adapters_native.py` | Implemented and validated. Every selector must match its component; alias conflicts and unsupported target types fail before injection |
 | Placement, trainability and optimizer ownership | `install_adapters`, `assert_trainability`, `optimizer_groups`, SFT `build_trainer` | Implemented and validated. Logical trainable inventory equals optimizer membership, without duplicates or frozen parameters |
 | HF construction, tying, freezing and FSDP lifecycle | `model/hf.py::HFModel.setup`; `test_model_hf.py`, `test_text_sft_adapters.py` | Implemented and validated. Load/materialize base, install adapters, apply distributed transformation, then construct optimizer; adapter-disabled branch retained |
-| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE implemented, actual training/resume passed for LoRA, portable reload failed and is under diagnosis |
+| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE LoRA training/resume passed. Reload-verifier kernel mismatch diagnosed and corrected; installed reload/export gates pending |
 | Text SFT templates and masks | `data/packer/text_sft.py`, existing source-traced SFT masker; `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented and validated for explicit ChatML, Llama3, Mistral and Gemma protocols. Unsupported or reordered renderings fail |
 | Vision/projector/action gradient paths | Native Qwen ordered-vision forward, `model/pi05/modeling.py::training_condition`, Alpamayo and GR00T native SFT policies; family fixtures | Implemented and validated in completed pretrained cases; GR00T has small-model evidence only. Differing rank modalities tested on native VLM |
 | Fresh initialization, warm start, exact resume | Shared adapter preparation and checkpoint lifecycle; qualification next-update comparison | Implemented and validated in completed cases. Resume restores optimizer/scheduler/data/RNG clock and skips method initialization/decomposition |
@@ -55,7 +55,7 @@ FP32 merged-file reload. These are correctness subsets, not complete task benchm
 | Qwen3.5-0.8B | 2 GPU / full | Passed (4/4 cases) |
 | π0.5 LIBERO SFT | 2 GPU / full | Passed (4/4 cases) |
 | Alpamayo-R1-10B | 2 GPU / vision | Passed (4/4 cases) |
-| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | Not yet qualified: LoRA portable reload failed; training/resume passed |
+| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | Not yet qualified: LoRA training/resume passed; corrected installed reload and merged-export gates pending |
 | GR00T-N1.7 LIBERO-Spatial | No pretrained profile qualified | Blocked on authorized backbone metadata |
 
 Text fixtures use eight real GSM8K training rows and eight held-out test rows.
@@ -136,6 +136,13 @@ fused three-dimensional expert tensors remain unsupported targets. Its existing
 native grouped-mm forward stays BF16. The separate stock HF FP32 export oracle
 uses two GPUs, checks every serialized tensor and records native-versus-stock BF16
 drift. It does not introduce another expert kernel or training loop.
+The initial portable reload verifier omitted the deterministic kernel setting used
+by training. All 882 frozen checkpoint tensors matched the original BF16 base;
+three full-model reload probes with matching settings then matched training
+exactly. `tests/adapter_numerics.py::configure_qualification_numerics` now aligns
+and records the controlled profile across training/reload, with a real CUDA
+grouped-expert forward/backward regression. This diagnosis does not qualify the
+pending native-to-stock export comparison.
 
 Other bound Qwen2-VL/2.5-VL small fixtures do not qualify their public checkpoints'
 legacy processor/namespaces; the production SFT packer still refuses them.

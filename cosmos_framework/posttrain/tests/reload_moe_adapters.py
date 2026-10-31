@@ -28,6 +28,7 @@ from cosmos_framework.posttrain.tests.adapter_numerics import (
     HFProbePolicy,
     assert_bf16_deployment_drift,
     compare_logits,
+    configure_qualification_numerics,
 )
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
@@ -115,8 +116,7 @@ def main():
     parser.add_argument("--max-memory-gib", type=float, default=70)
     args = parser.parse_args()
     evidence = attest(args.wheel, args.build_record)
-    torch.set_float32_matmul_precision("highest")
-    torch.backends.cuda.matmul.allow_tf32 = False
+    evidence["numerical_profile"] = configure_qualification_numerics()
     root = Path(args.run)
     identity, adapter_state = read_adapter_artifact(str(root / "portable"))
     native_reload = json.loads((root / "portable-reload.json").read_text())
@@ -130,6 +130,8 @@ def main():
     batches, native = [], []
     for path in sorted(root.glob("probes-rank*.pt")):
         record = torch.load(path, map_location="cpu", weights_only=True)
+        if record.get("numerical_profile", evidence["numerical_profile"]) != evidence["numerical_profile"]:
+            raise ValueError("MoE probe numerical profile differs; use the recorded qualification kernel settings")
         if record["identity"] != identity:
             raise ValueError("MoE controlled probe identity mismatch")
         batches.extend(record["batches"])

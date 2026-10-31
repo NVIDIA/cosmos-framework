@@ -19,6 +19,7 @@ from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
 from cosmos_framework.posttrain.tests.adapter_numerics import (
     HFProbePolicy,
     compare_logits,
+    configure_qualification_numerics,
     verify_promoted_merge,
 )
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
@@ -72,14 +73,15 @@ def main():
     if args.probe_run and not args.merged:
         parser.error("--probe-run requires --merged; portable exact reload needs its own saved reference outputs")
     evidence = attest(args.wheel, args.build_record)
-    torch.set_float32_matmul_precision("highest")
-    torch.backends.cuda.matmul.allow_tf32 = False
+    evidence["numerical_profile"] = configure_qualification_numerics()
     root = Path(args.run)
     identity, _ = read_adapter_artifact(str(root / "portable"))
     source = json.loads((root / "portable/adapter_manifest.json").read_text())["provenance"]
     batches, references = [], []
     for path in sorted(Path(args.probe_run or root).glob("probes-rank*.pt")):
         record = torch.load(path, map_location="cpu", weights_only=True)
+        if record.get("numerical_profile", evidence["numerical_profile"]) != evidence["numerical_profile"]:
+            raise ValueError("probe numerical profile differs; use the recorded qualification kernel settings")
         for key in ("base", "processor", "media", "base_storage_dtype"):
             if record["identity"][key] != identity[key]:
                 raise ValueError(f"probe input compatibility differs in {key}; use matching media/base inputs")

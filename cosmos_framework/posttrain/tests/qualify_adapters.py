@@ -34,6 +34,7 @@ from cosmos_framework.posttrain.entrypoints.sft import build_trainer, evaluate, 
 from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, assert_trainability, canonical_name
 from cosmos_framework.posttrain.roles.env.sft import build_sft_env
 from cosmos_framework.posttrain.roles.trainer.validation.runtime import reshard_fsdp_modules
+from cosmos_framework.posttrain.tests.adapter_numerics import configure_qualification_numerics
 from cosmos_framework.posttrain.utils.dist import init_local_process_group
 from cosmos_framework.utils.config import load_config
 
@@ -258,11 +259,8 @@ def main():
     assert evidence.get("environment") or (evidence["container_sha256"] and len(evidence["container_sha256"]) == 64), (
         "qualification requires a sealed container or isolated-environment identity"
     )
+    evidence["numerical_profile"] = configure_qualification_numerics()
     init_local_process_group()
-    torch.set_float32_matmul_precision("highest")
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
     rank, world = dist.get_rank(), dist.get_world_size()
     root = Path(args.out)
     root.mkdir(parents=True, exist_ok=True)
@@ -387,7 +385,12 @@ def main():
     # tensors and outputs after this process exits, so no live module can leak in.
     expected_logits = logits(trainer.model, probes)
     torch.save(
-        {"batches": probes, "logits": expected_logits, "identity": trainer.model.net._posttrain_adapter_identity},
+        {
+            "batches": probes,
+            "logits": expected_logits,
+            "identity": trainer.model.net._posttrain_adapter_identity,
+            "numerical_profile": evidence["numerical_profile"],
+        },
         root / f"probes-rank{rank}.pt",
     )
     record.update(

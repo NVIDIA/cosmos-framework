@@ -211,6 +211,15 @@ bitwise controlled next-update recovery. Portable GPU reload uses `2e-5` and a
 `2e-6` mean bound; controlled GPU continuation uses `atol=1e-7, rtol=1e-5` on
 trainable parameters and optimizer state.
 
+Controlled training and reload qualification both enable PyTorch deterministic
+algorithms, disable TF32 matmul and cuDNN benchmarking, and record these settings
+as `numerical_profile`. Launch with `CUBLAS_WORKSPACE_CONFIG=:4096:8` (or
+`:16:8`) before CUDA initialization. Native MoE's BF16 atomic expert combine
+otherwise changes summation order; comparing it with a deterministic reference
+is a different execution profile, even with identical weights. Normal model
+loading retains the caller's settings. Reproducible reload requires matching the
+recorded execution profile as well as the artifact and inputs.
+
 Merged export has three mandatory checks: every serialized tensor equals the
 FP32 reference merge exactly; native merged and stock HF forwards match the
 portable adapter evaluated in FP32 (`atol=5e-4, rtol=2e-4`, mean error at most

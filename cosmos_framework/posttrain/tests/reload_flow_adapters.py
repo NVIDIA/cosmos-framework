@@ -10,6 +10,7 @@ import torch
 
 from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration, read_adapter_artifact
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
+from cosmos_framework.posttrain.tests.adapter_numerics import configure_qualification_numerics
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
 
@@ -20,7 +21,7 @@ def main():
     parser.add_argument("--merged")
     args = parser.parse_args()
     evidence = attest(args.wheel, args.build_record)
-    torch.set_float32_matmul_precision("highest")
+    evidence["numerical_profile"] = configure_qualification_numerics()
     root = Path(args.run)
     identity, _ = read_adapter_artifact(str(root / "portable"))
     cfg = adapter_configuration(identity)
@@ -63,6 +64,8 @@ def main():
     for path in sorted(root.glob("probes-rank*.pt")):
         with torch.serialization.safe_globals(safe_types):
             record = torch.load(path, map_location="cpu", weights_only=True)
+        if record.get("numerical_profile", evidence["numerical_profile"]) != evidence["numerical_profile"]:
+            raise ValueError("flow probe numerical profile differs; use the recorded qualification kernel settings")
         if record["identity"] != identity:
             raise ValueError("flow probe identity differs from its portable adapter")
         batches.extend(record["batches"])
