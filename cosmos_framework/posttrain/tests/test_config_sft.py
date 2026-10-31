@@ -1025,7 +1025,11 @@ def test_deterministic_knob_reaches_setup(monkeypatch: pytest.MonkeyPatch) -> No
     state: dict[str, Any] = {}
     for deterministic in (False, True):
         state["rl"] = SimpleNamespace(
-            deterministic=deterministic, seed=0, data=None, validation=SimpleNamespace(enabled=False)
+            task="conversation",
+            deterministic=deterministic,
+            seed=0,
+            data=None,
+            validation=SimpleNamespace(enabled=False),
         )
         bodies = entry.make_setup("recipe.py", [])()
         assert bodies["policy"] == "trainer"
