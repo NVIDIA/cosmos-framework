@@ -1,6 +1,6 @@
 {
   "format": "cosmos-adapter-family-qualification-v1",
-  "generated_utc": "2026-10-31T04:09:32.892479+00:00",
+  "generated_utc": "2026-10-31T04:38:24.597660+00:00",
   "scope": "Real pretrained correctness subsets using existing SFT; not full task benchmarks or full-epoch WTS. All local cases use A10080, FP32 adapter parameters, BF16 base except model-owned physical precision. Shared CPU/disk timings are not throughput benchmarks. Merged exports compare against a private FP32 portable reference. FP32 conversion is not guaranteed to preserve BF16 decisions: the native 30B MoE LoRA case changes 6/64 controlled greedy positions versus BF16, despite FP32 merge equivalence and exact BF16 portable reload.",
   "sources": {
     "3a9552b-4c7d3d3e": {
@@ -1823,6 +1823,57 @@
         "pissa-w2-full": {
           "status": "not_completed"
         },
+        "dora-w1-full-slurm-37715445": {
+          "status": "passed",
+          "source": "8a8ead7-c4a01512",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 105,
+          "trainable_parameters": 3222528,
+          "trainable_tensors_changed": 315,
+          "training_loss_mean": 0.37897377957900363,
+          "training_loss_last": 0.7242415547370911,
+          "validation_before": {
+            "val/loss_avg": 0.39948214526203546,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.38828981627117504,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "02c17fc12133247b00edb24873e3fae9963d7105eb19f4a688da7082c595d154",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 1.5079975128173828e-05,
+          "merge_precision": "float32",
+          "portable_source": "8a8ead7-c4a01512",
+          "merged_source": "8a8ead7-c4a01512",
+          "peak_cuda_allocated_bytes_rank0": 13655322112,
+          "training_and_checkpoint_seconds": 289.88230309600476,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715445",
+          "report_sha256": {
+            "training-rank0.json": "c434678260c2d5885d58b0296bd0a8ed1fcce68b9f11d8b9d7266ae2a921ee9c",
+            "portable-reload.json": "7d307c71d59bb8b825ddfcc4a1f980fe8038246d8ad18a13c89f3da3bfd3cc26",
+            "merged-reload.json": "b5753b94a775670ac2f96550306570a246bf2cbf7e8c4041338ed4e8d26f4ffc"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-12fe8af5-45c5-f84b-af6c-00be98898ff2, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "e40b0a7109e583ef7b1e95ebe4e84d956a1ca9bcdc45b46ca07494dee82071ed"
+          },
+          "job_accounting_at_collection": "37715445|COMPLETED|0:0|00:25:05|batch-block4-1034|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+        },
         "dora-w1-none-slurm-37715445": {
           "status": "passed",
           "source": "8a8ead7-c4a01512",
@@ -1872,7 +1923,58 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-12fe8af5-45c5-f84b-af6c-00be98898ff2, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "e40b0a7109e583ef7b1e95ebe4e84d956a1ca9bcdc45b46ca07494dee82071ed"
           },
-          "job_accounting_at_collection": "37715445|RUNNING|0:0|00:16:42|batch-block4-1034|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+          "job_accounting_at_collection": "37715445|COMPLETED|0:0|00:25:05|batch-block4-1034|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+        },
+        "lora-w1-full-slurm-37715443": {
+          "status": "passed",
+          "source": "8a8ead7-c4a01512",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 105,
+          "trainable_parameters": 3047424,
+          "trainable_tensors_changed": 210,
+          "training_loss_mean": 0.38373080806599724,
+          "training_loss_last": 0.757131040096283,
+          "validation_before": {
+            "val/loss_avg": 0.39948214526203546,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3892259967936711,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "02c17fc12133247b00edb24873e3fae9963d7105eb19f4a688da7082c595d154",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.9802322387695312e-06,
+          "merge_precision": "float32",
+          "portable_source": "8a8ead7-c4a01512",
+          "merged_source": "8a8ead7-c4a01512",
+          "peak_cuda_allocated_bytes_rank0": 13527670272,
+          "training_and_checkpoint_seconds": 332.67786950431764,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715443",
+          "report_sha256": {
+            "training-rank0.json": "f31f96258aacfa975014cf8b91ff2815c287d1957d336db5994b530a26eb3795",
+            "portable-reload.json": "9998fc7e9467f1d81e375931f242b7e99b576fe27e46a24b56018d5bef5fd4ed",
+            "merged-reload.json": "34ab7a58de0401bbcf11e68f4dee22b718331e12a73d3ab0315675e59799f8d0"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-e92caa23-a1bc-e2b0-cce0-ef80c4fff9e5, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "65ca88be8593e82ca9497caeb86e2f0c76326288e3202ccf63f4af94f2367276"
+          },
+          "job_accounting_at_collection": "37715443|COMPLETED|0:0|00:26:05|batch-block7-01296|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
         },
         "lora-w1-none-slurm-37715443": {
           "status": "passed",
@@ -1923,7 +2025,58 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-e92caa23-a1bc-e2b0-cce0-ef80c4fff9e5, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "65ca88be8593e82ca9497caeb86e2f0c76326288e3202ccf63f4af94f2367276"
           },
-          "job_accounting_at_collection": "37715443|RUNNING|0:0|00:17:40|batch-block7-01296|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+          "job_accounting_at_collection": "37715443|COMPLETED|0:0|00:26:05|batch-block7-01296|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+        },
+        "pissa-w1-full-slurm-37715446": {
+          "status": "passed",
+          "source": "8a8ead7-c4a01512",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 105,
+          "trainable_parameters": 3047424,
+          "trainable_tensors_changed": 210,
+          "training_loss_mean": 0.21881565782758924,
+          "training_loss_last": 0.22086581587791443,
+          "validation_before": {
+            "val/loss_avg": 0.39948214526203546,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3192071144215085,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "06793f48d11d7ade559af4f6a85622835df39f58e50b120f553a356d9c28f7bf",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 1.9669532775878906e-06,
+          "merge_precision": "float32",
+          "portable_source": "8a8ead7-c4a01512",
+          "merged_source": "8a8ead7-c4a01512",
+          "peak_cuda_allocated_bytes_rank0": 13539859968,
+          "training_and_checkpoint_seconds": 341.90662754001096,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715446",
+          "report_sha256": {
+            "training-rank0.json": "429d256ebf536be97253ebfc8e4cb7552ea5d090cb0caaa2d1e3ffa72857c6c5",
+            "portable-reload.json": "348b95b01792e29c7c496edd241a9d23c7c03d9492feb80a3ddbb751e16543fa",
+            "merged-reload.json": "2d1c400810b642449807bda53a9860e2b8bd275e2c96dcf614ed36508787e095"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-4dee5e4b-674f-be76-434d-44dbd086d1d7, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "2c6d0e28c7cd62cac9da497ac075443ccef9e4f7ad90dde3957d83c45b3a419e"
+          },
+          "job_accounting_at_collection": "37715446|COMPLETED|0:0|00:26:05|batch-block4-1051|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
         },
         "pissa-w1-none-slurm-37715446": {
           "status": "passed",
@@ -1974,7 +2127,58 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-4dee5e4b-674f-be76-434d-44dbd086d1d7, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "2c6d0e28c7cd62cac9da497ac075443ccef9e4f7ad90dde3957d83c45b3a419e"
           },
-          "job_accounting_at_collection": "37715446|RUNNING|0:0|00:16:42|batch-block4-1051|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+          "job_accounting_at_collection": "37715446|COMPLETED|0:0|00:26:05|batch-block4-1051|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+        },
+        "rslora-w1-full-slurm-37715444": {
+          "status": "passed",
+          "source": "8a8ead7-c4a01512",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 105,
+          "trainable_parameters": 3047424,
+          "trainable_tensors_changed": 210,
+          "training_loss_mean": 0.3082694398860137,
+          "training_loss_last": 0.3874568045139313,
+          "validation_before": {
+            "val/loss_avg": 0.39948214526203546,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.36071906133808873,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "02c17fc12133247b00edb24873e3fae9963d7105eb19f4a688da7082c595d154",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.5033950805664062e-06,
+          "merge_precision": "float32",
+          "portable_source": "8a8ead7-c4a01512",
+          "merged_source": "8a8ead7-c4a01512",
+          "peak_cuda_allocated_bytes_rank0": 13527670272,
+          "training_and_checkpoint_seconds": 275.9348752265796,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715444",
+          "report_sha256": {
+            "training-rank0.json": "db4f32d8526b5461efa2193612206cbdca5e748a6fee541be9803f8d12b07add",
+            "portable-reload.json": "7e0f7c92bf25024a5f73b90f633c18527228547d40ccf1e0238dbbf8b26cb640",
+            "merged-reload.json": "4173e1d13c1fc34689cf6ac2af31ce6e651b69f6cbc0e015f837deed89d89f40"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-18a94b0c-d529-4b53-0669-2d5cfeea9cf1, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "a83d6b31f3a7979c41ee8fa14fc4684dafe6f1cca4186f91b8b62cd414841a2b"
+          },
+          "job_accounting_at_collection": "37715444|COMPLETED|0:0|00:24:33|batch-block4-2071|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
         },
         "rslora-w1-none-slurm-37715444": {
           "status": "passed",
@@ -2025,10 +2229,16 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-18a94b0c-d529-4b53-0669-2d5cfeea9cf1, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "a83d6b31f3a7979c41ee8fa14fc4684dafe6f1cca4186f91b8b62cd414841a2b"
           },
-          "job_accounting_at_collection": "37715444|RUNNING|0:0|00:16:42|batch-block4-2071|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
+          "job_accounting_at_collection": "37715444|COMPLETED|0:0|00:24:33|batch-block4-2071|billing=1,cpu=8,gres/gpu=1,mem=96000M,node=1"
         }
       },
-      "manifest_sha256": "df13eeaaa52bde934fd0f8e255e7abfccdce09073c23de43d633a433f9763ac6"
+      "manifest_sha256": "df13eeaaa52bde934fd0f8e255e7abfccdce09073c23de43d633a433f9763ac6",
+      "slurm_passed_matrices": [
+        "37715445",
+        "37715443",
+        "37715446",
+        "37715444"
+      ]
     },
     "gemma": {
       "matrix_passed": true,
@@ -6569,7 +6779,7 @@
           }
         },
         "rslora-w2-full": {
-          "status": "not_completed"
+          "status": "training_and_resume_passed_reload_pending"
         },
         "dora-w2-full": {
           "status": "not_completed"
@@ -6812,7 +7022,7 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8a146707-684d-2802-c030-737b52b3659c, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-82be0136-4c86-8ced-7d6e-f1de450fed71, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "79cc80d5418fa39142c046dd8b3d5e053fe68f381ed7190e6a1cedd90d54de1e"
           },
-          "job_accounting_at_collection": "37715429|RUNNING|0:0|00:17:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715429|COMPLETED|0:0|00:27:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "dora-w1-none-slurm-37715429": {
           "status": "passed",
@@ -6863,7 +7073,111 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8a146707-684d-2802-c030-737b52b3659c, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-82be0136-4c86-8ced-7d6e-f1de450fed71, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "79cc80d5418fa39142c046dd8b3d5e053fe68f381ed7190e6a1cedd90d54de1e"
           },
-          "job_accounting_at_collection": "37715429|RUNNING|0:0|00:17:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715429|COMPLETED|0:0|00:27:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "dora-w2-full-slurm-37715429": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1425696,
+          "trainable_tensors_changed": 231,
+          "training_loss_mean": 0.06079896994342562,
+          "training_loss_last": 0.2960153818130493,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.00038166937936859373,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.152557373046875e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 8060994048,
+          "training_and_checkpoint_seconds": 136.06877448782325,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715429",
+          "report_sha256": {
+            "training-rank0.json": "be2904b35271b2738b8987536292a7d8eb625bff2dfa7d6e21b3c48095404c02",
+            "training-rank1.json": "b3abf8ec910a95c0c4b54633a014149c2d19969c0216ce2293f8fdf2b5eedd79",
+            "portable-reload.json": "e2d0c084744111d8883a1635cdddc7e2dc1e479e8ac97dcb3cf4fe1f7f270755",
+            "merged-reload.json": "4dd084a5b6562cc5108ce17fbaab4da325a6bbc9d0e5b7734c4321b9557d6234"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8a146707-684d-2802-c030-737b52b3659c, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-82be0136-4c86-8ced-7d6e-f1de450fed71, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "79cc80d5418fa39142c046dd8b3d5e053fe68f381ed7190e6a1cedd90d54de1e"
+          },
+          "job_accounting_at_collection": "37715429|COMPLETED|0:0|00:27:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "dora-w2-none-slurm-37715429": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1425696,
+          "trainable_tensors_changed": 231,
+          "training_loss_mean": 0.06079896994342562,
+          "training_loss_last": 0.2960153818130493,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.00038166937936859373,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.152557373046875e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 9868444160,
+          "training_and_checkpoint_seconds": 168.2353181131184,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715429",
+          "report_sha256": {
+            "training-rank0.json": "9ea8ca39a8d0ae52bcd2ea36129a72df408703cd26f814540185b5752cc2776d",
+            "training-rank1.json": "253e7f99d705ce2727a2cf1517d2677602f4fdc855df42e1901916815f580638",
+            "portable-reload.json": "e2d0c084744111d8883a1635cdddc7e2dc1e479e8ac97dcb3cf4fe1f7f270755",
+            "merged-reload.json": "4dd084a5b6562cc5108ce17fbaab4da325a6bbc9d0e5b7734c4321b9557d6234"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8a146707-684d-2802-c030-737b52b3659c, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-82be0136-4c86-8ced-7d6e-f1de450fed71, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "79cc80d5418fa39142c046dd8b3d5e053fe68f381ed7190e6a1cedd90d54de1e"
+          },
+          "job_accounting_at_collection": "37715429|COMPLETED|0:0|00:27:40|batch-block5-04076|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "lora-w1-full-slurm-37715425": {
           "status": "passed",
@@ -6914,7 +7228,7 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-ae9c8132-8e35-497b-6113-8284a0475e64, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-c137e336-dedb-405d-a26f-00fb7be61aec, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "10eaa9278da680e554d43003b00eabada0331393a1d6e8a88d227c15fee7801e"
           },
-          "job_accounting_at_collection": "37715425|RUNNING|0:0|00:17:40|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715425|COMPLETED|0:0|00:27:24|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "lora-w1-none-slurm-37715425": {
           "status": "passed",
@@ -6965,7 +7279,111 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-ae9c8132-8e35-497b-6113-8284a0475e64, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-c137e336-dedb-405d-a26f-00fb7be61aec, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "10eaa9278da680e554d43003b00eabada0331393a1d6e8a88d227c15fee7801e"
           },
-          "job_accounting_at_collection": "37715425|RUNNING|0:0|00:17:40|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715425|COMPLETED|0:0|00:27:24|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "lora-w2-full-slurm-37715425": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.059557006825343706,
+          "training_loss_last": 0.2898422181606293,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003784213593462482,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.67572021484375e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 8060629504,
+          "training_and_checkpoint_seconds": 135.48308347698185,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715425",
+          "report_sha256": {
+            "training-rank0.json": "e95c53605d3c8984891bd7b9ae18a0fccfc7894133804a8247b77cc4be07d2ec",
+            "training-rank1.json": "d3a6a2a728909a6b6cf3c3869d000303ddf57b0ab4f9f64171efd9223d20c2e3",
+            "portable-reload.json": "cf4670554838d213477981f56bac59f9c5f5554e884fc708ff6f16462c70c457",
+            "merged-reload.json": "2f843dfa3cec4a23935cfedd089221de0b86bbf18fc6b19bec448e7d7817f20a"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-ae9c8132-8e35-497b-6113-8284a0475e64, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-c137e336-dedb-405d-a26f-00fb7be61aec, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "10eaa9278da680e554d43003b00eabada0331393a1d6e8a88d227c15fee7801e"
+          },
+          "job_accounting_at_collection": "37715425|COMPLETED|0:0|00:27:24|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "lora-w2-none-slurm-37715425": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.059557006825343706,
+          "training_loss_last": 0.2898422181606293,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003784213593462482,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.67572021484375e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 9763151872,
+          "training_and_checkpoint_seconds": 132.38773786500678,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715425",
+          "report_sha256": {
+            "training-rank0.json": "db33c68f879ac0edb3660cd367216f86bcac4bcaefd89bd3db1bdddecc6903d6",
+            "training-rank1.json": "8768efe2d3d435d206beee5d62ec0cbc07fe73c4b3e3b650944e7e357d1d742f",
+            "portable-reload.json": "cf4670554838d213477981f56bac59f9c5f5554e884fc708ff6f16462c70c457",
+            "merged-reload.json": "2f843dfa3cec4a23935cfedd089221de0b86bbf18fc6b19bec448e7d7817f20a"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-ae9c8132-8e35-497b-6113-8284a0475e64, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-c137e336-dedb-405d-a26f-00fb7be61aec, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "10eaa9278da680e554d43003b00eabada0331393a1d6e8a88d227c15fee7801e"
+          },
+          "job_accounting_at_collection": "37715425|COMPLETED|0:0|00:27:24|batch-block4-1034|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "pissa-w1-full-slurm-37715430": {
           "status": "passed",
@@ -7016,7 +7434,7 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-1a68655b-9a77-34fc-cd68-f88cf08f2191, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-a2782dfd-0281-2e6b-df1a-07962d3dd420, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "7be26d7e5d7a33d4f9b4aabc04086012afee0c45ea60144df9189f2281e0068a"
           },
-          "job_accounting_at_collection": "37715430|RUNNING|0:0|00:17:40|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715430|COMPLETED|0:0|00:26:32|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "pissa-w1-none-slurm-37715430": {
           "status": "passed",
@@ -7067,7 +7485,111 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-1a68655b-9a77-34fc-cd68-f88cf08f2191, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-a2782dfd-0281-2e6b-df1a-07962d3dd420, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "7be26d7e5d7a33d4f9b4aabc04086012afee0c45ea60144df9189f2281e0068a"
           },
-          "job_accounting_at_collection": "37715430|RUNNING|0:0|00:17:40|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715430|COMPLETED|0:0|00:26:32|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "pissa-w2-full-slurm-37715430": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.06019727294042241,
+          "training_loss_last": 0.29379504919052124,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0004708993029039861,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "93d19aaf28d4b22641f08401d96e949c7610d1be7d053390ddebfd49545ad498",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.821487426757812e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 8075140608,
+          "training_and_checkpoint_seconds": 134.11853411601624,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715430",
+          "report_sha256": {
+            "training-rank0.json": "23c2e9dd9f8e0d89796fe3d71cf94184fd1671cb9a7ce156ed3967590d12f1e8",
+            "training-rank1.json": "d66db1b524c83df7e9ad7e185b9264d9cbfc0867f0cc850d233c359d73df105a",
+            "portable-reload.json": "db48a0091790ef4e8aad92a9e426171cab209bc1c1ae6784197f5b0e36f17ddd",
+            "merged-reload.json": "38f49f0c782715309bd85de85687bb966ec82da39600ddc59c22015c1ba73e83"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-1a68655b-9a77-34fc-cd68-f88cf08f2191, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-a2782dfd-0281-2e6b-df1a-07962d3dd420, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "7be26d7e5d7a33d4f9b4aabc04086012afee0c45ea60144df9189f2281e0068a"
+          },
+          "job_accounting_at_collection": "37715430|COMPLETED|0:0|00:26:32|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "pissa-w2-none-slurm-37715430": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.06019727294042241,
+          "training_loss_last": 0.29379504919052124,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0004708993029039861,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "93d19aaf28d4b22641f08401d96e949c7610d1be7d053390ddebfd49545ad498",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.821487426757812e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 9764909056,
+          "training_and_checkpoint_seconds": 129.2747350500431,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715430",
+          "report_sha256": {
+            "training-rank0.json": "be40922222bf430bfa97dbc7435ce3d481f7bcd3c6aee1b9051d24e6276fbe97",
+            "training-rank1.json": "e82091d2c4bc0773d8c2f2dc853a26d3f730d177047ce03f98d5ec6075020208",
+            "portable-reload.json": "db48a0091790ef4e8aad92a9e426171cab209bc1c1ae6784197f5b0e36f17ddd",
+            "merged-reload.json": "38f49f0c782715309bd85de85687bb966ec82da39600ddc59c22015c1ba73e83"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-1a68655b-9a77-34fc-cd68-f88cf08f2191, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-a2782dfd-0281-2e6b-df1a-07962d3dd420, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "7be26d7e5d7a33d4f9b4aabc04086012afee0c45ea60144df9189f2281e0068a"
+          },
+          "job_accounting_at_collection": "37715430|COMPLETED|0:0|00:26:32|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "rslora-w1-full-slurm-37715427": {
           "status": "passed",
@@ -7118,7 +7640,7 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-32e8b86c-4c60-2adf-b017-a8b6407ea210, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-131d7f57-6133-ad74-c197-79f2f284c3ca, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "8ac7498fdcb29ec5e6062ec22f9ee49bc35104fc6f10164818706425dad2886d"
           },
-          "job_accounting_at_collection": "37715427|RUNNING|0:0|00:17:40|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715427|COMPLETED|0:0|00:28:08|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "rslora-w1-none-slurm-37715427": {
           "status": "passed",
@@ -7169,10 +7691,120 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-32e8b86c-4c60-2adf-b017-a8b6407ea210, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-131d7f57-6133-ad74-c197-79f2f284c3ca, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "8ac7498fdcb29ec5e6062ec22f9ee49bc35104fc6f10164818706425dad2886d"
           },
-          "job_accounting_at_collection": "37715427|RUNNING|0:0|00:17:40|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715427|COMPLETED|0:0|00:28:08|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "rslora-w2-full-slurm-37715427": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.0594226030370919,
+          "training_loss_last": 0.2889951765537262,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003887741434895857,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 3.814697265625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 8060629504,
+          "training_and_checkpoint_seconds": 141.1263555160258,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715427",
+          "report_sha256": {
+            "training-rank0.json": "bfb78743839266497919541579d30ce5429cbd4d53f6a6aae93b40103465d3b1",
+            "training-rank1.json": "37c8b87bba30b2270ed7e6b518e91b00fa421eb3b3c0499c8521b3e617ae828e",
+            "portable-reload.json": "401549ea9729260209836cd1170028ba6c10636615eaf3ce0d8aacbb480778c0",
+            "merged-reload.json": "dc11b68de6ee66e7918eb1bd3aa34be64d12c6b7e33bee96a8a173d4d9cd8ec3"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-32e8b86c-4c60-2adf-b017-a8b6407ea210, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-131d7f57-6133-ad74-c197-79f2f284c3ca, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "8ac7498fdcb29ec5e6062ec22f9ee49bc35104fc6f10164818706425dad2886d"
+          },
+          "job_accounting_at_collection": "37715427|COMPLETED|0:0|00:28:08|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "rslora-w2-none-slurm-37715427": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.0594226030370919,
+          "training_loss_last": 0.2889951765537262,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003887741434895857,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 3.814697265625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 9763151872,
+          "training_and_checkpoint_seconds": 141.1695143019897,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715427",
+          "report_sha256": {
+            "training-rank0.json": "0132bf629021d2323b5a5411e2689f8bdd3dcd3f9fc85f7749cde62c641f9266",
+            "training-rank1.json": "6065d896f8c9edeecb27f835bf11f795dbf73718cfe02896b33f3bd84d2550bc",
+            "portable-reload.json": "401549ea9729260209836cd1170028ba6c10636615eaf3ce0d8aacbb480778c0",
+            "merged-reload.json": "dc11b68de6ee66e7918eb1bd3aa34be64d12c6b7e33bee96a8a173d4d9cd8ec3"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-32e8b86c-4c60-2adf-b017-a8b6407ea210, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-131d7f57-6133-ad74-c197-79f2f284c3ca, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "8ac7498fdcb29ec5e6062ec22f9ee49bc35104fc6f10164818706425dad2886d"
+          },
+          "job_accounting_at_collection": "37715427|COMPLETED|0:0|00:28:08|batch-block4-1051|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         }
       },
-      "manifest_sha256": "91137295eeb931bafe7757c58811a7c1727163b1484982aa4f519e057abef967"
+      "manifest_sha256": "91137295eeb931bafe7757c58811a7c1727163b1484982aa4f519e057abef967",
+      "slurm_passed_matrices": [
+        "37715429",
+        "37715425",
+        "37715430",
+        "37715427"
+      ]
     },
     "alpamayo": {
       "matrix_passed": true,
@@ -7406,7 +8038,162 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-f680cf75-2742-0612-6fc9-542dd07f7893, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-3067a0b9-af2e-1a51-2d27-7eff458701c6, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "035698b0aab10a9d9f3185e6e04b5c8c90f0e4762e4f09a97000a30534db71ef"
           },
-          "job_accounting_at_collection": "37715436|RUNNING|0:0|00:17:40|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715436|COMPLETED|0:0|00:44:35|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "dora-w1-vision-slurm-37715436": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 1,
+          "activation_checkpointing": "vision",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5886822,
+          "trainable_tensors_changed": 471,
+          "training_loss_mean": 0.20341643566886583,
+          "training_loss_last": 0.10781264305114746,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.947270851386221,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e0c5660ff58ad2505930a19649d2a5d27087f63f71b38b2fe7f1ac4462d769c3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 1.9073486328125e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 29274456064,
+          "training_and_checkpoint_seconds": 284.8764699981548,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715436",
+          "report_sha256": {
+            "training-rank0.json": "62d935beb9371940c571be46e4dc3af02ad77602f0b956792bdcd4a616ec80b4",
+            "portable-reload.json": "509d3e737ace0699cfe867bc54a993d19bb330725ed0ac3af259865440062e67",
+            "merged-reload.json": "df522194caf74ad22c6a60b4fe23ad61b396cc6cca5c410faa9c4c5d082bcdb5"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-f680cf75-2742-0612-6fc9-542dd07f7893, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-3067a0b9-af2e-1a51-2d27-7eff458701c6, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "035698b0aab10a9d9f3185e6e04b5c8c90f0e4762e4f09a97000a30534db71ef"
+          },
+          "job_accounting_at_collection": "37715436|COMPLETED|0:0|00:44:35|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "dora-w2-none-slurm-37715436": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5886822,
+          "trainable_tensors_changed": 471,
+          "training_loss_mean": 0.2543815329670906,
+          "training_loss_last": 0.16469383239746094,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9518086972989535,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.5033950805664062e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54040073728,
+          "training_and_checkpoint_seconds": 258.51536866510287,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715436",
+          "report_sha256": {
+            "training-rank0.json": "42e4f45856bccfbd841eccdccc95c221b1967e26f89ca8edbcf95f2eb5f68efa",
+            "training-rank1.json": "bd1dcc99bf3e8dc5c480afd47d893985716155d80c227ca70ee00cf5345f3b5f",
+            "portable-reload.json": "509d3e737ace0699cfe867bc54a993d19bb330725ed0ac3af259865440062e67",
+            "merged-reload.json": "6f3ed776ebdb012af73d9b52dbdd868d8b2cf2a8efbf68828b74b25096fc4cbe"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-f680cf75-2742-0612-6fc9-542dd07f7893, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-3067a0b9-af2e-1a51-2d27-7eff458701c6, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "035698b0aab10a9d9f3185e6e04b5c8c90f0e4762e4f09a97000a30534db71ef"
+          },
+          "job_accounting_at_collection": "37715436|COMPLETED|0:0|00:44:35|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "dora-w2-vision-slurm-37715436": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5886822,
+          "trainable_tensors_changed": 471,
+          "training_loss_mean": 0.2543815329670906,
+          "training_loss_last": 0.16469383239746094,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9518086972989535,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.5033950805664062e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54040909312,
+          "training_and_checkpoint_seconds": 221.49533472023904,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715436",
+          "report_sha256": {
+            "training-rank0.json": "37f1a64c03eade6c7407c567581f654071a6481be1fcff24fbe7560bc0deb612",
+            "training-rank1.json": "4534b92f0668c35a3f2fd223d81289f875fab7bbb326a1d9ed948c767545504d",
+            "portable-reload.json": "509d3e737ace0699cfe867bc54a993d19bb330725ed0ac3af259865440062e67",
+            "merged-reload.json": "6f3ed776ebdb012af73d9b52dbdd868d8b2cf2a8efbf68828b74b25096fc4cbe"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-f680cf75-2742-0612-6fc9-542dd07f7893, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-3067a0b9-af2e-1a51-2d27-7eff458701c6, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "035698b0aab10a9d9f3185e6e04b5c8c90f0e4762e4f09a97000a30534db71ef"
+          },
+          "job_accounting_at_collection": "37715436|COMPLETED|0:0|00:44:35|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "lora-w1-none-slurm-37715434": {
           "status": "passed",
@@ -7457,7 +8244,162 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-7859cce3-8886-b057-f0da-8fb22ac46315, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-abe312bf-d03d-7548-b8ef-dd1d0eeed244, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "81b902d63d3ccbaacdc72d47cd73c8a8cf71eba549e545bfec03eefed7933af6"
           },
-          "job_accounting_at_collection": "37715434|RUNNING|0:0|00:17:40|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715434|COMPLETED|0:0|00:37:20|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "lora-w1-vision-slurm-37715434": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 1,
+          "activation_checkpointing": "vision",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.20347600968347657,
+          "training_loss_last": 0.1085226759314537,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9491230186663175,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e0c5660ff58ad2505930a19649d2a5d27087f63f71b38b2fe7f1ac4462d769c3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 1.430511474609375e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 28466114048,
+          "training_and_checkpoint_seconds": 236.90928277204512,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715434",
+          "report_sha256": {
+            "training-rank0.json": "81f5b43171070841e36723e57d65ae2c8d2af9915bad6ce399cbb23cf40535e9",
+            "portable-reload.json": "96028bf7d3c216b9310ac3517da74f1284136ddbd3bde29c4151a33eb7cd5572",
+            "merged-reload.json": "d0ca1e4ae69a783a9d6927698fab1864fb880ed8a5d7de2ad5b4eb6983882b5f"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-7859cce3-8886-b057-f0da-8fb22ac46315, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-abe312bf-d03d-7548-b8ef-dd1d0eeed244, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "81b902d63d3ccbaacdc72d47cd73c8a8cf71eba549e545bfec03eefed7933af6"
+          },
+          "job_accounting_at_collection": "37715434|COMPLETED|0:0|00:37:20|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "lora-w2-none-slurm-37715434": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.25462517589330674,
+          "training_loss_last": 0.1644846498966217,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9521056382279647,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.1457672119140625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54037116416,
+          "training_and_checkpoint_seconds": 199.87430094002048,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715434",
+          "report_sha256": {
+            "training-rank0.json": "e274ccd790d1e054134d5b54500aa71626e1a0599bff4cba3a28e047008b0a2f",
+            "training-rank1.json": "89531cf2ce59566ee5970bc036f5a9864c6915fe89e2a686606ae46952976c1f",
+            "portable-reload.json": "96028bf7d3c216b9310ac3517da74f1284136ddbd3bde29c4151a33eb7cd5572",
+            "merged-reload.json": "cbeeb09b4c1740ba86738e56c6ff9c57d431a3d8e6f889880f2f895f6a8cf050"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-7859cce3-8886-b057-f0da-8fb22ac46315, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-abe312bf-d03d-7548-b8ef-dd1d0eeed244, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "81b902d63d3ccbaacdc72d47cd73c8a8cf71eba549e545bfec03eefed7933af6"
+          },
+          "job_accounting_at_collection": "37715434|COMPLETED|0:0|00:37:20|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "lora-w2-vision-slurm-37715434": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.25462517589330674,
+          "training_loss_last": 0.1644846498966217,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9521056382279647,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.1457672119140625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54038058496,
+          "training_and_checkpoint_seconds": 195.98534715198912,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715434",
+          "report_sha256": {
+            "training-rank0.json": "f7aca2a7439917def9b20bf243007e6d9ab68f79209f4ab401aa879e100fe241",
+            "training-rank1.json": "913e169210ff758cd44b2742ecb8a78703f580ae496fc051f279ae673c3d44f7",
+            "portable-reload.json": "96028bf7d3c216b9310ac3517da74f1284136ddbd3bde29c4151a33eb7cd5572",
+            "merged-reload.json": "cbeeb09b4c1740ba86738e56c6ff9c57d431a3d8e6f889880f2f895f6a8cf050"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-7859cce3-8886-b057-f0da-8fb22ac46315, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-abe312bf-d03d-7548-b8ef-dd1d0eeed244, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "81b902d63d3ccbaacdc72d47cd73c8a8cf71eba549e545bfec03eefed7933af6"
+          },
+          "job_accounting_at_collection": "37715434|COMPLETED|0:0|00:37:20|batch-block7-03139|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "pissa-w1-none-slurm-37715441": {
           "status": "passed",
@@ -7508,7 +8450,162 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8dfda8c5-7eb4-d4b7-edad-da5ae2fbf7a3, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-e35abb1f-1ba9-296c-1053-e9af83878e13, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "068ac74ccc24db442522399a51f57f6db882deaee256499c39e1d83f88850137"
           },
-          "job_accounting_at_collection": "37715441|RUNNING|0:0|00:17:40|batch-block7-03676|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715441|COMPLETED|0:0|00:39:17|batch-block7-03676|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "pissa-w1-vision-slurm-37715441": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 1,
+          "activation_checkpointing": "vision",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.20347720715734693,
+          "training_loss_last": 0.09725640714168549,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.8659581542015076,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "95cdb17433ad6ec4a7c6ba2f6b06f56234025589728465483c2facc5ac153a65",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.1457672119140625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 28472891392,
+          "training_and_checkpoint_seconds": 266.5045766439289,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715441",
+          "report_sha256": {
+            "training-rank0.json": "01d49ffbd83357d0d820cec5056b4b438fe2383f83564a4424d1848bead9d20c",
+            "portable-reload.json": "855bc362aa54f77b0ca5326eae2366d4a4824f2d53cc47b9007385181314d54e",
+            "merged-reload.json": "27f7b856770945aefeec573ef9e8fea2217459189856ca5939a50ca3959a64aa"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8dfda8c5-7eb4-d4b7-edad-da5ae2fbf7a3, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-e35abb1f-1ba9-296c-1053-e9af83878e13, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "068ac74ccc24db442522399a51f57f6db882deaee256499c39e1d83f88850137"
+          },
+          "job_accounting_at_collection": "37715441|COMPLETED|0:0|00:39:17|batch-block7-03676|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "pissa-w2-none-slurm-37715441": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.24559950828552246,
+          "training_loss_last": 0.16858947277069092,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.870818345170272,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "330553780fcbfd8d72408607094ce46e88c2dd955f1df07ebacd8d6d541d0cb9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.6226043701171875e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54066085888,
+          "training_and_checkpoint_seconds": 203.15707050194032,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715441",
+          "report_sha256": {
+            "training-rank0.json": "d29989053bb41c7373ded6b554694bb6ac932fba6089005b02c56426d9f0b1e5",
+            "training-rank1.json": "0c8824445e36d9da50630e36bafce366c28bb4575ce0f96e3d2450c2f76fe317",
+            "portable-reload.json": "855bc362aa54f77b0ca5326eae2366d4a4824f2d53cc47b9007385181314d54e",
+            "merged-reload.json": "d5e6e042456f8ae151333dff5a7f883d9c134637ddc93b099f8655aa82f2c380"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8dfda8c5-7eb4-d4b7-edad-da5ae2fbf7a3, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-e35abb1f-1ba9-296c-1053-e9af83878e13, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "068ac74ccc24db442522399a51f57f6db882deaee256499c39e1d83f88850137"
+          },
+          "job_accounting_at_collection": "37715441|COMPLETED|0:0|00:39:17|batch-block7-03676|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "pissa-w2-vision-slurm-37715441": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.24559950828552246,
+          "training_loss_last": 0.16858947277069092,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.870818345170272,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "330553780fcbfd8d72408607094ce46e88c2dd955f1df07ebacd8d6d541d0cb9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.6226043701171875e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54067134464,
+          "training_and_checkpoint_seconds": 195.20307107502595,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715441",
+          "report_sha256": {
+            "training-rank0.json": "48425981dc9e48bcfb62d2550a0d03bd0e7ac39eb6d867837d4fdb670a6183d0",
+            "training-rank1.json": "6c6072a395ddf708a0bf4f069b03bd8afb1eefaf28ad8879d0dd26aa59085d69",
+            "portable-reload.json": "855bc362aa54f77b0ca5326eae2366d4a4824f2d53cc47b9007385181314d54e",
+            "merged-reload.json": "d5e6e042456f8ae151333dff5a7f883d9c134637ddc93b099f8655aa82f2c380"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-8dfda8c5-7eb4-d4b7-edad-da5ae2fbf7a3, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-e35abb1f-1ba9-296c-1053-e9af83878e13, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "068ac74ccc24db442522399a51f57f6db882deaee256499c39e1d83f88850137"
+          },
+          "job_accounting_at_collection": "37715441|COMPLETED|0:0|00:39:17|batch-block7-03676|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         },
         "rslora-w1-none-slurm-37715435": {
           "status": "passed",
@@ -7559,14 +8656,178 @@
             "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-cb95830c-6789-fad1-df03-3c58a4ee8077, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-b847652e-2292-d93c-8c45-7aef1757e33e, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
             "sha256": "379db9c69cb0100e357ff8a24c68bf3fed6de610e25d75069e0244a1cb3bf4b9"
           },
-          "job_accounting_at_collection": "37715435|RUNNING|0:0|00:17:40|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+          "job_accounting_at_collection": "37715435|COMPLETED|0:0|00:41:08|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "rslora-w1-vision-slurm-37715435": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 1,
+          "activation_checkpointing": "vision",
+          "updates": 9,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.20113240223791864,
+          "training_loss_last": 0.1073639839887619,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9339189466677214,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e0c5660ff58ad2505930a19649d2a5d27087f63f71b38b2fe7f1ac4462d769c3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 1.6689300537109375e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 28466114048,
+          "training_and_checkpoint_seconds": 262.0237573059276,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715435",
+          "report_sha256": {
+            "training-rank0.json": "6324c00d4270a71ecead0a7ad89ecf2509c31496f66b8a32f02a105bcbf364c4",
+            "portable-reload.json": "7ea9beaefbc7e24ef40ba84057e2a508a41e324842d2e6186866b174c7d06bd2",
+            "merged-reload.json": "e2aed2adb9c465f74b43b01614870bb3d78529c48675a0950a79840e38c42a34"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-cb95830c-6789-fad1-df03-3c58a4ee8077, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-b847652e-2292-d93c-8c45-7aef1757e33e, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "379db9c69cb0100e357ff8a24c68bf3fed6de610e25d75069e0244a1cb3bf4b9"
+          },
+          "job_accounting_at_collection": "37715435|COMPLETED|0:0|00:41:08|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "rslora-w2-none-slurm-37715435": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.2537147030234337,
+          "training_loss_last": 0.16374318301677704,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.943455856097372,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.384185791015625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54037116416,
+          "training_and_checkpoint_seconds": 225.0391369862482,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715435",
+          "report_sha256": {
+            "training-rank0.json": "4a488aa93682631ca452b99062f5af3ac4b2bbeab77ef4e0f446fecb2f078793",
+            "training-rank1.json": "b78507c607a2c7f9caa3367febed9bcbf629161db659257b9f6b23adcdec72f9",
+            "portable-reload.json": "7ea9beaefbc7e24ef40ba84057e2a508a41e324842d2e6186866b174c7d06bd2",
+            "merged-reload.json": "1b137639568a365336525d60af2e893eb8ed10af531e4bb77fc755c32b068998"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-cb95830c-6789-fad1-df03-3c58a4ee8077, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-b847652e-2292-d93c-8c45-7aef1757e33e, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "379db9c69cb0100e357ff8a24c68bf3fed6de610e25d75069e0244a1cb3bf4b9"
+          },
+          "job_accounting_at_collection": "37715435|COMPLETED|0:0|00:41:08|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
+        },
+        "rslora-w2-vision-slurm-37715435": {
+          "status": "passed",
+          "source": "14c9e09-0f39e0c9",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.2537147030234337,
+          "training_loss_last": 0.16374318301677704,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.943455856097372,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.384185791015625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-0f39e0c9",
+          "merged_source": "14c9e09-0f39e0c9",
+          "peak_cuda_allocated_bytes_rank0": 54038058496,
+          "training_and_checkpoint_seconds": 215.0524410540238,
+          "merge_verification_protocol": null,
+          "merge_vs_training_precision": {},
+          "slurm_job_id": "37715435",
+          "report_sha256": {
+            "training-rank0.json": "087bcd9a6c1cdc63d46a8fc27ae517b30469c0a95364c8452752262c3fdf311f",
+            "training-rank1.json": "706151cebfe800c6158892a368089391ad2ef65b7602c624da74f85dbec6b5bf",
+            "portable-reload.json": "7ea9beaefbc7e24ef40ba84057e2a508a41e324842d2e6186866b174c7d06bd2",
+            "merged-reload.json": "1b137639568a365336525d60af2e893eb8ed10af531e4bb77fc755c32b068998"
+          },
+          "hardware": {
+            "csv": "uuid, name, memory.total [MiB], driver_version\nGPU-cb95830c-6789-fad1-df03-3c58a4ee8077, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-b847652e-2292-d93c-8c45-7aef1757e33e, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+            "sha256": "379db9c69cb0100e357ff8a24c68bf3fed6de610e25d75069e0244a1cb3bf4b9"
+          },
+          "job_accounting_at_collection": "37715435|COMPLETED|0:0|00:41:08|batch-block7-01296|billing=2,cpu=16,gres/gpu=2,mem=125G,node=1"
         }
       },
-      "manifest_sha256": "ee34d308f0ad8760e15cd4e4c44159e1b54cfc0488196b497e3071211e06a137"
+      "manifest_sha256": "ee34d308f0ad8760e15cd4e4c44159e1b54cfc0488196b497e3071211e06a137",
+      "slurm_passed_matrices": [
+        "37715436",
+        "37715434",
+        "37715441",
+        "37715435"
+      ]
     }
   },
   "slurm_extension_report_sha256": "107b3ff26b20d6cd7193a80169979bbe0034569a8767256471f61f8ed23bb125",
-  "physical_slurm_report_sha256": "b217e2c00c1d1af3ff5be10326d6d63f044d19b5ab30fdf9fc349106b9821642",
+  "slurm_execution_report_sha256": {
+    "physical-slurm-family-extension.json": "033e67cd626eadc1513f4fe93d3ef4c02e0c225134f8160d3327f93337c81350",
+    "moe-slurm-family-extension.json": "4cffb3e1ca130efd0d2b954c7485a7c8986ea9b8808fc63df5fada33ef28ab34"
+  },
   "incomplete": {
     "full_wts": "Native Qwen3-VL full epochs are running locally on source 076cfbb and on Slurm at 3a9552b. The 2676/576 evaluation and exact final-step recovery depend on complete training; no completed full-epoch result is claimed here.",
     "remaining_profiles": "Additional method/world/AC cases are running or pending; only completed cases with full rank training, portable and serialized-merge reports are qualified. Matrix/job completion is recorded separately."
