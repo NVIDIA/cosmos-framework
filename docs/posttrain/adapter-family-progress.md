@@ -19,6 +19,7 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | Independent settings, aliases, optimizer ownership | Existing resolver / `assert_trainability` | Existing native tests pass; new family selector failures tested |
 | HF loaded-base → initialization → FSDP → optimizer lifecycle | `HFModel.setup`, `build_hf_model`, SFT `build_trainer` | Implemented; CPU materialization and tied embeddings pass; Qwen3-0.6B passed all four methods on one/two GPUs with AC none/full |
 | Text portable reload and merged model export | `checkpoint/adapters.py`, shared HF materializer | Implemented; real tiny HF serialization, strict reload and stock merged reload pass |
+| Non-Qwen text templates in the actual SFT workflow | `data/packer/text_sft.py`, `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented by extending the existing source-traced offset masker. Explicit ChatML, Llama3, Mistral and Gemma protocols; real Qwen2.5/SmolLM2/Mistral tokenizer preflight passes. Pretrained training remains pending; component math tests alone did not establish this path |
 | Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; pretrained GPU qualification pending |
 | Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook, family binding, `tests/reload_moe_adapters.py` | Implemented but awaiting actual grouped-mm training, resume and export qualification. Four small real MoE method fixtures pass native/HF target agreement, stock FP32 updates, exhaustive serialized tensor checks and reload with native expert layout. Fused expert tensors remain unsupported targets |
 | GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Implemented in `model/gr00t/{sft,sft_policy,adapter_export}.py`; 19 small actual Isaac/Qwen3-VL/DiT tests pass, including four methods, full AC, native stochastic resume, native-forward parity, real image packing and portable/merged reload. Real checkpoint GPU qualification is blocked on gated Cosmos-Reason2 config/processor metadata (HTTP 401). Category-specific tensors remain unsupported adapter targets |
@@ -34,6 +35,9 @@ The six small fixtures use actual Transformers implementations, three optimizer
 updates per method, frozen-base checks, warm reload, and an FP32 merge oracle.
 They do not establish task quality. The Qwen3.5 fixture additionally exercises
 both hybrid language-block types and image/video/text gradient paths.
+Additional Qwen2-VL/2.5-VL component fixtures use canonical materialized HF keys;
+they do not qualify the public checkpoints' legacy namespaces or their media
+processors. Those families are still refused by the production SFT packer.
 
 `sft_family_adapters.py` selects the native builder for Qwen3-VL dense/MoE and HF
 for text families and Qwen3.5. This is deliberate: the old generic-HF Qwen3-VL
@@ -104,7 +108,7 @@ job first gates its full-resolution/gradient-accumulation profile. Alpamayo
 image `af407d4`, job `37706329`, passed **105 installed tests, 1 skip**;
 image SHA `2198e81619a314702217cdf42d71b663b5bfc7ccb0df26ce80ecb6e99a2f0280`.
 Alpamayo's actual KITTI matrix is queued as `37706970`. GR00T source `e207c5c`
-is being installed and tested in image job `37707039`; this does not remove the
+passed installed tests in image job `37707039`; this does not remove the
 gated backbone-metadata requirement. The first pending MoE payload
 `37706615` was cancelled before execution: its generic merged checker attempted
 single-GPU FP32 30B inference, which exceeds A10080 memory and the native expert
@@ -118,3 +122,22 @@ kernel or adapter mathematics is introduced. Export releases its temporary FP32
 state before materialization to avoid retaining another full 30B allocation.
 The shared HF/native/export suite with these four new tests passed **229 tests**
 on Transformers 5.8.1. Real MoE GPU qualification is still outstanding.
+
+GR00T image `e207c5c` completed with **130 installed tests, 1 skip** and SHA
+`92bf607dadf8d3d320c7ca93bd25deb62f473a184edf9de66d7f4d1a4a386bda`.
+The reproducible x86 flow installer in `docker/posttrain/flow-environment` was
+built from a fresh prefix in job `37707556`; all pinned distributions and native
+source hashes matched and the same 130 tests passed (1 skip). Container publication
+is separate from these installed-test results.
+
+Public dense checkpoints staged by job `37707555`: Qwen2.5-0.5B-Instruct
+`7ae557604adf67be50417f59c2c2f167def9a775`, SmolLM2-135M-Instruct (Llama
+architecture) `12fd25f77366fa6b3b4b768ec3050bf629380bac`, and
+Mistral-7B-Instruct-v0.3 `c170c708c41dac9275d15a8fff4eca08d52bab71`.
+SmolLM2 results will not qualify Meta's Llama checkpoints. Gemma/Gemma2 have small
+correctness fixtures; pretrained HF training qualification remains outstanding.
+The extended shared regression suite passed **380 tests, 1 skip**, including
+16 actual Llama/Mistral/Gemma/Gemma2 `LLMTrainer` cases with masked template
+targets, all four methods, frozen-base checks and exact next-update restoration.
+The source-tracing tests reject dropped/reordered messages and unsupported text
+templates. This remains separate from the queued pretrained GPU matrices.

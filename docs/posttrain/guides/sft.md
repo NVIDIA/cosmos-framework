@@ -2,7 +2,7 @@
 
 ## 1. When to choose it
 
-Supervised fine-tuning of Qwen conversations through the existing `LLMTrainer`.
+Supervised fine-tuning of supported text and multimodal conversations through the existing `LLMTrainer`.
 The [multimodal recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3p8_27b_multimodal.py) targets `Qwen/Qwen3.8-27B`
 (the dense `qwen3_5` architecture), with text, images, videos and multiple assistant turns.
 Local/torchrun FSDP is supported. Native dense Qwen3-VL also has an
@@ -12,7 +12,7 @@ Ray execution, sequence packing and MTP training are not supported.
 There is no rollout engine, reference model or reward function.
 
 Physical-action adapter SFT also uses this entry point with `rl.task="flow_bc"`.
-The [π0.5 and Alpamayo recipes](flow-adapters.md) supply model-owned action packers
+The [π0.5, Alpamayo and GR00T recipes](flow-adapters.md) supply model-owned action packers
 and differentiable forwards. They use the Transformers 4.57.6 robotics runtime;
 the conversational SFT runtime below is a separate dependency profile. Check the
 [family evidence table](../adapter-family-progress.md) before choosing a model or
@@ -35,6 +35,18 @@ parameters with AdamW. The seat's masking contract is pinned against the officia
 processor template in `tests/test_data_packer_sft.py` (the collated `attention_mask` is `torch.int64`
 0/1, the contract `main` pins in `test_model_qwen3_vl.py`; the native eager mask casts it to bool); its
 GPU training path reuses the online adapters.
+
+The dense text adapter recipe also binds Llama, Mistral, Gemma and Gemma2 through
+`configs/sft_family_adapters.py`. `TextSFTDataPacker` extends the existing packer
+with explicit ChatML, Llama3 header, Gemma turn and Mistral `[INST]` protocols.
+It traces every source message through the checkpoint's own template and uses the
+same exact token-offset masks, assistant-end supervision and collation. Unknown
+templates, reserved delimiters, dropped/reordered messages and unsupported tools
+fail explicitly. The Mistral profile requires alternating user/assistant rows;
+coalesced system prompts are not supported. Template and masking identity are
+recorded in the checkpoint's objective contract. Existing Qwen identities stay
+unchanged. Architecture, template and real-checkpoint qualification are distinct:
+see the [family evidence table](../adapter-family-progress.md).
 
 ## 2. Quick start
 

@@ -52,6 +52,7 @@ _RESERVED = (
     "<|endoftext|>",
 )
 _TEXT_TYPES = {"qwen2", "qwen2_moe", "qwen3", "qwen3_moe"}
+_BOUND_TEXT_TYPES = {"llama", "mistral", "gemma", "gemma2"}
 # Families whose checkpoints ship ``Qwen3VLProcessor``: dense Qwen3.5/3.8 (trained through the HF
 # backend) and Qwen3-VL / Qwen3-VL-MoE (trained through the native policy seat, ``model/qwen3_vl.py``;
 # the HF backend still refuses MoE VLMs at ``model/hf.py::_is_moe_vlm``). Other VLM families need
@@ -269,6 +270,12 @@ class QwenSFTDataPacker(DataPacker):
             template = template.get("default")
         return template if isinstance(template, str) else None
 
+    def _parse_blocks(self, text: str):
+        return _blocks(text)
+
+    def _row_masking_contract(self, supervise: str, opener: str) -> str:
+        return masking_contract(supervise, opener)
+
     def _template_kwargs(self) -> dict[str, Any]:
         """``preserve_thinking=True`` only for a template that declares that variable.
 
@@ -441,8 +448,8 @@ class QwenSFTDataPacker(DataPacker):
                     auxiliary.append((call_marker, index))
             probes.append(traced)
         probe = self._render(probes, tools)
-        probe_blocks = _blocks(probe)
-        roles = [block[1] for block in _blocks(rendered)]
+        probe_blocks = self._parse_blocks(probe)
+        roles = [block[1] for block in self._parse_blocks(rendered)]
         if roles != [block[1] for block in probe_blocks]:
             raise ValueError("Unsupported SFT template: source and rendered message boundaries differ")
         seen = []
@@ -536,7 +543,7 @@ class QwenSFTDataPacker(DataPacker):
         encoded = self.tokenizer(expanded, add_special_tokens=False, return_offsets_mapping=True)
         if encoded["input_ids"] != ids:
             raise ValueError("SFT tokenizer cannot exactly round-trip the expanded token stream")
-        blocks = _blocks(expanded)
+        blocks = self._parse_blocks(expanded)
         if [block[1] for block in blocks] != roles:
             raise ValueError("SFT processor changed source message boundaries")
         # The row's rule: every assistant block, or under ``supervise="last_assistant"`` the last one alone, every earlier
@@ -578,7 +585,9 @@ class QwenSFTDataPacker(DataPacker):
                 raise ValueError(f"Unsupported SFT processor side input {key!r}")
             if not isinstance(value, torch.Tensor) or value.device.type != "cpu":
                 raise ValueError(f"SFT processor side input {key!r} must be a CPU tensor")
-        return SFTPolicyInput(ids, labels, processed or None, masking=masking_contract(sample.supervise, sample.opener))
+        return SFTPolicyInput(
+            ids, labels, processed or None, masking=self._row_masking_contract(sample.supervise, sample.opener)
+        )
 
     @staticmethod
     def _require_one_opener_per_supervised_block(
@@ -731,15 +740,20 @@ def build_sft_packer(
         if type(processor).__name__ != "Qwen3VLProcessor":
             raise ValueError("SFT VLM support requires Qwen3VLProcessor")
         tokenizer = processor.tokenizer
-    elif model_type in _TEXT_TYPES:
+    elif model_type in _TEXT_TYPES | _BOUND_TEXT_TYPES:
         processor = None
         tokenizer = AutoTokenizer.from_pretrained(name_or_path, trust_remote_code=trust_remote_code, use_fast=True)
     else:
         raise ValueError(
-            f"Unsupported SFT model_type {model_type!r}; only Qwen text models, dense Qwen3.5/3.8 and "
+            f"Unsupported SFT model_type {model_type!r}; only bound Qwen/Llama/Mistral/Gemma text models, dense Qwen3.5/3.8 and "
             "Qwen3-VL / Qwen3-VL-MoE are supported"
         )
-    return QwenSFTDataPacker(
+    packer_class = QwenSFTDataPacker
+    if model_type in _BOUND_TEXT_TYPES:
+        from cosmos_framework.posttrain.data.packer.text_sft import TextSFTDataPacker
+
+        packer_class = TextSFTDataPacker
+    return packer_class(
         tokenizer,
         processor=processor,
         max_length=max_length,
