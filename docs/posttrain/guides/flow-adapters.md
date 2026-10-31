@@ -1,5 +1,33 @@
 # Physical-action adapter SFT
 
+## Isolated runtime
+
+The x86 CUDA 12.8 runtime has a separate pinned dependency closure in
+[`docker/posttrain/flow-environment`](../../../docker/posttrain/flow-environment).
+Inside a CUDA-capable Linux x86 container with `git`, `uv` and FFmpeg libraries,
+build a wheel from the clean implementation checkout, then install into a new
+prefix:
+
+```bash
+python -m build --wheel
+UV=/path/to/uv bash docker/posttrain/flow-environment/install.sh \
+  /opt/cosmos-flow /build/cosmos_framework-1.2.2-py3-none-any.whl
+export SFT_PYTHON=/opt/cosmos-flow/venv/bin/python
+```
+
+The installer checks every pinned distribution and the installed native source
+hashes, and records the wheel and dependency hashes in `runtime.json`. It refuses
+an existing prefix. This profile uses Python 3.12.13, Torch 2.10.0+cu128,
+Transformers 4.57.6, Diffusers 0.35.1, NumPy 1.26.4 and PyArrow 23.0.1.
+Framework and native model wheels are installed with `--no-deps` into that complete
+closure: the root package's broader Omni dependencies do not define this offline
+flow-SFT runtime. It does not install a simulator, serving stack or model weights.
+The existing aarch64 GR00T PPO runtime and Transformers 5 conversational SFT
+environment have separate contracts. Runtime construction and installed tests do
+not qualify a model's GPU training; consult the evidence table below.
+
+## Supported physical models
+
 The π0.5 offline recipe trains language K/V, the multimodal projector, selected
 SigLIP vision layers and the action expert with LoRA, rsLoRA, DoRA or PiSSA.
 It uses `entrypoints.sft`, `LLMTrainer`, the existing flow-matching objective,
