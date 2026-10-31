@@ -1559,16 +1559,26 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                         "checkpoint with a fixed sampler or Stage 3 SF-DMD checkpoint with a fixed sampler, "
                         "with one latent frame per chunk"
                     )
-                if (
-                    len(hints) != 1
-                    or self.num_first_chunk_conditional_frames != 0
-                    or getattr(self, "control_guidance", None) != 1.0
-                    or not self.share_vision_temporal_positions
-                ):
+                # Name only the requirements this request breaks, with the values it passed.
+                culprits = []
+                if len(hints) != 1:
+                    culprits.append(f"{len(hints)} control hints {sorted(hints)} (must be exactly 1)")
+                if self.num_first_chunk_conditional_frames != 0:
+                    culprits.append(
+                        f"num_first_chunk_conditional_frames={self.num_first_chunk_conditional_frames} (must be 0)"
+                    )
+                control_guidance = getattr(self, "control_guidance", None)
+                if control_guidance != 1.0:
+                    culprits.append(
+                        f"control_guidance={control_guidance} (must be 1.0: the causal sampler has no "
+                        "control-guidance pass)"
+                    )
+                if not self.share_vision_temporal_positions:
+                    culprits.append("share_vision_temporal_positions=false (must be true to match training)")
+                if culprits:
                     raise ValueError(
-                        "Direct causal Transfer requires exactly one control hint, "
-                        "num_first_chunk_conditional_frames=0, control_guidance=1.0, "
-                        "and share_vision_temporal_positions=true"
+                        "Direct causal Transfer (transfer_resize_mode='direct_resize' on a causal checkpoint) "
+                        "cannot run this request:\n  - " + "\n  - ".join(culprits)
                     )
             if self.multiview is not None or any(
                 key not in {TransferHintKey.EDGE, TransferHintKey.BLUR, TransferHintKey.DEPTH, TransferHintKey.SEG}
@@ -1576,7 +1586,18 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             ):
                 raise ValueError("Direct Transfer resizing supports single-view edge, blur, depth, and seg only")
             if self.resolution not in {"480", "720"}:
-                raise ValueError("Direct Transfer resizing supports the teacher's trained 480 and 720 tiers only")
+                # A 480-only checkpoint would reject 720 later too; name its real limit instead of the teacher's tiers.
+                if (
+                    self._is_sf_dmd_transfer_model(model_config)
+                    and str(getattr(model_config, "resolution", "")) == "480"
+                ):
+                    raise ValueError(
+                        f"This SF-DMD Transfer checkpoint supports only resolution='480', got resolution='{self.resolution}'."
+                    )
+                raise ValueError(
+                    "Direct Transfer resizing supports the teacher's trained 480 and 720 tiers only, "
+                    f"got resolution='{self.resolution}'."
+                )
 
         for hint_key, config in hints.items():
             for field, default in self._TRANSFER_HINT_DEFAULTS.get(hint_key, {}).items():
@@ -1607,6 +1628,23 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                 if user_fields is None or field not in user_fields:
                     setattr(self, field, value)
 
+    @staticmethod
+    def _is_sf_dmd_transfer_model(model_config: "OmniMoTModelConfig") -> bool:
+        """Whether the loaded model is the causal SF-DMD Transfer student whose contract applies."""
+        video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
+        is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
+        is_distilled = getattr(model_config, "fixed_step_sampler_config", None) is not None
+        if not video_temporal_causal or not (is_self_forcing or is_distilled):
+            return False
+        if int(getattr(model_config, "teacher_forcing_frames_per_chunk", 1) or 1) != 1:
+            return False
+        replay_policy = getattr(model_config, "teacher_forcing_replay_policy", None)
+        return (
+            getattr(replay_policy, "control_visibility", None) == "causal"
+            and bool(getattr(replay_policy, "controls_read_strict_past_clean_rgb", False))
+            and getattr(replay_policy, "clean_pass_causality", None) == "frame"
+        )
+
     def _apply_sf_dmd_transfer_inference_contract(
         self,
         *,
@@ -1615,26 +1653,16 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     ) -> None:
         """Apply the resolution contract recorded by the SF-DMD Transfer checkpoint."""
         self = cast("SampleDataOverrides", self)
-        video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
-        is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
-        is_distilled = getattr(model_config, "fixed_step_sampler_config", None) is not None
-        if not video_temporal_causal or not (is_self_forcing or is_distilled):
-            return
-        if int(getattr(model_config, "teacher_forcing_frames_per_chunk", 1) or 1) != 1:
-            return
-        replay_policy = getattr(model_config, "teacher_forcing_replay_policy", None)
-        if (
-            getattr(replay_policy, "control_visibility", None) != "causal"
-            or not getattr(replay_policy, "controls_read_strict_past_clean_rgb", False)
-            or getattr(replay_policy, "clean_pass_causality", None) != "frame"
-        ):
+        if not self._is_sf_dmd_transfer_model(model_config):
             return
 
         resolution = self.resolution
         # The selected 480-only checkpoint must not inherit the legacy 720 preset.
         # Earlier mixed-resolution students record resolution=720 and retain both tiers.
         if str(getattr(model_config, "resolution", "")) == "480" and resolution != "480":
-            raise ValueError("This SF-DMD Transfer checkpoint supports only resolution='480'.")
+            raise ValueError(
+                f"This SF-DMD Transfer checkpoint supports only resolution='480', got resolution='{resolution}'."
+            )
         if not self.transfer_hints or not self.autoregressive:
             return
         frame_cap = self._SF_DMD_TRANSFER_MAX_FRAMES.get(resolution)
