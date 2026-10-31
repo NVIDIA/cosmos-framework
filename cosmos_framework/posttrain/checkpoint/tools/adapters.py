@@ -107,6 +107,16 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    if identity["architecture"] == "qwen3_vl_moe" and any(
+        row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
+    ):
+        raise ValueError(
+            "PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
+            "rounding changed a near-tied expert route and exceeded the controlled output bound, "
+            "including with the native merged forward. Keep the portable adapter for inference "
+            "or resume its complete training checkpoint; do not attach raw PiSSA factors to the "
+            "original base. See docs/posttrain/adapter-family-progress.md for the measured limitation."
+        )
     if identity["architecture"] == "Gr00tN1d7":
         from cosmos_framework.posttrain.model.gr00t.adapter_export import export_merged
 

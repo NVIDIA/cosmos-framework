@@ -199,6 +199,14 @@ membership and tensor versions unchanged.
 Stock HF reload is tested separately from native portable reload. BF16 merged
 inference exceeded real-model qualification bounds and is outside the supported
 export profile; the tool does not produce BF16 merged models.
+PiSSA merged export on native Qwen3-VL-MoE is also refused. A real 30B checkpoint
+passes training, continuation, exact BF16 portable reload and all serialized-weight
+checks, but FP32 merging switches a near-tied expert route and fails the fixed
+output bound with both native and stock HF forwards. Keep its portable adapter;
+this is an incomplete merged-export combination, not a qualified deployment.
+The [measured limitation](../assets/moe-pissa-export-limitation.json) records the
+route, original tolerances, source/image identities and errors. Other qualified
+PiSSA families retain their supported FP32 merged exports.
 
 ```bash
 "$SFT_PYTHON" -m cosmos_framework.posttrain.checkpoint.tools.adapters \

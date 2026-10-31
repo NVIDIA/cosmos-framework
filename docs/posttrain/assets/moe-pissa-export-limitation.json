@@ -1,0 +1,165 @@
+{
+  "format": "cosmos-moe-pissa-export-limitation-v1",
+  "job": {
+    "root": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/moe-pissa-native-diagnostic-v2",
+    "record": "qwen3_vl_moe-diagnose-pissa-fp32-routing-6cfa74",
+    "previous_job_id": "37716247",
+    "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+    "image_sha256": "cb27ee54c679e603b71e0cf80442b3bf0c7bf35e142200da0719f0d62112e5c2",
+    "hashes": {
+      "diagnostic.py": "5042fdb167eaea93bd76f88735f3bba87e8f1ebc5c5d14b18b6d9024a3df7771",
+      "run.sh": "c48b3a5a364323de00c5d2366909b9cb030095fadcb7422e688239a8c870167b",
+      "job.sbatch": "18e222ea6b572069206db1c3a7820df68df7665184d26a56218e95118b012244"
+    },
+    "job_id": "37718577"
+  },
+  "accounting": "COMPLETED|0:0|00:08:20\n",
+  "installed": {
+    "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+    "source_base": "86e1ee52f276c11d6cc66dfd17da2795dfbe937b",
+    "source_branch": "feat/posttrain-family-adapters",
+    "source_dirty": false,
+    "runtime": "hf",
+    "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+    "tracked_package_files_verified": 1877,
+    "created_utc": "2026-10-31T03:00:04.817343+00:00",
+    "source_test_reports": {
+      "cosmos-native-moe-export-regressions.log": "230a1e8ba6e9131d4004bae336f13710a27aa6281b967c680cf2c7adaff90bee",
+      "cosmos-native-moe-device-source-v3.log": "514a1315dabc4c948442da0d2db52d85b72e487f163fca39e0593b123814996e"
+    },
+    "container_sha256": "cb27ee54c679e603b71e0cf80442b3bf0c7bf35e142200da0719f0d62112e5c2",
+    "environment": null,
+    "slurm_job_id": "37718577",
+    "verified_package_files": 1877,
+    "versions": {
+      "torch": "2.10.0+cu128",
+      "transformers": "5.8.1",
+      "safetensors": "0.8.0",
+      "torchcodec": "0.10.0"
+    },
+    "numerical_profile": {
+      "format": "cosmos-adapter-qualification-numerics-v1",
+      "deterministic_algorithms": true,
+      "float32_matmul_precision": "highest",
+      "matmul_allow_tf32": false,
+      "cudnn_benchmark": false,
+      "cublas_workspace_config": ":4096:8"
+    }
+  },
+  "portable_manifest_sha256": "ad3252d30031e4ad628e3544f1195aee930b759779cf0b31b2d4536d98233c2d",
+  "native_private_merge": {
+    "maximum_logit_error": 0.02950000762939453,
+    "mean_absolute_logit_error": 0.0003888397977789282,
+    "maximum_relative_l2": 0.0012841233983635902,
+    "mean_kl": 1.478236342441554e-07,
+    "maximum_kl": 8.937631719163619e-06,
+    "mean_total_variation": 2.6843509136398325e-05,
+    "maximum_total_variation": 0.0015905548352748156,
+    "maximum_argmax_probability_regret": 0.0,
+    "argmax_equal": 64,
+    "positions": 64,
+    "original_gate_passed": false
+  },
+  "stock_portable": {
+    "maximum_logit_error": 0.029520034790039062,
+    "mean_absolute_logit_error": 0.0003887497093160164,
+    "maximum_relative_l2": 0.0012843599542975426,
+    "mean_kl": 1.4630989608847046e-07,
+    "maximum_kl": 8.98371945368126e-06,
+    "mean_total_variation": 2.678310664538941e-05,
+    "maximum_total_variation": 0.0015884379390627146,
+    "maximum_argmax_probability_regret": 0.0,
+    "argmax_equal": 64,
+    "positions": 64,
+    "original_gate_passed": false
+  },
+  "first_changed_routing": {
+    "native_merge_routing": {
+      "module": "model.language_model.layers.37.mlp",
+      "changed_token_routes": 1,
+      "router_max_abs_error": 6.67572021484375e-06,
+      "tokens": [
+        7
+      ],
+      "native_experts": [
+        [
+          14,
+          0,
+          50,
+          41,
+          84,
+          122,
+          104,
+          5
+        ]
+      ],
+      "other_experts": [
+        [
+          14,
+          0,
+          50,
+          41,
+          84,
+          122,
+          104,
+          68
+        ]
+      ],
+      "native_topk_boundary_margin": [
+        7.450580596923828e-09
+      ]
+    },
+    "stock_routing": {
+      "module": "model.language_model.layers.37.mlp",
+      "changed_token_routes": 1,
+      "router_max_abs_error": 4.76837158203125e-06,
+      "tokens": [
+        7
+      ],
+      "native_experts": [
+        [
+          14,
+          0,
+          50,
+          41,
+          84,
+          122,
+          104,
+          5
+        ]
+      ],
+      "other_experts": [
+        [
+          14,
+          0,
+          50,
+          41,
+          84,
+          122,
+          104,
+          68
+        ]
+      ],
+      "native_topk_boundary_margin": [
+        7.450580596923828e-09
+      ]
+    }
+  },
+  "saved_training_state_mutated": false,
+  "serialized_tensors_verified": 882,
+  "qualification_case": {
+    "family": "qwen3_vl_moe",
+    "method": "pissa",
+    "root": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/releases/239c3e7/moe-methods-v2",
+    "release": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/releases/239c3e7",
+    "revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+    "build_job": "37713908",
+    "old_job": "37708012",
+    "old_record": "qwen3_vl_moe-qualify-pissa-2c05e6",
+    "record": "qwen3_vl_moe-qualify-pissa-native-fp32-c75e5d",
+    "local_gate_sha256": "8b30029c922084ac3ddfa3321aa02ef50d556913b8ea4eb8b9c6e5171c9578fc",
+    "image_sha256": "cb27ee54c679e603b71e0cf80442b3bf0c7bf35e142200da0719f0d62112e5c2",
+    "job_id": "37716247"
+  },
+  "conclusion": "PiSSA native BF16 training, continuation and portable reload pass. Native and stock FP32 merged qualification fail the existing controlled bound after top-k routing changes. No widening of tolerances or router changes. Merged PiSSA on MoE remains incomplete; use the portable adapter."
+}

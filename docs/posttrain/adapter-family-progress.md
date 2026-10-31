@@ -30,7 +30,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Component/layer selection and independent settings | `model/adapter_families.py`, `resolve_targets`; `test_adapter_families.py`, `test_adapters_native.py` | Implemented and validated. Every selector must match its component; alias conflicts and unsupported target types fail before injection |
 | Placement, trainability and optimizer ownership | `install_adapters`, `assert_trainability`, `optimizer_groups`, SFT `build_trainer` | Implemented and validated. Logical trainable inventory equals optimizer membership, without duplicates or frozen parameters |
 | HF construction, tying, freezing and FSDP lifecycle | `model/hf.py::HFModel.setup`; `test_model_hf.py`, `test_text_sft_adapters.py` | Implemented and validated. Load/materialize base, install adapters, apply distributed transformation, then construct optimizer; adapter-disabled branch retained |
-| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE LoRA training/resume, exact fresh portable reload and serialized FP32 merge passed; remaining methods pending. FP32 conversion changes some BF16 predictions, as quantified below |
+| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE LoRA/rsLoRA/DoRA training, continuation and both reload gates passed. PiSSA training/continuation/portable reload pass; merged export is blocked by measured hard-routing sensitivity. FP32 conversion changes some BF16 predictions, as quantified below |
 | Text SFT templates and masks | `data/packer/text_sft.py`, existing source-traced SFT masker; `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented and validated for explicit ChatML, Llama3, Mistral and Gemma protocols. Unsupported or reordered renderings fail |
 | Vision/projector/action gradient paths | Native Qwen ordered-vision forward, `model/pi05/modeling.py::training_condition`, Alpamayo and GR00T native SFT policies; family fixtures | Implemented and validated in completed pretrained cases, including all four GR00T methods across language/projector/vision/action. Differing rank modalities tested on native VLM |
 | Fresh initialization, warm start, exact resume | Shared adapter preparation and checkpoint lifecycle; qualification next-update comparison | Implemented and validated in completed cases. Resume restores optimizer/scheduler/data/RNG clock and skips method initialization/decomposition |
@@ -61,7 +61,7 @@ FP32 merged-file reload. These are correctness subsets, not complete task benchm
 | Qwen3.5-0.8B | 1/2 GPU × none/full | Passed (16 Slurm + 4 host cases) |
 | π0.5 LIBERO SFT | 1/2 GPU × none/full | Passed (16 Slurm + 4 host cases) |
 | Alpamayo-R1-10B | 1/2 GPU × none/vision | Passed (16 Slurm + 4 host cases) |
-| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | LoRA passed (1 case); rsLoRA/DoRA/PiSSA pending. FP32 merge equivalence is qualified separately from BF16 predictions |
+| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | LoRA/rsLoRA/DoRA passed; PiSSA merged export blocked by measured hard-routing sensitivity. FP32 equivalence is separate from BF16 predictions |
 | GR00T-N1.7 LIBERO-Spatial | 1 GPU × none/full | Passed (8/8 cases); corrected two-GPU profiles pending |
 
 Text fixtures use eight real GSM8K training rows and eight held-out test rows.
@@ -187,7 +187,7 @@ positions (maximum logit error `6.6499`, mean `0.34860`). This is a precision
 conversion limitation, not portable-reload or FP32 merge equivalence. BF16
 portable reload remains exact. Deployments requiring unchanged BF16 predictions
 should use the portable model; FP32 task quality still needs separate evaluation.
-The remaining three MoE method gates are running/queued.
+Slurm rsLoRA and DoRA also pass. PiSSA's merge gate remains failed; see the measured limitation below.
 
 Other bound Qwen2-VL/2.5-VL small fixtures do not qualify their public checkpoints'
 legacy processor/namespaces; the production SFT packer still refuses them.
@@ -210,7 +210,7 @@ with sealed per-method jobs. Table labels distinguish these states:
 | Qwen3.5 — completed | 37707970 | 37707974 | 37707976 | 37707978 | 1/2 GPU × AC none/full |
 | π0.5 — failed mount preflight | 37710088 | 37710094 | 37710096 | 37710463 | 1/2 GPU × AC none/full |
 | Alpamayo — failed mount preflight | 37710102 | 37710106 | 37711261 | 37711674 | 1/2 GPU × AC none/vision |
-| Native Qwen3-VL-MoE — corrected jobs queued/running | 37716232 | 37716235 | 37716239 | 37716247 | 2 GPU, AC full |
+| Native Qwen3-VL-MoE — first three complete, PiSSA merge failed | 37716232 | 37716235 | 37716239 | 37716247 | 2 GPU, AC full |
 | Qwen2.5 — completed | 37708301 | 37708306 | 37708308 | 37708309 | 1/2 GPU × AC none/full |
 | SmolLM2 — completed | 37708310 | 37708311 | 37708312 | 37708313 | 1/2 GPU × AC none/full |
 | Mistral — completed | 37708398 | 37708399 | 37708400 | 37708401 | 1/2 GPU, AC full |
@@ -275,5 +275,19 @@ MoE Slurm LoRA, rsLoRA and DoRA have completed training, continuation, portable
 reload and FP32 merged qualification. PiSSA's training and exact BF16 portable
 reload pass, and all 882 serialized merged tensors match; the FP32 stock-HF
 portable/merged oracle differs from the native reference on one of eight probes
-(maximum logit error about `0.02952`). This exceeds the fixed gate and remains
-incomplete pending diagnosis; no tolerance was widened.
+(maximum logit error about `0.02952`). The diagnostic job `37718577` also
+reproduces the failure using a private native merged forward (`0.02950`),
+so a native-only export loader does not resolve it. The first route change is
+at language layer 37, token 7: the 8th/9th expert probability margin is only
+`7.45058e-9`; experts 5 and 68 exchange the final selected slot. Later routing
+and attention amplify the difference. All 64 controlled greedy positions agree,
+but the fixed elementwise/mean output gates fail.
+
+This is a concrete incomplete PiSSA/MoE merged-export requirement. The public
+exporter now refuses that combination with an actionable portable-adapter
+alternative; the rejection does not count as merged-export implementation.
+It does not change training, checkpoint continuation, PiSSA decomposition, expert
+routing or the numerical thresholds. Dense VLM/HF and physical PiSSA exports
+remain supported in their completed profiles. The compact
+[diagnostic evidence](assets/moe-pissa-export-limitation.json) retains the actual
+source/wheel/container, artifact identity, errors and first routing divergence.

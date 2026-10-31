@@ -54,7 +54,7 @@ def native_moe_snapshot(path):
 
 
 @pytest.mark.parametrize("method,rslora", [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
-def test_moe_native_manifest_stock_fp32_reload_and_every_export_tensor(tmp_path, method, rslora):
+def test_moe_native_manifest_portable_and_supported_merged_exports(tmp_path, method, rslora):
     torch.manual_seed(23)
     base = tmp_path / "base"
     native_moe_snapshot(base)
@@ -103,6 +103,18 @@ def test_moe_native_manifest_stock_fp32_reload_and_every_export_tensor(tmp_path,
     save_adapter_artifact(model, str(portable))
     _, adapter_state = read_adapter_artifact(str(portable))
     merged = tmp_path / "merged"
+    if method == "pissa":
+        # Small smooth fixtures cannot qualify a real hard-routing MoE merge.
+        # The 30B checkpoint switches a near-tied top-k expert after FP32 merge,
+        # including with the native forward. Portable training/reload remains
+        # supported; public merged export must fail before publishing anything.
+        reloaded = hf_portable(str(base), str(portable), identity).float()
+        for actual, reference in zip(logits(HFProbePolicy(reloaded), data), logits(HFProbePolicy(model), data)):
+            torch.testing.assert_close(actual, reference, atol=0, rtol=0)
+        with pytest.raises(ValueError, match="PiSSA merged export.*near-tied expert route"):
+            export_merged_adapter(str(portable), str(base), str(merged))
+        assert not merged.exists()
+        return
     export_merged_adapter(str(portable), str(base), str(merged))
     assert verify_serialized(base, merged, identity, adapter_state) == len(
         load_file(str(base / "model-00001-of-00001.safetensors"))
