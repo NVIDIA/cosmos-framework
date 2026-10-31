@@ -149,6 +149,8 @@ def test_flow_dataset_refuses_split_overlap_and_changed_media_identity(tmp_path)
     before = FlowSFTDataset(str(path)).cursor_fingerprint()
     media.write_bytes(b"other-content")
     assert FlowSFTDataset(str(path)).cursor_fingerprint() != before
+
+
 def test_flow_result_exposes_loss_to_distributed_backward_hooks():
     from torch.utils._pytree import tree_flatten, tree_unflatten
 
@@ -160,5 +162,3 @@ def test_flow_result_exposes_loss_to_distributed_backward_hooks():
     assert leaves[0] is loss
     assert all(isinstance(value, torch.Tensor) for value in leaves)
     assert tree_unflatten(leaves, spec).loss is loss
-
-

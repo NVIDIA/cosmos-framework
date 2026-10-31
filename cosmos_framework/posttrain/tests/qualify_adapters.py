@@ -15,6 +15,8 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import platform
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -34,6 +36,31 @@ from cosmos_framework.posttrain.roles.env.sft import build_sft_env
 from cosmos_framework.posttrain.roles.trainer.validation.runtime import reshard_fsdp_modules
 from cosmos_framework.posttrain.utils.dist import init_local_process_group
 from cosmos_framework.utils.config import load_config
+
+
+def installed_environment(wheel: str) -> dict:
+    """Fingerprint an isolated host runtime without calling it a container image."""
+    return {
+        "format": "cosmos-adapter-qualification-environment-v1",
+        "python": sys.version,
+        "platform": platform.platform(),
+        "cuda_runtime": torch.version.cuda,
+        "distributions": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
+        "wheel_sha256": hashlib.sha256(Path(wheel).read_bytes()).hexdigest(),
+    }
+
+
+def environment_identity(wheel: str) -> dict | None:
+    path = os.environ.get("ADAPTER_ENVIRONMENT_MANIFEST")
+    if path is None:
+        return None
+    contents = Path(path).read_bytes()
+    expected = json.loads(contents)
+    if expected != installed_environment(wheel):
+        raise ValueError(
+            "qualification environment differs from its sealed manifest; rebuild and requalify the runtime"
+        )
+    return {"sha256": hashlib.sha256(contents).hexdigest(), "manifest": expected}
 
 
 def attest(wheel: str, record: str) -> dict:
@@ -56,6 +83,7 @@ def attest(wheel: str, record: str) -> dict:
     return {
         **build,
         "container_sha256": os.environ.get("ADAPTER_CONTAINER_SHA256"),
+        "environment": environment_identity(wheel),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "verified_package_files": checked,
         "versions": {
@@ -202,7 +230,9 @@ def main():
     if args.method == "mixed" and args.component != "all":
         parser.error("the mixed-method qualification requires --component=all")
     evidence = attest(args.wheel, args.build_record)
-    assert evidence["container_sha256"] and len(evidence["container_sha256"]) == 64
+    assert evidence.get("environment") or (evidence["container_sha256"] and len(evidence["container_sha256"]) == 64), (
+        "qualification requires a sealed container or isolated-environment identity"
+    )
     init_local_process_group()
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = False
