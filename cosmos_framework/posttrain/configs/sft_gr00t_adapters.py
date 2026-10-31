@@ -53,7 +53,8 @@ def make_config():
             Component(
                 component="vision",
                 targets=["backbone.model.model.visual.blocks.*.attn.qkv"],
-                layers=[26],
+                # The pinned Cosmos-Reason2-2B backbone has 24 vision blocks.
+                layers=[23],
                 lr_multiplier=0.1,
                 **common,
             ),

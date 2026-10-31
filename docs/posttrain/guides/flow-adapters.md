@@ -274,7 +274,7 @@ export SFT_ADAPTER_RSLORA=0
 | --- | --- |
 | Language | `backbone.model.model.language_model.layers.*.self_attn.{q_proj,v_proj}` |
 | Projector | `backbone.model.model.visual.merger.linear_fc{1,2}`, `backbone.model.model.visual.deepstack_merger_list.*.linear_fc{1,2}` |
-| Vision | `backbone.model.model.visual.blocks.26.attn.qkv` |
+| Vision | `backbone.model.model.visual.blocks.23.attn.qkv` (last of 24 blocks) |
 | Action | `action_head.model.transformer_blocks.*.attn1.{to_q,to_v}` |
 
 The state/action encoders and action decoder contain category-specific 3-D

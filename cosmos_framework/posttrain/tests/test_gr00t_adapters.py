@@ -21,7 +21,7 @@ from cosmos_framework.posttrain.model.gr00t.sft import Gr00tSFTModelConfig
 from cosmos_framework.posttrain.model.gr00t.sft_policy import Gr00tSFTPolicy, build_policy, construct, load_base
 
 
-def source(tmp_path):
+def source(tmp_path, *, vision_depth=None):
     from safetensors.torch import save_file
     from tokenizers import Tokenizer, models
     from transformers import (
@@ -61,6 +61,9 @@ def source(tmp_path):
         video_processor=Qwen3VLVideoProcessor(**media),
     ).save_pretrained(backbone)
     cfg = Qwen3VLConfig(**_dense_config().to_dict())
+    if vision_depth is not None:
+        cfg.vision_config.depth = vision_depth
+        cfg.vision_config.deepstack_visual_indexes = [5, 11, 17]
     cfg.text_config.rope_scaling = {"rope_type": "default", "mrope_section": [1, 1, 2]}
     torch.manual_seed(123)
     Qwen3VLForConditionalGeneration(cfg).save_pretrained(backbone)
@@ -151,6 +154,23 @@ def source(tmp_path):
     model = construct(str(root), config)
     save_file({n: v.contiguous().clone() for n, v in model.state_dict().items()}, str(root / "model.safetensors"))
     return str(root), config
+
+
+def test_shipped_recipe_resolves_on_the_24_block_backbone(tmp_path, monkeypatch):
+    from cosmos_framework.posttrain.configs.sft_gr00t_adapters import make_config
+    from cosmos_framework.posttrain.model.adapters import resolve_targets
+
+    base, config = source(tmp_path, vision_depth=24)
+    monkeypatch.setenv("SFT_MODEL_PATH", base)
+    monkeypatch.setenv("SFT_BACKBONE_PATH", config.backbone_path)
+    recipe = make_config()
+    net = construct(base, config)
+    manifest = resolve_targets(net, recipe.rl.adapters, family="Gr00tN1d7")
+    targets = manifest["targets"]
+    assert {row["component"] for row in targets} == {"language", "projector", "vision", "action"}
+    assert [row["name"] for row in targets if row["component"] == "vision"] == [
+        "backbone.model.model.visual.blocks.23.attn.qkv"
+    ]
 
 
 def adapters(method, rs=False):
