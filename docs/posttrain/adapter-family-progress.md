@@ -44,7 +44,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented and validated: all four methods, real 3.144B checkpoint/LIBERO data, 105 resolved targets, 1/2 GPUs × none/full AC, exact continuation, portable and FP32 merged reload. Corrected parameter layout and pre-fix artifact compatibility are validated |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented orchestration; all four Slurm full-profile gates passed and full epochs/final validation are running; local LoRA/rsLoRA epochs and validation are complete. Corrected installed evaluator preflight passed; full scores and recovery still pending. Existing Cosmos3 scores are not reused |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented, awaiting complete evaluation. All four Slurm methods reached update 1,111. LoRA/rsLoRA full validation, final-step recovery, portable reload and merged reload passed; generation evaluation is running. DoRA/PiSSA final validation and dependent gates remain pending. Existing Cosmos3 scores are not reused |
 
 ## Completed real-checkpoint profiles
 
@@ -277,8 +277,10 @@ NLL is reported separately from teacher-forced validation loss. No new AutoML
 search substitutes for these checks.
 
 Slurm full-training jobs `37706319`, `37706324`, `37706326`, `37706327`
-are running after passing their method-specific full-profile checks. Their corrected dependent evaluation jobs are `37718903`, `37718931`,
-`37718943`, `37718945`. Unstarted earlier evaluation launchers were replaced after
+passed their method-specific full-profile checks and reached update 1,111.
+LoRA and rsLoRA completed final validation; DoRA and PiSSA are finishing it.
+Their corrected evaluation jobs are `37720305`, `37720307`,
+`37720310`, `37720335`. Unstarted earlier evaluation launchers were replaced after
 removing an unbound environment-variable read; old sealed inputs and cancellation
 receipts remain available. Local runs use true host-environment identities and
 local attempt IDs, never fabricated Slurm/container identities.
@@ -317,6 +319,23 @@ agreement, including exact generation-prompt token IDs and cached repeats.
 Installed host and Slurm checks passed; the held unstarted jobs were canceled
 and replaced with the corrected jobs above. Old inputs and receipts remain
 available. Historical scores using the earlier preprocessing are not comparable.
+
+The first corrected full evaluators (`37718903`, `37718931`) stopped before
+export because the verification harness assumed a sharded checkpoint index;
+this base uses one `model.safetensors` file. The harness now reuses
+`checkpoint/tools/materialize_hf.py::read_index_weight_map`, with checks of the
+actual 625-tensor inventory, single/sharded layouts and rejection of an invalid
+present index. No framework model or export mathematics changed. Those failed
+attempts remain preserved; the unstarted DoRA/PiSSA counterparts were held and
+replaced. The new jobs above use the same verified `2a8b48d` evaluator image.
+
+LoRA/rsLoRA's completed Slurm epochs have token-weighted training means
+`0.227340` / `0.193232` and final validation losses `0.172474` / `0.177561`,
+from the common initial `0.843903`. Both final-update recovery checks pass
+(maximum parameter errors zero / `7.28e-12`, loss errors zero). Portable reload
+is exact. FP32 merged reload maximum errors are `1.18e-4` / `8.01e-5`, with
+32/32 controlled greedy decisions unchanged. Complete generated-answer scores
+are still running; these loss/recovery results do not stand in for them.
 
 The local `076cfbb` LoRA and rsLoRA epochs are complete: all 5,555 rows,
 1,111 applied updates, no omitted/padded rows, and complete 2,676-row validation.
