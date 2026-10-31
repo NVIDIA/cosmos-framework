@@ -1,0 +1,110 @@
+{
+  "status": "passed",
+  "jobs": {
+    "build": {
+      "job_id": "37719151",
+      "root": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/releases/4dd3826-verified-v1",
+      "record": "family-adapters-build-installed-image-97d406",
+      "revision": "4dd38265838b28a5c01468c7c56c580c3c2ead4f"
+    },
+    "gpu": {
+      "root": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/adapter-disabled-fsdp-v1",
+      "release": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/releases/4dd3826-verified-v1",
+      "build_job": "37719151",
+      "source_revision": "4dd38265838b28a5c01468c7c56c580c3c2ead4f",
+      "record": "adapter-disabled-hf-fsdp-regression-cfd01c",
+      "input_sha256": {
+        "runner.py": "11060dc4490a7d6ac0eea3d7823f1a249527f44a51e5a8048e30ba4b8c3dd419",
+        "run.sh": "66290216e92cbef47f79269e19178ae2c793e909055554654c0da629452d60ec",
+        "job.sbatch": "48515b3569811cc0363c4cd31e19a8448c3c72b0ff8cdec1844925e6d2e51d98"
+      },
+      "job_id": "37719369"
+    }
+  },
+  "accounting": "37719151|COMPLETED|0:0|00:09:31\n37719369|COMPLETED|0:0|00:01:17\n",
+  "installed": {
+    "source_revision": "4dd38265838b28a5c01468c7c56c580c3c2ead4f",
+    "source_base": "86e1ee52f276c11d6cc66dfd17da2795dfbe937b",
+    "source_branch": "feat/posttrain-family-adapters",
+    "source_dirty": false,
+    "runtime": "hf",
+    "wheel_sha256": "7bfe7bc7719e3aa0cd8c0a45d828c80b77d349e3af87479e49c23bae89c178c9",
+    "tracked_package_files_verified": 1880,
+    "created_utc": "2026-10-31T05:29:27.802772+00:00",
+    "source_test_reports": {
+      "cosmos-moe-pissa-export-profile-tests.log": "c88c0230b2a608ab25ffb8309e060fafba3b5431c32614d973d365fe46c246dc"
+    },
+    "container_sha256": "03d73b6d38bddf7c8f1496d860dcb43ef3acd274e6b32793592bde2c4e062097",
+    "environment": null,
+    "slurm_job_id": "37719369",
+    "verified_package_files": 1880,
+    "versions": {
+      "torch": "2.10.0+cu128",
+      "transformers": "5.8.1",
+      "safetensors": "0.8.0",
+      "torchcodec": "0.10.0"
+    }
+  },
+  "gpu_verification": {
+    "status": "passed",
+    "scope": "Existing adapter-disabled HF two-rank FSDP exact source-value loading, tied embeddings, placement and forward checks; no adapter training results counted.",
+    "installed": {
+      "source_revision": "4dd38265838b28a5c01468c7c56c580c3c2ead4f",
+      "source_base": "86e1ee52f276c11d6cc66dfd17da2795dfbe937b",
+      "source_branch": "feat/posttrain-family-adapters",
+      "source_dirty": false,
+      "runtime": "hf",
+      "wheel_sha256": "7bfe7bc7719e3aa0cd8c0a45d828c80b77d349e3af87479e49c23bae89c178c9",
+      "tracked_package_files_verified": 1880,
+      "created_utc": "2026-10-31T05:29:27.802772+00:00",
+      "source_test_reports": {
+        "cosmos-moe-pissa-export-profile-tests.log": "c88c0230b2a608ab25ffb8309e060fafba3b5431c32614d973d365fe46c246dc"
+      },
+      "container_sha256": "03d73b6d38bddf7c8f1496d860dcb43ef3acd274e6b32793592bde2c4e062097",
+      "environment": null,
+      "slurm_job_id": "37719369",
+      "verified_package_files": 1880,
+      "versions": {
+        "torch": "2.10.0+cu128",
+        "transformers": "5.8.1",
+        "safetensors": "0.8.0",
+        "torchcodec": "0.10.0"
+      }
+    },
+    "hardware": "uuid, name, memory.total [MiB], driver_version\nGPU-59da1f7e-4e64-9860-fa3d-53c4fef649d4, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\nGPU-45bdc7fa-7d1f-c095-1c41-ec8ce0cb995a, NVIDIA A100-SXM4-80GB, 81920 MiB, 535.129.03\n",
+    "ranks": {
+      "0": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "2",
+        "time": "10.809",
+        "timestamp": "2026-10-30T22:40:50.360731-07:00",
+        "hostname": "batch-block7-03411"
+      },
+      "1": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "2",
+        "time": "10.808",
+        "timestamp": "2026-10-30T22:40:50.360724-07:00",
+        "hostname": "batch-block7-03411"
+      }
+    }
+  },
+  "installed_tests": {
+    "adapter_suite_passed": 400,
+    "adapter_suite_skipped": 4,
+    "evaluation_passed": 13
+  },
+  "source_regression_tests": {
+    "passed": 41,
+    "skipped": 2,
+    "gpu_deselected": 2,
+    "fixture_only_revision": "5a4cf53"
+  },
+  "evidence": "final-installed-and-legacy-gpu-live.json"
+}

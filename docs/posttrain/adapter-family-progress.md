@@ -121,6 +121,8 @@ and serving environments are not modified.
 | `08e5ff5` physical container | 143 passed, 5 skipped; CUDA layout and legacy-portable compatibility gates passed | All 16 corrected GR00T method/world/AC cases completed |
 | `2a8b48d` evaluator container | 400 passed, 4 skipped plus 13 media tests; two real clips have exact SFT pixels/timestamps/prompt IDs; two-GPU MCQ preflight passed | Job `37718708`; image SHA `f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083` |
 | `4dd3826` export guard | 36 focused source tests passed | Real MoE PiSSA merge is explicitly refused; rejection is not counted as feature completion |
+| `4dd3826` final HF container | 400 passed, 4 skipped plus 13 media tests; two existing adapter-disabled FSDP tests pass on each of two A100 80 GB ranks | Image job `37719151`, GPU regression `37719369`; installed source, wheel and image verified in [regression evidence](assets/adapter-installed-regressions.json) |
+| `5a4cf53` adapter-disabled source regression | 41 passed, 2 skipped, 2 GPU tests deselected | Existing HF/export/configuration suite; the deterministic-setup mock now supplies the conversation task field |
 
 Counts overlap and must not be added. The general Torch 2.11 environment is a
 separate unqualified profile. Every GPU result retains its actual revision; a
