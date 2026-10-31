@@ -17,6 +17,17 @@ from cosmos_framework.posttrain.model.protocol import FlowMatchingLossOutput
 
 
 class AlpamayoSFTNet(AlpamayoR1):
+    def __init__(self, config, *args, **kwargs):
+        super().__init__(config, *args, **kwargs)
+        if config.model_dtype == "float32":
+            # The public processor has text_config.dtype=BF16. Transformers
+            # constructs that child in BF16 even with an outer FP32 request,
+            # then casts incoming checkpoint tensors to the child's dtype.
+            # Establish FP32 on the empty model BEFORE from_pretrained loads
+            # merged weights; casting after loading would irreversibly round
+            # the merged adapter contribution. Native BF16 training is unchanged.
+            self.float()
+
     def forward(self, tokenized, history, actions, action_mask, *, time=None, noise=None):
         if (
             actions.ndim != 3

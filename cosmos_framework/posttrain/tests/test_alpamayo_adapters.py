@@ -61,6 +61,9 @@ def source(tmp_path):
         video_processor=Qwen3VLVideoProcessor(**media),
     ).save_pretrained(processor)
     qwen = Qwen3VLConfig(**_dense_config().to_dict())
+    # The public 8B processor declares a nested BF16 text dtype. Transformers
+    # honors it even inside an outer from_pretrained(dtype=float32) call.
+    qwen.text_config.dtype = torch.bfloat16
     qwen.text_config.rope_scaling = {"rope_type": "default", "mrope_section": [1, 1, 2]}
     qwen.save_pretrained(processor)
     cfg = AlpamayoR1Config(
