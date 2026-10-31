@@ -237,6 +237,11 @@ reference preserves the base's BF16 rounding; it does not reload original
 higher-precision base weights. BF16 merged inference, including stock HF's different
 expert arithmetic, is outside the supported export profile. Differences from the
 training-precision outputs are reported separately, as for the dense families.
+In the completed 30B LoRA case, FP32 merged output agrees with the FP32 portable
+reference at all 64 controlled greedy positions (maximum logit error `4.96e-5`).
+Compared with BF16 training computation, six positions change, with maximum logit
+error `6.65`. Exact BF16 portable reload passes. A passing FP32 merge gate therefore
+does not establish equivalent BF16 predictions or FP32 downstream task quality.
 The 30B profile advertises only two-rank pure DP with full activation checkpointing
 once its GPU gate passes; ordinary linear attention/vision/merger targets are
 distinct from unsupported fused expert tensors.
