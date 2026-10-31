@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Sample and setup contracts for causal multiview (Cosmos3-Nano-Sim-Auto) inference.
+"""Sample and setup contracts for causal multiview (Cosmos3-Nano-Sim-Auto) inference, and the Sim-Transfer setup contract.
 
 The sample cases port the reference implementation's causal simulation argument tests, minus the
 fields this repository does not have (``joint_generation``, the top-level ``lidar_condition_path``
@@ -666,3 +666,58 @@ def test_bidirectional_transfer_auto_keeps_the_requested_runtime(
     assert setup.diffusion_cache is True
     assert (setup.cp_size, setup.cfgp_size) == (2, 2)
     assert _contract_warnings(warnings) == []
+
+
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        ({}, None),  # checkpoint default 51 / 1
+        ({"kv_cache_inference_size": 0, "attention_sink_size": 0}, None),
+        ({"kv_cache_inference_size": 30, "attention_sink_size": 3}, None),
+        ({"kv_cache_inference_size": 3, "attention_sink_size": 1}, None),
+        ({"kv_cache_inference_size": 1, "attention_sink_size": 0}, "can wash out"),
+        ({"kv_cache_inference_size": 2, "attention_sink_size": 1}, "can wash out"),
+        ({"kv_cache_inference_size": 2}, "can wash out"),  # checkpoint sink 1
+        ({"kv_cache_inference_size": 2, "attention_sink_size": 0}, "brightness can drift"),
+        ({"kv_cache_inference_size": 8, "attention_sink_size": 0}, "brightness can drift"),
+        ({"kv_cache_inference_size": 2, "attention_sink_size": 2}, None),  # left to the model's sink check
+        ({"attention_sink_size": 0}, "brightness can drift"),  # checkpoint window 51
+    ],
+)
+def test_sim_transfer_warns_about_degrading_history_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setup: dict[str, int], expected: str | None
+) -> None:
+    checkpoint_dir = _write_hf_checkpoint(tmp_path / "sim_transfer", copy.deepcopy(_SIM_TRANSFER_EXPORTED_CONFIG))
+    warnings = _record_warnings(monkeypatch)
+
+    _build_setup(checkpoint_dir, world_size=1, **setup)
+
+    window_warnings = [message for message in warnings if "kv_cache_inference_size=" in message]
+    if expected is None:
+        assert window_warnings == []
+    else:
+        assert len(window_warnings) == 1 and expected in window_warnings[0]
+
+
+def test_sim_transfer_history_warning_follows_the_checkpoint_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unset sink resolves to the exported value, so a checkpoint without a sink is caught too."""
+    config = {**copy.deepcopy(_SIM_TRANSFER_EXPORTED_CONFIG), "attention_sink_size": 0}
+    checkpoint_dir = _write_hf_checkpoint(tmp_path / "sim_transfer", config)
+    warnings = _record_warnings(monkeypatch)
+
+    _build_setup(checkpoint_dir, world_size=1, kv_cache_inference_size=8)
+
+    assert any("brightness can drift" in message for message in warnings)
+
+
+def test_bidirectional_transfer_ignores_the_history_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checkpoint_dir = _write_hf_checkpoint(
+        tmp_path / "transfer_auto", {"video_temporal_causal": False, "fixed_step_sampler_config": None}
+    )
+    warnings = _record_warnings(monkeypatch)
+
+    _build_setup(checkpoint_dir, world_size=1, kv_cache_inference_size=1, attention_sink_size=0)
+
+    assert [message for message in warnings if "kv_cache_inference_size=" in message] == []
