@@ -16,8 +16,8 @@ not results for another checkpoint. Four-bit training remains separate.
 
 There are **182 completed real-model qualification cases across 12 checkpoints**.
 This includes repeated profiles in independently attested host and Slurm runtimes;
-it counts only cases with completed training, continuation and both reload gates;
-some parent matrices are still running. Repeated host/Slurm profiles remain
+it counts only cases with completed training, continuation and both reload gates.
+Additional host repeats continue and remain excluded until every gate passes. Repeated host/Slurm profiles remain
 separate executions rather than distinct model/method combinations. The compact
 [method results](assets/family-adapter-method-results.csv) select one fixed
 world-size/AC profile per checkpoint: 47 of 48 method profiles pass every gate;
@@ -44,7 +44,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented and validated: all four methods, real 3.144B checkpoint/LIBERO data, 105 resolved targets, 1/2 GPUs × none/full AC, exact continuation, portable and FP32 merged reload. Corrected parameter layout and pre-fix artifact compatibility are validated |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented, awaiting complete evaluation. All four Slurm methods reached update 1,111. LoRA/rsLoRA full validation, final-step recovery, portable reload, merged reload and full generation evaluation passed. PiSSA passed training/recovery/both reload gates and is scoring; DoRA final validation and dependent gates remain pending. Existing Cosmos3 scores are not reused |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented and validated: all four methods completed all 5,555 training rows, full validation, controlled final-update recovery, portable/merged reload and all 2,676 evaluation rows plus the 576-row scene-disjoint subset |
 
 ## Completed real-checkpoint profiles
 
@@ -174,7 +174,7 @@ Real runs exposed and verified these fixes:
   forward and reduces real-model merge mismatch from `0.00805` to `0.000210`.
   Corrected qualification is a fresh run; the failed attempt remains preserved.
 
-## Pending execution and explicit gaps
+## Compatibility limits and qualification history
 
 GR00T-N1.7 LIBERO-Spatial weights, complete processor assets and real LIBERO data
 are staged. Direct Cosmos-Reason2 metadata downloads returned HTTP 401, but the
@@ -258,93 +258,115 @@ with sealed per-method jobs. Table labels distinguish these states:
 | GR00T — earlier one-GPU cases completed | 37715443 | 37715444 | 37715445 | 37715446 | 1 GPU × AC none/full |
 | GR00T — corrected complete matrix | 37717289 | 37717290 | 37717292 | 37717294 | 1/2 GPU × AC none/full |
 
-## New native Qwen3-VL full WTS verification
+## Full-epoch native Qwen3-VL WTS results
 
-The local source copy verifies all 517 files, including 512 videos, against
-SHA-256 and preserves all 5,555 training and 2,676 validation rows. Each method
-must first pass its own full-resolution/gradient-accumulation qualification on
-the installed `076cfbb` wheel before the existing SFT entrypoint trains exactly
-1,111 updates (microbatch one, accumulation five). Every recorded row ID and data
-cursor is reconciled; no implicit padding or dropped training rows is accepted.
+All twelve Slurm phases completed successfully: one full epoch, independent
+final-update recovery, and verified export/reload plus full evaluation for each
+method. These are new native `Qwen/Qwen3-VL-2B-Instruct` results at immutable
+revision `89644892e4d85e24eaac8bacfd4f463576704203`. They do not reuse earlier
+Cosmos3 runs or the additional host repeats.
 
-After each complete epoch, independent read-only recovery replays update
-1110→1111 and compares parameters, optimizer, scheduler, RNG, clock and cursor.
-Final export checks the frozen base and PiSSA initial factors, verifies all
-trainable tensors changed in the final update, then performs portable and FP32
-merged reload. Only then does the existing two-GPU evaluator score all 2,676
-validation examples and the reserved 576-example scene-disjoint subset. Generated
-NLL is reported separately from teacher-forced validation loss. No new AutoML
-search substitutes for these checks.
+Every method consumed all 5,555 training rows exactly once, with 1,111 applied
+updates, microbatch one, accumulation five, and no padded or dropped rows.
+All used seed 42, rank eight, alpha 16, dropout zero, the same data order and
+base learning rate `2e-5`. Language/projector/vision LR multipliers were
+`1 / 0.5 / 0.1`. The 65 resolved targets comprise 56 language Q/V projections,
+eight merger/deepstack-merger projections and `model.visual.blocks.23.attn.qkv`.
+Training used one A100 80 GB per method, BF16 base storage, FP32 adapters and
+full activation checkpointing. Separate two-rank evaluator jobs scored the
+FP32 merged artifacts. No method-specific tuning or new AutoML search was run.
 
-Slurm full-training jobs `37706319`, `37706324`, `37706326`, `37706327`
-passed their method-specific full-profile checks and reached update 1,111.
-LoRA and rsLoRA completed final validation; DoRA and PiSSA are finishing it.
-Their corrected evaluation jobs are `37720305`, `37720307`,
-`37720310`, `37720335`. Unstarted earlier evaluation launchers were replaced after
-removing an unbound environment-variable read; old sealed inputs and cancellation
-receipts remain available. Local runs use true host-environment identities and
-local attempt IDs, never fabricated Slurm/container identities.
+The common initial teacher-forced validation loss was `0.843903`. Mean training
+loss is weighted by supervised tokens. Generated-token NLL is a separate metric
+in the machine-readable results; it is not validation loss.
 
-Slurm final-update recovery jobs `37716221`, `37716223`, `37716231`, and
-`37716233` depend on their respective successful full epochs. They mount
-training artifacts read-only, attest the exact training image, reject any method
-initialization/decomposition during resume, and compare update 1110→1111
-against the uninterrupted final checkpoint. Recovery retains the exact training
-image; corrected inference/export uses its separately attested evaluator image.
+| Method | Mean training loss | Final validation loss | Full evaluation, 2,676 | Scene-disjoint, 576 | Invalid answers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| LoRA | 0.227340 | 0.172474 | 2465/2676 (92.12%) | 528/576 (91.67%) | 0 |
+| rsLoRA | 0.193232 | 0.177561 | 2457/2676 (91.82%) | 530/576 (92.01%) | 0 |
+| DoRA | 0.224392 | 0.171818 | 2464/2676 (92.08%) | 528/576 (91.67%) | 0 |
+| PiSSA | 0.189425 | 0.180127 | 2465/2676 (92.12%) | 530/576 (92.01%) | 0 |
 
-The Slurm evaluator preflight `37716773` completed on two A100 80 GB GPUs
-using the exact `3a9552b` WTS training wheel/image. It exercised actual video
-decode, multimodal inference and the shared MCQ scorer on two examples. That historical preflight validated execution, but did not detect the media
-contract defect described below; its scores are not used. The corrected
-`2a8b48d` preflight `37718708` additionally verifies exact SFT media/prompt
-equivalence before actual two-rank MCQ execution. Full evaluation remains gated
-on completed training and artifact checks.
+The complete evaluation set contains 44 rows sharing four training-scene IDs.
+The reserved 576-row subset is scene-disjoint and is reported separately.
+These fixed-recipe results do not establish a universally best method.
 
-Source comparison after `076cfbb` finds no changes to dense Qwen3-VL's production
-SFT/adapter/packer/checkpoint path through `08e5ff5`: later production changes
-are GR00T-specific construction/metadata and the native MoE inference-device
-bridge. Qualification helpers gained explicit deterministic profiles and the MoE
-FP32 oracle. Local full-WTS results remain labeled `076cfbb`; Slurm results remain
-labeled `3a9552b`, which predates the shared portable-publication refactor and
-physical-autocast extensions. Results are never relabeled as a newer wheel.
+[Loss curves and evaluation plot](assets/native-qwen3-vl-wts-methods.png)
+([SVG](assets/native-qwen3-vl-wts-methods.svg));
+[machine-readable comparison and artifact identities](assets/native-qwen3-vl-wts-methods.json).
 
-The prior full WTS evaluation jobs `37711018`, `37711029`, `37711043`,
-`37711056` were held before execution after a
-real CPU probe found that decoded-frame evaluation lost source timestamps and
-changed the resize grid. The new inference-only fix preserves original frame
-metadata and delegates decoded-video preprocessing to Qwen3's processor. Small
-regressions cover short clips, batched processing, cache isolation and invalid
-metadata; two real WTS clips now have exact SFT/evaluation pixel and timestamp
-agreement, including exact generation-prompt token IDs and cached repeats.
-Installed host and Slurm checks passed; the held unstarted jobs were canceled
-and replaced with the corrected jobs above. Old inputs and receipts remain
-available. Historical scores using the earlier preprocessing are not comparable.
+| Method | Training job GPU-hours | Applied-step seconds | Sampled training peak GiB | Trainable parameters | Portable MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| LoRA | 2.726 | 5054.2 | 5.646 | 2,097,152 | 8.057 |
+| rsLoRA | 2.776 | 5111.5 | 5.646 | 2,097,152 | 8.057 |
+| DoRA | 3.326 | 6220.1 | 5.649 | 2,210,816 | 8.498 |
+| PiSSA | 3.054 | 5674.7 | 5.782 | 2,097,152 | 16.072 |
 
-The first corrected full evaluators (`37718903`, `37718931`) stopped before
-export because the verification harness assumed a sharded checkpoint index;
-this base uses one `model.safetensors` file. The harness now reuses
-`checkpoint/tools/materialize_hf.py::read_index_weight_map`, with checks of the
-actual 625-tensor inventory, single/sharded layouts and rejection of an invalid
-present index. No framework model or export mathematics changed. Those failed
-attempts remain preserved; the unstarted DoRA/PiSSA counterparts were held and
-replaced. The new jobs above use the same verified `2a8b48d` evaluator image.
+Job GPU-hours include setup, profile qualification, validation and checkpointing;
+applied-step seconds exclude those phases. GPU memory is sampled every ten
+seconds, not an exact allocator peak. Portable PiSSA includes its initial factors.
+These shared-node measurements are not isolated hardware throughput benchmarks.
 
-LoRA/rsLoRA's completed Slurm epochs have token-weighted training means
-`0.227340` / `0.193232` and final validation losses `0.172474` / `0.177561`,
-from the common initial `0.843903`. Both final-update recovery checks pass
-(maximum parameter errors zero / `7.28e-12`, loss errors zero). Portable reload
-is exact. FP32 merged reload maximum errors are `1.18e-4` / `8.01e-5`, with
-32/32 controlled greedy decisions unchanged. Full FP32 merged evaluation is complete for both: LoRA scored 2,465/2,676
-(92.12%) and rsLoRA 2,457/2,676 (91.82%). On the reserved scene-disjoint
-subset, they scored 528/576 (91.67%) and 530/576 (92.01%), respectively.
-Both produced zero invalid answers. PiSSA/DoRA full evaluation remains pending.
+All four final-update recovery checks replayed update 1110→1111 using the exact
+original training image. Optimizer, scheduler, RNG, update clock and data cursor
+matched. Maximum parameter error was zero except rsLoRA (`7.28e-12`); all loss
+errors were zero. The test rejects method initialization during resume.
+All 625 base tensors remained unchanged, all intended trainables changed in the
+final update, all 65 DoRA magnitude tensors changed, and all 130 PiSSA initial
+factor tensors remained unchanged. Fresh-process portable reload was exact.
 
-The local `076cfbb` LoRA and rsLoRA epochs are complete: all 5,555 rows,
-1,111 applied updates, no omitted/padded rows, and complete 2,676-row validation.
-Their token-weighted training means are `0.227146` / `0.192750`; validation
-loss moves from `0.843903` to `0.170965` / `0.179041`. Their generation scores
-and final checkpoint recovery/export remain pending; these partial results are
-not substituted for the independently running Slurm verification.
+| Method | FP32 merged maximum logit error | Controlled greedy agreement |
+| --- | ---: | ---: |
+| LoRA | 0.000118256 | 32/32 |
+| rsLoRA | 8.01086e-05 | 32/32 |
+| DoRA | 0.000130653 | 32/32 |
+| PiSSA | 0.000101089 | 32/32 |
+
+Merge equivalence uses the same trained adapter and rounded base promoted to
+FP32, with fixed `atol=5e-4`, `rtol=2e-4` and mean error at most `5e-5`.
+Changing BF16 computation to FP32 is measured separately: controlled greedy
+agreement is 31/32 for LoRA and DoRA, and 32/32 for rsLoRA and PiSSA. Each FP32
+adapter and its merged model agree at all 32 positions. Full task scores above
+evaluate the actual FP32 merged deployment. BF16 prediction equivalence is not
+inferred from this oracle.
+
+| Method | Training job | Final-update recovery | Export/reload and evaluation |
+| --- | --- | --- | --- |
+| LoRA | 37706319 | 37716221 | 37720305 |
+| rsLoRA | 37706324 | 37716223 | 37720307 |
+| DoRA | 37706326 | 37716231 | 37720310 |
+| PiSSA | 37706327 | 37716233 | 37720335 |
+
+Training and exact recovery used source `3a9552b5f533c3cf1440d973eeb9798ed83827f4`;
+wheel SHA-256 `fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d`;
+image SHA-256 `4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a`.
+Export/evaluation used source `2a8b48d6c0275d08dea8b1e4593437c19d6640da`;
+wheel SHA-256 `832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9`;
+image SHA-256 `f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083`.
+
+Newer portable loaders matched saved training probes exactly for all methods;
+current production changes after that evaluator revision only refuse the
+unqualified MoE/PiSSA merged path. Every result retains its executed revision;
+it is not relabeled as the current documentation commit.
+
+The evaluator preserves source frame indices/fps and delegates resize and
+normalization to the Qwen3 processor. Two distinct real WTS clips have exactly
+equal SFT/evaluation pixels, grids, timestamps, generation-prompt IDs and cached
+repeats. Installed two-GPU preflight `37718708` passed before full scoring.
+Historical scores from the older decoded-frame preprocessing are not comparable.
+
+Two prior full-evaluation attempts (`37718903`, `37718931`) stopped before export
+because the verification harness assumed a sharded index. It now reuses the
+framework's `checkpoint/tools/materialize_hf.py::read_index_weight_map`; actual
+625-tensor inventory, single/sharded layouts and invalid-index failures were
+checked. Old failures and unstarted superseded launchers remain preserved.
+No training restart, model change or numerical tolerance relaxation was used.
+
+Additional host runs remain separately labeled `076cfbb`. Their completed
+LoRA/rsLoRA losses and ongoing DoRA/PiSSA repeats are not substituted for the
+complete Slurm results above; existing experiments are preserved.
+
+## Incomplete MoE PiSSA merged export
 
 MoE Slurm LoRA, rsLoRA and DoRA have completed training, continuation, portable
 reload and FP32 merged qualification. PiSSA's training and exact BF16 portable

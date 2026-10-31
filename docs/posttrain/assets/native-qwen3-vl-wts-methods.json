@@ -1,0 +1,280 @@
+{
+  "format": "cosmos-native-qwen3-vl-wts-method-comparison-v1",
+  "checkpoint": {
+    "repository": "Qwen/Qwen3-VL-2B-Instruct",
+    "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
+  },
+  "protocol": "One complete WTS epoch, fixed rank 8 / alpha 16 / component LR multipliers and data order, seed 42. No method-specific tuning or optimal-method claim.",
+  "split_note": "All 2676 validation rows are scored; 44 rows share four training-scene IDs. The reserved 576-row subset is scene-disjoint and scored separately.",
+  "merge_note": "FP32 merged correctness compares against the same trained portable adapter promoted to FP32, preserving the rounded BF16 base. Drift versus training precision is separate.",
+  "evaluation_media_note": "Source frame indices and fps preserved; two actual WTS clips have exactly equal normalized video pixels, grids, timestamps, generation-prompt IDs and cached repeats between SFT and evaluation. Historical predecoded-frame scores used different preprocessing and are not comparable.",
+  "methods": {
+    "lora": {
+      "training_loss_weighted_by_tokens": 0.22733989453013634,
+      "last_training_loss": 0.006531864980388491,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17247415430957178,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2465,
+        "accuracy": 0.9211509715994021,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 528,
+        "accuracy": 0.9166666666666666,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.014500733782422141,
+      "trainable_parameters": 2097152,
+      "targets": 65,
+      "training_step_seconds": 5054.171389818133,
+      "training_rows_per_step_second": 1.0990921303521304,
+      "training_wall_seconds": 9493.0,
+      "training_gpu_hours": 2.7263888888888888,
+      "recovery_gpu_hours": 0.06416666666666666,
+      "evaluation_gpu_hours": 0.5944444444444444,
+      "peak_sampled_training_memory_gib": 5.6455078125,
+      "portable_bytes": 8447921,
+      "merged_bytes": 8521908075,
+      "merged_max_logit_error": 0.000118255615234375,
+      "merged_mean_logit_error": 6.704807560709014e-06,
+      "merged_reference_precision": "float32",
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "merged_vs_training_precision": {
+        "argmax_equal": 31,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.01764882169663906,
+        "maximum_logit_error": 1.5446853637695312,
+        "maximum_relative_l2": 0.02325834147632122,
+        "maximum_total_variation": 0.030362404882907867,
+        "mean_absolute_logit_error": 0.07941874861717224,
+        "mean_kl": 0.0007068379699646243,
+        "mean_total_variation": 0.0030273214833869133,
+        "positions": 32
+      },
+      "resume_max_parameter_error": 0.0,
+      "resume_loss_error": 0.0,
+      "evaluation_source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+      "evaluation_wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+      "evaluation_container_sha256": "f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083",
+      "media_preflight_sha256": "bbaf6c03f72e469be44d5034760d91a3b2975b16a3c24c2e02fdfce9283a61b2",
+      "source_revision": "3a9552b5f533c3cf1440d973eeb9798ed83827f4",
+      "wheel_sha256": "fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d",
+      "container_sha256": "4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a",
+      "jobs": {
+        "training": "37706319",
+        "recovery": "37716221",
+        "evaluation": "37720305"
+      }
+    },
+    "rslora": {
+      "training_loss_weighted_by_tokens": 0.193232366422019,
+      "last_training_loss": 0.0016643102157104296,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17756062283633814,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2457,
+        "accuracy": 0.9181614349775785,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 530,
+        "accuracy": 0.9201388888888888,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.012266408382416672,
+      "trainable_parameters": 2097152,
+      "targets": 65,
+      "training_step_seconds": 5111.53171291051,
+      "training_rows_per_step_second": 1.086758394938526,
+      "training_wall_seconds": 9677.0,
+      "training_gpu_hours": 2.776388888888889,
+      "recovery_gpu_hours": 0.06,
+      "evaluation_gpu_hours": 0.5988888888888889,
+      "peak_sampled_training_memory_gib": 5.6455078125,
+      "portable_bytes": 8448701,
+      "merged_bytes": 8521909635,
+      "merged_max_logit_error": 8.0108642578125e-05,
+      "merged_mean_logit_error": 6.47795741315349e-06,
+      "merged_reference_precision": "float32",
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "merged_vs_training_precision": {
+        "argmax_equal": 32,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.011057928204536438,
+        "maximum_logit_error": 1.0928993225097656,
+        "maximum_relative_l2": 0.020526865497231483,
+        "maximum_total_variation": 0.02842813730239868,
+        "mean_absolute_logit_error": 0.07700486667454243,
+        "mean_kl": 0.0005364264000036201,
+        "mean_total_variation": 0.003585491322155576,
+        "positions": 32
+      },
+      "resume_max_parameter_error": 7.275957614183426e-12,
+      "resume_loss_error": 0.0,
+      "evaluation_source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+      "evaluation_wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+      "evaluation_container_sha256": "f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083",
+      "media_preflight_sha256": "bbaf6c03f72e469be44d5034760d91a3b2975b16a3c24c2e02fdfce9283a61b2",
+      "source_revision": "3a9552b5f533c3cf1440d973eeb9798ed83827f4",
+      "wheel_sha256": "fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d",
+      "container_sha256": "4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a",
+      "jobs": {
+        "training": "37706324",
+        "recovery": "37716223",
+        "evaluation": "37720307"
+      }
+    },
+    "dora": {
+      "training_loss_weighted_by_tokens": 0.22439171863190055,
+      "last_training_loss": 0.00628281190929556,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17181789211335494,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2464,
+        "accuracy": 0.9207772795216741,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 528,
+        "accuracy": 0.9166666666666666,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.014537605418766905,
+      "trainable_parameters": 2210816,
+      "targets": 65,
+      "training_step_seconds": 6220.148014403705,
+      "training_rows_per_step_second": 0.8930655648606025,
+      "training_wall_seconds": 11650.0,
+      "training_gpu_hours": 3.326111111111111,
+      "recovery_gpu_hours": 0.05583333333333333,
+      "evaluation_gpu_hours": 0.6055555555555555,
+      "peak_sampled_training_memory_gib": 5.6494140625,
+      "portable_bytes": 8910553,
+      "merged_bytes": 8521908075,
+      "merged_max_logit_error": 0.00013065338134765625,
+      "merged_mean_logit_error": 7.102329391273088e-06,
+      "merged_reference_precision": "float32",
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "merged_vs_training_precision": {
+        "argmax_equal": 31,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.017901506274938583,
+        "maximum_logit_error": 0.966405987739563,
+        "maximum_relative_l2": 0.019765298813581467,
+        "maximum_total_variation": 0.03382304683327675,
+        "mean_absolute_logit_error": 0.06924176029860973,
+        "mean_kl": 0.0008955030152719701,
+        "mean_total_variation": 0.00532489052056917,
+        "positions": 32
+      },
+      "resume_max_parameter_error": 0.0,
+      "resume_loss_error": 0.0,
+      "evaluation_source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+      "evaluation_wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+      "evaluation_container_sha256": "f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083",
+      "media_preflight_sha256": "bbaf6c03f72e469be44d5034760d91a3b2975b16a3c24c2e02fdfce9283a61b2",
+      "source_revision": "3a9552b5f533c3cf1440d973eeb9798ed83827f4",
+      "wheel_sha256": "fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d",
+      "container_sha256": "4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a",
+      "jobs": {
+        "training": "37706326",
+        "recovery": "37716231",
+        "evaluation": "37720310"
+      }
+    },
+    "pissa": {
+      "training_loss_weighted_by_tokens": 0.18942470518224105,
+      "last_training_loss": 0.00763616261392599,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.1801274481762637,
+      "full_eval": {
+        "total": 2676,
+        "correct": 2465,
+        "accuracy": 0.9211509715994021,
+        "invalid": 0
+      },
+      "reserved_eval": {
+        "total": 576,
+        "correct": 530,
+        "accuracy": 0.9201388888888888,
+        "invalid": 0
+      },
+      "generated_token_nll": 0.010401347159826178,
+      "trainable_parameters": 2097152,
+      "targets": 65,
+      "training_step_seconds": 5674.652747900167,
+      "training_rows_per_step_second": 0.9789145251320545,
+      "training_wall_seconds": 10671.0,
+      "training_gpu_hours": 3.053611111111111,
+      "recovery_gpu_hours": 0.057777777777777775,
+      "evaluation_gpu_hours": 0.6038888888888889,
+      "peak_sampled_training_memory_gib": 5.7822265625,
+      "portable_bytes": 16853010,
+      "merged_bytes": 8521908205,
+      "merged_max_logit_error": 0.0001010894775390625,
+      "merged_mean_logit_error": 6.7349810706218705e-06,
+      "merged_reference_precision": "float32",
+      "merged_argmax_agreement": [
+        32,
+        32
+      ],
+      "merged_vs_training_precision": {
+        "argmax_equal": 32,
+        "maximum_argmax_probability_regret": 0.0,
+        "maximum_kl": 0.03404656797647476,
+        "maximum_logit_error": 1.1169147491455078,
+        "maximum_relative_l2": 0.01918944902718067,
+        "maximum_total_variation": 0.08347637951374054,
+        "mean_absolute_logit_error": 0.07145339995622635,
+        "mean_kl": 0.001453185330319684,
+        "mean_total_variation": 0.00538012949982658,
+        "positions": 32
+      },
+      "resume_max_parameter_error": 0.0,
+      "resume_loss_error": 0.0,
+      "evaluation_source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+      "evaluation_wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+      "evaluation_container_sha256": "f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083",
+      "media_preflight_sha256": "bbaf6c03f72e469be44d5034760d91a3b2975b16a3c24c2e02fdfce9283a61b2",
+      "source_revision": "3a9552b5f533c3cf1440d973eeb9798ed83827f4",
+      "wheel_sha256": "fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d",
+      "container_sha256": "4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a",
+      "jobs": {
+        "training": "37706327",
+        "recovery": "37716233",
+        "evaluation": "37720335"
+      }
+    }
+  },
+  "evidence_sha256": {
+    "lora/training.json": "19c9ba1e15825498b07003b42994875b78411dea7aba8b7c77709bbdaab5a278",
+    "lora/evaluation.json": "cecd0c68b6e13839601ee2462ffc5527fa3eb3e37efacd1bf7dbdec4fac8034c",
+    "lora/recovery.json": "bdba5b75a55b022da9d2bfdb8d8f6d3a048158d176f66e0ffd6f385673433bca",
+    "rslora/training.json": "18875f1226461e6ce247f187289e77633b7ae4ff51c08e44c56fe6b5128402e5",
+    "rslora/evaluation.json": "412784d9e1b791caf34f3c1173e00a0b6b3ce8203ab95305cf9292757398c42d",
+    "rslora/recovery.json": "d35c2c528307353e01d026d72c27301db834f57be675fb6887916867807dd322",
+    "dora/training.json": "cd1c3df714735b0ae947f493b72eead1b918485233ee28c9a9639435b2484b28",
+    "dora/evaluation.json": "2f51e1d59a0a73e2841699165e7f30d91495fa234a03ab2b995d8bee171bf695",
+    "dora/recovery.json": "d47e8271363526ec2c056f5b9e955106566cfdaf6a8d7e611e1047819c2266dd",
+    "pissa/training.json": "8705c8fe75496b467bc7c821e89f8ef4279c88671e65480066be8b96e14044cb",
+    "pissa/evaluation.json": "4546c738929da8242993db6b02340919ba20ad425f78ed667d5e84723c11a491",
+    "pissa/recovery.json": "e6337e173df5027f669291d7b627cca07a10f4b0bf07e991b3e117aded631067"
+  },
+  "comparison_script_sha256": "7036bb781bb5b06a61ef48a1400bb0ab18a5012d5f12f44f0e1a6f96d005657b"
+}
