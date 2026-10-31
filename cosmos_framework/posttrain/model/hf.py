@@ -440,10 +440,21 @@ class HFModel(nn.Module):
             # adapter must exist when FSDP registers parameters. Keep the original
             # shard-before-load path intact for adapter-disabled recipes.
             from cosmos_framework.posttrain.model.adapters import assert_trainability, prepare_adapter_model
+            from cosmos_framework.posttrain.model.hf_adapter_buffers import prepare_adapter_buffers
 
+            contract = prepare_adapter_buffers(self.net)
             self._materialize_meta()
             self.tie_embeddings()
             load_weights(self.net, self.ckpt_path, self.load_plan, None)
+            source_identity = None
+            if contract is not None:
+                from cosmos_framework.posttrain.checkpoint.adapters import snapshot_identity
+
+                source_identity = {
+                    "base": snapshot_identity(self.ckpt_path, weights=True),
+                    "processor": snapshot_identity(self.ckpt_path, weights=False),
+                    "model_contract": contract,
+                }
             prepare_adapter_model(
                 self.net,
                 adapters,
@@ -454,6 +465,7 @@ class HFModel(nn.Module):
                 resume=adapter_resume,
                 distributed=pdims is not None and int(pdims.world_size) > 1,
                 fsdp_block_types=self.shard_plan.block_types,
+                source_identity=source_identity,
             )
             if self.grad_ckpt:
                 self.apply_gradient_checkpointing()

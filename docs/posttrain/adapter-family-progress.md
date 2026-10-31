@@ -19,17 +19,18 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | Independent settings, aliases, optimizer ownership | Existing resolver / `assert_trainability` | Existing native tests pass; new family selector failures tested |
 | HF loaded-base → initialization → FSDP → optimizer lifecycle | `HFModel.setup`, `build_hf_model`, SFT `build_trainer` | Implemented; CPU materialization and tied embeddings pass; Qwen3-0.6B passed all four methods on one/two GPUs with AC none/full |
 | Text portable reload and merged model export | `checkpoint/adapters.py`, shared HF materializer | Implemented; real tiny HF serialization, strict reload and stock merged reload pass |
-| Non-Qwen text templates in the actual SFT workflow | `data/packer/text_sft.py`, `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented by extending the existing source-traced offset masker. Explicit ChatML, Llama3, Mistral and Gemma protocols; real Qwen2.5/SmolLM2/Mistral tokenizer preflight passes. Pretrained training remains pending; component math tests alone did not establish this path |
-| Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; pretrained GPU qualification pending |
+| Non-Qwen text templates in the actual SFT workflow | `data/packer/text_sft.py`, `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented by extending the existing source-traced offset masker. Explicit ChatML, Llama3, Mistral and Gemma protocols; real Qwen2.5/SmolLM2/Mistral tokenizer preflight passes. Qwen2.5 and SmolLM2 passed all four methods on two A100s with full AC, exact continuation and fresh portable/FP32 merged reload; Mistral and Gemma runs remain in progress |
+| Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; all four methods now pass two-A100 full-AC training/resume/portable/merged checks with real WTS and image/video fixtures |
 | Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook, family binding, `tests/reload_moe_adapters.py` | Implemented but awaiting actual grouped-mm training, resume and export qualification. Four small real MoE method fixtures pass native/HF target agreement, stock FP32 updates, exhaustive serialized tensor checks and reload with native expert layout. Fused expert tensors remain unsupported targets |
 | GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Implemented in `model/gr00t/{sft,sft_policy,adapter_export}.py`; 19 small actual Isaac/Qwen3-VL/DiT tests pass, including four methods, full AC, native stochastic resume, native-forward parity, real image packing and portable/merged reload. Real checkpoint GPU qualification is blocked on gated Cosmos-Reason2 config/processor metadata (HTTP 401). Category-specific tensors remain unsupported adapter targets |
-| π0.5 | `model/pi05/sft.py`, `Pi05Model.training_condition`, `model/pi05/adapter_export.py`, `tests/test_pi05_adapters.py` | Implemented, awaiting installed real-model GPU qualification. All four methods pass actual small SigLIP/Gemma prefix/action updates, AC, portable reload and FP32 merged-file reload. Final-prefix query/output/MLP targets are refused because only its K/V reaches the action loss. Existing PPO frozen-prefix behavior is retained |
-| Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Implemented in `model/alpamayo/{sft,policy,adapter_export}.py` with public pinned R1 source; no AlpaGym runtime needed. All four methods pass small real R1/Qwen3-VL flow updates, vision AC, portable/FP32 merged reload and native stochastic continuation. Real checkpoint GPU qualification pending |
+| π0.5 | `model/pi05/sft.py`, `Pi05Model.training_condition`, `model/pi05/adapter_export.py`, `tests/test_pi05_adapters.py` | Implemented and validated for all four methods on two A100s with full AC, real LIBERO demonstrations, exact continuation, portable reload and FP32 merged reload. Small fixtures also cover SigLIP/Gemma prefix/action updates, AC, portable reload and FP32 merged-file reload. Final-prefix query/output/MLP targets are refused because only its K/V reaches the action loss. Existing PPO frozen-prefix behavior is retained |
+| Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Implemented in `model/alpamayo/{sft,policy,adapter_export}.py` with public pinned R1 source; no AlpaGym runtime needed. All four methods pass small real R1/Qwen3-VL flow updates, vision AC, portable/FP32 merged reload and native stochastic continuation. Real R1/KITTI LoRA and rsLoRA pass two-A100 vision-AC training, exact continuation and both reload gates; DoRA/PiSSA still in progress |
 | Physical-action SFT lifecycle | `config/sft.py::SFTConfig.task`, existing SFT loop and `flow_bc`, `roles/env/flow_sft.py` | Implemented. Shares trainer, checkpoint boundary, rank cursor and validation transaction; reports action-element counts separately from text tokens. Controlled continuation and validation-padding CPU tests pass |
 | Model-owned base autocast with FP32 adapters | Native `LoraInjectedLinear.adapter_output`, `PosttrainAdapterLinear` | Implemented. Eight method/base-dtype fixtures pass FP32-input autocast tests; ordinary native LoRA mathematics reused |
 | New installed revision and real training | Wheel byte attestation, Slurm qualification harness | Commit `3a9552b`, wheel SHA `fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d`, image SHA `4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a`; 223 installed CPU tests passed. Qwen3 job `37701630` completed all 16 four-method 1/2-GPU AC-none/full cases, including continuation and both reload types. Native Qwen3-VL job `37701632` also completed all 16 cases, with text, real image/video and WTS fixtures, differing modalities across ranks, all target updates and unchanged frozen base |
 | Qwen3.5 public checkpoint MTP export | `checkpoint/tools/adapters.py`, `test_adapter_qwen3_5_export.py` | Job `37701635` passed training/resume/portable reload, then failed merge on unused source MTP tensors. Explicit bounded exclusion implemented and CPU-tested; 225 installed tests passed at `2f8d33f`; per-method GPU reruns listed below. Failure preserved |
 | Local GPU environment identity | `tests/qualify_adapters.py::installed_environment`, `test_qualification_environment.py` | Implemented at `5eecf10`; 34 environment/native harness tests pass. Host results bind a separately validated interpreter/package/CUDA/wheel manifest; they never report it as a container image |
+| Gemma BF16 → FP32 embedding constant | `model/hf_adapter_buffers.py`, `tests/test_hf_adapter_buffers.py` | Implemented; 54 focused CPU family/trainer tests pass. Real Gemma LoRA training/resume/portable reload passed but the old merged gate failed. Diagnostic identifies a BF16-rounded nonpersistent embedding scale (45.25 vs 45.254834); canonical FP32 storage reduces maximum real-model mismatch from 0.00805 to 0.000210 without changing BF16 forwards. Installed corrected GPU rerun pending |
 
 The dense HF path currently binds Qwen2, Qwen3, Llama, Mistral, Gemma and Gemma2.
 The six small fixtures use actual Transformers implementations, three optimizer
@@ -165,3 +166,24 @@ The WTS evaluation jobs `37707298`, `37707302`, `37707305`, `37707306`
 depend on their corresponding successful full-epoch training jobs. They evaluate
 all 2,676 validation examples and report the reserved 576-example scene-disjoint
 slice separately. No queued job is counted as a passing result.
+
+The local installed HF environment at `5eecf10` passed **386 tests, 1 skip**.
+The physical environment at `14c9e09` passed **138 tests, 1 skip** and image job
+`37709361` completed with SHA
+`0f39e0c9830ad64f05ac60cb82cc5a5b25b5720068ecd9f11e61c61353ac9508`.
+The latter fixes FP32 Alpamayo construction before nested BF16 child configs can
+round merged weights; its realistic small fixture failed before the fix and
+27 focused tests passed afterward. The actual R1 merged reload now agrees within
+2.4e-6 maximum controlled output error for LoRA/rsLoRA.
+
+The old physical method jobs in the table above were held before execution when
+local tests exposed odd training-row counts and a qualification assertion that
+incorrectly required every FSDP shard to change. The corrected harness requires
+every logical trainable tensor to change somewhere, records unchanged padded
+shards, and checks frozen tensors and optimizer membership on every rank.
+Two real Gloo tests cover positive/negative shard-update cases. Explicit subsets
+select 40/41 LIBERO and 14/15 KITTI training windows, preserving all 55/38 held-out
+windows and recording omitted IDs. These are correctness runs, not full dataset
+training. Replacement image `14c9e09` method jobs mount original media read-only
+so those subsets' symlinks resolve inside the container. Prior inputs and failures
+are retained. Replacements are submitted only after that method's local gates pass.

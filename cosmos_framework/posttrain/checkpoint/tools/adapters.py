@@ -76,9 +76,11 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
 
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
     from cosmos_framework.posttrain.model.adapters import resolve_targets
+    from cosmos_framework.posttrain.model.hf_adapter_buffers import validate_buffer_contract
 
     config = AutoConfig.from_pretrained(base)
     family = adapter_family(identity["architecture"])
+    validate_buffer_contract(identity, config)
     if config.model_type != family.name or family.hf_auto_class is None:
         raise ValueError("merged adapter export requires the artifact's exact HF architecture binding")
     with init_on_device("meta", include_buffers=False):

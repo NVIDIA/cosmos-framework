@@ -22,6 +22,8 @@ Transformers 4.57.6, Diffusers 0.35.1, NumPy 1.26.4 and PyArrow 23.0.1.
 Framework and native model wheels are installed with `--no-deps` into that complete
 closure: the root package's broader Omni dependencies do not define this offline
 flow-SFT runtime. It does not install a simulator, serving stack or model weights.
+The same isolated prefix can run on a CUDA-capable host; host qualification records its environment
+manifest separately from container identity.
 The existing aarch64 GR00T PPO runtime and Transformers 5 conversational SFT
 environment have separate contracts. Runtime construction and installed tests do
 not qualify a model's GPU training; consult the evidence table below.
@@ -43,6 +45,12 @@ AdamW, pure DP/FSDP2, microbatch one, and activation checkpointing `none` or `fu
 Transformers 5 changes the SigLIP checkpoint namespace and is explicitly refused.
 See the [evidence table](../adapter-family-progress.md) for installed GPU results;
 small-model CPU tests alone do not qualify this checkpoint or world size.
+
+Training and validation loss are masked means over supervised action elements,
+with validation padding excluded. Report the weighted mean across training
+updates as well as the final update: native flow noise/time sampling can make a
+single batch unrepresentative of the held-out mean. These losses do not measure
+closed-loop task success or trajectory displacement error.
 
 ## Data and training
 

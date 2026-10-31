@@ -260,8 +260,22 @@ with `torchrun` and explicit `--wheel`, `--build-record`, `--method`, `--compone
 and `--activation-checkpointing` arguments. It calls the existing SFT builder and
 trainer, saves controlled probes and checkpoints, and verifies the installed
 package bytes. `posttrain.tests.reload_adapters` performs the separate-process
-portable/merged checks. Qualification records include source, wheel and container
-digests; results from an unchanged baseline package do not qualify this extension.
+portable/merged checks. Qualification records include source and wheel digests,
+plus either the published container SHA or a sealed host-environment manifest.
+For an isolated host runtime, create that manifest with
+`qualify_adapters.installed_environment(wheel_path)` after installation and set
+`ADAPTER_ENVIRONMENT_MANIFEST` to its JSON path. Each gate compares its Python,
+platform, CUDA runtime, installed distributions and wheel against that manifest;
+package or interpreter drift fails. `ADAPTER_CONTAINER_SHA256` is reserved for
+an actual published image. Results from an unchanged baseline package do not
+qualify this extension.
+
+FSDP update checks compare logical trainable tensors across ranks. Every tensor
+must change on at least one rank; its local shards need not all change. For
+example, a π0.5 output projection has 32 channels but LIBERO supervises seven,
+so a shard containing only padded output rows can legitimately stay unchanged.
+The harness reports these unchanged shards, rejects a tensor unchanged on every
+rank, and verifies frozen state and optimizer ownership on every rank.
 
 WTS annotations can be converted without resampling using
 `posttrain.scripts.prepare_wts_sft`. Full-epoch jobs must account for every original
@@ -301,3 +315,10 @@ frame in the pinned processor version. Validation runs over the full evaluation
 split before training and after the final update. Continue an interrupted run
 with the same output directory and recipe, changing only `rl.resume=auto`; a
 portable warm start is a different operation and cannot continue its data cursor.
+
+Gemma/Gemma2 adapters retain the config-derived embedding scale as a nonpersistent
+FP32 buffer. Their native forward still casts it to the embedding dtype, preserving
+BF16 training outputs. Promoted portable models and fresh stock-HF FP32 exports
+therefore reconstruct the same constant. The portable `model_contract` records
+this policy; older artifacts without it are rejected for merged export instead
+of silently changing the model. Embedding/head weights remain tied.
