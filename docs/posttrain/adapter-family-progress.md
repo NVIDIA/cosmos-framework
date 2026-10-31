@@ -14,6 +14,10 @@ losses, trainable counts, numerical errors and report hashes. Historical Cosmos3
 full-WTS results remain in [adapters-progress.md](adapters-progress.md); they are
 not results for another checkpoint. Four-bit training remains separate.
 
+There are **120 completed real-model qualification cases across 10 checkpoints**.
+This includes repeated profiles in independently attested host and Slurm runtimes;
+it does not count queued jobs or imply 120 distinct model/method combinations.
+
 ## Requirement status
 
 Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwise.
@@ -24,17 +28,17 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Component/layer selection and independent settings | `model/adapter_families.py`, `resolve_targets`; `test_adapter_families.py`, `test_adapters_native.py` | Implemented and validated. Every selector must match its component; alias conflicts and unsupported target types fail before injection |
 | Placement, trainability and optimizer ownership | `install_adapters`, `assert_trainability`, `optimizer_groups`, SFT `build_trainer` | Implemented and validated. Logical trainable inventory equals optimizer membership, without duplicates or frozen parameters |
 | HF construction, tying, freezing and FSDP lifecycle | `model/hf.py::HFModel.setup`; `test_model_hf.py`, `test_text_sft_adapters.py` | Implemented and validated. Load/materialize base, install adapters, apply distributed transformation, then construct optimizer; adapter-disabled branch retained |
-| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE LoRA training/resume passed. Reload-verifier kernel mismatch diagnosed and corrected; installed reload/export gates pending |
+| Native VLM/MoE lifecycle | `model/qwen3_vl.py::Qwen3VLBuildHooks.after_load_before_parallelize`; `test_adapters_native.py`, `test_adapter_moe_export.py` | Dense VLM implemented and validated; MoE LoRA training/resume and exact fresh portable reload passed; installed serialized FP32 merge and remaining method gates pending |
 | Text SFT templates and masks | `data/packer/text_sft.py`, existing source-traced SFT masker; `test_data_packer_text_families.py`, `test_text_sft_adapters.py` | Implemented and validated for explicit ChatML, Llama3, Mistral and Gemma protocols. Unsupported or reordered renderings fail |
 | Vision/projector/action gradient paths | Native Qwen ordered-vision forward, `model/pi05/modeling.py::training_condition`, Alpamayo and GR00T native SFT policies; family fixtures | Implemented and validated in completed pretrained cases; GR00T has small-model evidence only. Differing rank modalities tested on native VLM |
 | Fresh initialization, warm start, exact resume | Shared adapter preparation and checkpoint lifecycle; qualification next-update comparison | Implemented and validated in completed cases. Resume restores optimizer/scheduler/data/RNG clock and skips method initialization/decomposition |
 | Portable artifact and merged export | `checkpoint/adapters.py`, `checkpoint/tools/adapters.py`, existing materializer; family-owned physical exporters | Implemented and validated in completed cases. Separate artifact kinds, exact base/processor/media identities, strict inventory, non-mutating FP32 merge |
 | π0.5 offline SFT | `model/pi05/{sft,adapter_export}.py`, existing flow objective and `LLMTrainer`; `test_pi05_adapters.py`, `test_flow_sft.py` | Implemented and validated: all four methods, real LIBERO data, two GPUs/full AC, continuation and both reload types |
 | Public Alpamayo R1 SFT | `model/alpamayo/{sft,policy,adapter_export}.py`; `test_alpamayo_adapters.py` | Implemented and validated: all four methods, real KITTI data, two GPUs/vision AC, continuation and both reload types; no AlpaGym runtime required |
-| GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented; 19 actual small Isaac/Qwen3-VL/DiT tests pass. Pretrained GPU validation pending; exact public metadata verified and staged, detailed below |
+| GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented; 20 actual small Isaac/Qwen3-VL/DiT tests and 3 metadata tests pass. Real 3.144B base materialization, LIBERO packing and 105-target resolution pass on the installed wheel; GPU method gates pending |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented orchestration; LoRA/rsLoRA full-profile gates passed and full epochs running; DoRA/PiSSA queued; evaluation awaiting completion. Existing Cosmos3 scores are not reused |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented orchestration; all four Slurm full-profile gates passed and full epochs running; local LoRA/rsLoRA also running; evaluation awaiting completion. Existing Cosmos3 scores are not reused |
 
 ## Completed real-checkpoint profiles
 
@@ -47,15 +51,15 @@ FP32 merged-file reload. These are correctness subsets, not complete task benchm
 | --- | --- | --- |
 | Qwen3-0.6B | 1/2 GPU × none/full | Passed (16/16 cases) |
 | Native Qwen3-VL-2B-Instruct | 1/2 GPU × none/full | Passed (16/16 cases) |
-| Qwen2.5-0.5B-Instruct | 2 GPU / full | Passed (4/4 cases) |
-| SmolLM2-135M-Instruct (Llama architecture) | 2 GPU / full | Passed (4/4 cases) |
-| Mistral-7B-Instruct-v0.3 | 2 GPU / full | Passed (4/4 cases) |
+| Qwen2.5-0.5B-Instruct | 1/2 GPU × none/full | Passed (16 Slurm + 4 host cases) |
+| SmolLM2-135M-Instruct (Llama architecture) | 1/2 GPU × none/full | Passed (16 Slurm + 4 host cases) |
+| Mistral-7B-Instruct-v0.3 | 1/2 GPU / full | Passed (8 Slurm + 4 host cases) |
 | Gemma-2B-IT | 2 GPU / full | Passed (4/4 cases) |
 | Gemma2-2B-IT | 2 GPU / full | Passed (4/4 cases) |
-| Qwen3.5-0.8B | 2 GPU / full | Passed (4/4 cases) |
+| Qwen3.5-0.8B | 1/2 GPU × none/full | Passed (16 Slurm + 4 host cases) |
 | π0.5 LIBERO SFT | 2 GPU / full | Passed (4/4 cases) |
 | Alpamayo-R1-10B | 2 GPU / vision | Passed (4/4 cases) |
-| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | Not yet qualified: LoRA training/resume passed; corrected installed reload and merged-export gates pending |
+| Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | Not yet qualified: LoRA training/resume and portable reload passed; serialized FP32 merge and remaining methods pending |
 | GR00T-N1.7 LIBERO-Spatial | No pretrained profile qualified | Exact metadata staged; GPU checks pending |
 
 Text fixtures use eight real GSM8K training rows and eight held-out test rows.
@@ -80,7 +84,9 @@ portable reload comparisons are exact. Alpamayo FP32 merged errors are at most
 BF16 training-versus-FP32 deployment drift is measured separately; it is not
 conflated with the merge oracle. Physical reload compares fixed-noise/time velocity
 and loss. The JSON artifact contains method-specific losses and allocator peaks;
-shared CPU/disk timings are not isolated throughput measurements.
+shared CPU/disk timings are not isolated throughput measurements. Older Slurm
+launchers recorded the node and allocated GPU count but not the GPU model; their
+reports make no GPU-model throughput claim. Local runs use A100 80 GB devices.
 
 ## Runtime and observed fixes
 
@@ -100,6 +106,8 @@ and serving environments are not modified.
 | `076cfbb` HF host | 407 passed, 6 skipped | Corrected Gemma/Gemma2 and new full-WTS wheel; 1,876 installed package files verified |
 | `076cfbb` HF container | 396 passed, 1 skipped | Image job `37710535` completed; SHA `8e9e8cf5591c77a2a6f4a143e432f5234d924292d6be68d7d257ff9aca64eeca` |
 | `076cfbb` evaluator host | 14 focused installed tests plus actual two-rank video MCQ preflight | Same framework wheel, separate locked environment including `toml==0.10.2` |
+| `239c3e7` HF host | 411 passed, 9 skipped; 4 installed GPU numerical/device tests passed | Native FP32 MoE export oracle; full real MoE matrix still running |
+| `8a8ead7` physical host | 143 passed, 4 skipped; real GR00T CPU preflight passed | Exact metadata staging and corrected 24-block vision recipe; 1,879 installed package files verified |
 
 Counts overlap and must not be added. The general Torch 2.11 environment is a
 separate unqualified profile. Every GPU result retains its actual revision; a
@@ -161,18 +169,22 @@ Physical merged artifacts have model-owned FP32 loaders; they are not stock HF,
 Omni/PPO or closed-loop deployment claims. No universal model-family support is
 inferred from a component binding.
 
-Additional Slurm method profiles remain pending; they are not counted as results.
-Unstarted MoE jobs are held while the local reload failure is diagnosed:
+Slurm text/Qwen3.5 profiles below completed and are included above. Physical
+method jobs failed before training because media symlinks resolved to an unmounted
+canonical `/lustre/fs11` namespace. Fresh attempts add both verified namespace
+mounts and require an actual container data/processor preflight before launch;
+old inputs and failures are preserved. Unstarted MoE jobs remain held pending
+qualification of the corrected verifier. Table labels distinguish these states:
 
 | Family | LoRA | rsLoRA | DoRA | PiSSA | Profiles per job |
 | --- | --- | --- | --- | --- | --- |
-| Qwen3.5 | 37707970 | 37707974 | 37707976 | 37707978 | 1/2 GPU × AC none/full |
-| π0.5 | 37710088 | 37710094 | 37710096 | 37710463 | 1/2 GPU × AC none/full |
-| Alpamayo | 37710102 | 37710106 | 37711261 | 37711674 | 1/2 GPU × AC none/vision |
-| Native Qwen3-VL-MoE | 37708008 | 37708009 | 37708011 | 37708012 | 2 GPU, AC full |
-| Qwen2.5 | 37708301 | 37708306 | 37708308 | 37708309 | 1/2 GPU × AC none/full |
-| SmolLM2 | 37708310 | 37708311 | 37708312 | 37708313 | 1/2 GPU × AC none/full |
-| Mistral | 37708398 | 37708399 | 37708400 | 37708401 | 1/2 GPU, AC full |
+| Qwen3.5 — completed | 37707970 | 37707974 | 37707976 | 37707978 | 1/2 GPU × AC none/full |
+| π0.5 — failed mount preflight | 37710088 | 37710094 | 37710096 | 37710463 | 1/2 GPU × AC none/full |
+| Alpamayo — failed mount preflight | 37710102 | 37710106 | 37711261 | 37711674 | 1/2 GPU × AC none/vision |
+| Native Qwen3-VL-MoE — held | 37708008 | 37708009 | 37708011 | 37708012 | 2 GPU, AC full |
+| Qwen2.5 — completed | 37708301 | 37708306 | 37708308 | 37708309 | 1/2 GPU × AC none/full |
+| SmolLM2 — completed | 37708310 | 37708311 | 37708312 | 37708313 | 1/2 GPU × AC none/full |
+| Mistral — completed | 37708398 | 37708399 | 37708400 | 37708401 | 1/2 GPU, AC full |
 
 ## New native Qwen3-VL full WTS verification
 
@@ -192,8 +204,8 @@ validation examples and the reserved 576-example scene-disjoint subset. Generate
 NLL is reported separately from teacher-forced validation loss. No new AutoML
 search substitutes for these checks.
 
-Original Slurm full-training jobs `37706319`, `37706324`, `37706326`, `37706327`
-are preserved. Their dependent evaluation jobs are `37711018`, `37711029`,
+Slurm full-training jobs `37706319`, `37706324`, `37706326`, `37706327`
+are running after passing their method-specific full-profile checks. Their dependent evaluation jobs are `37711018`, `37711029`,
 `37711043`, `37711056`. Unstarted earlier evaluation launchers were replaced after
 removing an unbound environment-variable read; old sealed inputs and cancellation
 receipts remain available. Local runs use true host-environment identities and

@@ -1,6 +1,6 @@
 {
   "format": "cosmos-adapter-family-qualification-v1",
-  "generated_utc": "2026-10-31T02:20:18.103376+00:00",
+  "generated_utc": "2026-10-31T03:37:53.017106+00:00",
   "scope": "Real pretrained correctness subsets using existing SFT; not full task benchmarks or full-epoch WTS. All local cases use A10080, FP32 adapter parameters, BF16 base except model-owned physical precision. Shared CPU/disk timings are not throughput benchmarks.",
   "sources": {
     "3a9552b-4c7d3d3e": {
@@ -14,6 +14,7 @@
         "torchcodec": "0.10.0",
         "transformers": "5.8.1"
       },
+      "numerical_profile": null,
       "environment_sha256": null
     },
     "076cfbb-aeae4ffd": {
@@ -27,6 +28,7 @@
         "torchcodec": "0.10.0",
         "transformers": "5.8.1"
       },
+      "numerical_profile": null,
       "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce"
     },
     "5eecf10-4ffeecf2": {
@@ -40,6 +42,7 @@
         "torchcodec": "0.10.0",
         "transformers": "5.8.1"
       },
+      "numerical_profile": null,
       "environment_sha256": "4ffeecf2a03b1463abffbb7e4a10175c8a7d43041cae5c74ea84aedd37877348"
     },
     "2556b4c-98affdc7": {
@@ -53,6 +56,7 @@
         "torchcodec": "0.10.0",
         "transformers": "4.57.6"
       },
+      "numerical_profile": null,
       "environment_sha256": "98affdc743afd3b6286d8139f73e0443b3979d985c1b90f747ed934c88061fa3"
     },
     "5eecf10-f884af74": {
@@ -66,6 +70,7 @@
         "torchcodec": "0.10.0",
         "transformers": "4.57.6"
       },
+      "numerical_profile": null,
       "environment_sha256": "f884af74de1f230f7a01990b64f2e132838c08c204f3132dd236146bd2220999"
     },
     "14c9e09-a1404f9d": {
@@ -79,7 +84,36 @@
         "torchcodec": "0.10.0",
         "transformers": "4.57.6"
       },
+      "numerical_profile": null,
       "environment_sha256": "a1404f9d53ae446f8d5fbdaa0e82b401b8a0b6e144e716e954db7780d2399ad4"
+    },
+    "db7c2ab-ce9759d9": {
+      "source_revision": "db7c2ab3112a16d6fde82749e79fea84a488ffff",
+      "wheel_sha256": "5f435aa494bdeedbdd79a770d7608dcb9e5246a197eaf8e21c514d272386fc09",
+      "container_sha256": "ce9759d95698b4fc716c225e4cbe1bc2d3d0e8e122e31cfc28fcfa1bbf340bf7",
+      "verified_package_files": 1872,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "5.8.1"
+      },
+      "numerical_profile": null,
+      "environment_sha256": null
+    },
+    "2f8d33f-4fb694b4": {
+      "source_revision": "2f8d33f563fe00083f90dac8fa1780a300e951c0",
+      "wheel_sha256": "95651cfaf9dbcb822b50be70484249326cb1626522a8a61a5dcf168e18fa5003",
+      "container_sha256": "4fb694b4d1802aab88b83a487ac95b8db933dc19b8e2c97420b490f9eed04781",
+      "verified_package_files": 1842,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "5.8.1"
+      },
+      "numerical_profile": null,
+      "environment_sha256": null
     }
   },
   "models": {
@@ -98,6 +132,10 @@
     "pi05": {
       "repository": "RLinf/RLinf-Pi05-LIBERO-SFT",
       "revision": "45ccfcc4e28634f1576ebf78cab0fbe2fd82432d"
+    },
+    "gr00t": {
+      "repository": "nvidia/GR00T-N1.7-LIBERO",
+      "revision": "2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21"
     },
     "alpamayo": {
       "repository": "nvidia/Alpamayo-R1-10B",
@@ -1298,6 +1336,24 @@
         }
       }
     },
+    "gr00t": {
+      "matrix_passed": false,
+      "cases": {
+        "lora-w2-full": {
+          "status": "not_completed"
+        },
+        "rslora-w2-full": {
+          "status": "not_completed"
+        },
+        "dora-w2-full": {
+          "status": "not_completed"
+        },
+        "pissa-w2-full": {
+          "status": "not_completed"
+        }
+      },
+      "manifest_sha256": "df13eeaaa52bde934fd0f8e255e7abfccdce09073c23de43d633a433f9763ac6"
+    },
     "gemma": {
       "matrix_passed": true,
       "cases": {
@@ -1792,9 +1848,695 @@
             "portable_report_sha256": "5c7cc26793d406e93b728d4ff2c9596dfeb818ade003273ac8e13b7b7c8205e0",
             "merged_report_sha256": "6e92846dee8091605da512129194026e1a004aade978c3c5a5fef5d186e572c5"
           }
+        },
+        "dora-w1-full-slurm-37708312": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 483840,
+          "trainable_tensors_changed": 180,
+          "training_loss_mean": 1.2647161182362476,
+          "training_loss_last": 0.9481402635574341,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.298320218065723,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.918212890625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 458863616,
+          "training_and_checkpoint_seconds": 10.40180324204266,
+          "slurm_job_id": "37708312",
+          "report_sha256": {
+            "training-rank0.json": "51161a86be7ef32fa8994498e30bb9b98764084eeb37a669961dc05fb8d24cb7",
+            "portable-reload.json": "cfca776c5ee04344eaceff34e3f234c362c5709dbcf3defc6c8d0eb1922cfa57",
+            "merged-reload.json": "b6c1cdf0f515f14148d9708a9fe8c5b66e0e6c4ecd6bdab2b29e525058c2bab9"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w1-none-slurm-37708312": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 483840,
+          "trainable_tensors_changed": 180,
+          "training_loss_mean": 1.2647161182362476,
+          "training_loss_last": 0.9481402635574341,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.298320218065723,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.918212890625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 662916096,
+          "training_and_checkpoint_seconds": 9.673939581029117,
+          "slurm_job_id": "37708312",
+          "report_sha256": {
+            "training-rank0.json": "ef6e20062935794f8ae4da15542c4dd6ad17076cc949d58776dedf48780553d7",
+            "portable-reload.json": "a19d8dde90ebb82ebbc52724d6c4e9da3064fc06861608903c34376f3a07e358",
+            "merged-reload.json": "0b55053c06066482584dc259262436cd440d5d3db889f67c5e11da791df9f6be"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-full-slurm-37708312": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 483840,
+          "trainable_tensors_changed": 180,
+          "training_loss_mean": 1.2994307319783813,
+          "training_loss_last": 1.35824453830719,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.305466750484021,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.05718994140625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 11.339047661982477,
+          "slurm_job_id": "37708312",
+          "report_sha256": {
+            "training-rank0.json": "d00015a2cb22a988a9da9ed3db03099c5e8e59256b224fe70b82276d02c262f6",
+            "training-rank1.json": "f6f6409476121bb3d9be3b0c0f6543853d1beee2701a23244acd10e7b50dd3d4",
+            "portable-reload.json": "22d6b78e958c3c2701488feb7788ac48b9505c7f7d6b148539480b6570f86da8",
+            "merged-reload.json": "beed076f364f5e234ebe211e054bd390d1e8c85b9b4779b0d7d0e3098c527072"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-none-slurm-37708312": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 483840,
+          "trainable_tensors_changed": 180,
+          "training_loss_mean": 1.2994307319783813,
+          "training_loss_last": 1.35824453830719,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.305466750484021,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.05718994140625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 487788544,
+          "training_and_checkpoint_seconds": 10.574188967002556,
+          "slurm_job_id": "37708312",
+          "report_sha256": {
+            "training-rank0.json": "7701af97cf815aa63c1199e55bbad635a7950f052e4f1d419398dbc7c36c957f",
+            "training-rank1.json": "b8b36adad80c9621a251af56964e475ad129f5c412c9247cc098736d9aba23a8",
+            "portable-reload.json": "1f413df22f3af1daf293df12b1453ae7d0d077b23f25eb4feaf6ebf9d54def8e",
+            "merged-reload.json": "680db031862464a8cabeca6b4b64b4a335dc34bab0a8ac60ae98e6c0da847912"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-full-slurm-37708310": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2589655022502215,
+          "training_loss_last": 0.9419463276863098,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2966834111291854,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.103515625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 458433536,
+          "training_and_checkpoint_seconds": 8.74593685939908,
+          "slurm_job_id": "37708310",
+          "report_sha256": {
+            "training-rank0.json": "17d53c4d887c735e3e87b455c3c62cc08e0a801e7df089a1fd62cee179ba236d",
+            "portable-reload.json": "4e9026d5950d589c51db7788504cf604cff58393c09515141d9db17d749c1885",
+            "merged-reload.json": "27d99b932b3dedcc9b3bdeca732bda1386e2d43c8646eaa969876f43438a806a"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-none-slurm-37708310": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2589655022502215,
+          "training_loss_last": 0.9419463276863098,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2966834111291854,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.103515625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 613399040,
+          "training_and_checkpoint_seconds": 8.896154712885618,
+          "slurm_job_id": "37708310",
+          "report_sha256": {
+            "training-rank0.json": "dbbd114673774500f32eb3c12301ed1f5d4da4d02c17e883983bdab66620bcbd",
+            "portable-reload.json": "129b805effd9837d9e6932f38f5048c5c3dd46c2ac3f5a81d0159641f003da6a",
+            "merged-reload.json": "fc53b91fed6af4c0c8434a7ac7e00082365c47a2ca325713a3e70b9344a9a343"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-full-slurm-37708310": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.296745115512289,
+          "training_loss_last": 1.352957010269165,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.3072926355678527,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.749961853027344e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 9.672069558873773,
+          "slurm_job_id": "37708310",
+          "report_sha256": {
+            "training-rank0.json": "80b6f15d68ad7f895a3c4b3c5ecd6074cba05547076ff4a89792beae61db48a6",
+            "training-rank1.json": "de68f69b43a7b8d3adf3d76d265ccfd4268a86db6abca29eb5fabef9e0fa2d56",
+            "portable-reload.json": "deb166180c856221101168200b4203b90495d0510d8fdfe36d1f9721c4875246",
+            "merged-reload.json": "5fcadbb6ab476000bd557da5a18aca4e1a9ded0cd1e0415076292e9bce8b27d0"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-none-slurm-37708310": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.296745115512289,
+          "training_loss_last": 1.352957010269165,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.3072926355678527,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.749961853027344e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 451158528,
+          "training_and_checkpoint_seconds": 9.957791511900723,
+          "slurm_job_id": "37708310",
+          "report_sha256": {
+            "training-rank0.json": "3c833a70181e55abf99b0bbb35c110cae5f2d91268f471c6d6f87f2dff836bbb",
+            "training-rank1.json": "764572367154a019635c9600243cc8d9c34f97b496974ea5b6fe4949071b9db2",
+            "portable-reload.json": "95aac333be319c0a838df1c7081f78f25a9c6fbd0fe3ba29b53fb24a43b328af",
+            "merged-reload.json": "199e9b207a2fa88da84a75e9c77298a40ab3fc2f73e0a48e0440b5c88120e894"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-full-slurm-37708313": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.1905911383715346,
+          "training_loss_last": 0.732857346534729,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.1685954238303373,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "4418f33fa80c0ba7b24684e7ba5d6346dc78c9a55e2b2a4fe583a0f16c90f2eb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.198883056640625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 460276736,
+          "training_and_checkpoint_seconds": 9.625241182977334,
+          "slurm_job_id": "37708313",
+          "report_sha256": {
+            "training-rank0.json": "5518f030d2e800143c48b35ba2fab0772dd4fd6367eeb0cb787c38f9e69cef6c",
+            "portable-reload.json": "139aaef8ff3ddb5f3c38d62aa63e4a4ef650dc2f6f29df1ca9157047a8b40a60",
+            "merged-reload.json": "4dda7131d4a19f3e3234d06ea6ee43530dabd5c99c64712bd482e404ab6a1bb6"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-none-slurm-37708313": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.1905911383715346,
+          "training_loss_last": 0.732857346534729,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.1685954238303373,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "4418f33fa80c0ba7b24684e7ba5d6346dc78c9a55e2b2a4fe583a0f16c90f2eb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.198883056640625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 615242240,
+          "training_and_checkpoint_seconds": 8.822447787038982,
+          "slurm_job_id": "37708313",
+          "report_sha256": {
+            "training-rank0.json": "c6a15ebce02e46523814bb41cd7880ad1c4ae1a89ea88e5133e6aa542b9c6f77",
+            "portable-reload.json": "4c29f3d69c7c754c24e8165bb179d76c2b693b473f6953633313e372427329f1",
+            "merged-reload.json": "c87d6a0619296543cd5f1410e367de7313f4145e4b3b3b48dfd96dd21a1c20c7"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-full-slurm-37708313": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2408246427491794,
+          "training_loss_last": 1.1498888731002808,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.195845760649345,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "7c10a340bce6bb894f8c549d849a949ac96e17683ab8382305a4e9ec5807cc48",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 393835008,
+          "training_and_checkpoint_seconds": 11.367354216985404,
+          "slurm_job_id": "37708313",
+          "report_sha256": {
+            "training-rank0.json": "052ed81a9b597b5b7a4a592cf5513a411f2f966ecf0d03a78638f44e73c790de",
+            "training-rank1.json": "c68677cd7f73cad0d26a4f792578f8998edf41521a267767e6dfed4dc2bb7f73",
+            "portable-reload.json": "2a53ca260121853429238bbc55002e000be7405dad1e00a5f918f8b23f40a1bf",
+            "merged-reload.json": "6d8fc734aec281d7a0221b78320872fe0eca59be7b10924694e7770dcf513b27"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-none-slurm-37708313": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2408246427491794,
+          "training_loss_last": 1.1498888731002808,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.195845760649345,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "7c10a340bce6bb894f8c549d849a949ac96e17683ab8382305a4e9ec5807cc48",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 454050304,
+          "training_and_checkpoint_seconds": 9.957174296025187,
+          "slurm_job_id": "37708313",
+          "report_sha256": {
+            "training-rank0.json": "10cb3faa1a1153f1116a42ce96f07326d580d58a6203a898eb5e2b760bb9c26a",
+            "training-rank1.json": "b12a1c2d6fd4c7fc72f1e450ca9ffe6b9cb2a1dff54a64ef24884dc9e4635fc9",
+            "portable-reload.json": "585cba0e0721f582b49e4aaf5d2489552d9369573be216a163f5df4dd7dff610",
+            "merged-reload.json": "15dc34ec26e6c431f5b241e7c1e6f31bccdc5c05f35b863453674dcdb9f15756"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-full-slurm-37708311": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2388166093231598,
+          "training_loss_last": 0.8745032548904419,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2445369742688586,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.866455078125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 458433536,
+          "training_and_checkpoint_seconds": 8.746040812693536,
+          "slurm_job_id": "37708311",
+          "report_sha256": {
+            "training-rank0.json": "9a9c045cda0542b8bb7521cd523f08fb3b07be6fc2de635648d04ce751893fc3",
+            "portable-reload.json": "a0d1062b328e0135f1d5ad28b35150ab719f6b09258a03b8c17e2e1a0af3bd37",
+            "merged-reload.json": "34f741e7cea4a841a1d2a814151b657443891784f31b447737d3453fad95ddd8"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-none-slurm-37708311": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2388166093231598,
+          "training_loss_last": 0.8745032548904419,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2445369742688586,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "5add75159f88e63660dfb28b1e1ae8edebf5211f1c8196534426b84aeb6985fe",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.866455078125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 613399040,
+          "training_and_checkpoint_seconds": 9.305321051739156,
+          "slurm_job_id": "37708311",
+          "report_sha256": {
+            "training-rank0.json": "86023cedfd77f78a83b14f538bed749a51445e2234048e9ccd8486a9dc0db12d",
+            "portable-reload.json": "b49b4930524d0bbaa4e89295ef36b9c96ceb18bbacc076f1ebdf19dfdebf99ee",
+            "merged-reload.json": "abcd335766dfb697cb7e52ebdfcc50e6b3193ad012fecded3fc9c4f9c1f833fd"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-full-slurm-37708311": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2821305921130486,
+          "training_loss_last": 1.2926033735275269,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2689988624121322,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.0108642578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 9.683752041310072,
+          "slurm_job_id": "37708311",
+          "report_sha256": {
+            "training-rank0.json": "499bbf57aee2e69c2004f78a72ed2b1364bcab8d221e0fc9042845fbcef64659",
+            "training-rank1.json": "e17603e8de3e9b80d1cc6672f4545682456e94d09ee58c91a4279f2bdc05d4a5",
+            "portable-reload.json": "fcda3fc565d802ab94db2a949cde9a38a83e9c83e7b931831bb5c4fa7d58b865",
+            "merged-reload.json": "26860be5b3268aeb6e83ee058591f0db85098d9fac713a25983f164b30c742e9"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-none-slurm-37708311": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2821305921130486,
+          "training_loss_last": 1.2926033735275269,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2689988624121322,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.0108642578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 451158528,
+          "training_and_checkpoint_seconds": 9.446881407871842,
+          "slurm_job_id": "37708311",
+          "report_sha256": {
+            "training-rank0.json": "e4043c620ea20e9dc3a562edc73e1df63366b0ce111577419b17ea59fa7a342d",
+            "training-rank1.json": "af01f4d4a01890a557af8c1a2ca08b4eed1ce683019930895ca28870c5eae1f6",
+            "portable-reload.json": "7d264fb146bf75c7466ef46b4bfc3d0253da335c4bed391249e054edcf927fed",
+            "merged-reload.json": "4a63fa021beed39fd0e7f67e1cd4a26da713f6956cf26a446cc26ebee9d7a184"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
         }
       },
-      "manifest_sha256": "4f951d7e2d55380dfe374a45ff5d4c0dc940be663158d9501e032e1b1c4a41d2"
+      "manifest_sha256": "4f951d7e2d55380dfe374a45ff5d4c0dc940be663158d9501e032e1b1c4a41d2",
+      "slurm_completed_jobs": [
+        "37708312",
+        "37708310",
+        "37708313",
+        "37708311"
+      ]
     },
     "qwen2": {
       "matrix_passed": true,
@@ -1958,9 +2700,695 @@
             "portable_report_sha256": "be9a45d7c7ff8e38c217e22180fc8cd61d84d096f496443a7b6ebb55e8b25f7d",
             "merged_report_sha256": "0c29084738790e28ea3d4e24ce15b84b1589016061fb83581258a328d6c2d257"
           }
+        },
+        "dora-w1-full-slurm-37708308": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 565248,
+          "trainable_tensors_changed": 144,
+          "training_loss_mean": 0.6593331888769612,
+          "training_loss_last": 0.414145827293396,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6974917297815755,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.369850158691406e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1418330112,
+          "training_and_checkpoint_seconds": 19.30120102223009,
+          "slurm_job_id": "37708308",
+          "report_sha256": {
+            "training-rank0.json": "773c36556fb791450b4ffede032c409cd5d61800da38819a4115b309a816fecb",
+            "portable-reload.json": "29cef9e1e2c7aeca74b11e70248845b055cc661a241a08fe756576b3b309a34c",
+            "merged-reload.json": "c8c97db6d3c02de8350d4bb0f2d7671cf970770ad60c1df045c0743f50c59af0"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w1-none-slurm-37708308": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 565248,
+          "trainable_tensors_changed": 144,
+          "training_loss_mean": 0.6593331888769612,
+          "training_loss_last": 0.414145827293396,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6974917297815755,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.369850158691406e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1727593984,
+          "training_and_checkpoint_seconds": 17.91298039443791,
+          "slurm_job_id": "37708308",
+          "report_sha256": {
+            "training-rank0.json": "e547c6c2daaaa8c1a2d385d20a36e48f2c40fefec56713c20c60ece3ea9375af",
+            "portable-reload.json": "e95030689e529ff0f504a3a2b08667ceb18538ed4a3bca3b8150b355660789bd",
+            "merged-reload.json": "406cd2ea1732b3f9a79f37b2e16b95a475c3f69362da384be63688d0a1abbf9b"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-full-slurm-37708308": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 565248,
+          "trainable_tensors_changed": 144,
+          "training_loss_mean": 0.7005835023112312,
+          "training_loss_last": 0.6419264674186707,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7598667370701234,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011730194091796875,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 16.933016754686832,
+          "slurm_job_id": "37708308",
+          "report_sha256": {
+            "training-rank0.json": "d364216977819012a4a840067dbf5ecf1755034f48e2453e3f70931bdec9ba2d",
+            "training-rank1.json": "a6ae72c86eed62502412427e3db9501e38c421a24c82ee851df238d0cf20804e",
+            "portable-reload.json": "e12134ec36d2c1d75d786dc088a139005117493a55dd29ba952b571fce236ed6",
+            "merged-reload.json": "89382d91b307e088c588e8d4751959bac360bca9e3705b0430051c119b4d055f"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-none-slurm-37708308": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 565248,
+          "trainable_tensors_changed": 144,
+          "training_loss_mean": 0.7005835023112312,
+          "training_loss_last": 0.6419264674186707,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7598667370701234,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011730194091796875,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1334160384,
+          "training_and_checkpoint_seconds": 16.06319111958146,
+          "slurm_job_id": "37708308",
+          "report_sha256": {
+            "training-rank0.json": "04d6e426865257d33ad52a200ebb058d06923369bfcc6c8e44fa8f1d8955db4d",
+            "training-rank1.json": "59b0fb03ee2a843b035a4c2607bb2ee7beaf36697453044bdd621c6b608738e8",
+            "portable-reload.json": "1657f065d8a6cfd667a2149ac0524dfed847646dd353686f5ebc3019f30b9d87",
+            "merged-reload.json": "596b26872eaaa728475239611c0ee6394c1c38b75f38753a35ea8c7ab3b45170"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-full-slurm-37708301": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6633314971740429,
+          "training_loss_last": 0.4268122911453247,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7092958098904806,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.226799011230469e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1417936896,
+          "training_and_checkpoint_seconds": 16.864709879970178,
+          "slurm_job_id": "37708301",
+          "report_sha256": {
+            "training-rank0.json": "0118c14e8a4ceeca641440858197f779a3b1fbc6665e60cae5514abb444f1577",
+            "portable-reload.json": "c9bd2fd425e539a8c27e98b62cf3afce8fe1176cee6100cf5715d12914998626",
+            "merged-reload.json": "125b4f6471b9df168047aa7232f9c819ce6a9e4e39d123c4803cb42f333476f7"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-none-slurm-37708301": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6633314971740429,
+          "training_loss_last": 0.4268122911453247,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7092958098904806,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.226799011230469e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1676283392,
+          "training_and_checkpoint_seconds": 17.508939207997173,
+          "slurm_job_id": "37708301",
+          "report_sha256": {
+            "training-rank0.json": "0b3d84d37dbd5016d334c201506921a2575fc96de95b0876a26adb9082caf3f3",
+            "portable-reload.json": "5173aa34088d3cc5d1e55db5a6be063f6b53b923f3bbe2f677f12776e7cd7035",
+            "merged-reload.json": "63f258a24ecd4d19e542350a188b598b2684508e17a35b861cde2aa103d6291d"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-full-slurm-37708301": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.7040343648821664,
+          "training_loss_last": 0.6547092795372009,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7703150199091099,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001232624053955078,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 15.298296375083737,
+          "slurm_job_id": "37708301",
+          "report_sha256": {
+            "training-rank0.json": "d5c9275b186efe225b52eaf6384b4bf8f2ecad3fcdfe8d0a7872f8be68f2ee26",
+            "training-rank1.json": "5cf04feff7742eb5078ee8c97e84e5a78d5086b7fcab0089e3599d43faaa4813",
+            "portable-reload.json": "cb93628847c6d31863c082a5693473e2d0e559d218c42a9ec67c8b2e448698e3",
+            "merged-reload.json": "aa2cdb25162485e9eb65334aed44ba0ac6ef07f804f14b93fffadacd6f6618ee"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-none-slurm-37708301": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.7040343648821664,
+          "training_loss_last": 0.6547092795372009,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7703150199091099,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001232624053955078,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1334160384,
+          "training_and_checkpoint_seconds": 16.066468517994508,
+          "slurm_job_id": "37708301",
+          "report_sha256": {
+            "training-rank0.json": "13e0b8807044a566eeca659e6234b20650dc76a25d5ccff5910d134061dd46d9",
+            "training-rank1.json": "d5ef0110e39492e0b3bd2accedd3ad2bc1bc271a0485d6c80cf1fec11dd65151",
+            "portable-reload.json": "9744637f66065a17d229413ff0a93cb3ed2fe9c0f1c6c4c769bc77f1ca9f3776",
+            "merged-reload.json": "b43707fce825d65f128c03b03c842023e66fd48e65b1b94d160a9273b09f9973"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-full-slurm-37708309": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.5621679764249664,
+          "training_loss_last": 0.20109036564826965,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6187035188747024,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "f5e773a0544c165e403f9048549b7e56ff3dad84cd7e0d14c1999d3e82956beb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00014400482177734375,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1420099584,
+          "training_and_checkpoint_seconds": 17.55796114820987,
+          "slurm_job_id": "37708309",
+          "report_sha256": {
+            "training-rank0.json": "3f36179f6f26af199a5a4636e3c6257a3cdfd5d8debcc60b692edf892335276d",
+            "portable-reload.json": "a93a9ad6482f2a975caa26a4a8d6958ebdf9b0a8e29e39bd26389850492fe5ef",
+            "merged-reload.json": "1177108158eea789553343ec67eca45ceb3a54ff64c4bd7c44374346adaabed5"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-none-slurm-37708309": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.5621679764249664,
+          "training_loss_last": 0.20109036564826965,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6187035188747024,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "f5e773a0544c165e403f9048549b7e56ff3dad84cd7e0d14c1999d3e82956beb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00014400482177734375,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1678446080,
+          "training_and_checkpoint_seconds": 17.754475547000766,
+          "slurm_job_id": "37708309",
+          "report_sha256": {
+            "training-rank0.json": "a3cecfac551d687113e4247aaf2b3f6d97e3d7c5b92c7791d420dadf811ac29e",
+            "portable-reload.json": "72625ce008b85bd4e57485ada910adeed0c0117a5c9411f8d5d1f3827a6e49da",
+            "merged-reload.json": "208810881b5acc1e691674d1e85573712bf9627046e989ffbbe834f3ef766579"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-full-slurm-37708309": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6065408889999369,
+          "training_loss_last": 0.40147948265075684,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6393428116694978,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e851dc98e73fcb651fec9ebc4de2405fb87a63d30c1fc1d169c3819734e7c304",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000164031982421875,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 16.395069386810064,
+          "slurm_job_id": "37708309",
+          "report_sha256": {
+            "training-rank0.json": "4f1bb80b39ffae1650a47763bb0d0c144654411bcfb5d7f83575ce2929b65607",
+            "training-rank1.json": "68c49c7614e0b91fd68a66f23987a0224b6dfa60ad9fbd7412d033a0fb9d45df",
+            "portable-reload.json": "48195657401140d15dcafc540858caa64313021a395356c7574783e038169fb9",
+            "merged-reload.json": "e1c46c73886a746a7e58cbc653705c70ba16852ed35677f8e88e803a09968b90"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-none-slurm-37708309": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6065408889999369,
+          "training_loss_last": 0.40147948265075684,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6393428116694978,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e851dc98e73fcb651fec9ebc4de2405fb87a63d30c1fc1d169c3819734e7c304",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000164031982421875,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1334160384,
+          "training_and_checkpoint_seconds": 16.673698410391808,
+          "slurm_job_id": "37708309",
+          "report_sha256": {
+            "training-rank0.json": "02c96cfd825673ec308c8855d86053af7fe6c4277164c5e5afc09eaf50ae4870",
+            "training-rank1.json": "945ae3cf3b6f778c87d1d5ca62e066a372d6b93fd25d73ef68b9858b0e4a472f",
+            "portable-reload.json": "9b56526461be92641fb2e6819e046544d288fc4e3ca4f15cd77aa05d226de8b4",
+            "merged-reload.json": "9a10b61a1a936effc560311de4c6714f809a095aa1fba00b49c47e54849f6ba1"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-full-slurm-37708306": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.5903979478738247,
+          "training_loss_last": 0.26013287901878357,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6284181151511895,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010442733764648438,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1417936896,
+          "training_and_checkpoint_seconds": 16.77069694607053,
+          "slurm_job_id": "37708306",
+          "report_sha256": {
+            "training-rank0.json": "bb137a68cfeba1a599397eec46661dc400689496598b76b61b1bc1193f708afc",
+            "portable-reload.json": "d217c6c6cb661867e121296a199aaaf51e80193884c7df63e97203a3a57b433c",
+            "merged-reload.json": "1e0a93dd477dfef9217786a25e034d7d11227984d403efc99d24f24a99d131d2"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-none-slurm-37708306": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.5903979478738247,
+          "training_loss_last": 0.26013287901878357,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6284181151511895,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e30379bcc709e5b0f7b56517f6dfd221893d8d7ac841b185df9e79b05dbb4051",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010442733764648438,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1676283392,
+          "training_and_checkpoint_seconds": 16.725783698959276,
+          "slurm_job_id": "37708306",
+          "report_sha256": {
+            "training-rank0.json": "bb5870dd6246dc56887a13179299d41b9cf8420322d6f198bcfc69564cc88138",
+            "portable-reload.json": "160e44688cf2ed44124875f670c6fe3bc64ae02f64b89897f2366e850690e1ea",
+            "merged-reload.json": "2f804af17165de113256637c416a1f1c86d9c608ec47d0abc98b67fb9c0d10b7"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-full-slurm-37708306": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6435321651455641,
+          "training_loss_last": 0.4979185461997986,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6606581244652662,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012058019638061523,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 16.248064500978217,
+          "slurm_job_id": "37708306",
+          "report_sha256": {
+            "training-rank0.json": "eecafe30430d597aa241ed16005550785823624aaed085bb847bb7da0bb7b6f7",
+            "training-rank1.json": "6b3e2ba8c697d958cdda4175e6a6517268c94edcdc8febf218aa4213ff42f5c2",
+            "portable-reload.json": "e46083455399a6ee927d20a893b67a612e07f45f5b2e16d7cf6a848477199ec7",
+            "merged-reload.json": "24a60b684a2d7d97c3c8f6597b296b2e653147820ced3d2208976cd3ffe9b2fe"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-none-slurm-37708306": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6435321651455641,
+          "training_loss_last": 0.4979185461997986,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6606581244652662,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012058019638061523,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 1334160384,
+          "training_and_checkpoint_seconds": 16.156972961034626,
+          "slurm_job_id": "37708306",
+          "report_sha256": {
+            "training-rank0.json": "02506a3902623cc278143d7ba10fb67129992a07f4d9515e9b145e599539f490",
+            "training-rank1.json": "e09db6fc88e6ce8d1be9147146c91030b23b3da737505c2de8daacc64927ce74",
+            "portable-reload.json": "c6d2f7266821ee73da09690a98f8b0d4fc046bbedf9f74f3b743e8a535d0eff5",
+            "merged-reload.json": "5ed2b6ccbf47f5b23a7f8c58429aab5970071d19c31283edead2f14a61d57c1d"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
         }
       },
-      "manifest_sha256": "11c8d5a3cef900ac9134850fba7f66373ba0dbae1d5378c4846a6433d5c7f222"
+      "manifest_sha256": "11c8d5a3cef900ac9134850fba7f66373ba0dbae1d5378c4846a6433d5c7f222",
+      "slurm_completed_jobs": [
+        "37708308",
+        "37708301",
+        "37708309",
+        "37708306"
+      ]
     },
     "mistral": {
       "matrix_passed": true,
@@ -2124,9 +3552,355 @@
             "portable_report_sha256": "2f4ea5abb6d59ab3b4f7b3b5c3bbba76564defb60424bca4aca460365c0c799e",
             "merged_report_sha256": "152aa19d134eb0fe7b2bea8959d67e94bbb836423f2b524fb7fe097e9e7e0995"
           }
+        },
+        "dora-w1-full-slurm-37708400": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3571712,
+          "trainable_tensors_changed": 192,
+          "training_loss_mean": 1.0943225095083768,
+          "training_loss_last": 0.5061243772506714,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7576416153953905,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d50f6a1b39d026fef1a8cec50433f5efbb30b828d624a7c25d2c7a76b167b900",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 4.57763671875e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14962668544,
+          "training_and_checkpoint_seconds": 137.88159188604914,
+          "slurm_job_id": "37708400",
+          "report_sha256": {
+            "training-rank0.json": "199c8cbfb0ba6943b2d7cf746f102f0219ae001315f9bd82af2270a555ce68bb",
+            "portable-reload.json": "a666eee6cbb750e9070b729fc2e70d9e46a1846fa0141b2c0e747ae57b078d8c",
+            "merged-reload.json": "30cbcd9ea5b21d576ffa7827a916f3ea2694f155bccdfc639683db9550e11da0"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-full-slurm-37708400": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3571712,
+          "trainable_tensors_changed": 192,
+          "training_loss_mean": 1.2430708260575603,
+          "training_loss_last": 0.9656030535697937,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.9592975805344747,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 165.52922620996833,
+          "slurm_job_id": "37708400",
+          "report_sha256": {
+            "training-rank0.json": "cd4f673a496527368a70e8d9f6c762974a964b0e468babeb9a7a0cfc2c6e0bbf",
+            "training-rank1.json": "27a6353bc173f52ceed24a646565ff689059ef461e9baf7c0f7903c341bcd1b6",
+            "portable-reload.json": "06cd00ecb0b71f7941ff8de35a4978dc50eb9f54537a4ce737a3cd345bb5a594",
+            "merged-reload.json": "0d7213845ac76a0f5025992d89077ceb343ec567b52ebff57ab78f4b1788c717"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-full-slurm-37708398": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.1172150802426661,
+          "training_loss_last": 0.5411021709442139,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7868271053383646,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d50f6a1b39d026fef1a8cec50433f5efbb30b828d624a7c25d2c7a76b167b900",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.424022674560547e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 109.60954327904619,
+          "slurm_job_id": "37708398",
+          "report_sha256": {
+            "training-rank0.json": "021a1e9a9573cf4ff998427bfdf4903c2e34fae186e4642fb85d1494b3ddc358",
+            "portable-reload.json": "08a476a235e5b9e65dd95ced1ed6586b408793f033e29c97fa90d3e7263d1c93",
+            "merged-reload.json": "dfb3a1c4d083b4cc3ad7f59d201f4a04b82b221eb4f66c9d49124b15c747bf78"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-full-slurm-37708398": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.2527869641780853,
+          "training_loss_last": 0.9662220478057861,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.995512838458335,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.91278076171875e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 82.59745236393064,
+          "slurm_job_id": "37708398",
+          "report_sha256": {
+            "training-rank0.json": "2e43f233e7b02ee38f13c5f501ea14ca652231209aeeacb87c03e47ee71c8c03",
+            "training-rank1.json": "145ff69b5b5758dac7e5377a3689db8ccb1d53f2f3dcb3d4189678792d907d35",
+            "portable-reload.json": "e488ca82559fe693901ca386f620c248cb169a49f78048fe0c1ed1f227df734a",
+            "merged-reload.json": "8a9a1e8c4a1d5f87d50b90d34d1dce69c6d597686df8669d0ff02c85a2a602cb"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-full-slurm-37708401": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 0.9039762445100821,
+          "training_loss_last": 0.3215993046760559,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6119892825723423,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "a04c3a4dd32a71fd3de5980d56aa67a0d606b7b1e74ca0e7c8004c6176154e19",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.7697296142578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 142.38446966791525,
+          "slurm_job_id": "37708401",
+          "report_sha256": {
+            "training-rank0.json": "6020bcdd0c1d361a507ff933604a472ac18898f3139d79255d6d71fc9ad56317",
+            "portable-reload.json": "30c08c25a8c4c0069db742351bd630d01cd169781034fa6c688d084f4d6cc26c",
+            "merged-reload.json": "549803267d0bb52c6c95d5d303c6135561457e25ee1c8b115d3456059495047b"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-full-slurm-37708401": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.0136494093443738,
+          "training_loss_last": 0.5217652916908264,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6669963630724342,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "76544575bbabaf08c8cbfe25a126944d8c4afe3398e2d095a6bc2b7835064b83",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.151199340820312e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 173.77411897690035,
+          "slurm_job_id": "37708401",
+          "report_sha256": {
+            "training-rank0.json": "17210aded12eea97bb6a2aaa54a136c577e3406d31c5ba1807d4a71fdca2f83e",
+            "training-rank1.json": "a05cc61200c2874705cf3a4d753d2e4efdb57dbb560e99a552cb7b63bd82e3e3",
+            "portable-reload.json": "d546012a39636a404844348c30f146bd1d01a5da05581321743b4aec64c4fd21",
+            "merged-reload.json": "bb0291bede78f265390de50effcb85e955c50016f6cbc486bfe6f9ebf1c0e849"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-full-slurm-37708399": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 0.9080837470737262,
+          "training_loss_last": 0.33024510741233826,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6038257584370323,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d50f6a1b39d026fef1a8cec50433f5efbb30b828d624a7c25d2c7a76b167b900",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.7220458984375e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 163.00240648305044,
+          "slurm_job_id": "37708399",
+          "report_sha256": {
+            "training-rank0.json": "59dae2a6f95a3b4611c80b3ac58270fa4a8e480c7dfcbe16bae8f146456dd159",
+            "portable-reload.json": "2125144409599a20b95983f85824b7224fcb02e107245b5a3b722c1add642348",
+            "merged-reload.json": "5626c37d4f1cd4589040bfb2c36de453231b95625b6de3b2f33b8fd7471154cb"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-full-slurm-37708399": {
+          "status": "passed",
+          "source": "db7c2ab-ce9759d9",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.0470381916061906,
+          "training_loss_last": 0.5351781249046326,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6876312840555447,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.05718994140625e-05,
+          "merge_precision": "float32",
+          "portable_source": "db7c2ab-ce9759d9",
+          "merged_source": "db7c2ab-ce9759d9",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 141.0620963461697,
+          "slurm_job_id": "37708399",
+          "report_sha256": {
+            "training-rank0.json": "4cc5a9a59f1ea0fd5cc395142947083b2ebedc2c2cd4f180d2f411289c44abad",
+            "training-rank1.json": "969a3aaf7994543639477cc17131f9b3a4be462cd688476b4a5e068deb9db806",
+            "portable-reload.json": "c4563608afe1a32cf9a95da13b80aea0b5c216de11e79cb5be1ec465a3999885",
+            "merged-reload.json": "33a6bf0497ad8092721753170bbebe7ec3d091e8a5ff0b063b4b3513161d1ba4"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
         }
       },
-      "manifest_sha256": "a3966e056ffe4ab0c73d39786e6bb619e5f9b8715baf93a03e9c87bd0e04738f"
+      "manifest_sha256": "a3966e056ffe4ab0c73d39786e6bb619e5f9b8715baf93a03e9c87bd0e04738f",
+      "slurm_completed_jobs": [
+        "37708400",
+        "37708398",
+        "37708401",
+        "37708399"
+      ]
     },
     "qwen3_5": {
       "matrix_passed": true,
@@ -2298,15 +4072,733 @@
             "portable_report_sha256": "a3e05ba2d9bb543c6db452dab31067c74d4db3d1df47cac3dab09846cb8e629b",
             "merged_report_sha256": "b2eac3aa9345df091bc47b94364fbcdccabb3d84b965fe57d12af61bfe59f1bc"
           }
+        },
+        "dora-w1-full-slurm-37707976": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1992960,
+          "trainable_tensors_changed": 153,
+          "training_loss_mean": 1.0712956774514169,
+          "training_loss_last": 0.4818664491176605,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.2982944790273905,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.487701416015625e-05,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302752768,
+          "training_and_checkpoint_seconds": 44.245849538827315,
+          "slurm_job_id": "37707976",
+          "report_sha256": {
+            "training-rank0.json": "e9f0f7d67f6b2e49cb0c0036d169d75b9f81f4a34f9f9f5167a17564a6eeb399",
+            "portable-reload.json": "fce84c15d3d94104a9a5ce57bd8a99aa6a9c041bc4e1a4246eae378b194dd23a",
+            "merged-reload.json": "2125f5553cd63182ae2580c630d49a8c7ee48997b63a92187aa0c11ccdcecfc5"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w1-none-slurm-37707976": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1992960,
+          "trainable_tensors_changed": 153,
+          "training_loss_mean": 1.0712956774514169,
+          "training_loss_last": 0.4818664491176605,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.2982944790273905,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.487701416015625e-05,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2882872832,
+          "training_and_checkpoint_seconds": 40.8107526418753,
+          "slurm_job_id": "37707976",
+          "report_sha256": {
+            "training-rank0.json": "63419ec3c6b6a3c6165cd38c64a46431d4835f4d1697cc3daae9da691d3b0282",
+            "portable-reload.json": "881970b5d801b1af4df660ff75ac48f6f6f7d4a118f9baab6e09df8a2eb3b4d2",
+            "merged-reload.json": "77d0464b350c07c73d704d3e90d22c15c06babee3102da1fb65093b828edbd6c"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-full-slurm-37707976": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1992960,
+          "trainable_tensors_changed": 153,
+          "training_loss_mean": 1.1067990875906415,
+          "training_loss_last": 0.2936403751373291,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.16954033821821213,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000148773193359375,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 43.281522661913186,
+          "slurm_job_id": "37707976",
+          "report_sha256": {
+            "training-rank0.json": "d35cf4488bc73b27aae115f279b175a9deb4e79c6595968902f8603a12143072",
+            "training-rank1.json": "1cfa98b10e74000a881ff8a7f28bd4140e7daf9abdd624ac131935c13c8ae323",
+            "portable-reload.json": "62f7eb312199a8662ee90c9377c3e1ebda42cd11ea038d93d954dcfa6bc65fb2",
+            "merged-reload.json": "1b22775c04f3577aa80e177f0eea5c1101085355b068c1cbea2448851a436ca3"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "dora-w2-none-slurm-37707976": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1992960,
+          "trainable_tensors_changed": 153,
+          "training_loss_mean": 1.1067990875906415,
+          "training_loss_last": 0.2936403751373291,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.16954033821821213,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000148773193359375,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2540595712,
+          "training_and_checkpoint_seconds": 48.85767120704986,
+          "slurm_job_id": "37707976",
+          "report_sha256": {
+            "training-rank0.json": "b4ce0fe66da79e3cf5e14ac54f21b656216fc6a6aaaa78c804534ac83fee6451",
+            "training-rank1.json": "bb5eba2e22ad5305cd37291d6bc420a9ddc8ea67c0b3f39787a9a959e2401d7e",
+            "portable-reload.json": "d31a801810d4ef5c29ff9269c44052e7ecc0cd8e3b758ade2f6f3a4e66c32dda",
+            "merged-reload.json": "da6c461258f1fc1c39385b236c66506424fd3cb8543b9d4880fd9428d3e67834"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-full-slurm-37707970": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.081270927330479,
+          "training_loss_last": 0.4125202000141144,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.26219538878649473,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00013208389282226562,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302752768,
+          "training_and_checkpoint_seconds": 41.63073680800153,
+          "slurm_job_id": "37707970",
+          "report_sha256": {
+            "training-rank0.json": "17f6a44e68c0d2d0817c7eccdea5941340357363c3b4d8079a7ff4975d0bcca0",
+            "portable-reload.json": "9df787c90f73ee28b60d3c0e53f33ff7c7f731b3bf4f339bcba5b46c2821105b",
+            "merged-reload.json": "14c6e4969aed93110d5b2e2ca51a4ebbe6e12e912dae508368d77d978d13ae79"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w1-none-slurm-37707970": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.081270927330479,
+          "training_loss_last": 0.4125202000141144,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.26219538878649473,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00013208389282226562,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2767440384,
+          "training_and_checkpoint_seconds": 39.83797276500263,
+          "slurm_job_id": "37707970",
+          "report_sha256": {
+            "training-rank0.json": "5ddb23de1610855ebc8808faa185585b2ce586470b35ab820b90868a776971b6",
+            "portable-reload.json": "a68b155015bca429763b433c1e8f4425bdaee2dfefac8fb81e0a61c576f666ca",
+            "merged-reload.json": "ef42b38095a617690cded7a00c9593c5f1d703a40980a8e249d93ce867b9764b"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-full-slurm-37707970": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.126485951244831,
+          "training_loss_last": 0.369030237197876,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.2034751195460558,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012111663818359375,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 39.26037032800377,
+          "slurm_job_id": "37707970",
+          "report_sha256": {
+            "training-rank0.json": "acf362d9d2e62f555b8731c54104c40d9cb6cea06d2df209c3d4c87ca6c60e92",
+            "training-rank1.json": "2dbd8d8e865616ee2e8ccec7152936654ddba4c1d8d07f3bf31960df8805605a",
+            "portable-reload.json": "a1a3bbfb57fff644eec3799661bb8ab17a71a7a5b9c777041219fd26b3c1366a",
+            "merged-reload.json": "68c72037b70f1bb888fb157181f000af9f1ac811c54cec18e71a694da9a964f7"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "lora-w2-none-slurm-37707970": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.126485951244831,
+          "training_loss_last": 0.369030237197876,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.2034751195460558,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012111663818359375,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2400541696,
+          "training_and_checkpoint_seconds": 35.432976128999144,
+          "slurm_job_id": "37707970",
+          "report_sha256": {
+            "training-rank0.json": "37b3639431847a50575f435a92790c444b8b50e87a7f1135d15e1d958b007e02",
+            "training-rank1.json": "9fa8831617e11750dafa49f398fe39b1cc3fb413d381756f6e4ec2c3bec1f310",
+            "portable-reload.json": "fdb1b41388880a533ccd58aeb5ed47c46b000f1beb8dd19326614425e94028a6",
+            "merged-reload.json": "1528240fa721262ff5495bb04254d23c3b9b882dc693c2135932f580160dfcdb"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-full-slurm-37707978": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.9229966753628105,
+          "training_loss_last": 2.0583367347717285,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3560730302706361,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e73ec16275b6b77f5ada6c6ebc29d3ef78766071844bf60fdb6b1297c06b2f44",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.772445678710938e-05,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2303277056,
+          "training_and_checkpoint_seconds": 44.783219998003915,
+          "slurm_job_id": "37707978",
+          "report_sha256": {
+            "training-rank0.json": "98fcd67a1fb405e19e7490f069304c57e9e7e040d786e3bdda85f7512542a69e",
+            "portable-reload.json": "dbc5ed8919fbb4c1ecf5e8f84d63f809b243980732df6ae1f88120b30ddbbb20",
+            "merged-reload.json": "03929a9ce92f5297b3f147f6e597f0efa70822d30876351e4b970886e8a6feb0"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w1-none-slurm-37707978": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.9229966753628105,
+          "training_loss_last": 2.0583367347717285,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3560730302706361,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e73ec16275b6b77f5ada6c6ebc29d3ef78766071844bf60fdb6b1297c06b2f44",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.772445678710938e-05,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2775308800,
+          "training_and_checkpoint_seconds": 41.41144765296485,
+          "slurm_job_id": "37707978",
+          "report_sha256": {
+            "training-rank0.json": "380ec734fcd5a0d5cbae66d57894ec44f5be5e81d813a71bcc6ac1172962f9ad",
+            "portable-reload.json": "aaf74e4f916cf795fb7d35b0b898a3b84f3598f9c70072f7bcc5b40bdddb296c",
+            "merged-reload.json": "7580ce149d6da1182f589962c377b7d9f7aa1aa48049266e594b3c6217be8561"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-full-slurm-37707978": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.0424077577061124,
+          "training_loss_last": 1.2975962162017822,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.43625687062740326,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e673e8547d498867ffdccf062ba30b859a9a7b7eebc1ab87badc3742a808a7c2",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011539459228515625,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 40.666884266072884,
+          "slurm_job_id": "37707978",
+          "report_sha256": {
+            "training-rank0.json": "899555033679fef26830d48145c6d72176a48262568ddd12849cbb113dcb1fd5",
+            "training-rank1.json": "19e69ec3842980e889d80a86b4596d73e14c799a50db8901d3c85efa5e76f633",
+            "portable-reload.json": "0b4d9c09652d9502dbe9e09fc2f64585c1d1bc3dc7b741fa1575afbfd6c15dbf",
+            "merged-reload.json": "303c19cef1df1143d9f5f257ee7b84885078ebbf7957185250a8a9da571d7dc0"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "pissa-w2-none-slurm-37707978": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.0424077577061124,
+          "training_loss_last": 1.2975962162017822,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.43625687062740326,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e673e8547d498867ffdccf062ba30b859a9a7b7eebc1ab87badc3742a808a7c2",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011539459228515625,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2408045568,
+          "training_and_checkpoint_seconds": 37.18044342508074,
+          "slurm_job_id": "37707978",
+          "report_sha256": {
+            "training-rank0.json": "bf1d3610eaa9e107191ff741f6b5f50ef3d821a5a58bad96edbab203b12e909a",
+            "training-rank1.json": "cb91b11eedbdca261cde810d18c0f5cd2098f266705a5092045d29efb9065773",
+            "portable-reload.json": "49f43cd0a70c1001e2fc5144119b7ccd032e0de42b16ca87ce78186f2f2f95fe",
+            "merged-reload.json": "cafd9826440cee6f8ee2537d658d4c3f3c2a3fa672f8dba790ad9884e1c49234"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-full-slurm-37707974": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.8576894749421626,
+          "training_loss_last": 1.2818129062652588,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3658934158011107,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011268258094787598,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302752768,
+          "training_and_checkpoint_seconds": 45.87435198598541,
+          "slurm_job_id": "37707974",
+          "report_sha256": {
+            "training-rank0.json": "59f15907d420b4427df19e6cd602092d340ff596196e0df5a7daa88211e82a46",
+            "portable-reload.json": "d9cea2fd04b47e375a7e0b47b07e2da300e5b220b520339bb8e522c9a10f5d24",
+            "merged-reload.json": "6765a7493ef797b48b2ee0bffa467097479c5cbe322181ebe30edeb91fb317c9"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w1-none-slurm-37707974": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.8576894749421626,
+          "training_loss_last": 1.2818129062652588,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.3658934158011107,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "2b178ed514cadded79e2362f85d21d5f1a3943649724e9a55b4fbab6340471a3",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011268258094787598,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2767440384,
+          "training_and_checkpoint_seconds": 40.547849213005975,
+          "slurm_job_id": "37707974",
+          "report_sha256": {
+            "training-rank0.json": "981195548ecdfbe0d624896045f0c5b53aca2e6b798354f9194e145149826eac",
+            "portable-reload.json": "029df8c425c4016d3d670c709d53347bbf432e8f9adf44e70faeadbfe83afce1",
+            "merged-reload.json": "9ea79875d5a94c633072384001f6ad293978a831f5984d8e8e981059792cda77"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-full-slurm-37707974": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.8630124984516038,
+          "training_loss_last": 0.31597113609313965,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07963394466787577,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001220703125,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 40.976658458122984,
+          "slurm_job_id": "37707974",
+          "report_sha256": {
+            "training-rank0.json": "92d35055eb27816685e4accc5a4f4a3971b90611075a0f34e255447be611f399",
+            "training-rank1.json": "f0210b2e06bb1ef6c9fabf6f09de8ecb30aa1a6509ed7b6a58e5f2c9b7a242cd",
+            "portable-reload.json": "51e763b0309e740cced05e6bcbbe0a886cbf04702b75a0a51496b9ee9842f796",
+            "merged-reload.json": "bce4208346668acfeb1b2b29157c9d90cd74a9354a0bff99c01fc4f0a71bd54a"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
+        },
+        "rslora-w2-none-slurm-37707974": {
+          "status": "passed",
+          "source": "2f8d33f-4fb694b4",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.8630124984516038,
+          "training_loss_last": 0.31597113609313965,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07963394466787577,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001220703125,
+          "merge_precision": "float32",
+          "portable_source": "2f8d33f-4fb694b4",
+          "merged_source": "2f8d33f-4fb694b4",
+          "peak_cuda_allocated_bytes_rank0": 2400541696,
+          "training_and_checkpoint_seconds": 43.142747078090906,
+          "slurm_job_id": "37707974",
+          "report_sha256": {
+            "training-rank0.json": "f5379076f477bdd505855ee0c5a8eae335718afd93d4229f4d3fac22733e04d6",
+            "training-rank1.json": "ef05a9b9d853a988bf1970eb4bf510bd7638ff55149239894c7a7e1dc394e358",
+            "portable-reload.json": "25f35f442cb59886220c0e2ef61baac80e0b79056f06aa2f3913cf752bfc8819",
+            "merged-reload.json": "ecc68f8f067f117ac158fe483d41c7e1ce60050e43a56fb7aab9d2077cd3c2c1"
+          },
+          "hardware_record": "Not captured by these historical launchers; node/allocated GPU count are in scheduler accounting, no GPU-model throughput claim."
         }
       },
-      "manifest_sha256": "f5346d0c63c38638f53591bcd10a23a2deb2e037274d922d121394e215830289"
+      "manifest_sha256": "f5346d0c63c38638f53591bcd10a23a2deb2e037274d922d121394e215830289",
+      "slurm_completed_jobs": [
+        "37707976",
+        "37707970",
+        "37707978",
+        "37707974"
+      ]
     },
     "qwen3_vl_moe": {
       "matrix_passed": false,
       "cases": {
         "lora-w2-full": {
-          "status": "failed_portable_reload"
+          "status": "training_and_resume_passed_reload_pending"
         },
         "rslora-w2-full": {
           "status": "not_completed"
@@ -2318,7 +4810,7 @@
           "status": "not_completed"
         }
       },
-      "manifest_sha256": "5dbe03649422f0d0d11fed66cc72ee14a617c046c1328f9a927a41abc1a7e3b9"
+      "manifest_sha256": "07da57827b097a78c07ac19e153a781a339ec111ebbf6a59d8088a0335163772"
     },
     "pi05": {
       "matrix_passed": true,
@@ -2677,9 +5169,10 @@
       "manifest_sha256": "ee34d308f0ad8760e15cd4e4c44159e1b54cfc0488196b497e3071211e06a137"
     }
   },
+  "slurm_extension_report_sha256": "107b3ff26b20d6cd7193a80169979bbe0034569a8767256471f61f8ed23bb125",
   "incomplete": {
-    "gr00t": "Implementation and 19 actual small-model tests pass. Public pretrained weights/runtime/LIBERO staged. Required nvidia/Cosmos-Reason2-2B metadata revision 9ce19a195e423419c349abfc86fd07178b230561 returned HTTP 401; no pretrained GPU result.",
-    "full_wts": "Native Qwen3-VL four full epochs and 2676/576 evaluation prepared with source 076cfbb; not yet results.",
+    "gr00t": "Exact public backbone metadata verified against pinned Cosmos-Reason2 Git blob IDs. The real 3.144B GR00T checkpoint and LIBERO packer pass CPU materialization/target resolution; 143 installed tests pass on 8a8ead7. Four-method GPU training/reload/merge qualification queued, no completed pretrained GPU result yet.",
+    "full_wts": "Native Qwen3-VL full epochs are running/queued locally on source 076cfbb. The 2676/576 evaluation and exact final-step recovery are gated on complete training; no completed full-epoch result is claimed here.",
     "remaining_profiles": "Pending Slurm method jobs are separate one/two-GPU and activation-checkpointing profiles; only listed completed cases are qualified."
   }
 }
