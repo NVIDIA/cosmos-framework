@@ -186,12 +186,19 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
         del merged["lm_head.weight"]
     with tempfile.TemporaryDirectory(prefix="cosmos-adapter-merge-") as temporary:
         torch.save({"net": merged}, os.path.join(temporary, "model.pt"))
+        expected_tensor_count = len(merged)
+        # The materializer mmap-loads the saved state and may transpose all MoE
+        # experts. Release the original FP32 allocation before that phase.
+        del weights, merged, tensor, state
+        import gc
+
+        gc.collect()
         result = run_request(
             base=base,
             out=out,
             ckpt_dir=temporary,
             min_tensors=1,
-            expect_tensors=len(merged),
+            expect_tensors=expected_tensor_count,
             verify=True,
             output_dtype="float32",
             export_metadata=metadata,

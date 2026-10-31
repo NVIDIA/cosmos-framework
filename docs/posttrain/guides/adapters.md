@@ -217,6 +217,15 @@ portable adapter evaluated in FP32 (`atol=5e-4, rtol=2e-4`, mean error at most
 `5e-5`, identical argmax); and a fresh stock HF load with `dtype="auto"` reproduces
 those controlled outputs. Small fixtures retain their tighter existing bounds.
 The control uses a private evaluation copy and never changes a live training model.
+For native Qwen3-VL-MoE, the grouped expert kernel accepts BF16, so the FP32
+comparison uses stock HF for both the promoted portable adapter and the merged
+model. `posttrain.tests.reload_moe_adapters` checks native/HF BF16 drift separately,
+verifies every serialized tensor in the original checkpoint layout, and dispatches
+FP32 inference across at least two GPUs with explicit memory budgets and no
+implicit CPU/disk offload. The ordinary native BF16 portable reload is a prerequisite.
+The 30B profile advertises only two-rank pure DP with full activation checkpointing
+once its GPU gate passes; ordinary linear attention/vision/merger targets are
+distinct from unsupported fused expert tensors.
 For a BF16-trained adapter, build/reload at its recorded base dtype first, then
 call `policy.net.float().eval()` for this FP32 reference. Constructing directly
 from the original FP32 base would undo training-time rounding and is incorrect.

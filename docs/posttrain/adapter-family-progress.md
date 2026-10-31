@@ -20,7 +20,7 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | HF loaded-base → initialization → FSDP → optimizer lifecycle | `HFModel.setup`, `build_hf_model`, SFT `build_trainer` | Implemented; CPU materialization and tied embeddings pass; Qwen3-0.6B passed all four methods on one/two GPUs with AC none/full |
 | Text portable reload and merged model export | `checkpoint/adapters.py`, shared HF materializer | Implemented; real tiny HF serialization, strict reload and stock merged reload pass |
 | Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; pretrained GPU qualification pending |
-| Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook and family binding | Implemented but awaiting actual grouped-mm training, resume and export qualification; fused expert tensors remain unsupported targets |
+| Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook, family binding, `tests/reload_moe_adapters.py` | Implemented but awaiting actual grouped-mm training, resume and export qualification. Four small real MoE method fixtures pass native/HF target agreement, stock FP32 updates, exhaustive serialized tensor checks and reload with native expert layout. Fused expert tensors remain unsupported targets |
 | GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Implemented in `model/gr00t/{sft,sft_policy,adapter_export}.py`; 19 small actual Isaac/Qwen3-VL/DiT tests pass, including four methods, full AC, native stochastic resume, native-forward parity, real image packing and portable/merged reload. Real checkpoint GPU qualification is blocked on gated Cosmos-Reason2 config/processor metadata (HTTP 401). Category-specific tensors remain unsupported adapter targets |
 | π0.5 | `model/pi05/sft.py`, `Pi05Model.training_condition`, `model/pi05/adapter_export.py`, `tests/test_pi05_adapters.py` | Implemented, awaiting installed real-model GPU qualification. All four methods pass actual small SigLIP/Gemma prefix/action updates, AC, portable reload and FP32 merged-file reload. Final-prefix query/output/MLP targets are refused because only its K/V reaches the action loss. Existing PPO frozen-prefix behavior is retained |
 | Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Implemented in `model/alpamayo/{sft,policy,adapter_export}.py` with public pinned R1 source; no AlpaGym runtime needed. All four methods pass small real R1/Qwen3-VL flow updates, vision AC, portable/FP32 merged reload and native stochastic continuation. Real checkpoint GPU qualification pending |
@@ -102,8 +102,19 @@ Current Slurm submissions (pending is not a training result): π0.5 matrix
 LoRA `37706319`, rsLoRA `37706324`, DoRA `37706326`, PiSSA `37706327`. Every WTS
 job first gates its full-resolution/gradient-accumulation profile. Alpamayo
 image `af407d4`, job `37706329`, passed **105 installed tests, 1 skip**;
-GPU submission waits for image publication. The first pending MoE payload
+image SHA `2198e81619a314702217cdf42d71b663b5bfc7ccb0df26ce80ecb6e99a2f0280`.
+Alpamayo's actual KITTI matrix is queued as `37706970`. GR00T source `e207c5c`
+is being installed and tested in image job `37707039`; this does not remove the
+gated backbone-metadata requirement. The first pending MoE payload
 `37706615` was cancelled before execution: its generic merged checker attempted
 single-GPU FP32 30B inference, which exceeds A10080 memory and the native expert
 kernel's BF16 contract. Its inputs and cancellation evidence are preserved;
-MoE needs a separate inference/export qualification path.
+its replacement uses stock HF FP32 inference across two GPUs. Native BF16
+portable reload remains a mandatory independent gate, every exported tensor is
+verified against the original rounded base and the shared method-specific merge,
+and stock BF16/native BF16 drift is reported separately from FP32 merge agreement.
+The existing materializer owns expert transposition; no alternate expert training
+kernel or adapter mathematics is introduced. Export releases its temporary FP32
+state before materialization to avoid retaining another full 30B allocation.
+The shared HF/native/export suite with these four new tests passed **229 tests**
+on Transformers 5.8.1. Real MoE GPU qualification is still outstanding.
