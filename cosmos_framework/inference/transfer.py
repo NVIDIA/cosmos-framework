@@ -23,6 +23,7 @@ from cosmos_framework.inference.args import (
     TransferArgs,
     TransferHintKey,
 )
+from cosmos_framework.inference.common.args import MAX_SEED
 from cosmos_framework.inference.inference import _fallback_seed, _get_prompt_sample_data
 from cosmos_framework.inference.transfer_preprocessing import (
     TransferGeometry,
@@ -1008,7 +1009,8 @@ def generate_transfer_sample(
                 control_guidance=sample_args.control_guidance,
                 control_guidance_interval=sample_args.control_guidance_interval,
             ),
-            seed=[seed + chunk_id],
+            # Wrap so a seed near the top of the accepted range stays valid for later chunks.
+            seed=[(seed + chunk_id) % (MAX_SEED + 1)],
             n_sample=1,
             has_negative_prompt=negative_prompt is not None,
             num_steps=sample_args.num_steps,

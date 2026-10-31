@@ -911,3 +911,46 @@ def test_sample_output_dir_rejects_a_symlink_out_of_the_root(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="outside the requested output root"):
         sample_output_dir(root, "link")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("seed", [0, 2025, 2**32 - 1])
+def test_seed_accepts_the_range_every_sampler_takes(seed: int) -> None:
+    assert OmniSampleOverrides(seed=seed).seed == seed
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("seed", [-1, 2**32, 2**64])
+def test_seed_rejects_values_a_sampler_cannot_take(seed: int) -> None:
+    # NumPy's RandomState (bidirectional sampler) takes 0..2**32-1, and torch overflows at 2**64,
+    # so these used to fail only after the model had loaded.
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(seed=seed)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_seed_plus_extra_outputs_must_stay_in_range(tmp_path: Path) -> None:
+    from cosmos_framework.inference.common.args import MAX_SEED, SampleArgs
+
+    fields = dict(output_dir=tmp_path, model="", extra={}, name="s", tensors_file=None, pickle_file=None)
+    assert SampleArgs(**fields, num_outputs=2, seed=MAX_SEED - 1).seed == MAX_SEED - 1
+    with pytest.raises(pydantic.ValidationError, match="per-output seeds up to"):
+        SampleArgs(**fields, num_outputs=2, seed=MAX_SEED)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_built_sample_rejects_extra_outputs_past_the_seed_range(tmp_path: Path) -> None:
+    from cosmos_framework.inference.common.args import MAX_SEED
+
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME, output_dir=tmp_path / "outputs"
+    ).build_setup()
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    overrides = OmniSampleOverrides(name="s", seed=MAX_SEED, num_outputs=2)
+    overrides.output_dir = tmp_path / "inputs"
+    with pytest.raises(pydantic.ValidationError, match="per-output seeds up to"):
+        overrides.build_sample(model_config=model_dict.config)
