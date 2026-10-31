@@ -116,6 +116,31 @@ def trainable_state(net):
     return {canonical_name(n): local_value(p).clone() for n, p in net.named_parameters() if p.requires_grad}
 
 
+def verify_trainable_updates(before, after):
+    """Require each logical tensor to update, including partially supervised shards.
+
+    A physical-action output can contain padded channels. An FSDP shard covering
+    only those channels correctly stays unchanged while another shard updates.
+    Preserve local evidence and require a change somewhere in each whole tensor.
+    """
+    from cosmos_framework.posttrain.utils.dist import collective_device, rank_identical
+
+    names = rank_identical(sorted(before), "qualification trainable parameter names")
+    if set(before) != set(after):
+        raise ValueError("trainable parameter inventory changed during qualification")
+    local = {name: not torch.equal(after[name], before[name]) for name in names}
+    flags = torch.tensor(
+        list(local.values()), dtype=torch.int32, device=collective_device() if dist.is_initialized() else "cpu"
+    )
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        dist.all_reduce(flags, op=dist.ReduceOp.MAX)
+    global_changes = dict(zip(names, flags.bool().cpu().tolist()))
+    missing = [name for name, changed in global_changes.items() if not changed]
+    if missing:
+        raise AssertionError(f"trainable tensors did not update on any rank: {missing}")
+    return local, global_changes
+
+
 def runtime(recipe, opts, output):
     config = load_config(recipe, ["--", *opts])
     component = os.environ.get("SFT_QUALIFY_COMPONENT", "all")
@@ -289,8 +314,7 @@ def main():
     for _ in range(8 // world):
         reports.append(train_step(data, trainer, rl))
     after = trainable_state(trainer.model.net)
-    changed = {name: not torch.equal(after[name], before[name]) for name in before}
-    assert all(changed.values()), [n for n, changed in changed.items() if not changed]
+    changed_locally, changed = verify_trainable_updates(before, after)
     assert frozen_digest(trainer.model.net) == frozen
     assert all(torch.isfinite(value).all() for value in after.values())
     checkpoint = str(root / "checkpoints" / f"iter_{len(reports):06d}")
@@ -339,6 +363,8 @@ def main():
         "resolved": trainer.model.net._posttrain_adapter_manifest,
         "trainable_tensors": len(after),
         "changed_tensors": sum(changed.values()),
+        "changed_local_shards": sum(changed_locally.values()),
+        "unchanged_local_shards": [name for name, value in changed_locally.items() if not value],
         "initial_max_abs_logit_error": init_error,
         "controlled_output_kind": "flow_velocity_and_loss" if rl.task == "flow_bc" else "language_logits",
         "resume_max_abs_parameter_error": resume_error,
