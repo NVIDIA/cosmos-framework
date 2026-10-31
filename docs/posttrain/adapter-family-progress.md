@@ -87,6 +87,34 @@ action elements. Report both weighted training mean and last-batch loss because
 native flow noise/time sampling makes a single batch unrepresentative. These
 losses do not establish simulator success or driving performance.
 
+The fixed two-GPU profiles in the CSV give the following controlled validation
+losses. Each row uses the same data, seed and component configuration across
+methods; the method changes. These small correctness fixtures are not a quality
+ranking. Text and physical datasets use the separate validation splits described
+above; conversational VLM fixtures are controlled execution checks. Full WTS
+losses and generation evaluation are reported separately below. Loss scales
+cannot be compared across families or objectives.
+
+| Checkpoint | Before | LoRA after | rsLoRA after | DoRA after | PiSSA after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-0.6B | 1.69144 | 1.42627 | 1.07403 | 1.39879 | 1.05419 |
+| Qwen3-VL-2B | 0.184306 | 0.093611 | 0.058094 | 0.088449 | 0.037789 |
+| Qwen2.5-0.5B | 0.861228 | 0.770315 | 0.660658 | 0.759867 | 0.639343 |
+| SmolLM2-135M | 1.32242 | 1.30729 | 1.26900 | 1.30547 | 1.19585 |
+| Mistral-7B | 1.39287 | 0.995513 | 0.687631 | 0.959298 | 0.666996 |
+| Gemma-2B | 2.26302 | 2.13581 | 1.92015 | 2.12037 | 1.70138 |
+| Gemma2-2B | 1.30810 | 1.18044 | 1.02051 | 1.17051 | 1.04145 |
+| Qwen3.5-0.8B | 2.52206 | 0.203475 | 0.079634 | 0.169540 | 0.436257 |
+| Qwen3-VL-30B-A3B | 0.419985 | 0.124445 | 0.000454 | 0.096077 | 0.0000401 (merge blocked) |
+| π0.5 LIBERO | 0.000383522 | 0.000378421 | 0.000388774 | 0.000381669 | 0.000470899 |
+| Alpamayo-R1-10B | 1.95522 | 1.95211 | 1.94346 | 1.95181 | 1.87082 |
+| GR00T-N1.7 LIBERO-Spatial | 0.399482 | 0.395212 | 0.378886 | 0.394431 | 0.327881 |
+
+π0.5's rsLoRA and PiSSA validation losses increased in this short run; passing
+update/recovery/export checks does not imply improved task quality. The CSV
+retains unrounded training means, last losses, validation losses, resource
+measurements and each run's immutable identities.
+
 All completed local continuation comparisons have zero maximum parameter error;
 portable reload comparisons are exact. Alpamayo FP32 merged errors are at most
 `2.7e-6`; π0.5 at most `8.9e-6`. Conversational FP32 merge uses elementwise
