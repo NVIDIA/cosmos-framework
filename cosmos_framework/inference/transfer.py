@@ -762,6 +762,33 @@ def _load_direct_transfer_inputs(
     return DirectTransferInputs(input_frames, per_hint_frames, reference_media.fps, geometry)
 
 
+def _warn_unused_length_and_fps(
+    sample_args: OmniSampleArgs, total_frames: int, input_fps: float, temporal_compression_factor: int
+) -> None:
+    """Warn when a requested num_frames or fps differs from what this sample actually uses.
+
+    The length comes from the decoded control (capped by max_frames) and the frame rate from the
+    source video; sample fps is only the fallback for image sources, which report 0 fps.
+    """
+    # Stand-ins and samples rebuilt from JSON carry no request record; stay silent for them.
+    requested = getattr(sample_args, "requested_fields", None)
+    if not isinstance(requested, frozenset):
+        return
+    if "fps" in requested and input_fps > 0 and abs(sample_args.fps - input_fps) >= 0.5:
+        log.warning(
+            f"[transfer] 'fps'={sample_args.fps} has no effect with a video input; the output keeps the input "
+            f"video's {input_fps:g} fps. 'fps' is used only for image inputs."
+        )
+    # num_frames was rounded up to the latent grid when the sample was built; compare on that grid.
+    length = math.ceil((total_frames - 1) / temporal_compression_factor) * temporal_compression_factor + 1
+    if "num_frames" in requested and total_frames > 1 and sample_args.num_frames != length:
+        log.warning(
+            f"[transfer] 'num_frames'={sample_args.num_frames} does not set the Transfer output length; the "
+            f"length comes from the control video ({total_frames} frames after the 'max_frames' cap). "
+            "Set 'max_frames' to change it."
+        )
+
+
 def generate_transfer_sample(
     sample_args: OmniSampleArgs,
     model: OmniMoTModel,
@@ -847,6 +874,7 @@ def generate_transfer_sample(
 
     total_frames = first_frames.shape[1]
     temporal_compression_factor = model.config.tokenizer.temporal_compression_factor
+    _warn_unused_length_and_fps(sample_args, total_frames, input_fps, temporal_compression_factor)
     chunk_frames = 1 if total_frames == 1 else num_video_frames_per_chunk
     chunk_frames = math.ceil((chunk_frames - 1) / temporal_compression_factor) * temporal_compression_factor + 1
     num_chunks, stride = _get_num_chunks(total_frames, chunk_frames, num_conditional_frames)
