@@ -254,3 +254,11 @@ using the exact `3a9552b` WTS training wheel/image. It exercised actual video
 decode, multimodal inference and the shared MCQ scorer on two examples. This
 validates the execution path, not adapted-model task quality; full evaluation
 remains gated on completed training and artifact checks.
+
+Source comparison after `076cfbb` finds no changes to dense Qwen3-VL's production
+SFT/adapter/packer/checkpoint path through `08e5ff5`: later production changes
+are GR00T-specific construction/metadata and the native MoE inference-device
+bridge. Qualification helpers gained explicit deterministic profiles and the MoE
+FP32 oracle. Local full-WTS results remain labeled `076cfbb`; Slurm results remain
+labeled `3a9552b`, whose portable publication and physical-autocast extensions
+predate the later shared code. Results are never relabeled as a newer wheel.

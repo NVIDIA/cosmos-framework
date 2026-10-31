@@ -306,10 +306,15 @@ focused installed-package and GPU gates pass; AutoML is not a substitute.
 
 For the 5,555-row WTS training split and 2,676-row evaluation split, the prepared
 full-epoch profile uses one GPU, five microbatches per update and 1,111 updates.
-Every training row is consumed exactly once. Set `SFT_DATA_ROOT` to a new output
-directory; conversion refuses to overwrite existing JSONL files.
+Every training row is consumed exactly once. The native Qwen3-VL family run uses
+`Qwen/Qwen3-VL-2B-Instruct@89644892e4d85e24eaac8bacfd4f463576704203`,
+with its actual last vision block (23), all final/deepstack mergers and language
+Q/V projections. This resolves to 65 adapter targets. Set `SFT_DATA_ROOT` to a
+new output directory; conversion refuses to overwrite existing JSONL files.
 
 ```bash
+export SFT_MODEL_PATH=/models/Qwen3-VL-2B-Instruct/89644892e4d85e24eaac8bacfd4f463576704203
+export SFT_DATA_ROOT=/data/wts-native-qwen3-vl
 "$SFT_PYTHON" -m cosmos_framework.posttrain.scripts.prepare_wts_sft \
   --annotations /data/wts_train/annotations.json --media-root /data/wts_train/videos \
   --out "$SFT_DATA_ROOT/train.jsonl"
@@ -317,10 +322,10 @@ directory; conversion refuses to overwrite existing JSONL files.
   --annotations /data/wts_eval/annotations.json --media-root /data/wts_eval/videos \
   --out "$SFT_DATA_ROOT/validation.jsonl"
 export SFT_ADAPTER_METHOD=lora SFT_ADAPTER_RSLORA=0
-export IMAGINAIRE_OUTPUT_ROOT=/runs/wts-adapters
+export IMAGINAIRE_OUTPUT_ROOT=/runs/wts-native-qwen3-vl/lora
 "$SFT_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=1 \
   -m cosmos_framework.posttrain.entrypoints.sft \
-  --config=cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py -- \
+  --config=cosmos_framework/posttrain/configs/sft_family_adapters.py -- \
   job.name=wts_full_epoch_all_components rl.run_ts=epoch1 \
   rl.max_steps=1111 rl.micro_batch_size=1 rl.grad_accum=5 \
   rl.save_every=111 rl.keep_model_last=2 rl.keep_optim_last=2 rl.resume=off \
@@ -328,6 +333,13 @@ export IMAGINAIRE_OUTPUT_ROOT=/runs/wts-adapters
   rl.processor_kwargs.videos_kwargs.size.shortest_edge=200704 \
   rl.processor_kwargs.videos_kwargs.size.longest_edge=327680
 ```
+
+For rsLoRA, use `SFT_ADAPTER_METHOD=lora` and `SFT_ADAPTER_RSLORA=1`.
+For DoRA or PiSSA, set the method to `dora` or `pissa` and rsLoRA to zero.
+Give each fresh run a distinct output directory. The shared recipe fixes rank 8,
+alpha 16, AdamW LR `2e-5`, component LR multipliers `1/0.5/0.1` and seed 42.
+Cosmos3-Nano-VLM uses its separate `sft_cosmos3_nano_adapters.py` recipe and
+checkpoint; its historical WTS scores do not qualify the Qwen checkpoint.
 
 The four-frame total-pixel bounds above correspond to 50,176–81,920 pixels per
 frame in the pinned processor version. Validation runs over the full evaluation
