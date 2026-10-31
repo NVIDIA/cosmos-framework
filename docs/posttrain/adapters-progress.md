@@ -1,5 +1,10 @@
 # Posttrain adapter implementation qualification
 
+This is the historical Cosmos3 qualification record. The subsequent implementation
+and real-checkpoint results for other families are tracked in
+[adapter-family-progress.md](adapter-family-progress.md). Results below retain the
+source revisions and execution profiles that produced them.
+
 Branch `feat/posttrain-vlm-adapters`; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)
 was closed, unmerged, at the user’s request on 2026-10-30. The implementation
 and qualification artifacts remain available on the branch; this report does
@@ -283,25 +288,16 @@ about 35.08 GB. Training and continuation use byte-attested revision `52a92d9`;
 export/reload/evaluation use `480be5a`. The wheel/container hashes are listed above
 and retained in every result. No new hyperparameter search was run.
 
-## Extension to other model families
+## Subsequent family extension
 
-The low-rank operations are reusable beyond Cosmos3; this adapter integration is
-currently qualified only for the native dense Qwen3-VL path and the model above.
-`model/adapters.py::component_of` classifies Qwen3-VL paths,
-`validate_adapter_profile` enforces its profile, and
-`checkpoint/adapters.py::make_adapter_identity` records `qwen3_vl`.
-Changing that guard alone does not establish another model family's support.
+The original qualification above covered dense native Qwen3-VL / Cosmos3 only.
+The subsequent branch adds architecture-owned component bindings in
+`model/adapter_families.py`, an HF lifecycle, and native physical-action SFT
+builders. It reuses the adapter mathematics, trainer and checkpoint/export
+transactions described here. Public Alpamayo R1 SFT uses its pinned native model
+source and does not require the separate AlpaGym runtime.
 
-The broader framework already contains GR00T and Alpamayo integration:
-
-| Family | Existing integration | Work needed for this adapter extension |
-|---|---|---|
-| Other dense HF models | Existing HF model builders, separate from this native SFT binding | Family-specific target/component mapping, gradient-path validation, loading/tying and artifact/export qualification |
-| GR00T | `model/gr00t/policy.py::Gr00tHeads` exposes the action head (projector and diffusion model); language and vision are frozen | Bind actual action-head targets and publication format; widening to language/vision also changes trainable ownership, wire prefixes and sharding; qualify robotics metrics |
-| Alpamayo | `entrypoints/alpagym_clrl.py::_build_trainer` constructs external `alpagym_runtime.posttrain.model.AlpamayoTrainModel` and uses `LLMTrainer` | Install adapters through that model/runtime bridge before `model.setup` and optimizer construction; qualify replay, rollout publication, processor identity and driving metrics |
-| Native MoE/custom fused operators | Separate model/operator implementations | Explicit target geometry and expert ownership/sharding support; the current adapter accepts plain two-dimensional `nn.Linear` targets |
-
-Use a shared adapter runtime with explicit family bindings. LoRA, rsLoRA, DoRA
-and PiSSA can share that architecture while retaining method-specific magnitude
-and initial-factor state. The new adapter methods have not been implemented or
-qualified on GR00T, Alpamayo, generic HF or MoE models by this contribution.
+Consult [the family requirement and qualification table](adapter-family-progress.md)
+for completed real-checkpoint tests, pending profiles and the GR00T metadata
+access blocker. The Cosmos3 losses and WTS scores above are not results for those
+other checkpoints. The closed PR remains closed.

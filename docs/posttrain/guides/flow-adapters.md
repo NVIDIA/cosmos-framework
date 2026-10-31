@@ -136,7 +136,7 @@ fit metric; rollout task success requires a separately qualified simulator run.
 
 ## Alpamayo-R1 trajectory adapters
 
-The Alpamayo recipe binds the public `NVlabs/Alpamayo-R1-10B` checkpoint at
+The Alpamayo recipe binds the public `nvidia/Alpamayo-R1-10B` checkpoint at
 `dd4a24cacefc9a6477a6dfc7354de2443401409d` and public `alpamayo-r1` source at
 `11a0e01c13a5622377c45ee37d653351453ec43b`. It uses the native R1 trajectory
 tokenizer, action-space conversion and flow objective, with a fresh differentiable

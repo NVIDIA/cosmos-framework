@@ -1,0 +1,2685 @@
+{
+  "format": "cosmos-adapter-family-qualification-v1",
+  "generated_utc": "2026-10-31T02:20:18.103376+00:00",
+  "scope": "Real pretrained correctness subsets using existing SFT; not full task benchmarks or full-epoch WTS. All local cases use A10080, FP32 adapter parameters, BF16 base except model-owned physical precision. Shared CPU/disk timings are not throughput benchmarks.",
+  "sources": {
+    "3a9552b-4c7d3d3e": {
+      "source_revision": "3a9552b5f533c3cf1440d973eeb9798ed83827f4",
+      "wheel_sha256": "fa6002a738b7298002f14706fa5df7d08cd4d78be0d351958a1bf10c80015f8d",
+      "container_sha256": "4c7d3d3e8dc480ed7a8a7f3a5079a0f21b68619dbeb3837de658ef7f9fdd1d9a",
+      "verified_package_files": 1841,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "5.8.1"
+      },
+      "environment_sha256": null
+    },
+    "076cfbb-aeae4ffd": {
+      "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+      "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+      "container_sha256": null,
+      "verified_package_files": 1876,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "5.8.1"
+      },
+      "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce"
+    },
+    "5eecf10-4ffeecf2": {
+      "source_revision": "5eecf10c13e86c6496a1b384dc8c2f3e7d79b427",
+      "wheel_sha256": "0a5ba1d6bfd74b63a397ae4d2592a91ffdbe1fd791aab2d6c48d51a06c59b5d0",
+      "container_sha256": null,
+      "verified_package_files": 1873,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "5.8.1"
+      },
+      "environment_sha256": "4ffeecf2a03b1463abffbb7e4a10175c8a7d43041cae5c74ea84aedd37877348"
+    },
+    "2556b4c-98affdc7": {
+      "source_revision": "2556b4c4be7e4bff2b2f54799d0ca2318d796875",
+      "wheel_sha256": "c4cf802d6f95f09f12300eeebfc79d084df8d87d262dae8305dae395f22fb008",
+      "container_sha256": null,
+      "verified_package_files": 1874,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "4.57.6"
+      },
+      "environment_sha256": "98affdc743afd3b6286d8139f73e0443b3979d985c1b90f747ed934c88061fa3"
+    },
+    "5eecf10-f884af74": {
+      "source_revision": "5eecf10c13e86c6496a1b384dc8c2f3e7d79b427",
+      "wheel_sha256": "0a5ba1d6bfd74b63a397ae4d2592a91ffdbe1fd791aab2d6c48d51a06c59b5d0",
+      "container_sha256": null,
+      "verified_package_files": 1873,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "4.57.6"
+      },
+      "environment_sha256": "f884af74de1f230f7a01990b64f2e132838c08c204f3132dd236146bd2220999"
+    },
+    "14c9e09-a1404f9d": {
+      "source_revision": "14c9e098f4e70b1ff07e8026158ca94a9d4ba47f",
+      "wheel_sha256": "af2496f4d89a977b9afb5f9b42b720a20a64479c4dc53bc8068e3e014ea37305",
+      "container_sha256": null,
+      "verified_package_files": 1874,
+      "versions": {
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "torchcodec": "0.10.0",
+        "transformers": "4.57.6"
+      },
+      "environment_sha256": "a1404f9d53ae446f8d5fbdaa0e82b401b8a0b6e144e716e954db7780d2399ad4"
+    }
+  },
+  "models": {
+    "qwen3": {
+      "repository": "Qwen/Qwen3-0.6B",
+      "revision": "c1899de289a04d12100db370d81485cdf75e47ca"
+    },
+    "qwen3_vl": {
+      "repository": "Qwen/Qwen3-VL-2B-Instruct",
+      "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
+    },
+    "qwen3_5": {
+      "repository": "Qwen/Qwen3.5-0.8B",
+      "revision": "2fc06364715b967f1860aea9cf38778875588b17"
+    },
+    "pi05": {
+      "repository": "RLinf/RLinf-Pi05-LIBERO-SFT",
+      "revision": "45ccfcc4e28634f1576ebf78cab0fbe2fd82432d"
+    },
+    "alpamayo": {
+      "repository": "nvidia/Alpamayo-R1-10B",
+      "revision": "dd4a24cacefc9a6477a6dfc7354de2443401409d"
+    },
+    "qwen3_vl_moe": {
+      "repository": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "revision": "9c4b90e1e4ba969fd3b5378b57d966d725f1b86c"
+    },
+    "gemma": {
+      "repository": "unsloth/gemma-2b-it",
+      "revision": "5ae754dee0b5cbf7f7fb39a7731aefa6b7987c2d",
+      "model_type": "gemma"
+    },
+    "gemma2": {
+      "repository": "unsloth/gemma-2-2b-it",
+      "revision": "457f2e15bf550c227ce6ad86e2ec108d3e42c106",
+      "model_type": "gemma2"
+    },
+    "llama": {
+      "repository": "HuggingFaceTB/SmolLM2-135M-Instruct",
+      "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+      "model_type": "llama"
+    },
+    "qwen2": {
+      "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+      "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+      "model_type": "qwen2"
+    },
+    "mistral": {
+      "repository": "mistralai/Mistral-7B-Instruct-v0.3",
+      "revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+      "model_type": "mistral"
+    }
+  },
+  "families": {
+    "qwen3": {
+      "slurm_job": "37701630",
+      "source_report_sha256": "088fc61065d018ba4cb1e7ddab112c8f2c7a8d6b50291c3b98070b45129db70e",
+      "cases": {
+        "dora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1232896,
+          "trainable_tensors_changed": 168,
+          "training_loss_mean": 1.492217091239272,
+          "training_loss_last": 1.0834530591964722,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2061740113676016,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.34600830078125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1626550272,
+          "training_and_checkpoint_seconds": 22.970864260103554
+        },
+        "dora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1232896,
+          "trainable_tensors_changed": 168,
+          "training_loss_mean": 1.492217091239272,
+          "training_loss_last": 1.0834530591964722,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2061740113676016,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.34600830078125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 2149217792,
+          "training_and_checkpoint_seconds": 20.715816371142864
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1232896,
+          "trainable_tensors_changed": 168,
+          "training_loss_mean": 1.6460564713364203,
+          "training_loss_last": 1.5832526683807373,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.3987930586070996,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010061264038085938,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570957824,
+          "training_and_checkpoint_seconds": 20.808090820908546
+        },
+        "dora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1232896,
+          "trainable_tensors_changed": 168,
+          "training_loss_mean": 1.6460564713364203,
+          "training_loss_last": 1.5832526683807373,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.3987930586070996,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010061264038085938,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1596244480,
+          "training_and_checkpoint_seconds": 20.62112081423402
+        },
+        "lora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.510657894664696,
+          "training_loss_last": 1.1373871564865112,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2338632998384693,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.165836334228516e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1625174016,
+          "training_and_checkpoint_seconds": 20.14295178093016
+        },
+        "lora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.510657894664696,
+          "training_loss_last": 1.1373871564865112,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2338632998384693,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.165836334228516e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1979872768,
+          "training_and_checkpoint_seconds": 19.992399917915463
+        },
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.6482559017922154,
+          "training_loss_last": 1.6079530715942383,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.4262688484730803,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.72747802734375e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570957824,
+          "training_and_checkpoint_seconds": 18.579125608783215
+        },
+        "lora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.6482559017922154,
+          "training_loss_last": 1.6079530715942383,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.4262688484730803,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.72747802734375e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570957824,
+          "training_and_checkpoint_seconds": 18.02708248188719
+        },
+        "pissa-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.214767529260392,
+          "training_loss_last": 0.6974866390228271,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 0.9235980561835735,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ba70e21d4e5f6ff02f7581f94016edd9463242ba1ec37726be0714a27cee9b41",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.771087646484375e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1629761536,
+          "training_and_checkpoint_seconds": 22.91307019861415
+        },
+        "pissa-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.214767529260392,
+          "training_loss_last": 0.6974866390228271,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 0.9235980561835735,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ba70e21d4e5f6ff02f7581f94016edd9463242ba1ec37726be0714a27cee9b41",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.771087646484375e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1984460288,
+          "training_and_checkpoint_seconds": 21.89783623116091
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.3844897645532404,
+          "training_loss_last": 1.011043667793274,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0541889905688981,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d2f8ba5bd483d76318ece791da78863dc57098e1db40e21ea5267d57ed4d2aeb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00013303756713867188,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570564608,
+          "training_and_checkpoint_seconds": 20.022979297675192
+        },
+        "pissa-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.3844897645532404,
+          "training_loss_last": 1.011043667793274,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0541889905688981,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d2f8ba5bd483d76318ece791da78863dc57098e1db40e21ea5267d57ed4d2aeb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00013303756713867188,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570564608,
+          "training_and_checkpoint_seconds": 19.77607521507889
+        },
+        "rslora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.2403237668993223,
+          "training_loss_last": 0.6780698299407959,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 0.8907334061130866,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.344650268554688e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1625174016,
+          "training_and_checkpoint_seconds": 22.139313883148134
+        },
+        "rslora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.2403237668993223,
+          "training_loss_last": 0.6780698299407959,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 0.8907334061130866,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "3713f4c18955d0297dee4cd6beae6cc50bc67a3a41cd3620357ab0e7a805abbb",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.344650268554688e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1979872768,
+          "training_and_checkpoint_seconds": 20.195832925848663
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.4351759660033545,
+          "training_loss_last": 1.069098711013794,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0740347655582139,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010442733764648438,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570957824,
+          "training_and_checkpoint_seconds": 17.516315339133143
+        },
+        "rslora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 56,
+          "trainable_parameters": 1146880,
+          "trainable_tensors_changed": 112,
+          "training_loss_mean": 1.4351759660033545,
+          "training_loss_last": 1.069098711013794,
+          "validation_before": {
+            "val/loss_avg": 1.6914367799681924,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0740347655582139,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 991
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "96f1a3075959804c662c07b9a5d62c53fc830a755d3bf46512b853814dcb6bcd",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00010442733764648438,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 1570957824,
+          "training_and_checkpoint_seconds": 18.130799679085612
+        }
+      }
+    },
+    "qwen3_vl": {
+      "slurm_job": "37701632",
+      "source_report_sha256": "1fa1363ea73ec61125fa77b2c77ddb0faefbf8ef97a2ec93f535a66bd29a8693",
+      "cases": {
+        "dora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2210816,
+          "trainable_tensors_changed": 195,
+          "training_loss_mean": 0.36160417339371115,
+          "training_loss_last": 6.973687959543895e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07957661695036222,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001068115234375,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948367872,
+          "training_and_checkpoint_seconds": 55.82036919798702
+        },
+        "dora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2210816,
+          "trainable_tensors_changed": 195,
+          "training_loss_mean": 0.36160417339371115,
+          "training_loss_last": 6.973687959543895e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07957661695036222,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001068115234375,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947325440,
+          "training_and_checkpoint_seconds": 51.28234571800567
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2210816,
+          "trainable_tensors_changed": 195,
+          "training_loss_mean": 0.31910149139002897,
+          "training_loss_last": 0.0013970598811283708,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.08844863776175771,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948978688,
+          "training_and_checkpoint_seconds": 50.06915596500039
+        },
+        "dora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2210816,
+          "trainable_tensors_changed": 195,
+          "training_loss_mean": 0.31910149139002897,
+          "training_loss_last": 0.0013970598811283708,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.08844863776175771,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947930112,
+          "training_and_checkpoint_seconds": 48.2260131300427
+        },
+        "lora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3568222704932071,
+          "training_loss_last": 7.331317647185642e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07992120283597615,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001049041748046875,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948367872,
+          "training_and_checkpoint_seconds": 51.61972397699719
+        },
+        "lora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3568222704932071,
+          "training_loss_last": 7.331317647185642e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07992120283597615,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001049041748046875,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947492352,
+          "training_and_checkpoint_seconds": 53.93969649297651
+        },
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3155738486093469,
+          "training_loss_last": 0.0017024681437760592,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.09361075339256786,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000102996826171875,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948454400,
+          "training_and_checkpoint_seconds": 45.331335825962014
+        },
+        "lora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3155738486093469,
+          "training_loss_last": 0.0017024681437760592,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.09361075339256786,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000102996826171875,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947405824,
+          "training_and_checkpoint_seconds": 45.180238496977836
+        },
+        "pissa-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.30724952967583313,
+          "training_loss_last": 2.8014028430334292e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0247006711011295,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "cc5752880bbfa9e5db361931e33bbcbcf3e831cef2f0d22e8f2a5972be5d8c5d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.0108642578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948431872,
+          "training_and_checkpoint_seconds": 52.63054112001555
+        },
+        "pissa-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.30724952967583313,
+          "training_loss_last": 2.8014028430334292e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0247006711011295,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "cc5752880bbfa9e5db361931e33bbcbcf3e831cef2f0d22e8f2a5972be5d8c5d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.0108642578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947319296,
+          "training_and_checkpoint_seconds": 47.804324834025465
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.2940760971854388,
+          "training_loss_last": 5.274961495160824e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.037789105000342715,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d0cb993f0a3b71b6b203aa0d441ed083f225da789c26c282e18ed408d1ad77ce",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000110626220703125,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948978688,
+          "training_and_checkpoint_seconds": 48.379358378995676
+        },
+        "pissa-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.2940760971854388,
+          "training_loss_last": 5.274961495160824e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.037789105000342715,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "d0cb993f0a3b71b6b203aa0d441ed083f225da789c26c282e18ed408d1ad77ce",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000110626220703125,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947930112,
+          "training_and_checkpoint_seconds": 49.651800633000676
+        },
+        "rslora-w1-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "full",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3260712960845922,
+          "training_loss_last": 2.771600520645734e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.050642649110614,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.608268737792969e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948367872,
+          "training_and_checkpoint_seconds": 52.39268801599974
+        },
+        "rslora-w1-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 1,
+          "activation_checkpointing": "none",
+          "updates": 9,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3260712960845922,
+          "training_loss_last": 2.771600520645734e-06,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.050642649110614,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "fd1d26302284eb3100645be63065887562b5c67c2c8e61a26311a115ae4ab7c9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 9.608268737792969e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947492352,
+          "training_and_checkpoint_seconds": 49.900350256997626
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3140931859379634,
+          "training_loss_last": 5.7225581258535385e-05,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.058093931970233825,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.726119995117188e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4948454400,
+          "training_and_checkpoint_seconds": 47.05523134500254
+        },
+        "rslora-w2-none": {
+          "status": "passed",
+          "source": "3a9552b-4c7d3d3e",
+          "world_size": 2,
+          "activation_checkpointing": "none",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 65,
+          "trainable_parameters": 2097152,
+          "trainable_tensors_changed": 130,
+          "training_loss_mean": 0.3140931859379634,
+          "training_loss_last": 5.7225581258535385e-05,
+          "validation_before": {
+            "val/loss_avg": 0.18430557427927852,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.058093931970233825,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c3122df8cb09afd3e6be825e8213e36fa9e8b2b5c36758a1dbe0c9b1f53e5fe9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.726119995117188e-05,
+          "merge_precision": "float32",
+          "portable_source": "3a9552b-4c7d3d3e",
+          "merged_source": "3a9552b-4c7d3d3e",
+          "peak_cuda_allocated_bytes_rank0": 4947405824,
+          "training_and_checkpoint_seconds": 44.76770830497844
+        }
+      }
+    },
+    "gemma": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 36,
+          "trainable_parameters": 921600,
+          "trainable_tensors_changed": 72,
+          "training_loss_mean": 2.4326956244165707,
+          "training_loss_last": 3.006056785583496,
+          "validation_before": {
+            "val/loss_avg": 2.263020815260066,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 2.135811957243447,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "8ef55661accfa83167dc392c3d61def2715e596a523c2ebf04a3a9fba1548fe4",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000209808349609375,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6128031232,
+          "training_and_checkpoint_seconds": 63.01043915003538,
+          "report_sha256": {
+            "training_report_sha256": "3334d3e851f620f2cb9fa352f8923bf88577012b4cf3edd8fa121843f2d8de97",
+            "portable_report_sha256": "381652627f46b49b651fd68cfc8079234341118dde71978600f9cb3738572eb0",
+            "merged_report_sha256": "a2a82bf951073491f4963577463ddbe892af91ffb79b3f95cc707aa2ff4f0791"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 36,
+          "trainable_parameters": 921600,
+          "trainable_tensors_changed": 72,
+          "training_loss_mean": 2.3237159496177235,
+          "training_loss_last": 2.558917999267578,
+          "validation_before": {
+            "val/loss_avg": 2.263020815260066,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9201460383515243,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "8ef55661accfa83167dc392c3d61def2715e596a523c2ebf04a3a9fba1548fe4",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00022125244140625,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6128031232,
+          "training_and_checkpoint_seconds": 64.43815187201835,
+          "report_sha256": {
+            "training_report_sha256": "0f9506a6fa285b50ea7fc18ce6f5c247ee29c045e49f12cb63197ee2dc62712e",
+            "portable_report_sha256": "6735a5adacd11f52cfdd820fb143e6bde13542c03af2bc9a0418015c3df329bb",
+            "merged_report_sha256": "3264bb969cd352168fd404e7121ecb85e366f012b550f1f736722d263eb6e690"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 36,
+          "trainable_parameters": 963072,
+          "trainable_tensors_changed": 108,
+          "training_loss_mean": 2.4251562217151177,
+          "training_loss_last": 2.969637632369995,
+          "validation_before": {
+            "val/loss_avg": 2.263020815260066,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 2.12037356533613,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "8ef55661accfa83167dc392c3d61def2715e596a523c2ebf04a3a9fba1548fe4",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0002288818359375,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6128031232,
+          "training_and_checkpoint_seconds": 65.28078198689036,
+          "report_sha256": {
+            "training_report_sha256": "c80478170bd9bc99a849c1e2d2551e296f132ba58d87fa6087d7e22aa18847a7",
+            "portable_report_sha256": "63f07843db79c883a4b78b272a3c113ceaedb9b8237a5d60f80ccf938841cf29",
+            "merged_report_sha256": "c5f19c5cbc3d1aab21aebf95af4bde7aadb06d4bc17f628f5e04dc2cae30e6fc"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 36,
+          "trainable_parameters": 921600,
+          "trainable_tensors_changed": 72,
+          "training_loss_mean": 2.1474267506141906,
+          "training_loss_last": 1.9591448307037354,
+          "validation_before": {
+            "val/loss_avg": 2.263020815260066,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.70137551491877,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "6cd906203b68015f36da1b62cc5eb5cded13595f0a4bbb8958300cc469828d17",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001983642578125,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6128031232,
+          "training_and_checkpoint_seconds": 64.85478455782868,
+          "report_sha256": {
+            "training_report_sha256": "ec95ee9f8c80d2ee38c89a8a898915cd89316186e022cf4b57da82d873099c3d",
+            "portable_report_sha256": "99c49dc34e53731e6a86dc9064213eec67bf87b3da5c968b7c096c257f01a506",
+            "merged_report_sha256": "364a56224dcdc40bd82e6b57d3ce296e38128549c8872a5a81d8d58bb6ca77cd"
+          }
+        }
+      },
+      "manifest_sha256": "20c451ef5be4f33d3573f799e2c639cf1c8e4f726573b792d899a1f293aadbf7"
+    },
+    "gemma2": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 52,
+          "trainable_parameters": 1597440,
+          "trainable_tensors_changed": 104,
+          "training_loss_mean": 1.3233588522177007,
+          "training_loss_last": 1.4988332986831665,
+          "validation_before": {
+            "val/loss_avg": 1.308102036252819,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.1804368096720022,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "a802962109ec346255f617d1403f0876a623f39cc8698069e2f50b9c4d286a44",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.245208740234375e-05,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6479636480,
+          "training_and_checkpoint_seconds": 67.1347897821106,
+          "report_sha256": {
+            "training_report_sha256": "b716797edb61ebcd058cde2042dc99928cfcfa2518ea281f52e0d7d94ebbb6bd",
+            "portable_report_sha256": "77c6483eedba2d51602d03b188906198b5430755c8c359c341632867fc7690b8",
+            "merged_report_sha256": "425922f124d252f6313a46a4834d1356d0b16b97ec259836525b018079e376bd"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 52,
+          "trainable_parameters": 1597440,
+          "trainable_tensors_changed": 104,
+          "training_loss_mean": 1.2230619974990389,
+          "training_loss_last": 1.178849458694458,
+          "validation_before": {
+            "val/loss_avg": 1.308102036252819,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0205087797911616,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "a802962109ec346255f617d1403f0876a623f39cc8698069e2f50b9c4d286a44",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.198883056640625e-05,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6479636480,
+          "training_and_checkpoint_seconds": 65.54232219886035,
+          "report_sha256": {
+            "training_report_sha256": "187519ee2b7e7e4300433ec12b9933952db7207e31bd071dd39270bb9183e565",
+            "portable_report_sha256": "9868fa14159574c33df11396f4fe9f76b832b5c2901c1ce4e6e68c8695116a5a",
+            "merged_report_sha256": "c415bd908ba78dfe143c8dc0342cff01d1dbc650d9837b66bf313d8229d67aa7"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 52,
+          "trainable_parameters": 1677312,
+          "trainable_tensors_changed": 156,
+          "training_loss_mean": 1.318443442585626,
+          "training_loss_last": 1.4819424152374268,
+          "validation_before": {
+            "val/loss_avg": 1.308102036252819,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.1705129488853898,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "a802962109ec346255f617d1403f0876a623f39cc8698069e2f50b9c4d286a44",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.43865966796875e-05,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6479636480,
+          "training_and_checkpoint_seconds": 64.33250202098861,
+          "report_sha256": {
+            "training_report_sha256": "1e2a7c600af044fd97ba249382494b9abfb32934b206041de10630459da1ee2d",
+            "portable_report_sha256": "ab6bdcf0773de516d5978263cb2b155c6056ad7d36c3c0cc6e84cf0d64976085",
+            "merged_report_sha256": "e99f6432cc6ba1944e8d22ea8ff7bf8ea0a846ed0df8d2e224cfbe5a2b1cff2e"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "076cfbb-aeae4ffd",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 52,
+          "trainable_parameters": 1597440,
+          "trainable_tensors_changed": 104,
+          "training_loss_mean": 1.2103953000579053,
+          "training_loss_last": 1.1608577966690063,
+          "validation_before": {
+            "val/loss_avg": 1.308102036252819,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "validation_after": {
+            "val/loss_avg": 1.0414504654558525,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 963
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "39a5c8e450b78c744d149494cea0619d11371a0bf9aa3e4f2dc042dabc52ebbc",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.7220458984375e-05,
+          "merge_precision": "float32",
+          "portable_source": "076cfbb-aeae4ffd",
+          "merged_source": "076cfbb-aeae4ffd",
+          "peak_cuda_allocated_bytes_rank0": 6479112192,
+          "training_and_checkpoint_seconds": 59.93183142412454,
+          "report_sha256": {
+            "training_report_sha256": "df821cc02d91be9add2d4161c1efbdb8908b1a3d95a9aea9eede59ed70f8a47a",
+            "portable_report_sha256": "387cf1c3c1931b1de742a56326c94b39a1bb5d3082c31973dac31575b35e511c",
+            "merged_report_sha256": "51efe7dad945eb944922458216bd594d3e9506a96308f4ce68225c69053b47cb"
+          }
+        }
+      },
+      "manifest_sha256": "5450a71f18a52ae6e5276f88ac9400a2a9cec416ebdd2e91db8f1ee26c0dbead"
+    },
+    "llama": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.296745115512289,
+          "training_loss_last": 1.352957010269165,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.3072926355678527,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.749961853027344e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 10.41672607511282,
+          "report_sha256": {
+            "training_report_sha256": "a4758801e5137c066ec8bd626220507371b8a48ec2a07396e6f4b12659abf5ad",
+            "portable_report_sha256": "756f920333379eb0df77f13c3146c9c81439aa93a9f987a30f25d1e98237bb42",
+            "merged_report_sha256": "52c12ddf4d82edc3662f62296dfe7c625c0d69eae39eb67812059db82f5460a2"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2821305921130486,
+          "training_loss_last": 1.2926033735275269,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.2689988624121322,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.0108642578125e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 10.662801473168656,
+          "report_sha256": {
+            "training_report_sha256": "62dc8f316ac521154ea70c79358365a0e847a8039bc4d88dd62205b8be542019",
+            "portable_report_sha256": "1f43e311d6ba928c6c46519ec48d0b40a998bfdf962d568f43300ab7aae79a69",
+            "merged_report_sha256": "613c6e4af2116369e5900d93fbb9fee9291075eed9c11cb9c483b8a431ce3f53"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 483840,
+          "trainable_tensors_changed": 180,
+          "training_loss_mean": 1.2994307319783813,
+          "training_loss_last": 1.35824453830719,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.305466750484021,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "ebe949a4015e2ab659627b5d518030a6eff35d44bc5e3ac7e32a7b88f2586f93",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.05718994140625e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 393769472,
+          "training_and_checkpoint_seconds": 11.534665413899347,
+          "report_sha256": {
+            "training_report_sha256": "284b078a268395f7715aab8980fcbdbe54902439de4661a767a3e3ce42def9ac",
+            "portable_report_sha256": "702fd4e8a2bab5a7b3de1bbfcaf793b53743da468c27642d15de017593d4e977",
+            "merged_report_sha256": "66d62849a79fcf1b6e2d13ced46d2fa20d4a59c20841b2052358fa2def0a7775"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 60,
+          "trainable_parameters": 460800,
+          "trainable_tensors_changed": 120,
+          "training_loss_mean": 1.2408246427491794,
+          "training_loss_last": 1.1498888731002808,
+          "validation_before": {
+            "val/loss_avg": 1.3224185344869974,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "validation_after": {
+            "val/loss_avg": 1.195845760649345,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 976
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "7c10a340bce6bb894f8c549d849a949ac96e17683ab8382305a4e9ec5807cc48",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 393835008,
+          "training_and_checkpoint_seconds": 11.500311359995976,
+          "report_sha256": {
+            "training_report_sha256": "c812089de27bb506515bfb2589e249317ffa83ed89c95c898df49fca3f5d0185",
+            "portable_report_sha256": "5c7cc26793d406e93b728d4ff2c9596dfeb818ade003273ac8e13b7b7c8205e0",
+            "merged_report_sha256": "6e92846dee8091605da512129194026e1a004aade978c3c5a5fef5d186e572c5"
+          }
+        }
+      },
+      "manifest_sha256": "4f951d7e2d55380dfe374a45ff5d4c0dc940be663158d9501e032e1b1c4a41d2"
+    },
+    "qwen2": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.7040343648821664,
+          "training_loss_last": 0.6547092795372009,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7703150199091099,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001232624053955078,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 18.534063196973875,
+          "report_sha256": {
+            "training_report_sha256": "6787a7cd526d786a2be75e1dfc4570491a8de53d09a97e66e83a5b1dc7bca2b1",
+            "portable_report_sha256": "0e164cb066263a880b6b4bc3c65f9e151ac766c2019e0d45cf7a02a109f0cf41",
+            "merged_report_sha256": "b72f6dc41ca06ac5a29f33e7df64f59f289c4aa65cf58d39f44b4fafbe8e4247"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6435321651455641,
+          "training_loss_last": 0.4979185461997986,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6606581244652662,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012058019638061523,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 18.45150323305279,
+          "report_sha256": {
+            "training_report_sha256": "991350e69fe9ee4edf99e67085ca2fa15d877d27b92df0bc99fc2f4a61c5ae6f",
+            "portable_report_sha256": "cc3d7f0a464f8e06a3e2546fc77122d9258f9345af637080756d72f9d51d6afe",
+            "merged_report_sha256": "9b8aa16a8ab1974f1d2397e3fbdc609a5f4f0a5da86be4b029e046110b8688b6"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 565248,
+          "trainable_tensors_changed": 144,
+          "training_loss_mean": 0.7005835023112312,
+          "training_loss_last": 0.6419264674186707,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.7598667370701234,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "1d45292fa91c6bb6f51c3ffb65a72fae8837249eee617131b800361ee322aa08",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011730194091796875,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 19.781964492052794,
+          "report_sha256": {
+            "training_report_sha256": "ade758a24180d3852bc78c35653a060bf926a1f7bc7e59079a501e9e6c29f15f",
+            "portable_report_sha256": "415e59159fdc5647a970b34b14af33a57bf6e3fac66b668788d38966352b9ac7",
+            "merged_report_sha256": "28c1b48f42b81406cba5a29b155491dd336dca2fe0cafe24db3ae7054d7cdc94"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 48,
+          "trainable_parameters": 540672,
+          "trainable_tensors_changed": 96,
+          "training_loss_mean": 0.6065408889999369,
+          "training_loss_last": 0.40147948265075684,
+          "validation_before": {
+            "val/loss_avg": 0.861228116299487,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6393428116694978,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 959
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e851dc98e73fcb651fec9ebc4de2405fb87a63d30c1fc1d169c3819734e7c304",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000164031982421875,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 1335208960,
+          "training_and_checkpoint_seconds": 20.029615950072184,
+          "report_sha256": {
+            "training_report_sha256": "0a19791b519dc0af3c550d30204266d49be2b0065d025b3e83ca185a4b132f41",
+            "portable_report_sha256": "be9a45d7c7ff8e38c217e22180fc8cd61d84d096f496443a7b6ebb55e8b25f7d",
+            "merged_report_sha256": "0c29084738790e28ea3d4e24ce15b84b1589016061fb83581258a328d6c2d257"
+          }
+        }
+      },
+      "manifest_sha256": "11c8d5a3cef900ac9134850fba7f66373ba0dbae1d5378c4846a6433d5c7f222"
+    },
+    "mistral": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.2527869641780853,
+          "training_loss_last": 0.9662220478057861,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.995512838458335,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 5.91278076171875e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 154.36059565399773,
+          "report_sha256": {
+            "training_report_sha256": "51051565d6ebc5ab91663e2145d76132c3770a25ef032fe04121b1dc7c570d57",
+            "portable_report_sha256": "ba18cee0fff5eda5401c0a1c1bb3da2ceee966050e309d740b2db56b88d37aaa",
+            "merged_report_sha256": "dc9f2fffa82b33e49814ad59bfd2141ffe0e809bf497b1481e10a07c174d196c"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.0470381916061906,
+          "training_loss_last": 0.5351781249046326,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6876312840555447,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.05718994140625e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 140.06392147601582,
+          "report_sha256": {
+            "training_report_sha256": "580c98eb40dd236ed71a1e1f4d425685ddb0b6e4023ca82f47a17153c7143e9e",
+            "portable_report_sha256": "76b0a46dc1169bd910e8ed50313a9b65922da2d3141e561373aaa10527be57b0",
+            "merged_report_sha256": "8ca842e534b048e47993b09cee78422a88366fd881fc83ce721ee8d093cf5c07"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3571712,
+          "trainable_tensors_changed": 192,
+          "training_loss_mean": 1.2430708260575603,
+          "training_loss_last": 0.9656030535697937,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.9592975805344747,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "00c16ad286dadd804f2e6b919dde7758361015a19247b244b3deb14f707b6a63",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.82012939453125e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 141.01267533702776,
+          "report_sha256": {
+            "training_report_sha256": "86803d5ec45598a7c89c873ea0623d6d1beb45c1ce7ff23191507573eb4aa871",
+            "portable_report_sha256": "b7aafa416eab9a54f002db9d3e9d3178536a8d700332042f9737c2777a943844",
+            "merged_report_sha256": "8f36d8dcb363657e5001062ad861b8d75bcdb9e2fdf4dd9bc29665bbf4dae4fd"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language"
+          ],
+          "target_count": 64,
+          "trainable_parameters": 3407872,
+          "trainable_tensors_changed": 128,
+          "training_loss_mean": 1.0136494093443738,
+          "training_loss_last": 0.5217652916908264,
+          "validation_before": {
+            "val/loss_avg": 1.3928701742846223,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "validation_after": {
+            "val/loss_avg": 0.6669963630724342,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 982
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "76544575bbabaf08c8cbfe25a126944d8c4afe3398e2d095a6bc2b7835064b83",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.151199340820312e-05,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 14831592448,
+          "training_and_checkpoint_seconds": 151.32245967793278,
+          "report_sha256": {
+            "training_report_sha256": "ea38fb9a999a36c1890e17025db77a32474254c5453ae7a4f45949d184701dbd",
+            "portable_report_sha256": "2f4ea5abb6d59ab3b4f7b3b5c3bbba76564defb60424bca4aca460365c0c799e",
+            "merged_report_sha256": "152aa19d134eb0fe7b2bea8959d67e94bbb836423f2b524fb7fe097e9e7e0995"
+          }
+        }
+      },
+      "manifest_sha256": "a3966e056ffe4ab0c73d39786e6bb619e5f9b8715baf93a03e9c87bd0e04738f"
+    },
+    "qwen3_5": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.126485951244831,
+          "training_loss_last": 0.369030237197876,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.2034751195460558,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00012111663818359375,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 43.857730051036924,
+          "report_sha256": {
+            "training_report_sha256": "248148eedd4f1d0b5159e9cea2dccd690e8fd8e6b50d1c1d0c4f131e018a73d5",
+            "portable_report_sha256": "9ca65927f3760b3adaa172a2bc50a0c1acfd3180cb3ee5046c4776b8ecd44d7b",
+            "merged_report_sha256": "ae62bcc475e7989039f4c836f9af07a65bb02e273c454a8567e18fb219b05f8e"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 0.8630124984516038,
+          "training_loss_last": 0.31597113609313965,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.07963394466787577,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.0001220703125,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 43.03085493785329,
+          "report_sha256": {
+            "training_report_sha256": "0265a27b3df2a66b4ad820161179cd9f97d6b386f97b6c667599eb3ed1516d17",
+            "portable_report_sha256": "4c85d032ae88fbb18612fdf87439fa2d35b9c5222bb32a6cb13e1fda7b5506c1",
+            "merged_report_sha256": "264864804eb2c34d6176424108905956bc10f37d139bf402f5ea0d29197f5f8a"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1992960,
+          "trainable_tensors_changed": 153,
+          "training_loss_mean": 1.1067990875906415,
+          "training_loss_last": 0.2936403751373291,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.16954033821821213,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "78e23e32ae7b3ff8c1c9887fd01943bbbbbaefa5a48d3eab13d354ecce05c16a",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.000148773193359375,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 44.94385654712096,
+          "report_sha256": {
+            "training_report_sha256": "49616900334e6ef1fc2ee52a42bdacce1352932c9af1bb610f41e5b42e135640",
+            "portable_report_sha256": "61a994c4d31ae9ff9429de8a6b3c27400ab6ec456d0ec68d6155c712cd8b4efa",
+            "merged_report_sha256": "bca1839c2530cf67a76d2ce2dcfa5f7ef0999ee9501342e1ff892378b0a33939"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "5eecf10-4ffeecf2",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 51,
+          "trainable_parameters": 1875968,
+          "trainable_tensors_changed": 102,
+          "training_loss_mean": 1.0424077577061124,
+          "training_loss_last": 1.2975962162017822,
+          "validation_before": {
+            "val/loss_avg": 2.5220578461885452,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "validation_after": {
+            "val/loss_avg": 0.43625687062740326,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 64
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "e673e8547d498867ffdccf062ba30b859a9a7b7eebc1ab87badc3742a808a7c2",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 0.00011539459228515625,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-4ffeecf2",
+          "merged_source": "5eecf10-4ffeecf2",
+          "peak_cuda_allocated_bytes_rank0": 2302635008,
+          "training_and_checkpoint_seconds": 48.96266400604509,
+          "report_sha256": {
+            "training_report_sha256": "74cb3b923aed41c10c7a083e5a4f06663d92dfcb0eb6917e8597e00813beb9fc",
+            "portable_report_sha256": "a3e05ba2d9bb543c6db452dab31067c74d4db3d1df47cac3dab09846cb8e629b",
+            "merged_report_sha256": "b2eac3aa9345df091bc47b94364fbcdccabb3d84b965fe57d12af61bfe59f1bc"
+          }
+        }
+      },
+      "manifest_sha256": "f5346d0c63c38638f53591bcd10a23a2deb2e037274d922d121394e215830289"
+    },
+    "qwen3_vl_moe": {
+      "matrix_passed": false,
+      "cases": {
+        "lora-w2-full": {
+          "status": "failed_portable_reload"
+        },
+        "rslora-w2-full": {
+          "status": "not_completed"
+        },
+        "dora-w2-full": {
+          "status": "not_completed"
+        },
+        "pissa-w2-full": {
+          "status": "not_completed"
+        }
+      },
+      "manifest_sha256": "5dbe03649422f0d0d11fed66cc72ee14a617c046c1328f9a927a41abc1a7e3b9"
+    },
+    "pi05": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-full": {
+          "status": "passed",
+          "source": "2556b4c-98affdc7",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.059557006825343706,
+          "training_loss_last": 0.2898422181606293,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003784213593462482,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.67572021484375e-06,
+          "merge_precision": "float32",
+          "portable_source": "2556b4c-98affdc7",
+          "merged_source": "2556b4c-98affdc7",
+          "peak_cuda_allocated_bytes_rank0": 8060629504,
+          "training_and_checkpoint_seconds": 162.09313230216503,
+          "report_sha256": {
+            "training_report_sha256": "80ffa3a955014faaa622c2c0473d901bacc51ea53208e94fd11c44c905cf640d",
+            "portable_report_sha256": "cc06c6d381a60fc7337eac2da17f26477f3a0eef2769942a26b9826f44f8c5d3",
+            "merged_report_sha256": "3e1b32e6ab993b324085fe3aa8bbba551fb017dae996a7afe6059d37540065af"
+          }
+        },
+        "rslora-w2-full": {
+          "status": "passed",
+          "source": "2556b4c-98affdc7",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.0594226030370919,
+          "training_loss_last": 0.2889951765537262,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0003887741434895857,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 3.814697265625e-06,
+          "merge_precision": "float32",
+          "portable_source": "2556b4c-98affdc7",
+          "merged_source": "2556b4c-98affdc7",
+          "peak_cuda_allocated_bytes_rank0": 8060629504,
+          "training_and_checkpoint_seconds": 174.2831744470168,
+          "report_sha256": {
+            "training_report_sha256": "9943272a5acb7c0f4d39823a7f8515ea6d4c139f44ed54b642d1f7d332bd2ef1",
+            "portable_report_sha256": "cc06c6d381a60fc7337eac2da17f26477f3a0eef2769942a26b9826f44f8c5d3",
+            "merged_report_sha256": "056ac03e6ec32c304e99bea4ea60b4af4067d668592f7cf54440ac3752621867"
+          }
+        },
+        "dora-w2-full": {
+          "status": "passed",
+          "source": "2556b4c-98affdc7",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1425696,
+          "trainable_tensors_changed": 231,
+          "training_loss_mean": 0.06079896994342562,
+          "training_loss_last": 0.2960153818130493,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.00038166937936859373,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c9a7d2463c58e5aa0ee4e079e991434aa77fde2d723c1b17af13d8dfe871af3d",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 7.152557373046875e-06,
+          "merge_precision": "float32",
+          "portable_source": "2556b4c-98affdc7",
+          "merged_source": "2556b4c-98affdc7",
+          "peak_cuda_allocated_bytes_rank0": 8060994048,
+          "training_and_checkpoint_seconds": 172.46199999703094,
+          "report_sha256": {
+            "training_report_sha256": "8f5b3c344e12c1139cc7256398eb4d87cfaa107585c84d2fb62c62db86dce001",
+            "portable_report_sha256": "cc06c6d381a60fc7337eac2da17f26477f3a0eef2769942a26b9826f44f8c5d3",
+            "merged_report_sha256": "c365d2b24d250b5e766fd502ff2d6f62b4b39e551d2df55d3caf2e00de14464e"
+          }
+        },
+        "pissa-w2-full": {
+          "status": "passed",
+          "source": "2556b4c-98affdc7",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 77,
+          "trainable_parameters": 1369600,
+          "trainable_tensors_changed": 154,
+          "training_loss_mean": 0.06019727294042241,
+          "training_loss_last": 0.29379504919052124,
+          "validation_before": {
+            "val/loss_avg": 0.00038352224457247015,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "validation_after": {
+            "val/loss_avg": 0.0004708993029039861,
+            "val/valid_action_count": 3850,
+            "val/valid_sequence_count": 55
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "93d19aaf28d4b22641f08401d96e949c7610d1be7d053390ddebfd49545ad498",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 8.821487426757812e-06,
+          "merge_precision": "float32",
+          "portable_source": "2556b4c-98affdc7",
+          "merged_source": "2556b4c-98affdc7",
+          "peak_cuda_allocated_bytes_rank0": 8075140608,
+          "training_and_checkpoint_seconds": 176.13637171289884,
+          "report_sha256": {
+            "training_report_sha256": "1c0819c99b6b7c10bddfe066383695befe68c1556075fe8c90ca081f34e2396c",
+            "portable_report_sha256": "cc06c6d381a60fc7337eac2da17f26477f3a0eef2769942a26b9826f44f8c5d3",
+            "merged_report_sha256": "931c4b6beb4d3bc18483806d217707dc78dfe61bc6405e3cd64bed6e1ad812b7"
+          }
+        }
+      },
+      "manifest_sha256": "91137295eeb931bafe7757c58811a7c1727163b1484982aa4f519e057abef967"
+    },
+    "alpamayo": {
+      "matrix_passed": true,
+      "cases": {
+        "lora-w2-vision": {
+          "status": "passed",
+          "source": "5eecf10-f884af74",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.25462517589330674,
+          "training_loss_last": 0.1644846498966217,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9521056382279647,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.1457672119140625e-06,
+          "merge_precision": "float32",
+          "portable_source": "5eecf10-f884af74",
+          "merged_source": "14c9e09-a1404f9d",
+          "peak_cuda_allocated_bytes_rank0": 54038058496,
+          "training_and_checkpoint_seconds": 269.1456324479077,
+          "report_sha256": {
+            "training_report_sha256": "594491eb4a0cdbe9a7b2db52ef493b1bec214990c2d138b0f22e357258a82092",
+            "portable_report_sha256": "edea5a3f05f865c92e06c5f6c2887d7e641a9dd8d9b96866a3e42b733dbb2fea",
+            "merged_report_sha256": "7ca1c37659088e908d5159fca71ff8831f0b0410daf1a26966922c066778f5de"
+          }
+        },
+        "rslora-w2-vision": {
+          "status": "passed",
+          "source": "14c9e09-a1404f9d",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.2537147030234337,
+          "training_loss_last": 0.16374318301677704,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.943455856097372,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.384185791015625e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-a1404f9d",
+          "merged_source": "14c9e09-a1404f9d",
+          "peak_cuda_allocated_bytes_rank0": 54038058496,
+          "training_and_checkpoint_seconds": 263.678789997939,
+          "report_sha256": {
+            "training_report_sha256": "4f9c53416d958728777bcf558ed0ba651e9694751cb25e63aa14d05a77f672b3",
+            "portable_report_sha256": "6a948e709f018523c5bbbc2261d8d27a072c025afb6c901bc9ed1c4d3872e31e",
+            "merged_report_sha256": "e5d2e714bdbbea754512352c7809be45583705d941a69f074328b62682cd546f"
+          }
+        },
+        "dora-w2-vision": {
+          "status": "passed",
+          "source": "14c9e09-a1404f9d",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5886822,
+          "trainable_tensors_changed": 471,
+          "training_loss_mean": 0.2543815329670906,
+          "training_loss_last": 0.16469383239746094,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.9518086972989535,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "c020c2111ad30d802a49af28d382e8c5a84059a93f8741daf438bc8721227ad7",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.5033950805664062e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-a1404f9d",
+          "merged_source": "14c9e09-a1404f9d",
+          "peak_cuda_allocated_bytes_rank0": 54041122304,
+          "training_and_checkpoint_seconds": 278.3139450971503,
+          "report_sha256": {
+            "training_report_sha256": "d8cda96736d426d83eccfe44f8b54b932f716cef08cd69c9a9fdd5b8d129419e",
+            "portable_report_sha256": "6a948e709f018523c5bbbc2261d8d27a072c025afb6c901bc9ed1c4d3872e31e",
+            "merged_report_sha256": "f370b304a893fe125164fd4e3ff0b16d10269a8a1c3bc7322358f1a90a76c118"
+          }
+        },
+        "pissa-w2-vision": {
+          "status": "passed",
+          "source": "14c9e09-a1404f9d",
+          "world_size": 2,
+          "activation_checkpointing": "vision",
+          "updates": 5,
+          "components": [
+            "action",
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 157,
+          "trainable_parameters": 5661156,
+          "trainable_tensors_changed": 314,
+          "training_loss_mean": 0.24559950828552246,
+          "training_loss_last": 0.16858947277069092,
+          "validation_before": {
+            "val/loss_avg": 1.95521500863527,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "validation_after": {
+            "val/loss_avg": 1.870818345170272,
+            "val/valid_action_count": 4864,
+            "val/valid_sequence_count": 38
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "330553780fcbfd8d72408607094ce46e88c2dd955f1df07ebacd8d6d541d0cb9",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 2.6226043701171875e-06,
+          "merge_precision": "float32",
+          "portable_source": "14c9e09-a1404f9d",
+          "merged_source": "14c9e09-a1404f9d",
+          "peak_cuda_allocated_bytes_rank0": 54067134464,
+          "training_and_checkpoint_seconds": 281.80039310106076,
+          "report_sha256": {
+            "training_report_sha256": "2a4e97ee9f8e65b2c04496b45d073791e2d72e1f285549cc8796ccf77256a368",
+            "portable_report_sha256": "6a948e709f018523c5bbbc2261d8d27a072c025afb6c901bc9ed1c4d3872e31e",
+            "merged_report_sha256": "d89224ea8024db6fcdb26b4028712b2d34b04a76a0586af20a6d8cde7deee1fc"
+          }
+        }
+      },
+      "manifest_sha256": "ee34d308f0ad8760e15cd4e4c44159e1b54cfc0488196b497e3071211e06a137"
+    }
+  },
+  "incomplete": {
+    "gr00t": "Implementation and 19 actual small-model tests pass. Public pretrained weights/runtime/LIBERO staged. Required nvidia/Cosmos-Reason2-2B metadata revision 9ce19a195e423419c349abfc86fd07178b230561 returned HTTP 401; no pretrained GPU result.",
+    "full_wts": "Native Qwen3-VL four full epochs and 2676/576 evaluation prepared with source 076cfbb; not yet results.",
+    "remaining_profiles": "Pending Slurm method jobs are separate one/two-GPU and activation-checkpointing profiles; only listed completed cases are qualified."
+  }
+}
