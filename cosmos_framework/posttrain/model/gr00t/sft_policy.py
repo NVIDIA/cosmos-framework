@@ -46,6 +46,13 @@ class Gr00tSFTBackbone(Qwen3Backbone):
         self.set_trainable_parameters(True, True, 0)
         self._reset_rotary_inv_freq()
         self._apply_vision_patch_embed_channels_last()
+        # Isaac's input hook retains the fast channels-last Conv3d activation
+        # path. FSDP2 requires contiguous parameter storage, however. cuDNN can
+        # convert the weight for that input layout inside the convolution; never
+        # change parameter storage during a sharded forward or replace its owner.
+        for module in self.model.visual.modules():
+            if isinstance(module, nn.Conv3d):
+                module.weight.data = module.weight.data.contiguous()
 
 
 class Gr00tSFTNet(Gr00tN1d7):

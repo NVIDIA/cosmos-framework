@@ -275,6 +275,9 @@ def test_checkpoint_constructor_matches_official_graph(tmp_path):
 
     base, config = source(tmp_path)
     net, _ = load_base(base, config)
+    # FSDP2 rejects Isaac's channels-last Conv3d parameter storage before its
+    # first forward. Check the actual loaded graph, not just adapter tensors.
+    assert all(parameter.is_contiguous() for parameter in net.parameters())
     official = Gr00tN1d7(
         Gr00tN1d7Config(**net.config.to_dict()), transformers_loading_kwargs={"local_files_only": True}
     ).float()
@@ -289,6 +292,28 @@ def test_checkpoint_constructor_matches_official_graph(tmp_path):
         torch.manual_seed(17)
         actual = net(data["inputs"]).loss
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA Conv3d layout regression")
+def test_contiguous_patch_parameters_preserve_native_cuda_output_and_gradient():
+    # Actual public backbone patch dimensions, with the native input-layout hook
+    # represented explicitly. Keep the fast channels-last activation path while
+    # FSDP owns ordinary contiguous master parameters.
+    torch.manual_seed(73)
+    native = torch.nn.Conv3d(3, 1024, (2, 16, 16), stride=(2, 16, 16), bias=False, device="cuda")
+    native.to(memory_format=torch.channels_last_3d).requires_grad_(False)
+    contiguous = copy.deepcopy(native).to(memory_format=torch.contiguous_format)
+    assert contiguous.weight.is_contiguous() and not native.weight.is_contiguous()
+    x = torch.randn(32, 3, 2, 16, 16, device="cuda", requires_grad=True)
+    y = x.detach().clone().requires_grad_(True)
+    with torch.backends.cudnn.flags(benchmark=False, deterministic=True, allow_tf32=False):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            expected = native(x.contiguous(memory_format=torch.channels_last_3d))
+            actual = contiguous(y.contiguous(memory_format=torch.channels_last_3d))
+        expected_grad = torch.autograd.grad(expected.float().square().sum(), x)[0]
+        actual_grad = torch.autograd.grad(actual.float().square().sum(), y)[0]
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    torch.testing.assert_close(actual_grad, expected_grad, atol=0, rtol=0)
 
 
 def test_reject_category_tensor_and_wrong_component(tmp_path):

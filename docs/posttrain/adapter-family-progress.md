@@ -154,6 +154,14 @@ Initial controlled output error and continuation error were zero. Peak allocated
 GPU memory was 15.94–16.67 GiB for this profile. Full AC and two-GPU cases remain
 independent gates; their results are not inferred from the one-GPU run.
 
+The first two-GPU attempts at `8a8ead7` failed before training: Isaac's
+channels-last Conv3d weight has non-contiguous storage, which FSDP2 rejects.
+The SFT constructor now keeps that parameter contiguous while retaining the
+native channels-last input hook. The actual small-model constructor regression
+failed before the change and now passes with exact native output agreement;
+the focused suite has 23 passes and one CUDA-only skip. A new CUDA output/input-
+gradient regression and rebuilt real-model distributed runs remain required.
+
 Native MoE implementation targets ordinary two-dimensional attention/vision/merger projections;
 fused three-dimensional expert tensors remain unsupported targets. Its existing
 native grouped-mm training forward stays BF16. The FP32 export oracle promotes a
