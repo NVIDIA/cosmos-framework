@@ -133,16 +133,21 @@ That is a concrete remaining resource dependency, not a passing GR00T GPU result
 
 Native MoE implementation targets ordinary two-dimensional attention/vision/merger projections;
 fused three-dimensional expert tensors remain unsupported targets. Its existing
-native grouped-mm forward stays BF16. The separate stock HF FP32 export oracle
-uses two GPUs, checks every serialized tensor and records native-versus-stock BF16
-drift. It does not introduce another expert kernel or training loop.
+native grouped-mm training forward stays BF16. The FP32 export oracle promotes a
+private portable copy, reuses `MoEExperts`' existing `native.naive` FP32 dispatch,
+and compares the native reference with stock HF portable/merged execution on two
+GPUs. It checks every serialized tensor without introducing another expert kernel
+or training loop. BF16 stock-HF and native merged probes exceeded the fixed drift
+bounds (maximum logit errors 4.75 and 6.609375); those profiles remain unsupported.
 The initial portable reload verifier omitted the deterministic kernel setting used
 by training. All 882 frozen checkpoint tensors matched the original BF16 base;
 three full-model reload probes with matching settings then matched training
 exactly. `tests/adapter_numerics.py::configure_qualification_numerics` now aligns
 and records the controlled profile across training/reload, with a real CUDA
-grouped-expert forward/backward regression. This diagnosis does not qualify the
-pending native-to-stock export comparison.
+grouped-expert forward/backward regression. A separate real-model FP32 diagnostic
+matched native and stock HF outputs (maximum `4.2915e-5`, mean `3.6162e-6`, all
+64 greedy decisions equal). Installed serialized-merge gates and all-method MoE
+runs are still required before adding this checkpoint to the qualified table.
 
 Other bound Qwen2-VL/2.5-VL small fixtures do not qualify their public checkpoints'
 legacy processor/namespaces; the production SFT packer still refuses them.

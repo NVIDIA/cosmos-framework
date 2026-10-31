@@ -18,7 +18,9 @@ from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_a
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 from cosmos_framework.posttrain.model.adapters import assert_trainability
 from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+from cosmos_framework.posttrain.tests.adapter_numerics import HFProbePolicy
 from cosmos_framework.posttrain.tests.helpers.sft_packer import local_processor, local_tokenizer
+from cosmos_framework.posttrain.tests.qualify_adapters import logits
 from cosmos_framework.posttrain.tests.reload_moe_adapters import hf_portable, verify_serialized
 from cosmos_framework.posttrain.tests.test_adapters_native import adapter_config, batches
 from cosmos_framework.posttrain.tests.test_model_qwen3_vl_gpu import _moe_config
@@ -66,18 +68,24 @@ def test_moe_native_manifest_stock_fp32_reload_and_every_export_tensor(tmp_path,
     initial = tmp_path / "initial"
     save_adapter_artifact(native.net, str(initial))
     identity = native.net._posttrain_adapter_identity
+    data = batches()
+    native.net.float().eval()
+    native_fp32 = logits(native, data)
     del native
     # This asserts exact native/HF placement, component and artifact agreement.
     model = hf_portable(str(base), str(initial), identity).float()
     before = {n: p.detach().clone() for n, p in model.named_parameters()}
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=0.01)
     assert_trainability(model, opt)
-    data = batches()
     for batch in data:
         tokens = torch.zeros_like(batch["input_ids"])
         tokens[batch["input_ids"] == model.config.image_token_id] = 1
         tokens[batch["input_ids"] == model.config.video_token_id] = 2
         batch["mm_token_type_ids"] = tokens
+    # MoEExperts already dispatches FP32 to native.naive. Its independent
+    # native model forward must agree with stock HF, not only HF with itself.
+    for actual, expected in zip(logits(HFProbePolicy(model), data), native_fp32, strict=True):
+        torch.testing.assert_close(actual, expected, atol=5e-6, rtol=5e-5)
     model.train()
     for batch in data[1:] * 2:
         opt.zero_grad(set_to_none=True)

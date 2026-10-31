@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""MoE export oracle: native BF16 reload, stock HF FP32 inference over multiple GPUs.
+"""MoE export oracle: native/HF FP32 inference over multiple GPUs.
 
-The native grouped expert kernel cannot execute FP32. Keep its portable reload
-as a separate mandatory gate; compare the promoted adapter and serialized merge
-in stock HF, whose loader owns the checkpoint expert transpose. No expert adapter
-or alternate training path is introduced.
+Native MoEExperts already selects native.naive for FP32, while BF16 training
+uses grouped_mm. Promote a private portable copy and compare that independent
+native forward with stock HF's promoted adapter and serialized merge. Keep BF16
+portable reload as a separate mandatory gate. BF16 merged execution is not the
+supported export precision. No expert adapter or new expert kernel is introduced.
 """
 
 from __future__ import annotations
@@ -26,11 +27,11 @@ from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig
 from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, prepare_adapter_model
 from cosmos_framework.posttrain.tests.adapter_numerics import (
     HFProbePolicy,
-    assert_bf16_deployment_drift,
     compare_logits,
     configure_qualification_numerics,
 )
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
+from cosmos_framework.posttrain.tests.reload_adapters import portable_policy
 
 
 def hf_portable(base, adapter, identity):
@@ -138,15 +139,20 @@ def main():
         native.extend(record["logits"])
     if not batches:
         raise ValueError("MoE oracle requires controlled text/image/video training probes")
-    # Stock BF16/native BF16 comparison is reported separately from FP32 merge
-    # equivalence, using the existing probability-aware BF16 drift limits.
-    model = hf_portable(args.base, str(root / "portable"), identity).cuda().eval()
-    stock_bf16 = logits(HFProbePolicy(model), batches)
-    bf16_drift = compare_logits(stock_bf16, native)
-    assert_bf16_deployment_drift(bf16_drift)
-    model.cpu().float()
+    # Match the dense-family oracle: preserve the already-rounded BF16 base,
+    # then promote a private copy. The native FP32 reference path is owned by
+    # MoEExperts, not a test monkey patch or a substitute training implementation.
+    policy = portable_policy(args.base, str(root / "portable"), identity)
+    policy.net.cpu().float()
+    torch.cuda.empty_cache()
+    policy.net, native_map = place_for_inference(policy.net, max_memory_gib=args.max_memory_gib)
+    expected = logits(policy, batches)
+    del policy
+    gc.collect()
+    torch.cuda.empty_cache()
+    model = hf_portable(args.base, str(root / "portable"), identity).float()
     model, adapter_map = place_for_inference(model, max_memory_gib=args.max_memory_gib)
-    expected = logits(HFProbePolicy(model), batches)
+    stock = logits(HFProbePolicy(model), batches)
     del model
     gc.collect()
     torch.cuda.empty_cache()
@@ -157,11 +163,13 @@ def main():
     actual = logits(HFProbePolicy(model), batches)
     report = {
         **evidence,
-        "verification_protocol": "cosmos-moe-adapter-numerics-v1",
+        "verification_protocol": "cosmos-moe-adapter-numerics-v2-native-fp32",
         "mode": "merged",
         "serialized_tensors_verified": verified,
-        "native_bf16_vs_stock_bf16": bf16_drift,
-        "reference_precision": "float32-stock-hf",
+        "native_fp32_vs_stock_fp32": compare_logits(stock, expected),
+        "versus_training_precision": compare_logits(actual, native),
+        "reference_precision": "float32-native",
+        "native_device_map": native_map,
         "adapter_device_map": adapter_map,
         "merged_device_map": merged_map,
         **compare_logits(actual, expected),
@@ -169,10 +177,12 @@ def main():
     }
     path = root / "merged-reload.json"
     atomic_write_json(str(path), report)
-    for a, b in zip(actual, expected, strict=True):
-        torch.testing.assert_close(a, b, atol=5e-4, rtol=2e-4)
-    if report["mean_absolute_logit_error"] > 5e-5 or report["argmax_equal"] != report["positions"]:
-        raise AssertionError(report)
+    for outputs in (stock, actual):
+        for a, b in zip(outputs, expected, strict=True):
+            torch.testing.assert_close(a, b, atol=5e-4, rtol=2e-4)
+        comparison = compare_logits(outputs, expected)
+        if comparison["mean_absolute_logit_error"] > 5e-5 or comparison["argmax_equal"] != comparison["positions"]:
+            raise AssertionError(comparison)
     report["status"] = "passed"
     atomic_write_json(str(path), report)
 

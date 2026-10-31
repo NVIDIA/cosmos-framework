@@ -82,6 +82,12 @@ def override_qwen3_vl_moe_for_padded_batches(net: nn.Module) -> int:
             # path (here and in `pinned_select_experts`): an activation-checkpoint recompute re-runs
             # this forward and must see the same mask and the same selection.
             token_mask = getattr(self, "_posttrain_token_mask", None)
+            if token_mask is not None:
+                # Inference dispatch moves forward arguments, not policy-owned
+                # attributes. Keep the staged mask intact for recomputation;
+                # use a local copy on this block's execution device. FSDP's
+                # same-device training path remains a no-op.
+                token_mask = token_mask.to(flat_hidden.device)
             routed, metadata = _original_forward(flat_hidden, token_mask=token_mask)  # [N,H]
             # The LBL metadata is kept only for an objective that asked for it (`set_lbl_collection`, the
             # SFT load-balancing term) and only by the REAL forward: non-reentrant activation checkpointing
