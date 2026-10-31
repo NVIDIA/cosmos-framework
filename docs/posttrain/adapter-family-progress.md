@@ -14,7 +14,7 @@ losses, trainable counts, numerical errors and report hashes. Historical Cosmos3
 full-WTS results remain in [adapters-progress.md](adapters-progress.md); they are
 not results for another checkpoint. Four-bit training remains separate.
 
-There are **181 completed real-model qualification cases across 12 checkpoints**.
+There are **182 completed real-model qualification cases across 12 checkpoints**.
 This includes repeated profiles in independently attested host and Slurm runtimes;
 it counts only cases with completed training, continuation and both reload gates;
 some parent matrices are still running. Repeated host/Slurm profiles remain
@@ -44,7 +44,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented and validated: all four methods, real 3.144B checkpoint/LIBERO data, 105 resolved targets, 1/2 GPUs × none/full AC, exact continuation, portable and FP32 merged reload. Corrected parameter layout and pre-fix artifact compatibility are validated |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented, awaiting complete evaluation. All four Slurm methods reached update 1,111. LoRA/rsLoRA full validation, final-step recovery, portable reload and merged reload passed; generation evaluation is running. DoRA/PiSSA final validation and dependent gates remain pending. Existing Cosmos3 scores are not reused |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented, awaiting complete evaluation. All four Slurm methods reached update 1,111. LoRA/rsLoRA full validation, final-step recovery, portable reload, merged reload and full generation evaluation passed. PiSSA passed training/recovery/both reload gates and is scoring; DoRA final validation and dependent gates remain pending. Existing Cosmos3 scores are not reused |
 
 ## Completed real-checkpoint profiles
 
@@ -334,8 +334,10 @@ LoRA/rsLoRA's completed Slurm epochs have token-weighted training means
 from the common initial `0.843903`. Both final-update recovery checks pass
 (maximum parameter errors zero / `7.28e-12`, loss errors zero). Portable reload
 is exact. FP32 merged reload maximum errors are `1.18e-4` / `8.01e-5`, with
-32/32 controlled greedy decisions unchanged. Complete generated-answer scores
-are still running; these loss/recovery results do not stand in for them.
+32/32 controlled greedy decisions unchanged. Full FP32 merged evaluation is complete for both: LoRA scored 2,465/2,676
+(92.12%) and rsLoRA 2,457/2,676 (91.82%). On the reserved scene-disjoint
+subset, they scored 528/576 (91.67%) and 530/576 (92.01%), respectively.
+Both produced zero invalid answers. PiSSA/DoRA full evaluation remains pending.
 
 The local `076cfbb` LoRA and rsLoRA epochs are complete: all 5,555 rows,
 1,111 applied updates, no omitted/padded rows, and complete 2,676-row validation.

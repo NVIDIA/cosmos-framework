@@ -1,6 +1,6 @@
 {
   "format": "cosmos-adapter-family-qualification-v1",
-  "generated_utc": "2026-10-31T05:38:16.768272+00:00",
+  "generated_utc": "2026-10-31T06:24:09.369216+00:00",
   "scope": "Real pretrained correctness subsets using existing SFT; not full task benchmarks or full-epoch WTS. All local cases use A10080, FP32 adapter parameters, BF16 base except model-owned physical precision. Shared CPU/disk timings are not throughput benchmarks. Merged exports compare against a private FP32 portable reference. FP32 conversion is not guaranteed to preserve BF16 decisions: the native 30B MoE LoRA case changes 6/64 controlled greedy positions versus BF16, despite FP32 merge equivalence and exact BF16 portable reload.",
   "sources": {
     "3a9552b-4c7d3d3e": {
@@ -7704,7 +7704,59 @@
           }
         },
         "dora-w2-full": {
-          "status": "training_and_resume_passed_reload_pending"
+          "status": "passed",
+          "source": "239c3e7-a6cd2ef3",
+          "world_size": 2,
+          "activation_checkpointing": "full",
+          "updates": 5,
+          "components": [
+            "language",
+            "projector",
+            "vision"
+          ],
+          "target_count": 105,
+          "trainable_parameters": 4138368,
+          "trainable_tensors_changed": 315,
+          "training_loss_mean": 0.8493360243737698,
+          "training_loss_last": 0.10340266674757004,
+          "validation_before": {
+            "val/loss_avg": 0.4199852331148577,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "validation_after": {
+            "val/loss_avg": 0.09607673063624134,
+            "val/valid_sequence_count": 8,
+            "val/valid_token_count": 32
+          },
+          "initial_max_abs_error": 0.0,
+          "resume_max_abs_parameter_error": 0.0,
+          "frozen_rank0_sha256": "9eeb621077a794b2aa53dd4362d6f3db4a58ab90fe96fecf907ab49fcbc66537",
+          "portable_max_abs_error": 0.0,
+          "merged_max_abs_error": 6.4849853515625e-05,
+          "merge_precision": "float32-native",
+          "portable_source": "239c3e7-a6cd2ef3",
+          "merged_source": "239c3e7-a6cd2ef3",
+          "peak_cuda_allocated_bytes_rank0": 63466313728,
+          "training_and_checkpoint_seconds": 940.8500024520326,
+          "merge_verification_protocol": "cosmos-moe-adapter-numerics-v2-native-fp32",
+          "merge_vs_training_precision": {
+            "argmax_equal": 60,
+            "maximum_argmax_probability_regret": 0.9229938983917236,
+            "maximum_kl": 3.7406134605407715,
+            "maximum_logit_error": 12.30805492401123,
+            "maximum_relative_l2": 0.23788723349571228,
+            "maximum_total_variation": 0.9674188494682312,
+            "mean_absolute_logit_error": 0.36251961812376976,
+            "mean_kl": 0.0810361453332007,
+            "mean_total_variation": 0.04737250390462577,
+            "positions": 64
+          },
+          "report_sha256": {
+            "training_report_sha256": "0eb6f56ba190d9c95e9126cdf8423d9810f3444915e4be077d289a8e9e5b8de2",
+            "portable_report_sha256": "fbaa2e0dfbe5987b2b6a1770b92e63b1b09cd6f9d665592c34f545e8de52229a",
+            "merged_report_sha256": "ea18815d4b7138921efd673abdb4e029f69c54b2afc007985973b66fa94717b4"
+          }
         },
         "pissa-w2-full": {
           "status": "not_completed"
