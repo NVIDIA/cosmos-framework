@@ -60,8 +60,8 @@ import numpy as np
 import torch
 import triton
 
-from cosmos_framework.model.attention.utils.environment import is_torch_compiling
 from cosmos_framework.configs.base.defaults.multiview_attention import temporal_window_bounds
+from cosmos_framework.model.attention.utils.environment import is_torch_compiling
 from cosmos_framework.model.generator.mot import maskless_kernels as kernels
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_PADDING,
@@ -432,10 +432,10 @@ def gapped_replay_unavailable_reason(device: torch.device) -> str | None:
     if torch.version.hip is not None:
         return "it needs NVIDIA CUDA, not ROCm"
     major, minor = torch.cuda.get_device_capability(device)
-    if (major, minor) != (9, 0) and major != 10:
-        # Hopper and Blackwell use different FA4 kernels; the replay GPU tests cover
-        # the segment isolation and untouched gap rows required by both paths.
-        return f"it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103), got sm{major}{minor}"
+    if (major, minor) not in ((9, 0), (12, 0)) and major != 10:
+        # FA4 >= 4.0.0b30 guards invalid varlen tiles on SM120; keep the
+        # existing gapped replay path rather than introducing a second backend.
+        return f"it needs FlashAttention-4 on Hopper (sm90) or Blackwell (sm100/sm103/sm120), got sm{major}{minor}"
     try:
         _flash_attn_interface()
     except ImportError as error:
@@ -912,6 +912,8 @@ def _gapped_replay_backward(
     Every launch uses the same folded query layout and segment arguments as forward.
     Rows nothing reaches are zero.
     """
+    if torch.cuda.get_device_capability(q.device) == (12, 0):
+        raise NotImplementedError("SM120 replay is inference-only; backward is not qualified.")
     flash_attn = _flash_attn_interface()
     runtime = _runtime(handle)
     q, k, v = (tensor.contiguous() for tensor in (q, k, v))  # [1,Q,H,D], [1,KV,H_KV,D], [1,KV,H_KV,Dv]
