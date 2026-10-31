@@ -102,6 +102,19 @@ _FAMILIES["alpamayo_r1"] = AdapterFamily(
 )
 
 
+_FAMILIES["Gr00tN1d7"] = AdapterFamily(
+    "Gr00tN1d7",
+    tuple((component, pattern.replace("^model", r"^backbone\.model\.model")) for component, pattern in _VLM)
+    + (
+        ("action", r"^action_head\.(?:model|vl_self_attention)\.transformer_blocks\.(?P<layer>\d+)\."),
+        ("action", r"^action_head\.(?:state_encoder|action_encoder|action_decoder|vlln|position_embedding)(?:\.|$)"),
+        ("action", r"^action_head\.model\.(?:proj_out_1|proj_out_2|timestep_encoder|norm_out)(?:\.|$)"),
+    ),
+    ("Qwen3VLTextRMSNorm",),
+    embedding="backbone.model.model.language_model.embed_tokens.weight",
+)
+
+
 def adapter_family(name: str) -> AdapterFamily:
     try:
         return _FAMILIES[name]

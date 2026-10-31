@@ -21,7 +21,7 @@ Four-bit training is separate. Existing Cosmos3 results remain in
 | Text portable reload and merged model export | `checkpoint/adapters.py`, shared HF materializer | Implemented; real tiny HF serialization, strict reload and stock merged reload pass |
 | Qwen3.5 language, merger, selected vision adapters | Existing ordered-vision forward plus shared adapter lifecycle | Implemented; LoRA, rsLoRA, DoRA, PiSSA each pass text/image/video/both CPU updates with activation checkpointing; pretrained GPU qualification pending |
 | Native Qwen3-VL-MoE non-expert projections | Native loaded-base hook and family binding | Implemented but awaiting actual grouped-mm training, resume and export qualification; fused expert tensors remain unsupported targets |
-| GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Not implemented yet. Category-specific `[embodiment,in,out]` projectors are not ordinary Linear. Official loader needs gated Cosmos-Reason2 processor/backbone metadata; unauthenticated access returned HTTP 401 |
+| GR00T | Existing `Gr00tN1d7TrainPolicy`, official Isaac revision `51d4c89` inspected | Implemented in `model/gr00t/{sft,sft_policy,adapter_export}.py`; 19 small actual Isaac/Qwen3-VL/DiT tests pass, including four methods, full AC, native stochastic resume, native-forward parity, real image packing and portable/merged reload. Real checkpoint GPU qualification is blocked on gated Cosmos-Reason2 config/processor metadata (HTTP 401). Category-specific tensors remain unsupported adapter targets |
 | π0.5 | `model/pi05/sft.py`, `Pi05Model.training_condition`, `model/pi05/adapter_export.py`, `tests/test_pi05_adapters.py` | Implemented, awaiting installed real-model GPU qualification. All four methods pass actual small SigLIP/Gemma prefix/action updates, AC, portable reload and FP32 merged-file reload. Final-prefix query/output/MLP targets are refused because only its K/V reaches the action loss. Existing PPO frozen-prefix behavior is retained |
 | Alpamayo | Existing `alpagym_clrl.py` and public NVlabs Alpamayo/AlpaGym inspected | Implemented in `model/alpamayo/{sft,policy,adapter_export}.py` with public pinned R1 source; no AlpaGym runtime needed. All four methods pass small real R1/Qwen3-VL flow updates, vision AC, portable/FP32 merged reload and native stochastic continuation. Real checkpoint GPU qualification pending |
 | Physical-action SFT lifecycle | `config/sft.py::SFTConfig.task`, existing SFT loop and `flow_bc`, `roles/env/flow_sft.py` | Implemented. Shares trainer, checkpoint boundary, rank cursor and validation transaction; reports action-element counts separately from text tokens. Controlled continuation and validation-padding CPU tests pass |
@@ -95,3 +95,15 @@ Transformers 5.8.1. Alpamayo tests restore native noise/time RNG, optimizer,
 scheduler and cursor for the next controlled update, and prohibit repeating
 PiSSA initialization on resume. These are CPU results; installed real-model
 training and held-out trajectory metrics remain outstanding.
+
+
+Current Slurm submissions (pending is not a training result): π0.5 matrix
+`37706304`; Qwen3.5 corrected export matrix `37705883`; native Qwen3-VL full WTS
+LoRA `37706319`, rsLoRA `37706324`, DoRA `37706326`, PiSSA `37706327`. Every WTS
+job first gates its full-resolution/gradient-accumulation profile. Alpamayo
+image `af407d4`, job `37706329`, passed **105 installed tests, 1 skip**;
+GPU submission waits for image publication. The first pending MoE payload
+`37706615` was cancelled before execution: its generic merged checker attempted
+single-GPU FP32 30B inference, which exceeds A10080 memory and the native expert
+kernel's BF16 contract. Its inputs and cancellation evidence are preserved;
+MoE needs a separate inference/export qualification path.

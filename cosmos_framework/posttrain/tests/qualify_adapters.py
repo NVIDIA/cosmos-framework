@@ -125,8 +125,11 @@ def probe_batches(config, data):
             torch.random.default_generator.manual_seed(321)
             for _ in range(4):
                 batch = packer(data.get_samples(1))
-                batch["noise"] = torch.randn_like(batch["actions"])
-                batch["time"] = torch.full((batch["actions"].shape[0],), 0.3)
+                if hasattr(packer, "controlled_probe"):
+                    batch = packer.controlled_probe(batch, seed=321 + len(batches))
+                else:
+                    batch["noise"] = torch.randn_like(batch["actions"])
+                    batch["time"] = torch.full((batch["actions"].shape[0],), 0.3)
                 batches.append(batch)
         data.load_state_dict(saved)
         return batches

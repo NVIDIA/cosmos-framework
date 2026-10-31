@@ -105,6 +105,10 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
     identity, state = read_adapter_artifact(adapter)
+    if identity["architecture"] == "Gr00tN1d7":
+        from cosmos_framework.posttrain.model.gr00t.adapter_export import export_merged
+
+        return export_merged(adapter, base, out, processor=processor)
     if identity["architecture"] == "alpamayo_r1":
         from cosmos_framework.posttrain.model.alpamayo.adapter_export import export_merged
 

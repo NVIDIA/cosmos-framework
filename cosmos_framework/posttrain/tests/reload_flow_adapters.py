@@ -46,6 +46,17 @@ def main():
             adapters=cfg,
             adapter_media_identity=identity["media"],
         )
+    elif identity["architecture"] == "Gr00tN1d7":
+        from cosmos_framework.posttrain.model.gr00t.adapter_export import load_merged
+        from cosmos_framework.posttrain.model.gr00t.sft import Gr00tSFTModelConfig
+        from cosmos_framework.posttrain.model.gr00t.sft_policy import build_policy
+
+        policy = build_policy(
+            args.base,
+            Gr00tSFTModelConfig(args.processor, "none"),
+            adapters=cfg,
+            adapter_media_identity=identity["media"],
+        )
     else:
         raise ValueError(f"no flow reload qualification binding for {identity['architecture']}")
     batches, references = [], []
@@ -68,6 +79,8 @@ def main():
         if metadata["adapter_identity"] != identity:
             raise ValueError("flow merged artifact has a different adapter identity")
         policy.net.float()
+        if identity["architecture"] == "Gr00tN1d7":
+            policy.autocast = False
         expected = logits(policy, batches)
         del policy
         gc.collect()

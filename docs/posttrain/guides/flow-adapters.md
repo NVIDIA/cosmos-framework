@@ -186,3 +186,70 @@ source loader refuses this format. It is a native FP32 velocity-inference artifa
 not a stock HF generation or closed-loop driving deployment claim. Portable and
 merged comparisons use the fixed-noise/time tolerances above; stochastic resume
 tests also compare the next actual optimizer update without repeating PiSSA SVD.
+
+## GR00T-N1.7 adapters
+
+`sft_gr00t_adapters.py` exposes the full GR00T backbone and action head to the
+same SFT adapter lifecycle. The existing GR00T RL path, which checkpoints only
+its action head, remains separate. This binding reuses Isaac-GR00T's complete
+forward, noise/time sampling, state dropout and masked flow loss. It constructs
+identical modules from the exact backbone configuration and strictly loads the
+full GR00T checkpoint, avoiding a redundant download of backbone weights.
+It does **not** infer or substitute the gated backbone configuration.
+
+The binding requires Isaac-GR00T `51d4c89f72fda44cbf77285c6a8114b52676b8a1`,
+Transformers 4.57.6 and the recorded native-source hashes. Base parameters and
+adapters use FP32 storage, with model-owned BF16 autocast and FP32 adapter
+accumulation. This follows the existing GR00T flow training precision profile.
+Only pure DP/FSDP2 and non-reentrant activation checkpointing `none|full` are
+implemented. Real pretrained GPU qualification is **blocked** in the current
+workspace: the public LIBERO checkpoint refers to gated
+`nvidia/Cosmos-Reason2-2B`, and its config/processor returned HTTP 401 without
+an authorized token. The small actual GR00T/Qwen3-VL/DiT tests establish code
+correctness, not real-checkpoint training or simulator success.
+
+Once authorized dependencies are staged:
+
+```bash
+export SFT_MODEL_PATH=/models/GR00T-N1.7-LIBERO/libero_spatial
+export SFT_BACKBONE_PATH=/models/Cosmos-Reason2-2B
+export SFT_DATA_ROOT=/data/libero-flow
+export SFT_ADAPTER_METHOD=dora
+export SFT_ADAPTER_RSLORA=0
+"$SFT_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=1 \
+  -m cosmos_framework.posttrain.entrypoints.sft \
+  --config=cosmos_framework/posttrain/configs/sft_gr00t_adapters.py
+```
+
+| Component | Targets |
+| --- | --- |
+| Language | `backbone.model.model.language_model.layers.*.self_attn.{q_proj,v_proj}` |
+| Projector | `backbone.model.model.visual.merger.linear_fc{1,2}`, `backbone.model.model.visual.deepstack_merger_list.*.linear_fc{1,2}` |
+| Vision | `backbone.model.model.visual.blocks.26.attn.qkv` |
+| Action | `action_head.model.transformer_blocks.*.attn1.{to_q,to_v}` |
+
+The state/action encoders and action decoder contain category-specific 3-D
+weights, so they are explicitly refused as ordinary Linear adapter targets.
+All three deep-stack mergers remain connected even though GR00T truncates the
+language stack: Transformers injects their outputs into the first decoder blocks.
+The complete model is registered before optimizer construction, and the native
+mode flags permit selected backbone adapters to remain in training mode.
+
+The LIBERO packer uses checkpoint-owned statistics and deterministic evaluation
+image transforms for both splits. It accepts the prepared eight-value
+xyz/axis-angle/two-finger state, two upright RGB cameras and seven environment
+actions. The gripper is explicitly converted from environment `[-1,1]` to the
+native dataset convention `(1-gripper)/2` before native normalization. The other
+six action dimensions are unchanged. The initial recipe supervises ten steps;
+this is bounded by the checkpoint's sixteen-step LIBERO embodiment. Model-owned
+state and diffusion dropout remain stochastic in training and are restored by
+checkpoint RNG state. Do not feed an already transformed gripper or flip prepared
+images again. Processor, statistics, embodiment mapping, backbone metadata and
+effective transforms are included in artifact identity.
+
+Portable reload and full training resume follow the shared contracts. Merged
+export uses `--processor "$SFT_BACKBONE_PATH"` and publishes the distinct
+`cosmos-gr00t-n1d7-merged-fp32-v1` format, with all backbone/action processor assets.
+Load it using `cosmos_framework.posttrain.model.gr00t.adapter_export.load_merged`.
+The merged reference is FP32 inference with autocast disabled; the source training
+loader rejects merged artifacts. This format is not an Omni/PPO deployment claim.
