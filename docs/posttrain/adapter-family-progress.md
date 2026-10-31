@@ -31,10 +31,10 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | Portable artifact and merged export | `checkpoint/adapters.py`, `checkpoint/tools/adapters.py`, existing materializer; family-owned physical exporters | Implemented and validated in completed cases. Separate artifact kinds, exact base/processor/media identities, strict inventory, non-mutating FP32 merge |
 | π0.5 offline SFT | `model/pi05/{sft,adapter_export}.py`, existing flow objective and `LLMTrainer`; `test_pi05_adapters.py`, `test_flow_sft.py` | Implemented and validated: all four methods, real LIBERO data, two GPUs/full AC, continuation and both reload types |
 | Public Alpamayo R1 SFT | `model/alpamayo/{sft,policy,adapter_export}.py`; `test_alpamayo_adapters.py` | Implemented and validated: all four methods, real KITTI data, two GPUs/vision AC, continuation and both reload types; no AlpaGym runtime required |
-| GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented; 19 actual small Isaac/Qwen3-VL/DiT tests pass. Pretrained GPU validation blocked by required gated backbone metadata (HTTP 401), detailed below |
+| GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented; 19 actual small Isaac/Qwen3-VL/DiT tests pass. Pretrained GPU validation pending; exact public metadata verified and staged, detailed below |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented orchestration; LoRA/rsLoRA full-profile gates running; new full epochs and evaluation awaiting completion. Existing Cosmos3 scores are not reused |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented orchestration; LoRA/rsLoRA full-profile gates passed and full epochs running; DoRA/PiSSA queued; evaluation awaiting completion. Existing Cosmos3 scores are not reused |
 
 ## Completed real-checkpoint profiles
 
@@ -56,7 +56,7 @@ FP32 merged-file reload. These are correctness subsets, not complete task benchm
 | π0.5 LIBERO SFT | 2 GPU / full | Passed (4/4 cases) |
 | Alpamayo-R1-10B | 2 GPU / vision | Passed (4/4 cases) |
 | Native Qwen3-VL-30B-A3B-Instruct | 2 GPU / full | Not yet qualified: LoRA training/resume passed; corrected installed reload and merged-export gates pending |
-| GR00T-N1.7 LIBERO-Spatial | No pretrained profile qualified | Blocked on authorized backbone metadata |
+| GR00T-N1.7 LIBERO-Spatial | No pretrained profile qualified | Exact metadata staged; GPU checks pending |
 
 Text fixtures use eight real GSM8K training rows and eight held-out test rows.
 Conversational VLM fixtures combine real WTS videos with controlled text, PNG and
@@ -125,11 +125,15 @@ Real runs exposed and verified these fixes:
 
 ## Pending execution and explicit gaps
 
-GR00T-N1.7 LIBERO-Spatial weights and real LIBERO data are staged, and its native
-runtime is built. The exact `nvidia/Cosmos-Reason2-2B` config/tokenizer/processor
-at `9ce19a195e423419c349abfc86fd07178b230561` returned HTTP 401. Its builder
-requires authorized metadata and refuses a guessed or substituted Qwen snapshot.
-That is a concrete remaining resource dependency, not a passing GR00T GPU result.
+GR00T-N1.7 LIBERO-Spatial weights, complete processor assets and real LIBERO data
+are staged. Direct Cosmos-Reason2 metadata downloads returned HTTP 401, but the
+public immutable Hub tree exposed its Git blob identities. All nine config,
+tokenizer, template and media-processor files exactly match the public pinned
+Qwen3-VL-2B snapshot. `scripts/prepare_gr00t_backbone.py` verifies those identities
+before publication; it neither infers configuration nor substitutes model weights.
+The staging tool rejects missing or changed files, and records both source
+revisions and SHA-256 hashes. This removes the metadata resource dependency;
+pretrained GPU training/reload/merge qualification is still required.
 
 Native MoE implementation targets ordinary two-dimensional attention/vision/merger projections;
 fused three-dimensional expert tensors remain unsupported targets. Its existing

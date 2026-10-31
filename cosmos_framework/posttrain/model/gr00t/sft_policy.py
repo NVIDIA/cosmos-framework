@@ -28,7 +28,8 @@ class Gr00tSFTBackbone(Qwen3Backbone):
     The upstream constructor downloads redundant base weights before overwriting
     them from the full GR00T checkpoint. Construct the *same* modules from the
     exact dependency config, then strictly restore the whole GR00T checkpoint.
-    This requires authorized metadata; it never infers a gated model's config.
+    This requires exact metadata; it never infers a gated model's config. The
+    staging tool also accepts byte-identical files published in a public snapshot.
     """
 
     def __init__(self, config, backbone_path):

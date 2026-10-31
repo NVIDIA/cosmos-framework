@@ -52,7 +52,8 @@ def resolve_source(spec):
             raise ValueError(f"incomplete GR00T checkpoint: {name} is required")
     if not (Path(config.backbone_path) / "config.json").is_file():
         raise ValueError(
-            "stage the exact GR00T backbone config/tokenizer/processor using authorized Hub access; "
+            "stage the exact GR00T backbone config/tokenizer/processor using authorized Hub access "
+            "or posttrain.scripts.prepare_gr00t_backbone's verified identical public metadata; "
             f"checkpoint requires {payload.get('model_name', 'nvidia/Cosmos-Reason2-2B')}; "
             "another Qwen checkpoint is not an interchangeable dependency"
         )

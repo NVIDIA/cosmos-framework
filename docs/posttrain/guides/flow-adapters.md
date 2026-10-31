@@ -238,17 +238,30 @@ Transformers 4.57.6 and the recorded native-source hashes. Base parameters and
 adapters use FP32 storage, with model-owned BF16 autocast and FP32 adapter
 accumulation. This follows the existing GR00T flow training precision profile.
 Only pure DP/FSDP2 and non-reentrant activation checkpointing `none|full` are
-implemented. Real pretrained GPU qualification is **blocked** in the current
-workspace: the public LIBERO checkpoint refers to gated
-`nvidia/Cosmos-Reason2-2B`, and its config/processor returned HTTP 401 without
-an authorized token. The small actual GR00T/Qwen3-VL/DiT tests establish code
-correctness, not real-checkpoint training or simulator success.
+implemented. Pretrained GPU qualification is tracked in the evidence table. The
+checkpoint refers to `nvidia/Cosmos-Reason2-2B`; direct metadata downloads require
+Hub authorization. At revision `9ce19a195e423419c349abfc86fd07178b230561`, all nine
+required metadata files have exactly the same Git blob IDs as the public
+`Qwen/Qwen3-VL-2B-Instruct` snapshot at
+`89644892e4d85e24eaac8bacfd4f463576704203`. The preparation tool verifies every
+file against these pinned IDs before publishing a metadata-only directory:
 
-Once authorized dependencies are staged:
+```bash
+"$SFT_PYTHON" -m cosmos_framework.posttrain.scripts.prepare_gr00t_backbone \
+  --source /models/Qwen3-VL-2B-Instruct --out /models/GR00T-exact-backbone-metadata
+```
+
+It rejects missing or different files; no backbone weights or inferred config
+are copied. `metadata_provenance.json` records both revisions and all file hashes.
+Adapter identity continues to hash the actual processor bytes, so a directly
+staged authorized snapshot remains equivalent. Stage all seven required GR00T
+checkpoint files, including `statistics.json` and `embodiment_id.json`, from
+`nvidia/GR00T-N1.7-LIBERO@2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21/libero_spatial`.
+Then run:
 
 ```bash
 export SFT_MODEL_PATH=/models/GR00T-N1.7-LIBERO/libero_spatial
-export SFT_BACKBONE_PATH=/models/Cosmos-Reason2-2B
+export SFT_BACKBONE_PATH=/models/GR00T-exact-backbone-metadata
 export SFT_DATA_ROOT=/data/libero-flow
 export SFT_ADAPTER_METHOD=dora
 export SFT_ADAPTER_RSLORA=0
