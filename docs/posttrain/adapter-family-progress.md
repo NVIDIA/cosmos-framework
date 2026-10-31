@@ -71,10 +71,14 @@ the Llama architecture, not Meta Llama checkpoints. Gemma fixtures use pinned pu
 BF16 checkpoints from `unsloth/gemma-2b-it` and `unsloth/gemma-2-2b-it`; no Unsloth
 runtime or quantization is used.
 
-π0.5 and GR00T use an explicit 40/41-window training subset and all 55 validation windows
-from a separate LIBERO episode. Alpamayo uses 14/15 training windows and all 38
-validation windows from a separate KITTI drive. Omitted row IDs are recorded;
-these are not full LIBERO/PhysicalAI runs. The physical loss is a masked mean over
+The staged π0.5/GR00T dataset contains an explicit 40/41-window training subset
+and 55 validation windows from a separate LIBERO episode. Alpamayo's staged
+dataset contains 14/15 training windows and 38 validation windows from a separate
+KITTI drive. Each correctness case consumes eight training rows before its
+checkpoint and one more global update for continuation (nine rows on one GPU,
+ten on two GPUs); it evaluates the complete staged validation split. Omitted
+row IDs are recorded. These are not full LIBERO/PhysicalAI training runs.
+The physical loss is a masked mean over
 action elements. Report both weighted training mean and last-batch loss because
 native flow noise/time sampling makes a single batch unrepresentative. These
 losses do not establish simulator success or driving performance.
