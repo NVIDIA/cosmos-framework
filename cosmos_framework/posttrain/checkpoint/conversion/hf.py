@@ -913,7 +913,9 @@ def overlay_consolidated_onto_hf(
 
     _log(f"writing HF-format directory: {staging_dir}")
     os.makedirs(staging_dir, exist_ok=True)
-    model.save_pretrained(staging_dir, safe_serialization=True)
+    # 5 GB shards (the Transformers 4 default): Transformers 5 defaults to 50 GB and writes a smaller model as one file
+    # without the INDEX_FILE that verify_index requires, so an 8B export failed its own verification.
+    model.save_pretrained(staging_dir, safe_serialization=True, max_shard_size="5GB")
     AutoProcessor.from_pretrained(model_id).save_pretrained(staging_dir)
     if expert_orig:
         rewritten = rewrite_expert_shards(staging_dir, expert_orig)
