@@ -301,3 +301,9 @@ Consult [the family requirement and qualification table](adapter-family-progress
 for completed real-checkpoint tests, pending profiles and the GR00T metadata
 access blocker. The Cosmos3 losses and WTS scores above are not results for those
 other checkpoints. The closed PR remains closed.
+
+The family-extension media audit later found that the existing decoded-video
+evaluator lost source timestamps and resized frames differently from SFT. The
+historical WTS scores in this report retain their original evaluator provenance;
+they must not be compared directly with new scores from the corrected
+source-metadata evaluator. See [family progress](adapter-family-progress.md).

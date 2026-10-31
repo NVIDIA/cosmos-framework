@@ -534,6 +534,9 @@ class CosmosFrameworkRuntime:
             item = {"type": media_mode, media_mode: media_value}
             if decoded_media is not None:
                 item["fps"] = decoded_media[media_index]["fps"]
+                item["sample_fps"] = decoded_media[media_index]["fps"]
+                if "video_metadata" in decoded_media[media_index]:
+                    item["video_metadata"] = copy.deepcopy(decoded_media[media_index]["video_metadata"])
             for key in ("fps", "min_pixels", "max_pixels", "total_pixels"):
                 if vision_config.get(key) is not None:
                     item[key] = vision_config[key]
@@ -708,6 +711,78 @@ class CosmosFrameworkRuntime:
             losses.append(sum(token_nll) / len(token_nll) if token_nll else 0.0)
         return outputs, losses
 
+    def _process_vision_info(self, conversations: list[Any]) -> tuple[Any, Any, dict[str, Any]]:
+        """Preserve source timing and let Qwen3's processor resize decoded videos.
+
+        qwen-vl-utils' frame-list path fabricates a 2-FPS timeline and resizes
+        each PIL frame before video processing. Raw decoded frames with their
+        original metadata instead use the same video processor as SFT. Image
+        processing and video paths without explicit source metadata stay native
+        to qwen-vl-utils.
+        """
+        from qwen_vl_utils import process_vision_info
+        from qwen_vl_utils.vision_process import extract_vision_info
+
+        media = extract_vision_info(conversations)
+        videos = [item for item in media if "video" in item]
+        supplied = [item for item in videos if "video_metadata" in item]
+        if not supplied:
+            return process_vision_info(
+                conversations, image_patch_size=16, return_video_kwargs=True, return_video_metadata=True
+            )
+        if len(supplied) != len(videos):
+            raise ValueError("a batch cannot mix source-metadata videos with untracked decoded frames or video paths")
+
+        import math
+
+        import numpy as np
+        import torch
+        from transformers.models.qwen3_vl.video_processing_qwen3_vl import Qwen3VLVideoProcessor
+
+        from cosmos_framework.utils.generator.video_source_metadata import validate_source_video_metadata
+
+        video_processor = getattr(self.processor, "video_processor", None)
+        if isinstance(video_processor, _RankLocalVideoProcessorCache):
+            video_processor = video_processor._delegate
+        if not isinstance(video_processor, Qwen3VLVideoProcessor):
+            raise ValueError("source-metadata video evaluation currently requires Qwen3VLVideoProcessor")
+        settings = set()
+        prepared = []
+        for item in videos:
+            frames = item["video"]
+            if not isinstance(frames, (list, tuple)) or not frames:
+                raise ValueError("source-metadata video evaluation requires a non-empty decoded frame list")
+            metadata = validate_source_video_metadata(item["video_metadata"], len(frames))
+            if item.get("total_pixels") is not None:
+                raise ValueError("source-metadata video evaluation uses min_pixels/max_pixels; omit total_pixels")
+            bounds = (item.get("min_pixels"), item.get("max_pixels"))
+            if any(v is not None and (type(v) is not int or v <= 0) for v in bounds):
+                raise ValueError("video min_pixels/max_pixels must be positive integers")
+            if all(v is not None for v in bounds) and bounds[0] > bounds[1]:
+                raise ValueError("video min_pixels must not exceed max_pixels")
+            settings.add((len(frames), *bounds))
+            tensor = torch.stack([torch.from_numpy(np.array(frame, copy=True)).permute(2, 0, 1) for frame in frames])
+            prepared.append((tensor, metadata))
+        if len(settings) != 1:
+            raise ValueError("batch decoded videos with the same frame count and pixel bounds, or use batch_size=1")
+        count, minimum, maximum = next(iter(settings))
+        padded_count = math.ceil(count / video_processor.temporal_patch_size) * video_processor.temporal_patch_size
+        size = dict(video_processor.size)
+        if minimum is not None:
+            size["shortest_edge"] = padded_count * minimum
+        if maximum is not None:
+            size["longest_edge"] = padded_count * maximum
+        images = [item for item in media if "video" not in item]
+        image_inputs = None
+        if images:
+            image_inputs, _, _ = process_vision_info(
+                [{"role": "user", "content": images}],
+                image_patch_size=16,
+                return_video_kwargs=True,
+                return_video_metadata=True,
+            )
+        return image_inputs, prepared, {"videos_kwargs": {"do_resize": True, "do_sample_frames": False, "size": size}}
+
     def _process_vision_info_cached(self, conversations: list[list[dict[str, Any]]]) -> tuple[Any, Any, dict[str, Any]]:
         """Reuse exact qwen-vl-utils inputs for adjacent questions on one video.
 
@@ -716,17 +791,10 @@ class CosmosFrameworkRuntime:
         cache, and it remains keyed by the same complete visual-input identity
         as the processor and feature caches.
         """
-        from qwen_vl_utils import process_vision_info
-
         active_key = self._video_feature_cache_active_key
         capacity = int(getattr(self, "_video_processor_cache_capacity", 0))
         if active_key is None or capacity <= 0:
-            return process_vision_info(
-                conversations,
-                image_patch_size=16,
-                return_video_kwargs=True,
-                return_video_metadata=True,
-            )
+            return self._process_vision_info(conversations)
 
         cache = self._video_input_cache
         if active_key in cache:
@@ -743,12 +811,7 @@ class CosmosFrameworkRuntime:
             return cached
 
         self._video_input_cache_misses += 1
-        prepared = process_vision_info(
-            conversations,
-            image_patch_size=16,
-            return_video_kwargs=True,
-            return_video_metadata=True,
-        )
+        prepared = self._process_vision_info(conversations)
         cache[active_key] = prepared
         while len(cache) > capacity:
             cache.popitem(last=False)
@@ -765,6 +828,7 @@ class CosmosFrameworkRuntime:
             for conversation in conversations
         ]
         image_inputs, video_inputs, video_kwargs = self._process_vision_info_cached(conversations)
+        video_kwargs = copy.deepcopy(video_kwargs)  # ProcessorMixin consumes nested kwargs in place.
         processor_kwargs: dict[str, Any] = {
             "text": texts,
             "images": image_inputs,
@@ -776,27 +840,26 @@ class CosmosFrameworkRuntime:
             processor_kwargs.update(
                 {
                     "videos": list(videos),
-                    "video_metadata": list(video_metadata),
-                    "do_resize": False,
+                    "video_metadata": copy.deepcopy(list(video_metadata)),
                 }
             )
+            if "videos_kwargs" in video_kwargs:
+                video_kwargs["videos_kwargs"]["video_metadata"] = processor_kwargs.pop("video_metadata")
+                processor_kwargs["images_kwargs"] = {"do_resize": False}
+                processor_kwargs["common_kwargs"] = {"return_tensors": processor_kwargs.pop("return_tensors")}
+            else:
+                processor_kwargs["do_resize"] = False
         return self.processor(**processor_kwargs, **video_kwargs)
 
     def _prepare_transformers_inputs(self, conversation: list[dict[str, Any]]) -> Any:
         """Materialize visual inputs through the registered Qwen GPU reader."""
-        from qwen_vl_utils import process_vision_info
-
         text = self.processor.apply_chat_template(
             conversation,
             tokenize=False,
             add_generation_prompt=True,
         )
-        image_inputs, video_inputs, video_kwargs = process_vision_info(
-            conversation,
-            image_patch_size=16,
-            return_video_kwargs=True,
-            return_video_metadata=True,
-        )
+        image_inputs, video_inputs, video_kwargs = self._process_vision_info(conversation)
+        video_kwargs = copy.deepcopy(video_kwargs)
         processor_kwargs: dict[str, Any] = {
             "text": [text],
             "images": image_inputs,
@@ -807,10 +870,15 @@ class CosmosFrameworkRuntime:
             processor_kwargs.update(
                 {
                     "videos": list(videos),
-                    "video_metadata": list(video_metadata),
-                    "do_resize": False,
+                    "video_metadata": copy.deepcopy(list(video_metadata)),
                 }
             )
+            if "videos_kwargs" in video_kwargs:
+                video_kwargs["videos_kwargs"]["video_metadata"] = processor_kwargs.pop("video_metadata")
+                processor_kwargs["images_kwargs"] = {"do_resize": False}
+                processor_kwargs["common_kwargs"] = {"return_tensors": processor_kwargs.pop("return_tensors")}
+            else:
+                processor_kwargs["do_resize"] = False
         return self.processor(**processor_kwargs, **video_kwargs)
 
     def generate_tasks(

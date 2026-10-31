@@ -353,3 +353,22 @@ BF16 training outputs. Promoted portable models and fresh stock-HF FP32 exports
 therefore reconstruct the same constant. The portable `model_contract` records
 this policy; older artifacts without it are rejected for merged export instead
 of silently changing the model. Embedding/head weights remain tied.
+
+For Qwen3-VL evaluation with `video_decoder="torchcodec-cuda-on-demand"`, decoded
+frames retain the source FPS and exact selected frame indices. The native HF
+video processor owns resizing and normalization, matching SFT's tensors. Pixel
+limits in `[vision]` are per frame; the runtime converts them to the processor's
+total-frame pixel budget. Short clips repeat sampled indices to retain the
+requested fixed frame count. A batch must use the same frame count and pixel
+bounds; use `batch_size=1` otherwise. This source-metadata path requires
+`Qwen3VLVideoProcessor` and `min_pixels`/`max_pixels`, with `total_pixels` omitted.
+Raw video paths and images retain their existing qwen-vl-utils handling.
+
+Earlier decoded-frame evaluation fabricated a 2-FPS timeline and resized PIL
+frames before video preprocessing. A real 2,211-frame, 30-FPS WTS clip produced
+`<0.2 seconds>/<1.2 seconds>` and grid `[2,12,20]`, instead of SFT's
+`<12.3 seconds>/<61.4 seconds>` and `[2,12,22]`. The corrected source probe matches
+timestamps, grids and every pixel tensor value on two real clips. Existing full
+training is unchanged; its new scoring jobs require the rebuilt evaluator and
+an installed two-GPU preflight. Historical scores from the earlier evaluator
+must remain labeled with that version.

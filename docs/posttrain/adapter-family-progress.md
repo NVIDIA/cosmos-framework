@@ -260,5 +260,20 @@ SFT/adapter/packer/checkpoint path through `08e5ff5`: later production changes
 are GR00T-specific construction/metadata and the native MoE inference-device
 bridge. Qualification helpers gained explicit deterministic profiles and the MoE
 FP32 oracle. Local full-WTS results remain labeled `076cfbb`; Slurm results remain
-labeled `3a9552b`, whose portable publication and physical-autocast extensions
-predate the later shared code. Results are never relabeled as a newer wheel.
+labeled `3a9552b`, which predates the shared portable-publication refactor and
+physical-autocast extensions. Results are never relabeled as a newer wheel.
+
+The full WTS evaluation jobs listed above were held before execution after a
+real CPU probe found that decoded-frame evaluation lost source timestamps and
+changed the resize grid. The new inference-only fix preserves original frame
+metadata and delegates decoded-video preprocessing to Qwen3's processor. Small
+regressions cover short clips, batched processing, cache isolation and invalid
+metadata; two real WTS clips now have exact SFT/evaluation pixel and timestamp
+agreement. Installed rebuilt-image evaluation remains a required gate.
+
+MoE Slurm LoRA, rsLoRA and DoRA have completed training, continuation, portable
+reload and FP32 merged qualification. PiSSA's training and exact BF16 portable
+reload pass, and all 882 serialized merged tensors match; the FP32 stock-HF
+portable/merged oracle differs from the native reference on one of eight probes
+(maximum logit error about `0.02952`). This exceeds the fixed gate and remains
+incomplete pending diagnosis; no tolerance was widened.

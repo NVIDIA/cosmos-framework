@@ -84,7 +84,7 @@ class FrameworkTorchCodecVideoPreprocessor:
                 raise ValueError("video_override_map must be a JSON object of string paths")
             self.video_overrides = payload
 
-        self._cache: OrderedDict[str, tuple[list[Image.Image], float]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[list[Image.Image], float, dict[str, Any]]] = OrderedDict()
         self._inflight: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
         self._attested = False
@@ -117,8 +117,9 @@ class FrameworkTorchCodecVideoPreprocessor:
             raise ValueError(f"LOCAL_RANK must be non-negative, found {local_rank}")
         return f"cuda:{local_rank}"
 
-    def _decode(self, source_path: str) -> tuple[list[Image.Image], float]:
+    def _decode(self, source_path: str) -> tuple[list[Image.Image], float, dict[str, Any]]:
         from cosmos_framework.utils.generator.torchcodec_video import TorchCodecVideoReader
+        from cosmos_framework.utils.generator.video_source_metadata import validate_source_video_metadata
 
         resolved_path = self.video_overrides.get(source_path, source_path)
         resolved_path = str(Path(resolved_path).expanduser().resolve(strict=True))
@@ -149,7 +150,9 @@ class FrameworkTorchCodecVideoPreprocessor:
             total_frames = len(reader)
             if total_frames < 1:
                 raise ValueError(f"Framework evaluation video has zero frames: {resolved_path}")
-            frame_count = min(self.num_frames, total_frames)
+            # Match the processor's fixed-count sampling, including repeated
+            # indices for short clips. Every batch has the requested frame count.
+            frame_count = self.num_frames
             indices = (
                 [0]
                 if frame_count == 1
@@ -170,7 +173,10 @@ class FrameworkTorchCodecVideoPreprocessor:
             frames = [Image.fromarray(frame) for frame in frames_np]
             source_fps = float(reader.get_avg_fps())
             average_stride = (indices[-1] - indices[0]) / max(len(indices) - 1, 1) if len(indices) > 1 else 1.0
-            decoded = (frames, source_fps / max(average_stride, 1.0))
+            metadata = validate_source_video_metadata(
+                {"fps": source_fps, "total_num_frames": total_frames, "frames_indices": indices}, len(frames)
+            )
+            decoded = (frames, source_fps / max(average_stride, 1.0), metadata)
             with self._lock:
                 if not self._attested:
                     print(
@@ -207,8 +213,8 @@ class FrameworkTorchCodecVideoPreprocessor:
         if task.get("media_mode", "image") != "video":
             return prepared
         prepared["_framework_decoded_media"] = [
-            {"frames": frames, "fps": fps}
-            for frames, fps in (self._decode(path) for path in task.get("media_paths", []))
+            {"frames": frames, "fps": fps, "video_metadata": copy.deepcopy(metadata)}
+            for frames, fps, metadata in (self._decode(path) for path in task.get("media_paths", []))
         ]
         return prepared
 
