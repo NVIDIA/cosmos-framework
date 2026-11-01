@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Primary checkpoint stores built on local IO and i4's S3 DCP support."""
+"""Primary checkpoint stores built on local IO and the built-in S3 DCP support."""
 
 from __future__ import annotations
 
@@ -320,9 +320,9 @@ class LocalCheckpointStore(CheckpointStore):
 
 
 class ObjectStoreCheckpointStore(CheckpointStore):
-    """Direct-primary DCP using i4 readers/writers and EasyIO control objects.
+    """Direct-primary DCP using DCP readers/writers and EasyIO control objects.
 
-    The protocol intentionally matches i4's single-writer model: partial iteration prefixes may
+    The protocol intentionally matches the upstream single-writer model: partial iteration prefixes may
     remain after a failed save, while the manifest and ``latest_checkpoint.txt`` are written last.
     """
 
@@ -354,7 +354,7 @@ class ObjectStoreCheckpointStore(CheckpointStore):
 
     @cached_property
     def _io(self) -> Any:
-        """Reuse i4 EasyIO for the small control plane."""
+        """Reuse EasyIO for the small control plane."""
         from cosmos_framework.utils.easy_io import easy_io
 
         return easy_io.get_file_backend(

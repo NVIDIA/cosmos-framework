@@ -8,7 +8,7 @@ result committed -- true, and about the wrong unit. `run_from_source` reaches `o
 the NEXT unit's lease, and `os._exit` runs no `finally`, so `_release_held` never ran and the
 claim outlived the process that owned it.
 
-What that cost is measurable rather than theoretical. the claim plane's `_alive` proves a holder dead only
+What that cost is measurable rather than theoretical. The claim plane's `_alive` proves a holder dead only
 within its own host and pid namespace, so the pod that died could reclaim at once but every other
 pod had to wait out the full `lease_seconds`; and each reclaim spent one of the unit's finite
 generations, which at the eval default of `sim_units_per_generation=1` is one burnt generation

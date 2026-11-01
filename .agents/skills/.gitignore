@@ -3,7 +3,6 @@
 
 # Cookbook runtime checkouts and generated artifacts
 packages/
-cookbooks/cosmos3/generator/audiovisual/outputs/
 outputs/
 
 # Cosmos3 finetune cookbook runtime artifacts (downloads, converted ckpts, runs)

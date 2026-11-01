@@ -12,7 +12,7 @@ model" coupling (where `compute_dpo_loss` was a method *on* the model).
 `FlowMatchingPolicy` is the general staged-denoising contract for diffusion/flow
 objectives. `PreferenceFlowPolicy` adds only the pair-context validation required by
 DPO, while `OnlineFlowPolicy` adds the final-sample operations required by NFT.
-Production implementations live in `model/` (`cosmos3` for the i4-internal OmniMoT,
+Production implementations live in `model/` (`cosmos3` for the built-in OmniMoT,
 `hf` later); a toy fixture for tests lives in `tests/helpers/toy_model.py`.
 
 `SupervisedFlowMatchingPolicy` is the sibling contract for a model that owns its supervised flow-matching

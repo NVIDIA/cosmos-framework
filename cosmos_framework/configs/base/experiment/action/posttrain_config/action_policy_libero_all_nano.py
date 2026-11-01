@@ -31,7 +31,7 @@ def _action_policy_libero_nano_model_config() -> dict:
     Keep ``encode_exact_durations=[17, 61, 73]`` to match the Cosmos3-Nano base."""
     cfg = copy.deepcopy(NANO_MODEL_CONFIG)  # action_gen=True, max_action_dim=64
     # Cap the packed sequence. Uncapped (-1) + a large max_samples_per_batch packs
-    # one very long sequence and OOMs even on H200; 74000 keeps the GA-validated bound.
+    # one very long sequence and OOMs even on H200; 74000 keeps the release-validated bound.
     cfg["max_num_tokens_after_packing"] = 74000
     cfg["activation_checkpointing"]["mode"] = "selective"
     cfg["diffusion_expert_config"]["load_weights_from_pretrained"] = False
@@ -100,16 +100,16 @@ action_policy_libero_all_nano = LazyDict(
         ),
         scheduler=dict(
             lr_scheduler_type="LambdaLinear",
-            cycle_lengths=[100],  # smoke: 100 iters (real run sets via TOML, GA=10000)
+            cycle_lengths=[100],  # smoke: 100 iters (real run sets via TOML, release recipe=10000)
             f_max=[1.0],
             f_min=[0.0],
             f_start=[1.0e-06],
             verbosity_interval=0,
-            warm_up_steps=[0],  # smoke (real run sets via TOML, GA=2000)
+            warm_up_steps=[0],  # smoke (real run sets via TOML, release recipe=2000)
         ),
         trainer=dict(
             distributed_parallelism="fsdp",
-            grad_accum_iter=1,  # real run sets via TOML (GA=2)
+            grad_accum_iter=1,  # real run sets via TOML (release recipe=2)
             logging_iter=1,
             max_iter=100,  # smoke
             max_val_iter=None,

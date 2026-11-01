@@ -1409,7 +1409,7 @@ def initialize_one_logger(config: dict) -> None:
 
 
 def initialize_one_logger_from_imaginaire_config(config: Any) -> None:
-    """Initialize OneLoggerUtils object from imaginaire4 config"""
+    """Initialize OneLoggerUtils object from the job config"""
 
     try:
         batch_size = config.dataloader_train.batch_size

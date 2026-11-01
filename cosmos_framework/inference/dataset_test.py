@@ -117,7 +117,7 @@ def test_transform_kwargs_merge_into_the_outer_config(tmp_path: Path) -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_resolution_kwarg_is_written_only_when_declared(tmp_path: Path) -> None:
-    # The override targets the inner entry of ``list_of_datasets``, as in i4.
+    # The override targets the inner entry of ``list_of_datasets``, as upstream.
     undeclared = create_dataset(
         DatasetArgs(
             config_file=_write_config(tmp_path, _dataset_config(list_of_datasets=[{"name": "robot"}])),

@@ -327,7 +327,7 @@ Three things about that command are worth more than the transcript:
   `EmbodimentMap` to be registered framework-side too, or for you to say it. A default here
   would produce a rollout of the wrong shape that your simulator accepts and the corpus records.
   Omit it with an unregistered embodiment and the command refuses, with that message.
-- **`num_envs` is pinned at 1 and is not a flag.** Round 4 measured scene tiling corrupting
+- **`num_envs` is pinned at 1 and is not a flag.** Scene tiling was measured corrupting
   physical particle systems — V=2 scored 0/316 where V=1 scored 5/40 — and V>1 is a standing
   refusal, not a default. b1k declares `max_lanes=1`, so §5's bind check refuses a run that asks
   for more. If your engine genuinely tiles, raise your own ceiling in `capabilities()` first.

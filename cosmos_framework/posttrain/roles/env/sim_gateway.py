@@ -1395,7 +1395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[gwdemo] attached: {body.probe()}")
         unit = WorkUnit.make(
             suite=args.sim,
-            # num_envs=1, PINNED and not a flag. Round 4 measured scene tiling corrupting
+            # num_envs=1, PINNED and not a flag. Scene tiling was measured corrupting
             # physical particle systems -- V=2 scored 0/316 where V=1 scored 5/40 -- and the
             # standing ruling is that V>1 is refused rather than defaulted against. b1k
             # declares `max_lanes=1`, so `validate_sim_role` refuses a run that asks for more;

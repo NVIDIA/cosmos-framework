@@ -5,7 +5,7 @@
 The grammar and CLI tests are pure Python. The packer-backed tests build ``QwenSFTDataPacker`` on the local test
 tokenizer/processor directly and need Transformers >= 5.4.0 (``_PACKER_TRANSFORMERS_FLOOR``: the packer's render imports
 ``transformers.utils.chat_template_utils._get_template_variables``, first exported at the v5.4.0 tag; below it they SKIP with
-that reason instead of failing on the ImportError, R149T-06); only ``build_sft_packer`` carries the >= 5.8.1 gate, which the
+that reason instead of failing on the ImportError); only ``build_sft_packer`` carries the >= 5.8.1 gate, which the
 entry-flag test bypasses with an equivalent local packer when the running Transformers is older. The
 behavioural fail-on-parent node for the entry flag (no module-level import of the validator) lives in
 ``test_entrypoints_sft_validate_rows.py``.
@@ -96,7 +96,7 @@ def test_grammar_names_a_tool_turn_mislabelled_as_assistant() -> None:
 
 
 def test_grammar_accepts_consecutive_assistant_turns() -> None:
-    """Review thread 56678e57c8: ``normalize_row`` and the packer accept back-to-back assistant turns (each its own block)."""
+    """``normalize_row`` and the packer accept back-to-back assistant turns (each its own block)."""
     user = {"role": "user", "content": "q"}
     assert validator.role_grammar_failures([user, _assistant("a"), _assistant("b")]) == []
     with_calls = [user, _assistant("call", calls=1), {"role": "tool", "content": "r"}, _assistant("a"), _assistant("b")]
@@ -195,14 +195,14 @@ def test_script_main_refuses_unknown_flags_before_loading_anything() -> None:
 
 # The packer's render imports ``transformers.utils.chat_template_utils._get_template_variables`` (``data/packer/sft.py``,
 # ``_template_variables``). The symbol first appears at the v5.4.0 tag (absent through v5.3.0, no v5.3.x tag: a bisect of
-# src/transformers/utils/chat_template_utils.py over the release tags, round 149t fix R149T-06). Below this floor the
+# src/transformers/utils/chat_template_utils.py over the release tags). Below this floor the
 # packer-backed tests used to FAIL on "packer refused the row: ImportError: cannot import name '_get_template_variables'"
 # (31 of them under 4.57.1) instead of skipping: the old floor "4.57" was the tokenizer classes' floor, not the render's.
 _PACKER_TRANSFORMERS_FLOOR = "5.4.0"
 
 
 def _packer_module() -> Any:
-    """The packer module, or a SKIP whose reason names the floor and the symbol behind it (R149T-06)."""
+    """The packer module, or a SKIP whose reason names the floor and the symbol behind it."""
     transformers = pytest.importorskip("transformers")
     from packaging.version import Version
 
@@ -291,8 +291,8 @@ def _p_layout_row(supervise: str | None = "last_assistant") -> dict[str, Any]:
     S_type_mcq_v0/00835be2aabec1ba@..._hA_s01_aoi_train_dev_HOWTO_min/dsh_xtf_th/r1/call1 has four messages: system, the task
     turn, the runtime-context turn, the supervised assistant turn = one tool call with empty content. The exemption the row
     exercises trusts the exporter's ``supervise`` field: the consumers that catch a wrongly-labelled row are the exporter's
-    episode gate and the pool census (LAST-TURN-NOT-ASSISTANT: 0 rows in DSH_P_v4). The P arms' integration pin carries V7
-    (b821fb850fe); V7b and V7c change tests, docstrings and gate scripts only (whitespace and words), never the rule."""
+    episode gate and the pool census (LAST-TURN-NOT-ASSISTANT: 0 rows in DSH_P_v4). The P arms' integration pin carries V7;
+    V7b and V7c change tests, docstrings and gate scripts only (whitespace and words), never the rule."""
     row: dict[str, Any] = {
         "id": "S_type_mcq_v0/00835be2aabec1ba@root/dsh_xtf_th/r1/call1",
         "messages": [
@@ -314,8 +314,8 @@ def _p_layout_row(supervise: str | None = "last_assistant") -> dict[str, Any]:
 
 def test_v7_last_assistant_row_may_end_on_its_own_tool_call() -> None:
     """V7: under supervise last_assistant the dangling call of the LAST assistant turn is the completion; the same messages under
-    the whole-episode rule (no supervise, or all_assistant) still fail exactly as on 92f8cab6175. The first assertion calls the
-    rule WITHOUT the keyword, so on the parent 92f8cab6175 it is reached and passes (the mechanism-level check); the keyword
+    the whole-episode rule (no supervise, or all_assistant) still fail exactly as on the parent. The first assertion calls the
+    rule WITHOUT the keyword, so on the parent it is reached and passes (the mechanism-level check); the keyword
     calls that follow raise TypeError there (the parent's one-argument signature), which is the FAIL-on-old of this test."""
     messages = _p_layout_row()["messages"]
     dangling = "message 3: conversation ends with 1 tool call(s) and no result"
@@ -331,7 +331,7 @@ def test_v7_last_assistant_row_may_end_on_its_own_tool_call() -> None:
 def test_v7_exemption_covers_only_the_final_supervised_turn() -> None:
     """A last_assistant row with a call left unanswered in an EARLIER turn, one that ends on a tool result, and a whole-episode
     row that ends in a call all still fail: the exemption is the final supervised turn's own calls, nothing else. On the parent
-    92f8cab6175 this test fails at the first keyword call (TypeError: the one-argument signature), not at the mechanism; the
+    commit this test fails at the first keyword call (TypeError: the one-argument signature), not at the mechanism; the
     mechanism-level FAIL-on-old lives in test_v7_last_assistant_row_may_end_on_its_own_tool_call (its first assertion) and in
     test_v7_last_assistant_tool_call_row_validates_with_the_mask_unchanged (the parent refuses the row with the dangling reason)."""
     user = {"role": "user", "content": "q"}
@@ -354,7 +354,7 @@ def test_v7_exemption_covers_only_the_final_supervised_turn() -> None:
 
 def test_v7_last_assistant_tool_call_row_validates_with_the_mask_unchanged(text_packer: Any) -> None:
     """The real P-layout shape through the validator: no reason, and the loss tokens are the supervised turn's own tokens (one
-    block); the same row under all_assistant carries the grammar reason. On the parent 92f8cab6175 this test fails at the
+    block); the same row under all_assistant carries the grammar reason. On the parent this test fails at the
     MECHANISM: validate_dataset refuses the last_assistant row with "conversation ends with 1 tool call(s) and no result"."""
     reports, summary = validator.validate_dataset(text_packer, [_p_layout_row()], max_length=4096)
     (report,) = reports
@@ -372,9 +372,9 @@ def test_v7_malformed_final_turn_call_entry_is_still_refused_by_the_packer(text_
     ``inspect_row`` -> ``SFTTarget`` (checks only ``supervise``/``opener``) -> ``QwenSFTDataPacker.render_conversation`` ->
     ``_conversation`` raises ``ValueError("SFT tool calls require a function name")``, which becomes the row's one reason. The
     grammar never inspected call entries on any turn (the count rule), and under V7 its final-turn dangling reason no longer
-    fires for a last_assistant row, so the packer is the only guard left for this shape (round 149t, R149T-05: the review's
+    fires for a last_assistant row, so the packer is the only guard left for this shape (the review's
     grammar-shape table called this message list "shape (m)").
-    FAIL-on-old at the mechanism: on the parent 92f8cab6175 the same row carries TWO reasons, the whole-episode rule's
+    FAIL-on-old at the mechanism: on the parent the same row carries TWO reasons, the whole-episode rule's
     "message 3: conversation ends with 2 tool call(s) and no result" before the packer's, so the exact-list assertion fails."""
     row = _p_layout_row()
     row["messages"][-1]["tool_calls"] = [1, 2]
@@ -479,7 +479,7 @@ def test_mislabelled_tool_turn_is_refused_by_grammar_while_the_counts_agree(text
 
 
 def test_consecutive_assistant_turns_pass_and_their_loss_tokens_equal_the_packers(text_packer: Any) -> None:
-    """Review thread 56678e57c8: user, assistant ``a``, assistant ``b`` packs as two supervised blocks ([2, 2]).
+    """User, assistant ``a``, assistant ``b`` packs as two supervised blocks ([2, 2]).
 
     The validator's independent count agrees with the packer's labels, and no grammar reason is raised: the row
     trains, so the validator may not refuse it.
@@ -571,7 +571,7 @@ def test_visual_token_disagreement_is_detected(vlm_packer: Any, monkeypatch: pyt
 
 
 def test_image_and_video_mismatches_do_not_cancel(vlm_packer: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review thread 6850f73605: +k image tokens and -k video tokens keep the combined sum equal to the combined pads.
+    """+k image tokens and -k video tokens keep the combined sum equal to the combined pads.
 
     The model forward scatters each modality separately, so such a row dies in training; the validator compares
     image grids with image pads and video grids with video pads independently and names both.
@@ -774,7 +774,7 @@ def test_validate_rows_flag_names_the_overlong_row_before_any_trainer(
 def test_missing_split_is_that_splits_load_refusal_and_never_blocks_the_other(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review thread f7b0fdcd21: the shipped recipe, a readable training JSONL and a missing enabled validation JSONL.
+    """The shipped recipe, a readable training JSONL and a missing enabled validation JSONL.
 
     On the parent ``validate_from_config`` raised ``ValueError`` from the manifest-style preflight before any row was
     inspected or any report created, printing the full path. Now the structural checks run first, and each selected
@@ -874,7 +874,7 @@ def test_student_template_rows_pass_the_validator() -> None:
     assert "<tool_call>" in supervised and "<think>" in supervised and "<tool_response>" not in supervised
 
 
-# ----------------------------------------------------------------------------- fix round (review 117)
+# ----------------------------------------------------------------------------- row validation fixes
 
 
 def _stub_jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
@@ -1348,7 +1348,7 @@ def test_census_read_failure_is_the_validation_splits_failure_and_its_rows_are_s
 def test_census_media_os_error_names_the_row_and_the_rows_are_still_inspected(
     text_packer: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Greptile thread 7bb34b5b76 (FIXTURE: on the parent this ``IsADirectoryError`` escaped ``validate_sources``). The
+    """FIXTURE: on the parent this ``IsADirectoryError`` escaped ``validate_sources``. The
     factory opens each image part's file while the census reads validation row 2, and that path is a directory, not a
     file: an ``OSError`` from the media is the validation split's failure, named with the row, the class and the redacted
     path; the rows are still inspected (row 2 is the same refusal per row) and both summaries are written."""
@@ -1381,9 +1381,9 @@ def test_census_media_os_error_names_the_row_and_the_rows_are_still_inspected(
 def test_census_corrupt_backing_row_names_the_decoder_error_and_the_row(
     text_packer: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review thread b9b8f14577 (P2) (FIXTURE: on the parent the decoder's ``JSONDecodeError`` was caught as a bare
+    """FIXTURE: on the parent the decoder's ``JSONDecodeError`` was caught as a bare
     ``ValueError`` and ``census_error`` read ``Expecting property name enclosed in double quotes: line 1 column 2 (char 1)``:
-    no class, no side, no row). The backing record of validation row 2 is not JSON: ``census_error`` names the decoder's
+    no class, no side, no row. The backing record of validation row 2 is not JSON: ``census_error`` names the decoder's
     class, the side and the row; the rows are still inspected and row 2 carries the same refusal per row."""
     validation = _backed_source(tmp_path / "backing", [_held_out_row("gamma", "held/G"), "{corrupt"])
     train = _jsonl_source(tmp_path / "train.jsonl", _TRAIN_ROWS)
@@ -1439,11 +1439,11 @@ def test_census_read_error_of_any_class_is_the_rows_failure_like_the_per_row_rea
     record must not depend on which class the factory's own code happens to raise: a record without ``messages``
     (``KeyError``), a string content part (``AttributeError``), a ``__len__`` that over-counts (``IndexError`` from the
     list), a vendor decoder's own ``Exception`` subclass, a ``RuntimeError`` of the factory's code, a ``StopIteration``
-    of it (finding R4-02 of review round 2; FIXTURE: on 544e3c9b38a1 the census walked the factory through
+    of it (FIXTURE: on the parent the census walked the factory through
     ``source_overlap``'s generator expression, which turned the ``StopIteration`` into
     ``RuntimeError: generator raised StopIteration`` -- PEP 479 -- while the per-row reader named ``StopIteration``;
     both now read the row through ``_read_row``, which names it for both), and a SUBCLASS of ``StopIteration`` a
-    vendor's code raises (finding R5-01 of review round 3; FIXTURE: on b01a38cde21e ``_read_row`` hardcoded the base
+    vendor's code raises (FIXTURE: on the parent ``_read_row`` hardcoded the base
     name, so ``_NoImagePart`` was filed as ``StopIteration: ...`` by both readers while ``_refusal`` names every other
     subclass by its own name; ``_read_row`` now names the class that was raised). Each is the validation split's
     ``census_error`` with the class and the message the per-row reader files for that row; the rows are still inspected,
@@ -1498,7 +1498,7 @@ def test_census_boundary_lets_an_interrupt_propagate(
 def test_census_read_refusal_is_redacted_like_the_row_reason(
     text_packer: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Review thread b9b8f14577 (P2), second item (FIXTURE: on the parent ``census_error``, the FAIL line and the gate line
+    """Second item (FIXTURE: on the parent ``census_error``, the FAIL line and the gate line
     carried the loader's refusal with its full path ``/data/pool/img_0.png`` while the row reason redacted it). The
     ``refusing_factory`` as the validation source: the loader refuses row 1 while the census reads it (a missing media
     file is a ``ValueError`` of ``normalize_row``), and the census entry is formatted by the same bounded, redacted helper
@@ -1520,8 +1520,8 @@ def test_census_read_refusal_is_redacted_like_the_row_reason(
 def test_census_hash_failure_names_the_side_the_row_and_its_item(
     text_packer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Greptile thread 7bb34b5b76 ("reads or hashes its rows"; FIXTURE: on the parent the ``PermissionError`` escaped
-    ``validate_sources``). The census hashes every media file by bytes (``data/datasets/sft.py::sha256_file`` through
+    """FIXTURE: on the parent the ``PermissionError`` escaped
+    ``validate_sources``. The census hashes every media file by bytes (``data/datasets/sft.py::sha256_file`` through
     ``media_digest_for``); here the hash raises ``PermissionError`` for the one image file, which exists and was read by
     the factory and the loader (so the row itself is known, item included). The entry names the side the census was
     walking -- the validation source when its row carries the image; the training source when the training factory's
@@ -1656,7 +1656,7 @@ def test_census_len_failure_names_the_side_and_the_call_not_a_row(
 
 def test_census_attribute_read_failure_names_the_side_and_the_attribute() -> None:
     """``source_overlap`` asks each side for ``media_hashes`` (its digest cache) before any row and for ``rows`` (a JSONL
-    source's in-memory list) when that side's walk starts (FIXTURE: on the parent 544e3c9b38a1 both sentences below read
+    source's in-memory list) when that side's walk starts (FIXTURE: on the parent both sentences below read
     ``training source``, no call named, the wrong side for the first). A source whose attribute read fails is named by its
     side and that call -- the validation one for ``media_hashes``, asked right after the training one's; the training one for
     ``rows`` -- never by a row. The same sources with nothing broken pass the census."""
@@ -1675,7 +1675,7 @@ def test_census_attribute_read_failure_names_the_side_and_the_attribute() -> Non
 def test_census_failure_before_any_source_call_is_not_a_sources_and_propagates(
     text_packer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The edge of the last-call rule, a control (FIXTURE: on the parent 544e3c9b38a1 both halves were filed as ``held-out
+    """The edge of the last-call rule, a control (FIXTURE: on the parent both halves were filed as ``held-out
     census could not read training source: ...``, a source that had not been asked). ``source_overlap`` is stood in for by a
     function that fails before it asks either source for anything -- the setup's own helper cannot, its first statement reads
     both sides' ``media_hashes`` -- and that failure is the census's own, not a source's: it propagates out of
@@ -1895,7 +1895,7 @@ def test_last_assistant_row_is_counted_over_its_last_block_only(text_packer: Any
     """A prefix row (``supervise: last_assistant``, history reasoning-free): the packer leaves the history block at -100,
     and the independent count covers the last block alone, so the row validates with 16 loss tokens = [16]; the same
     conversation without the field, or with ``all_assistant`` explicit, validates with 107 = [91, 16]. A history turn
-    that carries reasoning under ``last_assistant`` is the packer's refusal in the row's reasons (review R151-04). On the
+    that carries reasoning under ``last_assistant`` is the packer's refusal in the row's reasons. On the
     rebased parent the validator built ``SFTTarget`` without the field, so the row was measured as 107 = [91, 16]
     (``assert 107 == 16``) and the reasoning-history row packed."""
     messages = _three_turn(history_reasoning=None, final_reasoning="Sure.")
@@ -1970,8 +1970,8 @@ def test_prefilled_row_is_counted_one_token_fewer_per_supervised_block(text_pack
 
 
 def test_prefilled_row_with_a_bare_supervised_turn_is_the_packers_refusal(text_packer: Any) -> None:
-    """A ``prefilled`` row whose supervised turn renders no ``<think>`` opener is refused by the packer (review R149-01;
-    ``_require_one_opener_per_supervised_block``), and the validator reports that refusal, verbatim, as the row's reason
+    """A ``prefilled`` row whose supervised turn renders no ``<think>`` opener is refused by the packer
+    (``_require_one_opener_per_supervised_block``), and the validator reports that refusal, verbatim, as the row's reason
     (the row is unmeasured, the split fails). B1: no reasoning turn at all under ``all_assistant`` (both blocks bare);
     B2: ``last_assistant`` with a bare last turn; B3: reasoning on turn 1 and a bare turn 2 under ``all_assistant``. On
     the rebased parent the field was dropped, so the packer saw self rows and every one of them validated."""
@@ -2141,10 +2141,10 @@ def _knob_packer(packer: Any) -> Any:
 
 
 def test_run_level_opener_mask_is_counted_like_the_rows_prefilled_rule(text_packer: Any) -> None:
-    """The run-level knob and the row's ``opener: prefilled`` are one rule the packer applies once (T6c/T6d): the ``<think>``
+    """The run-level knob and the row's ``opener: prefilled`` are one rule the packer applies once: the ``<think>``
     that opens a supervised body is left at -100. Under a knob packer a self row with reasoning on both turns validates
     with 116 = [101, 15] (118 = [102, 16] without the knob) and a ``last_assistant`` row with 15 = [15]: the validator reads
-    the packer's knob and takes the opener off every supervised block that opens with it. On 401d0564c97 the validator did
+    the packer's knob and takes the opener off every supervised block that opens with it. On the parent the validator did
     not read the knob, so the row was a mismatch: 'loss tokens 116 != independent assistant tokens 118; per assistant block
     [101, 15] vs [102, 16]'."""
     knob = _knob_packer(text_packer)
@@ -2173,10 +2173,10 @@ def test_run_level_opener_mask_is_counted_like_the_rows_prefilled_rule(text_pack
 def test_run_level_opener_mask_leaves_a_bare_block_whole_and_subtracts_a_prefilled_opener_once(
     text_packer: Any,
 ) -> None:
-    """T6d's rule under the knob: a block that opens with anything but ``<think>`` loses nothing (the packer masks nothing
+    """The prefilled-row rule under the knob: a block that opens with anything but ``<think>`` loses nothing (the packer masks nothing
     there and refuses nothing). A bare self row validates with 96 = [91, 5], nothing off; the mixed row (turn 1 reasoning,
     turn 2 bare) with 106 = [101, 5], per block; a ``prefilled`` row under the knob with 116 = [101, 15], the opener
-    subtracted once, never twice. On 401d0564c97 the mixed row was a mismatch ('loss tokens 106 != independent assistant
+    subtracted once, never twice. On the parent the mixed row was a mismatch ('loss tokens 106 != independent assistant
     tokens 107; per assistant block [101, 5] vs [102, 5]'); the bare and the prefilled rows pass there too and pin the
     per-block rule against a count that would take one off every supervised block or stack the knob on ``prefilled``."""
     knob = _knob_packer(text_packer)
@@ -2210,7 +2210,7 @@ def test_validate_from_config_builds_the_packer_with_the_runs_opener_mask(
     ``entrypoints.sft.build_trainer`` does, so the counts it reports are the counts that train: under
     ``rl.mask_think_opener=true`` (declared with the typed field ``rl.serve_contract=prefills_opener``, which the seat's
     ``SFTConfig`` requires where the config is built) a self row with reasoning on both turns reports 116 = [101, 15]
-    and a bare row 96 = [91, 5]; without the knob the same rows report 118 and 96. On 401d0564c97 the validator built
+    and a bare row 96 = [91, 5]; without the knob the same rows report 118 and 96. On the parent the validator built
     its packer without the knob and reported 118 under it (the opener counted as the student's where training leaves it
     at -100)."""
     _packer_module()

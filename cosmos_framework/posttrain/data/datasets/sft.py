@@ -120,7 +120,7 @@ def normalize_row(row: Any, media_root: Path | None, *, label: str) -> dict[str,
         )
     # A prefilled row needs a reasoning block in every SUPERVISED assistant turn (all of them under all_assistant, the last
     # under last_assistant), or the packer would find no opener to mask there and the row would train as a self row under
-    # a prefilled contract string (review R149-01; the packer refuses the same rows by the mask it removed).
+    # a prefilled contract string (the packer refuses the same rows by the mask it removed).
     if result.get("opener", SFT_OPENER_SELF) == SFT_OPENER_PREFILLED:
         assistant = [i for i, message in enumerate(result["messages"]) if message.get("role") == "assistant"]
         supervised = assistant if supervise == SFT_SUPERVISE_ALL else assistant[-1:]
@@ -156,7 +156,7 @@ class JSONLSFTDataset:
         root = Path(media_root).expanduser().resolve() if media_root else (None if remote else Path(source).parent)
         self.rows: list[dict[str, Any]] = []
         # Resolved media path -> sha256 of the file's bytes; one read per distinct file. Part of the source identity
-        # below and the media side of ``row_identity`` (review R134-04).
+        # below and the media side of ``row_identity``.
         self.media_hashes: dict[str, str] = {}
         media_hashes = self.media_hashes
         with _open_jsonl(source, credentials) as stream:
@@ -252,7 +252,7 @@ def row_identity(row: dict[str, Any], *, media_digest: Callable[[str], str] | No
     The hash covers ``messages`` and ``tools`` only (the same conversation re-exported under other metadata still
     matches), with every image/video part's path replaced by ``sha256:<digest of the file's bytes>``: a normalized row
     carries the absolute resolved path, which differs between two media roots holding COPIES of the same file, so a
-    path-based hash let the same image row pass under another root (review R134-04; symlinks resolved and were caught,
+    path-based hash let the same image row pass under another root (symlinks resolved and were caught,
     copies were not). ``item`` is ``row["meta"]["item"]`` when the exporter recorded one (the benchmark item the episode
     was run on), else None.
     """
@@ -284,11 +284,10 @@ def source_overlap(training: Any, validation: Any, *, max_examples: int = 5) -> 
     the same item id, plus the item-id coverage of both sides.
 
     Both sources are map-style datasets (``len`` and ``[index]`` returning normalized rows). A validation source
-    overlapping the training source by even one row or one item is not held out (review R125-D-02: ``validation_4.jsonl``
+    overlapping the training source by even one row or one item is not held out (``validation_4.jsonl``
     was the training file's first four lines and the whole-source fingerprint guard let it pass). A validation row
     without an item id has only its content hash as identity, which one changed character defeats, so the census counts
-    ``training_rows_with_item`` and ``validation_rows_without_item`` for the guard to refuse that combination (review
-    R134-04).
+    ``training_rows_with_item`` and ``validation_rows_without_item`` for the guard to refuse that combination.
     """
 
     def rows_of(dataset: Any) -> Any:
@@ -339,11 +338,11 @@ def refuse_source_overlap(census: Mapping[str, Any]) -> None:
 
     Pure on the census dict, so one rank can compute the census and every rank apply the same refusal (the SFT setup,
     ``entrypoints/sft.py::held_out_census``), and the row validator applies the same rule as the setup. The whole-source
-    fingerprint comparison catches a byte-identical copy only; a subset of the training file passed it (review
-    R125-D-02), so the census is per row. The content hash covers media by file bytes (a copy of the training media
+    fingerprint comparison catches a byte-identical copy only; a subset of the training file passed it,
+    so the census is per row. The content hash covers media by file bytes (a copy of the training media
     under another root is the same row), and a validation row without ``meta.item`` is refused when the training rows
-    carry items: its only identity would be the content hash, which one changed character defeats (review R134-04,
-    bypasses 4 and 5).
+    carry items: its only identity would be the content hash, which one changed character defeats
+    (bypasses 4 and 5).
     """
     if census["shared_rows"] or census["shared_items"]:
         raise ValueError(

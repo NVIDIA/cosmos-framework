@@ -16,7 +16,7 @@ process boundary is a unix socket and a shared buffer, which is what the design 
 the envs can be isolated"*.
 
 **Import discipline is load-bearing here, not stylistic.** Everything this module reaches must be
-importable without Ray, torch, or the i4 policy stack -- that set is declared in
+importable without Ray, torch, or the native policy stack -- that set is declared in
 ``embodied/plugin_surface.py`` and enforced by ``tests/test_import_discipline.py``. A stray
 framework import would still WORK on a single-image deployment and would only fail once the
 images actually diverge, which is exactly the coupling being removed.

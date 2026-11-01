@@ -112,8 +112,7 @@ def test_adapter_declares_the_load_balancing_capability_over_its_adapted_blocks(
     policy, _ = _moe_policy()
     for name in ("begin_lbl_collection", "collect_lbl_metadata"):
         assert callable(getattr(policy, name, None)), f"the adapter declares no {name}"
-    # Imported after the behavioural assertion so that a tree without the capability fails on it, not on this ImportError
-    # (review round 1 of fix round 1, finding F3).
+    # Imported after the behavioural assertion so that a tree without the capability fails on it, not on this ImportError.
     from cosmos_framework.posttrain.model.protocol import LoadBalancingPolicy
 
     assert isinstance(policy, LoadBalancingPolicy)

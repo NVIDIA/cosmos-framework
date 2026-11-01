@@ -85,7 +85,7 @@ def _sleep_rollout_before_trainer_finalization(rollout: Any) -> None:
 
 
 def _require_native_policy_spec(selection: Any) -> Any:
-    """Return the selected online i4 build spec without instantiating a legacy model tree."""
+    """Return the selected online native build spec without instantiating a legacy model tree."""
     spec = selection.native_spec
     if spec is None:
         raise TypeError(
@@ -474,7 +474,7 @@ def build_trainer(
 ) -> Any:
     """Assemble the FSDP online learner with an entry-owned objective builder.
 
-    Backend selection is config-owned: HF uses the built-in adapter, while i4 dispatches through
+    Backend selection is config-owned: HF uses the built-in adapter, while the native backend dispatches through
     ``NativePolicyBuildSpec.builder``. The entry chooses the algorithm without changing the shared
     model, optimizer, checkpoint, or trainer assembly.
 
@@ -821,7 +821,7 @@ def loop(
     pool_owner_actors = _pool_owner_actors(units) if data_plane == "ray_nixl_pool" else {}
     release_validation_payload: Callable[[Any], None] | None = None
     if data_plane == "ray_nixl_pool":
-        # future(yangyangt): both this hook and the training-step barrier below release EVERY live
+        # Future work: both this hook and the training-step barrier below release EVERY live
         # lease on EVERY producer, which is only correct because synchronous steps and validation
         # batches never overlap. A cleaner release would be payload-scoped: producers track which
         # leases a published payload references (or consumers acknowledge per lease) so the driver

@@ -201,6 +201,12 @@ Increasing context parallelism can reduce per-GPU activation memory and speed up
 
 ## Model Arguments
 
+For calibrated static FP8 checkpoint export and vLLM/vLLM-Omni serving examples,
+see the [Nano/Super quantization cookbook](../.agents/skills/cookbooks/cosmos3/quantization/README.md).
+Its exported weights, scales, and activation policy are distinct from the
+load-time quantization flags below. Native Framework FP8 checkpoint inference
+compatibility is outside that cookbook's serving validation.
+
 - `--quantization-method {mxfp8,nvfp4,fp8}`: Post-training quantization applied at load time (replicated weights only, `--dp-shard-size 1`). `mxfp8` / `nvfp4` need Blackwell; `fp8` also runs on Hopper and Ada.
 - `--quantization-fp8-granularity {per_row,per_tensor}`: Scale granularity for `fp8` (default `per_row`).
 - `--experiment-overrides`: Extra config overrides as dotlist entries. Both `--experiment-overrides model.config.a=1 model.config.b=2` and the bracketed form `--experiment-overrides "[model.config.a=1,model.config.b=2]"` are accepted.

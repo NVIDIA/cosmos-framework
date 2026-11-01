@@ -27,7 +27,7 @@ Collapsing it to `rollout` alone would make the first env or trainer plugged in 
 tree re-open the same design question.
 
 NOT this: selecting objectives or callbacks by name from config. Those are separate surfaces with
-their own open TODOs (`algorithm/__init__.py`, `callbacks/dpo.py`, Greptile #12); this registry does
+their own open TODOs (`algorithm/__init__.py`, `callbacks/dpo.py`); this registry does
 not address them.
 """
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""CPU contracts for i4-compatible direct-primary DCP checkpoints."""
+"""CPU contracts for upstream-compatible direct-primary DCP checkpoints."""
 
 from __future__ import annotations
 

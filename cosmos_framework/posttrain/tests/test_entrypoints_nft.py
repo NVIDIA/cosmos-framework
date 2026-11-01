@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Online NFT control-loop tests: the termination-triggered emergency save follows `rl.emergency_checkpoint_components`.
 
-Review of c2af017642d (thread 0069d0e0): the loop called `ensure_resumable` at a termination trigger, so the shared
+The loop called `ensure_resumable` at a termination trigger, so the shared
 `RunConfig` selector was silently ignored by NFT. It now goes through `CheckpointCoordinator.save_emergency` like the
 GRPO and DPO loops; the step body (`online_nft_step`) is replaced by a fake that applies one optimizer step.
 """

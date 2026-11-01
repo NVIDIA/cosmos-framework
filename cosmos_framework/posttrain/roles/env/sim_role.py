@@ -223,7 +223,7 @@ def validate_sim_role(role: Any, *, expect: SimCapabilities) -> SimCapabilities:
     ``backend``           EQUAL. A different engine is a different experiment.
     ``embodiment``        EQUAL. The silent one: same ``action_dim``, different joints.
     ``max_lanes``         role >= expect. The role's is a CEILING, expect's is a demand --
-                          and for b1k the ceiling is 1, carrying round 4's measured tiling
+                          and for b1k the ceiling is 1, carrying the measured tiling
                           refusal (V=2 scored 0/316 where V=1 scored 5/40). This turns that
                           refusal from a scene-build-time raise into a bind-time one.
     ``proprio_width``     role >= expect. Same direction and the same reason

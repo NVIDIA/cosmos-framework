@@ -236,7 +236,7 @@ def run_unit(
             lanes = list(range(sess.n_lanes))
             # Emit liveness at TURN START, not only every _PROGRESS_EVERY steps.
             #
-            # Round 3's lease takeovers fired on LIVE processes because the holder's only
+            # Earlier lease takeovers fired on LIVE processes because the holder's only
             # heartbeat was the work it was not currently doing: it heartbeat on journal
             # appends, then spent ~110 s in ffprobe under the lease and aged out at 91.4 s
             # against a 90 s threshold. The same shape is here -- a scene build is 1.5-6

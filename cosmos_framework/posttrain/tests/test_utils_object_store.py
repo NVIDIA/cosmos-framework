@@ -60,7 +60,7 @@ def test_gcs_endpoint_gets_interop_config():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_non_gcs_endpoint_untouched():
-    cfg = build_s3_config("https://pdx.s8k.io")
+    cfg = build_s3_config("https://s3.example.com")
     assert cfg.signature_version is None  # stock signing for real S3-compatible stores
 
 
@@ -75,7 +75,7 @@ def test_conditional_creation_is_signed_for_the_actual_store(
     Both stores receive the plain ``If-None-Match: *`` header. GCS's S3-interoperability endpoint
     rejects any ``x-goog-*`` header sent beside AWS-signed ``x-amz-*`` headers with
     ``ExcessHeaderValues``; translating the precondition into ``x-goog-if-generation-match`` made
-    every archive PutObject fail (regression: a84c51b114), so no ``x-goog-*`` header may appear.
+    every archive PutObject fail (a regression), so no ``x-goog-*`` header may appear.
     """
     credentials = tmp_path / "credentials.json"
     credentials.write_text(

@@ -21,8 +21,8 @@ from cosmos_framework.posttrain.embodied.unit import UnitResult, WorkUnit
 @dataclass
 class Lease:
     unit: WorkUnit
-    #: Fencing token, minted **after** a successful ``O_EXCL`` create, never before. Round 3
-    #: minted it first, forked a journal, and 2 identities out of 16,000 produced a 100%
+    #: Fencing token, minted **after** a successful ``O_EXCL`` create, never before. An earlier
+    #: version minted it first, forked a journal, and 2 identities out of 16,000 produced a 100%
     #: delivery stop.
     token: str
     expires_at: float
@@ -98,7 +98,7 @@ class UnitSource(Protocol):
         here, and both need the same distinction: ``unclaimed`` and ``reclaimable`` are work
         this source will still hand out, ``held`` is work in flight elsewhere, and ``stuck``
         is work it will now refuse forever. A source that reported only a done-count would
-        make "finished" and "wedged" the same observation -- round 3's C7 sweep sat in a
+        make "finished" and "wedged" the same observation -- an earlier collection sweep sat in a
         fail-fast loop for hours behind exactly that ambiguity.
 
         Keys every implementation must supply: ``units``, ``done``, ``held``,
@@ -147,7 +147,7 @@ class StaticUnits:
         longest task, and the longest b1k task is ~23 min per episode.
 
         ``prefer`` is accepted and ignored. Honouring it here would mean keeping a scene
-        open across claims, which is the cross-episode reuse round 3 settled as forbidden
+        open across claims, which is the cross-episode reuse an earlier collection run ruled out
         (spec §7.3) -- so the parameter exists for protocol conformance and does nothing.
         """
         del prefer  # see docstring: deliberately not honoured

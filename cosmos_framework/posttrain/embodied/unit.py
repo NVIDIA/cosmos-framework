@@ -20,7 +20,7 @@ from cosmos_framework.posttrain.schema.identity import digest
 class Outcome(str, Enum):
     """How an episode ended.
 
-    ``FAILURE`` is **data, not an error**: at round 3's measured 4.43% yield, ~95% of
+    ``FAILURE`` is **data, not an error**: at a measured 4.43% yield, ~95% of
     episodes legitimately end this way and every one of them is a valid training frame
     sequence. Only ``SIM_ERROR`` (and ``ABANDONED``) means the unit must be re-dispatched.
     Conflating the two is how a pipeline decides a campaign has catastrophically failed
@@ -44,8 +44,8 @@ class EpisodeKey:
 
     NOT positional. Two workers that draw the same key must produce interchangeable data,
     and the sink uses :meth:`slug` as the output path -- so a key that encoded *which*
-    worker or *when* would make resume impossible and duplicates undetectable. Round 1
-    produced 102 duplicate packages precisely because identity was positional.
+    worker or *when* would make resume impossible and duplicates undetectable. An early
+    collection run produced 102 duplicate packages precisely because identity was positional.
     """
 
     suite: str
@@ -100,7 +100,7 @@ class WorkUnit:
     bin-packing plan meaningless.
 
     ``scenario["episodes_per_scene"]`` is the EPOCHS knob in disguise. Under EPOCHS>1,
-    env poisoning stalled 101 windows / 572 episodes across 6 tasks in round 2 (all later
+    env poisoning stalled 101 windows / 572 episodes across 6 tasks in one collection run (all later
     recovered), and during that recovery a THIRD failure class surfaced -- an articulation
     -view corpse -- which was explicitly not covered by the gates written for the first
     two. It MUST be pilot-measured (gate G3), never inferred from an amortization curve.

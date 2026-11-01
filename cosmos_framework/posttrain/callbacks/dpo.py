@@ -14,9 +14,9 @@ generations for eyeballing) needs the model's inference/generate path + an artif
 sink; that is a separate integration (P3 T2I/eval) and is intentionally left to wire on
 the same `Callback` interface rather than faked here.
 
-TODO(dinghaoy): move these algorithm-specific callbacks behind a registration mechanism
+TODO: move these algorithm-specific callbacks behind a registration mechanism
 (selectable by name from config, like `control/recipe.RECIPES`) instead of importing/
-constructing them directly in `config/build.py`. Deferred to a follow-up MR (Greptile #11).
+constructing them directly in `config/build.py`. Deferred to a follow-up change.
 """
 
 from __future__ import annotations
