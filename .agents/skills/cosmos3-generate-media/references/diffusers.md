@@ -9,7 +9,7 @@ README section "Run with Diffusers". Its relative links (`../../README.md#diffus
 ### Quickstart
 
 Set up the environment: [Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers).
-Run a text-to-video generation with `Cosmos3OmniPipeline`:
+Run a Cosmos3-Edge text-to-video generation with `Cosmos3OmniPipeline`:
 
 ```python
 import json
@@ -20,36 +20,36 @@ from diffusers.utils import export_to_video
 
 prompt = json.load(open("assets/prompts/text2video/robot_kitchen.json"))
 negative = json.load(open("assets/negative_prompts/text2video/neg_prompt.json"))
+device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
 
 pipe = Cosmos3OmniPipeline.from_pretrained(
-    "nvidia/Cosmos3-Nano", torch_dtype=torch.bfloat16, device_map="cuda"
+    "nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16
 )
-pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=10.0)
+pipe.to(device)
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
 
 result = pipe(
     prompt=json.dumps(prompt),
     negative_prompt=json.dumps(negative),
     image=None,
-    num_frames=189,
-    height=720,
-    width=1280,
+    num_frames=121,
+    height=480,
+    width=832,
     fps=24,
-    num_inference_steps=35,
-    guidance_scale=6.0,
+    num_inference_steps=20,
+    guidance_scale=5.0,
     enable_sound=False,
     add_resolution_template=False,
     add_duration_template=False,
-    generator=torch.Generator(device="cuda").manual_seed(1234),
+    generator=torch.Generator(device=device).manual_seed(1234),
 )
-export_to_video(result.video, "/tmp/cosmos3_t2v_diffusers.mp4", fps=24)
+export_to_video(result.video, "/tmp/cosmos3_edge_t2v_diffusers.mp4", fps=24)
 ```
 
-To run **Cosmos3-Super** instead, load the larger checkpoint:
-`Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Super", ...)`.
-
-To run **Cosmos3-Edge** instead, load `nvidia/Cosmos3-Edge` and use its
-single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
-`num_inference_steps=20`, `guidance_scale=5.0`, and `flow_shift=8.0`.
+The XPU path was validated on Intel Arc Graphics with PyTorch
+`2.13.0.dev20260530+xpu` and Diffusers `0.35.2`. XPU support is limited to
+Cosmos3-Edge generation through Diffusers. Nano and Super examples remain on
+their documented CUDA paths.
 
 ### Notebook walkthrough
 
@@ -259,6 +259,16 @@ def release_pipe() -> None:
     print(f"released previous pipeline; cuda allocated {cuda_allocated_gib():.1f} GiB")
 
 
+def inference_device(model: str) -> str:
+    if (
+        resolve_model_id(model) == "nvidia/Cosmos3-Edge"
+        and hasattr(torch, "xpu")
+        and torch.xpu.is_available()
+    ):
+        return "xpu"
+    return "cuda"
+
+
 def get_pipe(model: str):
     global _pipe, _pipe_model
     model_id = resolve_model_id(model)
@@ -289,7 +299,7 @@ def get_pipe(model: str):
             token=os.environ.get("HF_TOKEN") or None,
         )
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=FIXED_SAMPLING["shift"])
-    pipe.to("cuda")
+    pipe.to(inference_device(model))
     _pipe = pipe
     _pipe_model = model_id
     print(f"loaded pipeline in {time.time() - t0:.1f}s")
@@ -306,7 +316,7 @@ def run_diffusers_payload(payload_path: Path, output_dir: str | Path, *, model: 
     pipe = get_pipe(model)
     if not distilled:
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=payload["shift"])
-    generator = torch.Generator(device="cuda").manual_seed(payload["seed"])
+    generator = torch.Generator(device=inference_device(model)).manual_seed(payload["seed"])
     vision_path = resolve_payload_path(payload_path, payload["vision_path"]) if "vision_path" in payload else None
     image = load_image(str(vision_path)) if payload["model_mode"] == "image2video" else None
     video = load_video(str(vision_path)) if payload["model_mode"] == "video2video" else None
@@ -496,11 +506,12 @@ from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepSchedu
 from diffusers.utils import export_to_video
 
 compact = lambda p: json.dumps(json.load(open(p)), ensure_ascii=True, separators=(",", ":"))   # run from this skill directory (the one with assets/)
+device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
 pipe = Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16,
                                            safety_checker=None, enable_safety_checker=False)
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
-pipe.to("cuda")
-gen = torch.Generator(device="cuda").manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
+pipe.to(device)
+gen = torch.Generator(device=device).manual_seed(1234)   # FIXED_SAMPLING seed, as in the Nano snippet
 ```
 
 ```python

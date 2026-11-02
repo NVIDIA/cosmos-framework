@@ -23,7 +23,8 @@ local Framework environment below with ModelOpt, datasets, and notebook tooling.
 
 ## Prerequisites
 
-- Linux with NVIDIA GPU access.
+- Linux with NVIDIA GPU access, or an Intel GPU supported by PyTorch XPU for the
+  Cosmos3-Edge Diffusers backend.
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/), `git`, and `git-lfs` installed.
 - Hugging Face access to the gated Cosmos3 model repos. Generator also requires
   access to the gated
@@ -158,7 +159,9 @@ for a one-off run, pass `--no-guardrails` to `cosmos_framework.scripts.inference
 
 Direct generation with `Cosmos3OmniPipeline` (Generator · Audiovisual). Create a
 venv and install the backend, choosing `--torch-backend` to match your driver
-(see [CUDA driver and the `cuXXX` backend](#cuda-driver-and-the-cuxxx-backend)):
+(see [CUDA driver and the `cuXXX` backend](#cuda-driver-and-the-cuxxx-backend)).
+XPU is supported for Cosmos3-Edge generation only; other backends retain their
+documented NVIDIA GPU requirements.
 
 ```bash
 uv venv --python 3.13 --seed --managed-python
@@ -176,6 +179,26 @@ uv pip install --torch-backend=cu130 \
   torchvision \
   transformers
 ```
+
+For Cosmos3-Edge on an Intel Arc GPU, install the same dependencies with the
+PyTorch XPU backend:
+
+```bash
+uv pip install --torch-backend=xpu \
+  "diffusers @ git+https://github.com/huggingface/diffusers.git" \
+  accelerate \
+  av \
+  cosmos_guardrail \
+  huggingface_hub \
+  imageio \
+  imageio-ffmpeg \
+  torch \
+  torchvision \
+  transformers
+```
+
+This Cosmos3-Edge path was validated on Intel Arc Graphics with PyTorch
+`2.13.0.dev20260530+xpu` and Diffusers `0.35.2`.
 
 ## TensorRT-LLM Generator
 
