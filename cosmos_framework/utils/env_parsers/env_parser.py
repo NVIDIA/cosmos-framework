@@ -83,10 +83,12 @@ class EnvParser:
             log.debug(f"{key}: {value.__get__(self)}")
 
     def to_json(self, file_name=None):
+        # Use the subclass's validators (get_val_dict is polymorphic over
+        # cls.__dict__); iterating the base EnvParser.__dict__ finds no
+        # validators, so every real parser serialized to "{}".
         dict = {
             key.upper(): value.__get__(self)
-            for key, value in EnvParser.__dict__.items()
-            if isinstance(value, Validator)
+            for key, value in self.get_val_dict().items()
         }
         json_str = json.dumps(dict, indent=4)
         print(json_str)
