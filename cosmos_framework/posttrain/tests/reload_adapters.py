@@ -11,9 +11,8 @@ from pathlib import Path
 
 import torch
 
-from cosmos_framework.posttrain.checkpoint.adapters import read_adapter_artifact
+from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration, read_adapter_artifact
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
-from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig, AdapterExtraModuleConfig
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
 from cosmos_framework.posttrain.tests.adapter_numerics import (
@@ -26,27 +25,15 @@ from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
 
 def portable_policy(base: str, directory: str, identity: dict, *, backend: str = "i4"):
-    components = [
-        AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
-        for row in identity["resolved"]["targets"]
-    ]
-    extras = [
-        AdapterExtraModuleConfig(
-            component=row["component"],
-            targets=[row["name"].rsplit(".", 1)[0]],
-            lr_multiplier=row["lr_multiplier"],
-            weight_decay=row["weight_decay"],
-        )
-        for row in identity["resolved"]["extra_parameters"]
-        if row["owner"] == row["name"]
-    ]
+    adapters = adapter_configuration(identity)
+    adapters.warm_start = directory
     if backend == "hf":
         from cosmos_framework.posttrain.config.model import HFModelConfig
         from cosmos_framework.posttrain.model.hf import build_hf_model
 
         return build_hf_model(
             HFModelConfig(name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa"),
-            adapters=AdapterConfig(components=components, extra_modules=extras, warm_start=directory),
+            adapters=adapters,
             adapter_media_identity=identity["media"],
         )
     config = Qwen3VLModelConfig(
@@ -54,7 +41,7 @@ def portable_policy(base: str, directory: str, identity: dict, *, backend: str =
     )
     return build_qwen3_vl_model(
         config,
-        adapters=AdapterConfig(components=components, extra_modules=extras, warm_start=directory),
+        adapters=adapters,
         adapter_media_identity=identity["media"],
     )
 

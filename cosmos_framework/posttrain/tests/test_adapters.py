@@ -234,7 +234,7 @@ def test_shared_parameters_and_module_aliases(same_module, tmp_path):
 
 
 @pytest.mark.parametrize("same_module", [False, True])
-def test_portable_extra_alias_ownership_survives_configuration_roundtrip(tmp_path, same_module):
+def test_portable_extra_alias_ownership_survives_configuration_roundtrip(tmp_path, same_module, monkeypatch):
     from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration, load_adapter_artifact
     from cosmos_framework.posttrain.config.build import build_optimizer
     from cosmos_framework.posttrain.config.rl import OptimizerConfig
@@ -277,6 +277,21 @@ def test_portable_extra_alias_ownership_survives_configuration_roundtrip(tmp_pat
     )
     restored_optimizer = build_optimizer(base, OptimizerConfig(lr=0.01), parameter_groups=optimizer_groups(base, 0.01))
     assert_trainability(base, restored_optimizer)
+
+    # The real-checkpoint qualification must reconstruct aliases by the same
+    # contract as production warm start, for both HF and native builders.
+    from cosmos_framework.posttrain.tests.reload_adapters import portable_policy
+
+    for backend, builder in (
+        ("i4", "cosmos_framework.posttrain.tests.reload_adapters.build_qwen3_vl_model"),
+        ("hf", "cosmos_framework.posttrain.model.hf.build_hf_model"),
+    ):
+        with monkeypatch.context() as patch:
+            patch.setattr(builder, lambda config, **kwargs: kwargs["adapters"])
+            reloaded = portable_policy("unused", str(portable), saved, backend=backend)
+        expected = adapter_configuration(saved)
+        expected.warm_start = str(portable)
+        assert reloaded == expected
 
 
 @pytest.mark.parametrize("missing_owner", [False, True])
