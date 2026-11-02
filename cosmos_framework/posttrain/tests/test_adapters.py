@@ -233,6 +233,73 @@ def test_shared_parameters_and_module_aliases(same_module, tmp_path):
         export_merged_adapter(str(portable), str(tmp_path / "base"), str(tmp_path / "merged"))
 
 
+@pytest.mark.parametrize("same_module", [False, True])
+def test_portable_extra_alias_ownership_survives_configuration_roundtrip(tmp_path, same_module):
+    from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration, load_adapter_artifact
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    torch.manual_seed(42)
+    net = tiny_net()
+    first, second = net.model.language_model.layers
+    first.input_layernorm = nn.LayerNorm(8)
+    second.input_layernorm = first.input_layernorm if same_module else nn.LayerNorm(8)
+    second.input_layernorm.weight = first.input_layernorm.weight
+    base = copy.deepcopy(net)
+    names = [f"model.language_model.layers.{i}.input_layernorm" for i in (1, 0)]
+    config = AdapterConfig(
+        components=[Component(targets=[FIRST], rank=2)],
+        extra_modules=[AdapterExtraModuleConfig(targets=[name]) for name in names],
+    )
+    manifest = install_adapters(net, config)
+    ident = identity(manifest)
+    # Name-sorted serialized rows deliberately put the alias before its owner.
+    assert (
+        next(row for row in manifest["extra_parameters"] if row["name"] == names[1] + ".weight")["owner"]
+        == names[0] + ".weight"
+    )
+    optimizer = build_optimizer(net, OptimizerConfig(lr=0.01), parameter_groups=optimizer_groups(net, 0.01))
+    assert_trainability(net, optimizer)
+    x = torch.randn(2, 8)
+    first.input_layernorm(first.self_attn.q_proj(x)).square().sum().backward()
+    optimizer.step()
+    portable = tmp_path / "portable"
+    write_adapter_artifact(str(portable), ident, {name: net.state_dict()[name] for name in state_spec(ident)})
+    saved, _ = read_adapter_artifact(str(portable))
+    restored_manifest = install_adapters(base, adapter_configuration(saved), initialize=False)
+    assert restored_manifest == manifest
+    base._posttrain_adapter_identity = saved
+    load_adapter_artifact(base, str(portable))
+    left, right = base.model.language_model.layers
+    assert left.input_layernorm.weight is right.input_layernorm.weight
+    torch.testing.assert_close(
+        left.input_layernorm(left.self_attn.q_proj(x)), first.input_layernorm(first.self_attn.q_proj(x)), atol=0, rtol=0
+    )
+    restored_optimizer = build_optimizer(base, OptimizerConfig(lr=0.01), parameter_groups=optimizer_groups(base, 0.01))
+    assert_trainability(base, restored_optimizer)
+
+
+@pytest.mark.parametrize("missing_owner", [False, True])
+def test_portable_extra_alias_invalid_ownership_fails(missing_owner):
+    from cosmos_framework.posttrain.checkpoint.adapters import adapter_configuration
+
+    net = tiny_net()
+    manifest = resolve_targets(
+        net,
+        AdapterConfig(
+            components=[Component(targets=[FIRST], rank=2)],
+            extra_modules=[AdapterExtraModuleConfig(targets=["model.language_model.norm"])],
+        ),
+    )
+    # A valid resolver can never produce this missing owner/cyclic module graph.
+    row = manifest["extra_parameters"][0]
+    row["owner"] = "model.language_model.other." + row["name"].rsplit(".", 1)[1]
+    if not missing_owner:
+        manifest["extra_parameters"].append({**row, "name": row["owner"], "owner": row["name"]})
+    with pytest.raises(ValueError, match="ownership is cyclic or references a missing owner"):
+        adapter_configuration(identity(manifest))
+
+
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
 def test_portable_fresh_process_reload_and_errors(tmp_path, method):
     torch.manual_seed(6)

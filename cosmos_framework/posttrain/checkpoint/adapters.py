@@ -37,6 +37,24 @@ def adapter_configuration(identity: dict):
     """Reconstruct exact selectors/settings from a validated portable manifest."""
     from cosmos_framework.posttrain.config.adapters import AdapterConfig, AdapterExtraModuleConfig
 
+    # Extra-parameter owners follow the original module selection order. A
+    # manifest is sorted by parameter name, which need not put each owner first.
+    # Reconstruct that partial order without changing existing artifact identity
+    # or choosing a different alias as owner on warm start/export validation.
+    extras = identity["resolved"]["extra_parameters"]
+    predecessors: dict[str, set[str]] = {}
+    for row in extras:
+        module, owner = row["name"].rsplit(".", 1)[0], row["owner"].rsplit(".", 1)[0]
+        predecessors.setdefault(module, set()).update({owner} if owner != module else set())
+    order: dict[str, int] = {}
+    while predecessors:
+        ready = sorted(name for name, owners in predecessors.items() if owners <= order.keys())
+        if not ready:
+            raise ValueError("extra module ownership is cyclic or references a missing owner; invalid adapter manifest")
+        for name in ready:
+            order[name] = len(order)
+            del predecessors[name]
+
     return AdapterConfig(
         components=[
             AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
@@ -49,7 +67,7 @@ def adapter_configuration(identity: dict):
                 lr_multiplier=row["lr_multiplier"],
                 weight_decay=row["weight_decay"],
             )
-            for row in identity["resolved"]["extra_parameters"]
+            for row in sorted(extras, key=lambda row: (order[row["name"].rsplit(".", 1)[0]], row["name"]))
         ],
     )
 
