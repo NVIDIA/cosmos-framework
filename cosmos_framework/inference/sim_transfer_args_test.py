@@ -375,3 +375,47 @@ def test_public_causal_cache_overrides_preserve_exported_config(
     assert config["attention_sink_size"] == sink
     assert json.loads(config_path.read_text()) == source_config
     assert overrides.build_setup(world_size=1, local_world_size=1, device_memory_bytes=_GB200_MEMORY_BYTES) == setup
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("resolution", ["256", "704", "720", "768"])
+def test_480_only_checkpoint_names_its_own_limit_for_every_rejected_tier(tmp_path: Path, resolution: str) -> None:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    model_config = SimpleNamespace(
+        resolution="480",
+        fixed_step_sampler_config=SimpleNamespace(t_list=[1.0, 0.9375, 5 / 6, 0.625]),
+        video_temporal_causal=True,
+        causal_training_strategy="none",
+        teacher_forcing_frames_per_chunk=1,
+        teacher_forcing_replay_policy=SimpleNamespace(
+            control_visibility="causal", controls_read_strict_past_clean_rgb=True, clean_pass_causality="frame"
+        ),
+    )
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=True,
+        resolution=resolution,
+        transfer_resize_mode="direct_resize",
+        control_guidance=1.0,
+        num_first_chunk_conditional_frames=0,
+        share_vision_temporal_positions=True,
+    )
+    with pytest.raises(ValueError, match=f"supports only resolution='480', got resolution='{resolution}'"):
+        sample._build_transfer_data(model_config, sample.sample_meta, user_fields=frozenset())
+        sample._apply_sf_dmd_transfer_inference_contract(model_config=model_config, user_fields=frozenset())
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_bidirectional_480_model_keeps_the_teacher_tier_message(tmp_path: Path) -> None:
+    # Only the causal SF-DMD student is 480-only; a bidirectional model recording 480 still runs 720.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    model_config = SimpleNamespace(resolution="480", fixed_step_sampler_config=None, video_temporal_causal=False)
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, resolution="256", transfer_resize_mode="direct_resize"
+    )
+    with pytest.raises(ValueError, match="teacher's trained 480 and 720 tiers only, got resolution='256'"):
+        sample._build_transfer_data(model_config, sample.sample_meta, user_fields=frozenset())
