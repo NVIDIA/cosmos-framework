@@ -119,13 +119,13 @@ configure_diffusers_environment()
 
 Backend-only variables the cell sets (the notebook's echo loop printed these together with `COSMOS_ROOT`, `COSMOS3_AUDIOVISUAL_OUTPUT_ROOT`, `UV_CACHE_DIR`, `HF_HOME`, `CUDA_VISIBLE_DEVICES` and `HF_TOKEN: <set>`/`<unset>`; those shared variables are in payloads.md § 4.1 and § 4.4):
 
-| Variable                 | Default in the cell                                                   | Documented example (export block above) |
-| ------------------------ | --------------------------------------------------------------------- | --------------------------------------- |
-| `COSMOS3_DIFFUSERS_VENV` | `COSMOS_ROOT / ".venv-cosmos3-diffusers"`, resolved and exported back | `/path/to/.venv-cosmos3-diffusers`      |
-| `COSMOS3_TORCH_BACKEND`  | `"cu130"`, exported back                                              | `cu130` (`cu128` for CUDA 12.8)         |
-| `UV_LINK_MODE`           | `"copy"` (`setdefault`)                                               | `copy`                                  |
-| `HF_HUB_DISABLE_XET`     | `"1"` (`setdefault`)                                                  | —                                       |
-| `COSMOS3_DIFFUSERS_PRECISION` | `"bf16"` (`setdefault`)                                            | `bf16` (`fp8` selects a quantized checkpoint) |
+| Variable                      | Default in the cell                                                   | Documented example (export block above)       |
+| ----------------------------- | --------------------------------------------------------------------- | --------------------------------------------- |
+| `COSMOS3_DIFFUSERS_VENV`      | `COSMOS_ROOT / ".venv-cosmos3-diffusers"`, resolved and exported back | `/path/to/.venv-cosmos3-diffusers`            |
+| `COSMOS3_TORCH_BACKEND`       | `"cu130"`, exported back                                              | `cu130` (`cu128` for CUDA 12.8)               |
+| `UV_LINK_MODE`                | `"copy"` (`setdefault`)                                               | `copy`                                        |
+| `HF_HUB_DISABLE_XET`          | `"1"` (`setdefault`)                                                  | —                                             |
+| `COSMOS3_DIFFUSERS_PRECISION` | `"bf16"` (`setdefault`)                                               | `bf16` (`fp8` selects a quantized checkpoint) |
 
 ## 3. Install Diffusers Dependencies
 
@@ -555,7 +555,6 @@ def run_diffusers_payload(payload_path: Path, output_dir: str | Path, *, model: 
 ```
 
 Viewer helpers (`display_video`, `view_run`) are Jupyter-only and are not migrated; `view_run`'s media discovery rule is in payloads.md § 4.2 (`view_run` discovery row). How each payload key reaches the pipeline call: payloads.md § 10 (diffusers column).
-
 
 ## Quantized Checkpoints (FP8)
 
