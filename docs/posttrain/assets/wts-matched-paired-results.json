@@ -1,0 +1,267 @@
+{
+  "format": "cosmos-matched-wts-paired-v1",
+  "platform": "isolated_host",
+  "checkpoint": {
+    "repository": "Qwen/Qwen3-VL-2B-Instruct",
+    "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
+  },
+  "split_note": "576 rows are a reused scene-disjoint benchmark, not an untouched final test; full 2676 evaluation includes 44 rows sharing 4 training scene IDs.",
+  "comparison_scope": "Same host evaluation environment and settings; adapted models are the completed 076cfbb host repeats. Canonical 3a9552b Slurm scores remain separate.",
+  "installed": {
+    "source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+    "wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+    "container_sha256": null,
+    "versions": {
+      "torch": "2.10.0+cu128",
+      "transformers": "5.8.1",
+      "safetensors": "0.8.0",
+      "torchcodec": "0.10.0"
+    }
+  },
+  "environment_sha256": "ee8bd063a246931f33b8497eebd50ff9f45d20c0c0b0626e4da49ce867a61667",
+  "datasets": {
+    "evaluation_rows": {
+      "sha256": "5c930b91dabbc156f0912700d38b6ce24175705eced6a49b2fe48018f8a92562",
+      "rows": 2676,
+      "path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/resources/full-wts/source/data/wts_eval/annotations.json"
+    },
+    "reused_scene_disjoint_benchmark": {
+      "sha256": "3cab357a0ebb9bf7292525ae6f33dd43ffef916226c0e6d8171c3f45dce71e28",
+      "rows": 576,
+      "path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/resources/full-wts/source/cosmos-wts-bayesian-10-20261029/inputs/data/test.json"
+    }
+  },
+  "base_identity": {
+    "sha256": "9ab1478ba4659a470e3758fff33ba7418d3d99c12890d976b956bf5a9eaf5deb",
+    "files": {
+      "chat_template.json": "6f8a6a55027e3da5160105556cda5dd69f6423f1c32645f6730d32de7773d0c4",
+      "config.json": "bec4b3d446efa05807365c9e1cec03ac590836879d02f3a6da879971154bdd3b",
+      "generation_config.json": "1e241830b48b397cb0900101421df5450baddc7adf01e5fc86b5615865f3bae4",
+      "merges.txt": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+      "model.safetensors": "7de1838c87a5349b016c26a1c3f7d2bc400a3d485f95ef39a7059ffd734977a0",
+      "preprocessor_config.json": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+      "tokenizer.json": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+      "tokenizer_config.json": "c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399",
+      "video_preprocessor_config.json": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+      "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    }
+  },
+  "base_preparation": {
+    "base_storage_dtype": "bfloat16",
+    "evaluation_dtype": "float32",
+    "serialized_tensors_verified": 625,
+    "weights_sha256": "69d0ece6b7452832b60b57ab210db6db9eedeed8ac01ac04cad1df66ea7da0b5"
+  },
+  "evaluation_settings": {
+    "task": {
+      "type": "mcq"
+    },
+    "dataset": {
+      "annotation_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/resources/full-wts/source/data/wts_eval/annotations.json",
+      "media_dir": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/resources/full-wts/source/data/wts_eval/videos",
+      "system_prompt": "Answer the multiple-choice question with its letter."
+    },
+    "model": {
+      "model_name": "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/wts-baseline-host-v1/unadapted-fp32",
+      "enable_lora": false,
+      "dtype": "float32",
+      "attn_implementation": "sdpa",
+      "max_length": 16384
+    },
+    "evaluation": {
+      "answer_type": "letter",
+      "seed": 42,
+      "batch_size": 1,
+      "limit": -1,
+      "skip_saved": false
+    },
+    "vision": {
+      "video_decoder": "torchcodec-cuda-on-demand",
+      "decoder_device": "cpu",
+      "num_frames": 4,
+      "min_pixels": 50176,
+      "max_pixels": 81920,
+      "video_cache_size": 8,
+      "process_threads": 4
+    },
+    "generation": {
+      "max_tokens": 32,
+      "temperature": 0.0,
+      "max_retries": 1
+    },
+    "metrics": {
+      "names": []
+    }
+  },
+  "baseline": {
+    "full": {
+      "total": 2676,
+      "correct": 1269,
+      "accuracy": 0.4742152466367713,
+      "invalid": 0
+    },
+    "reused_scene_disjoint_benchmark": {
+      "total": 576,
+      "correct": 271,
+      "accuracy": 0.4704861111111111,
+      "invalid": 0
+    },
+    "generation_nll": 0.19573712447577493,
+    "prediction_sha256": {
+      "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/wts-baseline-host-v1/attempts/local-20261102T221527Z/results/unadapted-fp32/letter/general/results_shard0.json": "f7d82e8237a5ab14266db7a0c92cd8847f38f3b329e902f65e4d489c484c40e2",
+      "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/wts-baseline-host-v1/attempts/local-20261102T221527Z/results/unadapted-fp32/letter/general/results_shard1.json": "9578b998997e0a04dd54c45d1410a9e3e2bd7702e358e86060f55d2f8764bbf5"
+    }
+  },
+  "methods": {
+    "lora": {
+      "training_source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+      "training_wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+      "mean_training_loss": 0.22714613444808232,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17096450696396218,
+      "full": {
+        "rows": 2676,
+        "baseline_correct": 1269,
+        "adapted_correct": 2465,
+        "baseline_accuracy": 0.4742152466367713,
+        "adapted_accuracy": 0.9211509715994021,
+        "delta_percentage_points": 44.69357249626308,
+        "incorrect_to_correct": 1227,
+        "correct_to_incorrect": 31,
+        "both_correct": 1238,
+        "both_incorrect": 180
+      },
+      "reused_scene_disjoint_benchmark": {
+        "rows": 576,
+        "baseline_correct": 271,
+        "adapted_correct": 528,
+        "baseline_accuracy": 0.4704861111111111,
+        "adapted_accuracy": 0.9166666666666666,
+        "delta_percentage_points": 44.61805555555556,
+        "incorrect_to_correct": 261,
+        "correct_to_incorrect": 4,
+        "both_correct": 267,
+        "both_incorrect": 44
+      },
+      "invalid_answers": 0,
+      "prediction_sha256": {
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/lora/evaluation-v4/attempts/local-20261031T081729Z/results/merged-hf/letter/general/results_shard0.json": "a0a605cbf59047b75b5252ef013fe1a25cb99cfc3fc799a4df4f0b4a43ee9a5a",
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/lora/evaluation-v4/attempts/local-20261031T081729Z/results/merged-hf/letter/general/results_shard1.json": "000b6e602544d34fc1d468907d796f1c2043ac972ce4cfef02ffe3929112b72f"
+      }
+    },
+    "rslora": {
+      "training_source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+      "training_wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+      "mean_training_loss": 0.1927502177630766,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17904076750049733,
+      "full": {
+        "rows": 2676,
+        "baseline_correct": 1269,
+        "adapted_correct": 2455,
+        "baseline_accuracy": 0.4742152466367713,
+        "adapted_accuracy": 0.9174140508221226,
+        "delta_percentage_points": 44.31988041853513,
+        "incorrect_to_correct": 1222,
+        "correct_to_incorrect": 36,
+        "both_correct": 1233,
+        "both_incorrect": 185
+      },
+      "reused_scene_disjoint_benchmark": {
+        "rows": 576,
+        "baseline_correct": 271,
+        "adapted_correct": 530,
+        "baseline_accuracy": 0.4704861111111111,
+        "adapted_accuracy": 0.9201388888888888,
+        "delta_percentage_points": 44.96527777777778,
+        "incorrect_to_correct": 262,
+        "correct_to_incorrect": 3,
+        "both_correct": 268,
+        "both_incorrect": 43
+      },
+      "invalid_answers": 0,
+      "prediction_sha256": {
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/rslora/evaluation-v4/attempts/local-20261031T083828Z/results/merged-hf/letter/general/results_shard0.json": "d010674ab9217055fb93caf9ac2df41adc3da3f744ea3413834387d7ef4aa84b",
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/rslora/evaluation-v4/attempts/local-20261031T083828Z/results/merged-hf/letter/general/results_shard1.json": "244138878b4fafae9f8ef600b6fc2f234310126b6dad2eb80ba156b693c74094"
+      }
+    },
+    "dora": {
+      "training_source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+      "training_wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+      "mean_training_loss": 0.22444969899893122,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.17138761434834632,
+      "full": {
+        "rows": 2676,
+        "baseline_correct": 1269,
+        "adapted_correct": 2470,
+        "baseline_accuracy": 0.4742152466367713,
+        "adapted_accuracy": 0.9230194319880418,
+        "delta_percentage_points": 44.880418535127056,
+        "incorrect_to_correct": 1228,
+        "correct_to_incorrect": 27,
+        "both_correct": 1242,
+        "both_incorrect": 179
+      },
+      "reused_scene_disjoint_benchmark": {
+        "rows": 576,
+        "baseline_correct": 271,
+        "adapted_correct": 528,
+        "baseline_accuracy": 0.4704861111111111,
+        "adapted_accuracy": 0.9166666666666666,
+        "delta_percentage_points": 44.61805555555556,
+        "incorrect_to_correct": 261,
+        "correct_to_incorrect": 4,
+        "both_correct": 267,
+        "both_incorrect": 44
+      },
+      "invalid_answers": 0,
+      "prediction_sha256": {
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/dora/evaluation-v4/attempts/local-20261031T085954Z/results/merged-hf/letter/general/results_shard0.json": "d0754da7f448b23bfc0fb02deef200e225fa082cb60694a9e028c7918d20d6ab",
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/dora/evaluation-v4/attempts/local-20261031T085954Z/results/merged-hf/letter/general/results_shard1.json": "000b6e602544d34fc1d468907d796f1c2043ac972ce4cfef02ffe3929112b72f"
+      }
+    },
+    "pissa": {
+      "training_source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+      "training_wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+      "mean_training_loss": 0.18890389784259942,
+      "validation_before": 0.8439033968164751,
+      "validation_after": 0.18445413520977746,
+      "full": {
+        "rows": 2676,
+        "baseline_correct": 1269,
+        "adapted_correct": 2467,
+        "baseline_accuracy": 0.4742152466367713,
+        "adapted_accuracy": 0.921898355754858,
+        "delta_percentage_points": 44.76831091180867,
+        "incorrect_to_correct": 1227,
+        "correct_to_incorrect": 29,
+        "both_correct": 1240,
+        "both_incorrect": 180
+      },
+      "reused_scene_disjoint_benchmark": {
+        "rows": 576,
+        "baseline_correct": 271,
+        "adapted_correct": 530,
+        "baseline_accuracy": 0.4704861111111111,
+        "adapted_accuracy": 0.9201388888888888,
+        "delta_percentage_points": 44.96527777777778,
+        "incorrect_to_correct": 261,
+        "correct_to_incorrect": 2,
+        "both_correct": 269,
+        "both_incorrect": 44
+      },
+      "invalid_answers": 0,
+      "prediction_sha256": {
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/pissa/evaluation-v4/attempts/local-20261031T092113Z/results/merged-hf/letter/general/results_shard0.json": "aef9b6388f37bff4c4c0fe474d12a252ab24a84b407acffdbdf09909674d9747",
+        "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/pissa/evaluation-v4/attempts/local-20261031T092113Z/results/merged-hf/letter/general/results_shard1.json": "3b58e950ac81895ae8350d1d6021b3f3cfb7e2ab4ea4bec2881cd1599df0fa8d"
+      }
+    }
+  },
+  "evidence_sha256": {
+    "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/wts-baseline-host-v1/base-verification.json": "7adbb3e299cdba45df5a9ba12e5815d35b212f8b34be9cb265edd121df6aab27",
+    "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/wts-baseline-host-v1/evaluation-verification.json": "0fcaf1176162494f8e5e545009396e8449aff191475b56d16a15dda4ccf5e1bd",
+    "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/completed-host-summary.json": "18e6883a434a95208f76ef7f6e659b9748a76f47b6a2455a49d0eee4dcd75158",
+    "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/compare_matched_wts.py": "1eee5e822912b60ed667b8195c6d76fb0f986bd09c48ef988c87b2aa865a5637"
+  }
+}

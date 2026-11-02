@@ -7,8 +7,10 @@ remains closed and unmerged. The audited starting revision was
 `86e1ee52f276c11d6cc66dfd17da2795dfbe937b` was inspected and merged; its
 intervening changes were skills, documentation and CI.
 
-This report distinguishes implemented bindings from completed real-checkpoint
-qualification. The machine-readable [case evidence](assets/family-adapter-qualification.json)
+The [final qualification review](adapter-final-review.md) reconciles this history,
+records the final alias-owner fix and FP64 MoE investigation, and supplies the
+matched unadapted WTS comparison. This report distinguishes implemented bindings from completed real-checkpoint
+qualification. The machine-readable [case evidence](assets/family-adapter-qualification.json.gz)
 records immutable model revisions, actual source/wheel/environment identities,
 losses, trainable counts, numerical errors and report hashes. Historical Cosmos3
 full-WTS results remain in [adapters-progress.md](adapters-progress.md); they are
@@ -17,7 +19,9 @@ not results for another checkpoint. Four-bit training remains separate.
 There are **182 completed real-model qualification cases across 12 checkpoints**.
 This includes repeated profiles in independently attested host and Slurm runtimes;
 it counts only cases with completed training, continuation and both reload gates.
-Additional host repeats continue and remain excluded until every gate passes. Repeated host/Slurm profiles remain
+The four additional full-epoch host runs have completed training, recovery and
+evaluation; their scores remain separate from the canonical Slurm runs below.
+Repeated host/Slurm correctness profiles remain
 separate executions rather than distinct model/method combinations. The compact
 [method results](assets/family-adapter-method-results.csv) select one fixed
 world-size/AC profile per checkpoint: 47 of 48 method profiles pass every gate;
@@ -44,7 +48,7 @@ Paths below are relative to `cosmos_framework/posttrain/` unless stated otherwis
 | GR00T full-backbone/action SFT | `model/gr00t/{sft,sft_policy,adapter_export}.py`; `test_gr00t_adapters.py` | Implemented and validated: all four methods, real 3.144B checkpoint/LIBERO data, 105 resolved targets, 1/2 GPUs × none/full AC, exact continuation, portable and FP32 merged reload. Corrected parameter layout and pre-fix artifact compatibility are validated |
 | Installed artifact provenance | `tests/qualify_adapters.py::attest`, `installed_environment`; `test_qualification_environment.py` | Implemented and validated. Installed package bytes match the recorded wheel; host environment identity is distinct from container identity |
 | Gemma FP32 embedding constant | `model/hf_adapter_buffers.py`; `test_hf_adapter_buffers.py` | Implemented and validated. Canonical nonpersistent constant preserves BF16 forwards and stock FP32 merge; legacy missing-contract artifacts fail explicitly |
-| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented and validated: all four methods completed all 5,555 training rows, full validation, controlled final-update recovery, portable/merged reload and all 2,676 evaluation rows plus the 576-row scene-disjoint subset |
+| Native Qwen3-VL full WTS epoch/evaluation | Existing SFT/evaluator, method-specific full-profile gates, final checkpoint/recovery/export verification | Implemented and validated: all four methods completed all 5,555 training rows, full validation, controlled final-update recovery, portable/merged reload and all 2,676 evaluation rows plus the 576-row reused scene-disjoint benchmark |
 
 ## Completed real-checkpoint profiles
 
@@ -280,7 +284,7 @@ The common initial teacher-forced validation loss was `0.843903`. Mean training
 loss is weighted by supervised tokens. Generated-token NLL is a separate metric
 in the machine-readable results; it is not validation loss.
 
-| Method | Mean training loss | Final validation loss | Full evaluation, 2,676 | Scene-disjoint, 576 | Invalid answers |
+| Method | Mean training loss | Final validation loss | Full evaluation, 2,676 | Reused scene-disjoint benchmark, 576 | Invalid answers |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | LoRA | 0.227340 | 0.172474 | 2465/2676 (92.12%) | 528/576 (91.67%) | 0 |
 | rsLoRA | 0.193232 | 0.177561 | 2457/2676 (91.82%) | 530/576 (92.01%) | 0 |
@@ -288,11 +292,11 @@ in the machine-readable results; it is not validation loss.
 | PiSSA | 0.189425 | 0.180127 | 2465/2676 (92.12%) | 530/576 (92.01%) | 0 |
 
 The complete evaluation set contains 44 rows sharing four training-scene IDs.
-The reserved 576-row subset is scene-disjoint and is reported separately.
+The 576-row subset is a **reused scene-disjoint benchmark**, reported separately.
+It was used during earlier development and AutoML; it is not an untouched final test.
 These fixed-recipe results do not establish a universally best method.
 
-[Loss curves and evaluation plot](assets/native-qwen3-vl-wts-methods.png)
-([SVG](assets/native-qwen3-vl-wts-methods.svg));
+[Loss curves and evaluation plot](assets/native-qwen3-vl-wts-methods.png);
 [machine-readable comparison and artifact identities](assets/native-qwen3-vl-wts-methods.json).
 
 | Method | Training job GPU-hours | Applied-step seconds | Sampled training peak GiB | Trainable parameters | Portable MiB |
@@ -345,8 +349,9 @@ wheel SHA-256 `832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9`
 image SHA-256 `f50fa1157fbd4377c86ae0bad9d332c0aa82e10cc3a900a7f0081c692e961083`.
 
 Newer portable loaders matched saved training probes exactly for all methods;
-current production changes after that evaluator revision only refuse the
-unqualified MoE/PiSSA merged path. Every result retains its executed revision;
+subsequent production changes refuse the unqualified MoE/PiSSA merged path
+and preserve recorded tied-normalization owners when rebuilding adapter configuration.
+The final wheel also reloads all four completed host portable/merged artifacts. Every result retains its executed revision;
 it is not relabeled as the current documentation commit.
 
 The evaluator preserves source frame indices/fps and delegates resize and
@@ -362,9 +367,10 @@ framework's `checkpoint/tools/materialize_hf.py::read_index_weight_map`; actual
 checked. Old failures and unstarted superseded launchers remain preserved.
 No training restart, model change or numerical tolerance relaxation was used.
 
-Additional host runs remain separately labeled `076cfbb`. Their completed
-LoRA/rsLoRA losses and ongoing DoRA/PiSSA repeats are not substituted for the
-complete Slurm results above; existing experiments are preserved.
+Additional host runs remain separately labeled `076cfbb`. All four completed
+1,111 updates, recovery and evaluation. They are paired with a newly evaluated
+unadapted base in the [final review](adapter-final-review.md); they are not
+substituted for the Slurm results above. Existing experiments remain preserved.
 
 ## Incomplete MoE PiSSA merged export
 
@@ -388,3 +394,7 @@ routing or the numerical thresholds. Dense VLM/HF and physical PiSSA exports
 remain supported in their completed profiles. The compact
 [diagnostic evidence](assets/moe-pissa-export-limitation.json) retains the actual
 source/wheel/container, artifact identity, errors and first routing divergence.
+
+The final FP64 residual/linear/router diagnostic independently supports this
+interpretation and retains the unchanged failed gate; see
+[the numerical investigation](adapter-final-review.md#moe-pissa-residual-math-versus-routing-sensitivity).

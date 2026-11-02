@@ -1,0 +1,112 @@
+{
+  "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+  "wheel_sha256": "e487b90c607e5344b71786a6fc5b833c56a2bc0e3f5970fd56fb82b670d21062",
+  "package_files_verified": 1880,
+  "tests": {
+    "source_adapter_export": 97,
+    "installed_adapter_export": 97,
+    "source_physical": 50,
+    "source_physical_skips": 1
+  },
+  "counts_overlap": true,
+  "reloads": {
+    "lora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "ac8e016e977c61376186b2397d3e6c1eacabb1227f634bbc0da70589513def6a"
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 8.96453857421875e-05,
+        "mean_absolute_logit_error": 6.9132228190937894e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "28cb2e37691bfef943930567b934ed1d94616f2fce3d038078d4e21fed646b29"
+      }
+    },
+    "rslora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "39a9762b94b2afb0cd69a69670559eb2e971617bad385e8179e7a9497dc9820c"
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 7.62939453125e-05,
+        "mean_absolute_logit_error": 6.7967025643156376e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "bbb2a6cc4128841e471279c47b38458d7317765b4c39f91f5be5c117a2a57df5"
+      }
+    },
+    "dora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "cf5a8866ac57a28e8525cc2fbb0265b8ef6f7958633c63c756cd1660de318499"
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 7.534027099609375e-05,
+        "mean_absolute_logit_error": 6.925919251443702e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "2ab876e7a979954c7db4645a6cd6e9f81dc0c4ace734ef91697c55572357b303"
+      }
+    },
+    "pissa": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "80353c1acf16fa5b52e316e65f13b098820aa71af33ffa736174ba8996c0e29b"
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+        "maximum_logit_error": 0.00010967254638671875,
+        "mean_absolute_logit_error": 6.834829605395498e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "report_sha256": "7b20eb452a72ff9b27de2aa628d3ade2c895ec51a937d54f0bf890d2ca45445f"
+      }
+    }
+  },
+  "environment_sha256": "187503b763aeb7d7ea952038d293e83bcdf548865bfb79e3ad0f87c40ce31dd0",
+  "test_log_sha256": {
+    "source-reload-harness-regressions.log": "e0191bb4c85f99038eef18762df1a4b9918f4d53cb8c582b5acf58f03fb83bdc",
+    "source-flow-regressions.log": "fd09bfebd11bb1f9a2fd2a718c7d3f9b3c873d8c295b8924c0c2541d3dc9f97c",
+    "installed-final-v2-tests.log": "3351e3d5d0b107d5a0965597ae730d73e95008f67a6e51087fc27db7272c4fa6"
+  },
+  "production_revision": "44913e6f93e0b4fbc55e005c5ee933057b1169c2",
+  "test_revision_notes": {
+    "source_adapter_export": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+    "installed_adapter_export": "69d565b29c4bd30170018b9db13c38dce2bc5aed",
+    "source_physical": "44913e6f93e0b4fbc55e005c5ee933057b1169c2",
+    "physical_no_repeat_reason": "69d565b changes only the dense/native reload qualification helper and its tests. No physical model/forward/checkpoint implementation changed."
+  },
+  "previous_reload_execution": {
+    "source_revision": "44913e6f93e0b4fbc55e005c5ee933057b1169c2",
+    "checks": 8,
+    "summary_sha256": "037de18158e21de088d95cc186dab120227bcad9633247ad464195d6e97cc663"
+  }
+}

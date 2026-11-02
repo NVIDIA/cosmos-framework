@@ -1,0 +1,211 @@
+{
+  "status": "diagnostic_completed_not_qualification",
+  "serialized_tensors_verified": 882,
+  "original_gate_passed": false,
+  "saved_state_mutated": false,
+  "routing_semantics_changed": false,
+  "precision_note": "FP64 is an independent local weight/linear/router calculation at captured FP32 inputs, not a full FP64-model inference claim.",
+  "portable_manifest_sha256": "ad3252d30031e4ad628e3544f1195aee930b759779cf0b31b2d4536d98233c2d",
+  "probe_hashes": {
+    "probes-rank1.pt": "d9f21f884f4f9a11299eae3ce079759dfb5233582136653cdedaa5f25132bcb4",
+    "probes-rank0.pt": "e4ef8362552aa0f8047a725b820975b522ff2c8448627b1729d38b8cbd55a0b1"
+  },
+  "installed": {
+    "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+    "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+    "container_sha256": null,
+    "numerical_profile": {
+      "format": "cosmos-adapter-qualification-numerics-v1",
+      "deterministic_algorithms": true,
+      "float32_matmul_precision": "highest",
+      "matmul_allow_tf32": false,
+      "cudnn_benchmark": false,
+      "cublas_workspace_config": ":4096:8"
+    },
+    "versions": {
+      "torch": "2.10.0+cu128",
+      "transformers": "5.8.1",
+      "safetensors": "0.8.0",
+      "torchcodec": "0.10.0"
+    },
+    "environment_sha256": "a6cd2ef3d2b5152321d1ca13dcc35c5387f0ffbf6d2931a996ea96eea5123855"
+  },
+  "linear_reference_maxima": {
+    "residual_plus_initial_vs_original_fp64": 2.7755575615628914e-17,
+    "residual_and_rank_2r_conversion_fp64": 1.1102230246251565e-16,
+    "production_effective_weight_vs_fp64": 4.629120975430112e-08,
+    "fp64_factorized_vs_dense": 1.2079226507921703e-13,
+    "production_factorized_vs_fp64": 7.791433638715262e-06,
+    "production_dense_same_input_vs_fp64": 6.487375965313902e-06,
+    "production_factorized_vs_dense_same_input": 1.3828277587890625e-05
+  },
+  "first_changed_route": {
+    "module": "model.language_model.layers.37.mlp",
+    "changed_token_routes": 1,
+    "input_error": {
+      "maximum": 9.059906005859375e-06,
+      "mean": 7.263207629551937e-07
+    },
+    "router_logits_error": {
+      "maximum": 6.67572021484375e-06,
+      "mean": 6.987130024818459e-07
+    },
+    "block_output_error": {
+      "maximum": 0.09699919819831848,
+      "mean": 0.0001801860973316856
+    },
+    "native_router_fp32_vs_fp64": {
+      "maximum": 2.455240350585086e-06,
+      "mean": 3.420838940940197e-07
+    },
+    "merged_router_fp32_vs_fp64": {
+      "maximum": 2.667297749781028e-06,
+      "mean": 3.4530734190447036e-07
+    },
+    "tokens": [
+      {
+        "token": 7,
+        "portable": {
+          "selected": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5
+          ],
+          "fp32_top9": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5,
+            68
+          ],
+          "fp32_top9_scores": [
+            0.0704926922917366,
+            0.06428613513708115,
+            0.06391128152608871,
+            0.053714487701654434,
+            0.04696236550807953,
+            0.03157029673457146,
+            0.027647634968161583,
+            0.023923121392726898,
+            0.0239231139421463
+          ],
+          "fp64_top9": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5,
+            68
+          ],
+          "fp64_top9_scores": [
+            0.07049268597340197,
+            0.06428612800595938,
+            0.06391130262133948,
+            0.053714516331304515,
+            0.04696235653397393,
+            0.03157031156618447,
+            0.02764763188354472,
+            0.023923113214056352,
+            0.023923107069853358
+          ],
+          "fp32_boundary_margin": 7.450580596923828e-09,
+          "fp64_boundary_margin": 6.144202993607628e-09
+        },
+        "merged": {
+          "selected": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68
+          ],
+          "fp32_top9": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68,
+            5
+          ],
+          "fp32_top9_scores": [
+            0.07049261778593063,
+            0.06428609043359756,
+            0.06391140818595886,
+            0.05371452495455742,
+            0.046962328255176544,
+            0.031570326536893845,
+            0.027647623792290688,
+            0.023923134431242943,
+            0.02392309531569481
+          ],
+          "fp64_top9": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68,
+            5
+          ],
+          "fp64_top9_scores": [
+            0.07049263847716214,
+            0.06428609022000928,
+            0.06391138082410094,
+            0.053714540249075717,
+            0.046962347506276585,
+            0.03157033157894609,
+            0.027647622537776913,
+            0.0239231218759608,
+            0.023923100175844883
+          ],
+          "fp32_boundary_margin": 3.91155481338501e-08,
+          "fp64_boundary_margin": 2.170011591598464e-08
+        }
+      }
+    ]
+  },
+  "merge_comparison": {
+    "maximum_logit_error": 0.02950000762939453,
+    "mean_absolute_logit_error": 0.0003888397977789282,
+    "maximum_relative_l2": 0.0012841233983635902,
+    "mean_kl": 1.478236342441554e-07,
+    "maximum_kl": 8.937631719163619e-06,
+    "mean_total_variation": 2.6843509136398325e-05,
+    "maximum_total_variation": 0.0015905548352748156,
+    "maximum_argmax_probability_regret": 0.0,
+    "argmax_equal": 64,
+    "positions": 64
+  },
+  "evidence": {
+    "moe-fp64-host-v1/native-private-merged-linear-reference.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "moe-fp64-host-v1/native-private-merged-trace.pt": "95c3f573cd5171bbaab720b82bd5e0a041d09459e2f18c365699b6e4c6b22cdc",
+    "moe-fp64-host-v1/job-record.json": "35a04cb6ef2c10e637cb63ef2c5df8e7182a49dd7f100129dee0d88d7a3cac66",
+    "moe-fp64-host-v1/native-portable-linear-reference.json": "392bc05a5e4a8fe24bf3c4974c1be9fc5567595e4ec80e98d48053d6a5d56a22",
+    "moe-fp64-host-v1/execution.json": "1a78c9341e29c20da44a644f7d907a0e21d539b04fd0d3df4852f9bd4a1f0111",
+    "moe-fp64-host-v1/main.log": "54a3fb32aeda1b0e27061d33ea79a5b870a96987211062501e79d79ba969d585",
+    "moe-fp64-host-v1/diagnostic.json": "de340e0eab3ffb62a211c2fc07792073727f2ea7e1c6fd21a8236a1f14cee746",
+    "moe-fp64-host-v1/diagnostic.py": "fbda6023dc790470f9bea4654d2a0aae58ca7c9db967012edd25ae8a9c398515",
+    "moe-fp64-host-v1/native-portable-trace.pt": "e227e349062bd30a51af3e145bfc82833c0f3a5dddb79c9473ee5a9fb3280494"
+  },
+  "conclusion": "No residual-base or serialized conversion defect detected; ordinary FP32 factorized/dense differences precede an ill-conditioned hard top-k boundary. Local FP64 routers retain opposite expert order for the captured inputs. Merged-export acceptance remains incomplete; portable support and rejection are preserved."
+}

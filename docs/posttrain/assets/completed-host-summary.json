@@ -1,0 +1,432 @@
+{
+  "collected_utc": "2026-11-02T22:16:44.215066+00:00",
+  "scope": "Additional host full WTS runs, separate from 48 fixed correctness profiles and 182 completed subset executions.",
+  "methods": {
+    "lora": {
+      "training": {
+        "source_path": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/lora/training/training-verification.json",
+        "sha256": "63856d10d4aef1646701087c3fe6c8f1e15066715779e4f58a67cc633921b644",
+        "status": "full_epoch_verified",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "updates": 1111,
+        "unique_training_rows": 5555,
+        "padding_rows": 0,
+        "dropped_rows": 0,
+        "ordered_ids_sha256": "33de210b5ddf796097cd6c93c67f04f0ac85a5ad0e4a711433182ee2aca5f4b5",
+        "mean_training_loss_weighted_by_tokens": 0.22714613444808232,
+        "last_training_loss": 0.007870400483989215,
+        "validation": [
+          {
+            "step": 0,
+            "time": "2026-10-31T03:02:35+00:00",
+            "timer/validation_s": 2279.5459082790185,
+            "val/loss_avg": 0.8439033968164751,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          },
+          {
+            "step": 1111,
+            "time": "2026-10-31T05:12:55+00:00",
+            "optim/attempt_id": 1111.0,
+            "optim/finite_gradient_check_enabled": 1.0,
+            "optim/nonfinite_gradient": 0.0,
+            "optim/nonfinite_loss": 0.0,
+            "optim/nonfinite_skips_consecutive": 0.0,
+            "optim/nonfinite_skips_total": 0.0,
+            "optim/optimizer_step": 1111.0,
+            "optim/step_skipped": 0.0,
+            "optim/update_outcome": "applied",
+            "timer/e2e_step_s": 4.729988796869293,
+            "timer/validation_s": 2284.7624810589477,
+            "train/grad_clip_coef": 0.5369201406662473,
+            "train/grad_clip_fraction": 0.6696669666966697,
+            "train/grad_clipped": 1.0,
+            "train/grad_norm": 1.8624733686447144,
+            "train/learning_rate": 2.0000000000000003e-06,
+            "train/loss_avg": 0.007870400483989215,
+            "train/valid_sequence_count": 5.0,
+            "train/valid_token_count": 10.0,
+            "val/loss_avg": 0.17096450696396218,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          }
+        ],
+        "supervised_tokens": 11110.0,
+        "step_seconds": 5435.463987063384
+      },
+      "recovery": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/lora/recovery/resume-verification.json",
+        "sha256": "198966129818fcc83de218851c21b1ecdf0485cdc71d3cafb16a39a9425f92e9",
+        "status": "passed",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "max_parameter_error": 2.2737367544323206e-13,
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0
+      },
+      "evaluation": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/lora/evaluation-v4/evaluation-verification.json",
+        "sha256": "5478efc3161b1e06b72352649109d8cfbef75b005a7e317f1d4e32276b06013a",
+        "status": "passed",
+        "source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+        "wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+        "container_sha256": null,
+        "environment_sha256": "ee8bd063a246931f33b8497eebd50ff9f45d20c0c0b0626e4da49ce867a61667",
+        "all_wts_eval": {
+          "total": 2676,
+          "correct": 2465,
+          "accuracy": 0.9211509715994021,
+          "invalid": 0
+        },
+        "generation_nll": 0.014852987104951455,
+        "evaluation_seconds": 928.0,
+        "results_relative": "attempts/local-20261031T081729Z/results",
+        "reused_scene_disjoint_benchmark": {
+          "total": 576,
+          "correct": 528,
+          "accuracy": 0.9166666666666666,
+          "invalid": 0
+        }
+      }
+    },
+    "rslora": {
+      "training": {
+        "source_path": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/rslora/training/training-verification.json",
+        "sha256": "6c4d266f15e4464bb970a41fb382f0cc59b370481a849031da006b4778b3653c",
+        "status": "full_epoch_verified",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "updates": 1111,
+        "unique_training_rows": 5555,
+        "padding_rows": 0,
+        "dropped_rows": 0,
+        "ordered_ids_sha256": "33de210b5ddf796097cd6c93c67f04f0ac85a5ad0e4a711433182ee2aca5f4b5",
+        "mean_training_loss_weighted_by_tokens": 0.1927502177630766,
+        "last_training_loss": 0.0013430963117571082,
+        "validation": [
+          {
+            "step": 0,
+            "time": "2026-10-31T03:02:36+00:00",
+            "timer/validation_s": 2277.988233986078,
+            "val/loss_avg": 0.8439033968164751,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          },
+          {
+            "step": 1111,
+            "time": "2026-10-31T05:12:52+00:00",
+            "optim/attempt_id": 1111.0,
+            "optim/finite_gradient_check_enabled": 1.0,
+            "optim/nonfinite_gradient": 0.0,
+            "optim/nonfinite_loss": 0.0,
+            "optim/nonfinite_skips_consecutive": 0.0,
+            "optim/nonfinite_skips_total": 0.0,
+            "optim/optimizer_step": 1111.0,
+            "optim/step_skipped": 0.0,
+            "optim/update_outcome": "applied",
+            "timer/e2e_step_s": 4.66289916401729,
+            "timer/validation_s": 2285.342158711981,
+            "train/grad_clip_coef": 1.0,
+            "train/grad_clip_fraction": 0.5976597659765976,
+            "train/grad_clipped": 0.0,
+            "train/grad_norm": 0.19420060515403748,
+            "train/learning_rate": 2.0000000000000003e-06,
+            "train/loss_avg": 0.0013430963117571082,
+            "train/valid_sequence_count": 5.0,
+            "train/valid_token_count": 10.0,
+            "val/loss_avg": 0.17904076750049733,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          }
+        ],
+        "supervised_tokens": 11110.0,
+        "step_seconds": 5431.230220251484
+      },
+      "recovery": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/rslora/recovery/resume-verification.json",
+        "sha256": "965ca58413c0c814e7035a1e27e0aacffc1b3242e5ae3262324f301d6a17f890",
+        "status": "passed",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "max_parameter_error": 3.637978807091713e-12,
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0
+      },
+      "evaluation": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/rslora/evaluation-v4/evaluation-verification.json",
+        "sha256": "c38fb3d2f6f962dd2394e32fa9c547df31fddc60b02541478064f258b08ee20b",
+        "status": "passed",
+        "source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+        "wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+        "container_sha256": null,
+        "environment_sha256": "ee8bd063a246931f33b8497eebd50ff9f45d20c0c0b0626e4da49ce867a61667",
+        "all_wts_eval": {
+          "total": 2676,
+          "correct": 2455,
+          "accuracy": 0.9174140508221226,
+          "invalid": 0
+        },
+        "generation_nll": 0.012525603068513476,
+        "evaluation_seconds": 956.0,
+        "results_relative": "attempts/local-20261031T083828Z/results",
+        "reused_scene_disjoint_benchmark": {
+          "total": 576,
+          "correct": 530,
+          "accuracy": 0.9201388888888888,
+          "invalid": 0
+        }
+      }
+    },
+    "dora": {
+      "training": {
+        "source_path": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/dora/training/training-verification.json",
+        "sha256": "80f5a4040a6605cb7147c84f60cf2afdc169f343ebfa0e927f6ddfc01001c0d5",
+        "status": "full_epoch_verified",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "updates": 1111,
+        "unique_training_rows": 5555,
+        "padding_rows": 0,
+        "dropped_rows": 0,
+        "ordered_ids_sha256": "33de210b5ddf796097cd6c93c67f04f0ac85a5ad0e4a711433182ee2aca5f4b5",
+        "mean_training_loss_weighted_by_tokens": 0.22444969899893122,
+        "last_training_loss": 0.009373718628012284,
+        "validation": [
+          {
+            "step": 0,
+            "time": "2026-10-31T05:57:53+00:00",
+            "timer/validation_s": 2341.881918697851,
+            "val/loss_avg": 0.8439033968164751,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          },
+          {
+            "step": 1111,
+            "time": "2026-10-31T08:14:51+00:00",
+            "optim/attempt_id": 1111.0,
+            "optim/finite_gradient_check_enabled": 1.0,
+            "optim/nonfinite_gradient": 0.0,
+            "optim/nonfinite_loss": 0.0,
+            "optim/nonfinite_skips_consecutive": 0.0,
+            "optim/nonfinite_skips_total": 0.0,
+            "optim/optimizer_step": 1111.0,
+            "optim/step_skipped": 0.0,
+            "optim/update_outcome": "applied",
+            "timer/e2e_step_s": 5.0548763980623335,
+            "timer/validation_s": 2320.27380712796,
+            "train/grad_clip_coef": 0.42117219153175456,
+            "train/grad_clip_fraction": 0.666966696669667,
+            "train/grad_clipped": 1.0,
+            "train/grad_norm": 2.3743247985839844,
+            "train/learning_rate": 2.0000000000000003e-06,
+            "train/loss_avg": 0.009373718628012284,
+            "train/valid_sequence_count": 5.0,
+            "train/valid_token_count": 10.0,
+            "val/loss_avg": 0.17138761434834632,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          }
+        ],
+        "supervised_tokens": 11110.0,
+        "step_seconds": 5804.806773538003
+      },
+      "recovery": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/dora/recovery/resume-verification.json",
+        "sha256": "97fa6473d2c2bf678d363329566c7df377f766f13ada0e86be874ad579f85eda",
+        "status": "passed",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "max_parameter_error": 0.0,
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0
+      },
+      "evaluation": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/dora/evaluation-v4/evaluation-verification.json",
+        "sha256": "73a9c00d58e19a097f6d0cca8d49b7d60fa83546afa35fb7bd2680c8ea64aa7d",
+        "status": "passed",
+        "source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+        "wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+        "container_sha256": null,
+        "environment_sha256": "ee8bd063a246931f33b8497eebd50ff9f45d20c0c0b0626e4da49ce867a61667",
+        "all_wts_eval": {
+          "total": 2676,
+          "correct": 2470,
+          "accuracy": 0.9230194319880418,
+          "invalid": 0
+        },
+        "generation_nll": 0.014420303134293622,
+        "evaluation_seconds": 946.0,
+        "results_relative": "attempts/local-20261031T085954Z/results",
+        "reused_scene_disjoint_benchmark": {
+          "total": 576,
+          "correct": 528,
+          "accuracy": 0.9166666666666666,
+          "invalid": 0
+        }
+      }
+    },
+    "pissa": {
+      "training": {
+        "source_path": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/pissa/training/training-verification.json",
+        "sha256": "6304d733c54bb87aed0e34b5326af25809239d1012b8609210a30c89738a18d4",
+        "status": "full_epoch_verified",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "updates": 1111,
+        "unique_training_rows": 5555,
+        "padding_rows": 0,
+        "dropped_rows": 0,
+        "ordered_ids_sha256": "33de210b5ddf796097cd6c93c67f04f0ac85a5ad0e4a711433182ee2aca5f4b5",
+        "mean_training_loss_weighted_by_tokens": 0.18890389784259942,
+        "last_training_loss": 0.003979553477256559,
+        "validation": [
+          {
+            "step": 0,
+            "time": "2026-10-31T05:57:32+00:00",
+            "timer/validation_s": 2321.2466775211506,
+            "val/loss_avg": 0.8439033968164751,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          },
+          {
+            "step": 1111,
+            "time": "2026-10-31T08:12:42+00:00",
+            "optim/attempt_id": 1111.0,
+            "optim/finite_gradient_check_enabled": 1.0,
+            "optim/nonfinite_gradient": 0.0,
+            "optim/nonfinite_loss": 0.0,
+            "optim/nonfinite_skips_consecutive": 0.0,
+            "optim/nonfinite_skips_total": 0.0,
+            "optim/optimizer_step": 1111.0,
+            "optim/step_skipped": 0.0,
+            "optim/update_outcome": "applied",
+            "timer/e2e_step_s": 4.931866033934057,
+            "timer/validation_s": 2303.5959814039525,
+            "train/grad_clip_coef": 0.5953095707430618,
+            "train/grad_clip_fraction": 0.5967596759675967,
+            "train/grad_clipped": 1.0,
+            "train/grad_norm": 1.6797972917556763,
+            "train/learning_rate": 2.0000000000000003e-06,
+            "train/loss_avg": 0.003979553477256559,
+            "train/valid_sequence_count": 5.0,
+            "train/valid_token_count": 10.0,
+            "val/loss_avg": 0.18445413520977746,
+            "val/valid_sequence_count": 2676.0,
+            "val/valid_token_count": 5352.0
+          }
+        ],
+        "supervised_tokens": 11110.0,
+        "step_seconds": 5713.377816659864
+      },
+      "recovery": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/pissa/recovery/resume-verification.json",
+        "sha256": "01ec3908248d66a13df87ff16f34f5f876c1ae6c1813579197b966ad030eb8ee",
+        "status": "passed",
+        "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+        "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+        "container_sha256": null,
+        "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+        "max_parameter_error": 0.0,
+        "optimizer_matches": true,
+        "scheduler_matches": true,
+        "rng_matches": true,
+        "data_cursor_matches": true,
+        "update_clock_matches": true,
+        "frozen_base_and_pissa_initial_factors_unchanged": true,
+        "method_initialization_called": false,
+        "loss_error": 0.0
+      },
+      "evaluation": {
+        "source_path": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/full-wts-076cfbb/pissa/evaluation-v4/evaluation-verification.json",
+        "sha256": "29033c29be106e6c2886e08cb8a15d4ec215b0c46a44fd3f18185d7332a45e47",
+        "status": "passed",
+        "source_revision": "2a8b48d6c0275d08dea8b1e4593437c19d6640da",
+        "wheel_sha256": "832cc43cc7d933981b9308ab27595471aaebdd322714ee97db09edb5a5e761d9",
+        "container_sha256": null,
+        "environment_sha256": "ee8bd063a246931f33b8497eebd50ff9f45d20c0c0b0626e4da49ce867a61667",
+        "all_wts_eval": {
+          "total": 2676,
+          "correct": 2467,
+          "accuracy": 0.921898355754858,
+          "invalid": 0
+        },
+        "generation_nll": 0.009296262353466688,
+        "evaluation_seconds": 948.0,
+        "results_relative": "attempts/local-20261031T092113Z/results",
+        "reused_scene_disjoint_benchmark": {
+          "total": 576,
+          "correct": 530,
+          "accuracy": 0.9201388888888888,
+          "invalid": 0
+        }
+      }
+    }
+  },
+  "moe_host_pissa": {
+    "training-rank0.json": {
+      "sha256": "6c6f6c326eb10c994525824dca80cbffb20978bc211c894849486c6331beab0c",
+      "status": "training_and_resume_passed_reload_pending",
+      "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+      "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+      "resume_max_abs_parameter_error": 0.0
+    },
+    "training-rank1.json": {
+      "sha256": "2d148fc19b45db469fc1e28ca6b7e8b0692d9ae6d1793019574696391e1602a1",
+      "status": "training_and_resume_passed_reload_pending",
+      "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+      "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+      "resume_max_abs_parameter_error": 0.0
+    },
+    "portable-reload.json": {
+      "sha256": "7d2b21e8c50a44fb7af16db778527f598c91f45e440cf8ec499b79c1ef3a3edb",
+      "status": "passed",
+      "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+      "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+      "maximum_logit_error": 0.0,
+      "mean_absolute_logit_error": 0.0
+    },
+    "merged-reload.json": {
+      "sha256": "acf81eceee3743b865b56655cedf38a685702a5e6d3b72e8438a3f724893c991",
+      "status": "measured_awaiting_gate",
+      "source_revision": "239c3e72321a4072699ef2c0690145141e86aa34",
+      "wheel_sha256": "fe9cb6e1a45beb4eae743393f80420815a99173341eee8c1893b02e6e3a4b09a",
+      "maximum_logit_error": 0.029509544372558594,
+      "mean_absolute_logit_error": 0.0003890513243050009,
+      "serialized_tensors_verified": 882
+    },
+    "conclusion": "Training, continuation and portable passed; merged fails the unchanged gate and is not counted as a passing profile."
+  }
+}
