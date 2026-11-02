@@ -366,12 +366,13 @@ container.
 
 **Cosmos3-Edge** uses `Cosmos3EdgeForConditionalGeneration`. Release images
 through `v1.4.0rc1`, including `release:1.3.0rc22`, do not include that
-architecture. Install TensorRT-LLM from upstream `main` at or after
-[`39a44fab`](https://github.com/NVIDIA/TensorRT-LLM/commit/39a44fab74f4cfc0d4d498be385e746fdd182872)
-(the merge of [PR 20307](https://github.com/NVIDIA/TensorRT-LLM/pull/20307)),
-following the
+architecture. Build TensorRT-LLM with the
 [TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator),
-and run the Edge command below in that environment.
+but check out upstream `main` at or after
+[`39a44fab`](https://github.com/NVIDIA/TensorRT-LLM/commit/39a44fab74f4cfc0d4d498be385e746fdd182872)
+(the merge of [PR 20307](https://github.com/NVIDIA/TensorRT-LLM/pull/20307))
+instead of the commit in that block. Run the Edge command below in that
+environment.
 
 Install headless OpenCV with the same interpreter that provides `trtllm-serve`.
 Cosmos3 Reasoner uses it to process vision inputs:
