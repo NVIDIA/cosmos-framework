@@ -222,6 +222,12 @@ def _configure_vae_compile(model: OmniMoTModel, setup_args: OmniSetupArgs) -> No
         tokenizer.compile_encode([resolution], output_dir=str(setup_args.output_dir), aspect_ratio=aspect_ratio)
 
 
+def _warn_ignored_sampler_override(model_config: Any, sampler: str) -> None:
+    """Warn when ``--sampler`` asks for a scheduler that a fixed-step (distilled) checkpoint never uses."""
+    if sampler != "unipc" and getattr(model_config, "fixed_step_sampler_config", None) is not None:
+        log.warning(f"--sampler {sampler} is ignored: this checkpoint samples with its fixed-step distilled schedule.")
+
+
 def _unbatch_transfer_debug_tensor(
     tensor: torch.Tensor, *, name: str
 ) -> torch.Tensor:  # tensor: [B,C,T,H,W], returns: [C,T,H,W]
@@ -1768,6 +1774,7 @@ class OmniInference(Inference):
                 model.set_up_scheduler_and_sampler()
                 log.debug(f"Sampler overridden to: {sampler_override}")
 
+        _warn_ignored_sampler_override(model.config, sampler_override)
         model._prefill_text_kv = setup_args.prefill_text_kv or cpu_offload
         if setup_args.enable_layerwise_offload:
             from cosmos_framework.inference.layerwise_offloading import Cosmos3LayerwiseOffload
