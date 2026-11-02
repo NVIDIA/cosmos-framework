@@ -56,6 +56,8 @@ EPISODE_START_RIG_MAX_OFFSET_M = 10.0
 PER_FRAME_CAMERA_TO_RIG_KEY = "per_frame_camera_to_rig"
 
 SOURCE_RIG_JSON_KEY = "_rig_json"
+# Rig key marking a pose-world rig, whose camera-to-rig transform is each selected frame's pose.
+PER_FRAME_CAMERA_TO_RIG_KEY = "per_frame_camera_to_rig"
 
 
 class CameraCalibrationError(ValueError):
@@ -71,6 +73,24 @@ class CameraGeometrySource:
     times_ns: dict[int, int] | None = None
     native_times_ns: dict[int, int] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
+
+
+def pose_world_rig_geometry(sources: dict[str, CameraGeometrySource]) -> dict[str, Any]:
+    """Use the shared pose world frame as the rig, for cameras that move within a scene.
+
+    Every camera must carry world poses in one scene-fixed frame. ``camera_to_rig``
+    holds each camera's first pose only to identify rig membership; a per-frame rig
+    reads the selected frames' ``camera_to_world`` because these cameras have no
+    static extrinsic.
+    """
+    camera_to_rig: dict[str, Matrix4] = {}
+    for camera, source in sources.items():
+        if not source.poses:
+            raise ValueError(f"{camera}: a pose-world rig requires camera poses")
+        camera_to_rig[camera] = source.poses[min(source.poses)]
+    if not camera_to_rig:
+        raise ValueError("Sensor rig requires at least one camera")
+    return {"camera_to_rig": camera_to_rig, PER_FRAME_CAMERA_TO_RIG_KEY: True}
 
 
 class CameraGeometry(TypedDict):
@@ -542,7 +562,8 @@ class FinalizeCameraGeometry(Augmentor):
         conditioned model takes its fallback for it instead of losing the sample. The pose
         requirement, when set, still drops samples and logs its own drops.
         """
-        if SOURCE_CALIBRATION_ERROR_KEY not in data_dict and data_dict.get(SOURCE_GEOMETRY_KEY) is None:
+        if data_dict.get(SOURCE_GEOMETRY_KEY) is None:
+            data_dict.pop(SOURCE_CALIBRATION_ERROR_KEY, None)
             data_dict.pop(SOURCE_GEOMETRY_KEY, None)
             data_dict.pop(SOURCE_FPS_KEY, None)
             data_dict.pop(SOURCE_RIG_JSON_KEY, None)

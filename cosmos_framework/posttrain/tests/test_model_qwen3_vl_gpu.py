@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""@L1 @GPU: real i4-native tiny dense/MoE Qwen3-VL forward/backward."""
+"""@L1 @GPU: real native tiny dense/MoE Qwen3-VL forward/backward."""
 
 from __future__ import annotations
 

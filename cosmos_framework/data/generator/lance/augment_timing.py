@@ -34,6 +34,15 @@ def _augmentor_step_name(aug: Any) -> str:
     return getattr(aug, "__name__", None) or type(aug).__name__
 
 
+class AugmentorSampleDropError(RuntimeError):
+    """Signal a bounded, recoverable sample drop from an augmentor pipeline."""
+
+    def __init__(self, message: str, *, drop_context: str, consecutive_drops: int) -> None:
+        super().__init__(message)
+        self.drop_context = drop_context
+        self.consecutive_drops = consecutive_drops
+
+
 class _AugmentedWithTimingIterator:
     """Apply one timed augmentation step without retaining its returned sample.
 
@@ -89,13 +98,17 @@ class _AugmentedWithTimingIterator:
         """Return the source cursor after the most recent raw sample attempt."""
         return self._last_resume_cursor
 
-    def _record_drop(self) -> None:
+    def _record_drop(self, *, source: str) -> None:
         self._consecutive_drops += 1
         if self._max_consecutive_drops is not None and self._consecutive_drops >= self._max_consecutive_drops:
-            message = f"{self._drop_context} dropped {self._consecutive_drops} consecutive samples."
+            message = f"{self._drop_context} dropped {self._consecutive_drops} consecutive samples; {source}."
             if self._drop_error_hint is not None:
                 message = f"{message} {self._drop_error_hint}"
-            raise RuntimeError(message)
+            raise AugmentorSampleDropError(
+                message,
+                drop_context=self._drop_context,
+                consecutive_drops=self._consecutive_drops,
+            )
 
     def __next__(self) -> dict[str, Any] | None:
         while True:
@@ -105,7 +118,7 @@ class _AugmentedWithTimingIterator:
             if sample is None:
                 self._last_resume_cursor = None
                 self._rejection_progress.record("source", time.monotonic() - t_start, "")
-                self._record_drop()
+                self._record_drop(source="source yielded None")
                 if self._yield_drops:
                     return None
                 continue
@@ -120,7 +133,7 @@ class _AugmentedWithTimingIterator:
                 result = self._prepare(sample) if self._prepare is not None else sample
             if result is None:
                 self._rejection_progress.record("prepare", time.monotonic() - t_start, sample_id)
-                self._record_drop()
+                self._record_drop(source="prepare hook returned None")
                 if self._yield_drops:
                     return None
                 continue
@@ -145,7 +158,7 @@ class _AugmentedWithTimingIterator:
                     if result is None:
                         self._rejection_progress.record(step_name, time.monotonic() - t_start, sample_id)
             if result is None:
-                self._record_drop()
+                self._record_drop(source=f"augmentor {_augmentor_step_name(aug)!r} returned None")
                 if self._yield_drops:
                     return None
                 continue

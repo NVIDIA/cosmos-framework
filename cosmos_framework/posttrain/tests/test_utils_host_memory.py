@@ -3,7 +3,7 @@
 """CPU tests for the host/cgroup memory reader logged at checkpoint saves and the final drain.
 
 The fixtures replay the colocated-job shape the reader exists for: a Slurm step cgroup whose
-``memory.max`` is 900 GiB and whose usage reads what canM7 (job 461919) peaked at, 923,320,576 KB.
+``memory.max`` is 900 GiB and whose usage reads what one production run peaked at, 923,320,576 KB.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ GIB = 2**30
 STEP_CGROUP = "/system.slice/slurmstepd.scope/job_461919/step_0/user/task_0"
 STATUS = "Name:\tpython\nVmPeak:\t  3145728 kB\nVmRSS:\t  2097152 kB\nThreads:\t12\n"
 MEMINFO = "MemTotal:       964689920 kB\nMemFree:        10485760 kB\nMemAvailable:   41943040 kB\n"
-CANM7_PEAK_BYTES = 923_320_576 * 1024
+OBSERVED_PEAK_BYTES = 923_320_576 * 1024
 LIMIT_900_GIB = 900 * GIB
 V1_UNLIMITED = 9223372036854771712  # PAGE_COUNTER_MAX * PAGE_SIZE, what cgroup v1 reports for "no limit"
 
@@ -57,13 +57,13 @@ def _cgroup_v1(root: Path, path: str, *, usage: int, limit: int) -> str:
 @pytest.mark.CPU
 def test_host_memory_reads_cgroup_v2_usage_and_limit(tmp_path: Path) -> None:
     proc = _proc(tmp_path, cgroup=f"0::{STEP_CGROUP}\n")
-    cgroup = _cgroup_v2(tmp_path, STEP_CGROUP, current=CANM7_PEAK_BYTES, maximum=str(LIMIT_900_GIB))
+    cgroup = _cgroup_v2(tmp_path, STEP_CGROUP, current=OBSERVED_PEAK_BYTES, maximum=str(LIMIT_900_GIB))
 
     reading = host_memory(proc_root=proc, cgroup_root=cgroup)
 
     assert reading.rss_gib == 2.0
     assert reading.cgroup_source == "v2"
-    assert reading.cgroup_used_gib == pytest.approx(CANM7_PEAK_BYTES / GIB)
+    assert reading.cgroup_used_gib == pytest.approx(OBSERVED_PEAK_BYTES / GIB)
     assert reading.cgroup_limit_gib == 900.0
     assert reading.mem_total_gib == pytest.approx(920.0, abs=1e-6)
     assert reading.mem_available_gib == 40.0
@@ -103,10 +103,10 @@ def test_host_memory_falls_back_from_v2_to_v1_to_meminfo(tmp_path: Path) -> None
     hybrid = tmp_path / "hybrid"
     proc = _proc(hybrid, cgroup=f"12:memory:{STEP_CGROUP}\n0::/user.slice/session.scope\n")
     (hybrid / "cgroup" / "user.slice" / "session.scope").mkdir(parents=True)
-    cgroup = _cgroup_v1(hybrid, STEP_CGROUP, usage=CANM7_PEAK_BYTES, limit=LIMIT_900_GIB)
+    cgroup = _cgroup_v1(hybrid, STEP_CGROUP, usage=OBSERVED_PEAK_BYTES, limit=LIMIT_900_GIB)
     reading = host_memory(proc_root=proc, cgroup_root=cgroup)
     assert reading.cgroup_source == "v1"
-    assert reading.cgroup_used_gib == pytest.approx(CANM7_PEAK_BYTES / GIB) and reading.cgroup_limit_gib == 900.0
+    assert reading.cgroup_used_gib == pytest.approx(OBSERVED_PEAK_BYTES / GIB) and reading.cgroup_limit_gib == 900.0
 
     # No readable cgroup at all: the node-wide meminfo figures are what remains.
     bare = tmp_path / "bare"

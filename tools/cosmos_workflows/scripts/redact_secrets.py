@@ -137,7 +137,7 @@ def redact_uri(value: str) -> str:
 
     Applies ONLY format-based rules (URL userinfo, presigned query, token
     prefixes) — never the NAME=value shell rule, so a legitimate path segment
-    like /lustre/exp/token=v1/run is left intact."""
+    like /data/exp/token=v1/run is left intact."""
     value = _PRESIGNED_RE.sub(lambda m: f"{m.group('param')}=<redacted>", value)
     return _apply_format_rules(value)
 

@@ -40,7 +40,7 @@ import json
 import math
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -81,6 +81,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import 
     Qwen3VLMoeTextMLP,
     Qwen3VLMoeTextRMSNorm,
 )
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_und_gen_splits,
@@ -92,6 +93,116 @@ from cosmos_framework.utils.generator.parallelism import ParallelDims
 # -----------------------------------------------------------------------------
 # ReasonerKVCache
 # -----------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("normalized_text_keys", [False, True])
+def test_ar_text_cache_reuses_layer_work_and_preserves_media_predictions(normalized_text_keys: bool) -> None:
+    """Media changes each step; caption projections/MLP run once per chunk/branch."""
+    config = Qwen3VLTextConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=4,
+        num_hidden_layers=1,
+    )
+    layer = MoTDecoderLayer(
+        config,
+        layer_idx=0,
+        layer_types=LayerTypes("qwen3_vl_dense"),
+        qk_norm_for_text=False,
+        qk_norm_for_diffusion=normalized_text_keys,
+    ).eval()
+
+    def dense_attention(
+        q: SequencePack,
+        k: SequencePack,
+        v: SequencePack,
+        mask: object,
+        *,
+        memory_value: MemoryValue,
+        packed_key_states_normalized: SequencePack | None,
+        **kwargs: object,
+    ) -> tuple[SequencePack, None]:
+        cache = memory_value.text_cache
+        text_q, text_k, text_v = get_und_seq(q), get_und_seq(k), get_und_seq(v)  # each [S_text,H,D]
+        if cache is not None and cache.attention_output is not None:
+            text_out = cache.attention_output  # [S_text,H*D]
+        else:
+            text_out = (
+                torch.nn.functional.scaled_dot_product_attention(
+                    text_q.transpose(0, 1),
+                    text_k.transpose(0, 1),
+                    text_v.transpose(0, 1),
+                    is_causal=True,
+                )
+                .transpose(0, 1)
+                .flatten(-2)
+            )  # [S_text,H*D]
+            if cache is not None:
+                cache.attention_output = text_out
+        keys = k if packed_key_states_normalized is None else packed_key_states_normalized
+        media_k = torch.cat((get_und_seq(keys), get_gen_seq(keys)))  # [S_text+S_gen,H,D]
+        media_v = torch.cat((text_v, get_gen_seq(v)))  # [S_text+S_gen,H,D]
+        media_out = (
+            torch.nn.functional.scaled_dot_product_attention(
+                get_gen_seq(q).transpose(0, 1),
+                media_k.transpose(0, 1),
+                media_v.transpose(0, 1),
+            )
+            .transpose(0, 1)
+            .flatten(-2)
+        )  # [S_gen,H*D]
+        return from_und_gen_splits(text_out, media_out, q), None
+
+    layer.self_attn.dispatch_attention_fn = dense_attention
+    counts: dict[str, int] = {"q_proj": 0, "mlp": 0}
+
+    def count(name: str) -> Callable[[torch.nn.Module, tuple[object, ...], object], None]:
+        def hook(module: torch.nn.Module, args: tuple[object, ...], result: object) -> None:
+            counts[name] += 1
+
+        return hook
+
+    layer.self_attn.q_proj.register_forward_hook(count("q_proj"))
+    layer.mlp.register_forward_hook(count("mlp"))
+    pack: SequencePack = {
+        "causal_seq": torch.randn(3, 8),
+        "full_only_seq": torch.randn(4, 8),  # [S_text,D], [S_gen,D]
+        "is_sharded": False,
+        "_num_causal_tokens": 3,
+        "_num_full_tokens": 4,
+        "sample_offsets": torch.tensor([0, 7], dtype=torch.int32),  # [B+1]
+        "max_sample_len": 7,
+        "max_causal_len": 3,
+        "max_full_len": 4,
+        "_causal_indices": torch.arange(3),  # [S_text]
+        "_full_indices": torch.arange(3, 7),  # [S_gen]
+        "_causal_seq_offsets": torch.tensor([0, 3], dtype=torch.int32),  # [B+1]
+        "_full_only_seq_offsets": torch.tensor([0, 4], dtype=torch.int32),  # [B+1]
+    }
+    cos = from_und_gen_splits(torch.ones(3, 4), torch.ones(4, 4), pack)  # [S_text+S_gen,D_head]
+    sin = from_und_gen_splits(torch.zeros(3, 4), torch.zeros(4, 4), pack)  # [S_text+S_gen,D_head]
+    cache = ARTextLayerCache()
+    memory = MemoryValue(text_cache=cache)
+    with torch.no_grad():
+        layer(pack, object(), (cos, sin), memory_value=memory)
+        pack["full_only_seq"] = torch.randn(4, 8)  # [S_gen,D], next denoising timestep
+        cached, _, cached_kv = layer(pack, object(), (cos, sin), memory_value=memory)
+        assert counts == {"q_proj": 1, "mlp": 1}
+        reference, _, reference_kv = layer(pack, object(), (cos, sin), memory_value=MemoryValue())
+        torch.testing.assert_close(get_gen_seq(cached), get_gen_seq(reference), rtol=0, atol=0)
+        torch.testing.assert_close(get_und_seq(cached), get_und_seq(reference), rtol=0, atol=0)
+        assert cached_kv is not None and reference_kv is not None
+        for actual, expected in zip(cached_kv, reference_kv, strict=True):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        # Another chunk/CFG branch has a new cache, even at identical token shapes.
+        pack["causal_seq"] = torch.randn(3, 8)  # [S_text,D]
+        fresh, _, _ = layer(pack, object(), (cos, sin), memory_value=MemoryValue(text_cache=ARTextLayerCache()))
+        uncached, _, _ = layer(pack, object(), (cos, sin), memory_value=MemoryValue())
+        torch.testing.assert_close(get_gen_seq(fresh), get_gen_seq(uncached), rtol=0, atol=0)
 
 
 @pytest.mark.L0

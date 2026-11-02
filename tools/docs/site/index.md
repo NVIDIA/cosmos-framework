@@ -30,7 +30,7 @@ One Python package to train, post-train, evaluate and serve Cosmos3 omnimodal wo
 
     Text, images, video or actions in; images, video with optional audio, text or actions out.
 
-    [Run inference](inference.md) · [Generation notebooks](skills/cookbooks/cosmos3/generator/audiovisual/README.md)
+    [Run inference](inference.md) · [Generation skill](skills/cosmos3-generate-media/SKILL.md)
 
 - **Simulate driving and robot scenes**
 

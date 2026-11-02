@@ -44,8 +44,8 @@ def test_fresh_load_copies_after_loading_regular_weights() -> None:
     with torch.no_grad():
         for parameter in model.net.parameters():
             parameter.fill_(0.125)
-    InitializeEmaFromRegular("/checkpoints/ga/").on_load_checkpoint_end(
-        model, iteration=0, checkpoint_path="/checkpoints/ga"
+    InitializeEmaFromRegular("/checkpoints/base/").on_load_checkpoint_end(
+        model, iteration=0, checkpoint_path="/checkpoints/base"
     )
     for name, value in model.net.state_dict().items():
         torch.testing.assert_close(model.net_ema.state_dict()[name], value, rtol=0, atol=0)
@@ -55,18 +55,18 @@ def test_fresh_load_copies_after_loading_regular_weights() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    [None, "/checkpoints/other", "/checkpoints/ga/checkpoints/iter_bad", "/checkpoints/ga-prefix"],
+    [None, "/checkpoints/other", "/checkpoints/base/checkpoints/iter_bad", "/checkpoints/base-prefix"],
 )
 def test_undeclared_source_cannot_initialize_ema(path: str | None) -> None:
     model = _model()
     with pytest.raises(RuntimeError, match="declared base checkpoint"):
-        InitializeEmaFromRegular("/checkpoints/ga").on_load_checkpoint_end(model, checkpoint_path=path)
+        InitializeEmaFromRegular("/checkpoints/base").on_load_checkpoint_end(model, checkpoint_path=path)
     assert model.net_ema_worker.copies == 0
 
 
 def test_a_full_state_resume_preserves_ema() -> None:
     model = _model()
-    InitializeEmaFromRegular("/checkpoints/ga").on_load_checkpoint_end(
+    InitializeEmaFromRegular("/checkpoints/base").on_load_checkpoint_end(
         model, iteration=8, checkpoint_path="/outputs/stage0/checkpoints/iter_000000008"
     )
     assert model.net_ema_worker.copies == 0
@@ -75,7 +75,7 @@ def test_a_full_state_resume_preserves_ema() -> None:
 
 def test_same_job_iteration_zero_checkpoint_preserves_ema() -> None:
     model = _model()
-    callback = InitializeEmaFromRegular("/checkpoints/ga")
+    callback = InitializeEmaFromRegular("/checkpoints/base")
     callback.trainer = SimpleNamespace(checkpointer=SimpleNamespace(save_dirname="/outputs/stage0/checkpoints"))
     callback.on_load_checkpoint_end(
         model,
@@ -88,7 +88,7 @@ def test_same_job_iteration_zero_checkpoint_preserves_ema() -> None:
 
 def test_explicit_resume_configuration_disables_fresh_copy() -> None:
     model = _model()
-    InitializeEmaFromRegular("/checkpoints/ga", enabled=False).on_load_checkpoint_end(
+    InitializeEmaFromRegular("/checkpoints/base", enabled=False).on_load_checkpoint_end(
         model, iteration=8, checkpoint_path="/outputs/stage0/checkpoints/iter_000000008"
     )
     assert model.net_ema_worker.copies == 0
@@ -99,4 +99,4 @@ def test_disabled_ema_is_not_a_valid_stage0_warm_start() -> None:
     model = _model()
     model.config.ema.enabled = False
     with pytest.raises(RuntimeError, match="keep EMA enabled"):
-        InitializeEmaFromRegular("/checkpoints/ga").on_load_checkpoint_end(model, checkpoint_path="/checkpoints/ga")
+        InitializeEmaFromRegular("/checkpoints/base").on_load_checkpoint_end(model, checkpoint_path="/checkpoints/base")

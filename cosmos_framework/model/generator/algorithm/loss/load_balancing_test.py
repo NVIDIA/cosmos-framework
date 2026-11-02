@@ -10,7 +10,8 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import fully_shard
+from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.device_mesh import DeviceMesh
 from torch.nn.parallel import DistributedDataParallel
 
@@ -20,10 +21,11 @@ from cosmos_framework.model.generator.algorithm.loss.load_balancing import (
 )
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
 from cosmos_framework.data.generator.sequence_packing.runtime import prepare_sequence_pack_metadata
+from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
-pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
-
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_compute_sample_lbl_stats_preserves_packed_boundaries() -> None:
     routing_probabilities = torch.tensor(
         [
@@ -58,6 +60,8 @@ def test_compute_sample_lbl_stats_preserves_packed_boundaries() -> None:
     )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_compute_sample_lbl_stats_ignores_cp_padding_and_noncontiguous_samples() -> None:
     routing_probabilities = torch.tensor(
         [
@@ -83,6 +87,8 @@ def test_compute_sample_lbl_stats_ignores_cp_padding_and_noncontiguous_samples()
     torch.testing.assert_close(probability_sums, torch.tensor([[0.2, 0.8], [1.6, 0.4]]))  # [B,E]
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_cp_shard_sample_stats_sum_to_unsharded_stats() -> None:
     routing_probabilities = torch.tensor(
         [
@@ -118,6 +124,8 @@ def test_cp_shard_sample_stats_sum_to_unsharded_stats() -> None:
         torch.testing.assert_close(rank0 + rank1, expected)
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sequence_pack_sample_ids_follow_samples_across_multiple_splits() -> None:
     metadata = prepare_sequence_pack_metadata(
         sample_lens=[4, 3],
@@ -131,6 +139,8 @@ def test_sequence_pack_sample_ids_follow_samples_across_multiple_splits() -> Non
     torch.testing.assert_close(metadata["_full_only_sample_ids"], torch.tensor([0, 1]))  # [N_full]
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_averages_packed_samples_equally() -> None:
     sample_router_prob_sum_per_expert = torch.tensor(
         [[[0.9, 0.1], [0.6, 2.4]]],
@@ -165,7 +175,11 @@ def test_sample_load_balancing_averages_packed_samples_equally() -> None:
 def _distributed_metadata(routing_probabilities: torch.Tensor) -> LBLMetadata:
     """Build one-layer, one-sample router statistics from a local token shard."""
     expert_indices = routing_probabilities.argmax(dim=-1, keepdim=True)  # [N,1]
-    sample_ids = torch.zeros(routing_probabilities.shape[0], dtype=torch.long)  # [N]
+    sample_ids = torch.zeros(
+        routing_probabilities.shape[0],
+        dtype=torch.long,
+        device=routing_probabilities.device,
+    )  # [N]
     sample_counts, sample_tokens, sample_probability_sums = compute_sample_lbl_stats(
         routing_probabilities,
         expert_indices,
@@ -176,7 +190,7 @@ def _distributed_metadata(routing_probabilities: torch.Tensor) -> LBLMetadata:
         num_tokens_per_expert=sample_counts.sum(dim=0, keepdim=True),  # [1,E]
         num_tokens=sample_tokens.sum(dim=0, keepdim=True),  # [1,1]
         mean_router_prob_per_expert=routing_probabilities.mean(dim=0, keepdim=True),  # [1,E]
-        top_k=torch.ones((1, 1), dtype=torch.long),  # [1,1]
+        top_k=torch.ones((1, 1), dtype=torch.long, device=routing_probabilities.device),  # [1,1]
         sample_num_tokens_per_expert=sample_counts.unsqueeze(0),  # [1,1,E]
         sample_num_tokens=sample_tokens.unsqueeze(0),  # [1,1,1]
         sample_router_prob_sum_per_expert=sample_probability_sums.unsqueeze(0),  # [1,1,E]
@@ -202,8 +216,7 @@ class _DistributedRouter(torch.nn.Module):
         return _distributed_metadata(torch.softmax(features @ self.weight, dim=-1))  # [N,E]
 
 
-def _distributed_cp_gradient_worker(rank: int, rendezvous: str) -> None:
-    world_size = 2
+def _distributed_cp_gradient_worker(rank: int, rendezvous: str, world_size: int, cp_size: int) -> None:
     torch.set_num_threads(1)
     dist.init_process_group(
         "gloo",
@@ -213,12 +226,20 @@ def _distributed_cp_gradient_worker(rank: int, rendezvous: str) -> None:
         timeout=timedelta(seconds=90),
     )
     try:
-        mesh = init_device_mesh("cpu", (world_size,), mesh_dim_names=("cp",))
-        logical_features = torch.tensor(
-            [[1.0, 0.2], [0.5, -0.7], [-0.2, 0.8], [0.9, -0.4]],
-            dtype=torch.float64,
-        )
-        local_features = logical_features.chunk(world_size)[rank]  # [N/CP,D]
+        parallel_dims = ParallelDims(world_size=world_size, dp_shard=world_size, cp=cp_size)
+        parallel_dims.build_meshes("cpu")
+        dp_mesh = parallel_dims.dp_mesh
+        cp_mesh = parallel_dims.cp_mesh
+        assert dp_mesh is not None and dp_mesh.size() == world_size
+        assert cp_mesh is not None and cp_mesh.size() == cp_size
+        sample_count = world_size // cp_size
+        logical_features = [
+            torch.tensor([[1.0, 0.2], [0.5, -0.7], [-0.2, 0.8], [0.9, -0.4]], dtype=torch.float64),
+            torch.tensor([[-0.6, 0.3], [0.2, 1.1], [0.7, 0.4], [-0.8, -0.5]], dtype=torch.float64),
+        ][:sample_count]
+        sample_rank = rank // cp_size
+        cp_rank = rank % cp_size
+        local_features = logical_features[sample_rank].chunk(cp_size)[cp_rank]  # [N/CP,D]
 
         router = _DistributedRouter()
         reference = copy.deepcopy(router)
@@ -230,42 +251,152 @@ def _distributed_cp_gradient_worker(rank: int, rendezvous: str) -> None:
                 distributed_router(local_features),
                 coeff=1.0,
                 method="sample",
-                device_mesh=mesh,
-                context_parallel_mesh=mesh,
+                device_mesh=dp_mesh,
+                context_parallel_mesh=cp_mesh,
                 correct_cp_gradients=correct_cp_gradients,
             )
             assert local_loss is not None
             local_loss.backward()
 
             reference.zero_grad(set_to_none=True)
-            expected_loss = compute_load_balancing_loss(
-                reference(logical_features),
-                coeff=1.0,
-                method="sample",
-                device_mesh=None,
-            )
-            assert expected_loss is not None
+            reference_losses: list[torch.Tensor] = []
+            for features in logical_features:
+                reference_loss = compute_load_balancing_loss(
+                    reference(features),
+                    coeff=1.0,
+                    method="sample",
+                    device_mesh=None,
+                )
+                assert reference_loss is not None
+                reference_losses.append(reference_loss)
+            expected_loss = torch.stack(reference_losses).mean()
             expected_loss.backward()
 
-            torch.testing.assert_close(local_loss, expected_loss)
+            torch.testing.assert_close(local_loss, reference_losses[sample_rank])
             expected_gradient = reference.weight.grad
             assert router.weight.grad is not None and expected_gradient is not None
             if not correct_cp_gradients:
-                expected_gradient = expected_gradient / world_size
+                expected_gradient = expected_gradient / cp_size
             torch.testing.assert_close(router.weight.grad, expected_gradient)
     finally:
         dist.destroy_process_group()
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_corrects_cp_gradients_without_changing_loss(tmp_path: Path) -> None:
     mp.spawn(
         _distributed_cp_gradient_worker,
-        args=((tmp_path / "rendezvous").as_uri(),),
+        args=((tmp_path / "two_rank_rendezvous").as_uri(), 2, 2),
         nprocs=2,
         join=True,
     )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sample_load_balancing_cp_correction_with_separate_dp_and_cp_meshes(tmp_path: Path) -> None:
+    mp.spawn(
+        _distributed_cp_gradient_worker,
+        args=((tmp_path / "separate_mesh_rendezvous").as_uri(), 4, 2),
+        nprocs=4,
+        join=True,
+    )
+
+
+def _fsdp_cp_gradient_worker(rank: int, rendezvous: str) -> None:
+    world_size = 4
+    cp_size = 2
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        "nccl",
+        init_method=rendezvous,
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=90),
+    )
+    try:
+        parallel_dims = ParallelDims(world_size=world_size, dp_shard=world_size, cp=cp_size)
+        parallel_dims.build_meshes("cuda")
+        dp_mesh = parallel_dims.dp_mesh
+        cp_mesh = parallel_dims.cp_mesh
+        shard_mesh = fsdp_mesh(parallel_dims)
+        assert dp_mesh is not None and dp_mesh.size() == world_size
+        assert cp_mesh is not None and cp_mesh.size() == cp_size
+        assert shard_mesh is not None and shard_mesh.size() == world_size
+
+        device = torch.device("cuda", rank)
+        logical_features = [
+            torch.tensor([[1.0, 0.2], [0.5, -0.7], [-0.2, 0.8], [0.9, -0.4]], dtype=torch.float64, device=device),
+            torch.tensor(
+                [[-0.6, 0.3], [0.2, 1.1], [0.7, 0.4], [-0.8, -0.5]],
+                dtype=torch.float64,
+                device=device,
+            ),
+        ]
+        sample_rank = rank // cp_size
+        cp_rank = rank % cp_size
+        local_features = logical_features[sample_rank].chunk(cp_size)[cp_rank]  # [N/CP,D]
+
+        router = _DistributedRouter().to(device)
+        reference = copy.deepcopy(router)
+        fully_shard(router, mesh=shard_mesh)
+
+        for correct_cp_gradients in (False, True):
+            router.zero_grad(set_to_none=True)
+            local_loss = compute_load_balancing_loss(
+                router(local_features),
+                coeff=1.0,
+                method="sample",
+                device_mesh=dp_mesh,
+                context_parallel_mesh=cp_mesh,
+                correct_cp_gradients=correct_cp_gradients,
+            )
+            assert local_loss is not None
+            local_loss.backward()
+
+            reference.zero_grad(set_to_none=True)
+            reference_losses: list[torch.Tensor] = []
+            for features in logical_features:
+                reference_loss = compute_load_balancing_loss(
+                    reference(features),
+                    coeff=1.0,
+                    method="sample",
+                    device_mesh=None,
+                )
+                assert reference_loss is not None
+                reference_losses.append(reference_loss)
+            torch.stack(reference_losses).mean().backward()
+
+            torch.testing.assert_close(local_loss, reference_losses[sample_rank])
+            distributed_gradient = router.weight.grad
+            expected_gradient = reference.weight.grad
+            assert isinstance(distributed_gradient, DTensor) and expected_gradient is not None
+            full_distributed_gradient = distributed_gradient.full_tensor()
+            if not correct_cp_gradients:
+                expected_gradient = expected_gradient / cp_size
+            torch.testing.assert_close(full_distributed_gradient, expected_gradient)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.L1
+@pytest.mark.GPU
+def test_sample_load_balancing_cp_correction_matches_reference_after_fsdp_reduce_scatter(tmp_path: Path) -> None:
+    required_gpus = 4
+    if torch.cuda.device_count() < required_gpus:
+        pytest.skip(f"requires {required_gpus} visible GPUs")
+
+    mp.spawn(
+        _fsdp_cp_gradient_worker,
+        args=((tmp_path / "fsdp_rendezvous").as_uri(),),
+        nprocs=required_gpus,
+        join=True,
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_scales_rank_means_for_fsdp_average(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -321,6 +452,8 @@ def test_sample_load_balancing_scales_rank_means_for_fsdp_average(
     torch.testing.assert_close(rank1_local_mean.grad, torch.tensor([0.75]))  # [num_layers]
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_requires_sample_metadata() -> None:
     metadata = LBLMetadata(
         num_tokens_per_expert=torch.tensor([[1, 1]]),  # [num_layers,num_experts]
@@ -338,6 +471,8 @@ def test_sample_load_balancing_requires_sample_metadata() -> None:
         )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_returns_zero_without_valid_samples() -> None:
     sample_router_prob_sum_per_expert = torch.zeros((1, 2, 2), requires_grad=True)  # [num_layers,num_samples,E]
     metadata = LBLMetadata(
@@ -365,6 +500,8 @@ def test_sample_load_balancing_returns_zero_without_valid_samples() -> None:
     )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_sample_load_balancing_matches_local_global_top_k_scaling() -> None:
     top_k = torch.tensor([[2]])  # [num_layers,1]
     metadata = LBLMetadata(

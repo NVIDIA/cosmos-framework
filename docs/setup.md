@@ -68,6 +68,13 @@ cd cosmos-framework
 
 The two supported install paths are the recommended base image and the Docker container. For other paths (standalone venv, custom torch/cuda) see [Advanced](#advanced).
 
+For AutoML, also follow [installation from source](automl.md#installation-from-source)
+after preparing Framework. The core is installed from `NVIDIA-TAO/tao-automl`'s
+`main` branch by default; the guide includes an explicit named-development-branch
+override. A public wheel release is not required. Ordinary `uv sync --all-extras`
+does not install the core; use the documented post-sync install and `--no-sync`
+invocation. Keep the installed revision unchanged when resuming an experiment.
+
 <details open><summary><b>Quickstart: From the Recommended Base Image</b></summary>
 
 ### Quickstart: From the Recommended Base Image

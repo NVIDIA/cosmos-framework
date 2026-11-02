@@ -318,7 +318,9 @@ def pack_multiview_action_conditioning(
             num_views=num_views,
         )
         builder.finish_sample(builder.current_seq_index - generation_start, builder.current_seq_index - sample_start)
-    return builder.finalize(gen_data_clean=data)
+    packed = builder.finalize(gen_data_clean=data)
+    packed.multiview_action_temporal_factor = temporal_factor
+    return packed
 
 
 def pack_input_sequence(

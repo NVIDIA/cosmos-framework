@@ -51,6 +51,11 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 - **CUDA version alignment**: the major CUDA version from `nvidia-smi` must match `torch.version.cuda`. Mismatches cause cryptic shared-library errors.
 - **`HF_HOME`**: controls where checkpoints are cached (default: `~/.cache/huggingface`). Set this if disk space is tight or you want a shared cache.
 - **Conflicting env vars**: stale `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` env vars can silently override CLI auth. Check with `printenv | grep HF_`.
+- **AutoML is a separate source install**: `uv sync --all-extras` does not install
+  the core engine. For AutoML setup, follow `docs/automl.md#installation-from-source`
+  and the `cosmos-automl` skill: ask whether to use `NVIDIA-TAO/tao-automl`'s `main`
+  branch or a user-selected development branch before a new installation. Keep
+  the recorded source revision for existing experiments; do not upgrade on resume.
 
 ## Related skills
 

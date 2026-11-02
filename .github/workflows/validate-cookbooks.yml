@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Checks that every cookbook and evaluation notebook parses and lints, then runs the
-# Auto cookbook's CPU tests (request helpers, media timelines, synthetic RDS-HQ scene).
+# Auto cookbook's CPU tests (request helpers, media timelines, synthetic RDS-HQ scene)
+# and the Bimanual cookbook's CPU tests (input preparation, payload encoding, HTTP client).
 name: Validate cookbooks
 on:
   push:
@@ -15,6 +16,7 @@ permissions:
   contents: read
 env:
   AUTO: .agents/skills/cookbooks/cosmos3/simulation/auto
+  BIMANUAL: .agents/skills/cookbooks/cosmos3/simulation/bimanual
 jobs:
   validate-cookbooks:
     name: Validate cookbooks
@@ -29,7 +31,7 @@ jobs:
       - name: Install notebook checks
         run: >-
           python -m pip install --disable-pip-version-check
-          nbformat==5.11.1 ruff==0.16.4 httpx numpy attrs safetensors ipython matplotlib huggingface_hub imageio-ffmpeg==0.6.0
+          nbformat==5.11.1 ruff==0.16.4 httpx numpy pillow orjson attrs safetensors ipython matplotlib huggingface_hub imageio-ffmpeg==0.6.0
 
       - name: Install media tools
         run: |
@@ -116,8 +118,13 @@ jobs:
 
       - name: Check Sim-Auto request and HTTP helpers
         run: |
-          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/helpers/sim_auto_vllm_omni_helpers.py" "$AUTO/tests/test_sim_auto_helpers.py"
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$AUTO/helpers/sim_auto_vllm_omni_helpers.py" "$AUTO/helpers/sim_auto_sglang_helpers.py" "$AUTO/tests/test_sim_auto_helpers.py"
           python -m unittest discover -s "$AUTO/tests" -p 'test_sim_auto_helpers.py' -v
+
+      - name: Check Bimanual input preparation and HTTP helpers
+        run: |
+          ruff check --output-format=github --select=E9,F63,F7,F82 "$BIMANUAL/bimanual_helpers.py" "$BIMANUAL/tests/test_bimanual_helpers.py"
+          python -m unittest discover -s "$BIMANUAL/tests" -p 'test_bimanual_helpers.py' -v
 
       - name: Check media timelines with system FFmpeg
         run: |

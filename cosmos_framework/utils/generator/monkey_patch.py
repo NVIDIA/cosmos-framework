@@ -23,6 +23,8 @@ from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import (
 from transformers.utils.import_utils import is_torchdynamo_compiling
 
 from cosmos_framework.utils import log
+from cosmos_framework.model.generator.context_parallel import shard_decoder_inputs
+from cosmos_framework.utils.generator.attention_chunks import plan_varlen_attention_chunks
 
 _EXPECTED_TRANSFORMERS_VERSION_PREFIX = "4.57."
 
@@ -91,9 +93,9 @@ def patch_qwen3_vl_forward(model):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
+        position_ids: torch.Tensor | None = None,
         past_key_values: Cache | None = None,
-        inputs_embeds: torch.FloatTensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
         pixel_values: torch.Tensor | None = None,
         pixel_values_videos: torch.FloatTensor | None = None,
         image_grid_thw: torch.LongTensor | None = None,
@@ -257,6 +259,36 @@ def patch_qwen3_vl_forward(model):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+        cp_group = getattr(self, "_cosmos_multimodal_cp_group", None)
+        if cp_group is not None and (has_image or has_video):
+            if not all(
+                isinstance(value, torch.Tensor)
+                for value in (inputs_embeds, position_ids, attention_mask, visual_pos_masks)
+            ):
+                raise ValueError("Multimodal CP requires complete tensor embeddings, positions and masks")
+            assert isinstance(inputs_embeds, torch.Tensor) and isinstance(position_ids, torch.Tensor)
+            assert isinstance(attention_mask, torch.Tensor) and isinstance(visual_pos_masks, torch.Tensor)
+            if deepstack_visual_embeds is None:
+                raise ValueError("Multimodal CP requires the complete DeepStack features")
+            # Vision encoding, media insertion and native mRoPE all use the complete sequence.
+            local = shard_decoder_inputs(
+                {
+                    "inputs_embeds": inputs_embeds,
+                    "position_ids": position_ids,
+                    "attention_mask": attention_mask,
+                    "visual_pos_masks": visual_pos_masks,
+                    "deepstack_visual_embeds": deepstack_visual_embeds,
+                },
+                cp_group,
+                position_axes=3,
+                clone_embeddings=True,
+            )
+            inputs_embeds = local["inputs_embeds"]
+            position_ids = local["position_ids"]
+            attention_mask = local["attention_mask"]
+            visual_pos_masks = local["visual_pos_masks"]
+            deepstack_visual_embeds = local["deepstack_visual_embeds"]
 
         outputs = self.language_model(
             input_ids=None,
@@ -589,9 +621,25 @@ def patch_qwen3_vl_moe_grouped_mm_experts(model: torch.nn.Module) -> int:
     return len(blocks)
 
 
-def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
+def _vision_attention_chunks(
+    grid_thw: list[list[int]], max_padded_tokens: int
+) -> tuple[tuple[int, int, int, int, int], ...]:
+    """Group complete frame sequences while bounding batch_size * max_sequence_length.
+
+    Entries are (first_sequence, end_sequence, first_token, end_token, max_length).
+    No frame is split or reordered. A single frame longer than the budget stays intact.
+    """
+    if max_padded_tokens <= 0 or not grid_thw or any(min(grid) <= 0 for grid in grid_thw):
+        raise ValueError("Vision grids and the padded-token budget must be positive")
+    lengths = [height * width for time, height, width in grid_thw for _ in range(time)]
+    return plan_varlen_attention_chunks(lengths, max_padded_tokens)
+
+
+def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module, *, max_padded_tokens: int = 0) -> int:
     """Monkey-patch every Qwen3-VL vision tower **instance** under ``model`` so each block runs
-    ONE varlen attention call over the packed patches instead of one call per image/frame.
+    varlen attention over packed patches instead of one call per image/frame. By default
+    there is one call; an optional padded-token budget bounds backward workspaces when
+    high-resolution images are packed together with many small video frames.
 
     HF's ``Qwen3VL{,Moe}VisionAttention.forward`` reserves its varlen path for
     ``_attn_implementation == "flash_attention_2"``. Every other implementation — including
@@ -619,7 +667,8 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
     sdpa/eager overrides that choice silently. ``hf_model`` gates the call on it.
 
     Patched in place, per vision tower:
-    - Each ``Qwen3VL{,Moe}VisionAttention.forward`` becomes the FA2-shaped single call.
+    - Each ``Qwen3VL{,Moe}VisionAttention.forward`` becomes a packed varlen call,
+      or a bounded group of calls when ``max_padded_tokens`` is set.
     - The tower's own ``forward`` gains a wrapper that computes ``max_seqlen`` — an int, as
       the kernels need a host value to size their scheduling — and passes it down through
       the ``**kwargs`` that the tower already threads into every block. That leaves ONE
@@ -635,6 +684,8 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
     Args:
         model: Module containing the vision tower(s), i.e. the outer
             ``Qwen3VL{,Moe}ForConditionalGeneration`` (``HFModel.model``).
+        max_padded_tokens: Optional bound on sequence count times maximum frame length
+            per attention call. Zero preserves the original single-call path.
 
     Returns:
         Number of patched attention modules.
@@ -648,6 +699,9 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
     # Local import: the adapter pulls in cosmos_framework.model.attention, which probes for flash/NATTEN
     # backends at module scope, and backbones that never reach this patch must not pay for that.
     from cosmos_framework.utils.generator.hf_attention_cosmos import hf_attention_cosmos
+
+    if max_padded_tokens < 0:
+        raise ValueError("Vision attention padded-token budget must be nonnegative")
 
     towers = [module for module in model.modules() if isinstance(module, (Qwen3VLVisionModel, Qwen3VLMoeVisionModel))]
     if not towers:
@@ -674,6 +728,7 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
             rotary_pos_emb: torch.Tensor | None = None,
             position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
             max_seqlen: int | None = None,
+            vision_attention_chunks: tuple[tuple[int, int, int, int, int], ...] | None = None,
             **kwargs,
         ) -> torch.Tensor:
             if max_seqlen is None:
@@ -709,20 +764,43 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
             # the other implementations in that registry swallow unrecognized kwargs, so a tower
             # whose _attn_implementation changed after patching would drop them on the floor and
             # attend ACROSS image boundaries — wrong features, no error.
-            attn_output, _ = hf_attention_cosmos(
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask=None,
-                scaling=self.scaling,
-                dropout=0.0 if not self.training else self.attention_dropout,
-                cu_seq_lens_q=cu_seqlens,
-                cu_seq_lens_k=cu_seqlens,
-                max_length_q=max_seqlen,
-                max_length_k=max_seqlen,
-                is_causal=False,
-            )  # [1,N,num_heads,head_dim]
+            if vision_attention_chunks is None:
+                attn_output, _ = hf_attention_cosmos(
+                    self,
+                    query_states,
+                    key_states,
+                    value_states,
+                    attention_mask=None,
+                    scaling=self.scaling,
+                    dropout=0.0 if not self.training else self.attention_dropout,
+                    cu_seq_lens_q=cu_seqlens,
+                    cu_seq_lens_k=cu_seqlens,
+                    max_length_q=max_seqlen,
+                    max_length_k=max_seqlen,
+                    is_causal=False,
+                )  # [1,N,num_heads,head_dim]
+            else:
+                outputs: list[torch.Tensor] = []
+                for first, end, token_start, token_end, chunk_max in vision_attention_chunks:
+                    # All heads for each complete frame stay together. FSDP still sees
+                    # one vision/module forward; only independent attention calls split.
+                    chunk_cu = cu_seqlens[first : end + 1] - token_start
+                    output, _ = hf_attention_cosmos(
+                        self,
+                        query_states[:, :, token_start:token_end],
+                        key_states[:, :, token_start:token_end],
+                        value_states[:, :, token_start:token_end],
+                        attention_mask=None,
+                        scaling=self.scaling,
+                        dropout=0.0 if not self.training else self.attention_dropout,
+                        cu_seq_lens_q=chunk_cu,
+                        cu_seq_lens_k=chunk_cu,
+                        max_length_q=chunk_max,
+                        max_length_k=chunk_max,
+                        is_causal=False,
+                    )
+                    outputs.append(output)
+                attn_output = torch.cat(outputs, dim=1)  # [1,N,num_heads,head_dim]
 
             attn_output = attn_output.reshape(seq_length, -1).contiguous()  # [N,hidden_size]
             attn_output = self.proj(attn_output)  # [N,hidden_size]
@@ -746,7 +824,14 @@ def patch_qwen3_vl_vision_varlen_attention(model: torch.nn.Module) -> int:
             # sequences of the same length), so the longest sequence is max(h*w) — the same
             # value HF's FA2 branch derives from cu_seqlens, read here once for the whole
             # tower. int() is the device-to-host sync; it sits outside the compiled blocks.
-            kwargs.setdefault("max_seqlen", int((grid_thw[:, 1] * grid_thw[:, 2]).max()))
+            if max_padded_tokens:
+                # Plan once outside the blocks and reuse during activation recomputation.
+                # This replaces the existing host read; it adds none inside attention.
+                chunks = _vision_attention_chunks(grid_thw.tolist(), max_padded_tokens)
+                kwargs.setdefault("max_seqlen", max(chunk[-1] for chunk in chunks))
+                kwargs["vision_attention_chunks"] = chunks if len(chunks) > 1 else None
+            else:
+                kwargs.setdefault("max_seqlen", int((grid_thw[:, 1] * grid_thw[:, 2]).max()))
             return tower_forward(hidden_states, grid_thw, **kwargs)
 
         return patched_vision_tower_forward

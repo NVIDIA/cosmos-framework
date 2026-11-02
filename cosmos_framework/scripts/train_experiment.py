@@ -114,10 +114,20 @@ def _apply_deterministic_config_overrides(config: Config) -> None:
 
 
 def launch(config: Config, args: argparse.Namespace) -> None:
+    if os.environ.get("COSMOS_CLUSTERPULSE_ENABLED") == "1" and (
+        config.trainer.profiling.enable_nsys or config.trainer.profiling.enable_profiling
+    ):
+        raise ValueError("ClusterPulse cannot be combined with nsys/PyTorch profiling in the resolved experiment")
+
     from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.utils import distributed
     from cosmos_framework.utils.context_managers import data_loader_init, distributed_init, model_init
     from cosmos_framework.utils.launch import log_reproducible_setup
+
+    if os.environ.get("COSMOS_CLUSTERPULSE_HEALTH_CHECK"):
+        from cosmos_framework.utils.generator.clusterpulse_preflight import prepare_clusterpulse_providers
+
+        prepare_clusterpulse_providers()
 
     # The released configs name their tokenizer and VAE by object-store URI; the framework's
     # checkpoint registry maps those URIs to public downloads.

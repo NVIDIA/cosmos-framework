@@ -80,9 +80,9 @@ from cosmos_framework.checkpoint.background_store import (
 )
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
@@ -1119,7 +1119,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         *next* save to drain this one, or for :meth:`finalize` on a graceful exit. A job
         killed abnormally in between -- preemption, cancellation, timeout, node failure --
         therefore threw away credit for a checkpoint that had been durable on disk for as
-        long as the gap between saves. Job 1881483 wrote iteration 58500 successfully at
+        long as the gap between saves. One job wrote iteration 58500 successfully at
         10:52:04 and was preempted at 11:32:56 having reached 58856, yet still reported
         58000 as its last productive iteration.
 

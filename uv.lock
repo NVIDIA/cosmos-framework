@@ -2378,6 +2378,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+automl-prompts = [
+    { name = "gepa" },
+]
 guardrail = [
     { name = "better-profanity" },
     { name = "nltk" },
@@ -2425,7 +2428,6 @@ train = [
     { name = "imagecodecs", version = "2026.1.14", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-16-cosmos-framework-train') or (extra == 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-libero') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-vllm')" },
     { name = "ipycanvas" },
     { name = "ipyevents" },
-    { name = "jupyter-compare-view" },
     { name = "jupyterlab" },
     { name = "kornia" },
     { name = "lerobot" },
@@ -2709,6 +2711,7 @@ requires-dist = [
     { name = "ftfy", marker = "extra == 'train'" },
     { name = "futureproof", marker = "extra == 'train'" },
     { name = "fvcore", marker = "extra == 'train'" },
+    { name = "gepa", marker = "extra == 'automl-prompts'", specifier = "==0.1.2" },
     { name = "glfw", marker = "extra == 'train'" },
     { name = "gradio", marker = "extra == 'serve'" },
     { name = "h5py", marker = "extra == 'train'" },
@@ -2720,7 +2723,6 @@ requires-dist = [
     { name = "iopath", specifier = ">=0.1.10" },
     { name = "ipycanvas", marker = "extra == 'train'" },
     { name = "ipyevents", marker = "extra == 'train'" },
-    { name = "jupyter-compare-view", marker = "extra == 'train'" },
     { name = "jupyterlab", marker = "extra == 'train'" },
     { name = "kornia", marker = "extra == 'train'" },
     { name = "lerobot", marker = "extra == 'train'", git = "https://github.com/mli0603/lerobot.git" },
@@ -2740,8 +2742,8 @@ requires-dist = [
     { name = "multi-storage-client", extras = ["boto3", "google-cloud-storage", "fsspec", "observability-otel", "vault"], marker = "extra == 'train'", specifier = "==0.44.0" },
     { name = "ninja", marker = "extra == 'train'" },
     { name = "nltk", marker = "extra == 'guardrail'" },
-    { name = "nvidia-automl-core", marker = "extra == 'automl'", specifier = "==1.0.0.dev0" },
-    { name = "nvidia-automl-core", extras = ["prompts"], marker = "extra == 'automl-prompts'", specifier = "==1.0.0.dev0" },
+    { name = "nvidia-automl-core", marker = "extra == 'automl'", specifier = "==0.1.0" },
+    { name = "nvidia-automl-core", marker = "extra == 'automl-prompts'", specifier = "==0.1.0" },
     { name = "nvidia-cudnn-frontend" },
     { name = "nvidia-dali-cuda120", marker = "extra == 'train'" },
     { name = "nvidia-ml-py" },
@@ -5014,6 +5016,15 @@ wheels = [
 ]
 
 [[package]]
+name = "gepa"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/2d/9521c2b94bc4c95a81bfb483278cd3fbd1c4261f228638cb7844c84293da/gepa-0.1.2.tar.gz", hash = "sha256:1587e7081d3e321d7739785f00ba0bc27509dcc7ca4e75546d0210e1c292410c", size = 317051, upload-time = "2026-07-14T12:07:00.216Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/81/33e455d043926f95356f19f43b6e371a895708e067726071f0b5b1b05205/gepa-0.1.2-py3-none-any.whl", hash = "sha256:9ccf1e8353ec6d5d606a5aabd7a9ed75a86be5024371584646abc7d532321eb3", size = 273524, upload-time = "2026-07-14T12:06:58.865Z" },
+]
+
+[[package]]
 name = "gguf"
 version = "0.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6364,22 +6375,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/05/e4/ba649102a3bc3fbca54e7239fb924fd434c766f855693d86de0b1f2bec81/jupyter_client-8.8.0.tar.gz", hash = "sha256:d556811419a4f2d96c869af34e854e3f059b7cc2d6d01a9cd9c85c267691be3e", size = 348020, upload-time = "2026-01-08T13:55:47.938Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2d/0b/ceb7694d864abc0a047649aec263878acb9f792e1fec3e676f22dc9015e3/jupyter_client-8.8.0-py3-none-any.whl", hash = "sha256:f93a5b99c5e23a507b773d3a1136bd6e16c67883ccdbd9a829b0bbdb98cd7d7a", size = 107371, upload-time = "2026-01-08T13:55:45.562Z" },
-]
-
-[[package]]
-name = "jupyter-compare-view"
-version = "0.2.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ipykernel" },
-    { name = "ipython", version = "8.38.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-16-cosmos-framework-train') or (extra == 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-libero') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra != 'group-16-cosmos-framework-libero' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra != 'group-16-cosmos-framework-libero' and extra == 'group-16-cosmos-framework-vllm') or (extra != 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-vllm') or (extra != 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-vllm')" },
-    { name = "ipython", version = "9.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-16-cosmos-framework-train') or (extra == 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-libero') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-vllm')" },
-    { name = "jinja2" },
-    { name = "pillow" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/4b/382b3882faa4de741bf4a923d7681d597d5e3694ae2076047d45f619dcce/jupyter_compare_view-0.2.4.tar.gz", hash = "sha256:0edae58d8cc47450d7a545c74a9d5cdfe0e20dc9b1003939d5130737177643c1", size = 12195, upload-time = "2023-03-14T09:03:55.981Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/66/9b31bc102a9b959ca60aa4b70153809e8d4773e520618cb115860105e50a/jupyter_compare_view-0.2.4-py3-none-any.whl", hash = "sha256:5b31e56c38d4ace49cca9acc52f8aa3f9013a4bafbdf9c7bc3a70644db03d7dc", size = 11681, upload-time = "2023-03-14T09:03:53.752Z" },
 ]
 
 [[package]]

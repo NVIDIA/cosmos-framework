@@ -6,6 +6,7 @@ import re
 import wave
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -15,12 +16,19 @@ from PIL import Image
 from cosmos_framework.data.generator.augmentors.reasoner.bytes_to_media import BytesToMedia
 from cosmos_framework.data.generator.augmentors.reasoner.filter_output_key import FilterOutputKey
 from cosmos_framework.data.generator.augmentors.reasoner.filter_seq_length import FilterSeqLength
-from cosmos_framework.data.generator.augmentors.reasoner.tokenize_data import TokenizeData
+from cosmos_framework.data.generator.augmentors.reasoner.tokenize_data import TokenizeData, _select_video_frames
 from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
     AUDIO_PAD_TOKEN,
     AUDIO_START_TOKEN,
 )
+from cosmos_framework.data.generator.processors.qwen3vl_processor import VIDEO_BUDGET_RESIZED_KEY
+from cosmos_framework.utils.generator.source_video_timing import (
+    SOURCE_VIDEO_TIMING_KEY,
+    build_source_video_timing,
+    validate_source_video_timing,
+)
+from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY, validate_source_video_metadata
 
 
 class _FakeTokenizer:
@@ -67,9 +75,11 @@ class _FakeVLMProcessor:
         self.name = name
         self.tokenizer = _FakeTokenizer(extra_vocabulary)
         self.last_conversation = None
+        self.last_kwargs = None
 
     def apply_chat_template(self, conversation, **kwargs) -> dict[str, torch.Tensor]:
         self.last_conversation = deepcopy(conversation)
+        self.last_kwargs = kwargs
         input_ids: list[int] = []
         video_grid_thw: list[list[int]] = []
         special_tokens = (AUDIO_START_TOKEN, AUDIO_PAD_TOKEN, AUDIO_END_TOKEN)
@@ -196,8 +206,10 @@ def test_bytes_to_media_decodes_audio_bytes_to_mono_16khz() -> None:
 
 @pytest.mark.L0
 @pytest.mark.CPU
+@pytest.mark.parametrize("use_start_frame_end_frame", [False, True])
 def test_bytes_to_media_extracts_video_audio_only_when_requested(
     monkeypatch: pytest.MonkeyPatch,
+    use_start_frame_end_frame: bool,
 ) -> None:
     waveform = torch.tensor([0.25, -0.5], dtype=torch.float32)
     monkeypatch.setattr(
@@ -211,15 +223,61 @@ def test_bytes_to_media_extracts_video_audio_only_when_requested(
         lambda *args, **kwargs: waveform,
     )
 
-    video_only = BytesToMedia(is_input_pickle_byptes=False)(
-        {"media": {"clip.mp4": b"encoded-video"}},
+    data = {
+        "media": {"clip.mp4": b"encoded-video", "clip.wav": b"encoded-audio"},
+        "start_frame": 0,
+        "end_frame": 2,
+    }
+    video_only = BytesToMedia(
+        is_input_pickle_byptes=False, extract_audio=False, use_start_frame_end_frame=use_start_frame_end_frame
+    )(
+        deepcopy(data),
     )
-    audio_visual = BytesToMedia(is_input_pickle_byptes=False, extract_audio=True)(
-        {"media": {"clip.mp4": b"encoded-video"}},
+    audio_visual = BytesToMedia(
+        is_input_pickle_byptes=False, extract_audio=True, use_start_frame_end_frame=use_start_frame_end_frame
+    )(
+        deepcopy(data),
     )
 
     assert "audio" not in video_only["media"]["clip.mp4"]
     assert audio_visual["media"]["clip.mp4"]["audio"] is waveform
+    assert video_only["media"]["clip.wav"] is waveform
+    assert audio_visual["media"]["clip.wav"] is waveform
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("audio_layout", ["separate_no_timestamps", "separate_with_timestamps", "interleaved_av"])
+def test_video_without_soundtrack_keeps_tokens_when_audio_understanding_is_enabled(audio_layout: str) -> None:
+    data = {
+        "__key__": "video-without-soundtrack",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "conversation": [
+            {"role": "user", "content": [{"type": "video", "video": "clip.mp4"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "answer"}]},
+        ],
+        "media": {"clip.mp4": {"videos": [Image.new("RGB", (4, 4)) for _ in range(2)], "fps": 4.0}},
+    }
+    # The test double implements the processor methods used here without loading model assets.
+    baseline = TokenizeData(
+        processor=_FakeVLMProcessor(),  # pyright: ignore[reportArgumentType]
+        sound_und=False,
+        max_video_token_length=16,
+    )(deepcopy(data))
+    audio_processor = _FakeAudioProcessor()
+    output = TokenizeData(
+        processor=_FakeVLMProcessor(),  # pyright: ignore[reportArgumentType]
+        sound_und=True,
+        audio_processor=audio_processor,
+        audio_layout=audio_layout,
+        max_video_token_length=16,
+    )(deepcopy(data))
+
+    assert baseline is not None and output is not None
+    for key in ("input_ids", "attention_mask", "token_mask", "labels", "video_grid_thw", "pixel_values_videos"):
+        assert torch.equal(output[key], baseline[key]), key
+    assert "audio_features" not in output
+    assert audio_processor.last_audios is None
 
 
 @pytest.mark.L0
@@ -648,3 +706,225 @@ def test_tokenize_data_enabled_constructs_selected_audio_processor(
 
     assert constructed == [audio_encoder_type]
     assert tokenize.audio_processor is audio_processor
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "framewise,cap,expected_indices,expected_pixels",
+    [
+        (False, 2, [10, 40], [0, 3]),
+        (True, 2, [10, 10, 40, 40], [0, 0, 3, 3]),
+        (False, 3, [10, 40], [0, 3]),
+        (True, 3, [10, 10, 20, 20, 40, 40], [0, 0, 1, 1, 3, 3]),
+    ],
+)
+def test_video_frame_cap_keeps_source_indices_aligned(
+    framewise: bool, cap: int, expected_indices: list[int], expected_pixels: list[int]
+) -> None:
+    processor = _FakeVLMProcessor()
+    tokenize = TokenizeData(
+        processor=processor,
+        max_video_frames=cap,
+        video_temporal_mode="framewise" if framewise else "native",
+    )
+    metadata = {"fps": 10.0, "total_num_frames": 100, "frames_indices": [10, 20, 30, 40]}
+    data = {
+        "__key__": "frame-cap",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "conversation": [
+            {"role": "user", "content": [{"type": "video", "video": "clip"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "answer"}]},
+        ],
+        "media": {
+            "clip": {
+                "videos": [Image.new("RGB", (28, 28), (index, 0, 0)) for index in range(4)],
+                "fps": 1.0,
+                VIDEO_METADATA_KEY: metadata,
+            }
+        },
+    }
+    assert tokenize(data) is not None
+    assert processor.last_conversation is not None
+    video = processor.last_conversation[0]["content"][0]
+    assert video[VIDEO_METADATA_KEY]["frames_indices"] == expected_indices
+    assert [frame.getpixel((0, 0))[0] for frame in video["video"]] == expected_pixels
+    assert validate_source_video_metadata(video[VIDEO_METADATA_KEY], len(video["video"]))["fps"] == 10.0
+    assert metadata["frames_indices"] == [10, 20, 30, 40]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_tokenize_data_resolves_and_budgets_images_returned_by_tools() -> None:
+    vlm_processor = _FakeVLMProcessor()
+    data = {
+        "__key__": "agentic-trajectory",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "media": {"screenshot": Image.new("RGB", (64, 48)), "crop": Image.new("RGB", (16, 16))},
+        "conversation": [
+            {"role": "user", "content": [{"type": "image", "image": "screenshot"}, {"type": "text", "text": "before"}]},
+            {
+                "role": "assistant",
+                "content": "middle",
+                "tool_calls": [{"type": "function", "function": {"name": "crop", "arguments": {}}}],
+            },
+            {"role": "tool", "content": [{"type": "image", "image": "crop"}]},
+            {"role": "assistant", "content": "answer"},
+        ],
+    }
+
+    output = TokenizeData(processor=vlm_processor, max_image_token_length=1024)(data)
+
+    assert output is not None
+    user_image = vlm_processor.last_conversation[0]["content"][0]
+    tool_image = vlm_processor.last_conversation[2]["content"][0]
+    assert isinstance(tool_image["image"], Image.Image)
+    # Both images share the image budget: 1,024 tokens of 28x28 merged patches, halved.
+    assert user_image["max_pixels"] == tool_image["max_pixels"] == 1024 * 28 * 28 // 2
+
+
+def _two_video_sample() -> dict:
+    frames = [Image.new("RGB", (32, 32)) for _ in range(2)]
+    return {
+        "__key__": "two-videos",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "media": {
+            "decoded": {"videos": list(frames), "fps": 2.0, VIDEO_BUDGET_RESIZED_KEY: True},
+            "other": {"videos": list(frames), "fps": 2.0},
+        },
+        "conversation": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video", "video": "decoded"},
+                    {"type": "video", "video": "other"},
+                    {"type": "text", "text": "before"},
+                ],
+            },
+            {"role": "assistant", "content": "answer"},
+        ],
+    }
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("framewise", [False, True])
+def test_adaptive_budget_preserves_metadata_and_framewise_tubelets(framewise: bool) -> None:
+    tokenize = TokenizeData(processor=_FakeVLMProcessor(), video_temporal_mode="framewise" if framewise else "native")
+    pixel_ids = [0, 0, 1, 1, 2, 2, 3, 3] if framewise else list(range(8))
+    source_indices = [10 * (index + 1) for index in pixel_ids]
+    content: dict[str, Any] = {
+        "type": "video",
+        "video": [Image.new("RGB", (28, 28), (index, 0, 0)) for index in pixel_ids],
+        VIDEO_METADATA_KEY: {"fps": 10.0, "total_num_frames": 100, "frames_indices": source_indices},
+    }
+    if framewise:
+        content["frames_indices"] = source_indices.copy()
+    conversation = [{"role": "user", "content": [content]}]
+    assert tokenize._apply_video_token_budget(conversation, 2, allow_frame_subsampling=True)
+    expected_pixels = [0, 0, 3, 3] if framewise else [0, 2, 4, 7]
+    expected_indices = [10 * (index + 1) for index in expected_pixels]
+    assert [frame.getpixel((0, 0))[0] for frame in content["video"]] == expected_pixels
+    assert content[VIDEO_METADATA_KEY]["frames_indices"] == expected_indices
+    validate_source_video_metadata(content[VIDEO_METADATA_KEY], len(content["video"]))
+    if framewise:
+        assert content["frames_indices"] == expected_indices
+    assert source_indices == [10 * (index + 1) for index in pixel_ids]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_tokenize_data_passes_on_decoder_resizing_and_can_skip_raw_media() -> None:
+    vlm_processor = _FakeVLMProcessor()
+
+    output = TokenizeData(processor=vlm_processor, keep_raw_media=False)(_two_video_sample())
+
+    assert output is not None
+    videos = vlm_processor.last_conversation[0]["content"][:2]
+    # Copied per video; the real Qwen3VLProcessor then rejects such a mix (see qwen3vl_processor_test).
+    assert [video[VIDEO_BUDGET_RESIZED_KEY] for video in videos] == [True, False]
+    assert "raw_video" not in output
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_temporal_selection_keeps_source_pts_aligned() -> None:
+    timing = build_source_video_timing(
+        [10, 20, 30, 40],
+        torch.tensor([3.0, 4.0, 5.0, 6.5], dtype=torch.float64),
+        torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64),
+        "a" * 64,
+    )
+    original = deepcopy(timing)
+    content: dict[str, Any] = {"video": [0, 1, 2, 3], SOURCE_VIDEO_TIMING_KEY: timing}
+    _select_video_frames(content, [1, 3])
+    selected = content[SOURCE_VIDEO_TIMING_KEY]
+    assert content["video"] == [1, 3]
+    assert selected["frame_indices"] == [20, 40]
+    assert selected["duration_seconds"] == [0.2, 0.4]
+    assert validate_source_video_timing(selected, 2) == [0.0, 2.5]
+    assert timing == original
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("add_vision_id", [False, True])
+def test_tokenize_data_labels_media_only_when_enabled(add_vision_id: bool) -> None:
+    vlm_processor = _FakeVLMProcessor()
+
+    TokenizeData(processor=vlm_processor, add_vision_id=add_vision_id)(_two_video_sample())
+
+    assert vlm_processor.last_kwargs["add_vision_id"] is add_vision_id
+
+
+class _GridProcessor(_FakeVLMProcessor):
+    """One input id per merged video token (grid [frame pairs, 2, 2]) and one per text item."""
+
+    def apply_chat_template(self, conversation, **kwargs) -> dict[str, torch.Tensor]:
+        self.last_conversation = deepcopy(conversation)
+        ids: list[int] = []
+        grids: list[list[int]] = []
+        for message in conversation:
+            for content in message["content"] if isinstance(message["content"], list) else []:
+                if content["type"] == "video":
+                    pairs = (len(content["video"]) + 1) // 2
+                    grids.append([pairs, 2, 2])
+                    ids += [self.video_token_id] * pairs
+                elif content["type"] == "text":
+                    ids.append(1)
+        input_ids = torch.tensor(ids, dtype=torch.long)
+        output = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids, dtype=torch.bool)}
+        if grids:
+            output["video_grid_thw"] = torch.tensor(grids)
+        return output
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("keep_raw_media", [True, False])
+def test_adaptive_video_budget_honors_keep_raw_media(keep_raw_media: bool) -> None:
+    frames = [Image.new("RGB", (28, 28), (index, 0, 0)) for index in range(16)]
+    sample = {
+        "__key__": "adaptive-raw-media",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "media": {"clip": {"videos": frames, "fps": 2.0}},
+        "conversation": [
+            {"role": "user", "content": [{"type": "video", "video": "clip"}, {"type": "text", "text": "before"}]},
+            {"role": "assistant", "content": "answer"},
+        ],
+    }
+    processor = _GridProcessor()
+    tokenize = TokenizeData(
+        processor=processor,
+        keep_raw_media=keep_raw_media,
+        adaptive_video_token_budget=True,
+        max_total_token_length=6,
+        adaptive_video_token_safety_margin=0,
+        min_video_token_length=1,
+    )
+
+    output = tokenize(sample)
+
+    assert output is not None
+    assert len(processor.last_conversation[0]["content"][0]["video"]) < len(frames)  # the budget was applied
+    assert ("raw_video" in output) is keep_raw_media

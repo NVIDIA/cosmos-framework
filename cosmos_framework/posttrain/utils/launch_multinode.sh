@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# In-allocation multinode Ray bringup: start a Ray cluster across the job's nodes inside the i4
+# In-allocation multinode Ray bringup: start a Ray cluster across the job's nodes inside the training
 # container, export RAY_ADDRESS so the driver joins it (control.placement._ensure_ray), then run
 # RUN_CMD on the head. Cluster teardown = job end. The Python launcher (utils/launch_multinode.py)
 # submits the sbatch job and, in waiting mode, backstops it with an sacct timeout + scancel. This stays a
@@ -55,9 +55,9 @@ run() {  # run <node> <cmd...> in the persistent per-node container (venv source
   # $HOME/NFS, ~/.triton/cache on $HOME) make ranks on different nodes/jobs race the same
   # cache -> truncated kernels ("ImportError: ....main.so: file too short") or, when a
   # sibling job is cancelled mid-read, "OSError: [Errno 116] Stale file handle"
-  # (2026-07-06, job 1568874). vLLM re-points inductor under VLLM_CACHE_ROOT (default
+  # (2026-07-06). vLLM re-points inductor under VLLM_CACHE_ROOT (default
   # ~/.cache/vllm), so it needs its own default: engines on 256 nodes compiling there at once
-  # left an entry without its graph -> FXGraphCacheMiss (2026-09-30, job 721209).
+  # left an entry without its graph -> FXGraphCacheMiss (2026-09-30).
   # Node-local is always coherent.
   srun --overlap --nodes=1 --ntasks=1 -w "$1" --container-name "$CONTAINER_NAME" \
     bash -c "${VENV_ACTIVATE:+source '$VENV_ACTIVATE' && }cd '$CONTAINER_WORKDIR' && export PYTHONPATH='$CONTAINER_WORKDIR' HF_HOME=\"\${HF_HOME:-\$HOME/.cache}\" TORCHINDUCTOR_CACHE_DIR=\"\${TORCHINDUCTOR_CACHE_DIR:-/tmp/torchinductor_\$USER}\" TRITON_CACHE_DIR=\"\${TRITON_CACHE_DIR:-/tmp/triton_\$USER}\" VLLM_CACHE_ROOT=\"\${VLLM_CACHE_ROOT:-/tmp/vllm_\$USER}\"; ${RAY_RUNTIME_ENV:+$RAY_RUNTIME_ENV; }${POSTTRAIN_RUNTIME_ENV:+$POSTTRAIN_RUNTIME_ENV; }${*:2}"

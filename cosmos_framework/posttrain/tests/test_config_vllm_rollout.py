@@ -800,7 +800,7 @@ def test_ppo_engine_kwargs_refuse_custom_all_reduce() -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_limit_mm_per_prompt_key_policy_refuses_mistyped_and_unknown_modalities():
-    """Reviewer thread (rl.py:549): vLLM converts an unknown or mistyped key into a generic dummy option and the
+    """vLLM converts an unknown or mistyped key into a generic dummy option and the
     model's `allowed_mm_limits` iterates only its supported modalities, so `{'images': 40}` or `{' image': 40}`
     would be silently ignored. FAIL-ON-OLD: the first revision accepted both."""
     from cosmos_framework.posttrain.config.rl import VLLM_MODALITIES, RolloutConfig

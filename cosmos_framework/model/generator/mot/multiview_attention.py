@@ -314,6 +314,9 @@ def resolve_multiview_backend(
             "cross_view_temporal_window.includes_first_frame requires backend='maskless'; the flex "
             "mask has no first-frame rule"
         )
+    for flag in ("maskless_cross_view_attends_action", "maskless_cross_view_action_attends_action"):
+        if getattr(config, flag, False):
+            raise ValueError(f"{flag} requires backend='maskless'; the flex mask has no cross-view action rule")
 
     configured_same_view_windows = {
         name: getattr(config.mask.same_view_temporal_window, name)

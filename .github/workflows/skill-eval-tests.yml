@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Unit tests of the skill-eval orchestrator (.github/scripts/skill_eval): fake GitHub API, fake launcher, fake
+# dashboard, a throwaway git repo — no network, no docker, no GPU. GitHub-hosted; runs whenever the orchestrator
+# or this file changes. The eval itself is .github/workflows/skill-eval.yml (never automatic).
+name: skill-eval tests
+
+on:
+  pull_request:
+    paths:
+      - .github/scripts/skill_eval/**
+      - .github/workflows/skill-eval-tests.yml
+  push:
+    branches: [main]
+    paths:
+      - .github/scripts/skill_eval/**
+      - .github/workflows/skill-eval-tests.yml
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: orchestrator tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version  # the repo's interpreter (3.13), the one pre-commit's hooks use too
+      # run_matrix.py is stdlib-only; the tests import pytest and nothing else third-party
+      - run: python -m pip install pytest==9.1.1
+      - run: python -m pytest .github/scripts/skill_eval/tests -q

@@ -25,7 +25,7 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.data.generator.processors.qwen3vl_processor import VIDEO_BUDGET_RESIZED_KEY, Qwen3VLProcessor
 from cosmos_framework.utils.generator.source_video_timing import (
     SOURCE_VIDEO_TIMING_KEY,
     build_source_video_timing,
@@ -40,6 +40,10 @@ _VIDEO_EXTENSIONS = "mp4 avi webm mov".split()
 
 VIDEO_DECODER_OPTIONS = {}
 VideoTemporalMode = Literal["native", "framewise"]
+
+
+class VideoDecodeTimeoutError(TimeoutError):
+    """A resource-dependent decode failure that must not become a fixed data drop."""
 
 
 def get_effective_temporal_patch_size(temporal_patch_size: int, video_temporal_mode: VideoTemporalMode) -> int:
@@ -75,14 +79,17 @@ def pixels_to_token(pixels: int, patch_size: int = 14, temporal_patch_size: int 
 def video_decoder_qwen(
     num_threads: int = 0,
     min_fps_thres: int = 4,
-    max_fps_thres: int = 60,
+    max_fps_thres: float = 60.0,
     target_fps: float = 2.0,
     min_video_token_length: int = 16,
     max_video_token_length: int = 8192,
+    max_video_frames: int | None = None,
     random_augmentation: bool = False,
     frame_count_random_range: Optional[list[int]] = None,
     video_timestamp_mode: str = "qwen_index",
     video_temporal_mode: VideoTemporalMode = "native",
+    decoding_timeout: int = 60,
+    raise_on_decode_timeout: bool = False,
     **kwargs,
 ) -> Callable:
     """
@@ -118,10 +125,13 @@ def video_decoder_qwen(
         target_fps=target_fps,
         min_video_token_length=min_video_token_length,
         max_video_token_length=max_video_token_length,
+        max_video_frames=max_video_frames,
         random_augmentation=random_augmentation,
         frame_count_random_range=frame_count_random_range,
         video_timestamp_mode=video_timestamp_mode,
         video_temporal_mode=video_temporal_mode,
+        decoding_timeout=decoding_timeout,
+        raise_on_decode_timeout=raise_on_decode_timeout,
     )
 
     return video_decoder_configured
@@ -132,10 +142,11 @@ def _video_decoder_qwen_func(
     data: bytes,
     processor: Qwen3VLProcessor,
     min_fps_thres: int = 4,
-    max_fps_thres: int = 60,
+    max_fps_thres: float = 60.0,
     target_fps: float = 2.0,
     min_video_token_length: int = 16,
     max_video_token_length: int = 8192,
+    max_video_frames: int | None = None,
     num_threads: int = 0,
     random_augmentation: bool = False,
     fps_random_range: list[float] = [0.5, 1.5],
@@ -146,6 +157,8 @@ def _video_decoder_qwen_func(
     end_frame: Optional[int] = None,
     decoding_timeout: int = 60,
     video_timestamp_mode: str = "qwen_index",
+    raise_on_decode_timeout: bool = False,
+    decode_chunk_size: int = 32,
     **kwargs,
 ) -> dict | None:
     """Actual video decoder function.
@@ -165,9 +178,12 @@ def _video_decoder_qwen_func(
         frame_count_random_range (list[int], optional): Random frame count range. If provided, take priority over fps_random_range.
         start_frame (Optional[int], optional): Start frame. Defaults to None. If both start_frame and end_frame are provided, the video will be decoded from start_frame to end_frame.
         end_frame (Optional[int], optional): End frame. Defaults to None. If both start_frame and end_frame are provided, the video will be decoded from start_frame to end_frame.
-        decoding_timeout (int, optional): Timeout in seconds. Defaults to 60.
+        decoding_timeout (int, optional): Timeout in seconds for decoding one chunk of frames. Defaults to 60.
+        raise_on_decode_timeout: Raise instead of dropping a sample when decoding times out.
         video_timestamp_mode: Use Qwen source index/FPS by default for supported processors,
             legacy synthetic FPS, or actual selected FrameBatch presentation timestamps.
+        decode_chunk_size (int, optional): Frames decoded (and resized) at a time, bounding native-resolution
+            frames held in memory. Defaults to 32.
     Raises:
         ValueError: Video fps lower than 1, skipping
         ValueError: Video fps lower than min_fps_thres, skipping
@@ -252,7 +268,20 @@ def _video_decoder_qwen_func(
     max_pixels: int = token_to_pixels(max_video_token_length, patch_size, temporal_patch_size, merge_size)
     total_min_pixels = min_pixels
     total_max_pixels = max_pixels
-    max_frames: int = max_pixels // (min_height_width) ** 2 // temporal_patch_size
+    # A budget whose frame cap is below one temporal patch (under 128 tokens for Qwen3-VL in native mode, e.g. a
+    # short clip sharing a budget with long videos) still decodes one temporal patch; the per-frame budget below
+    # sets its resolution, under min_height_width when the budget cannot afford more.
+    max_frames: int = max(max_pixels // (min_height_width) ** 2 // temporal_patch_size, temporal_patch_size)
+    if max_video_frames is not None:
+        if max_video_frames <= 0:
+            raise ValueError(f"max_video_frames must be positive, got {max_video_frames}")
+        aligned_max_video_frames = max_video_frames // temporal_patch_size * temporal_patch_size
+        if aligned_max_video_frames < temporal_patch_size:
+            raise ValueError(
+                f"max_video_frames must allow at least {temporal_patch_size} temporally aligned frames, "
+                f"got {max_video_frames}"
+            )
+        max_frames = min(max_frames, aligned_max_video_frames)
 
     nframes = smart_nframes_with_factor(
         {"fps": target_fps, "max_frames": max_frames},
@@ -265,64 +294,89 @@ def _video_decoder_qwen_func(
     else:
         idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()  # [nframes]
 
-    def _decode_video() -> torch.Tensor | FrameBatch:  # pixels: [T,C,H,W]; times: [T]
-        frame_batch = video_reader.get_frames_at(indices=idx)  # pixels: [T,C,H,W]; times: [T]
-        return frame_batch if video_timestamp_mode == "source_pts" else frame_batch.data  # [T,C,H,W] uint8
+    # Each frame gets an even share of the budget. min_pixels floors the frame size only where that share affords
+    # it: below it (the single temporal patch a too-small budget still decodes, see max_frames) the floor is one
+    # merged patch, so frames are only ever shrunk to fit and a small allocation never spends more tokens than it
+    # was given.
+    max_pixels_per_frame = max_pixels // nframes
+    min_pixels_per_frame = min_pixels if max_pixels_per_frame >= min_pixels else (patch_size * merge_size) ** 2
 
-    # Use ThreadPoolExecutor to run video decoding with a timeout.
-    # If the thread is stuck, abandon it immediately.
+    # Decode (and resize) chunk by chunk into one preallocated output. With a resize, only one native chunk is alive
+    # at a time: decoding every sampled frame at native resolution before resizing peaks at ~37 MiB per 1080p frame,
+    # tens of GiB for the frame counts of long-context budgets. Without one, the output itself is native; filling it
+    # in place still avoids holding the decoded chunks and their concatenation at once.
+    # Each chunk is decoded in a worker thread with a timeout; a stuck thread is abandoned immediately.
     executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(_decode_video)
+    video_frames: torch.Tensor | None = None  # [T,C,H',W'] uint8, allocated once the first chunk gives the size
+    pts_chunks: list[torch.Tensor] = []
+    duration_chunks: list[torch.Tensor] = []
     try:
-        decoded = future.result(timeout=decoding_timeout)  # pixels: [T,C,H,W]; optional times: [T]
-        executor.shutdown(wait=False)
+        for chunk_start in range(0, nframes, decode_chunk_size):
+            chunk_indices = idx[chunk_start : chunk_start + decode_chunk_size]
+            frame_batch = executor.submit(video_reader.get_frames_at, indices=chunk_indices).result(
+                timeout=decoding_timeout
+            )  # pixels: [t,C,H,W]; times: [t]
+            if video_timestamp_mode == "source_pts":
+                if not isinstance(frame_batch, FrameBatch):
+                    raise ValueError("source_pts requires TorchCodec FrameBatch presentation metadata")
+                pts_chunks.append(frame_batch.pts_seconds)  # [t]
+                duration_chunks.append(frame_batch.duration_seconds)  # [t]
+            frames = frame_batch.data  # [t,C,H,W] uint8
+            del frame_batch  # the native chunk must not outlive its resize while the next chunk decodes
+            if frames.shape[0] != len(chunk_indices):
+                raise ValueError(f"[{key}] decoder returned {frames.shape[0]} frames for {len(chunk_indices)} indices")
+            if video_frames is None:
+                native_height, native_width = int(frames.shape[2]), int(frames.shape[3])
+                resized_height, resized_width = native_height, native_width
+                if processor.use_smart_resize:
+                    resized_height, resized_width = smart_resize(
+                        native_height,
+                        native_width,
+                        factor=patch_size * merge_size,
+                        min_pixels=min_pixels_per_frame,
+                        max_pixels=max_pixels_per_frame,
+                    )
+                    log.debug(
+                        f"resized_height: {resized_height}, resized_width: {resized_width} | original height: {native_height}, original width: {native_width}"
+                    )
+                video_frames = torch.empty(
+                    (nframes, frames.shape[1], resized_height, resized_width), dtype=frames.dtype
+                )  # [T,C,H',W']
+            if processor.use_smart_resize:
+                frames = transforms.functional.resize(
+                    frames,
+                    [resized_height, resized_width],
+                    interpolation=InterpolationMode.BICUBIC,
+                    antialias=True,
+                )  # [t,C,H',W'] uint8
+            video_frames[chunk_start : chunk_start + len(chunk_indices)] = frames
+            del frames  # copied; the chunk must not stay alive while the next one decodes
     except TimeoutError as e:
         log.warning(f"[{key}] Video decoding timed out after {decoding_timeout} seconds")
-        executor.shutdown(wait=False)
+        if raise_on_decode_timeout:
+            raise VideoDecodeTimeoutError(
+                f"Video decoding exceeded {decoding_timeout} seconds for {key!r}; "
+                "retry with sufficient CPU resources or a larger timeout instead of dropping this sample."
+            ) from e
         return None
+    finally:
+        executor.shutdown(wait=False)
 
+    if video_frames is None:
+        raise ValueError(f"[{key}] no frames were sampled")
+    if processor.use_smart_resize:
+        video_frames = video_frames.float()  # [T,C,H',W']
     timing = None
     if video_timestamp_mode == "source_pts":
-        if not isinstance(decoded, FrameBatch):
-            raise ValueError("source_pts requires TorchCodec FrameBatch presentation metadata")
         timing = build_source_video_timing(
             idx,
-            decoded.pts_seconds,  # [T]
-            decoded.duration_seconds,  # [T]
+            torch.cat(pts_chunks),  # [T]
+            torch.cat(duration_chunks),  # [T]
             hashlib.sha256(data).hexdigest(),
         )
-        video_frames = decoded.data  # [T,C,H,W]
-    else:
-        assert isinstance(decoded, torch.Tensor)
-        video_frames = decoded  # [T,C,H,W]
 
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
-
-    # recompute max_pixels based on number of sampled frames
-    nframes, _, height, width = video_frames.shape
-    native_height, native_width = int(height), int(width)
-    # Floor the per-frame budget at min_pixels so smart_resize never gets an inverted range
-    # (min_pixels > max_pixels) for many-frame videos. Matches the projects/cosmos3/vlm decoder
-    # the cosmos-rl i4 data bridge used.
-    max_pixels = max(max_pixels // nframes, min_pixels)
-    if processor.use_smart_resize:
-        resized_height, resized_width = smart_resize(
-            height,
-            width,
-            factor=patch_size * merge_size,
-            min_pixels=min_pixels,
-            max_pixels=max_pixels,
-        )
-        log.debug(
-            f"resized_height: {resized_height}, resized_width: {resized_width} | original height: {height}, original width: {width}"
-        )
-        video_frames = transforms.functional.resize(
-            video_frames,
-            [resized_height, resized_width],
-            interpolation=InterpolationMode.BICUBIC,
-            antialias=True,
-        ).float()  # [T,C,H,W]
-    video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H,W]
+    video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H',W']
 
     result = dict(
         videos=video_frames,
@@ -338,6 +392,7 @@ def _video_decoder_qwen_func(
         budget_min_pixels=int(total_min_pixels),
         budget_max_pixels=int(total_max_pixels),
     )
+    result[VIDEO_BUDGET_RESIZED_KEY] = bool(processor.use_smart_resize)
     if timing is not None:
         result[SOURCE_VIDEO_TIMING_KEY] = timing
     if uses_source_timestamps:

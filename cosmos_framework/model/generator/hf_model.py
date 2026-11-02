@@ -34,13 +34,15 @@ from accelerate import init_on_device
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
+from cosmos_framework.utils import log
+from cosmos_framework.model.generator.context_parallel import ContextParallelBatchPolicy, ContextParallelModelSpec
+from cosmos_framework.model.generator.reasoner.qwen3_vl_fused_ce import configure_qwen3_vl_fused_ce
 from cosmos_framework.model.generator.reasoner.qwen35_caption import (
     Qwen35CaptionLoss,
     configure_qwen35_caption_model,
     named_parameters_with_qwen35_decay,
 )
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
-from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.input_probe import maybe_dump_pre_forward
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
@@ -204,6 +206,21 @@ def _tensor_names_to_skip_for(model_type: str) -> list[str]:
     return table.get(model_type, [])
 
 
+def configure_sound_und_encoder_trainability(sound_und_model: nn.Module, *, freeze_encoder: bool) -> None:
+    """Apply the coarse audio policy plus backend-specific unused-parameter freezes."""
+    encoder = getattr(sound_und_model, "encoder", None)
+    if not isinstance(encoder, nn.Module):
+        raise TypeError("sound_und_model.encoder must be an nn.Module")
+    encoder.requires_grad_(not freeze_encoder)
+    configure = getattr(sound_und_model, "configure_encoder_trainability", None)
+    if configure is not None:
+        if not callable(configure):
+            raise TypeError("configure_encoder_trainability must be callable")
+        configure(train_encoder=not freeze_encoder)
+    if freeze_encoder:
+        encoder.eval()
+
+
 class HFModel(nn.Module):
     """Minimal HF model wrapper for the vfm/ unified VLM training path.
 
@@ -232,6 +249,28 @@ class HFModel(nn.Module):
     ``vfm/models/parallelize_vlm.py``.
     """
 
+    # Validation video cache state; __init__ sets these, the defaults cover wrappers built
+    # with __new__ (tests) so forward/train do not depend on __init__ having run.
+    _cosmos_validation_video_cache_keys = None
+    _cosmos_validation_video_cache_active = False
+    _cosmos_validation_video_feature_cache = None
+
+    def context_parallel_spec(self) -> ContextParallelModelSpec:
+        """Bind validated native modules; shared CP owns communication and slicing."""
+        if self.hf_config.model_type not in {"qwen3_vl", "qwen3_vl_moe"}:
+            raise NotImplementedError("This native model has no validated context-parallel integration")
+        # Only the validated native dense/MoE model interface is patched.
+        decoder = self.model.model.language_model
+        return ContextParallelModelSpec(
+            decoder=decoder,
+            attention_modules=tuple(layer.self_attn for layer in decoder.layers),
+            text_config=self.model.config.text_config,
+            fused_ce_enabled=bool(getattr(self.model, "_qwen3_vl_fused_ce", False)),
+            position_axes=3,
+            require_default_rope=True,
+            fusion_module=self.model.model,
+        )
+
     def named_parameters(
         self, prefix: str = "", recurse: bool = True, remove_duplicate: bool = True
     ) -> Iterator[tuple[str, nn.Parameter]]:
@@ -248,9 +287,15 @@ class HFModel(nn.Module):
         configured_model_name_or_path: str | None = None,
         qwen35_fp32_recurrent_a_log: bool = False,
         enable_fused_weighted_ce: bool = False,
+        recompute_fused_weighted_ce: bool = False,
         weighted_ce_exponent: float = 0.5,
+        qwen3_vl_moe_fixed_sum: bool = False,
+        qwen3_vl_vision_attention_max_padded_tokens: int = 0,
+        qwen3_vl_decoder_attention_max_padded_tokens: int = 0,
+        qwen3_vl_accumulate_head_grad_fp32: bool = True,
     ):
         super().__init__()
+        self.context_parallel_batch_policy: ContextParallelBatchPolicy | None = None
         self.model_name_or_path = model_name_or_path
         self.configured_model_name_or_path = configured_model_name_or_path or model_name_or_path
         self.sound_und = sound_und
@@ -262,8 +307,31 @@ class HFModel(nn.Module):
             raise ValueError("sound_und_config is required when sound_und=True")
         hf_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
-        if (qwen35_fp32_recurrent_a_log or enable_fused_weighted_ce) and hf_config.model_type != "qwen3_5":
-            raise ValueError("Caption FP32/fused loss options require dense qwen3_5")
+        if sound_und and enable_fused_weighted_ce and hf_config.model_type in {"qwen3_vl", "qwen3_vl_moe"}:
+            raise ValueError("Qwen3-VL fused weighted CE does not support sound_und=True")
+        if qwen3_vl_decoder_attention_max_padded_tokens < 0:
+            raise ValueError("Decoder attention padded-token budget must be nonnegative")
+        if qwen3_vl_decoder_attention_max_padded_tokens and (
+            hf_config.model_type not in {"qwen3_vl", "qwen3_vl_moe"} or attn_implementation != "cosmos"
+        ):
+            raise ValueError("Bounded decoder varlen attention requires Qwen3-VL with the cosmos backend")
+        if qwen3_vl_vision_attention_max_padded_tokens < 0:
+            raise ValueError("Vision attention padded-token budget must be nonnegative")
+        if qwen3_vl_vision_attention_max_padded_tokens and (
+            hf_config.model_type not in {"qwen3_vl", "qwen3_vl_moe"} or attn_implementation != "cosmos"
+        ):
+            raise ValueError("Bounded vision varlen attention requires Qwen3-VL with the cosmos backend")
+        if qwen3_vl_moe_fixed_sum and hf_config.model_type != "qwen3_vl_moe":
+            raise ValueError("Fixed MoE summation requires qwen3_vl_moe")
+        if qwen35_fp32_recurrent_a_log and hf_config.model_type != "qwen3_5":
+            raise ValueError("Caption FP32 recurrent decay requires dense qwen3_5")
+        if enable_fused_weighted_ce and hf_config.model_type not in {"qwen3_5", "qwen3_vl", "qwen3_vl_moe"}:
+            raise ValueError("Fused weighted CE requires qwen3_5, qwen3_vl, or qwen3_vl_moe")
+
+        if recompute_fused_weighted_ce and (
+            not enable_fused_weighted_ce or hf_config.model_type not in {"qwen3_vl", "qwen3_vl_moe"}
+        ):
+            raise ValueError("CE recomputation requires Qwen3-VL with enable_fused_weighted_ce=True")
 
         # Register cosmos before from_config validates it. Gated so non-cosmos
         # paths don't import cosmos_framework.model.attention.
@@ -305,9 +373,9 @@ class HFModel(nn.Module):
             )
 
         if sound_und:
-            from cosmos_framework.data.generator.processors.audio_utils import add_reasoner_audio_special_tokens
             from cosmos_framework.model.generator.reasoner.audio.registry import get_audio_encoder_backend
             from cosmos_framework.model.generator.reasoner.audio.utils import patch_reasoner_audio_forward
+            from cosmos_framework.data.generator.processors.audio_utils import add_reasoner_audio_special_tokens
 
             audio_backend = get_audio_encoder_backend(sound_und_config.audio_encoder_type)
 
@@ -341,8 +409,9 @@ class HFModel(nn.Module):
                     sound_und_config.projection_hidden_size,
                     reasoner_hidden_size,
                 )
-            self.model.sound_und_model.encoder.requires_grad_(False)
-            self.model.sound_und_model.encoder.eval()
+            configure_sound_und_encoder_trainability(
+                self.model.sound_und_model, freeze_encoder=sound_und_config.freeze_encoder
+            )
             if sound_und_config.freeze_projector:
                 self.model.sound_und_model.projector.requires_grad_(False)
                 self.model.sound_und_model.projector.eval()
@@ -402,6 +471,13 @@ class HFModel(nn.Module):
 
             patch_qwen3_vl_forward(self.model.model)
             log.info(f"HFModel: applied patch_qwen3_vl_forward ({hf_config.model_type}) for text-only batch support")
+            if enable_fused_weighted_ce:
+                configure_qwen3_vl_fused_ce(
+                    self.model,
+                    exponent=weighted_ce_exponent,
+                    recompute=recompute_fused_weighted_ce,
+                    accumulate_head_grad_fp32=qwen3_vl_accumulate_head_grad_fp32,
+                )
 
         # Swap HF's per-expert Python loop for the fused grouped_mm expert kernel. HF's loop
         # is never the faster choice on the GPUs this trains on, and the patch reuses the
@@ -412,6 +488,13 @@ class HFModel(nn.Module):
 
             n_moe_blocks = patch_qwen3_vl_moe_grouped_mm_experts(self.model)
             log.info(f"HFModel: applied grouped_mm experts to {n_moe_blocks} MoE block(s)")
+            if qwen3_vl_moe_fixed_sum:
+                from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.fixed_sum import (
+                    configure_qwen3_vl_moe_fixed_sum,
+                )
+
+                n_fixed = configure_qwen3_vl_moe_fixed_sum(self.model)
+                log.info(f"HFModel: enabled fixed-order FP32 summation in {n_fixed} MoE block(s)")
 
         # Give the vision tower a single varlen attention call per block. HF only does that for
         # flash_attention_2 and otherwise splits the packed patches per image, which costs a
@@ -421,7 +504,9 @@ class HFModel(nn.Module):
         if hf_config.model_type in ("qwen3_vl", "qwen3_vl_moe") and attn_implementation == "cosmos":
             from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_vision_varlen_attention
 
-            n_vision_attns = patch_qwen3_vl_vision_varlen_attention(self.model)
+            n_vision_attns = patch_qwen3_vl_vision_varlen_attention(
+                self.model, max_padded_tokens=qwen3_vl_vision_attention_max_padded_tokens
+            )
             log.info(f"HFModel: applied varlen attention to {n_vision_attns} vision attention module(s)")
 
         elif hf_config.model_type == "qwen3_vl" and hasattr(self.model, "model"):
@@ -497,7 +582,8 @@ class HFModel(nn.Module):
                 self.clear_validation_video_feature_cache()
         super().train(mode)
         if self.sound_und:
-            self.model.sound_und_model.encoder.eval()
+            if self.sound_und_config.freeze_encoder:
+                self.model.sound_und_model.encoder.eval()
             if self.sound_und_config.freeze_projector:
                 self.model.sound_und_model.projector.eval()
         return self
@@ -657,6 +743,8 @@ class HFModel(nn.Module):
             "cu_seq_lens_k",
             "max_length_q",
             "max_length_k",
+            # CPU-planned groups of complete packed conversations for bounded workspaces.
+            "decoder_attention_chunks",
         }
     )
 

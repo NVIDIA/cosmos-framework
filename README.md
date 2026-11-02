@@ -16,7 +16,7 @@
 **Cosmos-Framework** is an end-to-end framework for training and serving world models, including the **Cosmos3** model family. Everything lives in a single top-level [`cosmos_framework/`](./cosmos_framework) Python package:
 
 - **Training** — distributed FSDP / TP / CP / PP trainer, native DCP checkpoints with HuggingFace `safetensors` import/export, JSONL / WebDataset / LeRobot dataset adapters. Entry point: `cosmos_framework.scripts.train`. See [`docs/training.md`](./docs/training.md).
-- **Inference** — Diffusers / Transformers / vLLM backends with offline batch generation and online serving (Ray + Gradio). Entry point: `cosmos_framework.scripts.inference`. Ecosystem-facing shim libraries (lightweight standalone wrappers for downstream projects) live under [`packages/`](./packages).
+- **Inference** — Diffusers / Transformers / vLLM backends with offline batch generation and online serving (Ray + Gradio). Entry point: `cosmos_framework.scripts.inference`. Ecosystem-facing shim libraries (lightweight standalone wrappers for downstream projects) live under [`packages/`](./packages). For Cosmos3-Nano generation on GPUs with limited VRAM, see the standalone [Diffusers CPU-GPU offloading adapter](./packages/diffusers-cpu-offloading/README.md).
 - **Policy serving** — a server-client pipeline for deploying Cosmos3 policies. See [`docs/action_policy_droid_server.md`](./docs/action_policy_droid_server.md).
 - **Post-training and RL** — supervised, preference-based, reinforcement-learning, distillation, diffusion, and embodied-policy optimization under `cosmos_framework.posttrain`. See [`docs/posttrain/`](./docs/posttrain/index.md).
 
@@ -143,14 +143,14 @@ invokes automatically when the user's request matches its description.
 Skills live in [`.agents/skills/`](./.agents/skills) (canonical) and are
 mirrored under [`.claude/skills/`](./.claude/skills) for Claude Code:
 
-| Skill                                                                            | When it activates                                                                                          |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [`cosmos3-setup`](./.agents/skills/cosmos3-setup/SKILL.md)                       | Installation, environment setup, checkpoint downloads, Docker.                                             |
-| [`cosmos3-codebase-nav`](./.agents/skills/cosmos3-codebase-nav/SKILL.md)         | "Where is X" / "where do I change parameter Y" questions across `cosmos_framework/`.                       |
-| [`cosmos3-inference`](./.agents/skills/cosmos3-inference/SKILL.md)               | Running offline or online inference, parallelism, sampling parameters.                                     |
-| [`cosmos3-post-training`](./.agents/skills/cosmos3-post-training/SKILL.md)       | SFT post-training end-to-end: data prep, DCP conversion, launch, export.                                   |
-| [`cosmos-automl`](./.agents/skills/cosmos-automl/SKILL.md)                       | Reasoner hyperparameter search and GEPA prompt optimization; [setup and release status](./docs/automl.md). |
-| [`cosmos3-env-troubleshoot`](./.agents/skills/cosmos3-env-troubleshoot/SKILL.md) | Diagnosing install/runtime errors (ImportError, CUDA, Docker, checkpoint failures).                        |
+| Skill                                                                            | When it activates                                                                                                                        |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| [`cosmos3-setup`](./.agents/skills/cosmos3-setup/SKILL.md)                       | Installation, environment setup, checkpoint downloads, Docker.                                                                           |
+| [`cosmos3-codebase-nav`](./.agents/skills/cosmos3-codebase-nav/SKILL.md)         | "Where is X" / "where do I change parameter Y" questions across `cosmos_framework/`.                                                     |
+| [`cosmos3-inference`](./.agents/skills/cosmos3-inference/SKILL.md)               | Running offline or online inference, parallelism, sampling parameters.                                                                   |
+| [`cosmos3-post-training`](./.agents/skills/cosmos3-post-training/SKILL.md)       | SFT post-training end-to-end: data prep, DCP conversion, launch, export.                                                                 |
+| [`cosmos-automl`](./.agents/skills/cosmos-automl/SKILL.md)                       | Reasoner hyperparameter search and GEPA prompt optimization; [main/development-branch setup](./docs/automl.md#installation-from-source). |
+| [`cosmos3-env-troubleshoot`](./.agents/skills/cosmos3-env-troubleshoot/SKILL.md) | Diagnosing install/runtime errors (ImportError, CUDA, Docker, checkpoint failures).                                                      |
 
 See [`AGENTS.md`](./AGENTS.md) for the canonical repo map that agents load
 first; the skills above are referenced from there.

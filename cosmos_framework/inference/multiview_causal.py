@@ -852,7 +852,7 @@ def save_causal_multiview_outputs(
                     staged,
                     views,
                     prefix=prefix,
-                    fps=sample.fps,
+                    fps=sample.video_output_fps,
                     encoder_threads=encoder_threads,
                     max_workers=workers_per_set,
                 )

@@ -1955,6 +1955,11 @@ def iter_samples_multiview_transfer_autoregressive(
         has_negative_prompt,
         caption_groups,
     )
+    # Optional benchmark boundary: input encoding is done; clean-prefix work
+    # and diffusion have not started. Ordinary inference installs no callback.
+    on_inputs_prepared: Callable[[], None] | None = data_batch.pop("_on_ar_inputs_prepared", None)
+    if on_inputs_prepared is not None:
+        on_inputs_prepared()
     cfgp_enabled = host.parallel_dims is not None and host.parallel_dims.cfgp_enabled
     if cfgp_enabled:
         seed = _broadcast_seed([seed], host.parallel_dims.cfgp_mesh.get_group(), host.parallel_dims.cfgp_rank)[0]

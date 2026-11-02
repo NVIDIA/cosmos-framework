@@ -38,3 +38,4 @@ def test_view_ids_match_the_rig_order() -> None:
     assert CAMERA_VIEW_MAPPING == {name: index for index, name in enumerate(CAMERA_ATTRIBUTES)}
     assert sorted(CAMERA_VIEW_MAPPING.values()) == list(range(len(CAMERA_ATTRIBUTES)))
 
+

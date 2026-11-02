@@ -170,7 +170,7 @@ SFT_SUPERVISE_ALL = "all_assistant"  # every assistant body and its turn-ending 
 SFT_SUPERVISE_LAST = "last_assistant"  # the LAST assistant turn only; earlier assistant turns are context at loss 0
 SFT_SUPERVISE_VALUES = (SFT_SUPERVISE_ALL, SFT_SUPERVISE_LAST)
 # ``SFTTarget.opener``: whose token the ``<think>`` opener of a supervised assistant turn is (row rule R4 of the lab's brain
-# program, fix round T6c). The exporter records its per-row choice as ``meta.opener``; the loader requires the row field to
+# program). The exporter records its per-row choice as ``meta.opener``; the loader requires the row field to
 # agree with it, the packer reads the field.
 SFT_OPENER_SELF = (
     "self"  # the opener is the student's first supervised token (the default; the dsh serve prefills nothing)

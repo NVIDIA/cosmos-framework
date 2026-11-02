@@ -22,6 +22,7 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
 )
 from cosmos_framework.model.generator.mot.flex_attention import CaptionMaskItem, SensorMaskItem
 from cosmos_framework.model.generator.utils.kv_cache import KVToStore, MultiviewARMemoryState
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
@@ -49,6 +50,7 @@ class RollingReplayRequest:
     history: FlexQueryMetadata | None = None
     current: FlexQueryMetadata | None = None
     prompt_layout: RollingPromptLayout | None = None
+    text_cache_layers: list[ARTextLayerCache] | None = None
 
 
 def build_rolling_replay_metadata(

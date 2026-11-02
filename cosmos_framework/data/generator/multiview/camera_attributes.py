@@ -104,3 +104,4 @@ CAMERA_VIEW_MAPPING: Final[dict[str, int]] = {
     "camera_right_fisheye_200fov": 9,
     "camera_rear_fisheye_200fov": 10,
 }
+

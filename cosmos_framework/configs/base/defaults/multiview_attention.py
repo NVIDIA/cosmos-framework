@@ -538,6 +538,21 @@ class MultiviewAttentionConfig:
         default="other_views", validator=attrs.validators.in_(("all_views", "own_view", "other_views"))
     )
 
+    # Let a camera query's cross-view pass also key the other views' camera-pose action
+    # tokens, beside their vision tokens, under the same capture-time rule. Action tokens stay
+    # keys only: they never query the cross-view pass, and their own view's actions remain in
+    # the same-view pass alone. Requires maskless decomposed attention, no cross-view band
+    # expansion, no same-view temporal window and baseline geometry. False preserves existing
+    # recipes.
+    maskless_cross_view_attends_action: bool = False
+
+    # Let camera-pose action tokens query the cross-view pass too, keyed only by the other
+    # views' action tokens under the same capture-time rule; they still key no vision token
+    # there, and their own view's actions stay in the same-view pass alone. Independent of
+    # ``maskless_cross_view_attends_action``, with the same requirements. False preserves
+    # existing recipes.
+    maskless_cross_view_action_attends_action: bool = False
+
     # What the multiview backend lets the noisy tokens attend to.
     mask: MultiviewAttentionMaskConfig = attrs.field(factory=MultiviewAttentionMaskConfig)
 

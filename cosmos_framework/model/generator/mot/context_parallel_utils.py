@@ -491,6 +491,9 @@ def context_parallel_attention(
     cp_group = cp_mesh.get_group()
     cp_world_size = torch.distributed.get_world_size(cp_group)
     assert cp_world_size > 1, "Context parallel world size must be greater than 1"
+    text_cache = memory_value.text_cache if memory_value is not None else None
+    exchanged_text = text_cache.exchanged if text_cache is not None else None
+    cached_text = exchanged_text is not None
     # The streams only. These packs are context parallel local shards, and the tower offsets
     # ``get_causal_seq`` would hand out alongside them describe the unsharded stream they were cut
     # from. Nothing below wants them: this pass rebuilds its own ranges from the gathered lengths.
@@ -539,30 +542,43 @@ def context_parallel_attention(
     # when doing AR-inference with a KV-cache.
 
     if kv_head_repeats > 1:
-        k_und_seq = _repeat_kv_heads_for_cp(k_und_seq, kv_head_repeats)  # [text_shard_len,repeated_kv_heads,head_dim]
+        if not cached_text:
+            k_und_seq = _repeat_kv_heads_for_cp(
+                k_und_seq, kv_head_repeats
+            )  # [text_shard_len,repeated_kv_heads,head_dim]
+            v_und_seq = _repeat_kv_heads_for_cp(
+                v_und_seq, kv_head_repeats
+            )  # [text_shard_len,repeated_kv_heads,head_dim]
         k_gen_seq = _repeat_kv_heads_for_cp(k_gen_seq, kv_head_repeats)  # [gen_shard_len,repeated_kv_heads,head_dim]
-        v_und_seq = _repeat_kv_heads_for_cp(v_und_seq, kv_head_repeats)  # [text_shard_len,repeated_kv_heads,head_dim]
         v_gen_seq = _repeat_kv_heads_for_cp(v_gen_seq, kv_head_repeats)  # [gen_shard_len,repeated_kv_heads,head_dim]
 
     # all2all: gather sequence, scatter heads → head-sharded
-    q_und_seq = gather_seq_scatter_heads(
-        q_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
+    q_und_seq = (
+        exchanged_text[0]
+        if exchanged_text is not None
+        else gather_seq_scatter_heads(q_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh)
     )  # [text_len,H_local,head_dim]
     q_gen_seq = gather_seq_scatter_heads(
         q_gen_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
     )  # [gen_len,H_local,head_dim]
-    k_und_seq = gather_seq_scatter_heads(
-        k_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
+    k_und_seq = (
+        exchanged_text[1]
+        if exchanged_text is not None
+        else gather_seq_scatter_heads(k_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh)
     )  # [text_len,H_kv_local,head_dim]
     k_gen_seq = gather_seq_scatter_heads(
         k_gen_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
     )  # [gen_len,H_kv_local,head_dim]
-    v_und_seq = gather_seq_scatter_heads(
-        v_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
+    v_und_seq = (
+        exchanged_text[2]
+        if exchanged_text is not None
+        else gather_seq_scatter_heads(v_und_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh)
     )  # [text_len,H_kv_local,head_dim]
     v_gen_seq = gather_seq_scatter_heads(
         v_gen_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
     )  # [gen_len,H_kv_local,head_dim]
+    if text_cache is not None and not cached_text:
+        text_cache.exchanged = (q_und_seq, k_und_seq, v_und_seq)
 
     # Build head-sharded kv_to_store when memory is active.
     kv_to_store: KVToStore | None = None
@@ -599,11 +615,17 @@ def context_parallel_attention(
     packed_key_states_normalized_: SequencePack | None = None
     if packed_key_states_normalized is not None:
         k_und_normalized_seq = packed_key_states_normalized["causal_seq"]  # [text_shard_len,H_kv,head_dim]
-        if kv_head_repeats > 1:
+        if kv_head_repeats > 1 and not cached_text:
             k_und_normalized_seq = _repeat_kv_heads_for_cp(k_und_normalized_seq, kv_head_repeats)
-        k_und_normalized_seq = gather_seq_scatter_heads(
-            k_und_normalized_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
-        )  # [text_len,H_kv_local,head_dim]
+        if cached_text:
+            assert text_cache is not None and text_cache.exchanged_normalized_k is not None
+            k_und_normalized_seq = text_cache.exchanged_normalized_k  # [text_len,H_kv_local,head_dim]
+        else:
+            k_und_normalized_seq = gather_seq_scatter_heads(
+                k_und_normalized_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
+            )  # [text_len,H_kv_local,head_dim]
+            if text_cache is not None:
+                text_cache.exchanged_normalized_k = k_und_normalized_seq
         packed_key_states_normalized_ = from_mode_splits(k_und_normalized_seq, k_gen_seq, meta, is_sharded=False)
 
     # dispatch_attention returns (output, kv_to_store | None)
@@ -630,12 +652,18 @@ def context_parallel_attention(
     attn_output_gen_hp = attn_output_gen_hp[:q_gen_seq_len].contiguous()  # [gen_len,H_local,head_dim]
 
     # all2all: gather heads, scatter seq → seq-sharded
-    attn_output_und_sp = gather_heads_scatter_seq(
-        attn_output_und_hp,
-        seq_dim=0,
-        head_dim=1,
-        cp_mesh=cp_mesh,
-    )  # [text_shard_len,H,head_dim]
+    if cached_text:
+        assert text_cache is not None and text_cache.scattered_output is not None
+        attn_output_und_sp = text_cache.scattered_output  # [text_shard_len,H,head_dim]
+    else:
+        attn_output_und_sp = gather_heads_scatter_seq(
+            attn_output_und_hp,
+            seq_dim=0,
+            head_dim=1,
+            cp_mesh=cp_mesh,
+        )  # [text_shard_len,H,head_dim]
+        if text_cache is not None:
+            text_cache.scattered_output = attn_output_und_sp
     attn_output_gen_sp = gather_heads_scatter_seq(
         attn_output_gen_hp,
         seq_dim=0,

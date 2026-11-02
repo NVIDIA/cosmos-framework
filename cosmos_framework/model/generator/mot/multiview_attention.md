@@ -133,6 +133,27 @@ mixed-rate geometry raises instead of treating seconds as frames. FlexAttention
 does not implement these same-view windows. A control-to-sensor bound does not
 re-enable edges disabled by `control_attends_sensor=False`.
 
+## Separate-camera robot action conditioning
+
+`multiview_action_conditioning` configures packing for the bimanual RGB/action
+layout, including camera codes in padded action channels. The packer records
+`PackedSequence.multiview_action_temporal_factor`, so attention identifies this
+layout from the pack rather than interpreting every multi-item sample as cameras.
+
+The shared multiview item builder describes each ragged RGB clip as a separate
+camera target and each camera's replicated action rows as `(T-1, 1, factor)`.
+An action item shares its camera's view identity and starts at latent frame one;
+all full-rate action rows are retained. RGB and action items have sensor roles
+and read the shared caption, even though the actions are clean conditioning.
+
+These items use the same maskless plan builder and `multiview_attention` settings
+as camera-major RGB, LiDAR/radar, and camera-pose control layouts. Cross-view
+temporal windows and first-frame inclusion therefore share one configuration
+path, with same-view keys excluded from cross-view passes. The separate-camera action layout still requires maskless
+attention and baseline geometry: geometry encodings, cross-view bands, and
+same-view neighborhood windows are explicitly rejected. Ordinary single-camera
+packs without layout metadata continue to use two-way attention.
+
 ## Generation With Camera-Trajectory Controls
 
 MultiCamVideo forward-dynamics generation packs a target vision item and one

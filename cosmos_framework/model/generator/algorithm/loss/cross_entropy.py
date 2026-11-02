@@ -22,27 +22,30 @@ Reference: async_safe_ce:97-109 in the source file above.
 Both losses reduce their normalizer (valid-token count for plain CE, the
 exponent-weighted sample weight for weighted CE) over the WHOLE WORLD, taking no
 group argument. Every rank must hold a different sample for that to be the count the
-formula wants, which holds for VLM: ``ParallelDims`` pins
-``dp_replicate * dp_shard == world_size``, so the data-parallel mesh is the world, and
-the axes that would put the same sample on several ranks are rejected — cp/cfgp by
-``VLMModel``, tp/pp by not existing. Revisit this if any of that changes.
+formula wants on the logits-based path: ``ParallelDims`` pins
+``dp_replicate * dp_shard == world_size``, so the data-parallel mesh is the world.
+CP is accepted only by the separately normalized fused path described below;
+CFGP remains unsupported, and TP/PP are not implemented here.
 
 async_safe_ce instead reduces over the dp_shard sub-group, which under HSDP
 normalizes each replicate group separately; that agrees with the global token mean
 only when those groups carry equal token counts.
 
-Neither loss takes a cp_group: reducing across context-parallel segments is out of
-scope here.
+The two logits-based losses remain CP-disabled. The fused weighted loss additionally
+accepts a context_parallel_group and globally shifted, locally sliced labels; its
+per-sample counts are reduced over CP before applying the sample weighting.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
+from torch.utils.checkpoint import checkpoint
 
 from cosmos_framework.utils.generator.input_probe import maybe_dump_loss_reduction
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
@@ -231,6 +234,44 @@ def weighted_cross_entropy_loss(
     return loss
 
 
+def weighted_ce_denominator_from_labels(
+    labels: torch.Tensor,
+    *,
+    exponent: float,
+    cu_seq_lens: torch.Tensor | None = None,
+    ignore_index: int = IGNORE_INDEX,
+) -> torch.Tensor:
+    """Count the weighted objective mass from full, unsharded CPU labels.
+
+    This is label-only lookahead, before CP shifts/slices the sequence. Packed
+    boundaries retain per-conversation weighting; ignored-only segments add zero.
+    The caller handles CP replication and the WORLD reduction.
+    """
+    if labels.device.type != "cpu" or labels.ndim != 2 or labels.shape[1] < 2:
+        raise ValueError("Accumulation lookahead requires full CPU labels [B,T], T >= 2")
+    if not 0.0 <= exponent <= 1.0:
+        raise ValueError("Weighted CE exponent must be in [0,1]")
+    valid = labels != ignore_index
+    valid[:, 0] = False  # Match the global next-token shift, without changing labels.
+    if cu_seq_lens is None:
+        counts = valid.sum(dim=1).float()
+    else:
+        if (
+            labels.shape[0] != 1
+            or cu_seq_lens.device.type != "cpu"
+            or cu_seq_lens.dtype not in (torch.int32, torch.int64)
+            or cu_seq_lens.ndim != 1
+            or cu_seq_lens.numel() < 2
+            or cu_seq_lens[0] != 0
+            or cu_seq_lens[-1] != labels.shape[1]
+            or not bool((cu_seq_lens[1:] > cu_seq_lens[:-1]).all())
+        ):
+            raise ValueError("Packed lookahead boundaries must cover one complete CPU row")
+        prefix = torch.cat((torch.zeros(1, dtype=torch.long), valid[0].cumsum(0)))
+        counts = (prefix[cu_seq_lens[1:]] - prefix[cu_seq_lens[:-1]]).float()
+    return torch.where(counts > 0, counts.clamp(min=1).pow(1 - exponent), 0.0).sum()
+
+
 def _fused_linear_ce_sum(
     hidden: torch.Tensor, weight: torch.Tensor, labels: torch.Tensor, ignore_index: int
 ) -> torch.Tensor:
@@ -242,6 +283,42 @@ def _fused_linear_ce_sum(
     )
 
 
+class _FP32GradientAnchor(torch.autograd.Function):
+    """Carry a matrix-shaped FP32 gradient without copying the forward weight.
+
+    Only shape, dtype and the autograd edge are used by the compute-weight
+    aliases below. The expanded scalar's values never enter the loss kernel.
+    """
+
+    @staticmethod
+    def forward(ctx: Any, weight: torch.Tensor) -> torch.Tensor:
+        ctx.weight_dtype = weight.dtype
+        return weight.new_zeros((), dtype=torch.float32).expand_as(weight)
+
+    @staticmethod
+    def backward(ctx: Any, gradient: torch.Tensor) -> torch.Tensor:
+        return gradient.to(ctx.weight_dtype)
+
+
+class _ComputeWeightWithFP32Gradient(torch.autograd.Function):
+    """Alias compute storage while returning each head contribution to one FP32 node.
+
+    All conversations share the original compute weight. A distinct autograd edge
+    per conversation promotes its gradient before the shared FP32 fan-in; a
+    single cast then returns the sum to the original gathered weight's dtype.
+    """
+
+    @staticmethod
+    def forward(ctx: Any, accumulation_weight: torch.Tensor, compute_weight: torch.Tensor) -> torch.Tensor:
+        del ctx, accumulation_weight
+        return compute_weight
+
+    @staticmethod
+    def backward(ctx: Any, gradient: torch.Tensor) -> tuple[torch.Tensor, None]:
+        del ctx
+        return gradient.float(), None
+
+
 def fused_weighted_cross_entropy_loss(
     hidden_states: torch.Tensor,
     labels: torch.Tensor,
@@ -249,12 +326,24 @@ def fused_weighted_cross_entropy_loss(
     *,
     exponent: float,
     ignore_index: int = IGNORE_INDEX,
+    context_parallel_group: dist.ProcessGroup | None = None,
+    cu_seq_lens: torch.Tensor | None = None,
+    recompute: bool = False,
+    accumulate_head_grad_fp32: bool = False,
 ) -> tuple[torch.Tensor, LossStatistics]:
     """Compute the unified weighted objective without allocating [B,T,vocabulary] logits.
 
     Called inside the FSDP model forward, while the lm_head weight is gathered.
     Each sample uses a scalar fused CE call. The denominator spans the unified
-    trainer's whole DP world, including HSDP replicas.
+    trainer's whole DP world, including HSDP replicas. With CP, labels have
+    already been shifted globally and sliced with the inputs.
+    Sample weights use CP-global valid counts; each shard contributes 1/CP of
+    the sample's denominator so FSDP's WORLD average retains the same objective.
+    Optional recomputation avoids keeping Liger's dense weight-gradient buffer
+    for every conversation alive until backward; the objective is unchanged.
+    Optional FP32 accumulation adds the native per-conversation head gradients
+    before casting once to the gathered weight dtype. CE compute and hidden
+    gradients keep their original precision, and compute-weight storage is shared.
     """
     if hidden_states.ndim != 3 or labels.shape != hidden_states.shape[:2]:
         raise ValueError("Fused CE requires aligned hidden states [B,T,H] and labels [B,T]")
@@ -265,21 +354,69 @@ def fused_weighted_cross_entropy_loss(
     if isinstance(lm_head_weight, DTensor):
         raise ValueError("Fused CE must execute inside the FSDP root with its gathered lm_head weight")
     weight = lm_head_weight.to(hidden_states.dtype)
-    targets = labels[:, 1:].contiguous()
-    counts = (targets != ignore_index).sum(dim=1).to(torch.float32)
+    targets = labels[:, 1:].contiguous() if context_parallel_group is None else labels.contiguous()
+    hidden = hidden_states[:, :-1] if context_parallel_group is None else hidden_states
+    if cu_seq_lens is None:
+        segments = [(hidden[index], targets[index]) for index in range(labels.shape[0])]
+    else:
+        if labels.shape[0] != 1 or cu_seq_lens.ndim != 1 or cu_seq_lens.numel() < 2:
+            raise ValueError("Packed fused CE requires one row and cumulative conversation boundaries")
+        boundaries = cu_seq_lens.tolist()
+        cp_size = 1 if context_parallel_group is None else dist.get_world_size(context_parallel_group)
+        full_length = labels.shape[1] * cp_size
+        if (
+            boundaries[0] != 0
+            or boundaries[-1] != full_length
+            or any(left >= right for left, right in zip(boundaries[:-1], boundaries[1:], strict=True))
+        ):
+            raise ValueError("Packed boundaries must cover the complete physical sequence")
+        # Ownership follows the globally shifted target. Conversation-start
+        # labels are ignored by the pack collator, so no cross-conversation
+        # prediction contributes to either CE or the per-conversation counts.
+        target_start = 1
+        if context_parallel_group is not None:
+            target_start += dist.get_rank(context_parallel_group) * labels.shape[1]
+        segments = []
+        for left, right in zip(boundaries[:-1], boundaries[1:], strict=True):
+            start = min(max(left - target_start, 0), targets.shape[1])
+            end = min(max(right - target_start, 0), targets.shape[1])
+            segments.append((hidden[0, start:end], targets[0, start:end]))
+    counts = torch.stack([(target != ignore_index).sum() for _, target in segments])
+    sample_counts = counts.detach().to(torch.float32)
+    cp_size = 1
+    if context_parallel_group is not None:
+        dist.all_reduce(sample_counts, group=context_parallel_group)
+        cp_size = dist.get_world_size(context_parallel_group)
     losses = []
-    for index in range(labels.shape[0]):
+    accumulation_weight: torch.Tensor | None = None
+    promote_head_grad = (
+        accumulate_head_grad_fp32
+        and torch.is_grad_enabled()
+        and lm_head_weight.requires_grad
+        and hidden_states.dtype in (torch.bfloat16, torch.float16)
+        and len(segments) > 1
+    )
+    for index, (sample_hidden, sample_targets) in enumerate(segments):
         if bool(counts[index] > 0):
-            losses.append(
-                _fused_linear_ce_sum(hidden_states[index, :-1].contiguous(), weight, targets[index], ignore_index)
-            )
+            sample_weight = weight
+            if promote_head_grad:
+                if accumulation_weight is None:
+                    accumulation_weight = _FP32GradientAnchor.apply(lm_head_weight)
+                sample_weight = _ComputeWeightWithFP32Gradient.apply(accumulation_weight, weight.detach())
+            args = (sample_hidden.contiguous(), sample_weight, sample_targets.contiguous(), ignore_index)
+            if recompute and torch.is_grad_enabled():
+                losses.append(checkpoint(_fused_linear_ce_sum, *args, use_reentrant=False))
+            else:
+                losses.append(_fused_linear_ce_sum(*args))
         else:
             # Empty slices keep both branches in autograd without reducing the large weight matrix.
-            losses.append(hidden_states[index, :0].sum() + weight[:0].sum())
+            losses.append(sample_hidden[:0].sum() + weight[:0].sum())
     loss_sums = torch.stack(losses).float()
-    has_valid = counts > 0
-    numerator = (loss_sums / counts.clamp(min=1).pow(exponent)).sum()
-    denominator = torch.where(has_valid, counts.clamp(min=1).pow(1 - exponent), 0.0).sum()
+    has_valid = sample_counts > 0
+    sample_numerators = loss_sums / sample_counts.clamp(min=1).pow(exponent)
+    sample_denominators = torch.where(has_valid, sample_counts.clamp(min=1).pow(1 - exponent), 0.0) / cp_size
+    numerator = sample_numerators.sum()
+    denominator = sample_denominators.sum()
     global_denominator = denominator.detach().clone()
     world_size = 1
     if dist.is_available() and dist.is_initialized():
@@ -292,8 +429,8 @@ def fused_weighted_cross_entropy_loss(
         global_objective_denominator=global_denominator.detach(),
         token_ce_sum=loss_sums.sum().detach(),
         valid_token_count=counts.sum().detach(),
-        per_sample_objective_numerator=(loss_sums / counts.clamp(min=1).pow(exponent)).detach(),
-        per_sample_objective_denominator=torch.where(has_valid, counts.clamp(min=1).pow(1 - exponent), 0.0).detach(),
+        per_sample_objective_numerator=sample_numerators.detach(),
+        per_sample_objective_denominator=sample_denominators.detach(),
         per_sample_token_ce_sum=loss_sums.detach(),
         per_sample_valid_token_count=counts.detach().to(torch.long),
     )

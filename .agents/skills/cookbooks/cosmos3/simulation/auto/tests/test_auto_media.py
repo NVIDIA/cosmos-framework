@@ -78,6 +78,19 @@ class AutoMediaTests(unittest.TestCase):
                 for output, reference, width in zip(prepared, references, (64, 80), strict=True):
                     self.assert_video(output, reference, fps, width)
 
+    def test_exact_length_controls_are_copied_only_when_materialized(self):
+        fps, frames = 30, 201
+        source = self.make_video("exact.mp4", [20 + i % 211 for i in range(frames)], fps)
+        reference = self.frame_levels(source)
+        views = [{"camera_key": "camera_0", "control_path": source.name}]
+        in_place = prepare_controls(views, self.root, self.root / "prepared", frames, fps)
+        self.assertEqual(in_place, [source.resolve()])
+        self.assertEqual(list((self.root / "prepared").iterdir()), [])
+        copied = prepare_controls(views, self.root, self.root / "materialized", frames, fps, materialize=True)
+        self.assertEqual(copied, [self.root / "materialized" / "camera_0.mp4"])
+        self.assertEqual(copied[0].read_bytes(), source.read_bytes())
+        self.assert_video(copied[0], reference, fps)
+
     def test_split_preserves_camera_boundaries_and_each_frames_timeline(self):
         for fps in (30, 24):
             with self.subTest(fps=fps):

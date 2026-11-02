@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh
@@ -22,6 +23,40 @@ def _iter_generation_moe_blocks(
     for name, module in net.named_modules():
         if isinstance(module, Qwen3VLMoeTextSparseMoeBlock) and "moe_gen" in name:
             yield name, module
+
+
+@contextmanager
+def preserve_moe_learning_accumulators(net: torch.nn.Module) -> Iterator[None]:
+    """Restore router learning accumulators after an observation-only forward.
+
+    Sampling callbacks intentionally run with the model's existing module modes and RNG
+    behavior, so changing the model to evaluation mode would also change their outputs.
+    Instead, preserve only the transient state consumed by the next optimizer-step router
+    updates. Monitoring buffers remain live so observations can still be inspected.
+    """
+    snapshots: list[tuple[torch.Tensor, torch.Tensor]] = []
+    for _, module in _iter_generation_moe_blocks(net):
+        if module.aux_loss_free_load_balancing_config.enabled:
+            snapshots.append((module.tokens_per_expert, module.tokens_per_expert.detach().clone()))  # [E], [E]
+        if module.cosine_router.input_centering == "ema":
+            snapshots.extend(
+                [
+                    (
+                        module.cosine_router.router_bias_sum,
+                        module.cosine_router.router_bias_sum.detach().clone(),
+                    ),  # [D], [D]
+                    (
+                        module.cosine_router.router_bias_count,
+                        module.cosine_router.router_bias_count.detach().clone(),
+                    ),  # [1], [1]
+                ]
+            )
+    try:
+        yield
+    finally:
+        with torch.no_grad():
+            for accumulator, snapshot in snapshots:
+                accumulator.copy_(snapshot)  # [*accumulator_shape]
 
 
 def set_hf_moe_token_mask(net: torch.nn.Module, attention_mask: torch.Tensor | None) -> None:

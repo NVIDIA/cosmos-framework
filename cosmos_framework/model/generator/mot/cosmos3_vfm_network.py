@@ -14,7 +14,6 @@ from transformers.modeling_utils import PreTrainedModel
 from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
 from cosmos_framework.configs.base.defaults.multiview_attention import (
-    CaptionAccess,
     CrossViewTemporalWindowConfig,
     MultiviewAttentionConfig,
     ResolvedBackend,
@@ -46,7 +45,6 @@ from cosmos_framework.model.generator.mot.flex_attention import (
 )
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
 from cosmos_framework.model.generator.mot.multiview_attention import (
-    is_single_camera_pack,
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
     resolve_multiview_backend,
@@ -178,6 +176,8 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         # window, the folds read all of it through ``maskless_unavailable_reason``, and a copy of
         # each on this config could disagree with the other.
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
+        # Retain the exported-config flag for compatibility and configuration validation.
+        # Runtime attention reads the explicit item layout recorded by the packer.
         self.multiview_action_conditioning = multiview_action_conditioning
         # Exported checkpoint configs can arrive as plain DictConfig objects, bypassing
         # the attrs converter. Bring a config saved before the current fields or window keys
@@ -190,12 +190,17 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
             getattr(attention_config, "geometry_position_encoding", "baseline") != "baseline"
             or getattr(attention_config, "maskless_cross_view_band_radius", 0) != 0
             or getattr(attention_config, "maskless_cross_view_include_frame_zero", False)
+            or getattr(attention_config, "maskless_cross_view_attends_action", False)
+            or getattr(attention_config, "maskless_cross_view_action_attends_action", False)
         ):
-            # Action conditioning builds its own maskless plan, which carries no camera geometry
-            # and no cross-view band, so these settings would otherwise be silently ignored.
+            # Separate-camera action rows participate in cross-view attention. Geometry and bands
+            # need layout-specific support before these settings can be used with those rows.
+            # Those rows are sensor items, which already query and key the cross-view pass, so
+            # the camera-pose action flags have nothing to add there.
             raise ValueError(
-                "Multiview action conditioning supports neither RigRoPE/PRoPE geometry nor cross-view bands; "
-                "keep geometry_position_encoding='baseline' and the default maskless_cross_view_band_* settings."
+                "Multiview action conditioning supports neither RigRoPE/PRoPE geometry, cross-view bands nor "
+                "the maskless_cross_view_*action* flags; keep geometry_position_encoding='baseline' and the "
+                "default maskless_cross_view_* settings."
             )
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
@@ -343,7 +348,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                     f"control_attends_sensor={multiview.mask.control_attends_sensor}, "
                     f"cross_view_temporal_window.bounds={multiview.mask.cross_view_temporal_window.bounds}, "
                     "cross_view_temporal_window.includes_first_frame="
-                    f"{multiview.mask.cross_view_temporal_window.includes_first_frame}. It builds "
+                    f"{multiview.mask.cross_view_temporal_window.includes_first_frame}, "
+                    f"maskless_cross_view_attends_action={multiview.maskless_cross_view_attends_action}, "
+                    "maskless_cross_view_action_attends_action="
+                    f"{multiview.maskless_cross_view_action_attends_action}. It builds "
                     "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
                     "whatever padding the pack has."
                 )
@@ -1476,153 +1484,43 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.multiview_backend is None:
             return
 
-        mask_config = self.config.multiview_attention_config.mask
-        same_view_window = mask_config.same_view_temporal_window
-        has_same_view_window = any(
-            bounds is not None
-            for bounds in (
-                same_view_window.sensor_to_sensor_bounds,
-                same_view_window.sensor_to_control_bounds,
-                same_view_window.control_to_control_bounds,
-                same_view_window.control_to_sensor_bounds,
-            )
-        )
-        action_conditioning = getattr(self.config, "multiview_action_conditioning", False)
-        counts = packed_seq.num_vision_items_per_sample
-        if action_conditioning and counts is None and not has_same_view_window:
-            # Preserve dense attention for the unchanged single-view streams
-            # mixed into an opt-in run; their existing action block is unchanged.
-            # Configured same-view windows instead need the ordinary geometry below.
-            return
-        if action_conditioning and counts is not None:
-            if (
-                self.multiview_backend != "maskless"
-                or packed_seq.num_action_tokens_per_supertoken != 0
-                or packed_seq.vision is None
-                or packed_seq.action is None
-                or packed_seq.sound is not None
-                or packed_seq.lidar is not None
-                or packed_seq.radar is not None
-            ):
-                raise ValueError("Multiview action conditioning requires RGB/action blocks and maskless attention.")
-            config = self.config.multiview_attention_config
-            full_seq, _ = get_full_only_seq(input_pack)
-            shapes: list[tuple[int, int, int]] = []
-            rates: list[float] = []
-            view_axis: list[int] = []
-            frame_offsets: list[int] = []
-            items_per_sample: list[int] = []
-            factor = self.config.temporal_compression_factor_vision
-            if len(packed_seq.action.token_shapes) != len(counts):
-                raise ValueError("Multiview packs require one camera-major action payload per sample.")
-            vision_cursor = 0
-            for sample, num_views in enumerate(counts):
-                view_shapes = packed_seq.vision.token_shapes[vision_cursor : vision_cursor + num_views]
-                view_rates = packed_seq.vision.seconds_per_frame[vision_cursor : vision_cursor + num_views]
-                latent_t = view_shapes[0][0]
-                if any(shape[0] != latent_t for shape in view_shapes) or packed_seq.action.token_shapes[sample] != (
-                    num_views * (latent_t - 1) * factor,
-                ):
-                    raise ValueError("Multiview action blocks must retain every frame-rate action for every view.")
-                shapes.extend((t, h, w) for t, h, w in view_shapes)
-                rates.extend(view_rates)
-                view_axis.extend(range(num_views))
-                frame_offsets.extend([0] * num_views)
-                # The action block stays separate. Describe its full frame-rate
-                # rows in latent-sized groups, sharing each RGB view's attention
-                # identity. Match pack_supertokens_temporal_causal's [null, V0],
-                # [actions[0:factor], V1], ... alignment, but omit its null prefix.
-                # The first real action group therefore starts at latent frame 1.
-                if latent_t > 1:
-                    shapes.extend([(latent_t - 1, 1, factor)] * num_views)
-                    rates.extend(view_rates)
-                    view_axis.extend(range(num_views))
-                    frame_offsets.extend([1] * num_views)
-                items_per_sample.append(num_views * (2 if latent_t > 1 else 1))
-                vision_cursor += num_views
-            caption_access: list[CaptionAccess] = ["all_captions"] * len(shapes)
-            # All RGB items are synchronized targets, not Auto's prefix controls/
-            # last target. Conditioned actions join the same view/time groups;
-            # their clean inputs do not make them separate control-image streams.
-            attention_meta.multiview_maskless = build_multiview_maskless_plan(
-                [1] * len(shapes),
-                shapes,
-                device=full_seq.device,
-                seconds_per_frame=rates,
-                frame_offsets=frame_offsets,
-                items_per_sample=items_per_sample,
-                is_control=[False] * len(shapes),
-                view_axis=view_axis,
-                caption_access=caption_access,
-                same_view_temporal_window=config.mask.same_view_temporal_window,
-                padded_gen_tokens=full_seq.shape[0],
-                attention_scope=config.mask.attention_scope,
-                cross_view_temporal_window=config.mask.cross_view_temporal_window,
-            )
-            return
-
         # No pathway check here: ``multiview_backend`` is non-None exactly when
         # ``joint_attn_implementation == "multiview"``, so the two cannot disagree.
         # natten_metadata_list is always None here (only the three-way packer builds it).
         if self.natten_parameter_list:
-            raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
+            raise ValueError("Multiview attention and NATTEN cannot be enabled together.")
+
+        # Sensor-layout metadata opts a pack into multiview attention, including one-camera
+        # packs whose control rules or same-view temporal windows still need a plan. LiDAR
+        # and radar carry their own item counts even when camera-view metadata is absent.
+        # The dedicated robot packer records its separate-camera action layout explicitly.
+        # Ordinary image/video/action/sound packs leave all layout fields unset and retain
+        # two-way attention within each sample, independent of the multiview control rules.
+        if (
+            packed_seq.num_views_per_vision_item is None
+            and packed_seq.num_lidar_items_per_sample is None
+            and packed_seq.num_radar_items_per_sample is None
+            and packed_seq.multiview_action_temporal_factor is None
+        ):
+            return
+
+        if packed_seq.multiview_action_temporal_factor is not None and self.multiview_backend != "maskless":
+            raise ValueError("Separate-camera action conditioning requires maskless multiview attention.")
 
         # The multiview mask cannot describe a sound stream: its items carry a
         # ``(frame, view)`` grid that a sound latent has no place in, and the mask rejects
-        # a pack whose GEN tokens it cannot all account for. Leaving the mask unbuilt sends
-        # the pack to dense attention, which is what the single-view Super streams trained
-        # under before they were mixed with multiview ones.
-        #
-        # For a single-camera pack with no control stream that is an equivalence rather
-        # than an approximation: ``same_view`` holds for every pair, so the whole sensor
-        # square is admitted, ``is_control`` is empty so no control rule narrows anything,
-        # and the sample-level caption is readable from every view. Dense within-sample
-        # attention is the same connectivity.
-        #
-        # Both exclusions are load-bearing. A genuinely multiview pack would lose its view
-        # scoping silently, and a pack carrying controls would have its control edges
-        # widened, since the mask confines them to their own view.
+        # a pack whose GEN tokens it cannot all account for. Ordinary sound packs already
+        # returned above; a metadata-bearing pack cannot fall back without losing its
+        # declared view, control or temporal restrictions.
         if packed_seq.sound is not None:
-            if has_same_view_window:
-                raise NotImplementedError("Same-view temporal windows are not implemented for sound packs.")
-            if not (packed_seq.action is None and is_single_camera_pack(packed_seq)):
-                raise ValueError(
-                    "Multiview FlexAttention supports vision/LiDAR/radar/action batches, not sound. "
-                    "Only a single-camera sound pack with no action stream falls back to dense "
-                    "attention; this one carries "
-                    + ("an action stream." if packed_seq.action is not None else "more than one camera.")
-                )
-            return
-
-        # Under the maskless backend a single-camera pack is one more exact dense case. Every
-        # sample then owns one same-view group, and the plan slices it out of the cross-instant
-        # fold because its instant groups would be subsets of that group, so the folds reduce to
-        # attention within the sample. A control item -- an action item, or a camera item that
-        # conditions the next one on its stream -- joins the camera's only group, which gives its
-        # queries the camera rows' connectivity only while ``control_attends_sensor`` is set; off
-        # it, the folds withhold the target's tokens from a control query and dense would not.
-        # A single-camera pack has no LiDAR or radar stream, so those two are the only controls.
-        # Skipping the fold and its gen->und merge matters for the image and single-view Action
-        # streams of a mixed recipe, while true multiview packs still take the folds below.
-        # Same-view temporal windows also require the folds: dense attention would admit
-        # frames outside the configured window even when the pack has only one camera.
-        # Every geometry mode acts only between cameras, so a single-camera pack needs no poses.
-        carries_control = packed_seq.action is not None or any(
-            int(count) > 1 for count in packed_seq.num_vision_items_per_sample or []
-        )
-        if (
-            self.multiview_backend == "maskless"
-            and is_single_camera_pack(packed_seq)
-            and (not carries_control or mask_config.control_attends_sensor)
-            and not has_same_view_window
-        ):
-            return
+            raise ValueError(
+                "Multiview attention does not support sound in packs with camera/LiDAR/radar layout metadata."
+            )
 
         if packed_seq.action is not None and packed_seq.vision is None:
             raise ValueError("Multiview FlexAttention requires a vision generation stream for action controls.")
         if packed_seq.action is not None and (packed_seq.lidar is not None or packed_seq.radar is not None):
             raise ValueError("Multiview FlexAttention does not support joint LiDAR/radar and action-control batches.")
-
         if packed_seq.vision is None and packed_seq.lidar is None and packed_seq.radar is None:
             raise ValueError("Multiview FlexAttention needs a vision or LiDAR or radar generation stream.")
 
@@ -1677,6 +1575,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 rigrope_time_scale_s=self.config.multiview_attention_config.rigrope_time_scale_s,
                 rigrope_head_masks=self._rigrope_head_masks(input_pack["full_only_seq"].device),
                 rigrope_channels=self.config.multiview_attention_config.rigrope_channels,
+                cross_view_attends_action=self.config.multiview_attention_config.maskless_cross_view_attends_action,
+                cross_view_action_attends_action=(
+                    self.config.multiview_attention_config.maskless_cross_view_action_attends_action
+                ),
             )
             geometry_mode = self.config.multiview_attention_config.geometry_position_encoding
             if (
@@ -2075,6 +1977,8 @@ def _multiview_maskless_geometry(
     rigrope_time_scale_s: float = 1.0,
     rigrope_head_masks: tuple[torch.Tensor, torch.Tensor] | None = None,
     rigrope_channels: RigRopeChannels = "all",
+    cross_view_attends_action: bool = False,
+    cross_view_action_attends_action: bool = False,
 ) -> MultiviewMasklessPlan:
     """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
 
@@ -2092,7 +1996,11 @@ def _multiview_maskless_geometry(
     here. ``control_attends_sensor`` is not among those: the folds express both answers, so it is
     passed down as a description of the attention rather than tested as a condition.
 
-    * at most one sensor item per stream per sample, beside its control item, plus at most one
+    * separate-camera action packs declare their layout explicitly: ragged RGB targets
+      and replicated full-rate actions share camera identities, with action groups starting
+      at latent frame one. They use the same plan builder and configuration as other packs.
+      Geometry and cross-view bands remain unsupported for this layout.
+    * otherwise, at most one sensor item per stream per sample, beside its control item, plus at most one
       camera-pose action control, and no sound. A camera item, a range item, a radar item, or
       one of each: a joint sample is served by quantising every stream's capture times onto the
       camera's frame grid, or comparing capture times directly when a temporal window is
@@ -2163,6 +2071,12 @@ def _multiview_maskless_geometry(
             Own-view sensor keys are excluded from this pass. Same-view/caption attention stays intact.
             When includes_first_frame is enabled, also admit each sample's first frame
             on the other views for every query time, beside the window.
+        cross_view_attends_action: ``maskless_cross_view_attends_action``: the camera-pose action
+            control's per-view rows also key the cross-view pass, timed on the action clock from
+            video frame 1, where the packer lays the first action.
+        cross_view_action_attends_action: ``maskless_cross_view_action_attends_action``: those
+            rows also query the cross-view pass, keyed only by the other views' action rows,
+            on the same clock.
 
     Returns:
         The batch's plan. Asked only of a run that resolved to the folds, so there is no "did
@@ -2191,130 +2105,115 @@ def _multiview_maskless_geometry(
             f"{len(lidar_counts)} LiDAR and {len(radar_counts)} radar item counts for "
             f"{num_samples} samples." + _MASKLESS_REFUSAL_TAIL
         )
-    # The action stream's counts, resolved the way the mask resolves them: at most one control
-    # per sample, an item count the packed stream agrees with, and no LiDAR or radar beside it.
-    # In ``forward`` the mask builder has already run this on the same pack, so it is called
-    # again for the resolved lists rather than to re-check them, and the defaults stay in one
-    # place. Ahead of the per-stream counts because an action control with no camera to target
-    # is the more specific account of a sample that also owns no sensor item.
-    action_metadata = validate_multiview_pack(packed_seq)
-    action_counts = action_metadata.counts_per_sample
-    views_per_action_item = action_metadata.views_per_item
-    if any(count and vision_count != 1 for count, vision_count in zip(action_counts, vision_counts)):
-        # A transfer sample's two camera items share their view groups already, so an action
-        # control beside them would have two targets to condition and the plan one to give it.
-        raise ValueError(
-            f"{_MASKLESS_REFUSAL}an action control needs exactly one target vision item; "
-            f"vision counts are {list(vision_counts)} and action counts are {list(action_counts)}."
-            + _MASKLESS_REFUSAL_TAIL
-        )
-    # At most one sensor item per stream per sample beside its control item, and at least one
-    # item overall. A sample owning a camera item beside a range item or a radar item is the
-    # joint case: the sensors run at different rates, so the plan quantises each onto the
-    # camera's frame grid by capture time. The *second* item on a stream is that stream's
-    # control item, which the folds serve; a third is an image-editing layout, which this path
-    # does not -- ``control_weights`` catches most of those and this catches the rest.
-    if any(
-        cam > 2 or rng > 2 or bev > 2 or cam + rng + bev < 1
-        for cam, rng, bev in zip(vision_counts, lidar_counts, radar_counts)
-    ):
-        raise ValueError(
-            f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
-            f"lidar={list(lidar_counts)}, radar={list(radar_counts)}. Each sample takes at most "
-            "one target item per stream beside that stream's control item, and at least one "
-            "overall; more is an image-editing layout this path does not serve." + _MASKLESS_REFUSAL_TAIL
-        )
+    if packed_seq.multiview_action_temporal_factor is not None:
+        # The packer describes ragged camera targets and replicated sensor-role actions.
+        # Their item validation is shared with _multiview_sensor_mask_items below.
+        action_counts = [1] * num_samples
+        axes_by_offset = {view: view for view in range(max(vision_counts, default=0))}
+        if geometry_position_encoding != "baseline" or cross_view_band_radius != 0 or include_frame_zero:
+            raise ValueError("Separate-camera action conditioning does not support geometry or cross-view bands.")
+        if cross_view_attends_action or cross_view_action_attends_action:
+            raise ValueError(
+                "Separate-camera action rows are sensor items, which already query and key the cross-view "
+                "pass; the maskless_cross_view_*action* flags apply to camera-pose action controls only."
+            )
+    else:
+        # The action stream's counts, resolved the way the mask resolves them: at most one control
+        # per sample, an item count the packed stream agrees with, and no LiDAR or radar beside it.
+        # In ``forward`` the mask builder has already run this on the same pack, so it is called
+        # again for the resolved lists rather than to re-check them, and the defaults stay in one
+        # place. Ahead of the per-stream counts because an action control with no camera to target
+        # is the more specific account of a sample that also owns no sensor item.
+        action_metadata = validate_multiview_pack(packed_seq)
+        action_counts = action_metadata.counts_per_sample
+        if any(count and vision_count != 1 for count, vision_count in zip(action_counts, vision_counts)):
+            # A transfer sample's two camera items share their view groups already, so an action
+            # control beside them would have two targets to condition and the plan one to give it.
+            raise ValueError(
+                f"{_MASKLESS_REFUSAL}an action control needs exactly one target vision item; "
+                f"vision counts are {list(vision_counts)} and action counts are {list(action_counts)}."
+                + _MASKLESS_REFUSAL_TAIL
+            )
+        # At most one sensor item per stream per sample beside its control item, and at least one
+        # item overall. A sample owning a camera item beside a range item or a radar item is the
+        # joint case: the sensors run at different rates, so the plan quantises each onto the
+        # camera's frame grid by capture time. The *second* item on a stream is that stream's
+        # control item, which the folds serve; a third is an image-editing layout, which this path
+        # does not -- ``control_weights`` catches most of those and this catches the rest.
+        if any(
+            cam > 2 or rng > 2 or bev > 2 or cam + rng + bev < 1
+            for cam, rng, bev in zip(vision_counts, lidar_counts, radar_counts)
+        ):
+            raise ValueError(
+                f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
+                f"lidar={list(lidar_counts)}, radar={list(radar_counts)}. Each sample takes at most "
+                "one target item per stream beside that stream's control item, and at least one "
+                "overall; more is an image-editing layout this path does not serve." + _MASKLESS_REFUSAL_TAIL
+            )
 
-    views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
-    if vision is not None and not views_per_vision_item:
-        # One view per item, as _multiview_sensor_mask_items reads the same pack: only a
-        # multiview dataset writes the counts, so a pack without them is single-camera by
-        # construction -- a single-view stream mixed into a multiview recipe.
-        views_per_vision_item = [1] * len(vision.token_shapes)
-    if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
-        # Camera items need the per-camera VAE metadata to say where one view's frames end.
-        raise ValueError(
-            f"{_MASKLESS_REFUSAL}it records {len(views_per_vision_item)} per-item view counts "
-            f"for {len(vision.token_shapes)} vision items, so there is nothing to say where one "
-            "view's frames end." + _MASKLESS_REFUSAL_TAIL
-        )
+        views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
+        if vision is not None and not views_per_vision_item:
+            # One view per item, as _multiview_sensor_mask_items reads the same pack: only a
+            # multiview dataset writes the counts, so a pack without them is single-camera by
+            # construction -- a single-view stream mixed into a multiview recipe.
+            views_per_vision_item = [1] * len(vision.token_shapes)
+        if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
+            # Camera items need the per-camera VAE metadata to say where one view's frames end.
+            raise ValueError(
+                f"{_MASKLESS_REFUSAL}it records {len(views_per_vision_item)} per-item view counts "
+                f"for {len(vision.token_shapes)} vision items, so there is nothing to say where one "
+                "view's frames end." + _MASKLESS_REFUSAL_TAIL
+            )
+        # Retain the established camera/LiDAR/radar axes even when a stream is absent.
+        # The shared mask items use global view offsets instead of sensor-axis IDs.
+        axes_by_offset = {0: 0}
+        lidar_offset = max(views_per_vision_item, default=0)
+        if lidar is not None:
+            axes_by_offset[lidar_offset] = 1
+        if radar is not None:
+            axes_by_offset[lidar_offset + (lidar is not None)] = 2
 
-    num_views: list[int] = []
-    token_shapes: list[tuple[int, int, int]] = []
-    rates: list[float] = []
-    items_per_sample: list[int] = []
-    is_control: list[bool] = []
-    view_axis: list[int] = []
-    vision_cursor = lidar_cursor = radar_cursor = action_cursor = 0
-    for vision_count, lidar_count, radar_count, action_count in zip(
-        vision_counts, lidar_counts, radar_counts, action_counts
-    ):
-        items_per_sample.append(vision_count + lidar_count + radar_count + action_count)
-        # The camera item first, which is the order the packer lays a sample down and the order
-        # the plan anchors on: a joint sample quantises capture time onto its *first* item's
-        # frame grid, so anchoring on the camera keeps its tokens on the frame indices a
-        # camera-only sample would give them.
-        # Within a stream every item but the last conditions the one after it, which is the
-        # convention _multiview_sensor_mask_items marks is_control by and the packer forces
-        # fully clean. Camera items share one view axis and range items another, so a camera's
-        # view 0 and a sweep are never the same view -- the plan's counterpart to the view
-        # offset the mask gives a range clip.
-        for index in range(vision_count):
-            assert vision is not None
-            num_views.append(views_per_vision_item[vision_cursor])
-            token_shapes.append(tuple(vision.token_shapes[vision_cursor]))  # type: ignore[arg-type]
-            rates.append(float(vision.seconds_per_frame[vision_cursor]))
-            is_control.append(index < vision_count - 1)
-            view_axis.append(0)
-            vision_cursor += 1
-        for index in range(lidar_count):
-            assert lidar is not None
-            # A sweep fuses the whole rig rather than covering one of its cameras, so a range
-            # item is one "view" over its own grid -- the same count _multiview_sensor_mask_items
-            # gives it. The folds do not otherwise care which sensor produced the tokens.
-            num_views.append(1)
-            token_shapes.append(tuple(lidar.token_shapes[lidar_cursor]))  # type: ignore[arg-type]
-            rates.append(float(lidar.seconds_per_frame[lidar_cursor]))
-            is_control.append(index < lidar_count - 1)
-            view_axis.append(1)
-            lidar_cursor += 1
-        for index in range(radar_count):
-            assert radar is not None
-            # A BEV clip covers the scene around the rig rather than one of its cameras, so it
-            # is one "view", as a sweep is -- but on a third axis: a radar frame and a sweep
-            # are no more the same view than either is a camera's, and the two sensors cycle
-            # at 20 Hz and 10 Hz, so they do not even share an instant.
-            num_views.append(1)
-            token_shapes.append(tuple(radar.token_shapes[radar_cursor]))  # type: ignore[arg-type]
-            rates.append(float(radar.seconds_per_frame[radar_cursor]))
-            is_control.append(index < radar_count - 1)
-            view_axis.append(2)
-            radar_cursor += 1
-        for _index in range(action_count):
-            assert action is not None
-            # A trajectory per camera, laid view-outer like the camera item it conditions, so it
-            # sits on the cameras' axis and each view's run joins that view's group. It is last
-            # in its sample, as the packer lays it, so it never becomes the anchor.
-            num_views.append(views_per_action_item[action_cursor])
-            token_shapes.append(_mask_item_token_shape(tuple(action.token_shapes[action_cursor])))  # type: ignore[arg-type]
-            rates.append(float(action.seconds_per_frame[action_cursor]) if action.seconds_per_frame else 1.0)
-            is_control.append(True)
-            view_axis.append(0)
-            action_cursor += 1
+    # Both layouts now describe the same item contract, in packed token order.
+    # Shared view offsets join controls/actions to their camera and keep LiDAR/radar
+    # distinct. Map offsets onto the folds' opaque view axes while retaining the
+    # existing camera/LiDAR/radar axis IDs for the camera-major layout.
+    items = [item for sample_items in sensor_mask_items for item in sample_items]
+    num_views = [item.num_views for item in items]
+    token_shapes = [_mask_item_token_shape(item.token_shape) for item in items]
+    rates = [item.seconds_per_frame for item in items]
+    items_per_sample = [len(sample_items) for sample_items in sensor_mask_items]
+    is_control = [item.is_control for item in items]
+    view_axis = [axes_by_offset[item.view_offset] for item in items]
+    frame_offsets = [item.frame_offset for item in items]
+    cross_view_key_only = [False] * len(items)
+    cross_view_control_queries = [False] * len(items)
+    if cross_view_attends_action or cross_view_action_attends_action:
+        # A camera-pose action control is last in its sample, as the packer lays it.
+        item_start = action_cursor = 0
+        for sample_items, action_count in zip(sensor_mask_items, action_counts):
+            for index in range(item_start + len(sample_items) - action_count, item_start + len(sample_items)):
+                assert packed_seq.action is not None
+                if not (
+                    packed_seq.action.seconds_per_frame_known
+                    and packed_seq.action.seconds_per_frame_known[action_cursor]
+                ):
+                    raise ValueError(
+                        f"{_MASKLESS_REFUSAL}the maskless_cross_view_*action* flags time action tokens by "
+                        f"capture time, but action item {action_cursor} carries no action fps." + _MASKLESS_REFUSAL_TAIL
+                    )
+                cross_view_key_only[index] = cross_view_attends_action
+                cross_view_control_queries[index] = cross_view_action_attends_action
+                # Row r of a camera-pose action is the step into video frame r + 1: the multiview
+                # dataset packs it with action_start_frame_offset=1. The offset only times its
+                # cross-view tokens, so it stays 0 otherwise, which same-view windows require.
+                frame_offsets[index] = 1
+                action_cursor += 1
+            item_start += len(sample_items)
 
-    # The divisibility of each latent_t by its view count is checked by SensorMaskItem, which the
-    # caller built for these same items before reaching here, and again by the plan builder.
-    # Captions as (view_id, num_tokens) per sample, the two parallel lists the packer records.
-    # None keeps the gen->und pass on its per-sample form, which is what a single caption wants.
-    # Flattened in the same order this walked the items above -- per sample, its vision items
-    # then its LiDAR ones then its radar ones -- which is the order the packer lays a sample down
-    # and the order _multiview_sensor_mask_items builds in. The count check holds the two together.
-    caption_accesses = [item.caption_access for sample_items in sensor_mask_items for item in sample_items]
-    if len(caption_accesses) != len(num_views):
-        raise ValueError(
-            f"{_MASKLESS_REFUSAL}the mask describes {len(caption_accesses)} items for this batch and "
-            f"the folds derive {len(num_views)}; the two read the same pack and must agree." + _MASKLESS_REFUSAL_TAIL
-        )
+    # Divisibility and condition-mask lengths were checked when the shared items
+    # were constructed. Their caption access is also identical for both backends.
+    # None keeps gen->und on its per-sample form for a single shared caption.
+    caption_accesses = [item.caption_access for item in items]
     captions = (
         [
             list(zip(view_ids, lens))
@@ -2328,10 +2227,13 @@ def _multiview_maskless_geometry(
         token_shapes,
         device=device,
         seconds_per_frame=rates,
+        frame_offsets=frame_offsets,
         items_per_sample=items_per_sample,
         is_control=is_control,
         control_attends_sensor=control_attends_sensor,
         view_axis=view_axis,
+        cross_view_key_only=cross_view_key_only,
+        cross_view_control_queries=cross_view_control_queries,
         captions=captions,
         attention_scope=attention_scope,
         cross_view_temporal_window=cross_view_temporal_window,
@@ -2595,6 +2497,85 @@ def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[Capti
     ]
 
 
+def _multiview_action_conditioning_items(packed_seq: PackedSequence) -> list[list[SensorMaskItem]]:
+    """Describe separate-camera RGB and frame-rate actions using the shared item contract."""
+    vision, action = packed_seq.vision, packed_seq.action
+    counts = packed_seq.num_vision_items_per_sample
+    factor = packed_seq.multiview_action_temporal_factor
+    if (
+        vision is None
+        or action is None
+        or counts is None
+        or factor is None
+        or factor < 1
+        or packed_seq.num_action_tokens_per_supertoken != 0
+        or packed_seq.sound is not None
+        or packed_seq.lidar is not None
+        or packed_seq.radar is not None
+    ):
+        raise ValueError("Separate-camera action conditioning requires RGB and full frame-rate action blocks.")
+    if (
+        len(counts) != len(packed_seq.sample_lens)
+        or any(count < 1 for count in counts)
+        or sum(counts) != len(vision.token_shapes)
+        or len(action.token_shapes) != len(counts)
+    ):
+        raise ValueError("Multiview packs require separate RGB items and one camera-major action payload per sample.")
+    if packed_seq.num_views_per_vision_item not in (None, [1] * sum(counts)):
+        raise ValueError("Separate-camera RGB items must each contain exactly one view.")
+
+    sensor_items: list[list[SensorMaskItem]] = []
+    vision_cursor = 0
+    for sample, num_views in enumerate(counts):
+        view_shapes = vision.token_shapes[vision_cursor : vision_cursor + num_views]
+        latent_t = view_shapes[0][0]
+        if any(shape[0] != latent_t for shape in view_shapes) or action.token_shapes[sample] != (
+            num_views * (latent_t - 1) * factor,
+        ):
+            raise ValueError("Multiview action blocks must retain every frame-rate action for every view.")
+        sample_items: list[SensorMaskItem] = []
+        for view, shape in enumerate(view_shapes):
+            index = vision_cursor + view
+            sample_items.append(
+                SensorMaskItem(
+                    token_shape=_mask_item_token_shape(shape),
+                    condition_mask=vision.condition_mask[index],
+                    num_views=1,
+                    view_offset=view,
+                    is_control=False,
+                    seconds_per_frame=vision.seconds_per_frame[index],
+                    caption_access="all_captions",
+                )
+            )
+        # The action block stays separate. Describe its full frame-rate rows in
+        # latent-sized groups, sharing each RGB view's attention identity. Match
+        # pack_supertokens_temporal_causal's [null, V0], [actions[0:factor], V1], ...
+        # alignment, but omit its null prefix: the first real group starts at frame 1.
+        if latent_t > 1:
+            action_conditions = (
+                action.condition_mask[sample].reshape(num_views, latent_t - 1, factor).all(-1)
+            )  # [V,T-1]
+            for view in range(num_views):
+                sample_items.append(
+                    SensorMaskItem(
+                        token_shape=(latent_t - 1, 1, factor),
+                        condition_mask=action_conditions[view],
+                        num_views=1,
+                        view_offset=view,
+                        is_control=False,
+                        seconds_per_frame=vision.seconds_per_frame[vision_cursor + view],
+                        caption_access="all_captions",
+                        frame_offset=1,
+                    )
+                )
+        # All RGB items are synchronized targets, not prefix controls/last target.
+        # Conditioned actions join those same view/time groups; clean inputs do not
+        # make them separate control-image streams. Every item reads the shared caption.
+        sensor_items.append(sample_items)
+        vision_cursor += num_views
+    return sensor_items
+
+
 def _multiview_sensor_mask_items(
     packed_seq: PackedSequence,
     *,
@@ -2603,11 +2584,11 @@ def _multiview_sensor_mask_items(
 ) -> list[list[SensorMaskItem]]:
     """Describe each sample to the multiview mask in packed generation order.
 
-    A pack that records no per-camera view counts is read as one camera per item. Only a
-    multiview dataset writes those counts, via ``enable_per_camera_vae_encoding``, so their
-    absence says the pack is single-view rather than that a recipe forgot something -- which
-    is what lets a recipe mix single-view Super streams into a multiview run without
-    declaring it anywhere.
+    Separate-camera action packs explicitly record their layout and are normalized by
+    ``_multiview_action_conditioning_items``. For the usual camera-major layout, a pack
+    that records no per-camera view counts is read as one camera per item. Multiview
+    datasets write those counts via ``enable_per_camera_vae_encoding``; ordinary Super
+    streams leave them unset.
 
     The packer lays a sample out as vision items, LiDAR items, radar items, then action
     items, so walking the streams sample by sample reproduces the packed order the mask
@@ -2659,6 +2640,9 @@ def _multiview_sensor_mask_items(
     run at different rates -- what ``cross_view_temporal_window.bounds`` needs to compare the
     two streams by actual capture time rather than by frame index.
     """
+    if packed_seq.multiview_action_temporal_factor is not None:
+        return _multiview_action_conditioning_items(packed_seq)
+
     num_samples = len(packed_seq.sample_lens)
     vision = packed_seq.vision
     lidar = packed_seq.lidar

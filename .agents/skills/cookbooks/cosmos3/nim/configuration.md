@@ -255,6 +255,12 @@ only REST sessions are supported. Changing these settings requires restarting
 the service with the new environment. Ordinary Chat Completions token streaming
 uses the request field `stream=true` and does not require this enable flag.
 
+Checkpoint and KV-cache precision affect streaming quality. For streaming,
+use either an FP8 checkpoint (`NIM_PRECISION=fp8`) with BF16 KV-cache precision
+or a BF16 checkpoint (`NIM_PRECISION=bf16`);
+NVFP4 checkpoints are currently not recommended. Refer to
+[Streaming Video](streaming.md).
+
 | Name | Default | Use |
 | --- | --- | --- |
 | `NIM_ENABLE_STREAMING` | `false` | Enable stateful video-frame sessions and apply the required engine settings |

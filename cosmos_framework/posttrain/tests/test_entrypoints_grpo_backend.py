@@ -130,7 +130,7 @@ def test_policy_packer_build_spec_is_shared_and_immutable() -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_i4_qwen3_vl_backend_selects_native_packer_without_importing_hf() -> None:
-    """A fresh i4 process must neither import nor select the generic HF VLM packer."""
+    """A fresh native-backend process must neither import nor select the generic HF VLM packer."""
     script = f"""
 import sys
 from types import SimpleNamespace
@@ -174,7 +174,7 @@ build.build_vllm_rollout = lambda _config, *, packer, trust_remote_code, return_
 packer = build_rollout(config)
 assert isinstance(packer, Qwen3VLDataPacker)
 assert config.model.requires_collated_policy_forward is True
-assert hf_module not in sys.modules, "the i4 rollout imported the HF VLM packer"
+assert hf_module not in sys.modules, "the native rollout imported the HF VLM packer"
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

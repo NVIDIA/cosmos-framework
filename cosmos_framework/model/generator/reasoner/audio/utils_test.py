@@ -5,6 +5,7 @@
 
 import inspect
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -40,6 +41,10 @@ class _RecordingEncoder(nn.Module):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(_HIDDEN_SIZE), requires_grad=False)
         self.forward_calls = 0
+        self.config: SimpleNamespace = SimpleNamespace(num_mel_bins=_HIDDEN_SIZE)
+
+    def get_output_lengths(self, lengths: torch.Tensor) -> torch.Tensor:  # [B] -> [B]
+        return lengths
 
     def forward(
         self,
@@ -482,3 +487,52 @@ def test_no_audio_forward_is_unchanged_and_connects_only_trainable_projector() -
     assert projector_grad is not None
     assert torch.count_nonzero(projector_grad) == 0
     assert model.sound_und_model.encoder.scale.grad is None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("use_inputs_embeds", [False, True])
+def test_trainable_audio_encoder_connects_on_vision_batches_without_global_patches(use_inputs_embeds: bool) -> None:
+    model = _FakeRawReasoner()
+    model.sound_und_model.encoder.requires_grad_(True)
+    other_model = _FakeRawReasoner()
+    for instance in (model, other_model):
+        patch_reasoner_audio_forward(instance, audio_token_id=_AUDIO_TOKEN_ID, model_type="qwen3_vl")
+    input_ids = torch.tensor([[1, _IMAGE_TOKEN_ID, 3]])  # [1,3]
+    kwargs: dict[str, Any] = {"input_ids": input_ids, "pixel_values": torch.ones(1, _HIDDEN_SIZE)}  # [1,D]
+    if use_inputs_embeds:
+        kwargs["inputs_embeds"] = model.embedding(input_ids)  # [1,3,D]
+    output = model(**kwargs)
+    expected = other_model(**kwargs)
+    assert torch.equal(output.logits, expected.logits)
+    output.logits.sum().backward()
+    for parameter in model.sound_und_model.parameters():
+        assert parameter.grad is not None
+        assert torch.count_nonzero(parameter.grad) == 0
+    assert model.sound_und_model.encoder.forward_calls == 1
+    assert model.sound_und_model.projector.forward_calls == 1
+    assert not model.embedding._forward_hooks
+    assert other_model.sound_und_model.encoder.forward_calls == 0
+    assert other_model.sound_und_model.projector.forward_calls == 1
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_trainable_audio_encoder_dummy_skipped_in_inference() -> None:
+    model = _FakeRawReasoner()
+    model.sound_und_model.encoder.requires_grad_(True)
+    patch_reasoner_audio_forward(model, audio_token_id=_AUDIO_TOKEN_ID, model_type="qwen3_vl")
+    with torch.no_grad():
+        model(torch.tensor([[1, 2]]))
+    assert model.sound_und_model.encoder.forward_calls == 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_trainable_audio_encoder_hook_removed_after_forward_failure() -> None:
+    model = _FakeRawReasoner()
+    model.sound_und_model.encoder.requires_grad_(True)
+    patch_reasoner_audio_forward(model, audio_token_id=_AUDIO_TOKEN_ID, model_type="qwen3_vl")
+    with pytest.raises(IndexError):
+        model(torch.tensor([[1000]]))
+    assert not model.embedding._forward_hooks

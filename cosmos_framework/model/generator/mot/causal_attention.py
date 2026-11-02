@@ -14,23 +14,13 @@ from typing import Any
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
-from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    drop_pad_segment,
-    from_mode_splits,
-    from_und_gen_splits,
-    get_caption_seq_offsets,
-    get_causal_seq,
-    get_full_only_seq,
-    get_gen_seq,
-)
 from cosmos_framework.model.attention import (
     attention,
     multi_dimensional_attention,
     multi_dimensional_attention_varlen,
 )
 from cosmos_framework.model.attention.masks import CausalType
+from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
 from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
@@ -55,10 +45,20 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     write_current_kv_to_static_buffer,
     zero_null_action_values,
 )
-from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache, KVToStore, MemoryValue
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    drop_pad_segment,
+    from_mode_splits,
+    from_und_gen_splits,
+    get_caption_seq_offsets,
+    get_causal_seq,
+    get_full_only_seq,
+    get_gen_seq,
 )
 
 
@@ -416,6 +416,7 @@ def multiview_attention_with_memory(
     replay_maskless_plan: ReplayMasklessPlan | None = None,
     text_sink_layer: RollingTextSinkLayer | None = None,
     prompt_layout: RollingPromptLayout | None = None,
+    text_cache: ARTextLayerCache | None = None,
 ) -> SequencePack:
     """Run Flex or maskless multiview replay with an optional key-only K/V suffix."""
     if (memory_k is None) != (memory_v is None):
@@ -449,20 +450,25 @@ def multiview_attention_with_memory(
         torch._check(max_causal_len <= causal_k.shape[0])
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
-    causal_res = attention(
-        causal_q.unsqueeze(0),  # [1,N_und,H,D]
-        causal_k.unsqueeze(0),  # [1,N_und,H,D]
-        causal_v.unsqueeze(0),  # [1,N_und,H,D]
-        cumulative_seqlen_Q=causal_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=max_causal_len,
-        max_seqlen_KV=max_causal_len,
-        is_causal=True,
-        causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
-    )  # [1,N_und,H,D]
-    if not isinstance(causal_res, torch.Tensor):
-        raise TypeError("Two-way causal attention must return a tensor.")
-    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_und,H*D]
+    if text_cache is not None and text_cache.attention_output is not None:
+        causal_out = text_cache.attention_output  # [N_und,H*D]
+    else:
+        causal_res = attention(
+            causal_q.unsqueeze(0),  # [1,N_und,H,D]
+            causal_k.unsqueeze(0),  # [1,N_und,H,D]
+            causal_v.unsqueeze(0),  # [1,N_und,H,D]
+            cumulative_seqlen_Q=causal_q_offsets,
+            cumulative_seqlen_KV=causal_k_offsets,
+            max_seqlen_Q=max_causal_len,
+            max_seqlen_KV=max_causal_len,
+            is_causal=True,
+            causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+        )  # [1,N_und,H,D]
+        if not isinstance(causal_res, torch.Tensor):
+            raise TypeError("Two-way causal attention must return a tensor.")
+        causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_und,H*D]
+        if text_cache is not None:
+            text_cache.attention_output = causal_out
 
     und_v = causal_v  # [N_und,H,D]
     gen_k, _ = get_full_only_seq(packed_key_normalized)  # [N_gen,H,D], [B+1]
@@ -1761,26 +1767,34 @@ def three_way_attention_with_memory(
         video_out = torch.nn.functional.pad(video_out, (0, 0, 0, pad_len))
 
     # --- text self-attention ---
-    # Varlen self-attention over the live text in the current pack.  The
+    # Varlen self-attention over the live text in the current pack. The
     # text Q/K/V tensors are padded to a constant length (compile-stable
-    # shape); the varlen offsets restrict the kernel to the real
-    # (non-padded) range.  Output positions beyond the real range are
-    # discarded by ``from_mode_splits`` so they never reach the loss.
+    # shape). Keep K/V restricted to the real range, but evaluate every
+    # allocated query row: Hopper NATTEN leaves padded-query backward
+    # workspace uninitialized when Q offsets cover only the real prefix,
+    # which can introduce NaNs into real K gradients under torch.compile.
+    # Explicitly zero the padded output rows before returning the pack.
     #
-    # Reuse ``text_kv_offsets``, which should be the same as text Q offsets, and
-    # is already pre-clamped to >=1 by ``KVCacheTrainMemoryState.init()``
-    # to avoid kernel failure in case length == 0.
+    # ``KVCacheTrainMemoryState.init()`` normally clamps empty K/V to >=1.
+    # Do that locally even when the global clamp is disabled: the added
+    # queries need a finite dummy attention result before we mask them out.
+    # Top-left causality ensures that adding padded queries cannot change
+    # the real caption's outputs or gradients.
     text_q, _ = get_causal_seq(packed_query_states)
     text_k, _ = get_causal_seq(packed_key_states)
     text_v, _ = get_causal_seq(packed_value_states)
     padded_text_len = text_q.shape[0]
+    text_q_offsets = text_kv_offsets.new_tensor([0, padded_text_len])  # [2]
+    text_sa_kv_offsets = torch.stack(  # [2]
+        (text_kv_offsets[0], text_kv_offsets[1].clamp_min(min(padded_text_len, 1)))
+    )
 
     text_res = attention(
         text_q.unsqueeze(0),
         text_k.unsqueeze(0),
         text_v.unsqueeze(0),
-        cumulative_seqlen_Q=text_kv_offsets,
-        cumulative_seqlen_KV=text_kv_offsets,
+        cumulative_seqlen_Q=text_q_offsets,
+        cumulative_seqlen_KV=text_sa_kv_offsets,
         max_seqlen_Q=padded_text_len,
         max_seqlen_KV=padded_text_len,
         is_causal=True,
@@ -1788,6 +1802,10 @@ def three_way_attention_with_memory(
         backend="natten",  # Sanity check; this should be the only option.
     )
     assert isinstance(text_res, torch.Tensor)
+    real_text_rows = (
+        torch.arange(padded_text_len, device=text_q.device) < text_kv_offsets[-1]
+    ) & has_caption  # [S_text]
+    text_res = torch.where(real_text_rows[None, :, None, None], text_res, 0)  # [1,S_text,H,D]
     text_out = text_res.squeeze(0).flatten(-2, -1)
     return from_mode_splits(text_out, video_out, packed_query_states)
 
@@ -2250,6 +2268,7 @@ def dispatch_attention_with_memory(
             memory_v=memory_v,
             text_sink_layer=memory_value.text_sink_layer if isinstance(memory_value, MultiviewARMemoryValue) else None,
             prompt_layout=memory_value.prompt_layout if isinstance(memory_value, MultiviewARMemoryValue) else None,
+            text_cache=memory_value.text_cache,
         )
         return output, None
     if isinstance(memory_value, KVTrainMemoryValue):

@@ -28,37 +28,21 @@ from omegaconf import OmegaConf
 from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
-from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TEACHER_FORCING_KV_IMPLEMENTATIONS,
     TeacherForcingKVImplementation,
     TeacherForcingReplayPolicyConfig,
 )
 from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
-from cosmos_framework.data.generator.sequence_packing import (
-    PackedSequence,
-    SequencePlan,
-    build_sequence_plans_from_data_batch,
-)
-from cosmos_framework.data.generator.sequence_packing.autoregressive import (
-    pack_input_sequence_autoregressive,
-    pack_input_sequence_autoregressive_batch,
-    pack_multiview_action_temporal_causal,
-    resolve_text_system_prompt,
-)
-from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
-from cosmos_framework.data.generator.sequence_packing.packers import (
-    make_teacher_forcing_clean_pack,
-)
-from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
+from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
     build_interactive_multiview_mask_items,
 )
-from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.maskless_attention import require_gapped_replay
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
@@ -84,6 +68,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
 from cosmos_framework.model.generator.utils.memory import MemoryState
+from cosmos_framework.model.generator.utils.model_construction import is_architecture_only_model_construction
 from cosmos_framework.model.generator.utils.multiview_ar import (
     JointARCache,
     MultiviewTransferARBackend,
@@ -93,6 +78,22 @@ from cosmos_framework.model.generator.utils.multiview_ar import (
     sample_joint_transfer_ar,
 )
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
+from cosmos_framework.data.generator.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+)
+from cosmos_framework.data.generator.sequence_packing.autoregressive import (
+    pack_input_sequence_autoregressive,
+    pack_input_sequence_autoregressive_batch,
+    pack_multiview_action_temporal_causal,
+    resolve_text_system_prompt,
+)
+from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.data.generator.sequence_packing.packers import (
+    make_teacher_forcing_clean_pack,
+)
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
 _ARBranch = Literal["conditional", "unconditional"]
@@ -101,7 +102,7 @@ _TEACHER_FORCING_REPLAY_STRATEGIES: tuple[str, ...] = ("teacher_forcing", "teach
 
 # Framed-caption capacity chosen for long multi-caption rollouts with headroom; configurable for
 # other datasets, and used only for static-compile padding, never media positions.
-_DEFAULT_ROLLING_STATIC_CAPTION_MAX_TOKENS: int = 576
+_DEFAULT_ROLLING_STATIC_CAPTION_MAX_TOKENS: int = 1024
 
 
 class GaussianBellTrainTimeWeight:
@@ -493,6 +494,7 @@ class OmniMoTCausalModel(OmniMoTModel):
     """
 
     config: OmniMoTCausalModelConfig
+    ar_use_text_cache: bool = False
 
     # Set while a bidirectional MoBA step or dense MoBA inference runs. Read by
     # pre_noise_memory_hook and denoise.
@@ -622,8 +624,9 @@ class OmniMoTCausalModel(OmniMoTModel):
             or replay_policy.decomposed_temporal_window_seconds is not None
         ):
             raise ValueError("multiview_threeway_kv requires causal robot packs and same-instant decomposed attention.")
-        if maskless_replay:
+        if maskless_replay and not is_architecture_only_model_construction():
             # Validate the execution device before network construction enters the meta device context.
+            # Checkpoint conversion only inspects architecture and never executes replay kernels.
             require_gapped_replay(torch.device(self.tensor_kwargs["device"]))
         # Robot multiview keeps the production three-way layout and adds only
         # one same-instant RGB varlen component in Interactive attention.
@@ -2155,6 +2158,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         vision_items = gen_data_clean.x0_tokens_vision
         if vision_items is None:
             raise ValueError(f"{mode} AR inference requires vision latents")
+        physical_view_ids = getattr(gen_data_clean, "vision_view_ids", None)
         is_transfer = mode == "video_transfer"
         # The RGB-control frontend sets this per-request marker after validating
         # edge/blur/depth/seg. Other modes and multiview dispatch never opt in.
@@ -2500,6 +2504,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     include_text = prefix_frame_idx == 0
                     self._seed_frame_into_kv_cache(
                         frame_latent=prefix_vision_latent,
+                        vision_view_ids=physical_view_ids[0] if physical_view_ids is not None else None,
                         frame_idx=prefix_frame_idx,
                         use_ar_rolling_path=use_ar_rolling_path,
                         preserve_transfer_numerics=preserve_transfer_numerics,
@@ -2579,6 +2584,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                         frame_latent=control_latent,
                         frame_idx=transfer_history_cache_idx,
                         position_frame_idx=chunk_start,
+                        vision_view_ids=physical_view_ids[0] if physical_view_ids is not None else None,
                         dual_kv_cache=dual_kv_cache,
                         dual_kv_cache_uncond=dual_kv_cache_uncond,
                         cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
@@ -2689,6 +2695,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                 _cond_pack_text = cond_text_tokens[0] if (cond_text_tokens and include_text_in_pack) else None
                 packed_seq = pack_input_sequence_autoregressive(
                     vision_latent=curr_vision_latent,
+                    vision_view_ids=(
+                        physical_view_ids[generation_vision_item_idx] if physical_view_ids is not None else None
+                    ),
                     action_latent=curr_action_latent,
                     text_tokens=_cond_pack_text,
                     timestep=0.0,
@@ -2717,6 +2726,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                     _uncond_pack_text = uncond_text_tokens[0] if (uncond_text_tokens and include_text_in_pack) else None
                     packed_seq_uncond = pack_input_sequence_autoregressive(
                         vision_latent=curr_vision_latent,
+                        vision_view_ids=(
+                            physical_view_ids[generation_vision_item_idx] if physical_view_ids is not None else None
+                        ),
                         action_latent=curr_action_latent,
                         text_tokens=_uncond_pack_text,
                         timestep=0.0,
@@ -2817,6 +2829,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                             cache.gen_cache.select_history(_f, refresh_history)
                     self._seed_frame_into_kv_cache(
                         frame_latent=_frame_latent,
+                        vision_view_ids=(
+                            physical_view_ids[generation_vision_item_idx] if physical_view_ids is not None else None
+                        ),
                         frame_idx=transfer_history_cache_idx if is_transfer else _f,
                         position_frame_idx=_f,
                         dual_kv_cache=dual_kv_cache,
@@ -2926,6 +2941,11 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
             seed = _broadcast_seed([seed], self.parallel_dims.cp_mesh.get_group(), self.parallel_dims.cp_rank)[0]
+        # Optional benchmark boundary after input encoding, before clean-prefix
+        # work and diffusion. The callback is scoped to this generation.
+        on_inputs_prepared: Callable[[], None] | None = data_batch.pop("_on_ar_inputs_prepared", None)
+        if on_inputs_prepared is not None:
+            on_inputs_prepared()
         return sample_joint_transfer_ar(
             self,
             plans=plans,
@@ -3068,6 +3088,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
         batched_ar: bool = False,
+        vision_view_ids: torch.Tensor | None = None,  # [V] identity of the clean RGB item being cached
     ) -> None:
         """Run one forward pass that writes ``frame_latent``'s K/V into
         ``dual_kv_cache[layer].gen_cache[frame_idx]``, under the strategy-appropriate
@@ -3161,6 +3182,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             raw_action_dim = OmniMoTCausalModel._first_raw_action_dim(gen_data_clean)
             return pack_input_sequence_autoregressive(
                 vision_latent=frame_in,
+                vision_view_ids=vision_view_ids,
                 action_latent=curr_action_latent,
                 text_tokens=text_tokens,
                 timestep=timestep_val,

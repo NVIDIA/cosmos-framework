@@ -178,6 +178,7 @@ class FormatDescribeAnything(Augmentor):
             "random",
         ] = "random",
         urls_needs_timestamp: list = ["tl_plm_sav_20250714"],
+        stable_candidate_order: bool = False,
     ) -> None:
         """
         Args:
@@ -186,6 +187,7 @@ class FormatDescribeAnything(Augmentor):
         self.input_key = input_key
         self.output_format = output_format
         self.urls_needs_timestamp = urls_needs_timestamp
+        self.stable_candidate_order: bool = stable_candidate_order
 
     def __call__(self, data_dict: Dict) -> Dict:
         url = data_dict["__url__"]
@@ -243,8 +245,10 @@ class FormatDescribeAnything(Augmentor):
         if output_format in ["caption_one_object"]:
             assistant_message = random.sample(assistant_message, 1)
         elif output_format in ["location_and_caption_json_one_category", "location_and_caption_plain_one_category"]:
-            available_category = list(
-                set([assistant_message_i["category"] for assistant_message_i in assistant_message])
+            candidates = [assistant_message_i["category"] for assistant_message_i in assistant_message]
+            # Offline replay must not depend on a worker's Python hash seed.
+            available_category = (
+                list(dict.fromkeys(candidates)) if self.stable_candidate_order else list(set(candidates))
             )
             # sample one subject id
             category = random.choice(available_category)

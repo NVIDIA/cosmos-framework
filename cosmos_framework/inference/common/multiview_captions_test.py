@@ -20,7 +20,7 @@ from cosmos_framework.inference.common.multiview_captions import (
     separate_view_text_caption_streams,
 )
 
-# A config.json as imaginaire4's export_model writes it for the camera+LiDAR production
+# A config.json as the upstream codebase's export_model writes it for the camera+LiDAR production
 # checkpoint. Kept verbatim rather than paraphrased: these two keys are a cross-repo contract,
 # and a fixture that invents its own shape passes while the real artifact reads as merged.
 # Point COSMOS_EXPORTED_CHECKPOINT at an exported checkpoint directory to pin these keys
@@ -76,7 +76,7 @@ def test_tolerates_a_missing_config() -> None:
 
 
 def test_matches_a_real_exported_artifact_when_one_is_available() -> None:
-    """Pins the contract against an artifact imaginaire4 actually produced, not a fixture.
+    """Pins the contract against an artifact the upstream codebase actually produced, not a fixture.
 
     Skipped where the artifact is not mounted; this is the check that would have caught a key
     renamed on the exporter side.

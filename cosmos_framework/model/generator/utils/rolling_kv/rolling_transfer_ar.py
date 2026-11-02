@@ -15,6 +15,7 @@ import torch
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.post_saturation.rolling import RollingPostSaturation
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache
 from cosmos_framework.model.generator.utils.multiview_ar import JointARChunk, joint_ar_chunks
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptPack,
@@ -189,6 +190,11 @@ def _build_branch_pack(
         condition_masks=condition_masks,
         history=cache.metadata,
         prompt_layout=cache.prompt_layout,
+        text_cache_layers=(
+            [ARTextLayerCache() for _ in cache.cache]
+            if not clean and getattr(host, "ar_use_text_cache", False)
+            else None
+        ),
     )
     if clean:
         for modality in (pack.vision, pack.lidar):

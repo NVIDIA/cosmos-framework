@@ -116,7 +116,7 @@ def _draw_reference_number(image: Image.Image, position: tuple[int, int], index:
     draw.text((x + margin - left, y + margin - top), text, fill=text_color, font=font)
 
 
-def _format_coordinate_box(box: BoundingBox, coordinate_format: BBoxCoordinateFormat) -> str:
+def format_coordinate_box(box: BoundingBox, coordinate_format: BBoxCoordinateFormat) -> str:
     """Round half up to thousandths while keeping nonempty integer rectangles."""
     if coordinate_format == "normalized_01":
         return "[" + ", ".join(f"{coordinate:.6f}" for coordinate in box) + "]"
@@ -173,7 +173,7 @@ def build_bbox_condition(
             boxes = reference_bboxes.get(key, [])
             if not boxes:
                 continue
-            formatted = [_format_coordinate_box(box, coordinate_format) for box in boxes]
+            formatted = [format_coordinate_box(box, coordinate_format) for box in boxes]
             coordinates = formatted[0] if len(formatted) == 1 else "[" + ", ".join(formatted) + "]"
             lines.append(f"<img-{index}>: {coordinates}")
         return reference_images, prompt + "\n\n" + "\n".join(lines)

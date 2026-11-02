@@ -5,12 +5,17 @@ Simulation).
 Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
+For static checkpoint FP8 export of Nano/Super video and Super base/distilled
+T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
+local Framework environment below with ModelOpt, datasets, and notebook tooling.
+
 | Backend | Use it for | Used by |
 | --- | --- | --- |
 | [Cosmos Framework](#cosmos-framework) | Native PyTorch inference, launched with `torchrun` | Reasoner, Generator (Audiovisual, Action, **Transfer**), Simulation (Bimanual, Auto, Sim-Auto, Sim-Transfer) |
 | [Diffusers](#diffusers) | Direct generation with `Cosmos3OmniPipeline` | Generator (Audiovisual) |
 | [TensorRT-LLM Generator](#tensorrt-llm-generator) | OpenAI-compatible VisualGen server (image/video/audio/action/transfer generation) | Generator (Audiovisual, Action, **Transfer**) |
 | [TensorRT-LLM Reasoner](#tensorrt-llm-reasoner) | OpenAI-compatible image/video reasoning server | Reasoner |
+| [TensorRT-Edge-LLM](#tensorrt-edge-llm) | On-device TensorRT runtime for Cosmos3-Edge reasoning and DROID policy | Reasoner (Edge), Generator (Action / Policy) |
 | [Transformers](#transformers) | Hugging Face Transformers inference | Reasoner |
 | [vLLM](#vllm) | OpenAI-compatible reasoning server (image/video understanding) | Reasoner |
 | [vLLM-Omni](#vllm-omni) | OpenAI-compatible generation server (image/video/audio/action/transfer) | Generator (Audiovisual, Action, **Transfer**), Simulation ([Transfer-Auto](simulation/auto/auto.md), [Sim-Auto](simulation/auto/run_sim_auto_with_vllm_omni.ipynb), [Sim-Transfer](simulation/transfer/transfer.md#vllm-omni)) |
@@ -62,6 +67,10 @@ Native PyTorch inference through the Cosmos Framework checkout. Used by the
 quickstarts.
 
 From the cookbook root (`.agents/skills`), clone (or reuse) the framework checkout:
+
+If you are already inside this Framework repository, reuse its root (the
+directory containing `pyproject.toml` and `cosmos_framework/`) and run the
+installation commands there. A second clone is unnecessary.
 
 ```bash
 mkdir -p packages
@@ -190,7 +199,7 @@ git lfs install
 
 git clone https://github.com/NVIDIA/TensorRT-LLM.git
 cd TensorRT-LLM
-git checkout bca6761ab84fbcd58fc7f914eade7de48b32e35e
+git checkout cc63e66daf52644f1441e117bb7ba67d20566016
 git submodule update --init --recursive
 git lfs pull
 
@@ -218,58 +227,18 @@ Then install the Cosmos3 guardrail package in the same environment unless you
 explicitly disable guardrails before starting the server:
 
 ```bash
-pip install cosmos_guardrail==0.3.0
+pip install cosmos_guardrail==0.3.2
 # On headless servers without libGL.so.1, replace the OpenCV wheel pulled in by
 # cosmos_guardrail with the matching headless build:
 pip uninstall -y opencv-python
 pip install opencv-python-headless==5.0.0.93
 ```
 
-#### Server-side NLTK data setup
-
-With `cosmos_guardrail==0.3.0`, NLTK's path checks can reject tokenizer or
-dictionary files that are symlinks from a Hugging Face snapshot into its
-`blobs/` directory. Prepare a separate copy of the NLTK data as regular files
-**on the server, in the same container and shell used to launch TensorRT-LLM**:
-
-```bash
-export NLTK_DATA="$(mktemp -d "${TMPDIR:-/tmp}/cosmos3-nltk.XXXXXX")"
-python3 - <<'PY'
-import os
-import shutil
-from pathlib import Path
-
-import nltk
-from huggingface_hub import snapshot_download
-
-snapshot = snapshot_download(
-    "nvidia/Cosmos-1.0-Guardrail",
-    revision="cf03c0395fac8c4de386c0bdab12cc4fc8d66362",
-    allow_patterns=["blocklist/**"],
-)
-source = Path(snapshot) / "blocklist" / "nltk_data"
-destination = Path(os.environ["NLTK_DATA"]).resolve()
-shutil.copytree(source, destination, symlinks=False, dirs_exist_ok=True)
-assert not any(path.is_symlink() for path in destination.rglob("*"))
-
-# Check both resource lookups used by the text blocklist before starting a GPU server.
-nltk.data.path[:] = [str(destination)]
-tokens = nltk.word_tokenize("You are an autonomous vehicle planning system.")
-assert nltk.WordNetLemmatizer().lemmatize("vehicles") == "vehicle"
-print("Guardrail NLTK data ready:", destination, tokens)
-PY
-```
-
-Keep `NLTK_DATA` exported when starting the server below. Repeat this setup
-after recreating the container or removing the temporary directory. Running it
-only in the client notebook's environment does not configure a remote server.
-This workaround does not rewrite cached files or symlinks, and keeps NLTK
-path security and `use_guardrails=True` enabled.
-
-The separate `No safety models found, returning safe` warning in guardrail
-0.3.0 refers to its intentionally empty video-content classifier list. Text
-checks and face blurring remain configured; the NLTK workaround does not enable
-video-content classification or suppress that warning.
+`cosmos_guardrail` 0.3.2 copies its NLTK data out of the Hugging Face cache
+on first use, so the server needs no separate NLTK data setup. Its
+`No safety models found, returning safe` warning refers to the intentionally
+empty video-content classifier list; text checks and face blurring remain
+configured.
 
 Set the TensorRT-LLM source root for the shared VisualGen config YAMLs. Run this
 from inside the TensorRT-LLM checkout — the directory the `git clone` above
@@ -345,7 +314,7 @@ both out of the request. `Cosmos3-Super-Image2Video-4Step` also declares
 `use_system_prompt` unset. The text-to-image student deploys at 1024x1024, the
 shape `cosmos3-t2i-1gpu.yaml` warms; the image-to-video student deploys at the
 default 720p x 189-frame omni shape and needs no config file. The
-[distilled 4-step notebook](generator/audiovisual/run_distilled_with_trt_llm.ipynb)
+[distilled 4-step reference](../../cosmos3-generate-media/references/distilled-trt-llm.md)
 runs both against a running server. These students cover text-to-image and
 image-to-video only; use the base checkpoints for text-to-video, video-to-video,
 and synchronized audio.
@@ -433,6 +402,54 @@ The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
 [Reasoner TensorRT-LLM notebook](reasoner/run_with_tensorrt_llm.ipynb) for image
 and video requests.
+
+
+## TensorRT-Edge-LLM
+
+On-device **TensorRT** path for **Cosmos3-Edge** multimodal reasoning and
+**Cosmos3-Edge-Policy-DROID** policy generation. This is a different stack from
+[TensorRT-LLM Reasoner](#tensorrt-llm-reasoner) / [Generator](#tensorrt-llm-generator).
+Reasoning exports ONNX, then builds engines on the target (Jetson Thor/Orin,
+DRIVE, DGX Spark, or an x86 developer build). Policy on v0.11.0 builds engines
+with the direct builder.
+
+Use [TensorRT-Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM) **v0.11.0**.
+Complete the upstream
+[Installation](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/installation.html)
+guide first (Python package on the host; C++ runtime on the device).
+
+Policy examples need `-DBUILD_EXPERIMENTAL_MODELS=ON` so
+`cosmos3_policy_inference` exists, and `-DENABLE_CUTE_DSL=ALL` for
+[`tensorrt-edgellm-build`](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/direct-engine-builder.html).
+v0.11.0 `tensorrt-edgellm-export --task policy` writes `attention_pos_id` and
+VAE `height` / `width` only. The v0.11.0 runtime binds `attention_position_ids`
+and reads `builder_config.content_height` / `content_width`. The direct builder
+writes that contract. `cosmos3_policy_inference` in this tag accepts
+`--viewPoint concat_view`.
+
+Set a workspace and the Edge checkpoints. `EDGELLM_ROOT` matches the notebook
+default:
+
+```bash
+export EDGELLM_ROOT="${EDGELLM_ROOT:-$HOME/TensorRT-Edge-LLM}"
+export POLICY_CHECKPOINT=nvidia/Cosmos3-Edge-Policy-DROID
+export REASONING_CHECKPOINT=nvidia/Cosmos3-Edge
+export ONNX_DIR="${ONNX_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/onnx}"
+export ENGINE_DIR="${ENGINE_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/engines}"
+```
+
+Runnable cookbooks:
+
+- Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](reasoner/run_with_trt_edge_llm.ipynb)
+  (engines under `$ENGINE_DIR/reasoning`)
+- Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](generator/action/run_policy_with_trt_edge_llm.ipynb)
+  (engines under `$ENGINE_DIR/policy`)
+
+Upstream references:
+[Cosmos3-Edge VLA guide](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/examples/vla/cosmos3.html)
+for reasoning, and the
+[direct engine builder](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/direct-engine-builder.html)
+for policy.
 
 ## Transformers
 

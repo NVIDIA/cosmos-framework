@@ -40,13 +40,16 @@ from cosmos_framework.configs.base.defaults.activation_checkpointing import Acti
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import (
     _PACK_DYNAMIC_LEN_KEYS,
+    ContextParallelDispatch,
     _mark_pack_unbacked,
     _wrap_forward_with_unbacked_pack,
     apply_compile,
+    apply_cp,
     apply_fsdp,
     materialize_non_offloaded_state,
     parallelize_unified_mot,
 )
+from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
@@ -270,6 +273,43 @@ class TestMarkUnbackedFlag:
         # context-parallel config goes through, so it is opted into per configuration after
         # verifying that configuration compiles under it. See CompileConfig.mark_unbacked.
         assert CompileConfig().mark_unbacked is False
+
+
+class TestContextParallelHeads:
+    @staticmethod
+    def _model_with_query_heads(num_heads: int) -> torch.nn.Module:
+        attention = torch.nn.Module()
+        attention.num_attention_heads = num_heads
+        attention.dispatch_attention_fn = torch.nn.Identity()
+        block = torch.nn.Module()
+        block.self_attn = attention
+        inner = torch.nn.Module()
+        inner.layers = torch.nn.ModuleList([block])
+        model = torch.nn.Module()
+        model.model = inner
+        return model
+
+    @pytest.mark.parametrize("cp", [32, 64])
+    def test_accepts_cp_dividing_query_heads(self, cp: int) -> None:
+        model = self._model_with_query_heads(64)
+        parallel_dims = ParallelDims(world_size=128, dp_shard=128, cp=cp)
+        parallel_dims._meshes["cp"] = object()
+        original_dispatch = model.model.layers[0].self_attn.dispatch_attention_fn
+
+        assert apply_cp(model, parallel_dims) is model
+
+        dispatch = model.model.layers[0].self_attn.dispatch_attention_fn
+        assert isinstance(dispatch, ContextParallelDispatch)
+        assert dispatch.cp_mesh is parallel_dims.cp_mesh
+        assert dispatch.wrapped_dispatch is original_dispatch
+
+    @pytest.mark.parametrize(("num_heads", "cp"), [(32, 64), (48, 32)])
+    def test_rejects_cp_not_dividing_query_heads(self, num_heads: int, cp: int) -> None:
+        model = self._model_with_query_heads(num_heads)
+        parallel_dims = ParallelDims(world_size=128, dp_shard=128, cp=cp)
+
+        with pytest.raises(ValueError, match="Query heads .* must be divisible by CP"):
+            apply_cp(model, parallel_dims)
 
 
 class TestFSDPCPUOffload:

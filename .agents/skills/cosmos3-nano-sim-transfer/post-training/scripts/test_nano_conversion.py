@@ -219,7 +219,7 @@ class ConversionReceiptTest(unittest.TestCase):
         self.run_fixture_conversion()
         receipt_path = self.output / prep.RECEIPT
         receipt = json.loads(receipt_path.read_text())
-        receipt["identity"]["converter"]["revision"] = "573d46507dcd91155d7f371b366da760a7a5f718"
+        receipt["identity"]["converter"]["revision"] = "0123456789abcdef0123456789abcdef01234567"
         del receipt["runtime"]["framework_revision"]
         receipt_path.write_text(json.dumps(receipt))
         prep.verify(self.output)

@@ -195,6 +195,7 @@ def pack_input_sequence_autoregressive(
     vision_temporal_positions: torch.Tensor | None = None,
     num_views: int | None = None,
     text_view_ids: list[int] | None = None,
+    vision_view_ids: torch.Tensor | None = None,  # [V] physical camera IDs, or [-1] for non-rig RGB
 ) -> PackedSequence:
     """
     Pack input sequence for autoregressive video generation (one AR unit at a time).
@@ -267,6 +268,8 @@ def pack_input_sequence_autoregressive(
             axis. Required by multiview FlexAttention metadata.
         text_view_ids: Camera-view ID for every entry in a nested ``text_tokens``
             payload. ``None`` keeps one sample-level caption visible to all views.
+        vision_view_ids: Physical RGB camera IDs, independent of caption-local
+            view IDs. A singleton -1 denotes non-rig video.
 
     Returns:
         Finalized PackedSequence containing the supertoken(s) for this AR unit
@@ -415,6 +418,7 @@ def pack_input_sequence_autoregressive(
         action_domain_id=action_domain_id_list,
         raw_action_dim=raw_action_dim_list,
         num_views_per_vision_item=[num_views] if num_views is not None else None,
+        vision_view_ids=[vision_view_ids] if vision_view_ids is not None else None,
     )
 
     # Prepare text indexes

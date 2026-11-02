@@ -26,6 +26,7 @@ EmbodimentMappings: dict[Embodiment, str] = {
 }
 
 ViewComposition = Literal[
+    "separate_camera_views",
     "front",
     "above",
     "third_person",
@@ -40,6 +41,7 @@ ViewComposition = Literal[
     "above_over_side_third_person",
 ]
 ViewCompositionMappings: dict[ViewComposition, str] = {
+    "separate_camera_views": "The synchronized camera views are encoded separately, in a fixed camera order.",
     "front": "This video is captured from a dynamic front-facing perspective looking at the scene.",
     "above": "This video is captured from a third-person perspective looking towards the agent from above.",
     "third_person": "This video is captured from a third-person perspective looking towards the robot.",
@@ -56,6 +58,9 @@ ViewCompositionMappings: dict[ViewComposition, str] = {
 
 CaptionSubject = Literal[
     "camera_ego_pose",
+    "right_wrist_camera",
+    "dual_wrist_cameras",
+    "ego_and_dual_wrist_cameras",
     "vehicle_ego_pose",
     "right_arm_end_effector",
     "right_arm_attachment_site_end_effector",
@@ -69,6 +74,18 @@ CaptionSubject = Literal[
     "human_head_wrists_and_fingertips",
 ]
 CaptionSubjectMappings: dict[CaptionSubject, str] = {
+    "right_wrist_camera": (
+        "The action target is the wrist-mounted camera motion and gripper openness, "
+        "mapped to the right wrist-pose and right-openness components."
+    ),
+    "dual_wrist_cameras": (
+        "The action targets are the right and left wrist-mounted camera motions and gripper openness, "
+        "mapped to the right and left wrist-pose and openness components."
+    ),
+    "ego_and_dual_wrist_cameras": (
+        "The action targets are the head ego motion, right and left wrist-mounted camera motions, and "
+        "gripper openness, mapped to the ego-pose, right and left wrist-pose and openness components."
+    ),
     "dual_arm_joint_positions": (
         "The action performed by the robot is defined as the joint positions of its left and right arms "
         "and both grippers' positions."

@@ -8,8 +8,8 @@ import random
 from collections.abc import Mapping, Sequence
 from typing import Optional
 
-from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.data.imaginaire.webdataset.augmentors.v3_text_transforms import pad_and_resize
+from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 
 

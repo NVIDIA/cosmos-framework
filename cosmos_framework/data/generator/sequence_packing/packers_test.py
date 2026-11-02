@@ -18,6 +18,32 @@ from cosmos_framework.data.generator.sequence_packing.sequence import SequencePl
 
 @pytest.mark.L0
 @pytest.mark.CPU
+@pytest.mark.parametrize("view_id", [-1, 8])
+@pytest.mark.parametrize("frame_idx", [0, 2])
+def test_autoregressive_pack_preserves_physical_view_identity(view_id: int, frame_idx: int) -> None:
+    from cosmos_framework.data.generator.sequence_packing.autoregressive import pack_input_sequence_autoregressive
+
+    ids = torch.tensor([view_id])  # [V]
+    packed = pack_input_sequence_autoregressive(
+        vision_latent=torch.zeros(1, 4, 1, 2, 2),  # [B,C,T,H,W]
+        action_latent=None,
+        text_tokens=[1, 2] if frame_idx == 0 else None,
+        timestep=0.0,
+        fps_vision=[24.0],
+        fps_action=None,
+        special_tokens={"eos_token_id": 3, "start_of_generation": 4, "end_of_generation": 5},
+        frame_idx=frame_idx,
+        cached_text_offset=None if frame_idx == 0 else 4,
+        vision_view_ids=ids,
+    )
+
+    assert packed.vision_view_ids is not None
+    assert len(packed.vision_view_ids) == 1
+    torch.testing.assert_close(packed.vision_view_ids[0], ids)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 @pytest.mark.parametrize("fps", [None, 0.0, -1.0, float("nan"), float("inf"), -float("inf")])
 @pytest.mark.parametrize(
     "num_items,views_per_item,separate_camera_items",

@@ -53,7 +53,7 @@ _RESERVED = (
 )
 _TEXT_TYPES = {"qwen2", "qwen2_moe", "qwen3", "qwen3_moe"}
 # Families whose checkpoints ship ``Qwen3VLProcessor``: dense Qwen3.5/3.8 (trained through the HF
-# backend) and Qwen3-VL / Qwen3-VL-MoE (trained through the i4-native policy seat, ``model/qwen3_vl.py``;
+# backend) and Qwen3-VL / Qwen3-VL-MoE (trained through the native policy seat, ``model/qwen3_vl.py``;
 # the HF backend still refuses MoE VLMs at ``model/hf.py::_is_moe_vlm``). Other VLM families need
 # their own qualification before they are listed here.
 _VLM_TYPES = {"qwen3_5", "qwen3_vl", "qwen3_vl_moe"}
@@ -66,7 +66,7 @@ SUPERVISE_CONTRACTS = {
     SFT_SUPERVISE_ALL: "qwen_chatml_all_assistant_bodies_and_end_v2",
     SFT_SUPERVISE_LAST: "qwen_chatml_last_assistant_body_and_end_v1",
 }
-# The per-row opener rule's suffix (row rule R4, fix round T6c): ``opener="prefilled"`` masks the first ``<think>`` token of
+# The per-row opener rule's suffix (row rule R4): ``opener="prefilled"`` masks the first ``<think>`` token of
 # every supervised assistant block of that row, the rule the run-level ``mask_think_opener`` applies to every row; the
 # run-level knob stays in the packer identity, the row's rule in its contract string.
 OPENER_CONTRACT_SUFFIXES = {SFT_OPENER_SELF: "", SFT_OPENER_PREFILLED: "_opener_prefilled_v1"}
@@ -182,7 +182,7 @@ class QwenSFTDataPacker(DataPacker):
         self.processor: Any = processor
         self.max_length: int = max_length
         self.processor_kwargs: dict[str, Any] = deepcopy(processor_kwargs or {})
-        # The ``<think>`` opener rule (review R125-D-01 knob 7; reviews R134-01 / R134-02, corrected by review R138-01):
+        # The ``<think>`` opener rule:
         # when on, the token that opens an assistant body receives no loss, and only that token. On the lab's serving
         # path of record the server prefills NO opener: Codex ``--thinking high`` sends ``reasoning.effort`` AND a tools
         # array on every call, and with tools present vLLM 0.24 appends ``<|im_start|>assistant\n`` and nothing more
@@ -200,10 +200,9 @@ class QwenSFTDataPacker(DataPacker):
         # the A1a deployment, 2026-10-02, outside the repo; primary pointer vLLM 0.24 ``reasoning/basic_parsers.py``
         # 173-181: ``extract_reasoning`` returns all-reasoning only when ``</think>`` is absent) section 3's measured
         # trigger, an output that carries no ``</think>`` is returned as reasoning in full, tool-call turns unaffected,
-        # while the closer stays supervised;
-        # review R142-01), and fits only a serve that prefills the opener, where that loss is one deterministic token
+        # while the closer stays supervised), and fits only a serve that prefills the opener, where that loss is one deterministic token
         # per turn (the run declares that serve through the typed field ``rl.serve_contract=prefills_opener``, the only
-        # contract under which ``SFTConfig`` accepts the mask; review R142-04, review threads b196e5e99f / 12f2ce563b).
+        # contract under which ``SFTConfig`` accepts the mask).
         self.mask_think_opener: bool = bool(mask_think_opener)
         vocab = tokenizer.get_vocab()
         self._think_id: int | None = vocab.get("<think>") if "</think>" in vocab else None
@@ -369,11 +368,11 @@ class QwenSFTDataPacker(DataPacker):
     @staticmethod
     def _refuse_history_reasoning(messages: list[dict[str, Any]]) -> None:
         """``supervise="last_assistant"``: every history assistant turn (every assistant turn but the last) must carry no
-        reasoning. The processor template renders a non-empty ``reasoning_content`` as a think block (250 vs 236 ids on
-        review round 151's probe) while the default serve's prefix has none, and it strips an exact ``<think></think>``
+        reasoning. The processor template renders a non-empty ``reasoning_content`` as a think block (250 vs 236 ids in
+        a probe) while the default serve's prefix has none, and it strips an exact ``<think></think>``
         content prefix the tokenizer template keeps; a content opening with any ``<think>`` block never appears in a
         served history (the serve's reasoning parser removed the think text from what the harness replays). The row's
-        prefix would otherwise not be the served prefix (review R151-04). Refused, not warned: a warning in a training
+        prefix would otherwise not be the served prefix. Refused, not warned: a warning in a training
         log stops no launch. ``all_assistant`` rows are untouched."""
         last = max(index for index, message in enumerate(messages) if message["role"] == "assistant")
         for index, message in enumerate(messages[:last]):
@@ -562,7 +561,7 @@ class QwenSFTDataPacker(DataPacker):
         # One rule for the run-level knob and the row's own ``opener`` field (row rule R4: the prefilled slice shares the row
         # files with the self rows): the first <think> token of every supervised assistant block carries no loss; applied
         # once, so a row that sets both is not masked twice. A prefilled ROW must have had exactly one opener removed in
-        # every supervised block, or it is refused (review R149-01): its contract string is recorded only when the masking
+        # every supervised block, or it is refused: its contract string is recorded only when the masking
         # happened. The run-level knob on a bare block masks nothing and refuses nothing (the knob is the run's variant,
         # recorded in the packer identity, not the row's contract).
         if self.mask_think_opener or sample.opener == SFT_OPENER_PREFILLED:
@@ -589,7 +588,7 @@ class QwenSFTDataPacker(DataPacker):
         assistant_blocks: list[re.Match[str]],
         supervised: list[int],
     ) -> None:
-        """``opener="prefilled"`` (review R149-01, fix round T6d): the opener mask must have removed exactly one id in EVERY
+        """``opener="prefilled"``: the opener mask must have removed exactly one id in EVERY
         supervised assistant block of the row. A supervised block without a ``<think>`` opener (a bare turn) would otherwise
         be packed as a self row under a ``_opener_prefilled_v1`` contract string. The removed positions are assigned to
         blocks by their character offsets in the expanded stream; the refusal names the bare blocks (indices among the
@@ -616,9 +615,9 @@ class QwenSFTDataPacker(DataPacker):
         """Unsupervise the ``<think>`` token that opens an assistant body (the first supervised token after an ignored
         one) and nothing else (applied for the run-level ``mask_think_opener`` or for a row whose ``opener`` is
         ``prefilled``, row rule R4; one rule, applied once): the tokens after it -- reasoning text, a second ``<think>``, or
-        the closer of an empty block -- stay supervised. This fits only a serve that prefills the opener (a request without tools; review R138-01): on the
+        the closer of an empty block -- stay supervised. This fits only a serve that prefills the opener (a request without tools): on the
         serving path of record (tools present) vLLM 0.24 prefills nothing after ``<|im_start|>assistant\n``, the
-        student must emit the opener itself, and the default keeps it supervised. (Review R134-02: the earlier rule
+        student must emit the opener itself, and the default keeps it supervised. (The earlier rule
         also masked an empty ``<think>`` + newline + ``</think>`` block token for token as Nemo-Chat does; its newline
         was ``encode("\n")``, so under the exporter's ``<think>\n\n</think>\n\n`` rendering, where ``\n\n`` is ONE
         token, it masked only the opener, while under a single-newline rendering it masked the closer the student has
@@ -626,8 +625,7 @@ class QwenSFTDataPacker(DataPacker):
         assert self._think_id is not None
         # The boundary is read from the ORIGINAL labels, never from ``out``: a body that begins with two consecutive
         # openers (``<think><think>``) masks its first token only. Reading ``out`` made the first masked opener an
-        # ignored neighbour of the second, which then satisfied the boundary test and was masked too (review thread
-        # 19bf3c650f; probe: labels [-100, T, T, 7] -> [-100, -100, -100, 7] before, [-100, -100, T, 7] now).
+        # ignored neighbour of the second, which then satisfied the boundary test and was masked too (probe: labels [-100, T, T, 7] -> [-100, -100, -100, 7] before, [-100, -100, T, 7] now).
         out = list(labels)
         for pos, token in enumerate(ids):
             if token == self._think_id and labels[pos] != _IGNORE and (pos == 0 or labels[pos - 1] == _IGNORE):
@@ -665,7 +663,7 @@ class QwenSFTDataPacker(DataPacker):
             # int64 0/1, main's collator contract (tests/test_model_qwen3_vl.py::test_native_causal_mask_accepts_sft_padding_masks
             # pins it): the native eager mask path (model/qwen3_vl.py::_qwen3_vl_causal_mask) casts a 2-D mask to bool
             # before eager_mask / torch.where, HF models and the SFT objective's 0/1 check accept it. (This branch emitted
-            # torch.bool for that path before main grew the cast; the two met at the rebase of fix round 1.)
+            # torch.bool for that path before main grew the cast; the two met at the rebase.)
             "attention_mask": torch.tensor(masks, dtype=torch.long),  # [B,L]
         }
         side_inputs = [sample.mm_kwargs or {} for sample in sub_batch]

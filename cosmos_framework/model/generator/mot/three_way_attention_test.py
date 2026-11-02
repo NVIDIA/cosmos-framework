@@ -1179,17 +1179,11 @@ def test_attention_empty_varlen_self_attention_returns_zero(dtype: torch.dtype):
     ``[0, 0]``) but padded to a fixed buffer size should return a zero
     output, not NaN.
 
-    Mirrors the text self-attention call inside
-    ``three_way_attention_with_memory`` when no caption is present:
-    Q / K / V come from the pack's ``causal_seq`` slot (padded to a
-    constant length for compile stability), and ``text_kv_offsets`` is
-    ``[0, 0]`` (or, if ``clamp_empty_varlen_kv`` is True, ``[0, 1]`` —
-    this test pins the unclamped case).  The output is passed straight
-    to ``from_mode_splits``; positions beyond the real range are
-    discarded, but they must be *zero*, not NaN, to avoid contaminating
-    downstream tensors.  The LSE is not requested here — the text SA
-    output does not feed ``merge_attentions``, so its LSE value is
-    irrelevant.
+    This checks the raw attention kernel's empty-range contract.
+    Production text self-attention in ``three_way_attention_with_memory``
+    instead evaluates padded queries against at least one KV row, then
+    masks padded outputs to avoid uninitialized backward workspace.
+    The LSE is not requested here; this test only checks the output.
     """
 
     device = torch.device("cuda")

@@ -21,6 +21,7 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     CAPTION_SCOPE_NONE,
     CAPTION_SCOPE_SAME_VIEW,
     AttentionScope,
+    BackendPreference,
     CrossViewTemporalWindowConfig,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
@@ -2972,21 +2973,112 @@ def test_exact_windowed_cross_view_pass_over_an_action_pack_matches_the_flex_mas
     assert not cross[action_rows].any() and not cross[:, action_rows].any()
 
 
+def _cross_view_counts(plan) -> torch.Tensor:  # [N_gen,N_gen]
+    cross = torch.zeros((plan.num_gen_tokens, plan.num_gen_tokens), dtype=torch.int64)
+    for partition in plan.cross_view_partitions:
+        for qs, qe, ks, ke in zip(
+            partition.query_offsets[:-1],
+            partition.query_offsets[1:],
+            partition.key_offsets[:-1],
+            partition.key_offsets[1:],
+            strict=True,
+        ):
+            queries = partition.query_indices[int(qs) : int(qe)]
+            keys = partition.key_indices[int(ks) : int(ke)]
+            cross[queries[:, None], keys] += 1
+    return cross
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("include_first_frame", [False, True])
+@pytest.mark.parametrize(("attends_action", "action_attends_action"), [(True, False), (False, True), (True, True)])
+def test_cross_view_action_tokens_join_other_views_by_capture_time(
+    include_first_frame: bool, attends_action: bool, action_attends_action: bool
+) -> None:
+    """Action rows join the cross-view pass by capture time, from video frame 1, under either flag.
+
+    ``attends_action`` makes them keys of the other views' camera queries; ``action_attends_action``
+    makes them queries keyed by the other views' action rows alone. Neither changes what a camera
+    query reads of vision, and an action query never reads vision. No action row sits at capture
+    time 0, so the first-frame rule adds the other views' vision frame 0 alone and no action row.
+    """
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    # Latent frames 4 video frames apart at 30 fps; one action row per video frame.
+    assert pack.vision is not None and pack.action is not None
+    pack.vision.seconds_per_frame = [4 / 30, 4 / 30]
+    pack.vision.seconds_per_frame_known = [True, True]
+    pack.action.seconds_per_frame = [1 / 30]
+    pack.action.seconds_per_frame_known = [True]
+    # A window just over one video frame: the latent frame at 0 s reaches action row 0 (video
+    # frame 1), the one at 4/30 s reaches row 2 (video frame 3), and an action row reaches its
+    # neighbouring rows.
+    options = dict(
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(
+            bounds=(-0.04, 0.04), includes_first_frame=include_first_frame
+        ),
+    )
+    baseline = _cross_view_counts(_multiview_maskless_geometry_for_test(pack, **options))
+    plan = _multiview_maskless_geometry_for_test(
+        pack,
+        cross_view_attends_action=attends_action,
+        cross_view_action_attends_action=action_attends_action,
+        **options,
+    )
+    cross = _cross_view_counts(plan)
+
+    assert plan.is_control == (False, False, True)
+    assert int(cross.max()) <= 1, "A query keys each token at most once per pass."
+    # Sample 1 packs vision view 0 at 4:6, view 1 at 6:8, then action rows view 0 at 8:11 and
+    # view 1 at 11:14.
+    assert torch.equal(cross[:, :8], baseline[:, :8]), "Vision keys are unchanged."
+    vision_to_action = torch.zeros((8, 6), dtype=torch.int64)
+    if attends_action:
+        vision_to_action[4, 3] = vision_to_action[5, 5] = vision_to_action[6, 0] = vision_to_action[7, 2] = 1
+    assert torch.equal(cross[:8, 8:], vision_to_action)
+    rows = torch.arange(3)
+    near = ((rows[:, None] - rows[None, :]).abs() <= 1).long()  # [3,3], rows within one video frame
+    action_to_action = torch.zeros((6, 6), dtype=torch.int64)
+    if action_attends_action:
+        action_to_action[:3, 3:] = action_to_action[3:, :3] = near
+    assert torch.equal(cross[8:, 8:], action_to_action)
+    assert not cross[8:, :8].any(), "Action queries never key vision in the cross-view pass."
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("flag", ["cross_view_attends_action", "cross_view_action_attends_action"])
+def test_cross_view_action_flags_need_a_known_action_clock(flag: str) -> None:
+    pack = _mask_items_partly_posed_action_pack(num_views=2)
+    with pytest.raises(ValueError, match="carries no action fps"):
+        _multiview_maskless_geometry_for_test(
+            pack,
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=(-0.67, 0.67)),
+            **{flag: True},
+        )
+
+
 @pytest.mark.L0
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "num_views,with_action,control_attends_sensor,takes_folds",
+    "num_views,with_action,control_attends_sensor,with_view_metadata,sensor_window",
     [
-        # One view per item: the folds reduce to attention within the sample, so dense serves it.
-        pytest.param(1, False, False, False, id="single_camera"),
-        pytest.param(1, True, True, False, id="single_camera_action_reads_vision"),
+        # Metadata marks the multiview pathway even when every item has just one view.
+        pytest.param(1, False, False, True, None, id="single_camera"),
+        pytest.param(1, True, True, True, None, id="single_camera_action_reads_vision"),
         # Off the flag an action query may not read its camera, which dense would let it.
-        pytest.param(1, True, False, True, id="single_camera_action_withheld_from_vision"),
-        pytest.param(2, True, True, True, id="multiview"),
+        pytest.param(1, True, False, True, None, id="single_camera_action_withheld_from_vision"),
+        pytest.param(2, True, True, True, None, id="multiview"),
+        pytest.param(1, True, False, False, None, id="untagged_action_keeps_two_way"),
+        pytest.param(1, False, False, True, (-1, 0), id="single_camera_same_view_window"),
     ],
 )
-def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
-    num_views: int, with_action: bool, control_attends_sensor: bool, takes_folds: bool
+def test_multiview_routing_uses_camera_metadata(
+    num_views: int,
+    with_action: bool,
+    control_attends_sensor: bool,
+    with_view_metadata: bool,
+    sensor_window: tuple[int, int] | None,
 ) -> None:
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
     from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
@@ -2997,6 +3089,9 @@ def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
         pack.num_views_per_action_item = None
         pack.num_action_items_per_sample = None
         pack.sample_lens = [2 * num_views, 2 * num_views]
+    if not with_view_metadata:
+        pack.num_views_per_vision_item = None
+        pack.num_views_per_action_item = None
     network = SimpleNamespace(
         multiview_backend="maskless",
         natten_parameter_list=None,
@@ -3008,6 +3103,7 @@ def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
                 mask=MultiviewAttentionMaskConfig(
                     attention_scope="decomposed",
                     control_attends_sensor=control_attends_sensor,
+                    same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_sensor_bounds=sensor_window),
                 ),
             )
         ),
@@ -3018,31 +3114,120 @@ def test_maskless_runs_send_only_exactly_dense_packs_to_dense_attention(
         if modality is not None
         for token_shape in modality.token_shapes
     )
-    attention_meta = SimpleNamespace(multiview_maskless=None)
+    attention_meta = SimpleNamespace(multiview_maskless=None, flex_block_mask=None)
+    full_only_seq = torch.zeros(num_gen_tokens, 1)  # [N_gen,1]
 
     Cosmos3VFMNetwork._prepare_multiview_attention(
         cast(Cosmos3VFMNetwork, network),
         pack,
-        cast(SequencePack, {"full_only_seq": torch.zeros(num_gen_tokens, 1)}),
+        cast(SequencePack, {"full_only_seq": full_only_seq}),
         cast(SplitInfo, attention_meta),
     )
 
-    assert (attention_meta.multiview_maskless is not None) is takes_folds
+    plan = attention_meta.multiview_maskless
+    assert (plan is not None) is with_view_metadata
+    if plan is not None:
+        assert plan.control_attends_sensor is control_attends_sensor
+        assert plan.sensor_to_sensor_window == sensor_window
+        if with_action:
+            assert plan.is_control[-1]
+        if sensor_window is not None:
+            assert plan.neighborhood_layout == (2, 1, 1)
+            assert plan.sensor_gather.tolist() == [0, 1, 2, 3]
+    else:
+        assert attention_meta.flex_block_mask is None
 
 
 @pytest.mark.L0
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "control_attends_sensor,takes_folds",
-    [pytest.param(True, False, id="dense"), pytest.param(False, True, id="folds")],
+    "backend,num_views,control_stream,with_view_metadata,control_attends_sensor",
+    [
+        pytest.param("maskless", 1, "action", False, False, id="untagged_sound_action_maskless"),
+        pytest.param("flex_triton", 1, "action", False, False, id="untagged_sound_action_flex"),
+        pytest.param("maskless", 1, "vision", False, False, id="untagged_sound_vision_control"),
+        pytest.param("maskless", 1, "none", False, False, id="untagged_plain_sound_maskless"),
+        pytest.param("flex_triton", 1, "none", False, False, id="untagged_plain_sound_flex"),
+        pytest.param("maskless", 1, "none", True, True, id="tagged_single_camera_sound_maskless"),
+        pytest.param("flex_triton", 1, "none", True, False, id="tagged_single_camera_sound_flex"),
+        pytest.param("maskless", 2, "none", True, True, id="tagged_multiview_sound"),
+    ],
 )
-def test_maskless_per_camera_prope_single_camera_packs_need_no_poses(
-    control_attends_sensor: bool, takes_folds: bool
+def test_multiview_sound_routing_uses_camera_metadata(
+    backend: BackendPreference,
+    num_views: int,
+    control_stream: str,
+    with_view_metadata: bool,
+    control_attends_sensor: bool,
 ) -> None:
+    """A standard batch can pack sound and actions from different single-camera samples.
+
+    The sound stream belongs to the first sample and any action stream to the second.
+    Untagged samples retain their original two-way attention regardless of multiview
+    control settings. Any pack tagged with sensor metadata must reject sound.
+    """
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
+
+    if control_stream == "vision":
+        pack = _mask_items_pack(num_views=num_views, with_lidar=False)
+        pack.sample_lens = [4 * num_views]
+    else:
+        pack = _mask_items_partly_posed_action_pack(num_views=num_views)
+        if control_stream == "none":
+            pack.action = None
+            pack.num_action_items_per_sample = None
+            pack.num_views_per_action_item = None
+            pack.sample_lens = [2 * num_views, 2 * num_views]
+    if not with_view_metadata:
+        # Ordinary single-view streams do not carry per-camera view metadata.
+        pack.num_views_per_vision_item = None
+        pack.num_views_per_action_item = None
+    pack.sound = ModalityData(
+        tokens=[torch.zeros(1, 3)],  # list[[C,T_sound]]
+        token_shapes=[(3, 1, 1)],
+        condition_mask=[torch.zeros(3)],  # list[[T_sound]]
+        seconds_per_frame=[1.0],
+    )
+    pack.sample_lens[0] += 3
+    pack.modality_sample_ids["sound"] = [0]
+    network = SimpleNamespace(
+        multiview_backend=backend,
+        natten_parameter_list=None,
+        config=SimpleNamespace(
+            multiview_attention_config=MultiviewAttentionConfig(
+                backend=backend,
+                mask=MultiviewAttentionMaskConfig(
+                    attention_scope="decomposed",
+                    control_attends_sensor=control_attends_sensor,
+                ),
+            )
+        ),
+    )
+    attention_meta = SimpleNamespace(multiview_maskless=None, flex_block_mask=None)
+    full_only_seq = torch.zeros(sum(pack.sample_lens), 1)  # [N_gen,1]
+    expected = pytest.raises(ValueError, match="sound") if with_view_metadata else contextlib.nullcontext()
+
+    with expected:
+        Cosmos3VFMNetwork._prepare_multiview_attention(
+            cast(Cosmos3VFMNetwork, network),
+            pack,
+            cast(SequencePack, {"full_only_seq": full_only_seq}),
+            cast(SplitInfo, attention_meta),
+        )
+
+    assert attention_meta.multiview_maskless is None
+    assert attention_meta.flex_block_mask is None
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+def test_maskless_per_camera_prope_single_camera_packs_need_no_poses(control_attends_sensor: bool) -> None:
     """Per-camera PRoPE acts only between cameras, so a single-camera pack carries no poses.
 
-    The model gives single-camera items no poses. Such a pack takes the dense shortcut when
-    it may, and otherwise the folds, without failing the multiview geometry check.
+    The model gives single-camera items no poses. Metadata still routes such a pack through
+    the folds without failing the multiview geometry check.
     """
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
     from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
@@ -3076,33 +3261,33 @@ def test_maskless_per_camera_prope_single_camera_packs_need_no_poses(
         ),
     )
     attention_meta = SimpleNamespace(multiview_maskless=None)
+    full_only_seq = torch.zeros(2 * 6 * 2 * 3, 1)  # [N_gen,1]
 
     Cosmos3VFMNetwork._prepare_multiview_attention(
         cast(Cosmos3VFMNetwork, network),
         pack,
-        cast(SequencePack, {"full_only_seq": torch.zeros(2 * 6 * 2 * 3, 1)}),
+        cast(SequencePack, {"full_only_seq": full_only_seq}),
         cast(SplitInfo, attention_meta),
     )
 
-    assert (attention_meta.multiview_maskless is not None) is takes_folds
-    if takes_folds:
-        assert attention_meta.multiview_maskless.camera_relative_pose is None
+    assert attention_meta.multiview_maskless is not None
+    assert attention_meta.multiview_maskless.camera_relative_pose is None
 
 
 @pytest.mark.L0
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "control_attends_sensor,sensor_window,takes_folds",
+    "control_attends_sensor,sensor_window",
     [
-        pytest.param(True, None, False, id="control_reads_target"),
+        pytest.param(True, None, id="control_reads_target"),
         # Off the flag the camera control may not read its target, which dense would let it.
-        pytest.param(False, None, True, id="control_withheld_from_target"),
+        pytest.param(False, None, id="control_withheld_from_target"),
         # Even with controls readable, a causal sensor window excludes future target frames.
-        pytest.param(True, (-2, 0), True, id="causal_sensor_window"),
+        pytest.param(True, (-2, 0), id="causal_sensor_window"),
     ],
 )
-def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_reads_the_target(
-    control_attends_sensor: bool, sensor_window: tuple[int, int] | None, takes_folds: bool
+def test_maskless_single_camera_transfer_pack_preserves_control_visibility(
+    control_attends_sensor: bool, sensor_window: tuple[int, int] | None
 ) -> None:
     """A camera item conditioning the next one is a control even without an action stream."""
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
@@ -3136,17 +3321,62 @@ def test_maskless_single_camera_transfer_pack_goes_dense_only_when_its_control_r
         ),
     )
     attention_meta = SimpleNamespace(multiview_maskless=None)
+    full_only_seq = torch.zeros(2 * 6 * 2 * 3, 1)  # [N_gen,1]
 
     Cosmos3VFMNetwork._prepare_multiview_attention(
         cast(Cosmos3VFMNetwork, network),
         pack,
-        cast(SequencePack, {"full_only_seq": torch.zeros(2 * 6 * 2 * 3, 1)}),
+        cast(SequencePack, {"full_only_seq": full_only_seq}),
         cast(SplitInfo, attention_meta),
     )
 
-    assert (attention_meta.multiview_maskless is not None) is takes_folds
-    if attention_meta.multiview_maskless is not None:
-        assert attention_meta.multiview_maskless.sensor_to_sensor_window == sensor_window
+    assert attention_meta.multiview_maskless is not None
+    assert attention_meta.multiview_maskless.control_attends_sensor is control_attends_sensor
+    assert attention_meta.multiview_maskless.is_control == (True, False)
+    assert attention_meta.multiview_maskless.sensor_to_sensor_window == sensor_window
+
+
+@pytest.mark.L0
+@torch.no_grad()
+@pytest.mark.parametrize("sensor", ["lidar", "radar"])
+def test_multiview_routing_uses_range_sensor_metadata_without_camera_metadata(sensor: str) -> None:
+    """Either range sensor's item counts opt the pack into multiview attention on their own."""
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork
+
+    stream = _lidar_stream([(3, 1, 1)])
+    pack = PackedSequence(
+        sample_lens=[3],
+        lidar=stream if sensor == "lidar" else None,
+        radar=stream if sensor == "radar" else None,
+        num_lidar_items_per_sample=[1] if sensor == "lidar" else None,
+        num_radar_items_per_sample=[1] if sensor == "radar" else None,
+    )
+    network = SimpleNamespace(
+        multiview_backend="maskless",
+        natten_parameter_list=None,
+        rigrope=None,
+        _rigrope_head_masks=lambda device: None,
+        config=SimpleNamespace(
+            multiview_attention_config=MultiviewAttentionConfig(
+                backend="maskless",
+                mask=MultiviewAttentionMaskConfig(attention_scope="decomposed"),
+            )
+        ),
+    )
+    attention_meta = SimpleNamespace(multiview_maskless=None)
+    full_only_seq = torch.zeros(3, 1)  # [N_gen,1]
+
+    Cosmos3VFMNetwork._prepare_multiview_attention(
+        cast(Cosmos3VFMNetwork, network),
+        pack,
+        cast(SequencePack, {"full_only_seq": full_only_seq}),
+        cast(SplitInfo, attention_meta),
+    )
+
+    assert attention_meta.multiview_maskless is not None
+    assert attention_meta.multiview_maskless.num_views == (1,)
+    assert attention_meta.multiview_maskless.token_shapes == ((3, 1, 1),)
 
 
 @pytest.mark.L0
@@ -3249,11 +3479,16 @@ def _multiview_maskless_network(*, maskless_attention: bool, multiview: bool = T
 
 @pytest.mark.L0
 @pytest.mark.parametrize("window", [None, (-0.4, 0.0)])
-def test_opt_in_action_conditioning_preserves_single_view_temporal_windows(window: TemporalWindow | None) -> None:
+@pytest.mark.parametrize("with_view_metadata", [False, True])
+def test_opt_in_action_conditioning_routes_same_view_windows_from_pack_metadata(
+    window: TemporalWindow | None, with_view_metadata: bool
+) -> None:
     network = _multiview_maskless_network(maskless_attention=True)
     network.config.multiview_action_conditioning = True
     network.config.multiview_attention_config.mask.same_view_temporal_window.sensor_to_sensor_bounds = window
-    pack = _multiview_maskless_pack(num_vision_items_per_sample=None, num_views_per_vision_item=None)
+    pack = _multiview_maskless_pack(
+        num_vision_items_per_sample=None, num_views_per_vision_item=[1] if with_view_metadata else None
+    )
     assert pack.vision is not None
     pack.vision.seconds_per_frame = [0.2]
     attention_meta = SimpleNamespace(multiview_maskless=None)
@@ -3265,11 +3500,11 @@ def test_opt_in_action_conditioning_preserves_single_view_temporal_windows(windo
         cast(SplitInfo, attention_meta),
     )
 
-    if window is None:
-        assert attention_meta.multiview_maskless is None
-    else:
+    if with_view_metadata:
         assert attention_meta.multiview_maskless is not None
-        assert attention_meta.multiview_maskless.sensor_to_sensor_window == (-2, 0)
+        assert attention_meta.multiview_maskless.sensor_to_sensor_window == ((-2, 0) if window is not None else None)
+    else:
+        assert attention_meta.multiview_maskless is None
 
 
 @pytest.mark.L0
@@ -3282,7 +3517,7 @@ def test_single_camera_sound_pack_rejects_same_view_temporal_window() -> None:
     )
     full_sequence = torch.zeros(6 * 2 * 3 + 2, 1)  # [N_gen,D]
 
-    with pytest.raises(NotImplementedError, match="Same-view temporal windows.*sound"):
+    with pytest.raises(ValueError, match="does not support sound.*layout metadata"):
         network._prepare_multiview_attention(
             pack,
             cast(SequencePack, {"full_only_seq": full_sequence}),

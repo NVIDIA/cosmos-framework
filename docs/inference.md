@@ -201,6 +201,12 @@ Increasing context parallelism can reduce per-GPU activation memory and speed up
 
 ## Model Arguments
 
+For calibrated static FP8 checkpoint export and vLLM/vLLM-Omni serving examples,
+see the [Nano/Super quantization cookbook](../.agents/skills/cookbooks/cosmos3/quantization/README.md).
+Its exported weights, scales, and activation policy are distinct from the
+load-time quantization flags below. Native Framework FP8 checkpoint inference
+compatibility is outside that cookbook's serving validation.
+
 - `--quantization-method {mxfp8,nvfp4,fp8}`: Post-training quantization applied at load time (replicated weights only, `--dp-shard-size 1`). `mxfp8` / `nvfp4` need Blackwell; `fp8` also runs on Hopper and Ada.
 - `--quantization-fp8-granularity {per_row,per_tensor}`: Scale granularity for `fp8` (default `per_row`).
 - `--experiment-overrides`: Extra config overrides as dotlist entries. Both `--experiment-overrides model.config.a=1 model.config.b=2` and the bracketed form `--experiment-overrides "[model.config.a=1,model.config.b=2]"` are accepted.
@@ -230,7 +236,18 @@ Common arguments:
 
 Common arguments:
 
-- `fps`: Condition and output frames per second.
+- `fps`: Model conditioning frames per second; also the default output rate.
+  Released Auto camera models default to and require 30. Other models retain
+  their existing FPS defaults and validation.
+- `output_fps` (CLI `--output-fps`): Saved video playback rate for Auto RGB-only
+  generation. For synchronized 10-FPS RGB/WSM inputs, keep the frames unchanged
+  and use `--output-fps 10`; omit `fps` or keep it at 30. This changes only video
+  saving, not frame selection, model conditioning, caption timing or frame count.
+  Omitted, output FPS follows `fps`. Joint RGB/LiDAR currently requires the same
+  model and output rate; this option is unsupported for other models and
+  LiDAR-only generation. See the
+  [Auto timing guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
+  for timestamped captions and synchronization constraints.
 - `resolution` (`"256"`, `"480"`, `"720"`, `"768"`): Condition and output resolution **tier**, not a
   pixel dimension. The output width and height are looked up from the tier *and* the
   aspect ratio — see [Resolution tiers](#resolution-tiers) below.

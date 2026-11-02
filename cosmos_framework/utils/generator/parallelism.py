@@ -45,8 +45,6 @@ from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
 from cosmos_framework.utils import log
 
-_MAX_CP = 64
-
 
 @dataclass
 class ParallelDims:
@@ -64,7 +62,9 @@ class ParallelDims:
                                consume the dp budget).
         dp_replicate:          HSDP replicate size.  Pass ``-1`` to auto-infer to
                                ``world_size // dp_shard``.
-        cp:                    Context parallel size in ``[1, _MAX_CP]``. Overlay axis.
+        cp:                    Positive context parallel size. Overlay axis; ``cp * cfgp``
+                               must divide ``world_size``. The attention implementation
+                               validates model-specific constraints such as query heads.
         cfgp:                  CFG parallel size in ``(1, 2)``.  Overlay axis,
                                inference-only (rejected at construction time
                                unless ``enable_inference_mode`` is True). Also is
@@ -107,8 +107,8 @@ class ParallelDims:
         # --- overlay range checks (run before division below) ---
         if self.fsdp_cpu_offload and not self.enable_inference_mode:
             raise ValueError("fsdp_cpu_offload is supported only in inference mode")
-        if self.cp < 1 or self.cp > _MAX_CP:
-            raise ValueError(f"CP (Context Parallelism) must be in [1, {_MAX_CP}]. got {self.cp}")
+        if self.cp < 1:
+            raise ValueError(f"CP (Context Parallelism) must be positive. got {self.cp}")
         if self.cfgp not in (1, 2):
             raise ValueError(f"CFGP (CFG Parallelism) must be 1 or 2. got {self.cfgp}")
         if not self.enable_inference_mode and self.cfgp > 1:
@@ -207,6 +207,8 @@ class ParallelDims:
                 dims=[self.dp_replicate, self.dp_shard],
                 names=["dp_replicate", "dp_shard"],
             )
+            # Register a flattened DP mesh so DTensor can fuse reductions across both DP axes.
+            self._meshes["dp"]._flatten(mesh_dim_name="dp_flat")
             # Pure FSDP uses a 1-D mesh, including the singleton CPU-offload
             # case. Passing the full 2-D (1, N) mesh selects FSDP2's HSDP path.
             if self.dp_shard_enabled or not self.dp_replicate_enabled:

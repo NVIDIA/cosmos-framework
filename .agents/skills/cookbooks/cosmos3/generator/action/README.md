@@ -1,5 +1,8 @@
 # Cosmos3 Generator Action
 
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
+
 Cosmos3-Nano action-generation supports three distinct tasks:
 
 - **Forward dynamics (`fd`)** — predict future observations from a start image plus an action trajectory.
@@ -24,13 +27,15 @@ The rest of this doc shows how to run these modes on selected embodiments direct
 - [Run with vLLM-Omni](#run-with-vllm-omni)
   - [Quickstart](#quickstart-3)
   - [Notebook walkthrough](#vllm-omni-notebook-walkthrough)
+- [Run with TensorRT-Edge-LLM](#run-with-tensorrt-edge-llm)
 - [Post-Train for Cosmos3-Nano-Policy-DROID](#post-train-for-cosmos3-nano-policy-droid)
 
 ## Overview
 
-Examples are shown across native PyTorch (Cosmos Framework), Diffusers,
-TensorRT-LLM, and vLLM-Omni. Every backend uses the sample
-assets under [`assets/`](./assets) and covers three tasks:
+Examples for native PyTorch (Cosmos Framework), Diffusers, TensorRT-LLM,
+and vLLM-Omni use the sample assets under [`assets/`](./assets) and cover
+the three tasks above. TensorRT-Edge-LLM covers the Edge policy task only,
+with the same sample assets.
 
 Environment setup for all backends is centralized in the shared
 [Cosmos3 cookbooks environment setup](../../README.md) guide; each backend below
@@ -174,16 +179,14 @@ have available.
 ### Quickstart
 
 Set up and launch the VisualGen server with the one-GPU Nano config:
-[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator), including the
-[server-side NLTK data setup](../../README.md#server-side-nltk-data-setup).
-Keep `NLTK_DATA` exported in the server's shell. Action requests
+[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator). Action requests
 upload a conditioning image as multipart `image_reference` or a video as
 `video_reference`, and put the mode-specific fields under `extra_params`.
 Use the same trained AV prompt as the Cosmos Framework reference; the legacy
 `view_point` field is ignored by current TensorRT-LLM.
 
 Both notebooks' current multipart fields were exercised against TensorRT-LLM
-source revision `bca6761ab84fbcd58fc7f914eade7de48b32e35e`. Follow the source
+source revision `cc63e66daf52644f1441e117bb7ba67d20566016`. Follow the source
 pin in the shared setup.
 
 ```python
@@ -291,6 +294,30 @@ write outputs under `outputs/cosmos3_action_vllm/`:
   predicting ego-motion trajectories from input AV videos.
 - [`run_policy_with_vllm_omni.ipynb`](./run_policy_with_vllm_omni.ipynb) — policy
   inference for DROID through the async video API.
+
+## Run with TensorRT-Edge-LLM
+
+### Quickstart
+
+On-device TensorRT path for **Cosmos3-Edge-Policy-DROID**. Set up the shared
+[TensorRT-Edge-LLM](../../README.md#tensorrt-edge-llm) environment (upstream
+install, C++ runtime with `-DBUILD_EXPERIMENTAL_MODELS=ON` and
+`-DENABLE_CUTE_DSL=ALL`). Then follow
+[`run_policy_with_trt_edge_llm.ipynb`](./run_policy_with_trt_edge_llm.ipynb):
+`tensorrt-edgellm-build` → `cosmos3_policy_inference`.
+
+This is separate from workstation [vLLM-Omni](#run-with-vllm-omni) policy
+serving. Multimodal reasoning on the same Edge-LLM runtime is documented in
+[`../../reasoner/run_with_trt_edge_llm.ipynb`](../../reasoner/run_with_trt_edge_llm.ipynb).
+
+### Notebook walkthrough
+
+[`run_policy_with_trt_edge_llm.ipynb`](./run_policy_with_trt_edge_llm.ipynb)
+builds the same 640×540 DROID `concat_view` as the vLLM-Omni / SGLang policy
+notebooks (from `assets/droid_lerobot_example`), runs
+`cosmos3_policy_inference` with `--viewPoint concat_view` and an 8-value
+`--state`, and writes `action.json` (`[batch, chunk, action_dimension]`).
+Optional `--steps` / `--seed` match the upstream VLA guide.
 
 ## Post-Train for Cosmos3-Nano-Policy-DROID
 

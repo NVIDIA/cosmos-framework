@@ -82,6 +82,7 @@ from cosmos_framework.model.generator.utils.camera_relative_pose import (
     prepare_camera_relative_poses,
     prepare_prope_cross_view_poses,
 )
+from cosmos_framework.model.generator.utils.component_unipc import ComponentSchedule, sample_component_unipc
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -1014,8 +1015,14 @@ class OmniMoTModel(ImaginaireModel):
         """
         assert self.tokenizer_vision_gen is not None
         multiview_action_conditioning = getattr(self.config, "multiview_action_conditioning", None)
-        # Check source clocks before packing's fallback hides missing FPS.
-        if self.config.joint_attn_implementation == "multiview":
+        # Check source clocks before packing's fallback hides missing FPS. The
+        # attention path only applies multiview windows to packs with explicit layouts.
+        if self.config.joint_attn_implementation == "multiview" and (
+            gen_data_clean.num_views_per_vision_item is not None
+            or gen_data_clean.num_lidar_items_per_sample is not None
+            or gen_data_clean.num_radar_items_per_sample is not None
+            or (multiview_action_conditioning is not None and gen_data_clean.num_vision_items_per_sample is not None)
+        ):
             same_view_window = self.config.multiview_attention.mask.same_view_temporal_window
             validate_cross_view_fps(
                 sequence_plans,
@@ -1402,29 +1409,27 @@ class OmniMoTModel(ImaginaireModel):
         vae_pixel_shapes = payload["vae_pixel_shapes"]
         return input_text_indexes, sequence_plans, gen_data_clean, memory_info, data_resolutions, vae_pixel_shapes
 
-    def _release_raw_video_after_tokenization(
+    def _release_raw_vision_after_tokenization(
         self,
         gen_data_clean: GenerationDataClean,
         data_batch: dict[str, torch.Tensor],
     ) -> None:
-        """Free raw video tensors from GPU after CP slot-0 tokenization.
+        """Free raw image or video tensors from GPU after CP slot-0 tokenization.
 
-        Only video (the largest modality) is dropped, and only for non-image
-        batches.  The trainer retains the original host batch for callbacks,
-        which re-encode from its uint8 video.
+        The trainer retains the original host batch for callbacks, which
+        re-encode from its image or video tensors.
 
         ``num_vision_items_per_sample`` and ``image_size`` are kept: both
         describe the flattened vision-item layout and must stay mutually
-        consistent.  :meth:`build_callback_batch` restores host video and
-        flattens it to match the retained counts so callbacks see a
-        self-consistent batch without recomputation.
+        consistent.  :meth:`build_callback_batch` restores host vision and
+        flattens it to match the retained counts so callbacks see a self-consistent
+        batch without recomputation.
         """
         if not self.config.release_cp_raw_batch_after_preprocessing:
             return
-        if gen_data_clean.is_image_batch:
-            return
         gen_data_clean.raw_state_vision = None
         data_batch.pop(self.input_video_key, None)
+        data_batch.pop(self.input_image_key, None)
 
     def _get_training_inputs(
         self, data_batch: dict[str, torch.Tensor], iteration: int
@@ -1469,7 +1474,7 @@ class OmniMoTModel(ImaginaireModel):
         if cp_window_slot == 0:
             local_training_data = self._prepare_training_data(data_batch, iteration)
             self._cp_local_training_payload = self._pack_training_payload(*local_training_data)
-            self._release_raw_video_after_tokenization(local_training_data[2], data_batch)
+            self._release_raw_vision_after_tokenization(local_training_data[2], data_batch)
         if self._cp_local_training_payload is None:
             raise RuntimeError("CP training payload cache is empty before its data window is complete.")
         payload = broadcast_context_parallel_object(
@@ -2353,8 +2358,9 @@ class OmniMoTModel(ImaginaireModel):
             num_tokens: Number of tokens for each sample (before 2x2 merge). Needed for dynamic shift.
             sample_is_image: Per-sample image identities for mixed image/video schedules.
             sequence_plans: Effective per-sample modality metadata after CP input selection.
-                Batches with LiDAR and no RGB use shift_lidar when configured. RGB and joint
-                RGB/LiDAR batches share the vision schedule. None retains the vision schedule.
+                Samples with LiDAR and no RGB use shift_lidar when configured, including in
+                mixed batches. RGB and joint RGB/LiDAR samples retain the vision schedule.
+                None retains the vision schedule.
 
         Returns:
             (timesteps, sigmas): Both [B,1] for TF/base, or [B,T_max] for diffusion_forcing.
@@ -2401,17 +2407,21 @@ class OmniMoTModel(ImaginaireModel):
         rf_config = self.config.rectified_flow_training_config
         shift_image = getattr(rf_config, "shift_image", None)
         shift_config = shift_image if is_image_batch and shift_image is not None else rf_config.shift
-        if (
-            sequence_plans
-            and getattr(rf_config, "shift_lidar", None) is not None
-            and all(plan.has_lidar and not plan.has_vision for plan in sequence_plans)
-        ):
-            shift_config = rf_config.shift_lidar
-            if not isinstance(shift_config, int) or shift_config <= 0:
+        shift_lidar = getattr(rf_config, "shift_lidar", None)
+        lidar_only_indexes = (
+            [i for i, plan in enumerate(sequence_plans) if plan.has_lidar and not plan.has_vision]
+            if sequence_plans is not None and shift_lidar is not None
+            else []
+        )
+        if lidar_only_indexes:
+            if not isinstance(shift_lidar, int) or shift_lidar <= 0:
                 raise ValueError("shift_lidar must be a positive integer")
+            if len(lidar_only_indexes) == batch_size:
+                # Pure LiDAR batches do not need vision resolution or token-count metadata.
+                shift_config = shift_lidar
         if isinstance(shift_config, int):
             # Int-based shift: use directly for all samples
-            shifts = torch.full((batch_size,), shift_config, dtype=torch.float32)
+            shifts = torch.full((batch_size,), shift_config, dtype=torch.float32)  # [B]
         else:
             # Convert to plain dict to avoid traceback-based memory leaks when GC is disabled
             # (OmegaConf's `in` operator uses exception control flow internally).
@@ -2455,7 +2465,11 @@ class OmniMoTModel(ImaginaireModel):
                             f"Resolution '{resolution}' not found in shift dict. Available resolutions: {list(shift_dict.keys())}"
                         )
                     shifts_list.append(shift_dict[resolution])
-                shifts = torch.tensor(shifts_list, dtype=torch.float32)
+                shifts = torch.tensor(shifts_list, dtype=torch.float32)  # [B]
+
+        if shift_lidar is not None and lidar_only_indexes:
+            # Override before frame expansion while preserving the sampling call and RNG order.
+            shifts[lidar_only_indexes] = shift_lidar  # [N_lidar_only]
 
         # Sample noise times: B×T_max for DF (one per video latent frame), B×1 for base/TF
         if self.config.causal_training_strategy == "diffusion_forcing":
@@ -3489,6 +3503,7 @@ class OmniMoTModel(ImaginaireModel):
         packed_sequence_template: PackedSequence | None = None,
         memory: MemoryState | None = None,
         has_noisy_actions: bool,
+        action_timestep: torch.Tensor | None = None,
     ) -> list[torch.Tensor]:
         """
         Compute velocity prediction for a single sampling step.
@@ -3692,6 +3707,11 @@ class OmniMoTModel(ImaginaireModel):
                 noise_x_sound,
                 timestep,
             )
+
+        if action_timestep is not None:
+            if not has_noisy_actions or packed_sequence.action is None:
+                raise ValueError("Independent action timestep requires noisy action tokens")
+            self._copy_timestep_to_template(packed_sequence.action.timesteps, action_timestep)
 
         # --- Network forward ---
         out = self.denoise(
@@ -3933,6 +3953,114 @@ class OmniMoTModel(ImaginaireModel):
         else:
             return other_v_list, v_list
 
+    def _resolve_action_vision_shift(self, data_batch: dict, gen_data_clean: GenerationDataClean) -> float:
+        """Resolve one shared vision shift from the training configuration."""
+        rf_config = self.config.rectified_flow_training_config
+        shift_image = getattr(rf_config, "shift_image", None)
+        vision_shift_config = (
+            shift_image if gen_data_clean.is_image_batch and shift_image is not None else rf_config.shift
+        )
+        if isinstance(vision_shift_config, (int, float)):
+            return float(vision_shift_config)
+
+        image_sizes = data_batch["image_size"]
+        sizes = (
+            image_sizes.reshape(-1, 4)
+            if isinstance(image_sizes, torch.Tensor)
+            else torch.cat([size.reshape(-1, 4) for size in image_sizes])
+        )
+        resolutions = {get_vision_data_resolution((int(size[0]), int(size[1]))) for size in sizes}
+        shifts = {float(vision_shift_config[resolution]) for resolution in resolutions}
+        if len(shifts) != 1:
+            raise ValueError("Independent inference batches must share a vision shift")
+        return shifts.pop()
+
+    def _action_inference_vision_lengths(
+        self,
+        gen_data_clean: GenerationDataClean,
+        sequence_plans: list[SequencePlan],
+        initial_noise: list[torch.Tensor],
+        has_noisy_actions: bool,
+    ) -> list[int]:
+        """Validate RGB/action packing and count vision elements for each sample."""
+        if (
+            not has_noisy_actions
+            or gen_data_clean.x0_tokens_lidar is not None
+            or gen_data_clean.x0_tokens_radar is not None
+            or gen_data_clean.x0_tokens_sound is not None
+            or not all(plan.has_action for plan in sequence_plans)
+        ):
+            raise ValueError("Independent action inference requires an RGB/action layout for every sample")
+        if not gen_data_clean.x0_tokens_vision or gen_data_clean.x0_tokens_action is None:
+            raise ValueError("Independent action inference requires RGB and action components")
+        vision_counts = gen_data_clean.num_vision_items_per_sample or [1] * len(initial_noise)
+        if (
+            len(vision_counts) != len(initial_noise)
+            or len(gen_data_clean.x0_tokens_action) != len(initial_noise)
+            or sum(vision_counts) != len(gen_data_clean.x0_tokens_vision)
+        ):
+            raise ValueError("Independent inference vision layout differs from sample metadata")
+        vision_lengths: list[int] = []
+        vision_offset = 0
+        for sample_index, count in enumerate(vision_counts):
+            vision_length = sum(
+                item.numel() for item in gen_data_clean.x0_tokens_vision[vision_offset : vision_offset + count]
+            )
+            vision_offset += count
+            if (
+                initial_noise[sample_index].numel()
+                != vision_length + gen_data_clean.x0_tokens_action[sample_index].numel()
+            ):
+                raise ValueError("Independent inference requires flat [vision | action] samples")
+            vision_lengths.append(vision_length)
+        return vision_lengths
+
+    def _action_inference_schedule(
+        self,
+        *,
+        data_batch: dict,
+        gen_data_clean: GenerationDataClean,
+        sequence_plans: list[SequencePlan],
+        initial_noise: list[torch.Tensor],
+        has_noisy_actions: bool,
+        shift: float,
+        explicit_vision_shift: bool,
+        action_shift: float | None,
+        scheduler_type: str,
+        sampler: Any,
+        velocity_postprocess: Any,
+    ) -> tuple[float, ComponentSchedule | None]:
+        """Resolve the opt-in RGB/action schedule without changing legacy callers."""
+        schedule: ComponentSchedule | None = None
+        rf_config = self.config.rectified_flow_training_config
+        if action_shift is None and has_noisy_actions and getattr(rf_config, "independent_action_schedule", False):
+            action_shift = rf_config.shift_action
+            if action_shift is None:
+                raise ValueError("Independent action inference requires an explicit shift_action")
+        if (
+            not explicit_vision_shift
+            and gen_data_clean.x0_tokens_vision
+            and (action_shift is not None or getattr(rf_config, "independent_action_schedule", False))
+        ):
+            shift = self._resolve_action_vision_shift(data_batch, gen_data_clean)
+        if action_shift is not None:
+            if scheduler_type != "unipc" or not isinstance(sampler, UniPCSampler):
+                raise ValueError("Independent action inference requires UniPC")
+            if velocity_postprocess is not None:
+                raise ValueError("Independent action inference does not support velocity postprocessing")
+            vision_lengths = self._action_inference_vision_lengths(
+                gen_data_clean, sequence_plans, initial_noise, has_noisy_actions
+            )
+            schedule = ComponentSchedule(
+                shifts=(shift, float(action_shift)),
+                lengths=[
+                    (length, noise.numel() - length)
+                    for length, noise in zip(vision_lengths, initial_noise, strict=True)
+                ],
+            )
+            log.info(f"Using modality schedules: vision_shift={shift}, action_shift={action_shift}")
+        return shift, schedule
+
     @torch.no_grad()
     def generate_samples_from_batch(
         self,
@@ -3952,6 +4080,7 @@ class OmniMoTModel(ImaginaireModel):
         has_negative_prompt: bool = False,
         num_steps: int = 35,
         shift: float | None = None,
+        action_shift: float | None = None,
         sigma_max: float = 80.0,
         skip_text_tokens_for_cfg: bool = False,
         normalize_cfg: bool = False,
@@ -4053,7 +4182,7 @@ class OmniMoTModel(ImaginaireModel):
                 - "vision": List of vision latent tensors (one per sample, variable shapes)
                 - "action": List of external-space action tensors
                   (only present when the packed sequence marks action tokens as
-                  denoising targets, i.e. WAM / inverse dynamics. Plans whose
+                  denoising targets, i.e. Policy / WAM / inverse dynamics. Plans whose
                   actions are pure conditioning — forward dynamics, temporal-causal
                   action conditioning — generate no actions and return no key)
 
@@ -4062,6 +4191,7 @@ class OmniMoTModel(ImaginaireModel):
             ValueError: If the seed is a single integer. This is not supported anymore: `seed` must be
                 a list of integers, one for each sample.
         """
+        explicit_vision_shift = shift is not None
         if shift is None:
             shift = 5.0
             rf_config = getattr(self.config, "rectified_flow_training_config", None)
@@ -4317,7 +4447,9 @@ class OmniMoTModel(ImaginaireModel):
                 elif guidance != 1.0 or velocity_postprocess_builder is not None:
                     uncond_text_kv_cache = self._make_inference_text_kv_cache(target_net)
 
-            def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
+            def velocity_fn(
+                noise_x: list[torch.Tensor], timestep: torch.Tensor, action_timestep: torch.Tensor | None = None
+            ) -> list[torch.Tensor]:
                 # len(noise_x) == B, noise_x[i] is shape (D)
                 # timestep is shape (B, 1)
                 torch.compiler.cudagraph_mark_step_begin()
@@ -4327,6 +4459,8 @@ class OmniMoTModel(ImaginaireModel):
 
                 # Expand timestep to (B, 1)
                 timestep = timestep.repeat(len(noise_x), 1)  # [B,1]
+                if action_timestep is not None:
+                    action_timestep = action_timestep.repeat(len(noise_x), 1)  # [B,1]
 
                 def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool) -> list[torch.Tensor]:
                     nonlocal uncond_text_kv_cache
@@ -4348,6 +4482,7 @@ class OmniMoTModel(ImaginaireModel):
                         net=net,
                         noise_x=noise_x,
                         timestep=timestep,
+                        action_timestep=action_timestep,
                         text_tokens=tokens,
                         sequence_plans=sequence_plans,
                         gen_data_clean=gen_data_clean,
@@ -4417,6 +4552,11 @@ class OmniMoTModel(ImaginaireModel):
                         net=net,
                         noise_x=noise_x + noise_x,
                         timestep=torch.cat([timestep, timestep], dim=0),
+                        action_timestep=(
+                            torch.cat([action_timestep, action_timestep], dim=0)
+                            if action_timestep is not None
+                            else None
+                        ),
                         text_tokens=list(cond_tokens) + list(uncond_tokens),
                         sequence_plans=sequence_plans_doubled,
                         gen_data_clean=gen_data_clean_doubled,
@@ -4503,19 +4643,33 @@ class OmniMoTModel(ImaginaireModel):
                 _max_num_steps = num_steps
             _extra_num_steps = _max_num_steps - num_steps
 
-            if isinstance(sampler, FixedStepSampler):
-                log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
-            elif scheduler_type == "unipc":
-                log.info(f"Using sampler: UniPC (shift={shift}, num_steps={num_steps})")
-            else:
-                log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
-
             fixed_step_sampler_kwargs = {}
             if isinstance(sampler, FixedStepSampler):
                 fixed_step_sampler_kwargs = {
                     "condition_reference": condition_reference,
                     "condition_mask": condition_mask,
                 }
+
+            shift, component_schedule = self._action_inference_schedule(
+                data_batch=data_batch,
+                gen_data_clean=gen_data_clean,
+                sequence_plans=sequence_plans,
+                initial_noise=initial_noise,
+                has_noisy_actions=has_noisy_actions,
+                shift=shift,
+                explicit_vision_shift=explicit_vision_shift,
+                action_shift=action_shift,
+                scheduler_type=scheduler_type,
+                sampler=sampler,
+                velocity_postprocess=velocity_postprocess,
+            )
+
+            if isinstance(sampler, FixedStepSampler):
+                log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
+            elif scheduler_type == "unipc":
+                log.info(f"Using sampler: UniPC (shift={shift}, num_steps={num_steps})")
+            else:
+                log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
 
             # Explicit sampler steps drive both cache indexing and mixed precision.
             # Select W8A16/W8A8 once per sampler step; reset (trace + staging cleanup)
@@ -4528,17 +4682,35 @@ class OmniMoTModel(ImaginaireModel):
                 if _mixed_precision_runtime is not None:
                     _mixed_precision_runtime.set_step(step_index, step_count)
 
+            def _sample_latents(
+                noise: list[torch.Tensor],  # B x [N_i]
+                steps: int,
+                step_callback: Callable[[int, int], None] | None = None,
+            ) -> list[torch.Tensor]:  # B x [N_i]
+                if component_schedule is not None:
+                    # Modality order and timestep binding belong to inference;
+                    # the coordinator and native UniPC schedulers are generic.
+                    return sample_component_unipc(
+                        lambda values, timesteps: velocity_fn(values, timesteps[0], timesteps[1]),
+                        noise,
+                        cfg=sampler.cfg,
+                        schedule=component_schedule,
+                        num_steps=steps,
+                        step_callback=step_callback,
+                    )
+                return sampler(
+                    velocity_fn,
+                    noise,
+                    num_steps=steps,
+                    shift=shift,
+                    seed=seed,
+                    step_callback=step_callback,
+                    **fixed_step_sampler_kwargs,
+                )
+
             try:
                 if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
-                    latents = sampler(
-                        velocity_fn,
-                        initial_noise,
-                        num_steps=num_steps,
-                        shift=shift,
-                        seed=seed,
-                        step_callback=_step_callback,
-                        **fixed_step_sampler_kwargs,
-                    )
+                    latents = _sample_latents(initial_noise, num_steps, _step_callback)  # B x [N_i]
                     if _extra_num_steps > 0:
                         # Unregistered padding calls bypass caching on every shard rank.
                         cache_step_index = None
@@ -4555,14 +4727,7 @@ class OmniMoTModel(ImaginaireModel):
                             # Deterministic cheap padding: the FSDP-alignment dummy
                             # call must not inherit the last real step's W8A16.
                             _mixed_precision_runtime.set_base_precision()
-                        _ = sampler(
-                            velocity_fn,
-                            latents,
-                            num_steps=_extra_num_steps,
-                            shift=shift,
-                            seed=seed,
-                            **fixed_step_sampler_kwargs,
-                        )
+                        _ = _sample_latents(latents, _extra_num_steps)  # B x [N_i]
                 else:
                     # EDM Sampler
                     chunk_sizes = [_x.shape[0] for _x in initial_noise]

@@ -263,7 +263,7 @@ class WallClockCheckpoint(Callback):
         # hook has since described different optimizer/scheduler components.
         self._pending_dcp_components: dict[int, tuple[str, ...]] = {}
 
-        # Captured from on_before_optimizer_step so we can call checkpointer.save().
+        # Captured before optimizer steps, or at train start for dataloading-only runs, to call checkpointer.save().
         self._optimizer: torch.optim.Optimizer | None = None
         self._scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
         self._grad_scaler: torch.amp.GradScaler | None = None
@@ -309,6 +309,10 @@ class WallClockCheckpoint(Callback):
         if not self.enabled:
             log.info(f"[WallClockCheckpoint] Disabled; set {INTERVAL_MINUTES_ENV_VAR} or interval_minutes to enable.")
             return
+        if getattr(self.config.trainer, "skip_model_update", False):
+            self._optimizer = self.trainer.optimizer
+            self._scheduler = self.trainer.scheduler
+            self._grad_scaler = self.trainer.grad_scaler
         log.info(
             f"[WallClockCheckpoint] Enabled: saving at least every {self._interval_seconds / 60:.1f} minutes, "
             f"retaining the last {self._keep_last} wall-clock checkpoints."

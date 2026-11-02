@@ -3,11 +3,13 @@
 
 """Visual-Text Transformations or Augmentations."""
 
+import copy
 import random
 import re
 from typing import Any, Literal
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
+from cosmos_framework.utils.generator.structured_conversation import REASONING_PREFILL_KEY
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*|<think>.*\Z", re.DOTALL)
 
@@ -18,18 +20,29 @@ class PromptFormat(Augmentor):
         input_keys: list[str] = ["texts"],
         text_chat_order: Literal["text_end", "text_start", "random"] = "text_end",
         strip_thinking_prob: float = 0.0,
+        require_single_conversation: bool = False,
+        mask_inserted_reasoning_prefix: bool = False,
     ) -> None:
         """
         Args:
             input_keys: List of input keys.
             text_chat_order: Order of text items in user messages.
             strip_thinking_prob: Per-sample probability of dropping assistant thinking traces.
+            require_single_conversation: Require a nested input to contain
+                exactly one conversation and unwrap it without random choice.
+            mask_inserted_reasoning_prefix: Exclude the inserted <think> and newline
+                from loss. Opt in only to reproduce a preprocessing contract that
+                used this mask; otherwise preserve the processor-specific mask.
         """
         if not 0.0 <= strip_thinking_prob <= 1.0:
             raise ValueError(f"strip_thinking_prob must be in [0, 1], got {strip_thinking_prob}")
         self.input_keys = input_keys
         self.text_chat_order = text_chat_order
         self.strip_thinking_prob = strip_thinking_prob
+        self.require_single_conversation = require_single_conversation
+        if not isinstance(mask_inserted_reasoning_prefix, bool):
+            raise TypeError("mask_inserted_reasoning_prefix must be a bool")
+        self.mask_inserted_reasoning_prefix: bool = mask_inserted_reasoning_prefix
 
     def __call__(self, data_dict: dict[str, Any]) -> dict[str, Any] | None:
         conversation_key = self.input_keys[0]
@@ -45,7 +58,15 @@ class PromptFormat(Augmentor):
         # check if this is list of list of dict or list of dict
 
         if isinstance(list_of_conversation[0], list):
-            selected_index = random.sample(range(len(list_of_conversation)), 1)[0]
+            if self.require_single_conversation:
+                if len(list_of_conversation) != 1:
+                    raise ValueError(
+                        "Deterministic conversation-row preprocessing requires exactly one "
+                        f"conversation, got {len(list_of_conversation)}."
+                    )
+                selected_index = 0
+            else:
+                selected_index = random.sample(range(len(list_of_conversation)), 1)[0]
             selected_conversation = list_of_conversation[selected_index]
             conversation_metadata = data_dict.pop("_conversation_metadata", None)
             if conversation_metadata is not None:
@@ -61,6 +82,7 @@ class PromptFormat(Augmentor):
         assert isinstance(selected_conversation, list) and isinstance(selected_conversation[0], dict), (
             f"selected_conversation is not a list of dict: {selected_conversation}"
         )
+        selected_conversation = copy.deepcopy(selected_conversation)
         # Normalize all string content to list format
         for message in selected_conversation:
             if "content" in message and isinstance(message["content"], str):
@@ -96,7 +118,7 @@ class PromptFormat(Augmentor):
                 has_media = any(
                     isinstance(item, dict) and item.get("type") in ("image", "video", "audio") for item in content
                 )
-                if not has_text and not has_media:
+                if not has_text and not has_media and not message.get("tool_calls"):
                     return None
         else:
             # Merge reasoning_content into assistant message content
@@ -107,6 +129,8 @@ class PromptFormat(Augmentor):
                     think_start = [{"type": "text", "text": "<think>\n"}]
                     think_end = [{"type": "text", "text": "\n</think>\n\n"}]
                     message["content"] = think_start + reasoning_items + think_end + message["content"]
+                    if self.mask_inserted_reasoning_prefix:
+                        message[REASONING_PREFILL_KEY] = True
                     del message["reasoning_content"]
 
         data_dict["is_thinking_stripped"] = is_thinking_stripped
