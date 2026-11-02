@@ -366,19 +366,50 @@ container.
 
 **Cosmos3-Edge** uses `Cosmos3EdgeForConditionalGeneration`. Release images
 through `v1.4.0rc1`, including `release:1.3.0rc22`, do not include that
-architecture. Build TensorRT-LLM with the
-[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator),
-but check out upstream `main` at or after
-[`39a44fab`](https://github.com/NVIDIA/TensorRT-LLM/commit/39a44fab74f4cfc0d4d498be385e746fdd182872)
-(the merge of [PR 20307](https://github.com/NVIDIA/TensorRT-LLM/pull/20307))
-instead of the commit in that block. Run the Edge command below in that
-environment.
-
-Install headless OpenCV with the same interpreter that provides `trtllm-serve`.
-Cosmos3 Reasoner uses it to process vision inputs:
+architecture. Use the
+[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator)
+for the container, submodules, and wheel commands. Run this checkout instead of
+the `git checkout` line in that block. It selects upstream `main` at the merge
+of [PR 20307](https://github.com/NVIDIA/TensorRT-LLM/pull/20307). A newer
+`main` commit also includes `Cosmos3EdgeForConditionalGeneration`:
 
 ```bash
-python -m pip install opencv-python-headless
+git checkout 39a44fab74f4cfc0d4d498be385e746fdd182872
+```
+
+Run the Edge server command below in that environment.
+
+Install headless OpenCV with the interpreter that belongs to `trtllm-serve`.
+A virtualenv keeps that interpreter beside the `trtllm-serve` command. A system
+install records it in the command's shebang. Cosmos3 Reasoner uses OpenCV to
+process vision inputs:
+
+```bash
+SERVE_BIN="$(command -v trtllm-serve)"
+if [[ -z "$SERVE_BIN" ]]; then
+  echo "trtllm-serve is not on PATH."
+  exit 1
+fi
+SERVE_PY="$(dirname "$SERVE_BIN")/python"
+if [[ ! -x "$SERVE_PY" ]]; then
+  shebang="$(head -n 1 "$SERVE_BIN" 2>/dev/null || true)"
+  if [[ "$shebang" == "#!/"* ]]; then
+    interp="${shebang#\#!}"
+    interp="${interp%% *}"
+    if [[ "$interp" == "/usr/bin/env" ]]; then
+      name="${shebang#\#!/usr/bin/env }"
+      name="${name%% *}"
+      SERVE_PY="$(command -v "$name" 2>/dev/null || true)"
+    else
+      SERVE_PY="$interp"
+    fi
+  fi
+fi
+if [[ ! -x "$SERVE_PY" ]]; then
+  echo "Could not find the Python interpreter for trtllm-serve ($SERVE_BIN)."
+  exit 1
+fi
+"$SERVE_PY" -m pip install --no-cache-dir opencv-python-headless
 ```
 
 ### Start the server
