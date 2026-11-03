@@ -32,6 +32,9 @@ ______________________________________________________________________
   - [Torch CUDA Out of Memory Error](#torch-cuda-out-of-memory-error)
   - [NCCL Issue](#nccl-issue)
     - [NCCL Plugin Issue](#nccl-plugin-issue)
+  - [Text K/V prefill](#text-kv-prefill)
+  - [Component CPU offloading](#component-cpu-offloading)
+  - [Layerwise CPU offloading](#layerwise-cpu-offloading)
 
 ______________________________________________________________________
 
@@ -433,3 +436,62 @@ Fix:
 ```shell
 export NCCL_NET_PLUGIN=none
 ```
+
+### Text K/V prefill
+
+`--prefill-text-kv --no-use-cuda-graphs` prepares all text K/V caches inside
+the first generation forward, including conditional and unconditional prompts.
+Later steps reuse the caches. This flag also works without offloading;
+`torch.compile` remains enabled. Results may differ slightly from the default joint path.
+
+Requires single-GPU, non-causal `two_way` inference eligible for text-KV reuse:
+one sample, no sound, multi-control input, velocity postprocessor or
+generation-specific text K normalization.
+
+### Component CPU offloading
+
+`--enable-cpu-offload` loads the reasoner, prepares text K/V in the first
+forward, then swaps to the generator. The generator stays resident for later
+steps. Both offload modes enable text prefill automatically.
+
+```bash
+python -m cosmos_framework.scripts.inference \
+  --checkpoint-path Cosmos3-Nano -i inputs/omni/t2i.json -o /path/to/outputs \
+  --enable-cpu-offload --no-use-cuda-graphs --seed 42
+```
+
+Both offload modes use pinned CPU weights and asynchronous transfers without
+copying unchanged weights back. They require the prefill restrictions above,
+a combined BF16 or ModelOpt FP8 checkpoint without LoRA, and `--no-use-cuda-graphs`.
+`torch.compile` stays enabled. CPU RAM must hold both decoder pathways;
+embeddings, heads, rotary buffers and the VAE remain on GPU. Run one request
+at a time per model instance. Unused CUDA allocator cache is released after
+each completed request; component offloading also releases it at phase swaps.
+
+For ModelOpt FP8 checkpoints, use their local path as `--checkpoint-path`
+without `--quantization-method`. To run the first and last three denoising
+steps with A16 activations and the middle steps with A8, add
+`--mixed-precision-first-steps 3 --mixed-precision-last-steps 3`.
+The reasoner uses A16 when this schedule is enabled. Set these flags explicitly;
+checkpoint precision-policy metadata is not read. Keep
+`--mixed-precision-w8a16-cache none` (the default) when offloading.
+
+Compiled FP8 outputs are not guaranteed to be bit-identical across fresh
+processes, including without offloading.
+
+### Layerwise CPU offloading
+
+Replace `--enable-cpu-offload` with `--enable-layerwise-offload` to hold only
+two decoder layers' active-pathway weights on GPU, prefetching the next layer
+while the current one computes. Both modes also need GPU memory for resident
+modules, caches and activations; the two flags cannot be combined.
+
+- Prefer **component offloading** for small images and lighter workloads when
+  the active decoder pathway fits. Keeping the generator resident avoids repeated
+  weight transfers that short compute intervals cannot fully hide.
+- Start with **layerwise offloading** for memory-heavy workloads such as larger
+  videos. It reduces weight residency, and longer layer computation gives
+  prefetching more opportunity to overlap transfers with compute.
+
+Actual latency depends on workload size and CPU–GPU bandwidth; layerwise
+offloading is not guaranteed to be faster.

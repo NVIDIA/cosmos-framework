@@ -1119,7 +1119,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         *next* save to drain this one, or for :meth:`finalize` on a graceful exit. A job
         killed abnormally in between -- preemption, cancellation, timeout, node failure --
         therefore threw away credit for a checkpoint that had been durable on disk for as
-        long as the gap between saves. Job 1881483 wrote iteration 58500 successfully at
+        long as the gap between saves. One job wrote iteration 58500 successfully at
         10:52:04 and was preempted at 11:32:56 having reached 58856, yet still reported
         58000 as its last productive iteration.
 

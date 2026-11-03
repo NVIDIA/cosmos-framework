@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""The trajectory sink -- the capability that does not exist on the i4 path today.
+"""The trajectory sink -- the capability that does not exist on the native path today.
 
 The b1k eval path is outcome-only: it records success, steps and metrics, and throws the
 trajectory away. Collection needs every frame. This is the seam where that difference lives.

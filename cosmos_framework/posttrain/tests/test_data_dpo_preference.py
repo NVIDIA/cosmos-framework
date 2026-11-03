@@ -360,7 +360,7 @@ def test_image_media_yields_images_key(tmp_path):
 @pytest.mark.CPU
 def test_env_empty_shard_fails_loud(tmp_path):
     # world_size > #pairs: a strided shard would be empty → fail loud at rebuild with a
-    # descriptive message, not a bare IndexError mid-training (Greptile #7).
+    # descriptive message, not a bare IndexError mid-training.
     jsonl = _write_jsonl(tmp_path, [_pair(tmp_path, "only", 64, 64, gap=1.0)])  # 1 pair
     ds = DPOPreferenceDataset(jsonl, resolution="256", cfg_dropout_rate=0.0)
     env = DatasetPreferenceEnv(ds, rank=0, world_size=4)  # 1 pair, world 4 → unservable

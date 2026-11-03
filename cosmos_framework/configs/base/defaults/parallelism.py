@@ -57,6 +57,9 @@ class ParallelismConfig:
     # Inference-mode mesh toggle for ParallelDims.
     enable_inference_mode: bool = False
 
+    # Materialize unsharded decoder weights on CPU before inference offload setup.
+    inference_cpu_initialization: bool = False
+
     # Keep per-decoder-layer FSDP shards on CPU between forward calls. This is
     # inference-only, forces FSDP wrapping even for a singleton shard axis, and
     # requires a checkpoint load that initializes every parameter.

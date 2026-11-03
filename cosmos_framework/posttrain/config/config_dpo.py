@@ -4,7 +4,7 @@
 
 The default `--config` for `entrypoints/dpo.py`. Registration + job/trainer defaults come from
 `config.build_root`; this module only pins the typed `rl` section (and inherits `model_backend="i4"`,
-the i4 OmniMoT path).
+the OmniMoT path).
 """
 
 from __future__ import annotations

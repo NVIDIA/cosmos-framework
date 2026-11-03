@@ -3,7 +3,7 @@
 
 """RGB/LiDAR data contracts and transforms; no dataset locations or remote catalog.
 
-Adapted from the corresponding i4 implementation.
+Adapted from the corresponding upstream implementation.
 """
 
 from typing import Final

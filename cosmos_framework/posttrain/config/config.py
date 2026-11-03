@@ -61,7 +61,7 @@ _C = TypeVar("_C", bound=PosttrainConfig)
 # another project that carries its own optional dependencies (robotics datasets, a database driver,
 # video and array codecs), and posttrain installs none of those. A module-scope import failure in
 # one experiment must not decide whether an unrelated recipe can load its config. Both catalogs get
-# the same treatment: posttrain's own experiments inherit i4 experiments through `defaults`, so they
+# the same treatment: posttrain's own experiments inherit upstream experiments through `defaults`, so they
 # import the same optional dependencies transitively.
 _EXPERIMENT_CATALOGS = (
     "cosmos_framework.configs.base.experiment",
@@ -160,8 +160,8 @@ def build_root(
     cls: type[_C], group: str, *, register_experiment_configs: bool = True, register_base_configs: bool = True
 ) -> _C:
     """Build a per-algorithm root of type `cls`: reuse cosmos3's config-group registration, register
-    posttrain experiments when requested (so `experiment=` selects them; inherited i4 experiments
-    stay available so a posttrain experiment can `defaults: [/experiment/<i4>]`), and stamp the
+    posttrain experiments when requested (so `experiment=` selects them; inherited upstream experiments
+    stay available so a posttrain experiment can `defaults: [/experiment/<name>]`), and stamp the
     posttrain job/trainer defaults. Concrete recipes that fully populate the root disable experiment
     registration so they do not import unrelated projects and their optional dependencies. Idempotent
     — the ConfigStore registration is safe to repeat. ``register_base_configs=False`` selects a

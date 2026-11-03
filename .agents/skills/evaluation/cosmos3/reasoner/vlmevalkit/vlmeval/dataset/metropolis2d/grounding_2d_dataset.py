@@ -264,7 +264,7 @@ def parse_jsonl_annotations(annotation_path, data_root=None):
                 annotations.append({
                     'image': image_path,  # Relative path
                     'image_path': full_image_path,  # Full path
-                    'image_id': f"{line_num}",  # TODO(yuw): add category? _{category}
+                    'image_id': f"{line_num}",  # TODO: add category? _{category}
                     'bboxes': bboxes,  # List of bboxes in xyxy format
                     'sentence': category,  # Category name as the grounding query
                     'category': category,

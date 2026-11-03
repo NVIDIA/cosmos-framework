@@ -22,7 +22,7 @@ class CompileConfig:
 
     # Whether the entire Cosmos3 VFM network is compiled, or only a specific region is compiled.
     # Use "language" to compile only individual layers in the MOT model.
-    # Use "all" to compile the the MOT model, as well as encode/decode functions.
+    # Use "all" to compile the MOT model, as well as encode/decode functions.
     compiled_region: str = attrs.field(
         default="language",
         validator=attrs.validators.in_({"all", "language"}),

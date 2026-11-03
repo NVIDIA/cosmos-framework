@@ -117,7 +117,7 @@ def test_rewrite_expert_shards_replaces_only_named_tensors(tmp_path: Path) -> No
 def test_load_consolidated_state_dict_reads_the_open_file_not_the_path(
     reference: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fix round T6r (review thread 524355e746): with ``payload`` the loader returns the tensors of the file object it was handed,
+    """With ``payload`` the loader returns the tensors of the file object it was handed,
     memory-mapped through ``/proc/self/fd`` (or read whole through the object where that reference does not exist), even after the
     path was replaced the way the merge tool writes (a temporary, then os.replace); loading by path still reads the path."""
     path = tmp_path / "model.pt"

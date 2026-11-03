@@ -9,7 +9,7 @@ detection:
   - name: Astro2D
     dataset: Astro2DDetectionDataset
     data_root: s3://cosmos_understanding/benchmark/metropolis2d_astro/C0065-QA.m4v
-    # data_root: /lustre/fsw/portfolios/edgeai/users/yuw/data/astro_kpi_for_cosmos/C0065-QA.m4v
+    # data_root: /path/to/data/astro_kpi_for_cosmos/C0065-QA.m4v
     # min_bbox_area: optional; default 400 if data_root path ends with "IVA-0009-KPI-05_190916_10ft-60-deg.mp4", else 0
   - name: Astro2DBench_C0065
     dataset: Astro2DDetectionDataset

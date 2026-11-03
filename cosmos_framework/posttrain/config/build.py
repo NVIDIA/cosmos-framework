@@ -5,7 +5,7 @@
 `config/rl.py` is the typed *schema*; this module holds the **shared, algorithm-agnostic**
 building blocks that entries compose:
 
-  - `build_backbone(config, world)` — backend dispatch (legacy i4 LazyConfig tree | generic native
+  - `build_backbone(config, world)` — backend dispatch (legacy LazyConfig tree | generic native
     policy build spec | HF from_pretrained) → the model/capability.
   - `build_optimizer(model, opt_cfg)` — RL-owned optimizer (freeze backbone, train the subset);
     `opt_cfg.name` picks the class and `opt_cfg.impl` the torch kernel.
@@ -451,8 +451,8 @@ def _explicit_parameter_groups(
 
 QWEN_MOE_NO_DECAY_PATTERNS: tuple[str, ...] = (r"(?:^|\.)embed_tokens\.", r"(?:^|\.)lm_head\.", r"\.mlp\.gate\.weight$")
 """Name rules of ``decay_groups="qwen_moe"`` beside the shape rule (every 1-D parameter): the token embedding, the
-output head and the MoE router gate of every sparse layer stay undecayed. The seat's own choice, not a convention
-(review R134-03): the backbone's recipe (``cosmos3/utils/optimizer.py::_build_params_with_metadata``) decays all 882
+output head and the MoE router gate of every sparse layer stay undecayed. The seat's own choice, not a convention:
+the backbone's recipe (``cosmos3/utils/optimizer.py::_build_params_with_metadata``) decays all 882
 tensors and transformers' ``Trainer.get_decay_parameter_names`` decays these three classes; the native recipe's
 docstring (knob 4) states what the exemption protects and costs."""
 
@@ -497,7 +497,7 @@ def _group_by_decay_and_lr(net: Any, params: list, opt_cfg: OptimizerConfig) -> 
         key = (lr_multiplier_for(name, opt_cfg.lr_multipliers), bool(decay_rule(name, parameter)))
         classes.setdefault(key, []).append(parameter)
     # Each distinct factor once, in first-seen order: a factor two patterns share names ONE class; iterating it twice
-    # would append its groups twice and trip the count check below (review round 142, P2).
+    # would append its groups twice and trip the count check below.
     order = [1.0]
     for value in opt_cfg.lr_multipliers.values():
         factor = float(value)
@@ -531,7 +531,7 @@ def build_optimizer(
 ) -> Any:
     """RL owns the optimizer: freeze everything except params whose name contains a
     `train_keys` substring, then the optimizer `opt_cfg.name` selects (`OPTIMIZER_NAMES`) over the
-    trainable subset. `train_keys=[]` ⇒ train all `requires_grad` params. Operates on `model.net` (i4 policy) or the module itself (hf).
+    trainable subset. `train_keys=[]` ⇒ train all `requires_grad` params. Operates on `model.net` (native policy) or the module itself (hf).
     Explicit ``parameter_groups`` must partition every trainable parameter exactly once and
     cannot be combined with train-key filtering or automatic decay grouping.
     """
@@ -553,7 +553,7 @@ def build_optimizer(
                 p.requires_grad_(False)
         # train_keys was set but matched nothing → we just froze everything; the all-params
         # fallback below would also be empty and AdamW([]) errors opaquely. Fail loud instead
-        # (a model rename / wrong keys is the usual cause). (Greptile #17)
+        # (a model rename / wrong keys is the usual cause).
         if not params:
             raise ValueError(
                 f"OptimizerConfig.train_keys={list(opt_cfg.train_keys)} matched no parameter in "
@@ -904,7 +904,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
     """Normalize the configured policy DeviceMesh to ``(dp_replicate, dp_shard)``.
 
     The model backend owns the factorization. The HF adapter reads its typed ``model_hf.parallelism``
-    section. A generic native-policy spec reads ``model.parallelism``; the legacy i4 model tree
+    section. A generic native-policy spec reads ``model.parallelism``; the legacy native model tree
     retains its ``model.config.parallelism`` source. Placement supplies only ``policy_ranks`` for
     validation and never invents a configurable dimension.
 
@@ -956,7 +956,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
         field_name="policy DeviceMesh",
         ranks_field_name="POLICY_RANKS",
     )
-    # A legacy native i4 tree must consume the same normalized factorization the trainer WG carries.
+    # A legacy native tree must consume the same normalized factorization the trainer WG carries.
     # Generic native and HF specs retain their inference sentinel so this helper remains repeatable
     # when a caller validates the same config against another policy width.
     if backend == I4 and native_spec is None:
@@ -1065,7 +1065,7 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
 
 
 def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
-    """Build the generic i4-native online policy and return the exact builder config used."""
+    """Build the generic native online policy and return the exact builder config used."""
     spec = select_policy_backend(config).native_spec
     if spec is None:
         raise TypeError(
@@ -1095,7 +1095,7 @@ def build_native_value_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
 
 
 def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
-    """Backend dispatch to a legacy i4 model, generic native policy, or HF model.
+    """Backend dispatch to a legacy native model, generic native policy, or HF model.
 
     A legacy ``model_backend='i4'`` config still instantiates ``config.model`` and moves it to CUDA.
     When ``config.model`` is a :class:`NativePolicyBuildSpec`, its dotted builder owns construction
@@ -1974,7 +1974,7 @@ def validate_opd_runtime(
     Args:
         rl: The resolved OPD algorithm config.
         rollout: The resolved student rollout config.
-        model_backend: Optional root backend. DPCA requires a native i4 policy capability.
+        model_backend: Optional root backend. DPCA requires a native policy capability.
         model_config: Optional selected policy config used to prove policy/rollout artifact identity.
         policy_model_id: Explicit generic native policy/tokenizer identity, when selected by a
             :class:`NativePolicyBuildSpec`.

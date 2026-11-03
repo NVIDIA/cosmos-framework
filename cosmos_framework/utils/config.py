@@ -502,7 +502,7 @@ class TrainerConfig:
 @make_freezable
 @attrs.define(slots=False)
 class Config:
-    """Config for an imaginaire4 job.
+    """Config for a job.
 
     See /README.md/Configuration System for more info.
     """

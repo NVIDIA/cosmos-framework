@@ -161,7 +161,7 @@ def test_continuation_plan_reads_data_replicas_and_emits_exact_overrides(tmp_pat
 
 
 def test_continuation_refuses_a_source_run_whose_shards_refilled_unequally(tmp_path: Path) -> None:
-    """LDCR 2026-10-01 (mrs-ours V13): `consumed_per_shard = consumed // data_replicas` assumes every shard answered
+    """`consumed_per_shard = consumed // data_replicas` assumes every shard answered
     every draw. Under `rl.dynamic_sampling_refill_mode=short_cells` (not on main) the short cells refill alone
     and the idle cells draw 0, so the shards' counts differ; the even split then re-serves trained prompts on the
     shard that drew more and skips unseen prompts on the shard that drew less. Part 1 shows that mechanism with the
@@ -295,9 +295,9 @@ def test_warm_restart_from_a_model_only_artifact_serves_the_next_batch_not_the_f
     assert (warm_rl.data.cursor_offset, warm_rl.data.cursor_shards) == (4 * per_draw, shards)
 
 
-# --------------------------------------------------------------------------- review threads of 2026-10-07 (983201ea253)
+# --------------------------------------------------------------------------- continuation identity
 def test_continuation_plan_binds_the_artifact_iteration_to_the_optimizer_step_clock(tmp_path: Path) -> None:
-    """Thread bf4b5880: `iter_*` counts OPTIMIZER steps and one rollout batch advances `rl.n_mini` of them. Reading the
+    """`iter_*` counts OPTIMIZER steps and one rollout batch advances `rl.n_mini` of them. Reading the
     iteration as rollout-batch steps over-advanced the cursor n_mini-fold and skipped unseen prompts. The plan takes
     the artifact's iteration, converts it with the source's n_mini and refuses an iteration off the batch grid."""
     pool = _pool(tmp_path / "pool.jsonl", rows=200)
@@ -319,7 +319,7 @@ def test_continuation_plan_binds_the_artifact_iteration_to_the_optimizer_step_cl
 
 
 def test_continuation_of_a_continuation_carries_the_source_offset_forward(tmp_path: Path) -> None:
-    """Thread 1ab0b62e: run B was itself an exact continuation of run A, so B's resolved config carries
+    """Run B was itself an exact continuation of run A, so B's resolved config carries
     `rl.data.cursor_offset` / `cursor_shards`. A plan from B that emitted only B's draws made run C re-serve the
     prompts A and B trained. The plan reads B's base offset, requires it to be bound to B's shard count, emits A's
     offset plus B's per-shard draws, and excludes both runs' draws from the remaining-pool view."""
@@ -364,7 +364,7 @@ def test_continuation_of_a_continuation_carries_the_source_offset_forward(tmp_pa
 
 
 def test_continuation_plan_refuses_coerced_counts(tmp_path: Path) -> None:
-    """Thread 2b05c1a3: `int(consumed)` accepted True, 440.9 and "440" and could move an exact continuation to another
+    """`int(consumed)` accepted True, 440.9 and "440" and could move an exact continuation to another
     prompt boundary; the cursor and the config refuse coercion, and so does the plan, for both counts."""
     pool = _pool(tmp_path / "pool.jsonl", rows=600)
     run = _arm_run(tmp_path, pool)

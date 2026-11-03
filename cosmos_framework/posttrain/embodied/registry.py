@@ -5,7 +5,7 @@
 It closes the gap ``docs/design/DESIGN.md`` names explicitly ("Deferred -- component registration:
 there is no by-name registry yet"), and it exists for one mechanical reason: the lazy
 ``__import__`` is what keeps the policy venv from ever importing ``omnigibson``, and the
-Isaac venv from ever importing the i4 policy stack. A registry that imported its modules
+Isaac venv from ever importing the native policy stack. A registry that imported its modules
 eagerly would defeat the entire import discipline the core is built around.
 """
 

@@ -40,7 +40,7 @@ class S3Spec:
 
 @dataclass
 class MinimapSpec:
-    minimap_types: List[str] = field(default_factory=list)  # map name in MADS convention
+    minimap_types: List[str] = field(default_factory=list)  # map name in the rig's convention
 
 
 @dataclass

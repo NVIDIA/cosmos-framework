@@ -16,7 +16,7 @@ from typing import Any
 
 DEFAULT_CREDENTIAL_PATH = "credentials/gcp_checkpoint.secret"
 
-# imaginaire4 repo root: .../tokenizers/lidar/paths.py -> parents[5]
+# repository root: .../tokenizers/lidar/paths.py -> parents[5]
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
 

@@ -140,7 +140,7 @@ def make_objective(
             ),
             **({"ce_exponent": ce_exponent} if weighted else {}),
             **({"moe_lbl": {"coeff": moe_lbl_coeff, "method": moe_lbl_method}} if moe_lbl_coeff > 0 else {}),
-            # The serve contract the run declared (``rl.serve_contract``, review threads b196e5e99f / 12f2ce563b): present
+            # The serve contract the run declared (``rl.serve_contract``): present
             # only when it is not the default, so every existing run's identity is unchanged.
             **({"serve_contract": serve_contract} if serve_contract != SFT_SERVE_CONTRACT_DEFAULT else {}),
             "packer_class": f"{type(packer).__module__}.{type(packer).__qualname__}",

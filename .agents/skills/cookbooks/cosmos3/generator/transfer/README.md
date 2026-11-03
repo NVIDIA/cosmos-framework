@@ -47,7 +47,7 @@ for the negative caption.
 | Depth | `assets/depth/` | `control_depth.mp4` + `prompt.json` | 121 frames @ 30 FPS |
 | Segmentation | `assets/seg/` | `control_seg.mp4` + `prompt.json` | 121 frames @ 30 FPS |
 | World scenario (WSM) | `assets/wsm/` | `control_wsm.mp4` + `prompt.json` | 100 frames @ 10 FPS |
-| Multi-control | `assets/multi_control/` | `vision_path` + multiple hints (Framework example) | 121 frames @ 30 FPS |
+| Multi-control | `assets/multi_control/` | `vision_path` + multiple hints (Framework example) | 93 frames @ 16 FPS |
 
 Transfer inference is selected automatically when any hint key is present in the
 Framework spec or in vLLM-Omni `extra_params`.
@@ -398,9 +398,9 @@ Key fields:
 
 - **`aspect_ratio`** — aspect ratio of the control video; together with `resolution` determines the spatial dimensions (e.g. `720` + `16,9` → 1280 × 720).
 
-- **`fps`** — model conditioning signal and playback rate of the saved output video. Should match the native fps of the control video.
+- **`fps`** — frame rate of the input video. Keep it equal to the native fps of the control/input video. Cosmos Framework Transfer takes the output frame rate from the video itself and uses `fps` only for image inputs; the Diffusers notebook reads it from the spec.
 
-- **`num_frames`** — number of video frames.
+- **`num_frames`** — number of video frames. Keep it equal to the control/input video's frame count. Cosmos Framework Transfer takes the output length from the video (capped by `max_frames`); the Diffusers notebook reads it from the spec.
 
 ### Cookbook entrypoints
 

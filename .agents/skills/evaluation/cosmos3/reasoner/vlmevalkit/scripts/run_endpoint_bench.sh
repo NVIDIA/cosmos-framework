@@ -25,7 +25,7 @@ usage() {
 Usage: ./run_endpoint_bench.sh --endpoint URL --model MODEL (--dataset DATASET | --all) [OPTIONS]
 
 Required:
-  --endpoint URL        Full chat completions URL (e.g. https://...lepton.run/v1/chat/completions)
+  --endpoint URL        Full chat completions URL (e.g. https://<your-endpoint>/v1/chat/completions)
   --model MODEL         Model name served at the endpoint (e.g. Qwen3-VL-8B-Instruct)
   --dataset DATASET     Dataset name (e.g. CountBenchQA)
   --all                 Run all built-in datasets

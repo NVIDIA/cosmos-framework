@@ -3,7 +3,7 @@
 """Root config for the GRPO entrypoint: `PosttrainConfig` with `rl: GRPOConfig`.
 
 The default `--config` for `entrypoints/grpo.py`. Registration + job/trainer defaults come from
-`config.build_root`; this module pins the typed `rl` section and keeps the generic i4 backend as the
+`config.build_root`; this module pins the typed `rl` section and keeps the generic native backend as the
 default. HF recipes must select ``model_backend="hf"`` explicitly.
 """
 
@@ -24,7 +24,7 @@ class PosttrainGRPOConfig(PosttrainConfig):
     # GRPOConfig itself defaults to the production clipped surrogate.
     rl: GRPOConfig = attrs.field(factory=lambda: GRPOConfig(grpo_surrogate="legacy_pg"))
     # vLLM rollout engine + sampling (top-level, GRPO-only — like model/grid, not an rl objective
-    # field). The selected i4/HF policy owns the FSDP trainer weights; config.rollout is the separate
+    # field). The selected native/HF policy owns the FSDP trainer weights; config.rollout is the separate
     # inference engine that pulls them each step (build.build_vllm_rollout / control.loop.weight_sync).
     rollout: RolloutConfig = attrs.field(factory=RolloutConfig)
     data_packer: DataPackerConfig = attrs.field(factory=DataPackerConfig)

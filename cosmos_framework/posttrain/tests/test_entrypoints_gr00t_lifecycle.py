@@ -324,7 +324,7 @@ def test_online_reporting_failure_does_not_block_training(
 
 @pytest.fixture
 def one_logger_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Replace only the SDK transport; the adapter and i4 counters/timers remain real."""
+    """Replace only the SDK transport; the adapter and trainer counters/timers remain real."""
     sinks = []
 
     def create_client(config):

@@ -8,7 +8,7 @@ The producer MUST be an actor: `ray.put(_tensor_transport="nixl")` reaches
 inside `Peer`, not from the test process — the same shape production uses, where `stage`
 runs inside `_Host`.
 
-Skipped wholesale where ray/nixl are absent, which includes the i4 container today.
+Skipped wholesale where ray/nixl are absent, which includes the training container today.
 """
 
 from __future__ import annotations
