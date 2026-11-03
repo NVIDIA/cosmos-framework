@@ -18,6 +18,7 @@ Choose the model. The NIM selects a compatible profile and precision. Refer to
 | Generator | `nano` | General-purpose Generator tasks |
 | Generator | `edge-droid` | DROID policy with action-only output; BF16 only; **experimental** |
 | Generator | `nano-droid` | DROID policy with action-only output; BF16 only |
+| Generator | `multiview` | Multi-camera driving video with optional LiDAR; BF16 only; refer to [Multiview](multiview.md) |
 | Generator | `super` | General-purpose Generator tasks |
 | Generator | `super-t2i` | Full-step T2I only |
 | Generator | `super-t2i-4step` | Four-step T2I only |
@@ -90,6 +91,8 @@ default Reasoner `NIM_GPU_MEMORY_UTILIZATION`.
 | Reasoner `super` BF16, TP1 | 135 GiB/device | No CPU/model offload |
 | Reasoner `super` FP8, TP1 | 67 GiB/device | No CPU/model offload |
 | Reasoner `super` NVFP4, TP1 | 73 GiB/device | No CPU/model offload |
+
+The multiview Generator is not supported on unified-memory systems.
 
 Floors are compared with 70% of the binary-GiB total reported by the running
 system. Current free shared memory is checked separately at startup.

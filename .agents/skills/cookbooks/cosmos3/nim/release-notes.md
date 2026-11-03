@@ -3,6 +3,15 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 # Release Notes
 
+## 2.2.0
+
+- **Multiview Generator.** The new `multiview` Generator variant generates
+  multi-camera autonomous-vehicle driving video from per-camera captions and
+  World Scenario Model controls, with optional RGB first-frame conditioning and
+  optional joint numeric LiDAR output. It returns one MP4 per camera. BF16
+  profiles only; not supported on unified-memory systems. Refer to
+  [Multiview](multiview.md).
+
 ## 2.1.0
 
 Image: `nvcr.io/nim/nvidia/cosmos3:2.1.0`.

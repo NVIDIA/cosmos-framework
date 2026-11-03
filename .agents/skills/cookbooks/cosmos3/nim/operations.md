@@ -233,12 +233,16 @@ Failures](transfer.md#validation-and-common-failures).
 | --- | --- | --- |
 | HTTP 422, missing or invalid `model_mode` | The request does not identify a valid Generator task | Set one of the documented top-level modes |
 | Selected variant rejects request mode or sampling fields | A specialist received another mode, or a four-step request supplied model-owned controls | Select a compatible `NIM_MODEL_VARIANT`; omit `num_inference_steps`, `guidance_scale`, and `flow_shift` for four-step variants |
+| HTTP 422, `multiview requests require a selected model variant of 'multiview'` | A multiview request reached another variant | Relaunch with `NIM_MODEL_VARIANT=multiview` |
+| HTTP 422, `Selected model variant 'multiview' requires a multiview field` | A single-view request reached the multiview variant | Send a [multiview request](multiview.md), or launch a general-purpose variant |
 | HTTP 422, media decode/fetch | Invalid base64/data URL, URL disabled/unreachable, or unsupported media | Prefer a MIME-aware data URL; check the selected image's codec and format support |
+| HTTP 500, `Cannot decode 'h264' video: it requires NVDEC, but libnvcuvid.so.1 is not available` (also for `hevc`/`mpeg4`); startup logs `NVDEC is unavailable` | The container runtime did not inject the host driver's video library; H.264, HEVC, and MPEG-4 inputs decode only through NVDEC | Run with the NVIDIA container runtime and a host driver that provides `libnvcuvid`, and do not narrow `NVIDIA_DRIVER_CAPABILITIES` below `compute,utility,video`; or send VP8, VP9, or AV1 video |
 | HTTP 422, frame or resolution | Request violates T2I/video cadence rules or supplies `num_frames` for Action | Recompute with the task tables; Action derives frames from its chunk size |
 | Content-policy 422 | Text or generated frames triggered guardrails | Rephrase and review content; disable only under approved diagnostic policy |
 | Backend 500/OOM | Profile fit or runtime workload exceeded available memory | Reduce workload/concurrency, choose Nano/offload, or use a larger supported GPU; retain logs |
 | Request/client timeout | Image or video generation exceeded client/backend timeout | Refer to [Long-Running Requests](#long-running-requests); inspect NIM logs and runtime metrics |
 | MP4 does not play | Player lacks VP9-in-MP4 support | Use `mpv`/`ffplay` or re-encode to H.264 |
+| Multiview response has no `b64_video` | Multiview returns one video per camera in `multiview.videos[]` | Decode each camera's `b64_video` in `camera_order`; refer to [Multiview Output](multiview.md#output) |
 
 ### Reasoner
 

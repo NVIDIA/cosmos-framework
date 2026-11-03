@@ -51,6 +51,9 @@ chooses the task per request.
 | `inverse_dynamics` | Inverse dynamics | Required video |
 
 The task guides define the remaining required inputs and invalid combinations.
+The `multiview` variant accepts only `text2video` and `image2video` with a
+`multiview` object; multiview I2V rejects `input_reference` and takes per-camera
+RGB inputs in `multiview.views[].vision`. Refer to [Multiview](multiview.md).
 
 ### Common Generator Request Fields
 
@@ -60,7 +63,7 @@ on their pages.
 | Field | Type | Video / T2I Default | Applies To |
 | --- | --- | --- | --- |
 | `model_mode` | required enum | None | Selects one of the seven modes above |
-| `prompt` | string or null; maximum 20,000 characters | None | Required and non-empty for T2I/T2V; task-dependent otherwise |
+| `prompt` | string or null; maximum 20,000 characters | None | Required and non-empty for T2I/T2V; task-dependent otherwise; rejected by [multiview](multiview.md), which takes per-camera captions |
 | `negative_prompt` | string or null; maximum 20,000 characters | Built-in / empty | Tasks and models that permit negative prompting |
 | `input_reference` | encoded image/video string or null | None | I2V, V2V, Action, and derived Transfer; media type follows `model_mode` |
 | `seed` | non-negative integer or null | Service-generated | Reproducibility |
@@ -76,6 +79,9 @@ on their pages.
 | `transfer` | object | None | `video2video` only; [Transfer](transfer.md) |
 
 Empty or whitespace-only media strings are treated as absent.
+
+Multiview has its own defaults and accepted ranges for these fields. Refer to
+[Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
 
 ### Strict JSON Types
 
@@ -158,6 +164,11 @@ In that case both `b64_image` and `b64_video` are absent or null. Clients must
 branch on the fields actually present rather than assuming every non-T2I
 request has `b64_video`. Refer to [Edge-/Nano-DROID
 Policy](action.md#edge-droid-and-nano-droid-policy).
+
+The `multiview` variant returns a `multiview` object instead of `b64_video`:
+one raw base64 MP4 per requested camera in `multiview.videos[]`, their
+`camera_order`, the shared output geometry, and, for joint requests, a numeric
+`lidar` tensor. Refer to [Multiview Output](multiview.md#output).
 
 ## Errors and Live Schema
 

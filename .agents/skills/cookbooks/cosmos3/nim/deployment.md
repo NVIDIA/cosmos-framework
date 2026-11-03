@@ -35,6 +35,7 @@ for the memory rules.
 | `nano` | General-purpose Nano Generator |
 | `edge-droid` | Edge-DROID policy with an action-only response; BF16 only; [experimental](support-matrix.md#choose-a-model) |
 | `nano-droid` | Nano-DROID policy with an action-only response; BF16 only |
+| `multiview` | Multi-camera driving video and LiDAR; BF16 only; refer to [Multiview](multiview.md) |
 | `super` | General-purpose Super Generator |
 | `super-t2i` | Full-step T2I specialist |
 | `super-t2i-4step` | Four-step T2I specialist |
@@ -65,8 +66,8 @@ Omit `NIM_PRECISION` normally. Generator prefers FP8 when compatible. Reasoner
 prefers BF16 on compute capability 8.0 through 8.8, FP8 on 8.9 through 9.x, and
 NVFP4 on 10.0 or newer, falling back to another compatible precision.
 Set `NIM_PRECISION=bf16`, `fp8`, or another available value only when the
-workload requires it. Edge Reasoner is BF16 or FP8 (no NVFP4), and Edge-DROID
-and Nano-DROID are BF16 only.
+workload requires it. Edge Reasoner is BF16 or FP8 (no NVFP4), and Edge-DROID,
+Nano-DROID, and multiview are BF16 only.
 
 For [streaming video sessions](streaming.md), precision affects quality:
 NVFP4 checkpoints are currently not recommended. Select either an FP8 checkpoint
