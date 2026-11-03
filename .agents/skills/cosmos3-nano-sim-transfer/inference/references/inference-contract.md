@@ -74,6 +74,13 @@ history window with three pinned entries. A positive cache size is measured
 in latent frames. Attention sinks require a finite window. Cache eviction
 must preserve the temporal position clock.
 
+The window includes the frame being generated, so it exposes
+`window - sink - 1` earlier non-sink frames. With none (for example
+`1 / 0` or `2 / 1`) the output can wash out. A finite window without a
+sink can let brightness drift once the clip outgrows the window; keep a
+sink of 1 or more. Setup warns about both for the HF Sim-Transfer
+checkpoint.
+
 ## Runtime options
 
 Use BF16 attention-cache storage (`model.config.kv_cache_dtype=null`).
