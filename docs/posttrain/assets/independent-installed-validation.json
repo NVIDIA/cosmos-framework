@@ -1,0 +1,266 @@
+{
+  "reviewed_baseline": "e2db8167fef08b186c838be86b45da4afb7d8240",
+  "production_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+  "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+  "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+  "package_files_verified": 1880,
+  "tests": {
+    "source_adapter_export": 99,
+    "source_physical": 60,
+    "source_physical_skips": 1,
+    "installed_adapter_export": 99,
+    "installed_physical": 60,
+    "installed_physical_skips": 1
+  },
+  "counts_overlap": true,
+  "source_physical_note": "Initial source pass preceded explicit net.train() in new positive normalization test. Installed physical suite and independent post-fix graph probes cover final test version.",
+  "source_adapters_note": "Affected files equal final production/test revision; source run preceded the commits. Clean archive/installed checks bind final revision.",
+  "test_log_sha256": {
+    "adapter-source-after.log": "87803d5bdb54669b722a3ace1181522693d01ddb4bc9aec061883202a8105d0b",
+    "physical-source-after.log": "0da85638a977a3849263c9bcf8bb5b4938f0c0fe85f633910cfdf32a3faf62de",
+    "hf-installed-tests.log": "37a4993a374ab99c9a8f1f491377bed06c66640f148c94c661444a5f2ef3e1ef",
+    "physical-installed-tests.log": "eec01d92672be0646bcec21aab3f1f4b8a4369e88d75d5667523623c97ff999a",
+    "alpamayo-regression-before.log": "7d577d0649ae4a20028720bf08810a943b2a371c15eeadf7f814917ad20bca5c",
+    "artifact-regressions-before.log": "682c6d0bccca6454ea628310336184860f077ebae16d46ae3a3d843793f07721"
+  },
+  "environment_sha256": {
+    "hf": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+    "physical": "08f4895698ad83c8c1e48f454bea4cf013a6c98b7b02d5d68740d621d249f186"
+  },
+  "independent_reviews": {
+    "targets-math-review.md": "90b15e3a6916a48ced9000121846a10576579e479142902dedb95a4335ea75fe",
+    "lifecycle-review.md": "72d438f73233b3615c2514565446852ce764848cb26e567764a09f1f074ac025",
+    "artifacts-review.md": "d487de5c8c0ee55ad68fbaec0fae39d9ebc4996d89c86d3287ac89a27fc373cd"
+  },
+  "reloads": {
+    "lora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "bfloat16",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/lora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "dc94a03df75429c43f4e4d8be8350d921ae77a710f4d36aacecc82f68208a76e",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-a/lora/portable-reload.json",
+        "report_sha256": "e611f219cc1c7b6acf80fcba0d0109166323c6172a7df8a77342034e47b3510b",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": false
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 8.96453857421875e-05,
+        "mean_absolute_logit_error": 6.9132228190937894e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "float32",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/lora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "dc94a03df75429c43f4e4d8be8350d921ae77a710f4d36aacecc82f68208a76e",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-a/lora/merged-reload.json",
+        "report_sha256": "50bed2f57302f606796481316c3536e3b75de033b70eb40a273c713fcaaae80b",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": true,
+        "materialization_marker_sha256": "84b489686b7884848fcad290c28df9b385104ef0e1485c02b1d6e6af9efac777"
+      }
+    },
+    "rslora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "bfloat16",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/rslora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "8f224e20fe5b3cb4b9f47dbcf1f725bd2c5406dbfbb7ad7cb34eff80cdc710ad",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-a/rslora/portable-reload.json",
+        "report_sha256": "d5859783ff976e710b8332fd647b6c7a19b9e5579d178d500959981a6ecdc93f",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": false
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 7.62939453125e-05,
+        "mean_absolute_logit_error": 6.7967025643156376e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "float32",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/rslora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "8f224e20fe5b3cb4b9f47dbcf1f725bd2c5406dbfbb7ad7cb34eff80cdc710ad",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-a/rslora/merged-reload.json",
+        "report_sha256": "2a1a4527f01d597b46eeab268d71712419f5cee3b798d0c9c1fbcbbb96737b97",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": true,
+        "materialization_marker_sha256": "079c094957849a3ce1faaed8f860ff67d31f69802915a4572a75bdb8a4cce24d"
+      }
+    },
+    "dora": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "bfloat16",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/dora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "ec59b6aebb35e5603fb06d01d69077329f90f37584745cdeff817f9b6a0d6622",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-b/dora/portable-reload.json",
+        "report_sha256": "0bf8c5f061e36ccde19d851955a184680a85663ba02dcd2a06b46f2597b54c1f",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": false
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 7.534027099609375e-05,
+        "mean_absolute_logit_error": 6.925919251443702e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "float32",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/dora/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "ec59b6aebb35e5603fb06d01d69077329f90f37584745cdeff817f9b6a0d6622",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-b/dora/merged-reload.json",
+        "report_sha256": "3d4bf4369324c7a648bc43729717b8b97c7099f2108368bd9dbb53f1c570eba1",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": true,
+        "materialization_marker_sha256": "3e21226f7cc80f0286098fd69353a53203c8b10c4c49c50dc3161707460cb8dc"
+      }
+    },
+    "pissa": {
+      "portable": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 0.0,
+        "mean_absolute_logit_error": 0.0,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "bfloat16",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/pissa/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "0460f9d7c65bee19c656b933bc3ff3caf51bb5a9e8aff2cb48ee54321474b50e",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-b/pissa/portable-reload.json",
+        "report_sha256": "f8fe228905b9c4d91e31a7b71348b83afec9905629943a06432e6329fb77bb00",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": false
+      },
+      "merged": {
+        "status": "passed",
+        "source_revision": "9f9052483da96adc1c9ac1033f14b6d7ab4b8cfc",
+        "wheel_sha256": "5a7ab6d1cb41d71c926dbc7a68eba0b67b9875e9e5adf9eede8870dfc27b47ee",
+        "maximum_logit_error": 0.00010967254638671875,
+        "mean_absolute_logit_error": 6.834829605395498e-06,
+        "argmax_equal": 32,
+        "positions": 32,
+        "reference_precision": "float32",
+        "training_artifact_provenance": {
+          "source": "/raid/cosmos-family-adapters-rarunachalam-20261031/full-wts-076cfbb/pissa/training/train/adapter_families/qwen3_vl/wts_full_epoch_all_components/epoch1/checkpoints/iter_001111",
+          "signature": "0460f9d7c65bee19c656b933bc3ff3caf51bb5a9e8aff2cb48ee54321474b50e",
+          "version": 1,
+          "installed": {
+            "source_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+            "wheel_sha256": "dd17f90ce81e13cc3a93085ff4ee4128b01ee92500aee4230ae3074485c7e973",
+            "container_sha256": null
+          },
+          "environment_sha256": "aeae4ffdb729a44e6a6687d5a39b2f4f08cc895f92913b8c573e4be9b327fbce",
+          "full_record_preserved_in_report": true
+        },
+        "report_path": "gpu-reloads-b/pissa/merged-reload.json",
+        "report_sha256": "2912bc20a3b0cdc2fc3da97bdc3964504f9845e44f5572db7672f4eec2bd8b96",
+        "environment_sha256": "4e5203fce5df41f109f9150b7ee100427dfee27733615bffdc76f10c73b0ac41",
+        "new_export_created_at_review_revision": true,
+        "materialization_marker_sha256": "dfdc3eaf0f17ff7b6fbd9414c60618a52c7f649c3af2b9a626f53f5d55f659ac"
+      }
+    }
+  },
+  "gpu_scope": "Four previously completed host full-WTS native Qwen3-VL-2B adapters. One A100 per process, existing saved controlled inputs, unchanged kernels/gates. Four new FP32 exports; eight fresh-process reload checks. No training, profile expansion or downstream accuracy reevaluation.",
+  "previous_qualification": {
+    "checkpoints": 12,
+    "fixed_profiles": 48,
+    "fully_passing_profiles": 47,
+    "historical_passing_correctness_executions": 182,
+    "provenance_preserved": "Original revisions, wheels/containers, targets, data and processor/media identities remain in adapter-final-review.md and its unchanged profile assets. The preceding sealed review archive is embedded unchanged in the new local package."
+  },
+  "remaining": "Native Qwen3-VL-30B-A3B PiSSA merged export unsupported; acceptance incomplete. Portable support preserved. WTS 576-row reused scene-disjoint benchmark and physical correctness-only limitations unchanged."
+}

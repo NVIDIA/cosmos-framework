@@ -192,6 +192,10 @@ modules, processor/tokenizer/template and effective media settings. This metadat
 participates in output/staging identity checks; identical weights with different
 media settings cannot silently reuse an existing export. Legacy merged artifacts
 without this record must be re-exported to a fresh destination.
+Portable loading hashes and deserializes the same captured payload bytes. HF
+export retains that captured manifest so an external path replacement cannot
+label consumed tensors with a different adapter's digest. This uses temporary
+memory proportional to the adapter payload, not to the base-model weights.
 Before merge, the exporter re-resolves the recorded targets against the stock
 architecture on meta; mismatched types, component ownership, scaling and counts
 fail before loading base shards. Export leaves live parameters, optimizer

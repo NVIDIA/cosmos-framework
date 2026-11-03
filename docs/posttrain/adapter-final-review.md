@@ -1,5 +1,10 @@
 # Adapter implementation: final qualification review
 
+This is the **November 2 qualification baseline**, preserved at `e2db816`.
+The subsequent [independent code review](adapter-independent-review.md) records
+two confirmed corrections, their separate commits and affected installed-wheel
+validation. Historical revisions and counts below are not relabeled as new runs.
+
 This review starts from clean `feat/posttrain-family-adapters` at
 `06f59f89fb64f55216bec271bb581c0878a0b4e4`, against audited main
 `86e1ee52f276c11d6cc66dfd17da2795dfbe937b`. The final production correction is

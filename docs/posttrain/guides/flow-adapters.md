@@ -153,6 +153,15 @@ because the language/expert prefix cache is mutable. The language and expert sta
 in the root FSDP unit so cache-only gradients remain visible to its backward hook.
 Actual GPU qualification is tracked in the evidence table, separately from CPU tests.
 
+The action objective reads the prefix's cached K/V. In its final language layer,
+only K/V projection adapters and separately trained `input_layernorm` or
+`self_attn.k_norm` feed that loss. Final-layer `self_attn.q_norm`,
+`post_attention_layernorm`, and the root final prefix norm are refused before
+injection, including when a wildcard also matches live earlier layers. Earlier
+layer query/post-attention norms remain selectable. Tiny actual R1 graph tests
+check optimizer membership and three updates with and without vision checkpointing;
+the fixed real-checkpoint profiles do not train these extra normalization modules.
+
 Stage the pinned R1 weights and the public `Qwen/Qwen3-VL-8B-Instruct` processor
 snapshot named by its config. The processor directory must include its
 `config.json`, tokenizer, chat template, image and video processor files; the
