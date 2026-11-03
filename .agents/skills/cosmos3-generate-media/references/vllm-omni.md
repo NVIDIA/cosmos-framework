@@ -33,6 +33,7 @@ docker run --runtime nvidia --gpus all \
   -v "$PWD:$PWD" \
   -w /workspace \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
@@ -44,6 +45,8 @@ docker run --runtime nvidia --gpus all \
   --port 8000 \
   --init-timeout 1800
 ```
+
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` raises the synchronous video endpoint's timeout from its 600 second default. The first video request after a server start includes a one-time warm-up that can exceed 600 seconds (about 9 minutes measured with the Nano FP8 checkpoint on one B200 GPU); without the larger timeout that request returns `504 Gateway Timeout`. Later requests are faster.
 
 ### Docker Image: Cosmos3-Edge
 
@@ -77,6 +80,7 @@ docker run --runtime nvidia --gpus all \
   -v "$PWD:$PWD" \
   -w /workspace \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
@@ -90,6 +94,8 @@ docker run --runtime nvidia --gpus all \
   --port 8000 \
   --init-timeout 1800
 ```
+
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` raises the synchronous video endpoint's timeout from its 600 second default. The first video request after a server start includes a one-time warm-up that can exceed 600 seconds on `Cosmos3-Super` (about 28 minutes measured with the FP8 checkpoint on one B200 GPU); without the larger timeout that request returns `504 Gateway Timeout`. Later requests are faster.
 
 ### Docker Image: Cosmos3-Super-Text2Image-4Step, Cosmos3-Super-Image2Video-4Step
 
@@ -241,6 +247,7 @@ if [ -n "${FP8_SOURCE_DIR:-}" ]; then
 fi
 docker run --runtime nvidia --gpus all \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   "${MOUNTS[@]}" \
   -w /workspace \
   -p 8000:8000 --ipc=host \
@@ -252,7 +259,9 @@ docker run --runtime nvidia --gpus all \
 ```
 
 For Super, add the upstream `--tensor-parallel-size 4` and
-`--enable-layerwise-offload` options if needed. Poll
+`--enable-layerwise-offload` options if needed. The command sets
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` for the reason given under the Nano and
+Super launch commands above. Poll
 `curl http://localhost:8000/v1/models` until ready and verify the ID equals
 `SERVED_MODEL`, then run the matching request and visualization cells below.
 The image and activation policy require runtime validation on your GPU setup.
