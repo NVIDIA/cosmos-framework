@@ -129,32 +129,36 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-For video requests, frame-sampling controls are multimodal processor options.
-Assuming `messages` contains the video content for your request, pass those
-controls via `extra_body` when using the OpenAI client:
+For video requests, the accompanying `run_with_vllm.ipynb` notebook samples
+video frames through vLLM's media loader. If `messages` contains the video
+content for your request, pass the same options via `extra_body` when using
+the OpenAI client:
 
 ```python
 response = client.chat.completions.create(
     model=client.models.list().data[0].id,
     messages=messages,
-    extra_body={"mm_processor_kwargs": {"fps": 4, "do_sample_frames": True}},
+    extra_body={"media_io_kwargs": {"video": {"num_frames": -1, "fps": 4}}},
 )
 ```
 
-For direct `/v1/chat/completions` HTTP requests, put `mm_processor_kwargs`
-inside the JSON body as shown below. Do not send `fps` or
-`do_sample_frames` as standalone top-level chat-completion fields.
+For direct `/v1/chat/completions` HTTP requests, put the equivalent
+`media_io_kwargs` object in the JSON body:
 
 ```python
 payload = {
-    "model": "Cosmos3-Super",
+    "model": "nvidia/Cosmos3-Super",
     "messages": messages,
-    "mm_processor_kwargs": {"fps": 4, "do_sample_frames": True},
+    "media_io_kwargs": {"video": {"num_frames": -1, "fps": 4}},
 }
 ```
 
-This matters for motion-dependent tasks such as physical plausibility analysis,
-where frame sampling determines which temporal events are visible to the Reasoner.
+The model ID above matches the `vllm serve nvidia/Cosmos3-Super` launch
+in the environment setup guide when no `--served-model-name` override is
+specified. Use the model ID returned by `client.models.list()` when in doubt.
+These examples follow the notebook's frame-sampling mechanism; avoid combining
+it with a separate processor-side sampling option without validating how the
+server handles both.
 
 ### Notebook walkthrough
 
