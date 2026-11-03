@@ -118,3 +118,31 @@ def test_empty_input_remains_unscored(tmp_path, evaluator_modules):
     result = dataset.evaluate(str(path)).iloc[0]
     assert pd.isna(result["macro_f1"])
     assert result["Valid Predictions"] == result["Total Samples"] == 0
+
+
+def test_partial_abstentions_do_not_publish_in_label_micro_average(tmp_path, evaluator_modules):
+    result = evaluate_rows(
+        tmp_path, evaluator_modules, ["yes", "no", "no"], ["yes", "?", "uncertain"]
+    )
+    assert result["macro_f1"] == pytest.approx(0.5)
+    assert result["macro avg--support"] == 3
+    assert result["accuracy"] == pytest.approx(1 / 3)
+    assert not any(key.startswith("micro avg--") for key in result)
+
+
+def test_nan_ground_truth_from_matched_annotation_is_not_a_class(tmp_path, evaluator_modules):
+    evaluator, _ = evaluator_modules
+    dataset = object.__new__(evaluator.MetropolisEventVerification)
+    dataset.data = pd.DataFrame(
+        {"index": ["sample-0", "sample-1"], "answer": [float("nan"), "yes"]}
+    )
+    path = tmp_path / "matched_nan.csv"
+    pd.DataFrame({
+        "index": ["sample-0", "sample-1"], "prediction": ["?", "yes"]
+    }).to_csv(path, index=False)
+    result = dataset.evaluate(str(path)).iloc[0].to_dict()
+    assert result["Total Samples"] == 2
+    assert result["Valid Predictions"] == 1
+    assert result["macro avg--support"] == 1
+    assert result["macro_f1"] == pytest.approx(1.0)
+    assert "nan--f1-score" not in result

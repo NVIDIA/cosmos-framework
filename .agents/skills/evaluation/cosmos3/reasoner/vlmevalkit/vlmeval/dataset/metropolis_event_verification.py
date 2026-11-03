@@ -226,10 +226,16 @@ class MetropolisEventVerification(VideoBaseDataset):
         for their ground-truth class, without adding an abstention class to the
         macro average. Valid Predictions reports parse coverage separately.
 
+        This abstention-penalized macro-F1 is not directly comparable with
+        earlier evaluator output that excluded unparseable answers. Alignment
+        with the historical VANTAGE Table 2 treatment is not established.
+
         Returns:
-            pd.DataFrame: Evaluation results. Top-level `macro_f1` key is the
-            primary rollup (matches VANTAGE paper Table 2); the full sklearn
-            classification_report is retained under `--`-flattened keys.
+            pd.DataFrame: Evaluation results. Top-level `macro_f1` is the
+            abstention-aware rollup. Per-class, macro, and weighted sklearn
+            metrics are retained under `--`-flattened keys; an in-label-only
+            micro average is excluded when some predictions abstain. Overall
+            accuracy is computed from all scored rows.
         """
         data = load(eval_file)
 
@@ -243,10 +249,10 @@ class MetropolisEventVerification(VideoBaseDataset):
             gt_row = self._lookup_gt_row(row)
             if gt_row is None:
                 gt = row.get('answer')
-                if pd.isna(gt):
-                    continue
             else:
                 gt = gt_row['answer']
+            if pd.isna(gt):
+                continue
 
             pred_answer = self._extract_answer(pred)
 
@@ -274,7 +280,10 @@ class MetropolisEventVerification(VideoBaseDataset):
             ground_truths, predictions, labels=labels, output_dict=True,
             zero_division=0,
         )
-        # Explicit labels omit the abstention class; retain overall accuracy too.
+        # With abstentions, sklearn's micro average only covers predictions in
+        # the selected labels and can be mistaken for all-row accuracy.
+        if invalid_answer in predictions:
+            report.pop('micro avg', None)
         report['accuracy'] = accuracy_score(ground_truths, predictions)
         macro_f1 = float(report.get('macro avg', {}).get('f1-score', 0.0))
         summary = {
