@@ -364,52 +364,27 @@ Authenticate with Hugging Face before loading gated checkpoints.
 [`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
 container.
 
-**Cosmos3-Edge** uses `Cosmos3EdgeForConditionalGeneration`. Release images
-through `v1.4.0rc1`, including `release:1.3.0rc22`, do not include that
-architecture. Use the
+**Cosmos3-Edge** requires TensorRT-LLM >=
+[`v1.4.0rc2`](https://github.com/NVIDIA/TensorRT-LLM/releases/tag/v1.4.0rc2).
+That release includes `Cosmos3EdgeForConditionalGeneration`. `v1.4.0rc1` and
+`release:1.3.0rc22` do not. Run Edge in
+[`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release/1.4.0rc2/tags).
+
+If that image is not available, build from the
 [TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator)
-for the container, submodules, and wheel commands. Run this checkout instead of
-the `git checkout` line in that block. It selects upstream `main` at the merge
-of [PR 20307](https://github.com/NVIDIA/TensorRT-LLM/pull/20307). A newer
-`main` commit also includes `Cosmos3EdgeForConditionalGeneration`:
+and run this checkout instead of the `git checkout` line in that block. A newer
+`main` commit also includes Edge:
 
 ```bash
 git checkout 39a44fab74f4cfc0d4d498be385e746fdd182872
 ```
 
-Run the Edge server command below in that environment.
-
-Install headless OpenCV with the interpreter that belongs to `trtllm-serve`.
-A virtualenv keeps that interpreter beside the `trtllm-serve` command. A system
-install records it in the command's shebang. Cosmos3 Reasoner uses OpenCV to
-process vision inputs:
+Install headless OpenCV with the same `python` that provides `trtllm-serve`.
+Inside a release container, that is the container's `python`. Cosmos3 Reasoner
+uses OpenCV to process vision inputs:
 
 ```bash
-SERVE_BIN="$(command -v trtllm-serve)"
-if [[ -z "$SERVE_BIN" ]]; then
-  echo "trtllm-serve is not on PATH."
-  exit 1
-fi
-SERVE_PY="$(dirname "$SERVE_BIN")/python"
-if [[ ! -x "$SERVE_PY" ]]; then
-  shebang="$(head -n 1 "$SERVE_BIN" 2>/dev/null || true)"
-  if [[ "$shebang" == "#!/"* ]]; then
-    interp="${shebang#\#!}"
-    interp="${interp%% *}"
-    if [[ "$interp" == "/usr/bin/env" ]]; then
-      name="${shebang#\#!/usr/bin/env }"
-      name="${name%% *}"
-      SERVE_PY="$(command -v "$name" 2>/dev/null || true)"
-    else
-      SERVE_PY="$interp"
-    fi
-  fi
-fi
-if [[ ! -x "$SERVE_PY" ]]; then
-  echo "Could not find the Python interpreter for trtllm-serve ($SERVE_BIN)."
-  exit 1
-fi
-"$SERVE_PY" -m pip install --no-cache-dir opencv-python-headless
+python -m pip install opencv-python-headless
 ```
 
 ### Start the server
@@ -437,8 +412,7 @@ trtllm-serve nvidia/Cosmos3-Super \
   --max_num_tokens 32768
 ```
 
-**Cosmos3-Edge** (single GPU, port 8001) — run in the source environment above,
-not in a release image through `v1.4.0rc1`:
+**Cosmos3-Edge** (single GPU, port 8001) — run inside `release:1.4.0rc2`:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
