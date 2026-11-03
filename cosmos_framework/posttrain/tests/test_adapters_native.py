@@ -331,6 +331,47 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
     assert control["serialized_tensors_verified"] > 0
 
 
+def test_merged_export_metadata_binds_the_consumed_adapter_snapshot(tmp_path, monkeypatch):
+    from safetensors.torch import load_file
+
+    from cosmos_framework.posttrain.checkpoint.adapters import MANIFEST, WEIGHTS, save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.tools import adapters as exporter
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+
+    torch.manual_seed(42)
+    base, first, second, merged = (tmp_path / name for name in ("base", "first", "second", "merged"))
+    tiny_snapshot(base)
+    policy = build_qwen3_vl_model(
+        Qwen3VLModelConfig(name_or_path=str(base), dtype="float32", activation_checkpointing="none"),
+        adapters=adapter_config("lora"),
+    )
+    ident = policy.net._posttrain_adapter_identity
+    target = ident["resolved"]["targets"][0]["name"]
+    expected = prepare_merged_state(policy.net.state_dict(), ident)[target + ".weight"].clone()
+    save_adapter_artifact(policy.net, str(first))
+    original_digest = json.loads((first / MANIFEST).read_text())["weights_sha256"]
+    with torch.no_grad():
+        policy.net.get_submodule(target).lora_B.weight.add_(0.125)
+    save_adapter_artifact(policy.net, str(second))
+    replacement_digest = json.loads((second / MANIFEST).read_text())["weights_sha256"]
+    assert original_digest != replacement_digest
+    metadata = exporter.merged_export_metadata
+
+    def replace_before_metadata(adapter, identity, **kwargs):
+        for name in (WEIGHTS, MANIFEST):
+            (second / name).replace(first / name)
+        return metadata(adapter, identity, **kwargs)
+
+    monkeypatch.setattr(exporter, "merged_export_metadata", replace_before_metadata)
+    exporter.export_merged_adapter(str(first), str(base), str(merged))
+    index = json.loads((merged / "model.safetensors.index.json").read_text())["weight_map"]
+    actual = load_file(str(merged / index[target + ".weight"]))[target + ".weight"]
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    marker = json.loads((merged / ".materialized").read_text())["identity"]["export_metadata"]
+    assert marker["adapter_weights_sha256"] == original_digest
+
+
 def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path):
     from cosmos_framework.posttrain.checkpoint.adapters import (
         read_adapter_artifact,

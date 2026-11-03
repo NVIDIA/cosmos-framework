@@ -373,6 +373,55 @@ def test_base_identity_hashes_weights_not_only_sizes(tmp_path):
     assert before != snapshot_identity(str(tmp_path), weights=True)
 
 
+def test_portable_read_deserializes_the_verified_payload(tmp_path, monkeypatch):
+    import builtins
+    import io
+    from contextlib import contextmanager
+    from pathlib import Path
+
+    from safetensors.torch import save_file
+
+    from cosmos_framework.posttrain.checkpoint.adapters import WEIGHTS
+
+    torch.manual_seed(42)
+    net = tiny_net()
+    ident = identity(install_adapters(net, AdapterConfig(components=[Component(targets=[FIRST], rank=2)])))
+    original = {n: net.state_dict()[n].clone() for n in state_spec(ident)}
+    portable = tmp_path / "portable"
+    write_adapter_artifact(str(portable), ident, original)
+    weights = portable / WEIGHTS
+    replacement = tmp_path / "replacement.safetensors"
+    changed = {n: value.clone() for n, value in original.items()}
+    changed[FIRST + ".lora_B.weight"].fill_(0.125)
+    save_file(changed, str(replacement))
+    original_open = builtins.open
+
+    @contextmanager
+    def replace_after_read(handle):
+        with handle:
+            yield handle
+        if replacement.exists():
+            replacement.replace(weights)
+
+    def controlled_open(file, *args, **kwargs):
+        handle = original_open(file, *args, **kwargs)
+        if isinstance(file, (str, Path)) and Path(file) == weights:
+            return replace_after_read(handle)
+        return handle
+
+    # An external replacement after the payload read must not substitute tensors
+    # for bytes whose digest was verified. Cover both open() and Path.open().
+    monkeypatch.setattr(builtins, "open", controlled_open)
+    monkeypatch.setattr(io, "open", controlled_open)
+    loaded_identity, state = read_adapter_artifact(str(portable))
+    assert not replacement.exists()
+    assert loaded_identity == ident
+    assert all(torch.equal(value, original[name]) for name, value in state.items())
+    # A subsequent read sees the changed bytes and must reject the old manifest.
+    with pytest.raises(ValueError, match="digest"):
+        read_adapter_artifact(str(portable))
+
+
 @pytest.mark.parametrize(
     "kwargs", [{"method": "pissa", "dropout": 0.1}, {"method": "dora", "initialization": "svd"}, {"dtype": "bfloat16"}]
 )

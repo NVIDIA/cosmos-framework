@@ -23,16 +23,19 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     adapter_configuration,
     checkpoint_adapter_state,
     prepare_merged_state,
-    read_adapter_artifact,
+    read_adapter_snapshot,
     snapshot_identity,
     state_spec,
     write_adapter_artifact,
 )
 
 
-def merged_export_metadata(adapter: str, identity: dict) -> dict:
+def merged_export_metadata(adapter: str, identity: dict, *, artifact_record: dict | None = None) -> dict:
     """Retain the validated portable contract in the materializer's commit marker."""
-    manifest = json.loads((Path(adapter) / MANIFEST).read_text())
+    # Export uses its captured record, so later path replacement cannot label
+    # already consumed tensors with another run's weight digest. Validation of
+    # an existing export still compares against the currently supplied artifact.
+    manifest = artifact_record if artifact_record is not None else json.loads((Path(adapter) / MANIFEST).read_text())
     if manifest.get("kind") != "portable_adapter" or manifest.get("identity") != identity:
         raise ValueError("portable adapter manifest changed during export; use an immutable artifact")
     return {
@@ -106,7 +109,8 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
     """
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
-    identity, state = read_adapter_artifact(adapter)
+    record, state = read_adapter_snapshot(adapter)
+    identity = record["identity"]
     if identity["architecture"] == "qwen3_vl_moe" and any(
         row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
     ):
@@ -133,7 +137,7 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
         raise ValueError(
             "HF merged adapters require the processor beside the base; --processor is for native model-owned formats"
         )
-    metadata = merged_export_metadata(adapter, identity)
+    metadata = merged_export_metadata(adapter, identity, artifact_record=record)
     if any(
         row["name"] != row["owner"]
         for row in [*identity["resolved"]["targets"], *identity["resolved"]["extra_parameters"]]

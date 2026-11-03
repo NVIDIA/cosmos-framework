@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load as load_safetensors
+from safetensors.torch import save_file
 
 from cosmos_framework.posttrain.checkpoint.conversion.hf import SIDECAR_DIRS, SIDECAR_FILES
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json, fsync_directory, rename_directory_noreplace
@@ -267,14 +268,29 @@ def publish_staged_artifact(staging: str, target: str, *, commit_file: str) -> N
 def read_adapter_artifact(
     directory: str, *, expected_identity: dict | None = None
 ) -> tuple[dict, dict[str, torch.Tensor]]:
+    record, state = read_adapter_snapshot(directory, expected_identity=expected_identity)
+    return record["identity"], state
+
+
+def read_adapter_snapshot(
+    directory: str, *, expected_identity: dict | None = None
+) -> tuple[dict, dict[str, torch.Tensor]]:
+    """Capture the validated record and tensors from the same serialized payload.
+
+    Hashing a path and then reopening it for mmap deserialization can consume a
+    replacement file under the original digest. Adapter payloads exclude base
+    weights; retain their bytes through verification and deserialization.
+    Exporters also retain this record to bind provenance to the consumed state.
+    """
     root = Path(directory)
     if not (root / MANIFEST).is_file() or not (root / WEIGHTS).is_file():
         raise ValueError(f"incomplete portable adapter at {directory!r}; both {MANIFEST} and {WEIGHTS} are required")
     record = json.loads((root / MANIFEST).read_text())
-    if record.get("kind") != "portable_adapter" or file_sha256(str(root / WEIGHTS)) != record.get("weights_sha256"):
-        raise ValueError(
-            "invalid adapter artifact kind or weight digest; training checkpoints are not portable adapters"
-        )
+    if record.get("kind") != "portable_adapter":
+        raise ValueError("invalid adapter artifact kind; training checkpoints are not portable adapters")
+    payload = (root / WEIGHTS).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != record.get("weights_sha256"):
+        raise ValueError("invalid adapter weight digest; use a complete immutable portable artifact")
     identity = record["identity"]
     if expected_identity is not None and identity != expected_identity:
         differences = [
@@ -283,9 +299,9 @@ def read_adapter_artifact(
         raise ValueError(
             f"adapter compatibility mismatch in {sorted(differences)}; use the recorded base, processor, targets and media settings"
         )
-    state = load_file(str(root / WEIGHTS), device="cpu")
+    state = load_safetensors(payload)
     _validate_state(state, identity)
-    return identity, state
+    return record, state
 
 
 def load_adapter_artifact(net: torch.nn.Module, directory: str) -> None:
