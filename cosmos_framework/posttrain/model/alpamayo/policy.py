@@ -122,8 +122,19 @@ def validate_targets(net, config):
             raise ValueError(
                 "Alpamayo action loss reads final-prefix K/V only; select k_proj/v_proj or an earlier layer"
             )
-    if any(row["name"].startswith(root + "norm.") for row in resolved["extra_parameters"]):
-        raise ValueError("Alpamayo action loss does not consume the final prefix norm")
+    for row in resolved["extra_parameters"]:
+        if row["name"].startswith(root + "norm."):
+            raise ValueError("Alpamayo action loss does not consume the final prefix norm")
+        # Only the input normalization and key normalization feed the final
+        # layer's cached K/V. Query and post-attention norms feed its unused
+        # output, just like the rejected query/output/MLP adapter targets above.
+        if row["name"].startswith(prefix) and not row["name"].startswith(
+            (prefix + "input_layernorm.", prefix + "self_attn.k_norm.")
+        ):
+            raise ValueError(
+                f"Alpamayo action loss does not consume final-prefix normalization {row['name']}; "
+                "select input_layernorm/self_attn.k_norm or an earlier layer"
+            )
 
 
 def external_identity():

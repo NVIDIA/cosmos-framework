@@ -17,8 +17,8 @@ pytestmark = pytest.mark.skipif(transformers.__version__ != "4.57.6", reason="pi
 
 from cosmos_framework.posttrain.checkpoint.adapters import load_adapter_artifact, save_adapter_artifact
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig as C
-from cosmos_framework.posttrain.config.adapters import AdapterConfig
-from cosmos_framework.posttrain.model.adapters import assert_trainability
+from cosmos_framework.posttrain.config.adapters import AdapterConfig, AdapterExtraModuleConfig
+from cosmos_framework.posttrain.model.adapters import assert_trainability, optimizer_groups
 from cosmos_framework.posttrain.model.alpamayo.policy import AlpamayoSFTPolicy, build_policy, load_base
 from cosmos_framework.posttrain.model.alpamayo.sft import AlpamayoSFTModelConfig
 
@@ -241,6 +241,54 @@ def test_r1_rejects_dead_prefix_targets_and_cache_checkpoint_replay(tmp_path):
     model_config.activation_checkpointing = "full"
     with pytest.raises(ValueError, match="mutable"):
         build_policy(base, model_config, adapters=config("lora"), device="cpu")
+
+
+@pytest.mark.parametrize("target", ["self_attn.q_norm", "post_attention_layernorm"])
+def test_r1_rejects_dead_final_prefix_norms_before_injection(tmp_path, monkeypatch, target):
+    import cosmos_framework.posttrain.model.alpamayo.policy as policy_module
+
+    base, model_config = source(tmp_path)
+    cfg = config("lora")
+    cfg.extra_modules = [AdapterExtraModuleConfig(targets=[f"vlm.model.language_model.layers.1.{target}"])]
+    monkeypatch.setattr(
+        policy_module, "prepare_adapter_model", lambda *a, **kw: pytest.fail("dead target reached injection")
+    )
+    with pytest.raises(ValueError, match="does not consume final-prefix normalization"):
+        build_policy(base, model_config, adapters=cfg, device="cpu")
+
+
+@pytest.mark.parametrize("ac", ["none", "vision"])
+@pytest.mark.parametrize(
+    "target",
+    ["1.input_layernorm", "1.self_attn.k_norm", "0.self_attn.q_norm", "0.post_attention_layernorm"],
+)
+def test_r1_live_prefix_norm_updates_and_optimizer_membership(tmp_path, ac, target):
+    from cosmos_framework.posttrain.config.build import build_optimizer
+    from cosmos_framework.posttrain.config.rl import OptimizerConfig
+
+    base, model_config = source(tmp_path)
+    model_config.activation_checkpointing = ac
+    cfg = config("lora")
+    name = f"vlm.model.language_model.layers.{target}"
+    cfg.extra_modules = [AdapterExtraModuleConfig(targets=[name])]
+    policy = build_policy(base, model_config, adapters=cfg, device="cpu")
+    policy.net.train()
+    optimizer = build_optimizer(
+        policy.net, OptimizerConfig(lr=0.003), parameter_groups=optimizer_groups(policy.net, 0.003)
+    )
+    assert_trainability(policy.net, optimizer)
+    parameter = policy.net.get_submodule(name).weight
+    before = parameter.detach().clone()
+    data = batch()
+    for _ in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        output = policy.flow_matching_loss(data)
+        assert torch.isfinite(output.loss)
+        output.loss.backward()
+        assert parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        assert parameter.grad.count_nonzero() > 0
+        optimizer.step()
+    assert not torch.equal(parameter, before)
 
 
 @pytest.mark.parametrize("method,rs", [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
