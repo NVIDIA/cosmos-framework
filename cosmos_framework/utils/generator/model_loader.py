@@ -374,7 +374,7 @@ def load_model_from_checkpoint(
             For DCP this is forwarded as-is to ``CustomLoadPlanner`` (substring match).  For
             safetensors each substring is escaped and wrapped as ``.*<substring>.*`` so that
             ``load_vfm_model``'s ``re.fullmatch``-based ``skip_patterns`` reproduces the
-            substring semantics one-for-one. This option is incompatible with FSDP CPU offload,
+            substring semantics one-for-one. This option is incompatible with CPU offload,
             which requires the checkpoint load to initialize every parameter.
 
         load_lidar_tokenizer: Keep the configured LiDAR tokenizer by default. RGB-only
@@ -413,9 +413,12 @@ def load_model_from_checkpoint(
             else:
                 raise ValueError(f"Key {key} not found in config.model.config.parallelism")
 
-    if getattr(config.model.config.parallelism, "fsdp_cpu_offload", False) and keys_to_skip_loading:
+    preserve_cpu_placement = getattr(config.model.config.parallelism, "fsdp_cpu_offload", False) or getattr(
+        config.model.config.parallelism, "inference_cpu_initialization", False
+    )
+    if preserve_cpu_placement and keys_to_skip_loading:
         raise ValueError(
-            "fsdp_cpu_offload requires the checkpoint load to initialize every parameter; "
+            "CPU offload requires the checkpoint load to initialize every parameter; "
             "keys_to_skip_loading is not supported"
         )
 
@@ -462,9 +465,9 @@ def load_model_from_checkpoint(
 
     with misc.timer("instantiate model"):
         model = instantiate(config.model)
-        # FSDP CPU offload establishes mixed placement during construction;
-        # recursively moving the model would corrupt its CPU-shard DTensor aliases.
-        if not getattr(config.model.config.parallelism, "fsdp_cpu_offload", False):
+        # Preserve CPU initialization for inference offload and FSDP's mixed
+        # placement; a recursive CUDA move defeats both loading strategies.
+        if not preserve_cpu_placement:
             model = model.cuda()  # type: ignore
         model.on_train_start()
 

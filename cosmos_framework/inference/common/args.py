@@ -978,6 +978,9 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    enable_cpu_offload: bool
+    enable_layerwise_offload: bool
+    prefill_text_kv: bool
     use_batched_cfg: bool
     diffusion_cache: bool
     diffusion_cache_thresh: float | None
@@ -1037,6 +1040,16 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    enable_cpu_offload: bool = False
+    """Swap reasoner/generator blocks through CPU (single GPU, no CUDA graphs).
+    Loads network weights on CPU and prepares text K/V in the first forward. VAE and heads remain resident."""
+    enable_layerwise_offload: bool = False
+    """Stream reasoner/generator layers from pinned CPU memory with asynchronous prefetch.
+    Single GPU, no CUDA graphs or runtime quantization; supports ModelOpt FP8 checkpoints.
+    Mutually exclusive with enable_cpu_offload."""
+    prefill_text_kv: bool = False
+    """Prepare text K/V inside the first forward (single GPU, two-way attention, no CUDA graphs).
+    Enabled automatically by either CPU offload mode."""
     use_batched_cfg: bool = False
     """Run conditional and unconditional CFG branches as a single batched forward of
     size 2N instead of two sequential N-forwards. Disabled by default because
