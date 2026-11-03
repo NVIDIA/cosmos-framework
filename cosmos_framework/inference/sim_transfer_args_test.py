@@ -713,6 +713,59 @@ def test_negative_prompt_file_resolves_relative_to_the_spec(tmp_path: Path, monk
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_negative_prompt_file_still_resolves_from_the_launch_folder_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before this check the file was read from the folder the run was launched from; keep that working.
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    (launch / "neg.json").write_text(json.dumps({"caption": "launch"}))
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "neg.json").write_text(json.dumps({"caption": "spec"}))
+    (specs / "depth.mp4").touch()
+    monkeypatch.setattr(args_module, "_LAUNCH_DIR", launch)
+    monkeypatch.chdir(specs)
+    sample = OmniSampleOverrides(depth={"control_path": "depth.mp4"}, negative_prompt_file="neg.json")
+
+    assert Path(sample.negative_prompt_file).resolve() == (launch / "neg.json").resolve()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_defaults_name_fallback_applies_only_to_a_bare_filename(tmp_path: Path) -> None:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    with pytest.raises(ValueError, match="negative_prompt_file not found: typo_dir/neg_prompts.json"):
+        OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="typo_dir/neg_prompts.json")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_keep_metadata_promotion_does_not_report_a_requested_none_as_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The built-in video2video defaults set negative_prompt_keep_metadata=true, which promotes 'none' to 'same'.
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=True,
+        negative_metadata_mode="none",
+        negative_prompt_keep_metadata=True,
+    )
+    sample._build_text_data(SimpleNamespace(), sample.sample_meta)
+    assert sample.negative_metadata_mode == "same"
+    sample._build_transfer_data(
+        _distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth", "negative_metadata_mode"})
+    )
+
+    assert not any("'negative_metadata_mode' is ignored" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_defaults_negative_prompt_file_name_is_still_accepted(tmp_path: Path) -> None:
     # The built-in modality defaults name their caption file by bare filename under defaults/.
     control = tmp_path / "depth.mp4"

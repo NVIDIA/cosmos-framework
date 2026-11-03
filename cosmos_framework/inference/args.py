@@ -77,26 +77,34 @@ def _load_transfer_negative_prompt_file(path: str | Path) -> str:
     return json.dumps(json.loads(candidate.read_text()))
 
 
+# The folder the run was launched from. Spec files are validated inside a chdir to the spec's folder, and
+# negative_prompt_file used to be read later from the launch folder, so that folder is still tried first.
+_LAUNCH_DIR = Path.cwd()
+
+
 def _resolve_negative_prompt_file(v: str | None) -> str | None:
     """Fail fast on a ``negative_prompt_file`` that does not exist.
 
-    Spec files are validated with the working directory set to the spec's folder, so a relative path resolves
-    against the spec, the same as ``vision_path`` and ``prompt_path``. A bare filename under ``defaults/`` is
-    kept as-is for ``_load_transfer_negative_prompt_file``. Previously a missing file was only noticed if the
-    loader ever read it, and in most setups a default ``negative_prompt`` wins first, so a typo passed silently.
+    Tried in order: the launch folder (where the file used to be read from), the current folder (the spec's
+    folder while a spec file is validated), and, for a bare filename only, ``defaults/``. Previously a missing
+    file was only noticed if the loader ever read it, and in most setups a default ``negative_prompt`` wins
+    first, so a typo passed silently.
     """
     if v is None:
         return None
-    candidate = Path(v).expanduser()
-    if candidate.is_file():
-        return str(candidate.absolute())
-    defaults_path = PACKAGE_DIR / "defaults" / candidate.name
-    if defaults_path.is_file():
-        return v
-    raise ValueError(
-        f"negative_prompt_file not found: {v} (resolved to {candidate.absolute()}; also checked {defaults_path}). "
-        "A relative path is resolved against the spec file's folder."
-    )
+    path = Path(v).expanduser()
+    tried = []
+    for candidate in [path] if path.is_absolute() else [_LAUNCH_DIR / path, Path.cwd() / path]:
+        if candidate not in tried:
+            tried.append(candidate)
+        if candidate.is_file():
+            return str(candidate.absolute())
+    if path.name == v:
+        defaults_path = PACKAGE_DIR / "defaults" / v
+        tried.append(defaults_path)
+        if defaults_path.is_file():
+            return v
+    raise ValueError(f"negative_prompt_file not found: {v} (tried {', '.join(str(t) for t in tried)})")
 
 
 NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
@@ -440,6 +448,8 @@ class TextDataArgs(ArgsBase):
 
 
 class TextDataOverrides(OverridesBase):
+    _negative_metadata_mode_promoted: bool = pydantic.PrivateAttr(default=False)
+
     prompt_path: ResolvedFilePath | None = None
     """Path to a .txt file containing the prompt. Only one of 'prompt' or 'prompt_path' should be provided."""
     prompt: str | None = None
@@ -489,6 +499,8 @@ class TextDataOverrides(OverridesBase):
             return
 
         if self.negative_prompt_keep_metadata and self.negative_metadata_mode == NegativeMetadataMode.NONE:
+            # Remember that this was promoted, so a requested 'none' is not reported as an ignored 'same'.
+            self._negative_metadata_mode_promoted = True
             self.negative_metadata_mode = NegativeMetadataMode.SAME
 
 
@@ -1756,6 +1768,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         ):
             for field, (neutral, reason) in self._DISTILLED_TRANSFER_IGNORED_FIELDS.items():
                 value = getattr(self, field)
+                if field == "negative_metadata_mode" and self._negative_metadata_mode_promoted:
+                    value = NegativeMetadataMode.NONE  # the request said 'none'; keep_metadata promoted it
                 if field in user_set and value is not None and value != neutral:
                     log.warning(f"[transfer] '{field}' is ignored by distilled causal Transfer: {reason}.")
             # The recipe keeps the chunk equal to num_frames (601 for the long rollout), so a fixed
@@ -2188,6 +2202,12 @@ class OmniSampleOverrides(
         # User-provided values take precedence over JSON defaults.
         if self.defaults_file is not None:
             defaults = json.loads(self.defaults_file.read_text())
+            # A defaults file is validated outside any chdir, so resolve its relative caption file here.
+            neg_file = defaults.get("negative_prompt_file")
+            if isinstance(neg_file, str) and not Path(neg_file).expanduser().is_absolute():
+                beside = self.defaults_file.parent / neg_file
+                if beside.is_file():
+                    defaults["negative_prompt_file"] = str(beside.absolute())
         else:
             defaults_key = sample_meta.model_mode
             if self.multiview is not None:
