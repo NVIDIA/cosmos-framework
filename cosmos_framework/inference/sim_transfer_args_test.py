@@ -489,12 +489,17 @@ def test_explicit_negative_prompt_wins_over_file_with_a_warning(
         ("normalize_cfg", True, True),
         ("num_conditional_frames", 0, False),
         ("num_conditional_frames", 2, True),
+        ("negative_metadata_mode", "none", False),
+        ("negative_metadata_mode", "same", True),
+        ("negative_metadata_mode", "inverse", True),
+        ("negative_prompt_keep_metadata", False, False),
+        ("negative_prompt_keep_metadata", True, True),
     ],
 )
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_sampler_fields_are_flagged_as_ignored_by_distilled_transfer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: float | bool, warns: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: float | bool | str, warns: bool
 ) -> None:
     warnings = _record_contract_warnings(monkeypatch)
     control = tmp_path / "depth.mp4"
@@ -655,19 +660,66 @@ def test_guidance_interval_is_flagged_as_ignored_by_distilled_transfer(
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_unused_negative_prompt_file_is_not_opened(tmp_path: Path) -> None:
-    # Specs such as the cookbook's set a relative negative_prompt_file next to a negative_prompt from the
-    # defaults; the file is only read when it supplies the caption, so a path that does not resolve is fine.
+    # Specs such as the cookbook's set a negative_prompt_file next to a negative_prompt from the defaults;
+    # the file is only read when it supplies the caption, so the default caption is kept.
     control = tmp_path / "depth.mp4"
     control.touch()
+    negative = tmp_path / "negative.json"
+    negative.write_text("not json: never opened")
     sample = OmniSampleOverrides(
         depth={"control_path": str(control)},
         autoregressive=False,
         negative_prompt="grainy",
-        negative_prompt_file="../assets/negative_prompt.json",
+        negative_prompt_file=str(negative),
     )
     sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
 
     assert sample.negative_prompt == "grainy"
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("autoregressive", [True, False])
+def test_missing_negative_prompt_file_is_rejected(tmp_path: Path, autoregressive: bool) -> None:
+    # Before, a typo here passed silently whenever a default negative_prompt won, which is almost always.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    with pytest.raises(ValueError, match="negative_prompt_file not found: missing_negative.json"):
+        OmniSampleOverrides(
+            depth={"control_path": str(control)},
+            autoregressive=autoregressive,
+            negative_prompt_file="missing_negative.json",
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_resolves_relative_to_the_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The cookbook layout: specs/<control>.json points at ../assets/negative_prompt.json.
+    (tmp_path / "assets").mkdir()
+    negative = tmp_path / "assets" / "negative_prompt.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "depth.mp4").touch()
+    monkeypatch.chdir(specs)  # load_args_from_file validates with the spec's folder as the working directory
+    sample = OmniSampleOverrides(
+        depth={"control_path": "depth.mp4"}, negative_prompt_file="../assets/negative_prompt.json"
+    )
+    monkeypatch.chdir(tmp_path.parent)
+
+    assert Path(sample.negative_prompt_file).resolve() == negative.resolve()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_defaults_negative_prompt_file_name_is_still_accepted(tmp_path: Path) -> None:
+    # The built-in modality defaults name their caption file by bare filename under defaults/.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="neg_prompts.json")
+
+    assert sample.negative_prompt_file == "neg_prompts.json"
 
 
 @pytest.mark.L0

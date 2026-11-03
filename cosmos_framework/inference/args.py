@@ -77,6 +77,31 @@ def _load_transfer_negative_prompt_file(path: str | Path) -> str:
     return json.dumps(json.loads(candidate.read_text()))
 
 
+def _resolve_negative_prompt_file(v: str | None) -> str | None:
+    """Fail fast on a ``negative_prompt_file`` that does not exist.
+
+    Spec files are validated with the working directory set to the spec's folder, so a relative path resolves
+    against the spec, the same as ``vision_path`` and ``prompt_path``. A bare filename under ``defaults/`` is
+    kept as-is for ``_load_transfer_negative_prompt_file``. Previously a missing file was only noticed if the
+    loader ever read it, and in most setups a default ``negative_prompt`` wins first, so a typo passed silently.
+    """
+    if v is None:
+        return None
+    candidate = Path(v).expanduser()
+    if candidate.is_file():
+        return str(candidate.absolute())
+    defaults_path = PACKAGE_DIR / "defaults" / candidate.name
+    if defaults_path.is_file():
+        return v
+    raise ValueError(
+        f"negative_prompt_file not found: {v} (resolved to {candidate.absolute()}; also checked {defaults_path}). "
+        "A relative path is resolved against the spec file's folder."
+    )
+
+
+NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
+
+
 @cache
 def _load_modality_defaults(model_mode: str) -> dict[str, Any]:
     default_file = PACKAGE_DIR / f"defaults/{model_mode}/sample_args.json"
@@ -1346,8 +1371,8 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     seg: TransferArgs | None = None
     wsm: TransferArgs | None = None
     lidar: LidarTransferArgs | None = None
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     num_conditional_frames: pydantic.NonNegativeInt | None = None
     max_frames: pydantic.PositiveInt | None = None
@@ -1387,8 +1412,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     unset. Joint camera+LiDAR: pair it with ``wsm: {}`` and one or more multiview views, each
     carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
     supply measured target sweeps as a clean conditioning prefix."""
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
@@ -1516,6 +1541,11 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "num_conditional_frames": (0, "generation starts from noise with no RGB history prefix"),
         "control_guidance_interval": (None, "control guidance is fixed at 1.0, so there is no control-guidance window"),
         "guidance_interval": (None, "guidance is fixed at 1.0, so there is no guidance window"),
+        "negative_metadata_mode": (
+            NegativeMetadataMode.NONE,
+            "the distilled schedule has no negative-caption branch to add metadata to",
+        ),
+        "negative_prompt_keep_metadata": (False, "the distilled schedule has no negative-caption branch"),
     }
 
     def _build_transfer_data(
