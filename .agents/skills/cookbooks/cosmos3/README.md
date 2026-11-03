@@ -180,8 +180,8 @@ uv pip install --torch-backend=cu130 \
   transformers
 ```
 
-For Cosmos3-Edge on an Intel Arc GPU, install the same dependencies with the
-PyTorch XPU backend:
+For Cosmos3-Edge on an Intel GPU, install the same dependencies with the
+PyTorch XPU backend, then verify the device:
 
 ```bash
 uv pip install --torch-backend=xpu \
@@ -195,10 +195,20 @@ uv pip install --torch-backend=xpu \
   torch \
   torchvision \
   transformers
+
+python -c 'import torch; print(torch.xpu.is_available(), torch.xpu.get_device_name(0))'
 ```
 
-This Cosmos3-Edge path was validated on Intel Arc Graphics with PyTorch
-`2.13.0.dev20260530+xpu` and Diffusers `0.35.2`.
+Validated for Cosmos3-Edge text-to-video (480p, 17 frames, 20 steps, guardrail
+off) on an Intel Core Ultra 9 285H with Intel Arc Graphics (iGPU), using a
+fresh install from the command above: Python 3.13.18, PyTorch `2.15.0+xpu`,
+torchvision `0.29.2+xpu`, Diffusers `0.42.0.dev0` (git commit `86ef420`), and
+Transformers `5.22.1`. On this iGPU, VAE decode at 480p with 33 or more frames,
+including Edge's default 121, did not complete.
+
+If `import torch` fails with `undefined symbol: urGraphGetIdExp`, a system oneAPI
+install on `LD_LIBRARY_PATH` is shadowing the runtime shipped with the XPU wheel;
+remove the oneAPI entries from `LD_LIBRARY_PATH` for this venv.
 
 ## TensorRT-LLM Generator
 

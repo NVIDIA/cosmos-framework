@@ -9,7 +9,7 @@ README section "Run with Diffusers". Its relative links (`../../README.md#diffus
 ### Quickstart
 
 Set up the environment: [Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers).
-Run a Cosmos3-Edge text-to-video generation with `Cosmos3OmniPipeline`:
+Run a text-to-video generation with `Cosmos3OmniPipeline`:
 
 ```python
 import json
@@ -20,19 +20,67 @@ from diffusers.utils import export_to_video
 
 prompt = json.load(open("assets/prompts/text2video/robot_kitchen.json"))
 negative = json.load(open("assets/negative_prompts/text2video/neg_prompt.json"))
-device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
 
 pipe = Cosmos3OmniPipeline.from_pretrained(
-    "nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16
+    "nvidia/Cosmos3-Nano", torch_dtype=torch.bfloat16, device_map="cuda"
 )
-pipe.to(device)
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=10.0)
+
+result = pipe(
+    prompt=json.dumps(prompt),
+    negative_prompt=json.dumps(negative),
+    image=None,
+    num_frames=189,
+    height=720,
+    width=1280,
+    fps=24,
+    num_inference_steps=35,
+    guidance_scale=6.0,
+    enable_sound=False,
+    add_resolution_template=False,
+    add_duration_template=False,
+    generator=torch.Generator(device="cuda").manual_seed(1234),
+)
+export_to_video(result.video, "/tmp/cosmos3_t2v_diffusers.mp4", fps=24)
+```
+
+To run **Cosmos3-Super** instead, load the larger checkpoint:
+`Cosmos3OmniPipeline.from_pretrained("nvidia/Cosmos3-Super", ...)`.
+
+To run **Cosmos3-Edge** instead, load `nvidia/Cosmos3-Edge` and use its
+single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
+`num_inference_steps=20`, `guidance_scale=5.0`, and `flow_shift=8.0`.
+
+### Cosmos3-Edge on Intel XPU (skill addition, not in the README)
+
+XPU applies to Cosmos3-Edge only; Nano, Super, and the distilled checkpoints stay on CUDA.
+Install with `--torch-backend=xpu` ([Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers)), then run Edge
+on `xpu`. This block was validated with the guardrail **off**. The Edge checkpoint's `model_index.json` already
+sets `enable_safety_checker: false`, and the guardrail (`cosmos_guardrail`) has not been run on XPU yet; it is passed
+explicitly below so the setting is visible. Set it to `True` (as `get_pipe`, § 7, does) only after checking the guardrail
+models on your XPU setup:
+
+```python
+import json
+import torch
+from diffusers import Cosmos3OmniPipeline
+from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+from diffusers.utils import export_to_video
+
+prompt = json.load(open("assets/prompts/text2video/robot_kitchen.json"))
+negative = json.load(open("assets/negative_prompts/text2video/neg_prompt.json"))
+
+pipe = Cosmos3OmniPipeline.from_pretrained(
+    "nvidia/Cosmos3-Edge", torch_dtype=torch.bfloat16, enable_safety_checker=False
+)
+pipe.to("xpu")
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
 
 result = pipe(
     prompt=json.dumps(prompt),
     negative_prompt=json.dumps(negative),
     image=None,
-    num_frames=121,
+    num_frames=17,
     height=480,
     width=832,
     fps=24,
@@ -41,15 +89,15 @@ result = pipe(
     enable_sound=False,
     add_resolution_template=False,
     add_duration_template=False,
-    generator=torch.Generator(device=device).manual_seed(1234),
+    generator=torch.Generator(device="xpu").manual_seed(1234),
 )
-export_to_video(result.video, "/tmp/cosmos3_edge_t2v_diffusers.mp4", fps=24)
+export_to_video(result.video, "/tmp/cosmos3_edge_t2v_xpu.mp4", fps=24)
 ```
 
-The XPU path was validated on Intel Arc Graphics with PyTorch
-`2.13.0.dev20260530+xpu` and Diffusers `0.35.2`. XPU support is limited to
-Cosmos3-Edge generation through Diffusers. Nano and Super examples remain on
-their documented CUDA paths.
+The block uses `num_frames=17`. On the validated Intel Arc iGPU, VAE decode at 480p with 33 or more frames
+(including Edge's default 121) did not complete within 10 minutes, with or without `vae.enable_tiling()`, so
+longer clips are not supported on XPU yet. Validated package versions and hardware:
+[Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers).
 
 ### Notebook walkthrough
 
@@ -166,6 +214,8 @@ Jupyter-only step (the install cell registered a `Cosmos3 Diffusers (Python 3.13
 
 ## 5. Verify GPU and Python Environment
 
+This cell checks CUDA only. On Intel XPU (Cosmos3-Edge only), check `torch.xpu.is_available()` and `torch.xpu.get_device_name(0)` instead.
+
 ```python
 import torch
 import diffusers
@@ -194,7 +244,7 @@ Shared definitions, verbatim in payloads.md:
 - `create_payload` (`backend="diffusers"`): § 9.2 (`run_with_diffusers.ipynb` block; differences from the other notebooks' versions are tabulated there).
 - `MODEL_IDS`, `DISTILLED_MODELS`, `resolve_model_id`, `is_distilled_model`: § 5.
 
-The Diffusers runner (verbatim; the kernel/venv guard that preceded the imports is covered by § 4, and the definitions above are pointed to where they sat in the cell):
+The Diffusers runner (verbatim; the kernel/venv guard that preceded the imports is covered by § 4, and the definitions above are pointed to where they sat in the cell). It is CUDA-only (`pipe.to("cuda")`, CUDA generator, `torch.cuda` cleanup in `release_pipe`); for Cosmos3-Edge on Intel XPU use the Quickstart's XPU block or § 8.4:
 
 ```python
 import json
@@ -259,16 +309,6 @@ def release_pipe() -> None:
     print(f"released previous pipeline; cuda allocated {cuda_allocated_gib():.1f} GiB")
 
 
-def inference_device(model: str) -> str:
-    if (
-        resolve_model_id(model) == "nvidia/Cosmos3-Edge"
-        and hasattr(torch, "xpu")
-        and torch.xpu.is_available()
-    ):
-        return "xpu"
-    return "cuda"
-
-
 def get_pipe(model: str):
     global _pipe, _pipe_model
     model_id = resolve_model_id(model)
@@ -299,7 +339,7 @@ def get_pipe(model: str):
             token=os.environ.get("HF_TOKEN") or None,
         )
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=FIXED_SAMPLING["shift"])
-    pipe.to(inference_device(model))
+    pipe.to("cuda")
     _pipe = pipe
     _pipe_model = model_id
     print(f"loaded pipeline in {time.time() - t0:.1f}s")
@@ -316,7 +356,7 @@ def run_diffusers_payload(payload_path: Path, output_dir: str | Path, *, model: 
     pipe = get_pipe(model)
     if not distilled:
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=payload["shift"])
-    generator = torch.Generator(device=inference_device(model)).manual_seed(payload["seed"])
+    generator = torch.Generator(device="cuda").manual_seed(payload["seed"])
     vision_path = resolve_payload_path(payload_path, payload["vision_path"]) if "vision_path" in payload else None
     image = load_image(str(vision_path)) if payload["model_mode"] == "image2video" else None
     video = load_video(str(vision_path)) if payload["model_mode"] == "video2video" else None
@@ -461,7 +501,8 @@ Text-to-image as the notebook runs it (`get_pipe` + the `text2image` branch of
 `run_diffusers_payload`; `FIXED_SAMPLING`: 35 steps, guidance 6.0, shift 10.0, 720 × 1280,
 seed 1234; `get_pipe` loads with `enable_safety_checker=True` — `False` is the § 1 switch; output path per § 4.2).
 Save the snippet as a file and run it with the venv's interpreter, `"$COSMOS3_DIFFUSERS_VENV/bin/python" <file>.py`,
-from this skill directory (the one with `assets/`) — `python` alone is the venv's only in a shell that activated it:
+from this skill directory (the one with `assets/`) — `python` alone is the venv's only in a shell that activated it.
+Nano runs on CUDA only; on Intel XPU use the Edge snippet of § 8.4:
 
 ```python
 import json, os, torch
@@ -496,7 +537,9 @@ then verify with ffprobe or the venv's `av` (see SKILL.md Verify the output).
 Edge, composed from the README sentence above and the text2image / video branches of
 `run_diffusers_payload` (diffusers.md § 7; the diffusers notebook has no `t2i_edge` /
 `t2v_edge_noaudio` case, payloads.md § 8.2). Run the setup block, then ONE mode block — the one the task asks for — in the
-same Python process; text-to-video needs more GPU time and memory than a single frame:
+same Python process; text-to-video needs more GPU time and memory than a single frame. The `device` line selects Intel XPU
+when available (Edge is the only model with an XPU path) and CUDA otherwise; like the Nano snippet, it disables the guardrail
+for a smoke run, as in the Quickstart's XPU block:
 
 ```python
 # setup — shared by both modes

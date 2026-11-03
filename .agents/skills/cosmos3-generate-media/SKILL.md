@@ -97,10 +97,9 @@ the first command (Quickstart; § 7 `get_pipe` / `run_diffusers_payload`; use-ca
 
 The notebook's venv, with the torch backend matching the driver's CUDA major
 version (13.x → `cu130`, 12.x → `cu128`; check `nvidia-smi`), plus the setup guide's
-headless OpenCV swap. For Cosmos3-Edge on Intel Arc, set
-`COSMOS3_TORCH_BACKEND=xpu`; this path was validated with PyTorch
-`2.13.0.dev20260530+xpu` and Diffusers `0.35.2`. Other models and backends remain
-on their documented NVIDIA GPU paths.
+headless OpenCV swap. For Cosmos3-Edge on an Intel GPU, set
+`COSMOS3_TORCH_BACKEND=xpu` (validated stack: setup guide, Diffusers section). XPU
+is Edge-only; Nano, Super, and the distilled checkpoints stay on CUDA.
 
 ```bash
 export COSMOS3_DIFFUSERS_VENV="${COSMOS3_DIFFUSERS_VENV:-$PWD/.venv-cosmos3-diffusers}"
