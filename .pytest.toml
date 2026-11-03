@@ -20,6 +20,11 @@ filterwarnings = [
     "ignore::FutureWarning",
 ]
 markers = [
+    "L0: Fast unit tests selected by the GPU CI unit-test job.",
+    "L1: Extended tests requiring additional resources.",
+    "L2: End-to-end or long-running tests.",
+    "CPU: Test can run without a GPU.",
+    "GPU: Test requires a GPU.",
     "manual: Test requires --manual.",
     "level(l): Test level <l> in [0, 1, 2].",
     "gpus(n): Test requires <n> GPUs.",

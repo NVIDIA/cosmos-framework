@@ -13,19 +13,31 @@ batched CFG (cond+uncond as B=2) via varlen attention with per-sample isolation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
+from cosmos_framework.model.generator.mot.attention import (
+    SplitInfo,
+    build_packed_sequence,
+    dispatch_attention,
+    two_way_attention,
+)
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     drop_pad_segment,
+    from_all_seq,
     from_und_gen_splits,
     get_gen_seq,
 )
+
+
+if TYPE_CHECKING:
+    from cosmos_framework.data.generator.sequence_packing import PackedSequence
 
 
 class UndKVCache:
@@ -64,12 +76,21 @@ class InferenceTextKVMemoryValue(MemoryValue):
     max_seqlen_q: int = 0
     max_seqlen_kv: int = 0
     for_cuda_graphs: bool = False
+    und_only: bool = False
 
 
 class InferenceTextKVMemoryState(MemoryState):
     """Request-local memory state that reuses static text K/V during diffusion inference."""
 
-    def __init__(self, text_kv_cache: list[UndKVCache]) -> None:
+    def __init__(
+        self,
+        text_kv_cache: list[UndKVCache],
+        *,
+        prefill: bool = False,
+        prepare: Callable[[], None] | None = None,
+    ) -> None:
+        self._prepare = prepare
+        self.prefill = prefill
         self._text_kv_cache = text_kv_cache
         self._gen_len = 0
         self._kv_reorder_indices: torch.Tensor | None = None
@@ -79,6 +100,8 @@ class InferenceTextKVMemoryState(MemoryState):
         self._max_seqlen_kv = 0
 
     def init(self, hidden_states: dict, device: torch.device) -> None:
+        if self._prepare is not None:
+            self._prepare()
         del device
         self._gen_len = int(hidden_states["_num_full_tokens"])
         # Precompute the multi-sample layout outside the compiled decoder layers.
@@ -142,6 +165,7 @@ class InferenceTextKVMemoryState(MemoryState):
             max_seqlen_q=self._max_seqlen_q,
             max_seqlen_kv=self._max_seqlen_kv,
             for_cuda_graphs=False,
+            und_only=self.prefill,
         )
 
     def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
@@ -162,6 +186,93 @@ class InferenceTextKVMemoryState(MemoryState):
 def make_inference_text_kv_cache(num_layers: int) -> list[UndKVCache]:
     """Create per-layer request-local text K/V caches for one CFG branch."""
     return [UndKVCache() for _ in range(num_layers)]
+
+
+class InferenceTextKVPrefill:
+    """Prepare every CFG branch inside the first generation forward, then swap once."""
+
+    def __init__(
+        self,
+        net: torch.nn.Module,
+        branches: list[tuple[PackedSequence | None, list[UndKVCache] | None]],
+        activate: Callable[[str], None],
+    ) -> None:
+        self._net = net
+        self._activate = activate
+        self._pending: list[tuple[PackedSequence, list[UndKVCache]]] = []
+        for template, cache in branches:
+            if cache is not None:
+                if template is None:
+                    raise ValueError("Text prefill requires a packed template for each CFG branch")
+                self._pending.append((template, cache))
+
+    def __call__(self) -> None:
+        if not self._pending:
+            return
+        self._activate("reasoner")
+        for template, cache in self._pending:
+            prefill_inference_text_kv(self._net, template, cache)
+        self._activate("generator")
+        self._pending.clear()
+
+
+@torch.no_grad()
+def prefill_inference_text_kv(net: torch.nn.Module, packed_seq: PackedSequence, caches: list[UndKVCache]) -> None:
+    """Fill diffusion text caches with the ordinary packed decoder kernels.
+
+    Preserve positions, padding and per-sample attention boundaries, including
+    unequal conditional/unconditional prompts in batched CFG. Generation blocks
+    are skipped; K/V writes stay outside the compiled decoder layers.
+    """
+    model = net.language_model.model
+    if len(caches) != len(model.layers) or any(cache.is_initialized for cache in caches):
+        raise ValueError("Text K/V prefill requires an empty cache for every decoder layer")
+    if any(layer.self_attn.k_norm_und_for_gen is not None for layer in model.layers):
+        raise ValueError("Text K/V prefill does not support generation-specific text K normalization")
+    if packed_seq.text_ids.numel() == 0:
+        for layer, cache in zip(model.layers, caches, strict=True):
+            attn = layer.self_attn
+            empty = model.embed_tokens.weight.new_empty((1, 0, attn.num_key_value_heads, attn.head_dim))
+            cache.store(empty, empty)
+        return
+    hidden = model.embed_tokens(packed_seq.text_ids)
+    packed = hidden.new_zeros((packed_seq.sequence_length, hidden.shape[-1]))
+    packed[packed_seq.text_indexes] = hidden
+    gen_mask = torch.ones(packed_seq.sequence_length, device=hidden.device, dtype=torch.bool)
+    gen_mask[packed_seq.text_indexes] = False
+    pack, mask, _ = build_packed_sequence(
+        "two_way",
+        packed_sequence=packed,
+        attn_modes=packed_seq.attn_modes,
+        split_lens=packed_seq.split_lens,
+        sample_lens=packed_seq.sample_lens,
+        packed_und_token_indexes=packed_seq.text_indexes,
+        packed_gen_token_indexes=gen_mask.nonzero().flatten(),
+        num_heads=model.config.num_attention_heads,
+        head_dim=model.config.head_dim,
+        num_layers=len(model.layers),
+        skip_natten_metadata=True,
+    )
+    # Traverse only the reasoner layers inside the active generation forward.
+    # No recursive model forward or generator final norm is needed for K/V.
+    positions = packed_seq.position_ids
+    cos, sin = model.rotary_emb(
+        hidden,
+        position_ids=positions.unsqueeze(0) if positions.ndim == 1 else positions.unsqueeze(1),
+    )
+    position_embeddings = (from_all_seq(cos.squeeze(0), pack), from_all_seq(sin.squeeze(0), pack))
+    memory = InferenceTextKVMemoryState(caches, prefill=True)
+    memory.init(pack, hidden.device)
+    for index, layer in enumerate(model.layers):
+        pack, _, kv = layer(
+            pack,
+            mask,
+            position_embeddings,
+            memory_value=memory.read_for_layer(index),
+        )
+        if kv is None:
+            raise RuntimeError("Text prefill did not produce K/V for a decoder layer")
+        memory.write_for_layer(index, kv)
 
 
 def _attention_gen_with_cached_text(
@@ -264,9 +375,11 @@ def dispatch_attention_with_text_kv_memory(
 ) -> tuple[SequencePack, KVToStore | None]:
     """Dispatch attention with optional request-local text K/V reuse.
 
-    Falls through to standard ``dispatch_attention`` when ``memory_value`` is
-    ``None`` or still on the first (cache-fill) step.
+    Use reasoner-only attention during prefill and cached text K/V during
+    generation. Otherwise, delegate to standard ``dispatch_attention``.
     """
+    if isinstance(memory_value, InferenceTextKVMemoryValue) and memory_value.und_only:
+        return two_way_attention(packed_query_states, packed_key_states, packed_value_states, und_only=True), None
     if isinstance(memory_value, InferenceTextKVMemoryValue) and memory_value.frame_idx > 0:
         return _attention_gen_with_cached_text(
             packed_query_states,

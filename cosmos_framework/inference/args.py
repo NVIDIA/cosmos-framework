@@ -140,6 +140,14 @@ class SamplingOverrides(OverridesBase):
             if self.sigma_max is None:
                 self.sigma_max = 0.0
             return
+        interval = self.guidance_interval
+        guided = getattr(model_config, "fixed_step_sampler_config", None) is None and self.guidance not in (None, 1.0)
+        if guided and interval is not None and len(interval) == 2 and interval[0] >= interval[1]:
+            # The sampler tests lo < t < hi, so a reversed window silently never applies text guidance.
+            log.warning(
+                f"'guidance_interval'={list(interval)} is reversed (lo >= hi): text guidance runs only on steps "
+                "with lo < t < hi, so it never runs. Use [lo, hi] with lo < hi."
+            )
         fixed_sampler = getattr(model_config, "fixed_step_sampler_config", None)
         if fixed_sampler is not None:
             schedule = fixed_sampler.t_list
@@ -1496,6 +1504,20 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "control_guidance": 1.0,
     }
 
+    # Fields the distilled causal Transfer path accepts but never reads: field -> (neutral value, reason).
+    # A warning fires only when the sample or CLI sets a field to something other than its neutral value.
+    _DISTILLED_TRANSFER_IGNORED_FIELDS: ClassVar[dict[str, tuple[Any, str]]] = {
+        "negative_prompt": ("", "the distilled schedule has no negative-caption branch"),
+        "negative_prompt_file": (None, "the distilled schedule has no negative-caption branch"),
+        "guidance": (1.0, "the distilled sampler always runs at guidance 1.0"),
+        "sigma_max": (80.0, "the distilled sampler uses its fixed timestep list"),
+        "shift": (5.0, "the distilled sampler's fixed timestep list is already shifted"),
+        "normalize_cfg": (False, "guidance is fixed at 1.0, so there is no CFG output to normalize"),
+        "num_conditional_frames": (0, "generation starts from noise with no RGB history prefix"),
+        "control_guidance_interval": (None, "control guidance is fixed at 1.0, so there is no control-guidance window"),
+        "guidance_interval": (None, "guidance is fixed at 1.0, so there is no guidance window"),
+    }
+
     def _build_transfer_data(
         self,
         model_config: "OmniMoTModelConfig",
@@ -1513,8 +1535,20 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         if not hints:
             return
 
+        user_set = user_fields if user_fields is not None else frozenset()
         if self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
+        elif (
+            self.negative_prompt_file is not None
+            and "negative_prompt" in user_set
+            and "negative_prompt_file" in user_set
+        ):
+            log.warning(
+                f"[transfer] both 'negative_prompt' and 'negative_prompt_file' are set; "
+                f"'negative_prompt_file' ({self.negative_prompt_file}) is ignored."
+            )
+
+        self._warn_ignored_transfer_fields(model_config, hints, user_set)
 
         # A multiview caption run takes its chunk length from the span each caption describes, so
         # the generic 93-frame transfer chunk must not stand in for it: a 300-frame caption would
@@ -1627,6 +1661,97 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             for field, value in self._TRANSFER_DEFAULTS[hint_key].items():
                 if user_fields is None or field not in user_fields:
                     setattr(self, field, value)
+
+        # After the hint defaults, so control_guidance is final. Only the bidirectional single-view
+        # path runs a control-guidance pass, and only when control_guidance is not 1.0.
+        interval = self.control_guidance_interval
+        if (
+            interval is not None
+            and len(interval) == 2
+            and interval[0] >= interval[1]
+            and not self.autoregressive
+            and self.multiview is None
+            and getattr(model_config, "fixed_step_sampler_config", None) is None
+            and getattr(self, "control_guidance", None) not in (None, 1.0)
+        ):
+            # control_active() tests lo < t < hi, so a reversed window silently never applies control guidance.
+            log.warning(
+                f"[transfer] 'control_guidance_interval'={list(interval)} is reversed (lo >= hi): control guidance "
+                "runs only on steps with lo < t < hi, so it never runs. Use [lo, hi] with lo < hi."
+            )
+
+    def _warn_ignored_transfer_fields(
+        self,
+        model_config: "OmniMoTModelConfig",
+        hints: dict,
+        user_set: frozenset[str],
+    ) -> None:
+        """Reject invalid control weights and warn about requested settings that cannot take effect."""
+        self = cast("SampleDataOverrides", self)
+        weights = {key: (1.0 if config.weight is None else config.weight) for key, config in hints.items()}
+        # Only the bidirectional path passes these weights to build_transfer_batch, which asserts the same
+        # rule after the model has loaded; the causal path hard-codes a single weight of 1.0.
+        # Joint camera+LiDAR transfer reads only the wsm weight, unnormalized, so it is left alone here.
+        reads_weights = not self.autoregressive and TransferHintKey.LIDAR not in hints
+        if reads_weights and (any(w < 0 for w in weights.values()) or sum(weights.values()) <= 0):
+            raise ValueError(f"Control weights must be non-negative with a positive sum, got {weights}")
+        if len(hints) == 1 and self.multiview is None:
+            ((hint_key, weight),) = weights.items()
+            if weight != 1.0:
+                # build_transfer_batch divides each weight by the sum, and the network only takes the
+                # weighted path for more than one control, so a lone control's weight is never read.
+                log.warning(
+                    f"[transfer] '{hint_key}.weight'={weight} has no effect with a single control; "
+                    "weights only set the relative mix between multiple controls."
+                )
+        # Single-view Transfer returns through _generate_transfer_batch before the native upsampler,
+        # but native_prompt_upsampling still skips the duration/resolution text added to plain prompts.
+        if (
+            self.prompt_upsampling is True
+            and not getattr(self, "prompt_upsampling_applied", None)
+            and self.multiview is None
+        ):
+            log.warning(
+                "[transfer] 'prompt_upsampling' is ignored by Transfer: the prompt is not upsampled, and a "
+                "plain-text prompt also loses the duration/resolution text normally added to it. "
+                "Leave 'prompt_upsampling' off and pass the detailed prompt directly."
+            )
+
+        # Mirrors the sampler choice in generate_transfer_sample: a fixed-step (distilled)
+        # sampler runs at guidance 1.0, so these settings are never read.
+        if (
+            self.autoregressive
+            and self.multiview is None
+            and getattr(model_config, "fixed_step_sampler_config", None) is not None
+        ):
+            for field, (neutral, reason) in self._DISTILLED_TRANSFER_IGNORED_FIELDS.items():
+                value = getattr(self, field)
+                if field in user_set and value is not None and value != neutral:
+                    log.warning(f"[transfer] '{field}' is ignored by distilled causal Transfer: {reason}.")
+            # The recipe keeps the chunk equal to num_frames (601 for the long rollout), so a fixed
+            # neutral value does not fit; flag only a chunk that would imply chunked generation.
+            chunk = self.num_video_frames_per_chunk
+            if "num_video_frames_per_chunk" in user_set and chunk is not None and chunk != self.num_frames:
+                log.warning(
+                    f"[transfer] 'num_video_frames_per_chunk'={chunk} is ignored by distilled causal Transfer: "
+                    "it generates the whole clip one latent frame at a time."
+                )
+            # Any control routes to the transfer path whatever the mode says, and this path has no
+            # first-frame conditioning, so only video2video describes what runs. Action modes fail on
+            # their own capability check, and multiview transfer uses text2video/image2video on purpose.
+            mode = self.model_mode
+            if (
+                "model_mode" in user_set
+                and self.multiview is None
+                and mode is not None
+                and mode != ModelMode.VIDEO2VIDEO
+                and not mode.is_action
+                and not mode.is_reasoner
+            ):
+                log.warning(
+                    f"[transfer] 'model_mode'='{mode.value}' is ignored by distilled causal Transfer: "
+                    "a control video always runs video-to-video transfer here; use 'video2video'."
+                )
 
     @staticmethod
     def _is_sf_dmd_transfer_model(model_config: "OmniMoTModelConfig") -> bool:
@@ -1905,7 +2030,14 @@ class OmniSampleArgs(
     SamplingArgs,
     SampleDataArgs,
     PromptUpsamplingArgs,
-): ...
+):
+    # Fields the sample or CLI set explicitly (not filled from defaults), so generation can tell a
+    # request apart from a default when it reports a setting it had to override. Not serialized.
+    _requested_fields: frozenset[str] = pydantic.PrivateAttr(default_factory=frozenset)
+
+    @property
+    def requested_fields(self) -> frozenset[str]:
+        return self._requested_fields
 
 
 class OmniSampleOverrides(
@@ -2160,7 +2292,9 @@ class OmniSampleOverrides(
         # than ``applied is False`` (which would miss case (a)).
         prompt_upsampling_applied = getattr(self, "prompt_upsampling_applied", None)
         native_prompt_upsampling = self.prompt_upsampling is True and not prompt_upsampling_applied
-        return self._build(OmniSampleArgs, native_prompt_upsampling=native_prompt_upsampling)
+        sample_args = self._build(OmniSampleArgs, native_prompt_upsampling=native_prompt_upsampling)
+        sample_args._requested_fields = user_fields
+        return sample_args
 
 
 _MODEL_MEMORY_FACTOR: int = int(1e9) * 2 * 2  # 1B params/tower * 2 bytes/param (bfloat16) * 2 towers
