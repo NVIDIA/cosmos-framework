@@ -55,10 +55,12 @@ single-GPU, no-audio settings: `height=480`, `width=832`, `num_frames=121`,
 
 XPU applies to Cosmos3-Edge only; Nano, Super, and the distilled checkpoints stay on CUDA.
 Install with `--torch-backend=xpu` ([Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers)), then run Edge
-on `xpu`. This block was validated with the guardrail **off**. The Edge checkpoint's `model_index.json` already
-sets `enable_safety_checker: false`, and the guardrail (`cosmos_guardrail`) has not been run on XPU yet; it is passed
-explicitly below so the setting is visible. Set it to `True` (as `get_pipe`, § 7, does) only after checking the guardrail
-models on your XPU setup:
+on `xpu`. This block runs with the guardrail **off**; the Edge checkpoint's `model_index.json` already sets
+`enable_safety_checker: false`, and the block passes it explicitly so the setting is visible. Turning it on fails on
+XPU (and on any host without CUDA) with `cosmos_guardrail` 0.3.2: `cosmos_utils.load_model` calls `torch.load` without
+`map_location` on the CUDA-saved face-blur checkpoint. With that load mapped to CPU, the guardrail ran on XPU (text and
+video checks on `xpu:0`); switch to `enable_safety_checker=True`, as `get_pipe` (§ 7) does, once a fixed
+`cosmos_guardrail` is available:
 
 ```python
 import json

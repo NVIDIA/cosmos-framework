@@ -204,7 +204,10 @@ off) on an Intel Core Ultra 9 285H with Intel Arc Graphics (iGPU), using a
 fresh install from the command above: Python 3.13.18, PyTorch `2.15.0+xpu`,
 torchvision `0.29.2+xpu`, Diffusers `0.42.0.dev0` (git commit `86ef420`), and
 Transformers `5.22.1`. On this iGPU, VAE decode at 480p with 33 or more frames,
-including Edge's default 121, did not complete.
+including Edge's default 121, did not complete. The guardrail cannot be enabled
+on XPU with `cosmos_guardrail` 0.3.2, which loads a CUDA-saved checkpoint
+without `map_location`; see
+[the Diffusers skill reference](../../cosmos3-generate-media/references/diffusers.md#cosmos3-edge-on-intel-xpu-skill-addition-not-in-the-readme).
 
 If `import torch` fails with `undefined symbol: urGraphGetIdExp`, a system oneAPI
 install on `LD_LIBRARY_PATH` is shadowing the runtime shipped with the XPU wheel;
