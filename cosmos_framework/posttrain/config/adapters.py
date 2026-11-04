@@ -24,6 +24,7 @@ class AdapterComponentConfig:
     layers: list[int] | None = None
     method: str = "lora"
     initialization: str = "default"
+    execution: str = "factorized_v1"
     rank: int = 8
     alpha: float = 16.0
     use_rslora: bool = False
@@ -56,6 +57,10 @@ class AdapterComponentConfig:
                 raise ValueError("duplicate adapter layer indices")
         if self.method not in ("lora", "dora", "pissa"):
             raise ValueError(f"unsupported adapter method {self.method!r}")
+        if self.execution not in ("factorized_v1", "pissa_dense_v1"):
+            raise ValueError(f"unsupported adapter execution semantics {self.execution!r}")
+        if self.execution == "pissa_dense_v1" and self.method != "pissa":
+            raise ValueError("pissa_dense_v1 execution requires method=pissa")
         if type(self.rank) is not int or self.rank <= 0:
             raise ValueError("adapter rank must be a positive integer")
         if not math.isfinite(self.alpha) or self.alpha <= 0:

@@ -53,14 +53,25 @@ def native_moe_snapshot(path):
     )
 
 
-@pytest.mark.parametrize("method,rslora", [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
-def test_moe_native_manifest_portable_and_supported_merged_exports(tmp_path, method, rslora):
+@pytest.mark.parametrize(
+    "method,rslora,execution",
+    [
+        ("lora", False, "factorized_v1"),
+        ("lora", True, "factorized_v1"),
+        ("dora", False, "factorized_v1"),
+        ("pissa", False, "factorized_v1"),
+        ("pissa", False, "pissa_dense_v1"),
+        ("pissa", True, "pissa_dense_v1"),
+    ],
+)
+def test_moe_native_manifest_portable_and_supported_merged_exports(tmp_path, method, rslora, execution):
     torch.manual_seed(23)
     base = tmp_path / "base"
     native_moe_snapshot(base)
     cfg = adapter_config(method)
     for group in cfg.components:
         group.use_rslora = rslora
+        group.execution = execution
     native = build_qwen3_vl_model(
         Qwen3VLModelConfig(name_or_path=str(base), dtype="bfloat16", activation_checkpointing="none"),
         adapters=cfg,
@@ -103,7 +114,7 @@ def test_moe_native_manifest_portable_and_supported_merged_exports(tmp_path, met
     save_adapter_artifact(model, str(portable))
     _, adapter_state = read_adapter_artifact(str(portable))
     merged = tmp_path / "merged"
-    if method == "pissa":
+    if method == "pissa" and execution == "factorized_v1":
         # Small smooth fixtures cannot qualify a real hard-routing MoE merge.
         # The 30B checkpoint switches a near-tied top-k expert after FP32 merge,
         # including with the native forward. Portable training/reload remains

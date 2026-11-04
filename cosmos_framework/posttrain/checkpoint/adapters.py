@@ -30,6 +30,7 @@ from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, ca
 from cosmos_framework.posttrain.utils.object_store import file_sha256
 
 FORMAT = "cosmos-posttrain-adapter-v1"
+DENSE_FORMAT = "cosmos-posttrain-adapter-v2"
 MANIFEST = "adapter_manifest.json"
 WEIGHTS = "adapter.safetensors"
 
@@ -124,7 +125,9 @@ def make_adapter_identity(
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = None
     result = {
-        "format": FORMAT,
+        "format": DENSE_FORMAT
+        if any(row["settings"].get("execution") == "pissa_dense_v1" for row in targets["targets"])
+        else FORMAT,
         "architecture": architecture,
         "base_storage_dtype": base_dtype,
         "base": snapshot_identity(base, weights=True) if source_identity is None else source_identity["base"],
@@ -162,7 +165,7 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         "parameter_dtypes"
     ):
         raise ValueError("model-defined adapter base precision requires the materialized parameter dtype map")
-    if identity.get("format") != FORMAT:
+    if identity.get("format") not in (FORMAT, DENSE_FORMAT):
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
@@ -170,7 +173,14 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
     if identity.get("pissa_representation") != "original_base_plus_trained_minus_initial_factors":
         raise ValueError("unsupported PiSSA residual-base representation")
     result = {}
+    dense = False
     for row in identity["resolved"]["targets"]:
+        execution = row["settings"].get("execution", "factorized_v1")
+        if execution not in ("factorized_v1", "pissa_dense_v1") or (
+            execution == "pissa_dense_v1" and row["settings"]["method"] != "pissa"
+        ):
+            raise ValueError("unsupported adapter execution semantics; use the recorded compatible runtime")
+        dense |= execution == "pissa_dense_v1"
         out_features, in_features = row["shape"]
         rank = row["settings"]["rank"]
         prefix = row["name"] + "."
@@ -182,6 +192,8 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
             result[prefix + "initial_A"] = (rank, in_features)
             result[prefix + "initial_B"] = (out_features, rank)
     result.update({row["name"]: tuple(row["shape"]) for row in identity["resolved"]["extra_parameters"]})
+    if (identity["format"] == DENSE_FORMAT) != dense:
+        raise ValueError("adapter format/execution mismatch: dense PiSSA requires the version-2 artifact contract")
     return result
 
 

@@ -72,6 +72,10 @@ def resolve_targets(net: nn.Module, config: AdapterConfig, *, family: str | None
             settings = asdict(group)
             for key in ("component", "targets", "layers"):
                 settings.pop(key)
+            # Preserve the exact identities of existing artifacts/checkpoints.
+            # Absence means the original factorized execution, never dense mode.
+            if settings["execution"] == "factorized_v1":
+                settings.pop("execution")
             row = dict(
                 component=group.component,
                 name=name,
@@ -159,16 +163,37 @@ def validate_adapter_profile(cfg: Any, model_config: Any, pdims: Any, adapters: 
         raise ValueError(f"adapters require float32/bfloat16 base storage and activation_checkpointing in {modes}")
     if cfg.attn_impl not in ("eager", "sdpa"):
         raise ValueError("posttrain adapters require attn_impl=eager|sdpa; other attention backends are not qualified")
+    validate_adapter_parallelism(pdims)
+    if resume and adapters.warm_start:
+        raise ValueError(
+            "exact training resume and adapter warm_start are distinct operations; clear warm_start for resume"
+        )
+
+
+def validate_adapter_parallelism(pdims: Any) -> None:
+    """Shared DP-only contract for native/HF/physical adapter builders."""
     if pdims is not None:
         replicate, shard = int(pdims.dp_replicate), int(pdims.dp_shard)
         if replicate < 1 or shard < 1 or replicate * shard != int(pdims.world_size):
             raise ValueError("adapter DP mesh requires positive dp_replicate * dp_shard == world_size")
         if any(int(getattr(pdims, axis, 1)) != 1 for axis in ("tp", "ep", "cp", "pp", "cfgp")):
             raise ValueError("adapters support FSDP2/HSDP data parallelism only; TP/EP/CP/PP/CFG axes must be one")
-    if resume and adapters.warm_start:
-        raise ValueError(
-            "exact training resume and adapter warm_start are distinct operations; clear warm_start for resume"
-        )
+
+
+def pissa_dense_weight(base, a, b, initial_a, initial_b, scale):
+    """Version-1 dense execution: shared differentiable train/inference/export math.
+
+    W0 + s * ((B-B0) A + B0 (A-A0)) represents the same PiSSA residual
+    W0-s*B0*A0 without mutating W0 or materializing a second persistent base.
+    FP64 products precede one FP32 rounding; the caller then applies its base
+    compute dtype. At initialization the correction is exactly zero. This
+    deliberately pays for dense effective weights while optimizing only A/B.
+    """
+    with torch.autocast(device_type=base.device.type, enabled=False):
+        a64, b64 = a.double(), b.double()
+        a0, b0 = initial_a.double(), initial_b.double()
+        delta = (b64 - b0) @ a64 + b0 @ (a64 - a0)
+        return (base.double() + delta * scale).float()
 
 
 class PosttrainAdapterLinear(LoraInjectedLinear):
@@ -184,6 +209,7 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
             adapter_dtype=torch.float32,
         )
         self.method = config.method
+        self.execution = config.execution
         if self.method == "dora":
             self.magnitude = nn.Parameter(torch.ones(base.out_features, device=base.weight.device, dtype=torch.float32))
         if self.method == "pissa":
@@ -223,6 +249,13 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.method == "lora":
             return super().forward(x)
+        if self.execution == "pissa_dense_v1":
+            weight = pissa_dense_weight(
+                self.weight, self.lora_A.weight, self.lora_B.weight, self.initial_A, self.initial_B, self._lora_scale
+            ).to(self.weight.dtype)
+            # Keep the family's Linear autocast/bias boundary. Low-rank A/B
+            # remain the only trainable leaves; no merged weight is registered.
+            return F.linear(x, weight, self.bias)
         # Preserve the family's base autocast boundary (e.g. FP32 GR00T master
         # weights or Alpamayo's FP32 Fourier inputs feeding BF16 projections).
         base = F.linear(x, self.weight, self.bias)
@@ -244,6 +277,10 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
     def merged_state_weight(self, state: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         base = state[prefix + ".weight"]
         a, b = state[prefix + ".lora_A.weight"], state[prefix + ".lora_B.weight"]
+        if self.execution == "pissa_dense_v1":
+            return pissa_dense_weight(
+                base, a, b, state[prefix + ".initial_A"], state[prefix + ".initial_B"], self._lora_scale
+            ).to(base.dtype)
         if self.method == "pissa":
             # The PiSSA paper's rank-2r conversion to the untouched base. The
             # effective scale remains s; do not reinterpret it as alpha/(2r).

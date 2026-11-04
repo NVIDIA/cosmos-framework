@@ -169,10 +169,11 @@ def export_merged_adapter(
                 "or explicit --execution-profile=qwen3_vl_bf16_residual_fp32_v1 with the Framework inference loader."
             )
     if identity["architecture"] == "qwen3_vl_moe" and any(
-        row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
+        row["settings"]["method"] == "pissa" and row["settings"].get("execution") != "pissa_dense_v1"
+        for row in identity["resolved"]["targets"]
     ):
         raise ValueError(
-            "PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
+            "Legacy factorized PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
             "rounding changed a near-tied expert route and exceeded the controlled output bound, "
             "including with the native merged forward. Keep the portable adapter for inference "
             "or resume its complete training checkpoint; do not attach raw PiSSA factors to the "
