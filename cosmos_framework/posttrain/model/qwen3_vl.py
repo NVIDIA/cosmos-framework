@@ -775,6 +775,11 @@ def build_qwen3_vl_model(
             "into the rollout engine's live embedding/head namespace is not supported"
         )
     activation_checkpointing = ActivationCheckpointingConfig(mode=cfg.activation_checkpointing)
+    if adapters is not None and cfg.activation_checkpointing == "selective" and cfg.attn_impl == "sdpa":
+        # The shared defaults name external Flash/NATTEN operators. Native SFT
+        # also uses PyTorch SDPA; retain its expensive attention result while
+        # replaying adapter/dropout operations with the wrapper's preserved RNG.
+        activation_checkpointing.save_ops_regex.append(r"_scaled_dot_product_(flash|efficient|cudnn)_attention")
     parallelism_config = ParallelismConfig(
         data_parallel_shard_degree=1 if pdims is None else int(pdims.dp_shard),
         data_parallel_replicate_degree=1 if pdims is None else int(pdims.dp_replicate),

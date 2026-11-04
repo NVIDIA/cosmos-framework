@@ -152,12 +152,19 @@ def validate_adapter_profile(cfg: Any, model_config: Any, pdims: Any, adapters: 
     adapter_family(getattr(model_config, "model_type", None))
     if getattr(model_config, "quantization_config", None) is not None:
         raise ValueError("quantized adapter training is a separate contribution; use a dense BF16/FP32 base")
-    if cfg.dtype not in ("float32", "bfloat16") or cfg.activation_checkpointing not in ("none", "full"):
-        raise ValueError("adapters require float32/bfloat16 base storage and activation_checkpointing=none|full")
+    modes = (
+        ("none", "full", "selective") if model_config.model_type in ("qwen3_vl", "qwen3_vl_moe") else ("none", "full")
+    )
+    if cfg.dtype not in ("float32", "bfloat16") or cfg.activation_checkpointing not in modes:
+        raise ValueError(f"adapters require float32/bfloat16 base storage and activation_checkpointing in {modes}")
     if cfg.attn_impl not in ("eager", "sdpa"):
         raise ValueError("posttrain adapters require attn_impl=eager|sdpa; other attention backends are not qualified")
-    if pdims is not None and int(pdims.dp_replicate) != 1:
-        raise ValueError("adapter distributed profile supports pure FSDP2 dp_replicate=1; HSDP is not qualified")
+    if pdims is not None:
+        replicate, shard = int(pdims.dp_replicate), int(pdims.dp_shard)
+        if replicate < 1 or shard < 1 or replicate * shard != int(pdims.world_size):
+            raise ValueError("adapter DP mesh requires positive dp_replicate * dp_shard == world_size")
+        if any(int(getattr(pdims, axis, 1)) != 1 for axis in ("tp", "ep", "cp", "pp", "cfgp")):
+            raise ValueError("adapters support FSDP2/HSDP data parallelism only; TP/EP/CP/PP/CFG axes must be one")
     if resume and adapters.warm_start:
         raise ValueError(
             "exact training resume and adapter warm_start are distinct operations; clear warm_start for resume"

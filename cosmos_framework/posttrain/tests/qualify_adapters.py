@@ -97,6 +97,29 @@ def local_value(tensor):
     return (tensor.to_local() if hasattr(tensor, "to_local") else tensor).detach().cpu().contiguous()
 
 
+def observe_optimizer_gradients(net, optimizer):
+    """Observe final reduced parameters at the step boundary, including FSDP2.
+
+    FSDP2 differentiates unsharded parameter objects and then assigns .grad to
+    the optimizer's DTensors. Autograd hooks on those DTensors do not run.
+    """
+    names = {id(p): canonical_name(name) for name, p in net.named_parameters() if p.requires_grad}
+    records = {name: {"observed": False, "finite": True, "nonzero_local": False} for name in names.values()}
+
+    def observe(opt, args, kwargs):
+        for group in opt.param_groups:
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                local = local_value(parameter.grad)
+                row = records[names[id(parameter)]]
+                row["observed"] = True
+                row["finite"] &= bool(torch.isfinite(local).all())
+                row["nonzero_local"] |= bool(local.count_nonzero())
+
+    return records, optimizer.register_step_pre_hook(observe)
+
+
 def frozen_digest(net):
     reshard_fsdp_modules({"net": net})
     digest = hashlib.sha256()
@@ -244,15 +267,21 @@ def main():
     parser.add_argument("--wheel", required=True)
     parser.add_argument("--build-record", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--method", choices=["lora", "rslora", "dora", "pissa", "mixed"], required=True)
-    parser.add_argument("--activation-checkpointing", choices=["none", "full", "vision"], default="full")
+    parser.add_argument("--method", choices=["lora", "rslora", "dora", "pissa", "mixed", "configured"], required=True)
+    parser.add_argument("--activation-checkpointing", choices=["none", "full", "vision", "selective"], default="full")
+    parser.add_argument("--updates", type=int, help="training updates before checkpoint; default consumes eight rows")
+    parser.add_argument(
+        "--warm-start-check", action="store_true", help="also train a fresh run from its portable artifact"
+    )
     parser.add_argument("--component", choices=["all", "language", "projector", "vision", "action"], default="all")
     parser.add_argument("--override", action="append", default=[], help="existing recipe key=value override")
     parser.add_argument("--recipe", default="cosmos_framework/posttrain/configs/sft_cosmos3_nano_adapters.py")
     parser.add_argument("--backend", choices=["i4", "hf"], default="i4")
     args = parser.parse_args()
-    if args.backend == "hf" and args.activation_checkpointing == "vision":
+    if args.backend == "hf" and args.activation_checkpointing not in ("none", "full"):
         parser.error("HF qualification supports only activation checkpointing none/full")
+    if args.updates is not None and args.updates < 2:
+        parser.error("--updates must be at least two to exercise initially zero LoRA B")
     if args.method == "mixed" and args.component != "all":
         parser.error("the mixed-method qualification requires --component=all")
     evidence = attest(args.wheel, args.build_record)
@@ -265,7 +294,7 @@ def main():
     root = Path(args.out)
     root.mkdir(parents=True, exist_ok=True)
     recipe = args.recipe
-    os.environ["SFT_ADAPTER_METHOD"] = "lora" if args.method in ("rslora", "mixed") else args.method
+    os.environ["SFT_ADAPTER_METHOD"] = "lora" if args.method in ("rslora", "mixed", "configured") else args.method
     os.environ["SFT_ADAPTER_RSLORA"] = "1" if args.method == "rslora" else "0"
     os.environ["SFT_QUALIFY_EXTRA_NORM"] = "1" if args.method == "mixed" else "0"
     os.environ["SFT_QUALIFY_COMPONENT"] = args.component
@@ -294,6 +323,7 @@ def main():
     opts += args.override
     started = time.monotonic()
     config, rl, data, validation, trainer = runtime(recipe, opts, str(root))
+    initial_cursor = copy.deepcopy(data.state_dict())
     probes = probe_batches(config, data)
     initial = logits(trainer.model, probes)
     base = logits(trainer.model, probes, base_only=True)
@@ -303,14 +333,32 @@ def main():
     before = trainable_state(trainer.model.net)
     frozen = frozen_digest(trainer.model.net)
     assert_trainability(trainer.model.net, trainer.opt)
+    placement = {
+        canonical_name(name)
+        for name, module in trainer.model.net.named_modules(remove_duplicate=False)
+        if isinstance(module, PosttrainAdapterLinear)
+    }
+    assert placement == {row["name"] for row in trainer.model.net._posttrain_adapter_manifest["targets"]}
+    parameter_names = {id(p): canonical_name(n) for n, p in trainer.model.net.named_parameters()}
+    optimizer_inventory = [
+        {
+            "names": [parameter_names[id(p)] for p in group["params"]],
+            "lr": group["lr"],
+            "weight_decay": group["weight_decay"],
+        }
+        for group in trainer.opt.param_groups
+    ]
+    gradients, gradient_hook = observe_optimizer_gradients(trainer.model.net, trainer.opt)
     validation_before = evaluate(
         {"validation": validation, "policy": trainer}, rl, 0, frozenset({ValidationTrigger.BEFORE_TRAINING})
     ).metrics
     reports = []
     # Eight rows include real text, PNG, MP4 and WTS videos. Rank 0 and rank 1
     # encounter different modality combinations on the same FSDP collective path.
-    for _ in range(8 // world):
+    for _ in range(args.updates or 8 // world):
         reports.append(train_step(data, trainer, rl))
+    gradient_hook.remove()
+    assert all(row["observed"] and row["finite"] for row in gradients.values()), gradients
     after = trainable_state(trainer.model.net)
     changed_locally, changed = verify_trainable_updates(before, after)
     assert frozen_digest(trainer.model.net) == frozen
@@ -359,6 +407,20 @@ def main():
         "world_size": world,
         "rank": rank,
         "resolved": trainer.model.net._posttrain_adapter_manifest,
+        "optimizer_inventory": optimizer_inventory,
+        "observed_gradients": gradients,
+        "configured_execution": {
+            "backend": args.backend,
+            "attention": config.model_hf.attn_impl
+            if args.backend == "hf"
+            else getattr(config.model.model_config, "attn_impl", "model_owned"),
+            "dp_replicate": config.model_hf.parallelism.dp_replicate
+            if args.backend == "hf"
+            else config.model.parallelism.dp_replicate,
+            "dp_shard": config.model_hf.parallelism.dp_shard
+            if args.backend == "hf"
+            else config.model.parallelism.dp_shard,
+        },
         "trainable_tensors": len(after),
         "changed_tensors": sum(changed.values()),
         "changed_local_shards": sum(changed_locally.values()),
@@ -400,6 +462,39 @@ def main():
         peak_cuda_reserved=torch.cuda.max_memory_reserved(),
     )
     atomic_write_json(str(root / f"training-rank{rank}.json"), record)
+    if args.warm_start_check:
+        del trainer
+        gc.collect()
+        torch.cuda.empty_cache()
+        warm_opts = [x for x in opts if not x.startswith(("rl.resume=", "rl.adapters.warm_start="))]
+        warm_opts += ["rl.resume=off", f"rl.adapters.warm_start={root / 'portable'}"]
+        _, _, warm_data, _, warm = runtime(recipe, warm_opts, str(root / "warm-start"))
+        warm_state = trainable_state(warm.model.net)
+        assert all(torch.equal(warm_state[name], value) for name, value in snapshot.items())
+        assert frozen_digest(warm.model.net) == frozen
+        assert warm.optimizer_is_pristine() and warm._update_state_dict()["optimizer_step"] == 0
+        assert warm_data.state_dict() == initial_cursor
+        assert_trainability(warm.model.net, warm.opt)
+        warm_logits = logits(warm.model, probes)
+        for value, reference in zip(warm_logits, expected_logits, strict=True):
+            torch.testing.assert_close(value, reference, atol=2e-5, rtol=2e-5)
+        warm_reports = [train_step(warm_data, warm, rl) for _ in range(args.updates or 8 // world)]
+        warm_after = trainable_state(warm.model.net)
+        _, warm_changed = verify_trainable_updates(warm_state, warm_after)
+        assert frozen_digest(warm.model.net) == frozen
+        assert_trainability(warm.model.net, warm.opt)
+        record["warm_start"] = {
+            "exact_initial_state": True,
+            "fresh_optimizer_and_clock": True,
+            "fresh_data_cursor": True,
+            "controlled_maximum_error": max(
+                (a - b).abs().max().item() for a, b in zip(warm_logits, expected_logits, strict=True)
+            ),
+            "updates": warm_reports,
+            "changed_tensors": sum(warm_changed.values()),
+            "final_clock": warm._update_state_dict(),
+        }
+        atomic_write_json(str(root / f"training-rank{rank}.json"), record)
     dist.barrier()
     dist.destroy_process_group()
 

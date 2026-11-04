@@ -518,6 +518,46 @@ def test_profile_rejects_unqualified_attention():
         )
 
 
+@pytest.mark.parametrize(("replicate", "shard"), [(1, 2), (2, 1), (2, 2)])
+def test_adapter_profile_accepts_factorized_data_parallelism(replicate, shard):
+    from types import SimpleNamespace
+
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.adapters import validate_adapter_profile
+
+    validate_adapter_profile(
+        Qwen3VLModelConfig(attn_impl="sdpa", activation_checkpointing="selective"),
+        SimpleNamespace(model_type="qwen3_vl"),
+        SimpleNamespace(dp_replicate=replicate, dp_shard=shard, world_size=replicate * shard),
+        AdapterConfig(components=[Component(targets=[FIRST])]),
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "dims",
+    [
+        dict(dp_replicate=0, dp_shard=2, world_size=2),
+        dict(dp_replicate=2, dp_shard=2, world_size=3),
+        dict(dp_replicate=2, dp_shard=2, world_size=4, tp=2),
+    ],
+)
+def test_adapter_profile_rejects_invalid_meshes(dims):
+    from types import SimpleNamespace
+
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.adapters import validate_adapter_profile
+
+    with pytest.raises(ValueError, match="adapter"):
+        validate_adapter_profile(
+            Qwen3VLModelConfig(),
+            SimpleNamespace(model_type="qwen3_vl"),
+            SimpleNamespace(**dims),
+            AdapterConfig(components=[Component(targets=[FIRST])]),
+            False,
+        )
+
+
 def test_dora_forward_and_gradients_match_peft_reference():
     pytest.importorskip("peft")
     from peft.tuners.lora.dora import DoraLinearLayer
