@@ -236,9 +236,13 @@ def overlay_compatibility_files(
 
 
 def config_with_export_dtype(
-    config: dict[str, Any], output_dtype: str, *, execution_profile: str | None = None
+    config: dict[str, Any],
+    output_dtype: str,
+    *,
+    execution_profile: str | None = None,
+    model_execution: str | None = None,
 ) -> dict[str, Any]:
-    """Change only precision metadata; preserve the base's architecture dialect."""
+    """Bind precision/execution metadata; preserve the base's architecture dialect."""
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("explicit merged export precision supports float32|bfloat16")
     result = json.loads(json.dumps(config))
@@ -254,15 +258,30 @@ def config_with_export_dtype(
         ):
             raise ValueError("residual FP32 deployment requires dense Qwen3-VL and bfloat16 output")
         result["cosmos_inference_profile"] = execution_profile
+    if model_execution is not None:
+        if (
+            model_execution != "qwen3_vl_moe_stock_v1"
+            or output_dtype != "float32"
+            or result.get("model_type") != "qwen3_vl_moe"
+        ):
+            raise ValueError("stock MoE execution requires Qwen3-VL-MoE and float32 output")
+        result["cosmos_model_execution"] = model_execution
     return result
 
 
 def verify_export_dtype(
-    export: str, base: str, output_dtype: str, *, execution_profile: str | None = None
+    export: str,
+    base: str,
+    output_dtype: str,
+    *,
+    execution_profile: str | None = None,
+    model_execution: str | None = None,
 ) -> dict[str, Any]:
     """Torch-free verification of explicit precision, including idempotent skips."""
     with open(os.path.join(base, "config.json")) as handle:
-        expected = config_with_export_dtype(json.load(handle), output_dtype, execution_profile=execution_profile)
+        expected = config_with_export_dtype(
+            json.load(handle), output_dtype, execution_profile=execution_profile, model_execution=model_execution
+        )
     with open(os.path.join(export, "config.json")) as handle:
         if json.load(handle) != expected:
             raise ConversionError("merged export config differs beyond its declared output dtype")
@@ -285,6 +304,7 @@ def write_config_from_base(
     *,
     output_dtype: str | None = None,
     execution_profile: str | None = None,
+    model_execution: str | None = None,
 ) -> dict[str, Any]:
     """Make ``<export>/config.json`` the base's ``config.json`` verbatim, keeping the file transformers wrote once as
     ``config.json<backup_suffix>``.
@@ -313,7 +333,9 @@ def write_config_from_base(
         shutil.copy2(source, part)
     else:
         with open(source) as handle:
-            config = config_with_export_dtype(json.load(handle), output_dtype, execution_profile=execution_profile)
+            config = config_with_export_dtype(
+                json.load(handle), output_dtype, execution_profile=execution_profile, model_execution=model_execution
+            )
         with open(part, "w") as handle:
             json.dump(config, handle, indent=2)
             handle.write("\n")

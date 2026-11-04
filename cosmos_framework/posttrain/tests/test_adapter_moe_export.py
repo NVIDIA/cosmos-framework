@@ -114,7 +114,7 @@ def test_moe_native_manifest_portable_and_supported_merged_exports(tmp_path, met
     save_adapter_artifact(model, str(portable))
     _, adapter_state = read_adapter_artifact(str(portable))
     merged = tmp_path / "merged"
-    if method == "pissa" and execution == "factorized_v1":
+    if method == "pissa":
         # Small smooth fixtures cannot qualify a real hard-routing MoE merge.
         # The 30B checkpoint switches a near-tied top-k expert after FP32 merge,
         # including with the native forward. Portable training/reload remains

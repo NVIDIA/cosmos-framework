@@ -1155,7 +1155,12 @@ def run_request(
         deployment_precision.get("execution_profile") if isinstance(deployment_precision, dict) else None
     )
     profile_kwargs = {"execution_profile": execution_profile} if execution_profile is not None else {}
-    if execution_profile is not None:
+    adapter_identity = (export_metadata or {}).get("adapter_identity", {})
+    resolved = adapter_identity.get("resolved", {}) if isinstance(adapter_identity, dict) else {}
+    model_execution = resolved.get("model_execution") if isinstance(resolved, dict) else None
+    if model_execution is not None:
+        profile_kwargs["model_execution"] = model_execution
+    if profile_kwargs:
         with open(os.path.join(base, "config.json")) as handle:
             hf.config_with_export_dtype(json.load(handle), output_dtype, **profile_kwargs)
     out = os.path.abspath(out.rstrip("/"))

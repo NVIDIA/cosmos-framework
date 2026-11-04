@@ -148,6 +148,7 @@ def resolve_targets(net: nn.Module, config: AdapterConfig, *, family: str | None
         "targets": [resolved[n] for n in sorted(resolved)],
         "extra_parameters": [extras[n] for n in sorted(extras)],
         "expected_trainable_parameters": expected,
+        **({"model_execution": config.model_execution} if config.model_execution != "default_v1" else {}),
     }
 
 
@@ -318,6 +319,9 @@ def install_adapters(
 ) -> dict[str, Any]:
     binding = family_for_model(net, family)
     manifest = resolve_targets(net, config, family=binding.name)
+    from cosmos_framework.posttrain.model.adapter_moe_execution import install_model_execution, validate_model_execution
+
+    validate_model_execution(net, config, binding.name)
     if distributed:
 
         def fsdp_unit(name: str) -> str:
@@ -374,6 +378,7 @@ def install_adapters(
             module.register_forward_hook(_preserve_normalization_output_dtype)
             extra_modules.add(id(module))
     net._posttrain_adapter_manifest = manifest
+    install_model_execution(net, config)
     assert_trainability(net)
     return manifest
 

@@ -57,6 +57,30 @@ _NON_MODEL_BATCH_KEYS: frozenset[str] = frozenset(
 # same multimodal forward contract, installed Transformers version, and padded MoE policy batches.
 # See `cosmos_framework/posttrain/docs/design/DESIGN.md#v5-native-qwen3-vl-compatibility-boundary`.
 # =============================================================================
+def _separate_vision_features(visual, inputs_embeds, image_pixels, image_grid, video_pixels, video_grid):
+    """Fixed image-then-video schedule, including differentiable missing-media passes.
+
+    Stock inference calls vision separately for images and videos. Keeping both
+    calls on every rank preserves FSDP collective order during native training.
+    Empty slices flow through the existing placeholder/deepstack scatters, so
+    missing media retains its zero gradient path without modifying real features.
+    """
+    outputs = []
+    for pixels, grid in ((image_pixels, image_grid), (video_pixels, video_grid)):
+        missing = pixels is None
+        if missing:
+            pixels = torch.zeros(
+                16 * 16,
+                visual.config.temporal_patch_size * visual.config.patch_size**2 * 3,
+                device=inputs_embeds.device,
+                dtype=visual.dtype,
+            )
+            grid = torch.tensor([[1, 16, 16]], device=inputs_embeds.device)
+        features, deepstack = visual(pixels.type(visual.dtype), grid_thw=grid)
+        outputs.append((features[:0], [value[:0] for value in deepstack]) if missing else (features, deepstack))
+    return outputs[0][0], outputs[1][0], outputs[0][1], outputs[1][1]
+
+
 def override_qwen3_vl_forward(model: nn.Module) -> None:
     """Override one native ``Qwen3VLModel`` / ``Qwen3VLMoeModel`` instance's forward.
 
@@ -148,7 +172,21 @@ def override_qwen3_vl_forward(model: nn.Module) -> None:
             visual_grid_thw_list.append(video_grid_thw)
             video_embed_len = int((video_grid_thw.prod(-1) // self.visual.spatial_merge_size**2).sum().item())
 
-        if has_image or has_video:
+        if getattr(self, "_posttrain_separate_modalities", False):
+            image_embeds, video_embeds, deepstack_image_embeds, deepstack_video_embeds = _separate_vision_features(
+                self.visual, inputs_embeds, pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw
+            )
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            image_mask, _ = self.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+            )
+            _, video_mask = self.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
+            )
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+        elif has_image or has_video:
             visual_pixel_values = torch.cat(visual_pixel_values_list, dim=0).type(self.visual.dtype)  # [N_patch,D]
             visual_grid_thw = torch.cat(visual_grid_thw_list, dim=0)  # [N_media,3]
             visual_embeds, deepstack_visual_feature_lists = self.visual(

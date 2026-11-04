@@ -147,9 +147,15 @@ class CosmosFrameworkRuntime:
         self._load()
 
     def _load(self) -> None:
+        from cosmos_framework.inference.reasoner.model_execution import model_execution_profile, validate_loaded_model
         from cosmos_framework.inference.reasoner.precision import deployment_profile, install_deployment_profile
 
         profile = deployment_profile(self.model_path)
+        model_profile = model_execution_profile(self.model_path)
+        if model_profile:
+            if self.dtype not in ("float32", "fp32", "auto") or self.attn_implementation not in (None, "sdpa"):
+                raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
+            self.dtype, self.attn_implementation = "float32", "sdpa"
         if profile:
             if self.dtype not in ("bfloat16", "bf16", "auto") or self.attn_implementation not in (None, "sdpa"):
                 raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
@@ -199,7 +205,9 @@ class CosmosFrameworkRuntime:
         }
         if self.attn_implementation:
             model_load_kwargs["attn_implementation"] = self.attn_implementation
-        if profile:
+        if model_profile:
+            model_load_kwargs["experts_implementation"] = "grouped_mm"
+        if profile or model_profile:
             # HF can warn and initialize absent tensors even in a completed
             # export. Tagged deployment requires exactly the saved model.
             loaded, loading_info = AutoModelForImageTextToText.from_pretrained(
@@ -228,6 +236,8 @@ class CosmosFrameworkRuntime:
 
             apply_qwen3_vl_patch_embed_compat(self.model, model_type=self.model_type, mode="auto")
         self.model.eval()
+        if model_profile:
+            validate_loaded_model(self.model)
         if profile:
             installed = install_deployment_profile(self.model, profile)
             logger.info("Installed deployment profile %s on %d modules", profile, len(installed))

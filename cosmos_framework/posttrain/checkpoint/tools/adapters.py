@@ -105,6 +105,7 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     from transformers import AutoConfig
 
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
+    from cosmos_framework.posttrain.model.adapter_moe_execution import validate_model_execution
     from cosmos_framework.posttrain.model.adapters import resolve_targets
     from cosmos_framework.posttrain.model.hf_adapter_buffers import validate_buffer_contract
 
@@ -117,7 +118,9 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
         net = getattr(transformers, family.hf_auto_class).from_config(
             config, dtype=torch.float32, attn_implementation="sdpa"
         )
-    resolved = resolve_targets(net, adapter_configuration(identity), family=family.name)
+    adapter_config = adapter_configuration(identity)
+    validate_model_execution(net, adapter_config, family.name)
+    resolved = resolve_targets(net, adapter_config, family=family.name)
     if resolved != identity["resolved"]:
         raise ValueError(
             "adapter resolved-target manifest disagrees with the base architecture "
@@ -169,15 +172,14 @@ def export_merged_adapter(
                 "or explicit --execution-profile=qwen3_vl_bf16_residual_fp32_v1 with the Framework inference loader."
             )
     if identity["architecture"] == "qwen3_vl_moe" and any(
-        row["settings"]["method"] == "pissa" and row["settings"].get("execution") != "pissa_dense_v1"
-        for row in identity["resolved"]["targets"]
+        row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
     ):
         raise ValueError(
-            "Legacy factorized PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
+            "PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
             "rounding changed a near-tied expert route and exceeded the controlled output bound, "
-            "including with the native merged forward. Keep the portable adapter for inference "
+            "including with dense effective weights under default native execution. Keep the portable adapter for inference "
             "or resume its complete training checkpoint; do not attach raw PiSSA factors to the "
-            "original base. See docs/posttrain/adapter-family-progress.md for the measured limitation."
+            "original base or rewrite execution metadata. See docs/posttrain/adapter-family-progress.md for the measured limitation."
         )
     if identity["architecture"] == "Gr00tN1d7":
         from cosmos_framework.posttrain.model.gr00t.adapter_export import export_merged

@@ -31,6 +31,7 @@ from cosmos_framework.posttrain.utils.object_store import file_sha256
 
 FORMAT = "cosmos-posttrain-adapter-v1"
 DENSE_FORMAT = "cosmos-posttrain-adapter-v2"
+MODEL_EXECUTION_FORMAT = "cosmos-posttrain-adapter-v3"
 MANIFEST = "adapter_manifest.json"
 WEIGHTS = "adapter.safetensors"
 
@@ -58,6 +59,7 @@ def adapter_configuration(identity: dict):
             del predecessors[name]
 
     return AdapterConfig(
+        model_execution=identity["resolved"].get("model_execution", "default_v1"),
         components=[
             AdapterComponentConfig(component=row["component"], targets=[row["name"]], **row["settings"])
             for row in identity["resolved"]["targets"]
@@ -125,7 +127,9 @@ def make_adapter_identity(
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = None
     result = {
-        "format": DENSE_FORMAT
+        "format": MODEL_EXECUTION_FORMAT
+        if targets.get("model_execution", "default_v1") != "default_v1"
+        else DENSE_FORMAT
         if any(row["settings"].get("execution") == "pissa_dense_v1" for row in targets["targets"])
         else FORMAT,
         "architecture": architecture,
@@ -165,7 +169,7 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         "parameter_dtypes"
     ):
         raise ValueError("model-defined adapter base precision requires the materialized parameter dtype map")
-    if identity.get("format") not in (FORMAT, DENSE_FORMAT):
+    if identity.get("format") not in (FORMAT, DENSE_FORMAT, MODEL_EXECUTION_FORMAT):
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
@@ -192,8 +196,20 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
             result[prefix + "initial_A"] = (rank, in_features)
             result[prefix + "initial_B"] = (out_features, rank)
     result.update({row["name"]: tuple(row["shape"]) for row in identity["resolved"]["extra_parameters"]})
-    if (identity["format"] == DENSE_FORMAT) != dense:
-        raise ValueError("adapter format/execution mismatch: dense PiSSA requires the version-2 artifact contract")
+    profile = identity["resolved"].get("model_execution", "default_v1")
+    if profile not in ("default_v1", "qwen3_vl_moe_stock_v1"):
+        raise ValueError("unsupported adapter model execution semantics")
+    if profile != "default_v1" and (
+        identity["architecture"] != "qwen3_vl_moe"
+        or identity["resolved"]["extra_parameters"]
+        or any(row["settings"].get("execution") != "pissa_dense_v1" for row in identity["resolved"]["targets"])
+        or identity["dependencies"].get("transformers") != "5.8.1"
+        or identity["dependencies"].get("torch") != "2.10.0"
+    ):
+        raise ValueError("stock MoE execution requires dense PiSSA and its pinned runtime identity")
+    expected_format = MODEL_EXECUTION_FORMAT if profile != "default_v1" else DENSE_FORMAT if dense else FORMAT
+    if identity["format"] != expected_format:
+        raise ValueError("adapter format/execution mismatch: preserve the recorded numerical execution contract")
     return result
 
 
