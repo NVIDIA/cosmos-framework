@@ -379,19 +379,22 @@ def main():
     ).metrics
     reports = []
     update_resources = []
+    measure_cuda = next(trainer.model.net.parameters()).device.type == "cuda"
     # Eight rows include real text, PNG, MP4 and WTS videos. Rank 0 and rank 1
     # encounter different modality combinations on the same FSDP collective path.
     for _ in range(args.updates or 8 // world):
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
+        if measure_cuda:
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
         update_started = time.monotonic()
         reports.append(train_step(data, trainer, rl))
-        torch.cuda.synchronize()
+        if measure_cuda:
+            torch.cuda.synchronize()
         update_resources.append(
             {
                 "seconds": time.monotonic() - update_started,
-                "peak_cuda_allocated": torch.cuda.max_memory_allocated(),
-                "peak_cuda_reserved": torch.cuda.max_memory_reserved(),
+                "peak_cuda_allocated": torch.cuda.max_memory_allocated() if measure_cuda else None,
+                "peak_cuda_reserved": torch.cuda.max_memory_reserved() if measure_cuda else None,
             }
         )
     replicas_after_updates = verify_hybrid_replicas(trainer.model.net)
