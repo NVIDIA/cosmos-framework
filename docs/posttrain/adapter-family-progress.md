@@ -1,5 +1,9 @@
 # Adapter family extension: implementation and evidence
 
+This is the preserved family qualification history. Additional mixed settings,
+HSDP/selective checkpointing, BF16 deployment and checkpoint corrections are
+recorded separately in the [November 4 extension](adapter-extension-progress.md).
+
 Work branch: `feat/posttrain-family-adapters`. This extends the original Cosmos3
 implementation; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)
 remains closed and unmerged. The audited starting revision was

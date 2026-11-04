@@ -1,5 +1,9 @@
 # Independent review of the adapter contribution
 
+This records the preserved November 3 review. The
+[subsequent execution/deployment extension](adapter-extension-progress.md) has
+its own independent review and revision-bound validation.
+
 Review requested at clean `feat/posttrain-family-adapters` commit
 `e2db8167fef08b186c838be86b45da4afb7d8240`, relative to audited main
 `86e1ee52f276c11d6cc66dfd17da2795dfbe937b`. The existing package contained

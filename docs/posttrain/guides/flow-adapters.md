@@ -103,9 +103,17 @@ The third π0.5 view remains masked as in the native LIBERO processor.
 
 ## Checkpoint and export contracts
 
+The [execution extension](../adapter-extension-progress.md) additionally qualifies
+an Alpamayo-R1 recipe with different language/merger/vision/action methods,
+ranks/scaling/dropout/LR policies and a separately trained live prefix K-norm.
+These real KITTI fixture runs establish correctness, not downstream driving quality.
+
 Training resume uses the same full checkpoint transaction as conversational SFT.
 Use `rl.resume` for exact continuation; `rl.adapters.warm_start` starts a new run
-from a portable adapter and must be cleared for resume. Adapter identity includes
+from a portable adapter and must be cleared for resume. New full checkpoints bind
+the execution profile separately from portable weight identity; old checkpoints
+without this binding require their original runtime/configuration for exact
+continuation, or a portable warm start into a new run. Adapter identity includes
 the original checkpoint hash, tokenizer and normalization hashes, resolved targets,
 effective media processing and native parameter precision map. PiSSA initial
 factors and DoRA magnitudes are included in both checkpoint and portable state.

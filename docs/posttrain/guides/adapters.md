@@ -14,22 +14,25 @@ models use their own native forward and processor through the same SFT lifecycle
 see [physical-action adapters](flow-adapters.md). Support is specific to the
 recorded checkpoint and execution profile, not every model sharing its family name.
 
-See the [qualification record](../adapters-progress.md) for what has actually
-been tested. CPU correctness is not real-model GPU qualification. Four-bit
-training, unregistered HF architectures, fused expert tensors, HSDP, TP/EP/CP/PP,
-compilation, stacked adapters and arbitrary linear/embedding `modules_to_save`
-are outside this execution profile. GPU qualification covers one node with one or
-two A100 80 GB GPUs, SDPA,
-BF16 frozen bases and FP32 adapters. Larger worlds, multiple nodes, and the
-separate Torch 2.11 environment are not included in these results. Plain native
-`nn.Linear` targets and optional native normalization modules are supported. CPU fixtures additionally cover FP32
-training bases, eager attention, exact-SVD PiSSA and rsLoRA scaling with DoRA/PiSSA;
-these are not additional real-model GPU qualification claims. Fused vision QKV is one whole
-linear target, not independently selectable Q/K/V slices.
+See the [original qualification](../adapters-progress.md) and the
+[execution/deployment extension](../adapter-extension-progress.md) for exact
+checkpoint/profile coverage. CPU correctness is not real-model GPU qualification.
+The extension adds measured native Qwen3-VL-2B and HF Qwen3-0.6B 2×2 HSDP,
+native 2×1 replication/eager attention, selective SDPA checkpointing and independent
+component recipes, on one host with up to four A100 80 GB GPUs. BF16 frozen bases
+and FP32 adapters remain the training profile. These results do not qualify every
+family/checkpoint on every mesh. Four-bit training, unregistered architectures,
+fused expert tensors, TP/EP/CP/PP, multiple nodes, compilation, stacked adapters,
+arbitrary linear/embedding `modules_to_save` and the separate Torch 2.11 runtime
+remain outside qualification. Plain native `nn.Linear` and optional native
+normalization targets are supported. Exact-SVD PiSSA and FP32 training bases have
+fixture coverage. Fused vision QKV is one whole linear target, not independently
+selectable Q/K/V slices.
 
 ## Recipe and component selection
 
-The qualified CUDA 12.8 profile uses Python 3.13, torch 2.10.0+cu128,
+The original CUDA 12.8 Slurm profile uses Python 3.13; the new attested host
+profiles use Python 3.12. Both use torch 2.10.0+cu128,
 torchvision 0.25.0+cu128, Transformers 5.8.1, safetensors 0.8.0, av 18.0.0 and
 the CPU TorchCodec 0.10.0 wheel. The general [SFT environment](sft.md) instead
 pins torch 2.11 / TorchCodec 0.11; that is a separate qualification case.
@@ -102,9 +105,12 @@ Clear `optimizer.train_keys`, `decay_groups` and `lr_multipliers`: adapter compo
 settings own those policies. `lr_multiplier` multiplies the global optimizer LR;
 `weight_decay` is absolute and defaults to zero. The initial profile uses AdamW,
 FP32 adapter storage/accumulation, BF16 or FP32 frozen base, eager/SDPA and full
-non-reentrant activation checkpointing or none. BF16 adapter storage is refused.
+non-reentrant activation checkpointing or none. Native Qwen3-VL additionally
+supports selective checkpointing, with the precise GPU profiles listed in the
+extension record. BF16 adapter storage is refused.
 Separately trained normalization parameters remain FP32 while their output keeps
-the input activation dtype. The supported merged export retains these parameters in FP32.
+the input activation dtype. The default FP32 merged export retains these parameters
+in FP32; optional BF16 deployment rounds all floating weights, including extras.
 
 ## Methods and lifecycle
 
@@ -159,6 +165,12 @@ optimizer, scheduler, update state, RNG and data cursor. No adapter-only checkpo
 optimization is introduced. Resume uses `rl.resume`; missing adapter keys or changed
 objective/base/processor/media identity fail. Resume across a changed DP world is
 not an exact-continuation claim. `warm_start` must be cleared for exact resume.
+New adapter checkpoints also bind backend/builder, attention, activation
+checkpointing and resolved DP dimensions. Changing these fails exact resume.
+Checkpoints written before `2d12fd5` lack that execution identity: resume them
+with their original runtime/configuration, or export portable adapters and start
+a new run. Do not rewrite their identities to bypass validation. Portable adapter
+identities and adapter-disabled checkpoint compatibility remain unchanged.
 
 **Portable adapters** are immutable directories with `adapter.safetensors` and a
 commit-last `adapter_manifest.json`. They record SHA-256 over all original weight
@@ -200,9 +212,15 @@ Before merge, the exporter re-resolves the recorded targets against the stock
 architecture on meta; mismatched types, component ownership, scaling and counts
 fail before loading base shards. Export leaves live parameters, optimizer
 membership and tensor versions unchanged.
-Stock HF reload is tested separately from native portable reload. BF16 merged
-inference exceeded real-model qualification bounds and is outside the supported
-export profile; the tool does not produce BF16 merged models.
+Stock HF reload is tested separately from native portable reload. Optional
+`--output-dtype bfloat16` now rounds the completed FP32 merge once and binds the
+deployment precision in the export identity. It is qualified for the exact dense
+Qwen3-VL-2B WTS rsLoRA, DoRA and PiSSA artifacts in the
+[extension record](../adapter-extension-progress.md#bf16-deployment-contract-and-measurements),
+using separate approximation, paired task-quality and resource gates. It is not
+FP32 equivalence. Ordinary non-rs LoRA failed the unchanged confident-decision
+gate and is refused; other families/physical formats remain refused. New mixed
+recipes and other checkpoints are not additional BF16 qualifications.
 PiSSA merged export on native Qwen3-VL-MoE is also refused. A real 30B checkpoint
 passes training, continuation, exact BF16 portable reload and all serialized-weight
 checks, but FP32 merging switches a near-tied expert route and fails the fixed

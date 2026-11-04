@@ -1,6 +1,8 @@
 # Adapter implementation: final qualification review
 
 This is the **November 2 qualification baseline**, preserved at `e2db816`.
+The [November 4 extension](adapter-extension-progress.md) separately records new
+mixed-component, execution and deployment work; it does not relabel these runs.
 The subsequent [independent code review](adapter-independent-review.md) records
 two confirmed corrections, their separate commits and affected installed-wheel
 validation. Historical revisions and counts below are not relabeled as new runs.
