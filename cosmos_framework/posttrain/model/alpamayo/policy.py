@@ -11,7 +11,12 @@ import torch
 from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
 
 from cosmos_framework.posttrain.config.build import Precision
-from cosmos_framework.posttrain.model.adapters import assert_trainability, prepare_adapter_model, resolve_targets
+from cosmos_framework.posttrain.model.adapters import (
+    assert_trainability,
+    prepare_adapter_model,
+    resolve_targets,
+    validate_adapter_parallelism,
+)
 from cosmos_framework.posttrain.model.alpamayo.sft import REFERENCE_REVISION, require_runtime, source_config
 from cosmos_framework.posttrain.model.protocol import FlowMatchingLossOutput
 
@@ -29,6 +34,29 @@ class AlpamayoSFTNet(AlpamayoR1):
             self.float()
 
     def forward(self, tokenized, history, actions, action_mask, *, time=None, noise=None):
+        if tokenized.get("past_key_values") is not None:
+            raise ValueError("Alpamayo SFT requires a fresh differentiable prefix, not an externally cached prefix")
+        if getattr(self, "_full_activation_checkpointing", False) and self.training and torch.is_grad_enabled():
+            from torch.utils.checkpoint import checkpoint
+
+            # Replay the whole prefix -> expert -> flow graph. Every invocation
+            # constructs a NEW DynamicCache internally; none crosses the replay
+            # boundary. Generic decoder checkpointing would instead replay into
+            # the already-extended mutable K/V cache and lose/corrupt gradients.
+            return checkpoint(
+                self._flow_forward,
+                tokenized,
+                history,
+                actions,
+                action_mask,
+                time=time,
+                noise=noise,
+                use_reentrant=False,
+                preserve_rng_state=True,
+            )
+        return self._flow_forward(tokenized, history, actions, action_mask, time=time, noise=noise)
+
+    def _flow_forward(self, tokenized, history, actions, action_mask, *, time=None, noise=None):
         if (
             actions.ndim != 3
             or actions.shape[1:] != self.action_space.get_action_space_dims()
@@ -212,10 +240,7 @@ def build_policy(
     config.__post_init__()
     if adapters is None:
         raise ValueError("Alpamayo trajectory SFT currently requires explicit adapter components")
-    if pdims is not None and (
-        pdims.dp_replicate != 1 or any(getattr(pdims, k, 1) != 1 for k in ("tp", "cp", "pp", "ep"))
-    ):
-        raise ValueError("Alpamayo adapters require pure DP sharding; TP/CP/PP/EP/replication are unsupported")
+    validate_adapter_parallelism(pdims)
 
     def construct():
         net, identity = load_base(model_id, config)
@@ -251,6 +276,7 @@ def build_policy(
             checkpoint_wrapper_fn=partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT),
             check_fn=lambda m: isinstance(m, Qwen3VLVisionBlock),
         )
+    net._full_activation_checkpointing = config.activation_checkpointing == "full"
     parallelize(net, ShardPlan(blocks, None, torch.float32), pdims)
     assert_trainability(net)
     return AlpamayoSFTPolicy(net)

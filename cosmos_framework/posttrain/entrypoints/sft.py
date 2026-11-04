@@ -180,7 +180,7 @@ def adapter_execution_identity(config: Any) -> dict[str, Any]:
     selection = select_policy_backend(config)
     model_config = selection.model_config
     replicate, shard = resolve_policy_parallelism(config, world_size_or_1())
-    return {
+    identity = {
         "format": "cosmos-adapter-execution-v1",
         "backend": selection.backend,
         "builder": selection.native_spec.builder if selection.native_spec is not None else "HFModel",
@@ -191,6 +191,13 @@ def adapter_execution_identity(config: Any) -> dict[str, Any]:
         "dp_replicate": replicate,
         "dp_shard": shard,
     }
+    if (
+        selection.native_spec is not None
+        and selection.native_spec.builder == "cosmos_framework.posttrain.model.alpamayo.sft.build_alpamayo_sft_policy"
+        and model_config.activation_checkpointing == "full"
+    ):
+        identity["activation_replay"] = "alpamayo_fresh_prefix_flow_v1"
+    return identity
 
 
 def validate_config(config: Any) -> SFTConfig:

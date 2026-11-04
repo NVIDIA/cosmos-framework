@@ -140,6 +140,31 @@ def trainable_state(net):
     return {canonical_name(n): local_value(p).clone() for n, p in net.named_parameters() if p.requires_grad}
 
 
+def verify_hybrid_replicas(net):
+    """Confirm updated HSDP shards agree across replicas, not just shard ranks."""
+    reshard_fsdp_modules({"net": net})
+    digest = hashlib.sha256()
+    group, count = None, 0
+    for name, parameter in net.named_parameters():
+        mesh = getattr(parameter, "device_mesh", None)
+        if not parameter.requires_grad or mesh is None or mesh.ndim != 2:
+            continue
+        axes = [i for i, placement in enumerate(parameter.placements) if placement.is_replicate()]
+        if len(axes) != 1:
+            raise ValueError("qualification expected one HSDP replica axis")
+        group = mesh.get_group(axes[0])
+        digest.update(canonical_name(name).encode())
+        digest.update(local_value(parameter).view(torch.uint8).numpy().tobytes())
+        count += 1
+    if group is None:
+        return {"hybrid": False}
+    digests = [None] * dist.get_world_size(group)
+    dist.all_gather_object(digests, digest.hexdigest(), group=group)
+    if len(set(digests)) != 1:
+        raise AssertionError("HSDP trainable shards diverged across replica ranks")
+    return {"hybrid": True, "trainable_shards": count, "replicas": len(digests), "sha256": digests[0]}
+
+
 def verify_trainable_updates(before, after):
     """Require each logical tensor to update, including partially supervised shards.
 
@@ -353,10 +378,23 @@ def main():
         {"validation": validation, "policy": trainer}, rl, 0, frozenset({ValidationTrigger.BEFORE_TRAINING})
     ).metrics
     reports = []
+    update_resources = []
     # Eight rows include real text, PNG, MP4 and WTS videos. Rank 0 and rank 1
     # encounter different modality combinations on the same FSDP collective path.
     for _ in range(args.updates or 8 // world):
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        update_started = time.monotonic()
         reports.append(train_step(data, trainer, rl))
+        torch.cuda.synchronize()
+        update_resources.append(
+            {
+                "seconds": time.monotonic() - update_started,
+                "peak_cuda_allocated": torch.cuda.max_memory_allocated(),
+                "peak_cuda_reserved": torch.cuda.max_memory_reserved(),
+            }
+        )
+    replicas_after_updates = verify_hybrid_replicas(trainer.model.net)
     gradient_hook.remove()
     assert all(row["observed"] and row["finite"] for row in gradients.values()), gradients
     after = trainable_state(trainer.model.net)
@@ -430,6 +468,9 @@ def main():
         "resume_max_abs_parameter_error": resume_error,
         "frozen_sha256": frozen,
         "train": reports,
+        "update_resources": update_resources,
+        "replicas_after_updates": replicas_after_updates,
+        "replicas_after_resume": verify_hybrid_replicas(trainer.model.net),
         "resumed_update": resumed_report,
         "validation_before": validation_before,
         "validation_after": validation_after,

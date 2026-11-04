@@ -142,7 +142,7 @@ def batch():
 
 
 @pytest.mark.parametrize("method,rs", [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
-@pytest.mark.parametrize("ac", ["none", "vision"])
+@pytest.mark.parametrize("ac", ["none", "vision", "full"])
 def test_r1_components_flow_updates_and_reload(tmp_path, method, rs, ac):
     base, model_config = source(tmp_path)
     model_config.activation_checkpointing = ac
@@ -233,14 +233,64 @@ def test_r1_merged_file_precision_reload_and_identity(tmp_path, method, rs):
         build_policy(base, model_config, adapters=cfg, device="cpu")
 
 
-def test_r1_rejects_dead_prefix_targets_and_cache_checkpoint_replay(tmp_path):
+def test_r1_rejects_dead_prefix_targets_and_external_cache(tmp_path):
     base, model_config = source(tmp_path)
     cfg = AdapterConfig(components=[C(targets=["vlm.model.language_model.layers.1.self_attn.q_proj"], rank=2)])
     with pytest.raises(ValueError, match="final-prefix K/V"):
         build_policy(base, model_config, adapters=cfg, device="cpu")
     model_config.activation_checkpointing = "full"
-    with pytest.raises(ValueError, match="mutable"):
-        build_policy(base, model_config, adapters=config("lora"), device="cpu")
+    policy = build_policy(base, model_config, adapters=config("lora"), device="cpu")
+    data = batch()
+    data["tokenized"]["past_key_values"] = object()
+    with pytest.raises(ValueError, match="fresh differentiable prefix"):
+        policy.flow_matching_loss(data)
+
+
+def test_full_replay_preserves_stochastic_gradients_rng_and_fresh_caches(tmp_path):
+    base, model_config = source(tmp_path)
+    cfg = config("lora")
+    for group in cfg.components:
+        group.dropout = 0.2
+    cfg.components[2].method = "dora"
+    cfg.components[1].method = "pissa"
+    cfg.components[1].dropout = 0
+    left = build_policy(base, model_config, adapters=cfg, device="cpu")
+    right = copy.deepcopy(left)
+    right.net._full_activation_checkpointing = True
+    opts = [
+        torch.optim.AdamW([p for p in policy.net.parameters() if p.requires_grad], lr=0.003) for policy in (left, right)
+    ]
+    inputs = batch()
+    inputs.pop("time")
+    inputs.pop("noise")
+    original_ids = inputs["tokenized"]["input_ids"].clone()
+    caches = []
+    hook = right.net.vlm.model.register_forward_hook(
+        lambda module, args, output: caches.append((output.past_key_values, output.past_key_values.get_seq_length()))
+    )
+    for step in range(3):
+        results = []
+        for policy, opt in zip((left, right), opts, strict=True):
+            policy.net.train()
+            torch.manual_seed(103 + step)
+            opt.zero_grad(set_to_none=True)
+            result = policy.flow_matching_loss(inputs)
+            result.loss.backward()
+            gradients = {n: p.grad.clone() for n, p in policy.net.named_parameters() if p.requires_grad}
+            assert all(torch.isfinite(g).all() for g in gradients.values())
+            results.append((result.prediction.detach(), result.loss.detach(), gradients, torch.random.get_rng_state()))
+            opt.step()
+            assert_trainability(policy.net, opt)
+        for a, b in zip(results[0][:2], results[1][:2], strict=True):
+            torch.testing.assert_close(a, b, atol=0, rtol=0)
+        for name, grad in results[0][2].items():
+            torch.testing.assert_close(grad, results[1][2][name], atol=0, rtol=0)
+        assert torch.equal(results[0][3], results[1][3])
+    hook.remove()
+    assert len(caches) == 6 and len({id(cache) for cache, _ in caches}) == 6
+    assert {length for _, length in caches} == {original_ids.shape[1]}
+    assert torch.equal(inputs["tokenized"]["input_ids"], original_ids)
+    assert all(torch.equal(value, right.net.state_dict()[name]) for name, value in left.net.state_dict().items())
 
 
 @pytest.mark.parametrize("target", ["self_attn.q_norm", "post_attention_layernorm"])

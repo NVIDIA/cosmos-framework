@@ -209,7 +209,11 @@ def build_policy(
     )
     from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextDecoderLayer, Qwen3VLVisionBlock
 
-    from cosmos_framework.posttrain.model.adapters import assert_trainability, prepare_adapter_model
+    from cosmos_framework.posttrain.model.adapters import (
+        assert_trainability,
+        prepare_adapter_model,
+        validate_adapter_parallelism,
+    )
     from cosmos_framework.posttrain.model.parallelize import parallelize
     from cosmos_framework.posttrain.model.specs import ShardPlan
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
@@ -217,10 +221,7 @@ def build_policy(
     config.__post_init__()
     if adapters is None:
         raise ValueError("GR00T full SFT requires explicit adapter components")
-    if pdims is not None and (
-        pdims.dp_replicate != 1 or any(getattr(pdims, k, 1) != 1 for k in ("tp", "cp", "pp", "ep"))
-    ):
-        raise ValueError("GR00T adapters require pure DP sharding; TP/CP/PP/EP/replication unsupported")
+    validate_adapter_parallelism(pdims)
     net, identity = run_rank_converged(lambda: load_base(model_id, config), "GR00T base materialization")
     net.to(device)
     blocks = (Qwen3VLTextDecoderLayer, Qwen3VLVisionBlock, BasicTransformerBlock)

@@ -26,10 +26,8 @@ class AlpamayoSFTModelConfig:
     max_pixels: int = 196608
 
     def __post_init__(self):
-        if self.activation_checkpointing not in ("none", "vision"):
-            raise ValueError(
-                "Alpamayo SFT supports activation_checkpointing=none|vision; its differentiable language/expert cache is mutable and cannot be replayed by generic full checkpointing"
-            )
+        if self.activation_checkpointing not in ("none", "vision", "full"):
+            raise ValueError("Alpamayo SFT supports activation_checkpointing=none|vision|full")
         if not self.processor_path or not 0 < self.min_pixels <= self.max_pixels:
             raise ValueError("Alpamayo SFT requires a local processor and positive ordered pixel bounds")
 

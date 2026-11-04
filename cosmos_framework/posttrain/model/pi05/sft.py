@@ -181,7 +181,11 @@ def build_pi05_sft_policy(
     from transformers.models.gemma.modeling_gemma import GemmaMLP
     from transformers.models.siglip.modeling_siglip import SiglipEncoderLayer
 
-    from cosmos_framework.posttrain.model.adapters import assert_trainability, prepare_adapter_model
+    from cosmos_framework.posttrain.model.adapters import (
+        assert_trainability,
+        prepare_adapter_model,
+        validate_adapter_parallelism,
+    )
     from cosmos_framework.posttrain.model.parallelize import parallelize
     from cosmos_framework.posttrain.model.pi05.compat import Pi05GemmaAttention, Pi05GemmaDecoderLayer
     from cosmos_framework.posttrain.model.pi05.modeling import Pi05Model
@@ -194,10 +198,7 @@ def build_pi05_sft_policy(
     require_sft_runtime()
     if adapters is None:
         raise ValueError("pi05 offline SFT currently requires explicit adapters; use the existing PPO seat for PPO")
-    if pdims is not None and (
-        pdims.dp_replicate != 1 or any(getattr(pdims, k, 1) != 1 for k in ("tp", "cp", "pp", "ep"))
-    ):
-        raise ValueError("pi05 SFT adapters require pure DP sharding (no TP/CP/PP/EP/replication)")
+    validate_adapter_parallelism(pdims)
     native = _model_config(model_id, config)
     source = run_rank_converged(lambda: Pi05Source.resolve(native), "pi05 SFT source")
 

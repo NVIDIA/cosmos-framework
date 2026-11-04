@@ -34,7 +34,8 @@ def test_execution_identity_uses_effective_hf_mesh_and_checkpointing(monkeypatch
     assert adapter_execution_identity(config)["attention"] == "sdpa"
 
 
-def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp_path, monkeypatch):
+@pytest.mark.parametrize("execution", ["factorized_v1", "pissa_dense_v1"])
+def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp_path, monkeypatch, execution):
     from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
     from cosmos_framework.posttrain.scripts.prepare_sft_example import prepare_example
     from cosmos_framework.posttrain.tests.helpers.distributed import init_gloo_process_group
@@ -67,6 +68,7 @@ def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp
         "model.model_config.attn_impl=eager",
         "rl.adapters.components.1.method=dora",
         "rl.adapters.components.2.method=pissa",
+        f"rl.adapters.components.2.execution={execution}",
         "rl.adapters.components.2.layers=[0]",
         "rl.processor_kwargs.images_kwargs.size.shortest_edge=16",
         "rl.processor_kwargs.images_kwargs.size.longest_edge=64",
@@ -84,10 +86,19 @@ def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp
         trainer.finalize_checkpoints()
         train_step(data, trainer, rl)
         expected = trainable_state(trainer.model.net)
+        monkeypatch.setattr(
+            "cosmos_framework.posttrain.model.adapters.PosttrainAdapterLinear.initialize_method",
+            lambda *args: pytest.fail("resume/warm start repeated adapter initialization"),
+        )
         _, _, resumed_data, _, resumed = runtime(recipe, [*opts, f"rl.resume={checkpoint}"], str(tmp_path / "resume"))
         train_step(resumed_data, resumed, rl)
         assert all(torch.equal(value, trainable_state(resumed.model.net)[name]) for name, value in expected.items())
-        for changed in ("model.model_config.attn_impl=sdpa", "model.model_config.activation_checkpointing=full"):
+        other_execution = "pissa_dense_v1" if execution == "factorized_v1" else "factorized_v1"
+        for changed in (
+            "model.model_config.attn_impl=sdpa",
+            "model.model_config.activation_checkpointing=full",
+            f"rl.adapters.components.2.execution={other_execution}",
+        ):
             with pytest.raises(RuntimeError, match="objective exact-resume identity differs"):
                 runtime(recipe, [*opts, f"rl.resume={checkpoint}", changed], str(tmp_path / "refused"))
         # A valid legacy transaction has no trustworthy execution binding. Do not
@@ -131,7 +142,11 @@ def _gradient_observer_worker(rank, world, replicate, path):
     from cosmos_framework.posttrain.model.parallelize import parallelize
     from cosmos_framework.posttrain.model.specs import ShardPlan
     from cosmos_framework.posttrain.tests.helpers.distributed import init_gloo_process_group
-    from cosmos_framework.posttrain.tests.qualify_adapters import local_value, observe_optimizer_gradients
+    from cosmos_framework.posttrain.tests.qualify_adapters import (
+        local_value,
+        observe_optimizer_gradients,
+        verify_hybrid_replicas,
+    )
 
     init_gloo_process_group(rank, world, path)
     try:
@@ -150,6 +165,9 @@ def _gradient_observer_worker(rank, world, replicate, path):
         handle.remove()
         assert all(row["observed"] and row["finite"] and row["nonzero_local"] for row in records.values()), records
         assert all(not torch.equal(before[name], local_value(p)) for name, p in net.named_parameters())
+        checked = verify_hybrid_replicas(net)
+        if replicate > 1:
+            assert checked["hybrid"] and checked["replicas"] == replicate
     finally:
         dist.destroy_process_group()
 
