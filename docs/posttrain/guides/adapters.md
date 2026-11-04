@@ -218,9 +218,21 @@ deployment precision in the export identity. It is qualified for the exact dense
 Qwen3-VL-2B WTS rsLoRA, DoRA and PiSSA artifacts in the
 [extension record](../adapter-extension-progress.md#bf16-deployment-contract-and-measurements),
 using separate approximation, paired task-quality and resource gates. It is not
-FP32 equivalence. Ordinary non-rs LoRA failed the unchanged confident-decision
-gate and is refused; other families/physical formats remain refused. New mixed
-recipes and other checkpoints are not additional BF16 qualifications.
+FP32 equivalence. Ordinary non-rs LoRA with default stock BF16 execution failed
+the unchanged confident-decision gate; that export remains refused. The same
+ordinary LoRA artifact is now qualified with the explicit
+`--execution-profile qwen3_vl_bf16_residual_fp32_v1` option. This keeps BF16 merged
+weights and logits, with FP32 intermediate results, attention and residual state.
+Use `CosmosFrameworkRuntime` with BF16/auto dtype and SDPA to validate and install
+the artifact-bound profile. Plain HF loading alone does not activate its arithmetic.
+Tagged loading rejects missing or unexpected weights instead of permitting HF
+to initialize or ignore them. The supported execution is one CUDA device, eager
+module execution, evaluation with no gradients/autocast, and the recorded library
+versions. KV tensors are FP32. See the
+[deployment continuation](../adapter-deployment-continuation.md) for exact
+precision semantics, resource costs, paired results and reproduction commands.
+Other families/physical formats remain refused. New mixed recipes and other
+checkpoints are not additional BF16 qualifications.
 PiSSA merged export on native Qwen3-VL-MoE is also refused. A real 30B checkpoint
 passes training, continuation, exact BF16 portable reload and all serialized-weight
 checks, but FP32 merging switches a near-tied expert route and fails the fixed
@@ -281,10 +293,13 @@ from the original FP32 base would undo training-time rounding and is incorrect.
 
 BF16 adapter and dense GEMMs round at different boundaries; combined image/video
 encoding also has different GEMM batch shapes in native and stock HF. Real-model
-BF16 exports failed both the initial absolute-logit proposal and later fixed
+BF16 exports in the historical family qualification failed both its initial absolute-logit proposal and later fixed
 probability-drift gates (including a `.0475` probability loss for a changed rsLoRA
 greedy token). Those failures are retained in the qualification record. Their
-limits were not widened to declare success. The supported FP32 export instead
+limits were not widened to declare success. The later bounded BF16 deployment
+qualifications above use separately predeclared approximation/task/resource
+contracts; they do not turn those historical equivalence failures into passes.
+The supported FP32 export
 uses same-precision equivalence; it costs twice the BF16 weight storage and has
 a different compute cost. Reports also measure FP32-export versus BF16-training
 outputs, but do not claim cross-precision generation equivalence. Portable reload

@@ -1,0 +1,654 @@
+{
+  "format": "cosmos-adapter-deployment-continuation-v1",
+  "baseline": "afbd4ab27e129460959cd388f7ccfcb8d44340e8",
+  "production_revision": "263dac1a9269a154ebd3ab6669c830647e261eeb",
+  "wheel_sha256": "a5adbfc3c2f041cbc7a855231eb64ab7d2155f55b0cb4c729f8465873845b6e1",
+  "model": "Qwen/Qwen3-VL-2B-Instruct",
+  "model_revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "training_revision": "076cfbb2b92994a9939cce4211f27fe3c39e79c1",
+  "training_repeated": false,
+  "execution_profile": "qwen3_vl_bf16_residual_fp32_v1",
+  "controlled": {
+    "versus_bf16_portable": {
+      "maximum_logit_error": 2.0,
+      "mean_absolute_logit_error": 0.0780094563961029,
+      "maximum_relative_l2": 0.02163839340209961,
+      "mean_kl": 0.0007105654904080438,
+      "maximum_kl": 0.015031343325972557,
+      "mean_total_variation": 0.003418207346840063,
+      "maximum_total_variation": 0.033575497567653656,
+      "maximum_argmax_probability_regret": 0.0,
+      "argmax_equal": 31,
+      "positions": 32,
+      "p99_total_variation": 0.032468877732753754,
+      "passed": true,
+      "failures": []
+    },
+    "versus_fp32_merged": {
+      "maximum_logit_error": 0.3502769470214844,
+      "mean_absolute_logit_error": 0.026718066073954105,
+      "maximum_relative_l2": 0.007988964207470417,
+      "mean_kl": 6.96775062465349e-05,
+      "maximum_kl": 0.0008277907618321478,
+      "mean_total_variation": 0.0017946662610484054,
+      "maximum_total_variation": 0.015267808921635151,
+      "maximum_argmax_probability_regret": 0.0,
+      "argmax_equal": 32,
+      "positions": 32,
+      "p99_total_variation": 0.014760160818696022,
+      "passed": true,
+      "failures": []
+    },
+    "versus_diagnostic": {
+      "maximum_logit_error": 0.0,
+      "mean_absolute_logit_error": 0.0,
+      "maximum_relative_l2": 0.0,
+      "mean_kl": 0.0,
+      "maximum_kl": 0.0,
+      "mean_total_variation": 0.0,
+      "maximum_total_variation": 0.0,
+      "maximum_argmax_probability_regret": 0.0,
+      "argmax_equal": 32,
+      "positions": 32
+    }
+  },
+  "artifact": {
+    "path": "/localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/exports/lora-bf16-residual",
+    "tensors": 625,
+    "all_tensors_exact_bf16_rounding": true,
+    "floating_bytes": 4255064064,
+    "adapter_branches": 0
+  },
+  "resources": {
+    "median_seconds": 0.3852009465917945,
+    "peak_cuda_allocated": 4575137280,
+    "peak_cuda_reserved": 4905238528
+  },
+  "fp32_resources": {
+    "median_seconds": 0.367007469991222,
+    "peak_cuda_allocated": 8774798848,
+    "peak_cuda_reserved": 9267314688
+  },
+  "resource_ratios": {
+    "median_seconds": 1.049572496715142,
+    "peak_cuda_allocated": 0.5213951179111975
+  },
+  "resource_gate_passed": true,
+  "cache_stats": {
+    "feature_hits": 0,
+    "feature_misses": 0,
+    "feature_entries": 0,
+    "processor_hits": 0,
+    "processor_misses": 0,
+    "processor_entries": 0,
+    "video_input_hits": 0,
+    "video_input_misses": 0,
+    "video_input_entries": 0,
+    "prefix_hits": 2,
+    "prefix_misses": 2,
+    "prefix_entries": 2
+  },
+  "cached_generation": [
+    {
+      "batch": 0,
+      "cached_vs_recomputed": {
+        "maximum_logit_error": 0.1875,
+        "mean_absolute_logit_error": 0.01584945572540164,
+        "maximum_relative_l2": 0.007503041531890631,
+        "mean_kl": 5.725833669192946e-05,
+        "maximum_kl": 0.00022903206991031766,
+        "mean_total_variation": 0.0009341813744783282,
+        "maximum_total_variation": 0.0037367248442023993,
+        "maximum_argmax_probability_regret": 0.0,
+        "argmax_equal": 4,
+        "positions": 4,
+        "p99_total_variation": 0.0036246227100491524,
+        "passed": true,
+        "failures": []
+      },
+      "same_generated_ids": true
+    },
+    {
+      "batch": 1,
+      "cached_vs_recomputed": {
+        "maximum_logit_error": 0.1875,
+        "mean_absolute_logit_error": 0.017752280924469233,
+        "maximum_relative_l2": 0.006897300947457552,
+        "mean_kl": 3.3680687892001515e-06,
+        "maximum_kl": 1.2910717487102374e-05,
+        "mean_total_variation": 7.669846244243636e-05,
+        "maximum_total_variation": 0.00029901141533628106,
+        "maximum_argmax_probability_regret": 0.0,
+        "argmax_equal": 4,
+        "positions": 4,
+        "p99_total_variation": 0.0002902735723182559,
+        "passed": true,
+        "failures": []
+      },
+      "same_generated_ids": true
+    },
+    {
+      "batch": 2,
+      "cached_vs_recomputed": {
+        "maximum_logit_error": 0.1875,
+        "mean_absolute_logit_error": 0.014865869889035821,
+        "maximum_relative_l2": 0.006251032464206219,
+        "mean_kl": 2.856398350559175e-05,
+        "maximum_kl": 0.000114255934022367,
+        "mean_total_variation": 0.0003408165264304904,
+        "maximum_total_variation": 0.001363264163956046,
+        "maximum_argmax_probability_regret": 0.0,
+        "argmax_equal": 4,
+        "positions": 4,
+        "p99_total_variation": 0.0013223132118582726,
+        "passed": true,
+        "failures": []
+      },
+      "same_generated_ids": true,
+      "prefix_first_and_reused": [
+        {
+          "maximum_logit_error": 0.25,
+          "mean_absolute_logit_error": 0.025093471631407738,
+          "maximum_relative_l2": 0.007879696786403656,
+          "mean_kl": 0.0003413043335118715,
+          "maximum_kl": 0.0013651298359036446,
+          "mean_total_variation": 0.005332106943050086,
+          "maximum_total_variation": 0.021328166127204895,
+          "maximum_argmax_probability_regret": 0.0,
+          "argmax_equal": 4,
+          "positions": 4,
+          "p99_total_variation": 0.020688319578766823,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "maximum_logit_error": 0.25,
+          "mean_absolute_logit_error": 0.025093471631407738,
+          "maximum_relative_l2": 0.007879696786403656,
+          "mean_kl": 0.0003413043335118715,
+          "maximum_kl": 0.0013651298359036446,
+          "mean_total_variation": 0.005332106943050086,
+          "maximum_total_variation": 0.021328166127204895,
+          "maximum_argmax_probability_regret": 0.0,
+          "argmax_equal": 4,
+          "positions": 4,
+          "p99_total_variation": 0.020688319578766823,
+          "passed": true,
+          "failures": []
+        }
+      ]
+    },
+    {
+      "batch": 3,
+      "cached_vs_recomputed": {
+        "maximum_logit_error": 0.21875,
+        "mean_absolute_logit_error": 0.014169485890306532,
+        "maximum_relative_l2": 0.006556154694408178,
+        "mean_kl": 5.382934601882644e-06,
+        "maximum_kl": 2.1459887648234144e-05,
+        "mean_total_variation": 8.151131865740073e-05,
+        "maximum_total_variation": 0.0003260113298892975,
+        "maximum_argmax_probability_regret": 0.0,
+        "argmax_equal": 4,
+        "positions": 4,
+        "p99_total_variation": 0.00031623183167539537,
+        "passed": true,
+        "failures": []
+      },
+      "same_generated_ids": true,
+      "prefix_first_and_reused": [
+        {
+          "maximum_logit_error": 0.1875,
+          "mean_absolute_logit_error": 0.022263598162680864,
+          "maximum_relative_l2": 0.007404806092381477,
+          "mean_kl": 7.34408467906178e-06,
+          "maximum_kl": 2.937633871624712e-05,
+          "mean_total_variation": 8.96761769939303e-05,
+          "maximum_total_variation": 0.0003586544480640441,
+          "maximum_argmax_probability_regret": 0.0,
+          "argmax_equal": 4,
+          "positions": 4,
+          "p99_total_variation": 0.00034789397614076734,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "maximum_logit_error": 0.1875,
+          "mean_absolute_logit_error": 0.022263598162680864,
+          "maximum_relative_l2": 0.007404806092381477,
+          "mean_kl": 7.34408467906178e-06,
+          "maximum_kl": 2.937633871624712e-05,
+          "mean_total_variation": 8.96761769939303e-05,
+          "maximum_total_variation": 0.0003586544480640441,
+          "maximum_argmax_probability_regret": 0.0,
+          "argmax_equal": 4,
+          "positions": 4,
+          "p99_total_variation": 0.00034789397614076734,
+          "passed": true,
+          "failures": []
+        }
+      ]
+    }
+  ],
+  "cached_generation_peak_cuda_allocated": 4503667200,
+  "parameters_preserved": true,
+  "parameter_ownership_preserved": true,
+  "task": {
+    "rows": 576,
+    "fp32_correct": 528,
+    "profile_correct": 528,
+    "fp32_accuracy_percent": 91.66666666666666,
+    "profile_accuracy_percent": 91.66666666666666,
+    "delta_percentage_points": 0.0,
+    "paired_95_interval_percentage_points": [
+      -0.5208333333333333,
+      0.5208333333333333
+    ],
+    "wrong_to_right": 1,
+    "right_to_wrong": 1,
+    "changed_answers": 2,
+    "invalid_answers": 0,
+    "generated_token_nll": 0.009109307710481783,
+    "task_gate_passed": true,
+    "bootstrap": {
+      "seed": 42,
+      "repetitions": 10000,
+      "unit": "paired row; descriptive, not independent scenes/seeds"
+    },
+    "benchmark": "reused scene-disjoint 576-row WTS benchmark; not untouched final test",
+    "execution": {
+      "source_build": {
+        "source_revision": "263dac1a9269a154ebd3ab6669c830647e261eeb",
+        "source_base": "afbd4ab27e129460959cd388f7ccfcb8d44340e8",
+        "source_branch": "feat/posttrain-family-adapters",
+        "source_dirty": false,
+        "build_input": "clean git archive 263dac1a9269a154ebd3ab6669c830647e261eeb",
+        "wheel_sha256": "a5adbfc3c2f041cbc7a855231eb64ab7d2155f55b0cb4c729f8465873845b6e1",
+        "tracked_package_files_verified": 1886,
+        "created_utc": "2026-11-04T01:48:54.553807+00:00"
+      },
+      "argv": [
+        "/localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/runtime-eval-v1/bin/python",
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        "--nproc_per_node=1",
+        "-m",
+        "cosmos_framework.evaluation.reasoner.evaluate",
+        "--config",
+        "/localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/wts-profile/evaluation.toml"
+      ],
+      "cwd": "/tmp",
+      "environment_overrides": {
+        "CUDA_VISIBLE_DEVICES": "GPU-b4b6607c-aaf5-fb9f-0401-57d4413a0fd6",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "ADAPTER_ENVIRONMENT_MANIFEST": "/localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/release-263dac1/eval-environment.json"
+      },
+      "runtime_sha256": "b83cf6a04cb292947946f5162d6200072ee4b8b0c97892d54143cc9811b6121e",
+      "method": "ordinary_lora",
+      "execution_profile": "qwen3_vl_bf16_residual_fp32_v1",
+      "training_source": "076cfbb",
+      "rows": 576,
+      "benchmark_status": "reused scene-disjoint benchmark; not untouched test",
+      "dataset": "/localhome/local-rarunachalam/cosmos-family-adapters-20261030/local-gpu-v1/resources/full-wts/source/cosmos-wts-bayesian-10-20261029/inputs/data/test.json",
+      "dataset_sha256": "3cab357a0ebb9bf7292525ae6f33dd43ffef916226c0e6d8171c3f45dce71e28",
+      "paired_reference": "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/review/wts-paired-predictions.csv",
+      "paired_reference_sha256": "2d6c46522c65bbee7a3cd5b4ce75bc7712c38fe7887a05f22bccbc1e2194f589",
+      "artifact_marker_sha256": "db4bfcdd0f0a7a5d991b9549d30f44193865d2300bd00cbf3da5353d6084c923",
+      "config_sha256": "7cdddb40eb9aa761a9237b3c2dcbe3124610043c0d109f09e614d4a7ed79e58d",
+      "script_sha256": "a3f4b2d1524502e8022eda5343a4ed2cf2486262591b8b1e16d3051d2e9d88d0",
+      "returncode": 0,
+      "seconds": 280.57688907394186
+    }
+  },
+  "paired_predictions_sha256": "9fddf0f1a5ed99f33373e2da078a991e689dffb0c9ec998b6264a2b1a69f9b78",
+  "acceptance_sha256": "fcc90b384151d45b0706a33b4b33603697ac20c46659f0579a5e450b343e2848",
+  "historical_counts": {
+    "named_checkpoints": 12,
+    "fixed_profiles": 48,
+    "fully_passed_fixed_profiles": 47,
+    "mixed_component_profiles": 5,
+    "prior_bf16_deployment_profiles": 3
+  },
+  "new_training_profiles": 0,
+  "new_bf16_deployment_profiles": 1,
+  "independent_review": {
+    "review_base": "afbd4ab27e129460959cd388f7ccfcb8d44340e8",
+    "reviewed_commit": "263dac1a9269a154ebd3ab6669c830647e261eeb",
+    "status": "complete_no_unresolved_findings",
+    "scope": "new production delta only; read-only code review and CPU validation",
+    "findings": [
+      {
+        "id": "R1",
+        "severity": "P2",
+        "status": "fixed_and_independently_rechecked",
+        "location": "cosmos_framework/inference/reasoner/runtime.py:420",
+        "description": "Pinned HF5.8 prefix RoPE requires processor modality IDs and named grid arguments."
+      },
+      {
+        "id": "R2",
+        "severity": "P2",
+        "status": "fixed_and_independently_rechecked",
+        "location": "cosmos_framework/inference/reasoner/runtime.py:499",
+        "description": "Prefix continuation must omit media pixels already represented in KV state."
+      }
+    ],
+    "focused_tests": {
+      "passed": 15,
+      "skipped_cuda": 1,
+      "deselected": 47
+    },
+    "independent_probe": {
+      "status": "passed",
+      "cpu_cuda_standins": true,
+      "parameter_ids_ties_values_state_keys_preserved": true,
+      "cached_uncached_score_error": {
+        "text": 0.0,
+        "image": 0.0,
+        "video": 0.0
+      },
+      "prefix": {
+        "first_and_reused_tokens_equal": true,
+        "maximum_score_error": 0.0,
+        "caller_inputs_unchanged": true,
+        "hits": 1,
+        "misses": 1
+      },
+      "non_sdpa_children_refused": [
+        "text_config",
+        "vision_config"
+      ]
+    },
+    "qualification": "Separate installed GPU/reference/resource/task gates required; this review alone does not qualify deployment.",
+    "source_state": "final-review-state.json",
+    "production_edits_by_reviewer": false,
+    "gpu_jobs_by_reviewer": false
+  },
+  "tests": {
+    "installed_affected_cpu": {
+      "passed": 176,
+      "skipped_cuda": 1
+    },
+    "installed_cuda": {
+      "passed": 1
+    }
+  },
+  "status": "qualified",
+  "moe_additional_diagnostics": {
+    "installed_revision": "2d12fd5a11c2e86a5e47808b5da17efb2200ab87",
+    "wheel_sha256": "3df44383519c45a2f5eb8a6692af13f5af71899765e499645482164f1aa2f894",
+    "saved_probe_batches": 8,
+    "unchanged_gate": {
+      "atol": 0.0005,
+      "rtol": 0.0002,
+      "mean_absolute_error_max": 5e-05,
+      "greedy_agreement": "all positions"
+    },
+    "results": {
+      "original_target_linears_fp64": {
+        "existing_gate_passed": false,
+        "maximum_logit_error": 0.029510498046875,
+        "mean_absolute_logit_error": 0.0003887735867920128,
+        "argmax_equal": 64,
+        "positions": 64,
+        "adapter_branches": 0,
+        "artifact": "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/moe-original-inputs/merged",
+        "first_changed_route": {
+          "module": "model.language_model.layers.37.mlp",
+          "token": 7,
+          "portable": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5
+          ],
+          "candidate": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68
+          ],
+          "portable_margin": 7.450580596923828e-09,
+          "block_error": {
+            "maximum": 0.09699927270412445,
+            "mean": 0.00018018181439373966
+          }
+        }
+      },
+      "original_all_linears_fp64": {
+        "existing_gate_passed": false,
+        "maximum_logit_error": 0.029496192932128906,
+        "mean_absolute_logit_error": 0.00038882876998513893,
+        "argmax_equal": 64,
+        "positions": 64,
+        "adapter_branches": 0,
+        "artifact": "/localhome/local-rarunachalam/cosmos-adapter-final-review-20261102/moe-original-inputs/merged",
+        "first_changed_route": {
+          "module": "model.language_model.layers.37.mlp",
+          "token": 7,
+          "portable": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5
+          ],
+          "candidate": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68
+          ],
+          "portable_margin": 7.450580596923828e-09,
+          "block_error": {
+            "maximum": 0.09699947386980057,
+            "mean": 0.0001802053711575161
+          }
+        }
+      },
+      "effective_fp64_target_linears_fp64": {
+        "existing_gate_passed": false,
+        "maximum_logit_error": 0.029494285583496094,
+        "mean_absolute_logit_error": 0.0003886823436971554,
+        "argmax_equal": 64,
+        "positions": 64,
+        "adapter_branches": 0,
+        "artifact": "/localhome/local-rarunachalam/cosmos-adapter-extension-20261104/moe-candidates/stock-fp64-accumulated",
+        "first_changed_route": {
+          "module": "model.language_model.layers.37.mlp",
+          "token": 7,
+          "portable": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5
+          ],
+          "candidate": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68
+          ],
+          "portable_margin": 7.450580596923828e-09,
+          "block_error": {
+            "maximum": 0.0969993844628334,
+            "mean": 0.00018017684947888558
+          }
+        }
+      },
+      "effective_fp64_all_linears_fp64": {
+        "existing_gate_passed": false,
+        "maximum_logit_error": 0.029481887817382812,
+        "mean_absolute_logit_error": 0.0003887246776059783,
+        "argmax_equal": 64,
+        "positions": 64,
+        "adapter_branches": 0,
+        "artifact": "/localhome/local-rarunachalam/cosmos-adapter-extension-20261104/moe-candidates/stock-fp64-accumulated",
+        "first_changed_route": {
+          "module": "model.language_model.layers.37.mlp",
+          "token": 7,
+          "portable": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            5
+          ],
+          "candidate": [
+            14,
+            0,
+            50,
+            41,
+            84,
+            122,
+            104,
+            68
+          ],
+          "portable_margin": 7.450580596923828e-09,
+          "block_error": {
+            "maximum": 0.09699928760528564,
+            "mean": 0.00018020675114017177
+          }
+        }
+      }
+    },
+    "previous_failed_candidates": 7,
+    "total_failed_candidates": 11,
+    "merged_export": "incomplete_guard_retained",
+    "portable_support": "preserved"
+  },
+  "failed_bf16_candidates": [
+    {
+      "candidate": "stock_bf16_control",
+      "versus_bf16_portable": [],
+      "versus_fp32_merged": [
+        "BF16 merged deployment drift maximum_argmax_probability_regret=0.033915669 exceeds 0.02"
+      ],
+      "resource_gate_passed": true
+    },
+    {
+      "candidate": "rounded_weights_fp32_isolation",
+      "versus_bf16_portable": [
+        "BF16 merged deployment drift maximum_logit_error=2.1199265 exceeds 2.0"
+      ],
+      "versus_fp32_merged": [],
+      "resource_gate_passed": false
+    },
+    {
+      "candidate": "bf16_gemm_fp32_output",
+      "versus_bf16_portable": [
+        "BF16 merged deployment drift maximum_logit_error=2.0086823 exceeds 2.0"
+      ],
+      "versus_fp32_merged": [],
+      "resource_gate_passed": true
+    },
+    {
+      "candidate": "bf16_storage_layerwise_fp32",
+      "versus_bf16_portable": [
+        "BF16 merged deployment drift maximum_logit_error=2.1347313 exceeds 2.0"
+      ],
+      "versus_fp32_merged": [],
+      "resource_gate_passed": false
+    },
+    {
+      "candidate": "language_residual_fp32_vision_head_bf16",
+      "versus_bf16_portable": [],
+      "versus_fp32_merged": [
+        "BF16 merged deployment drift maximum_argmax_probability_regret=0.033915669 exceeds 0.02"
+      ],
+      "resource_gate_passed": true
+    }
+  ],
+  "evidence_hashes": {
+    "installed-profile/report.json": "85c6ad6a80ece811648c8879e5566d4f4d719cf37e8be1a9129bea3d368112d7",
+    "moe-linear-precision/report.json": "35c2b5bd0cfcaaabb56131865214d5922255cf8336a8edbe73cd0b359bf098be",
+    "review/review-summary.json": "8266e2a6e5962d40961e99f04ff11a6437f791a3f784afd53a18188372e7a87d",
+    "installed-affected-cpu.log": "78016dca79f26a41f3cb5bc7f64527aa8b2257dc06d20ba0e4d7e060f3183ddf",
+    "installed-focused-gpu.log": "9a7186ca30b2f6aebda2ae575fa5efee53d0403770ff99b6b83324f0b8aca365",
+    "wts-profile/execution.json": "40b7dc67e8ee781a4ac6f3b54e8cca9f75af3690a6648583ea9e48f48048f07f",
+    "installed-strict-loader/report.json": "e841756bb7df346e2a741b3813a5c9f7eb32e5addc2fbce6b6baf32eb61856f9",
+    "installed-strict-loader-cpu.log": "cde6a404bdb2029cf49cad2bfa1d23ee867684c82476427f2a99f6185b509641",
+    "review/strict-loader-followup.json": "ea8fac12265c124b88c0ba27ea946fd11a0f88df7e1f651dce02b05a1f47adff"
+  },
+  "strict_loader_followup": {
+    "production_revision": "217cc5f5a92c2d8d6b62ef9727ab9576739640cd",
+    "wheel_sha256": "408ff6a7b532770b52f9ed8738857f551dcc00db5006f7c9e1bf7977cd1bef13",
+    "installed_cpu": {
+      "passed": 11,
+      "skipped_cuda": 1
+    },
+    "installed_gpu": {
+      "probe_batches": 4,
+      "controlled_positions": 32,
+      "maximum_logit_error": 0.0,
+      "every_output_bitwise_equal": true
+    },
+    "comparison_source_revision": "263dac1a9269a154ebd3ab6669c830647e261eeb",
+    "independent_review": {
+      "status": "passed",
+      "reviewed_commit": "217cc5f5a92c2d8d6b62ef9727ab9576739640cd",
+      "runtime_source_sha256": "6d731eadc8f9ca82177261047256bef8ce71f1067df1102da59d40f2ebe2da89",
+      "results": {
+        "complete_tied_export": {
+          "accepted": true,
+          "tying_preserved": true,
+          "loading_info_requested": true
+        },
+        "missing": {
+          "refused": true,
+          "diagnostic": "Incomplete or incompatible deployment artifact at /localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/review/missing-key-loader-v4/incomplete: {'missing_keys': ['model.language_model.layers.0.self_attn.q_proj.weight']}. Re-export the complete merged model; deployment cannot initialize or ignore saved weights.",
+          "model_not_assigned": true,
+          "installer_not_called": true
+        },
+        "unexpected": {
+          "refused": true,
+          "diagnostic": "Incomplete or incompatible deployment artifact at /localhome/local-rarunachalam/cosmos-adapter-continuation-20261104/review/strict-loader-followup/unexpected: {'unexpected_keys': ['unexpected_projection.weight']}. Re-export the complete merged model; deployment cannot initialize or ignore saved weights.",
+          "model_not_assigned": true,
+          "installer_not_called": true
+        },
+        "untagged": {
+          "accepted": true,
+          "loading_info_omitted": true,
+          "installer_not_called": true,
+          "tying_preserved": true
+        }
+      },
+      "note": "Actual stock HF and Runtime CPU loading; only the CUDA-only profile installer was observed via a no-op spy. Preserved 263dac1 fixtures were read-only."
+    },
+    "behavior_change": "Tagged incomplete weights are refused before profile installation; valid and untagged loading unchanged.",
+    "task_evaluation_repeated": false,
+    "task_coverage": "Only weight-load diagnostics changed since 263dac1; all valid controlled outputs are bitwise identical. WTS task results remain recorded at 263dac1, not relabeled to the loader fix."
+  },
+  "installed_modules_count": 356,
+  "installed_modules_sha256": "a616c889b3b73cf51ffb0b3af2d45bb4421c4760ddf0342f6ef0f0011da6d845",
+  "full_report_sha256": "fae15c71d58a0a147c605511722cefed07632385a367ce240fdf91d6c1993e5c"
+}

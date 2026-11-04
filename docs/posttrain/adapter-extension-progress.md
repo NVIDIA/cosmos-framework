@@ -1,5 +1,11 @@
 # Adapter execution and deployment extension
 
+This is the preserved extension snapshot through `afbd4ab`. The subsequent
+[deployment continuation](adapter-deployment-continuation.md) qualifies an explicit
+ordinary-LoRA BF16 inference profile, fixes optional prefix-cache/loading defects
+and records four more failed MoE accumulation probes. The results below retain
+their original source revisions and qualification boundaries.
+
 This extends clean `feat/posttrain-family-adapters` at
 `d2627108da1282f2de7577f9e878acd269084fd5`. Production commits are `7b0d100`
 (HSDP/selective checkpointing and independent recipes), `f6baa78` (bounded BF16
