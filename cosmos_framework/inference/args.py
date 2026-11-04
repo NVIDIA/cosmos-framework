@@ -650,6 +650,15 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
     Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
 
+    @pydantic.field_validator("resolution", mode="before")
+    @classmethod
+    def _resolution_tier_from_int(cls, value: object) -> object:
+        # JSON specs often write the tier as a number (``"resolution": 480``); the tier is the same
+        # string, so accept the integer instead of failing the Literal check.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
     @override
     def download(self, output_dir: Path):
         super().download(output_dir)
@@ -1746,6 +1755,32 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                     f"[transfer] '{hint_key}.weight'={weight} has no effect with a single control; "
                     "weights only set the relative mix between multiple controls."
                 )
+        # load_transfer_control_frames reads a control_path as-is and computes edge/blur only when it is
+        # missing, so the preset of a control that comes from a file is never read. The default preset
+        # (medium, as in the shipped cookbook specs) stays silent.
+        preset_fields = {TransferHintKey.EDGE: "preset_edge_threshold", TransferHintKey.BLUR: "preset_blur_strength"}
+        for hint_key, config in hints.items():
+            preset_field = preset_fields.get(hint_key)
+            preset = getattr(config, preset_field, None) if preset_field else None
+            if hint_key in user_set and config.control_path is not None and preset is not None and preset != "medium":
+                log.warning(
+                    f"[transfer] '{hint_key}.{preset_field}'='{preset}' is ignored: '{hint_key}.control_path' is set, "
+                    "so that control video is used as-is and the preset only applies when the control is computed "
+                    "from 'vision_path'. Remove control_path and set 'vision_path' to apply the preset."
+                )
+        # show_input pastes the source RGB next to the output, so without vision_path there is nothing
+        # to show: single-view Transfer writes the output alone, and streaming Transfer rejects it.
+        if (
+            self.show_input is True
+            and "show_input" in user_set
+            and self.vision_path is None
+            and self.multiview is None
+            and all(config.control_path is not None for config in hints.values())
+        ):
+            log.warning(
+                "[transfer] 'show_input' has no effect without 'vision_path': there is no input video to show next "
+                "to the output (streaming Transfer rejects this request). Set 'vision_path' to the source video."
+            )
         # Single-view Transfer returns through _generate_transfer_batch before the native upsampler,
         # but native_prompt_upsampling still skips the duration/resolution text added to plain prompts.
         if (

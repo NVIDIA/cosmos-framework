@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pydantic
 import pytest
 
 import cosmos_framework.inference.args as args_module
@@ -838,3 +839,91 @@ def test_reversed_control_guidance_interval_warns_only_where_control_guidance_ru
     sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"control_guidance"}))
 
     assert any("is reversed" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "hint,preset_field,preset,warns",
+    [
+        ("blur", "preset_blur_strength", "very_high", True),
+        ("blur", "preset_blur_strength", "medium", False),
+        ("blur", "preset_blur_strength", None, False),
+        ("edge", "preset_edge_threshold", "low", True),
+        ("edge", "preset_edge_threshold", "medium", False),
+    ],
+)
+def test_preset_is_flagged_as_ignored_when_control_path_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hint: str, preset_field: str, preset: str | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / f"{hint}.mp4"
+    control.touch()
+    config: dict[str, str] = {"control_path": str(control)}
+    if preset is not None:
+        config[preset_field] = preset
+    sample = OmniSampleOverrides(**{hint: config}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({hint}))
+
+    assert any(f"'{hint}.{preset_field}'" in w and "is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_preset_without_control_path_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    rgb = tmp_path / "rgb.mp4"
+    rgb.touch()
+    sample = OmniSampleOverrides(vision_path=str(rgb), blur={"preset_blur_strength": "very_high"}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"blur"}))
+
+    assert not any("preset_blur_strength" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "show_input,with_vision,user_set,warns",
+    [
+        (True, False, True, True),
+        (True, True, True, False),
+        (False, False, True, False),
+        (True, False, False, False),  # from a defaults file, not the request
+    ],
+)
+def test_show_input_without_vision_path_is_flagged_as_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    show_input: bool,
+    with_vision: bool,
+    user_set: bool,
+    warns: bool,
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    extra: dict[str, str] = {}
+    if with_vision:
+        rgb = tmp_path / "rgb.mp4"
+        rgb.touch()
+        extra["vision_path"] = str(rgb)
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, show_input=show_input, autoregressive=True, **extra)
+    fields = {"depth", "show_input"} if user_set else {"depth"}
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset(fields))
+
+    assert any("'show_input' has no effect without 'vision_path'" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value,expected", [(480, "480"), ("480", "480"), (720, "720")])
+def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: str) -> None:
+    assert OmniSampleOverrides(resolution=value).resolution == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", [1080, "4k", True])
+def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(resolution=value)
