@@ -199,10 +199,30 @@ class CosmosFrameworkRuntime:
         }
         if self.attn_implementation:
             model_load_kwargs["attn_implementation"] = self.attn_implementation
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_path,
-            **model_load_kwargs,
-        )
+        if profile:
+            # HF can warn and initialize absent tensors even in a completed
+            # export. Tagged deployment requires exactly the saved model.
+            loaded, loading_info = AutoModelForImageTextToText.from_pretrained(
+                self.model_path,
+                **model_load_kwargs,
+                output_loading_info=True,
+            )
+            problems = {
+                key: sorted(map(str, loading_info[key]))
+                for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")
+                if loading_info.get(key)
+            }
+            if problems:
+                raise ValueError(
+                    f"Incomplete or incompatible deployment artifact at {self.model_path}: {problems}. "
+                    "Re-export the complete merged model; deployment cannot initialize or ignore saved weights."
+                )
+            self.model = loaded
+        else:
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_path,
+                **model_load_kwargs,
+            )
         if self.model_type == "qwen3_vl" and profile is None:
             from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
 
