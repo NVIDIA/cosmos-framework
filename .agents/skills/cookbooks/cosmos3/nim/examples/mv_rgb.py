@@ -71,7 +71,6 @@ def build_request(case: str, sample_root: Path, caption_folder: str) -> dict:
         "model_mode": "image2video" if case == "i2v" else "text2video",
         "resolution": "480",
         "num_frames": NUM_FRAMES,
-        "fps": 30.0,
         "seed": 42,
         "multiview": {
             "output_modality": "camera",

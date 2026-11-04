@@ -336,7 +336,7 @@ The control is a safetensors file containing one contiguous FP32 tensor named
 
 
 Each sweep is a 128 × 1800 range image. LiDAR runs at its checkpoint-defined
-10 Hz independently of camera FPS, so a 201-frame, 30-FPS camera clip spans
+10 Hz while cameras run at a fixed 30 FPS, so a 201-frame camera clip spans
 6.7 seconds and consumes the first 67 sweeps. Supply at least that many; the
 backend ignores trailing sweeps. The control must come from the same scene and
 time interval as the WSM controls. The sample's control converts to 100 sweeps.
@@ -480,8 +480,7 @@ values that differ are rejected unless the table allows them:
 | Field                                | Default                             | Accepted values                                                                                                     |
 | ------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `resolution`                         | `480` (832 × 480 for 16:9 controls) | Any `480` or `720` key; a bare tier sizes output from the first WSM control's aspect                                |
-| `num_frames`                         | `201` per camera                    | `200` through `397`; a count that is not `4k + 1` is generated at the next `4k + 1` and each camera is trimmed back |
-| `fps`                                | `30.0`                              | `10.0` through `30.0`; LiDAR stays at 10 Hz at any camera rate                                                      |
+| `num_frames`                         | `201` per camera                    | `200` through `401`; a count that is not `4k + 1` is generated at the next `4k + 1` and each camera is trimmed back |
 | `num_inference_steps`                | `35`                                | `35` only                                                                                                           |
 | `guidance_scale`                     | `1.5`                               | `1.0` through `7.0`                                                                                                 |
 | `flow_shift`                         | `10.0`                              | Any positive value                                                                                                  |
@@ -489,9 +488,13 @@ values that differ are rejected unless the table allows them:
 
 
 The single-view frame ceilings in [Generation](generation.md#frame-counts-and-limits)
-do not apply to multiview. `480` with 201 frames at 30 FPS is the validated
-configuration; the model is trained on 30 FPS clips, so lower rates can reduce
-visual quality. Always set `seed` when comparing runs.
+do not apply to multiview. `480` with 201 frames is the validated
+configuration. Always set `seed` when comparing runs.
+
+Multiview has no `fps` field. Cameras are always generated and encoded at
+30 FPS, the only rate the model is trained and conditioned on, and a request
+that sends `fps` is rejected. Prepare WSM controls at 30 FPS. To play a clip
+back at another rate, retime the saved MP4s; LiDAR stays at 10 Hz.
 
 Multiview requests reject top-level `prompt`, `input_reference`, `transfer`,
 `action_params`, and `negative_prompt`. Per-view `control` implies WSM;
@@ -548,8 +551,8 @@ caption and reword it. See [Guardrails](operations.md#guardrails).
 | HTTP 422, `num_conditional_sweeps=N must leave at least one`                           | Conditioning would cover every LiDAR sweep in the request                                                                                              | Use at most the stated maximum, or request more frames                                                                                                                |
 | HTTP 422, `This request has been blocked by our AI guidelines`                         | The text guardrail is enabled and a caption or the negative prompt was blocked | Reword the blocked text, or launch with `NIM_ENABLE_TEXT_GUARDRAILS=0` for an approved, isolated evaluation                                                           |
 | HTTP 422, `requires vision for <camera>`                                               | `image2video` view without `vision`                                                                                                                    | Add an RGB image or video to every view                                                                                                                               |
-| HTTP 422, `num_frames between 200 and 397`, or `less than or equal to 397`             | Explicit frame count outside the supported range                                                                                                       | Request 200 to 397 frames, or omit `num_frames` for 201                                                                                                               |
-| HTTP 422, `requires fps between 10 and 30`                                             | Explicit camera frame rate outside the supported range                                                                                                 | Request 10 to 30 FPS, or omit `fps` for 30                                                                                                                            |
+| HTTP 422, `num_frames between 200 and 401`, or `less than or equal to 401`             | Explicit frame count outside the supported range                                                                                                       | Request 200 to 401 frames, or omit `num_frames` for 201                                                                                                               |
+| HTTP 422, `fixed 30 FPS; remove fps`                                                   | `fps` sent with a multiview request                                                                                                                    | Remove `fps`; multiview always generates at 30 FPS                                                                                                                    |
 | HTTP 422, `guidance_scale` `greater than or equal to 1` or `less than or equal to 7`   | Guidance outside the request bounds                                                                                                                    | Request 1.0 to 7.0, or omit `guidance_scale` for 1.5                                                                                                                  |
 | HTTP 422, `text2video multiview requests do not accept vision inputs`                  | `vision` sent with `text2video`                                                                                                                        | Remove `vision`, or use `image2video`                                                                                                                                 |
 | HTTP 422, `camera_lidar` requires `multiview.lidar.control`                            | Joint output without the LiDAR control                                                                                                                 | Add `multiview.lidar.control`                                                                                                                                         |

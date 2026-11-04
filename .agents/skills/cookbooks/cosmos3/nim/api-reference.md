@@ -72,7 +72,7 @@ on their pages.
 | `flow_shift` | finite number greater than 0 | `10.0` / `3.0` | Sampling when not owned by a specialist model |
 | `resolution` | enum | `720` / `720_1_1` | Generation and Transfer; refer to [Resolution Keys](generation.md#resolution-keys) |
 | `num_frames` | integer | `189` / `1` | Generation and Transfer; Action derives it and rejects the field |
-| `fps` | finite number in `[1.0,60.0]` | `24.0` | Video tasks; retained but not encoded for T2I |
+| `fps` | finite number in `[1.0,60.0]` | `24.0` | Video tasks; retained but not encoded for T2I; rejected by [multiview](multiview.md), which always runs at 30 FPS |
 | `condition_frame_indexes_vision` | integer array or null | `[0, 1]` | V2V only |
 | `condition_video_keep` | `first`, `last`, or null | `first` | V2V only |
 | `action_params` | object | None | Action modes only; [Action](action.md#action-parameter-reference) |

@@ -259,7 +259,7 @@ variational autoencoder (VAE) compresses time by 4, and trims to exactly
 | `480` | 297 |
 | `720` | 197 |
 
-These limits do not apply to multiview, which accepts 200 through 397 frames
+These limits do not apply to multiview, which accepts 200 through 401 frames
 per camera. Refer to [Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
 
 ### Resolution Keys
@@ -276,7 +276,8 @@ Bare keys alias the 16:9 shape of their tier (width × height):
 
 ### FPS and Denoising Steps
 
-The `fps` field accepts 1–60 (10–30 recommended); multiview accepts 10–30.
+The `fps` field accepts 1–60 (10–30 recommended). Multiview has no `fps` field: it always
+generates at 30 FPS and rejects the field. Refer to [Multiview](multiview.md#generation-defaults-and-limits).
 Video duration is about `num_frames / fps` seconds. Fractional `fps` reaches the model and encoder
 unchanged. Only prompt-upsampling text rounds it. More `num_inference_steps`
 costs more latency.

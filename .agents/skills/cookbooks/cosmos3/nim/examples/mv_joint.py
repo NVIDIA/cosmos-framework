@@ -62,7 +62,6 @@ def build_request(
         "model_mode": mode,
         "resolution": "480",
         "num_frames": NUM_FRAMES,
-        "fps": 30.0,
         "seed": 42,
         "multiview": {
             "output_modality": "camera_lidar",
