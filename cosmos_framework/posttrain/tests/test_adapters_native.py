@@ -500,7 +500,8 @@ def test_merged_export_metadata_binds_the_consumed_adapter_snapshot(tmp_path, mo
     assert marker["adapter_weights_sha256"] == original_digest
 
 
-def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path):
+@pytest.mark.parametrize("attention", ["sdpa", "eager"])
+def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path, attention):
     from cosmos_framework.posttrain.checkpoint.adapters import (
         read_adapter_artifact,
         save_adapter_artifact,
@@ -520,7 +521,10 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     config.components[2].method = "pissa"
     config.extra_modules = [AdapterExtraModuleConfig(targets=["model.language_model.norm"])]
     policy = build_qwen3_vl_model(
-        Qwen3VLModelConfig(name_or_path=str(base), dtype="bfloat16", activation_checkpointing="none"), adapters=config
+        Qwen3VLModelConfig(
+            name_or_path=str(base), dtype="bfloat16", activation_checkpointing="none", attn_impl=attention
+        ),
+        adapters=config,
     )
     with torch.no_grad():
         for parameter in policy.net.parameters():
@@ -557,9 +561,14 @@ def test_promoted_merge_control_bf16_independent_methods_and_extra_norm(tmp_path
     with pytest.raises(MaterializeRefusedError, match="export_metadata"):
         export_merged_adapter(str(changed), str(base), str(merged_path))
     assert marker.read_bytes() == before
-    control = verify_promoted_merge(
-        policy, identity, [{"input_ids": torch.tensor([[30, 31, 32, 33]])}], str(tmp_path / "merged")
-    )
+    from cosmos_framework.posttrain.tests.qualify_adapters import logits
+    from cosmos_framework.posttrain.tests.reload_adapters import portable_policy
+
+    batches = [{"input_ids": torch.tensor([[30, 31, 32, 33]])}]
+    restored = portable_policy(str(base), str(tmp_path / "portable"), identity, attn_impl=attention)
+    for actual, expected in zip(logits(restored, batches), logits(policy, batches), strict=True):
+        torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    control = verify_promoted_merge(restored, identity, batches, str(tmp_path / "merged"), attn_impl=attention)
     assert control["serialized_tensors_verified"] > 0
     assert control["hf_fp32"]["maximum_logit_error"] < 3e-5
 

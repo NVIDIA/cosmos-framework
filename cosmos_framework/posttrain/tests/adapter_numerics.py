@@ -135,7 +135,13 @@ def assert_bf16_deployment_drift(report: dict) -> None:
 
 
 def verify_promoted_merge(
-    policy, identity: dict, batches: list[dict], exported: str, *, reference: list[torch.Tensor] | None = None
+    policy,
+    identity: dict,
+    batches: list[dict],
+    exported: str,
+    *,
+    reference: list[torch.Tensor] | None = None,
+    attn_impl: str = "sdpa",
 ) -> dict:
     """Control a private loaded copy in FP32 and account for every exported tensor.
 
@@ -207,7 +213,7 @@ def verify_promoted_merge(
         torch.cuda.empty_cache()
     with init_on_device("meta", include_buffers=False):
         hf = getattr(transformers, family.hf_auto_class).from_config(
-            AutoConfig.from_pretrained(exported), dtype=torch.float32, attn_implementation="sdpa"
+            AutoConfig.from_pretrained(exported), dtype=torch.float32, attn_implementation=attn_impl
         )
     hf.load_state_dict(merged, strict=True, assign=True)
     hf.tie_weights()

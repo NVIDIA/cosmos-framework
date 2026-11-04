@@ -24,7 +24,18 @@ from cosmos_framework.posttrain.tests.adapter_numerics import (
 from cosmos_framework.posttrain.tests.qualify_adapters import attest, logits
 
 
-def portable_policy(base: str, directory: str, identity: dict, *, backend: str = "i4"):
+def recorded_attention(root: Path) -> str:
+    """Keep the controlled training computation; old qualified profiles used SDPA."""
+    profiles = {
+        json.loads(path.read_text()).get("configured_execution", {}).get("attention", "sdpa")
+        for path in root.glob("training-rank*.json")
+    } or {"sdpa"}
+    if len(profiles) != 1 or not profiles <= {"eager", "sdpa"}:
+        raise ValueError(f"inconsistent or unsupported recorded attention profiles: {profiles}")
+    return profiles.pop()
+
+
+def portable_policy(base: str, directory: str, identity: dict, *, backend: str = "i4", attn_impl: str = "sdpa"):
     adapters = adapter_configuration(identity)
     adapters.warm_start = directory
     if backend == "hf":
@@ -32,12 +43,12 @@ def portable_policy(base: str, directory: str, identity: dict, *, backend: str =
         from cosmos_framework.posttrain.model.hf import build_hf_model
 
         return build_hf_model(
-            HFModelConfig(name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa"),
+            HFModelConfig(name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl=attn_impl),
             adapters=adapters,
             adapter_media_identity=identity["media"],
         )
     config = Qwen3VLModelConfig(
-        name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl="sdpa", activation_checkpointing="none"
+        name_or_path=base, dtype=identity["base_storage_dtype"], attn_impl=attn_impl, activation_checkpointing="none"
     )
     return build_qwen3_vl_model(
         config,
@@ -62,6 +73,8 @@ def main():
     evidence = attest(args.wheel, args.build_record)
     evidence["numerical_profile"] = configure_qualification_numerics()
     root = Path(args.run)
+    attention = recorded_attention(root)
+    evidence["attention"] = attention
     identity, _ = read_adapter_artifact(str(root / "portable"))
     source = json.loads((root / "portable/adapter_manifest.json").read_text())["provenance"]
     batches, references = [], []
@@ -76,7 +89,7 @@ def main():
         references.extend(record["logits"])
     if not batches:
         raise ValueError("no controlled probe inputs found")
-    policy = portable_policy(args.base, str(root / "portable"), identity, backend=args.backend)
+    policy = portable_policy(args.base, str(root / "portable"), identity, backend=args.backend, attn_impl=attention)
     native = logits(policy, batches)
     if not args.probe_run:
         for value, expected in zip(native, references):
@@ -94,13 +107,13 @@ def main():
         validate_merged_export_metadata(marker["identity"].get("export_metadata"), str(root / "portable"), identity)
         policy.net.float()
         expected = logits(policy, batches)
-        control = verify_promoted_merge(policy, identity, batches, args.merged, reference=expected)
+        control = verify_promoted_merge(policy, identity, batches, args.merged, reference=expected, attn_impl=attention)
         del policy
         gc.collect()
         torch.cuda.empty_cache()
         model = (
             getattr(transformers, adapter_family(identity["architecture"]).hf_auto_class)
-            .from_pretrained(args.merged, dtype="auto", attn_implementation="sdpa")
+            .from_pretrained(args.merged, dtype="auto", attn_implementation=attention)
             .cuda()
         )
         assert all(p.dtype == torch.float32 for p in model.parameters())

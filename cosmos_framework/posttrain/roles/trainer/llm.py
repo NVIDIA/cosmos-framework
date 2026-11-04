@@ -1734,5 +1734,6 @@ class LLMTrainer(BaseTrainer):
         if not json_identity_equal(restored, self.objective_identity, context="LLM objective exact-resume identity"):
             raise RuntimeError(
                 "checkpoint objective exact-resume identity differs from the configured objective: "
-                f"saved={restored!r}, configured={self.objective_identity!r}"
+                f"saved={restored!r}, configured={self.objective_identity!r}. "
+                "Use the original runtime/configuration for exact resume, or a model/adapter warm start for a new run."
             )

@@ -167,6 +167,32 @@ def require_source_available(data: SFTDatasetConfig) -> None:
         validate_dataset_factory(data.factory)
 
 
+def adapter_execution_identity(config: Any) -> dict[str, Any]:
+    """Bind exact adapter continuation to the selected computation, not only weights.
+
+    Portable warm starts deliberately retain a separate weight/processor identity.
+    Legacy checkpoints without this binding cannot prove the same execution and
+    must continue with their original runtime/configuration or start a new run.
+    """
+    from cosmos_framework.posttrain.config.build import resolve_policy_parallelism, select_policy_backend
+    from cosmos_framework.posttrain.utils.dist import world_size_or_1
+
+    selection = select_policy_backend(config)
+    model_config = selection.model_config
+    replicate, shard = resolve_policy_parallelism(config, world_size_or_1())
+    return {
+        "format": "cosmos-adapter-execution-v1",
+        "backend": selection.backend,
+        "builder": selection.native_spec.builder if selection.native_spec is not None else "HFModel",
+        "attention": getattr(model_config, "attn_impl", "model_owned"),
+        "activation_checkpointing": ("full" if model_config.grad_ckpt else "none")
+        if selection.backend == "hf"
+        else model_config.activation_checkpointing,
+        "dp_replicate": replicate,
+        "dp_shard": shard,
+    }
+
+
 def validate_config(config: Any) -> SFTConfig:
     """Pure configuration/source preflight (structure, then every enabled source's availability); no model or processor."""
     from cosmos_framework.posttrain.config.build import refuse_rounding_or_unavailable_optimizer
@@ -253,7 +279,11 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
                 },
             },
         )
-        objective.identity = {**objective.identity, "adapters": model.net._posttrain_adapter_identity}
+        objective.identity = {
+            **objective.identity,
+            "adapters": model.net._posttrain_adapter_identity,
+            "adapter_execution": adapter_execution_identity(config),
+        }
         optimizer = build_optimizer(
             model.net, rl.optimizer, parameter_groups=optimizer_groups(model.net, rl.optimizer.lr)
         )
