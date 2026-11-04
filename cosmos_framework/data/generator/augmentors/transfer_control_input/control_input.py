@@ -156,8 +156,8 @@ class AddControlInputBlur(Augmentor):
         }
         blur_downup_preset_values = {
             "none": 1,
-            "very_low": 1,
-            "low": 4,
+            "very_low": 4,
+            "low": 1,
             "medium": 2,
             "high": 1,
             "very_high": 4,
