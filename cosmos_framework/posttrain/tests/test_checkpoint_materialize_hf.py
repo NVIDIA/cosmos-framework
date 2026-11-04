@@ -568,8 +568,12 @@ def test_explicit_export_dtype_is_identity_bound_and_verified_before_publication
     with pytest.raises(ConversionError, match="dtype BF16; expected float32"):
         mat.run_request(out=invalid, output_dtype="float32", **request)
     assert not Path(invalid).exists() and not Path(invalid + ".tmp").exists()
-    with pytest.raises(ValueError, match="supports float32 only"):
-        mat.run_request(out=invalid, output_dtype="bfloat16", **request)
+    bf16 = str(tmp_path / "bf16")
+    assert mat.run_request(out=bf16, output_dtype="bfloat16", **request) == "built"
+    assert _marker(bf16)["identity"]["output_dtype"] == "bfloat16"
+    assert mat.run_request(out=bf16, output_dtype="bfloat16", **request) == "skipped"
+    with pytest.raises(ValueError, match="supports float32"):
+        mat.run_request(out=invalid, output_dtype="float16", **request)
 
 
 def test_export_metadata_survives_transaction_and_binds_reuse(tmp_path, base, monkeypatch):

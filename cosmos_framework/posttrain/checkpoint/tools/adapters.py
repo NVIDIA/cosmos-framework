@@ -30,7 +30,9 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
 )
 
 
-def merged_export_metadata(adapter: str, identity: dict, *, artifact_record: dict | None = None) -> dict:
+def merged_export_metadata(
+    adapter: str, identity: dict, *, artifact_record: dict | None = None, output_dtype: str = "float32"
+) -> dict:
     """Retain the validated portable contract in the materializer's commit marker."""
     # Export uses its captured record, so later path replacement cannot label
     # already consumed tensors with another run's weight digest. Validation of
@@ -38,16 +40,27 @@ def merged_export_metadata(adapter: str, identity: dict, *, artifact_record: dic
     manifest = artifact_record if artifact_record is not None else json.loads((Path(adapter) / MANIFEST).read_text())
     if manifest.get("kind") != "portable_adapter" or manifest.get("identity") != identity:
         raise ValueError("portable adapter manifest changed during export; use an immutable artifact")
-    return {
+    result = {
         "format": "cosmos-merged-adapter-v1",
         "adapter_identity": identity,
         "adapter_weights_sha256": manifest["weights_sha256"],
     }
+    if output_dtype == "bfloat16":
+        result["deployment_precision"] = {
+            "dtype": "bfloat16",
+            "weight_conversion": "float32_merge_then_bfloat16",
+            "equivalence": "approximate_requires_task_qualification",
+        }
+    elif output_dtype != "float32":
+        raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
+    return result
 
 
-def validate_merged_export_metadata(record: dict, adapter: str, identity: dict) -> None:
+def validate_merged_export_metadata(
+    record: dict, adapter: str, identity: dict, *, output_dtype: str = "float32"
+) -> None:
     """Validate the immutable adapter binding and any bounded source exclusions."""
-    expected = merged_export_metadata(adapter, identity)
+    expected = merged_export_metadata(adapter, identity, output_dtype=output_dtype)
     if not isinstance(record, dict) or {k: v for k, v in record.items() if k != "excluded_base_tensors"} != expected:
         raise ValueError(
             "merged artifact adapter/base/processor/media identity differs; re-export with the current tool"
@@ -99,18 +112,37 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
     return frozenset(net.state_dict())
 
 
-def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str | None = None) -> str:
-    """One adapter into its materialized base, exported in FP32 without live mutation.
+def export_merged_adapter(
+    adapter: str, base: str, out: str, *, processor: str | None = None, output_dtype: str = "float32"
+) -> str:
+    """One adapter into its materialized base, without live mutation.
 
     BF16 dense GEMMs do not reproduce BF16 adapter forwards within the real-model
-    qualification bounds. FP32 is the supported merged inference precision; its
+    qualification bounds. FP32 retains the merged equivalence contract; its
     reference is the portable adapter promoted to FP32, preserving the already
-    rounded training-base values. Portable reload retains the training precision.
+    rounded training-base values. Explicit BF16 deployment rounds that completed
+    FP32 merge once and requires separate approximation/task qualification.
+    Portable reload retains the training precision.
     """
     from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
 
+    if output_dtype not in ("float32", "bfloat16"):
+        raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     record, state = read_adapter_snapshot(adapter)
     identity = record["identity"]
+    if output_dtype != "float32" and identity["architecture"] in ("Gr00tN1d7", "alpamayo_r1", "pi05"):
+        raise ValueError("native physical merged formats currently require float32; BF16 deployment is HF-only")
+    if output_dtype == "bfloat16":
+        if identity["architecture"] != "qwen3_vl":
+            raise ValueError("BF16 adapter deployment is currently qualified only for dense Qwen3-VL; use float32")
+        if any(
+            row["settings"]["method"] == "lora" and not row["settings"]["use_rslora"]
+            for row in identity["resolved"]["targets"]
+        ):
+            raise ValueError(
+                "ordinary LoRA BF16 merged deployment is not qualified: the recorded WTS profile exceeds "
+                "the preserved FP32-reference confident-token bound. Use float32 merged export or the BF16 portable adapter."
+            )
     if identity["architecture"] == "qwen3_vl_moe" and any(
         row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
     ):
@@ -137,7 +169,7 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
         raise ValueError(
             "HF merged adapters require the processor beside the base; --processor is for native model-owned formats"
         )
-    metadata = merged_export_metadata(adapter, identity, artifact_record=record)
+    metadata = merged_export_metadata(adapter, identity, artifact_record=record, output_dtype=output_dtype)
     if any(
         row["name"] != row["owner"]
         for row in [*identity["resolved"]["targets"], *identity["resolved"]["extra_parameters"]]
@@ -191,6 +223,8 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
             )
     weights.update(state)
     merged = prepare_merged_state(weights, {**identity, "base_storage_dtype": "float32"})
+    if output_dtype == "bfloat16":
+        merged = {name: tensor.bfloat16() if tensor.is_floating_point() else tensor for name, tensor in merged.items()}
     config = json.loads((root / "config.json").read_text())
     if config.get("tie_word_embeddings", False) and "lm_head.weight" in merged:
         from cosmos_framework.posttrain.model.adapter_families import adapter_family
@@ -216,7 +250,7 @@ def export_merged_adapter(adapter: str, base: str, out: str, *, processor: str |
             min_tensors=1,
             expect_tensors=expected_tensor_count,
             verify=True,
-            output_dtype="float32",
+            output_dtype=output_dtype,
             export_metadata=metadata,
         )
     return result
@@ -231,9 +265,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--merged", action="store_true")
     parser.add_argument("--base", help="exact immutable local base snapshot, required for merged export")
     parser.add_argument("--processor", help="native model processor assets, when stored separately from its base")
+    parser.add_argument(
+        "--output-dtype",
+        choices=["float32", "bfloat16"],
+        default="float32",
+        help="merged inference precision; BF16 is approximate deployment, not FP32 equivalence",
+    )
     args = parser.parse_args(argv)
     if args.merged != bool(args.base) or (args.adapter and not args.merged):
         parser.error("merged export requires --base; --adapter is accepted only with --merged")
+    if not args.merged and args.output_dtype != "float32":
+        parser.error(
+            "--output-dtype applies only to merged models; portable adapters preserve their training precision"
+        )
     if args.checkpoint:
         identity, state, provenance = checkpoint_adapter_state(args.checkpoint)
         portable = {name: state[name] for name in state_spec(identity)}
@@ -243,9 +287,11 @@ def main(argv: list[str] | None = None) -> None:
         with tempfile.TemporaryDirectory(prefix="cosmos-portable-") as temporary:
             path = os.path.join(temporary, "adapter")
             write_adapter_artifact(path, identity, portable, provenance=provenance)
-            export_merged_adapter(path, args.base, args.out, processor=args.processor)
+            export_merged_adapter(path, args.base, args.out, processor=args.processor, output_dtype=args.output_dtype)
     else:
-        export_merged_adapter(args.adapter, args.base, args.out, processor=args.processor)
+        export_merged_adapter(
+            args.adapter, args.base, args.out, processor=args.processor, output_dtype=args.output_dtype
+        )
 
 
 if __name__ == "__main__":

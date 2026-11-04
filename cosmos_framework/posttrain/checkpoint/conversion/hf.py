@@ -237,8 +237,8 @@ def overlay_compatibility_files(
 
 def config_with_export_dtype(config: dict[str, Any], output_dtype: str) -> dict[str, Any]:
     """Change only precision metadata; preserve the base's architecture dialect."""
-    if output_dtype != "float32":
-        raise ValueError("explicit merged export precision currently supports float32 only")
+    if output_dtype not in ("float32", "bfloat16"):
+        raise ValueError("explicit merged export precision supports float32|bfloat16")
     result = json.loads(json.dumps(config))
     for section in [result, *[result[k] for k in ("text_config", "vision_config") if isinstance(result.get(k), dict)]]:
         # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
@@ -256,12 +256,13 @@ def verify_export_dtype(export: str, base: str, output_dtype: str) -> dict[str, 
             raise ConversionError("merged export config differs beyond its declared output dtype")
     with open(os.path.join(export, INDEX_FILE)) as handle:
         shards = set(json.load(handle)["weight_map"].values())
+    expected_dtype = {"float32": "F32", "bfloat16": "BF16"}[output_dtype]
     for shard in shards:
         header, _ = safetensors_header(os.path.join(export, shard))
         for name, tensor in header.items():
             dtype = tensor["dtype"]
-            if (dtype.startswith("F") or dtype == "BF16") and dtype != "F32":
-                raise ConversionError(f"merged export {name} has dtype {dtype}; expected float32")
+            if (dtype.startswith("F") or dtype == "BF16") and dtype != expected_dtype:
+                raise ConversionError(f"merged export {name} has dtype {dtype}; expected {output_dtype}")
     return {"output_dtype": output_dtype}
 
 
@@ -278,7 +279,7 @@ def write_config_from_base(
     base's config is the one true description. Requires equal structural identity; idempotent (a kept backup is never
     overwritten).
 
-    ``output_dtype='float32'`` is the explicit adapter-export exception: preserve
+    ``output_dtype='float32'|'bfloat16'`` is the explicit adapter-export exception: preserve
     every architecture field but write matching Transformers 4/5 precision keys.
     The materializer records this option in its identity and verifies shard dtype.
     """

@@ -1136,8 +1136,8 @@ def run_request(
     """
     if bool(ckpt_dir) == bool(artifact_uri):
         raise ValueError("pass exactly one of ckpt_dir or artifact_uri")
-    if output_dtype not in (None, "float32"):
-        raise ValueError("explicit merged export output_dtype currently supports float32 only")
+    if output_dtype not in (None, "float32", "bfloat16"):
+        raise ValueError("explicit merged export output_dtype supports float32|bfloat16")
     if export_metadata is not None:
         if not isinstance(export_metadata, dict) or not export_metadata:
             raise ValueError("export_metadata must be a non-empty JSON object")

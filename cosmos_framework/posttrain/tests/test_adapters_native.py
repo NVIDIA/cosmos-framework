@@ -57,11 +57,12 @@ def adapter_config(method: str, *, dropout: float = 0) -> AdapterConfig:
     )
 
 
-def make_policy(*, dtype=torch.float32):
+def make_policy(*, dtype=torch.float32, attn_implementation="eager"):
     return build_qwen3_vl_policy(
         model_type="qwen3_vl",
         model_config=_dense_config(),
         dtype=dtype,
+        attn_implementation=attn_implementation,
         hooks=Qwen3VLBuildHooks(prepare_model=lambda net: override_qwen3_vl_forward(net.model)),
         initialize_on_meta=False,
     )
@@ -78,6 +79,69 @@ def batches():
     }
     video["input_ids"][0, 2] = 121
     return [text, image, video]
+
+
+def test_selective_sdpa_adapters_preserve_dropout_gradients_and_updates(monkeypatch):
+    from types import SimpleNamespace
+
+    from torch.utils.checkpoint import CheckpointPolicy
+
+    from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
+    from cosmos_framework.model.generator import parallelize_vlm
+    from cosmos_framework.posttrain.tests.qualify_adapters import trainable_state
+
+    torch.manual_seed(42)
+    left = make_policy(attn_implementation="sdpa")
+    settings = adapter_config("lora", dropout=0.2)
+    settings.components[1].method = "dora"
+    settings.components[1].dropout = 0.1
+    settings.components[2].method = "pissa"
+    settings.components[2].dropout = 0
+    install_adapters(left.net, settings)
+    right = copy.deepcopy(left)
+    decisions = []
+    original = parallelize_vlm.create_selective_checkpoint_contexts
+
+    def contexts(policy_fn):
+        def observe(ctx, op, *args, **kwargs):
+            result = policy_fn(ctx, op, *args, **kwargs)
+            decisions.append((str(op), result))
+            return result
+
+        return original(observe)
+
+    monkeypatch.setattr(parallelize_vlm, "create_selective_checkpoint_contexts", contexts)
+    ac = ActivationCheckpointingConfig(mode="selective")
+    ac.save_ops_regex.append(r"_scaled_dot_product_(flash|efficient|cudnn)_attention")
+    parallelize_vlm.apply_ac(SimpleNamespace(model=right.net), ac)
+    optimizers = [
+        torch.optim.AdamW([p for p in model.net.parameters() if p.requires_grad], lr=0.003) for model in (left, right)
+    ]
+    initial = trainable_state(left.net)
+    for step, batch in enumerate(batches() * 2):
+        outputs, gradients, rng = [], [], []
+        for model, optimizer in zip((left, right), optimizers, strict=True):
+            model.net.train()
+            torch.manual_seed(42 + step)
+            optimizer.zero_grad(set_to_none=True)
+            value = model.forward_policy_batch(batch).logits
+            loss = torch.nn.functional.cross_entropy(value[:, -1].float(), torch.tensor([7]))
+            loss.backward()
+            outputs.append(loss.detach())
+            gradients.append([p.grad.clone() for p in model.net.parameters() if p.requires_grad])
+            rng.append(torch.random.get_rng_state())
+            optimizer.step()
+            assert_trainability(model.net, optimizer)
+        torch.testing.assert_close(outputs[0], outputs[1], atol=1e-7, rtol=1e-6)
+        assert torch.equal(rng[0], rng[1])
+        for a, b in zip(*gradients, strict=True):
+            assert torch.isfinite(a).all() and torch.isfinite(b).all()
+            torch.testing.assert_close(a, b, atol=1e-7, rtol=1e-5)
+    final = trainable_state(right.net)
+    for name, value in trainable_state(left.net).items():
+        torch.testing.assert_close(final[name], value, atol=1e-7, rtol=1e-5)
+        assert not torch.equal(initial[name], value)
+    assert any("scaled_dot_product" in op and policy == CheckpointPolicy.MUST_SAVE for op, policy in decisions)
 
 
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
@@ -331,6 +395,70 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
     assert control["serialized_tensors_verified"] > 0
 
 
+@pytest.mark.parametrize(("method", "rslora"), [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
+def test_bf16_export_rounds_completed_fp32_merge_and_preserves_identity(tmp_path, method, rslora):
+    from transformers import AutoModelForImageTextToText
+
+    from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
+    from cosmos_framework.posttrain.checkpoint.tools.adapters import (
+        export_merged_adapter,
+        validate_merged_export_metadata,
+    )
+    from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
+    from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
+
+    torch.manual_seed(42)
+    base = tmp_path / "base"
+    tiny_snapshot(base, tied=True)
+    config = adapter_config(method)
+    for component in config.components:
+        component.use_rslora = rslora
+    policy = build_qwen3_vl_model(
+        Qwen3VLModelConfig(name_or_path=str(base), dtype="bfloat16", activation_checkpointing="none"), adapters=config
+    )
+    with torch.no_grad():
+        for name, parameter in policy.net.named_parameters():
+            if name.endswith("lora_B.weight"):
+                parameter.add_(0.013)
+    original = {name: value.clone() for name, value in policy.net.state_dict().items()}
+    portable = tmp_path / "portable"
+    save_adapter_artifact(policy.net, str(portable))
+    if method == "lora" and not rslora:
+        with pytest.raises(ValueError, match="ordinary LoRA BF16 merged deployment is not qualified"):
+            export_merged_adapter(str(portable), str(base), str(tmp_path / "bfloat16"), output_dtype="bfloat16")
+        assert not (tmp_path / "bfloat16").exists()
+        return
+    for precision in ("float32", "bfloat16"):
+        export_merged_adapter(str(portable), str(base), str(tmp_path / precision), output_dtype=precision)
+    fp32 = AutoModelForImageTextToText.from_pretrained(tmp_path / "float32", dtype="auto").eval()
+    bf16 = AutoModelForImageTextToText.from_pretrained(tmp_path / "bfloat16", dtype="auto").eval()
+    assert all(p.dtype == torch.bfloat16 for p in bf16.parameters())
+    assert bf16.lm_head.weight is bf16.model.language_model.embed_tokens.weight
+    for name, value in bf16.state_dict().items():
+        assert torch.equal(value, fp32.state_dict()[name].bfloat16()), name
+    assert all(torch.equal(value, policy.net.state_dict()[name]) for name, value in original.items())
+    marker = json.loads((tmp_path / "bfloat16/.materialized").read_text())["identity"]
+    assert marker["output_dtype"] == "bfloat16"
+    ident = policy.net._posttrain_adapter_identity
+    validate_merged_export_metadata(marker["export_metadata"], str(portable), ident, output_dtype="bfloat16")
+    with pytest.raises(ValueError, match="identity differs"):
+        validate_merged_export_metadata(marker["export_metadata"], str(portable), ident)
+    assert marker["export_metadata"]["deployment_precision"]["equivalence"] == "approximate_requires_task_qualification"
+    assert (
+        export_merged_adapter(str(portable), str(base), str(tmp_path / "bfloat16"), output_dtype="bfloat16")
+        == "skipped"
+    )
+
+
+@pytest.mark.parametrize("family", ["Gr00tN1d7", "alpamayo_r1", "pi05"])
+def test_bf16_export_does_not_silently_ignore_precision_for_native_formats(monkeypatch, family):
+    from cosmos_framework.posttrain.checkpoint.tools import adapters as export
+
+    monkeypatch.setattr(export, "read_adapter_snapshot", lambda _: ({"identity": {"architecture": family}}, {}))
+    with pytest.raises(ValueError, match="native physical merged formats currently require float32"):
+        export.export_merged_adapter("adapter", "base", "out", output_dtype="bfloat16")
+
+
 def test_merged_export_metadata_binds_the_consumed_adapter_snapshot(tmp_path, monkeypatch):
     from safetensors.torch import load_file
 
@@ -522,6 +650,7 @@ def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monk
             component,
             "--override",
             "rl.grad_accum=2" if component == "all" else "rl.grad_accum=1",
+            *(["--warm-start-check"] if component == "all" else []),
         ],
     )
     previous = torch.are_deterministic_algorithms_enabled()
@@ -537,6 +666,9 @@ def test_qualification_harness_reaches_training_resume_and_export(tmp_path, monk
     assert report["resume_max_abs_parameter_error"] == 0
     assert len(report["train"]) == 9
     assert (output / "portable/adapter_manifest.json").is_file()
+    if component == "all":
+        assert report["warm_start"]["fresh_optimizer_and_clock"]
+        assert report["warm_start"]["changed_tensors"] == report["trainable_tensors"]
 
 
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
