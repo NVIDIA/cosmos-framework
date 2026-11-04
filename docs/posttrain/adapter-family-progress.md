@@ -6,6 +6,9 @@ recorded separately in the [November 4 extension](adapter-extension-progress.md)
 The [deployment continuation](adapter-deployment-continuation.md) adds a qualified
 ordinary-LoRA BF16 execution profile and further MoE diagnostics without adding
 training runs or changing the historical fixed-profile counts.
+The [effective-execution extension](adapter-effective-execution.md) separately records
+versioned dense/stock-compatible PiSSA, physical HSDP/full replay, recurrent cache
+ownership and broader BF16 failures. Historical counts and legacy artifacts stay unchanged.
 
 Work branch: `feat/posttrain-family-adapters`. This extends the original Cosmos3
 implementation; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)

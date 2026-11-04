@@ -8,6 +8,9 @@ adapters, full checkpoints and their execution identities are unchanged.
 Follow-up `217cc5f` rejects incomplete tagged deployments after independent review
 demonstrated that HF could silently initialize an omitted projection. Both
 production commits were built from clean archives and independently reviewed.
+The later [effective-execution extension](adapter-effective-execution.md) tests
+new input populations and mixed profiles, adds physical HSDP/full replay and
+versioned MoE execution, and preserves the qualifications and failures below.
 
 The previous [extension record](adapter-extension-progress.md) retains its source
 revisions and results: **12 named checkpoints, 48 fixed profiles, 47 fully passing

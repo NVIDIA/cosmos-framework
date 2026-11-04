@@ -107,6 +107,12 @@ The [execution extension](../adapter-extension-progress.md) additionally qualifi
 an Alpamayo-R1 recipe with different language/merger/vision/action methods,
 ranks/scaling/dropout/LR policies and a separately trained live prefix K-norm.
 These real KITTI fixture runs establish correctness, not downstream driving quality.
+The [effective-execution extension](../adapter-effective-execution.md) additionally
+qualifies the independent GR00T, Pi05 and Alpamayo recipes on one-host 2×2 HSDP,
+including full activation checkpointing, exact next-update recovery, warm start,
+portable reload and FP32 merged reload. Those are three additional execution
+profiles on existing checkpoints, not additional members of the historical fixed
+48-profile matrix.
 
 Training resume uses the same full checkpoint transaction as conversational SFT.
 Use `rl.resume` for exact continuation; `rl.adapters.warm_start` starts a new run
@@ -155,10 +161,15 @@ This recipe supervises **trajectories**, with an empty chain-of-thought prefix.
 It does not train reasoning text or establish driving safety. The source revision
 is checked by installed Python-file hashes. Use Torch 2.10 and Transformers
 **4.57.6**, BF16 base storage/autocast, FP32 adapters and accumulation, SDPA,
-AdamW, and pure DP/FSDP2. Microbatch size is one physical demonstration per rank.
-Activation checkpointing supports `none` or `vision`; generic `full` is refused
-because the language/expert prefix cache is mutable. The language and expert stay
-in the root FSDP unit so cache-only gradients remain visible to its backward hook.
+AdamW, and FSDP2 data parallelism. Microbatch size is one physical demonstration per rank.
+Activation checkpointing supports `none`, `vision`, or `full`. Full mode replays
+the complete differentiable prefix, action expert and flow closure with a fresh
+internal cache on each invocation and preserved RNG. It rejects external prefix
+caches and leaves generic decoder checkpointing off. Full checkpoints bind
+`alpamayo_fresh_prefix_flow_v1` so a changed replay mode cannot silently resume.
+The language and expert stay in the root FSDP unit so cache-only gradients remain
+visible to its backward hook. The new mixed-component 2×2 HSDP profile is qualified
+separately from the original pure-shard profiles.
 Actual GPU qualification is tracked in the evidence table, separately from CPU tests.
 
 The action objective reads the prefix's cached K/V. In its final language layer,

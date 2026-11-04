@@ -17,6 +17,10 @@ recorded checkpoint and execution profile, not every model sharing its family na
 See the [original qualification](../adapters-progress.md) and the
 [execution/deployment extension](../adapter-extension-progress.md) for exact
 checkpoint/profile coverage. CPU correctness is not real-model GPU qualification.
+The [effective-execution extension](../adapter-effective-execution.md) records
+physical 2×2 HSDP/full replay, explicitly versioned PiSSA execution and broader
+BF16 checks, including their failures. Its explicitly versioned MoE profile passes
+stock FP32 merged qualification; the legacy PiSSA merge guard remains enabled.
 The extension adds measured native Qwen3-VL-2B and HF Qwen3-0.6B 2×2 HSDP,
 native 2×1 replication/eager attention, selective SDPA checkpointing and independent
 component recipes, on one host with up to four A100 80 GB GPUs. BF16 frozen bases
@@ -232,15 +236,24 @@ versions. KV tensors are FP32. See the
 [deployment continuation](../adapter-deployment-continuation.md) for exact
 precision semantics, resource costs, paired results and reproduction commands.
 Other families/physical formats remain refused. New mixed recipes and other
-checkpoints are not additional BF16 qualifications.
-PiSSA merged export on native Qwen3-VL-MoE is also refused. A real 30B checkpoint
-passes training, continuation, exact BF16 portable reload and all serialized-weight
-checks, but FP32 merging switches a near-tied expert route and fails the fixed
-output bound with both native and stock HF forwards. Keep its portable adapter;
-this is an incomplete merged-export combination, not a qualified deployment.
-The [measured limitation](../assets/moe-pissa-export-limitation.json) records the
-route, original tolerances, source/image identities and errors. Other qualified
-PiSSA families retain their supported FP32 merged exports.
+checkpoints are not additional BF16 qualifications. The broader input and
+mixed-component checks in the effective-execution extension fail the unchanged
+numerical gates despite passing resource gates; the previous fixed-artifact
+results must not be generalized to them.
+Legacy PiSSA merged export on native Qwen3-VL-MoE remains refused, including dense
+PiSSA under default native model execution. The original 30B artifact passes
+training, continuation and BF16 portable reload, but FP32 merging changes a
+near-tied route and fails the preserved output bounds. Keep its portable adapter;
+[its measured failure](../assets/moe-pissa-export-limitation.json) remains incomplete.
+
+New training with `AdapterConfig.model_execution="qwen3_vl_moe_stock_v1"` and
+`execution="pissa_dense_v1"` on every selected PiSSA component has a separate,
+versioned FP32 merge contract. The pinned 30B checkpoint passes all 64 original/new
+inputs through the unmodified stock loader with zero logit error. Use the supplied
+`sft_qwen3_vl_moe_pissa_stock.py` recipe and the exact precision/runtime profile in
+the effective-execution report. This does not convert legacy artifacts, qualify
+MoE BF16 merged deployment, or establish task quality after FP32 promotion.
+Other qualified PiSSA families retain their supported FP32 merged exports.
 
 ```bash
 "$SFT_PYTHON" -m cosmos_framework.posttrain.checkpoint.tools.adapters \
@@ -268,8 +281,10 @@ portable adapter evaluated in FP32 (`atol=5e-4, rtol=2e-4`, mean error at most
 `5e-5`, identical argmax); and a fresh stock HF load with `dtype="auto"` reproduces
 those controlled outputs. Small fixtures retain their tighter existing bounds.
 The control uses a private evaluation copy and never changes a live training model.
-For native Qwen3-VL-MoE, BF16 training uses the grouped expert kernel.
-`MoEExperts.forward` already selects `native.naive` for a promoted FP32 copy.
+For default native Qwen3-VL-MoE execution, BF16 training uses the native grouped
+expert kernel and `MoEExperts.forward` selects `native.naive` for a promoted FP32
+copy. The new explicit stock-compatible profile instead uses the pinned stock
+grouped-expert helper in both precisions and separate image/video vision calls.
 `posttrain.tests.reload_moe_adapters` uses that independent native reference,
 compares stock HF's portable and merged FP32 forwards against it, verifies every
 serialized tensor in the original checkpoint layout, and dispatches FP32 inference

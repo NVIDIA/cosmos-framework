@@ -171,15 +171,19 @@ def export_merged_adapter(
                 "the preserved FP32-reference confident-token bound. Use float32 merged export, the BF16 portable adapter, "
                 "or explicit --execution-profile=qwen3_vl_bf16_residual_fp32_v1 with the Framework inference loader."
             )
-    if identity["architecture"] == "qwen3_vl_moe" and any(
-        row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"]
+    if (
+        identity["architecture"] == "qwen3_vl_moe"
+        and any(row["settings"]["method"] == "pissa" for row in identity["resolved"]["targets"])
+        and identity["resolved"].get("model_execution", "default_v1") != "qwen3_vl_moe_stock_v1"
     ):
         raise ValueError(
             "PiSSA merged export for native Qwen3-VL-MoE is not qualified: real-checkpoint FP32 "
             "rounding changed a near-tied expert route and exceeded the controlled output bound, "
             "including with dense effective weights under default native execution. Keep the portable adapter for inference "
             "or resume its complete training checkpoint; do not attach raw PiSSA factors to the "
-            "original base or rewrite execution metadata. See docs/posttrain/adapter-family-progress.md for the measured limitation."
+            "original base or rewrite execution metadata. New training with model_execution='qwen3_vl_moe_stock_v1' "
+            "and dense PiSSA has a separate qualified FP32 merge contract; it does not convert legacy artifacts. "
+            "See docs/posttrain/adapter-effective-execution.md for the measured scope."
         )
     if identity["architecture"] == "Gr00tN1d7":
         from cosmos_framework.posttrain.model.gr00t.adapter_export import export_merged

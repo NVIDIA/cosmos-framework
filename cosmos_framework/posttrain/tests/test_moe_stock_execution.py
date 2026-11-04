@@ -10,14 +10,13 @@ import torch
 from cosmos_framework.posttrain.checkpoint.adapters import (
     MODEL_EXECUTION_FORMAT,
     adapter_configuration,
-    prepare_merged_state,
     save_adapter_artifact,
     state_spec,
 )
-from cosmos_framework.posttrain.checkpoint.tools.adapters import merged_export_metadata, validate_export_targets
+from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter, validate_export_targets
 from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 from cosmos_framework.posttrain.model.adapter_moe_execution import PROFILE
-from cosmos_framework.posttrain.model.adapters import assert_trainability
+from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, assert_trainability
 from cosmos_framework.posttrain.model.qwen3_vl import build_qwen3_vl_model
 from cosmos_framework.posttrain.tests.adapter_numerics import HFProbePolicy
 from cosmos_framework.posttrain.tests.qualify_adapters import logits
@@ -112,28 +111,32 @@ def test_native_stock_multimodal_gradients_and_portable_contract(tmp_path, ac):
     stock = hf_portable(str(tmp_path / "base"), str(portable), identity).float()
     for actual, expected in zip(logits(HFProbePolicy(stock), data), logits(policy, data), strict=True):
         torch.testing.assert_close(actual, expected, atol=5e-4, rtol=2e-4)
-    # Exercise the existing transaction independently of the public qualification
-    # guard. Passing a tiny fixture does not lift the real-checkpoint refusal.
+    # The new v3 profile is qualified independently of the guarded legacy v1/v2
+    # modes. Exercise the public exporter, its transaction, and actual loader.
     from cosmos_framework.inference.reasoner.model_execution import model_execution_profile
-    from cosmos_framework.posttrain.checkpoint.tools.materialize_hf import run_request
+    from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 
-    checkpoint = tmp_path / "merged-state"
-    checkpoint.mkdir()
-    merged = prepare_merged_state(policy.net.state_dict(), {**identity, "base_storage_dtype": "float32"})
-    torch.save({"net": merged}, checkpoint / "model.pt")
+    live_state = {name: value.clone() for name, value in policy.net.state_dict().items()}
     request = dict(
+        adapter=str(portable),
         base=str(tmp_path / "base"),
-        ckpt_dir=str(checkpoint),
         out=str(tmp_path / "merged"),
-        min_tensors=1,
-        expect_tensors=len(merged),
-        verify=True,
         output_dtype="float32",
-        export_metadata=merged_export_metadata(str(portable), identity),
     )
-    assert run_request(**request) == "built"
-    assert run_request(**request) == "skipped"
+    assert export_merged_adapter(**request) == "built"
+    assert export_merged_adapter(**request) == "skipped"
+    for name, value in live_state.items():
+        assert torch.equal(value, policy.net.state_dict()[name]), name
     assert model_execution_profile(request["out"]) == PROFILE
+    runtime = CosmosFrameworkRuntime.__new__(CosmosFrameworkRuntime)
+    runtime.model_path, runtime.dtype, runtime.attn_implementation = request["out"], "auto", None
+    runtime.model_type, runtime.device, runtime.device_map, runtime.rank = "qwen3_vl_moe", "cpu", "auto", 0
+    runtime._load()
+    assert not any(isinstance(module, PosttrainAdapterLinear) for module in runtime.model.modules())
+    for actual, expected in zip(logits(HFProbePolicy(runtime.model), data), logits(policy, data), strict=True):
+        torch.testing.assert_close(actual, expected, atol=5e-4, rtol=2e-4)
+        assert (actual - expected).abs().mean() <= 5e-5
+        assert torch.equal(actual.argmax(-1), expected.argmax(-1))
 
 
 def test_stock_profile_invalid_method_and_dependency_fail_before_injection(tmp_path, monkeypatch):
