@@ -12,21 +12,25 @@ export COSMOS_COMMIT
 COSMOS_COMMIT=$(git rev-parse HEAD)
 : "${LAUNCHABLE_STATE_DIR:?Set an absolute state directory outside the Framework checkout}"
 export PERCEPTION_TEST_DATA_DIR="${PERCEPTION_TEST_DATA_DIR:-$LAUNCHABLE_STATE_DIR/perception-test}"
+export BENCHMARK_DATA_DIR="${BENCHMARK_DATA_DIR:-$LAUNCHABLE_STATE_DIR/datasets}"
 export LAUNCHABLE_STATE_DIR
-python3 - "$LAUNCHABLE_STATE_DIR" "$PERCEPTION_TEST_DATA_DIR" "$(git rev-parse --show-toplevel)" <<'PY'
+python3 - "$LAUNCHABLE_STATE_DIR" "$PERCEPTION_TEST_DATA_DIR" "$BENCHMARK_DATA_DIR" "$(git rev-parse --show-toplevel)" <<'PY'
 import os
 from pathlib import Path
 import sys
 
-checkout = Path(sys.argv[3]).resolve()
-state, data = (Path(value) for value in sys.argv[1:3])
-for path in (state, data):
+checkout = Path(sys.argv[4]).resolve()
+state, perception, benchmarks = (Path(value) for value in sys.argv[1:4])
+for path in (state, perception, benchmarks):
     if not path.is_absolute() or path.resolve().is_relative_to(checkout):
-        raise SystemExit("State and Perception Test data must use absolute paths outside the Framework checkout")
-if any(data.resolve().is_relative_to((state / name).resolve())
-       or (state / name).resolve().is_relative_to(data.resolve()) for name in ("cache", "results")):
-    raise SystemExit("Perception Test data must be separate from writable cache/results mounts")
-for path in (state / "cache", state / "results", data):
+        raise SystemExit("State and data must use absolute paths outside the Framework checkout")
+for data in (perception, benchmarks):
+    if any(data.resolve().is_relative_to((state / name).resolve())
+           or (state / name).resolve().is_relative_to(data.resolve()) for name in ("cache", "results")):
+        raise SystemExit("Benchmark data must be separate from writable cache/results mounts")
+if perception.resolve().is_relative_to(benchmarks.resolve()) or benchmarks.resolve().is_relative_to(perception.resolve()):
+    raise SystemExit("Perception Test and other benchmark data must use separate directories")
+for path in (state / "cache", state / "results", perception, benchmarks):
     path.mkdir(parents=True, exist_ok=True)
     if not os.access(path, os.W_OK):
         raise SystemExit(f"Runtime directory must be writable: {path}")
@@ -91,5 +95,5 @@ fi
 printf 'Jupyter is starting on %s:8888. Open its authenticated secure link or SSH tunnel.\n' "${JUPYTER_BIND_ADDRESS:-127.0.0.1}"
 printf '%s\n' \
     'Retrieve the notebook login token with: docker compose exec perception-eval jupyter server list' \
-    'Open Evaluate_Cosmos3.ipynb to download public Perception Test validation data, prepare, infer, and score.' \
-    'Default smoke: five video_8241 questions; full 19,140-question validation is explicit opt-in.'
+    'Open Evaluate_Cosmos3.ipynb and follow a link to the benchmark notebook you want to run.' \
+    'Run All downloads public inputs, validates coverage, infers, and scores locally. SCOPE=full is explicit opt-in.'

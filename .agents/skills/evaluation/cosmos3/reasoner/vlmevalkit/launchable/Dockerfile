@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir --no-deps -e . \
 ARG COSMOS_COMMIT=unknown
 ENV COSMOS_COMMIT=${COSMOS_COMMIT} PYTHONUNBUFFERED=1 HF_HOME=/cache/huggingface \
     AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
-    AWS_EC2_METADATA_DISABLED=true PERCEPTION_TEST_DATA_DIR=/perception-test LMUData=/cache/lmudata
+    AWS_EC2_METADATA_DISABLED=true PERCEPTION_TEST_DATA_DIR=/perception-test BENCHMARK_DATA_DIR=/datasets LMUData=/cache/lmudata
 WORKDIR /opt/vlmevalkit/launchable
 CMD ["python", "jupyter_config.py"]

@@ -17,6 +17,7 @@ services:
     ipc: host
     environment:
       HF_HOME: /cache/huggingface
+      VLLM_USE_FLASHINFER_SAMPLER: '0'
     volumes:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
     # Deliberately no host port: only the evaluator can reach this API.
@@ -36,6 +37,8 @@ services:
       - --enable-chunked-prefill
       - --mm-processor-cache-gb
       - '0'
+      # This pinned 0.23.1rc1.dev1306+gbfee6a802 build accepts per-request
+      # mm_processor_kwargs unconditionally; --trust-request-mm-kwargs is absent.
       - --mm-encoder-tp-mode
       - data
       - --media-io-kwargs
@@ -66,6 +69,7 @@ services:
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?Run bash setup.sh to generate a Jupyter token}
       LMUData: /cache/lmudata
       PERCEPTION_TEST_DATA_DIR: /perception-test
+      BENCHMARK_DATA_DIR: /datasets
       EVAL_SCORE_ONLY: ${EVAL_SCORE_ONLY:-0}
       AWS_CONFIG_FILE: /dev/null
       AWS_SHARED_CREDENTIALS_FILE: /dev/null
@@ -74,6 +78,7 @@ services:
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/cache:/cache
       - ${LAUNCHABLE_STATE_DIR:?Set an external absolute state directory}/results:/results
       - ${PERCEPTION_TEST_DATA_DIR:?Set an external writable Perception Test data directory}:/perception-test
+      - ${BENCHMARK_DATA_DIR:?Set an external writable benchmark data directory}:/datasets
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8888/login', timeout=5)"]
       interval: 15s

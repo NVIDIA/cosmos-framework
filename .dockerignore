@@ -8,3 +8,4 @@
 /examples/**/checkpoints
 /examples/**/output
 /examples/**/datasets
+node_modules

@@ -108,5 +108,12 @@ The notebook shows concise metrics/coverage and artifact links.
 BYOM uses complete `COSMOS_API_BASE`, exact `COSMOS_MODEL`, optional
 environment-only `COSMOS_API_KEY`, and explicit `COSMOS_MODEL_REVISION`;
 setup then skips local serving. Score-only setup uses `bash setup.sh --score-only`.
-This launchable does not implement a customer-ingestion evaluation agent or alter
-other model deployment tracks. Source changes are not hardware or accuracy proof.
+For your own labeled video MCQ data, follow the
+[customer-data recipe](launchable/CUSTOM_DATA_RECIPE.md) and
+[Customer_Data.ipynb](launchable/Customer_Data.ipynb). This is a separate
+canonical JSONL path: official benchmark identity/checksum gates remain intact.
+Questions, answer options and actual ground-truth labels are required before
+GPU use; footage alone cannot produce an accuracy score. Existing agents can
+perform the one-off conversion described by the recipe. No customer-ingestion
+agent, benchmark builder, automatic converter or other model deployment track
+is added.

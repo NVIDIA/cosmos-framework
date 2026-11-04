@@ -139,7 +139,7 @@ def verify_predictions(path, selected_indices):
 
 def source_provenance():
     files = ("run.py", "vlmeval/perception_test_local.py", "vlmeval/dataset/perception_test.py",
-             "vlmeval/dataset/video_dataset_config.py", "vlmeval/api/cosmos_reason.py",
+             "vlmeval/dataset/video_dataset_config.py", "vlmeval/api/cosmos_reason.py", "vlmeval/execution_evidence.py",
              "launchable/launchable.py")
     return {"framework_revision": os.environ.get("COSMOS_COMMIT", "unknown"),
             "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
@@ -148,6 +148,17 @@ def source_provenance():
 
 def _write_state(work, state):
     (work / "run.json").write_text(json.dumps(state, indent=2, default=str) + "\n")
+
+
+def collect_execution_evidence(work, expected):
+    from vlmeval.execution_evidence import aggregate_execution_records
+
+    records = [json.loads(path.read_text()) for path in sorted((work / "execution-responses").glob("*.json"))]
+    aggregate = aggregate_execution_records(records, expected_requests=expected)
+    aggregate.update(per_response="execution-responses", requested_configuration="config.json",
+                     summary="execution-summary.json")
+    (work / "execution-summary.json").write_text(json.dumps(aggregate, indent=2) + "\n")
+    return aggregate
 
 
 def _protocol(nframe):
@@ -171,6 +182,10 @@ def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
     model = {"class": recipe["class"], **recipe["defaults"]}
     model.update(api_base=os.environ.get("COSMOS_API_BASE", "http://cosmos-endpoint:8080/v1/chat/completions"),
                  model=os.environ.get("COSMOS_MODEL", "nvidia/Cosmos3-Nano"))
+    from vlmeval.execution_evidence import nano_processor_profile, PINNED_SERVING_COMPATIBILITY
+    model.update(execution_evidence_dir=str(work / "execution-responses"),
+                 execution_processor_profile=nano_processor_profile(
+                     model["model"], os.environ.get("COSMOS_MODEL_REVISION", "unknown")))
     config = {"model": {"cosmos": model}, "data": {"PerceptionTest": {
         "class": "PerceptionTestLocal", "dataset": "PerceptionTest", "data_root": str(data_root),
         "nframe": nframe, "smoke": smoke}}}
@@ -186,13 +201,16 @@ def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
              "data_root": str(data_root), "nframe": nframe, "frame_protocol": PROTOCOL,
              "api_nproc": api_nproc, "config": config,
              "generation_parameters": {key: value for key, value in model.items()
-                                       if key not in {"class", "api_base", "model"}},
+                                       if key not in {"class", "api_base", "model", "execution_evidence_dir",
+                                                      "execution_processor_profile"}},
              "model": model["model"],
              "model_revision": os.environ.get("COSMOS_MODEL_REVISION",
                  MODEL_REVISION if local and model["model"] == "nvidia/Cosmos3-Nano" else "unknown"),
              "serving_image": (os.environ.get("VLLM_IMAGE", SERVING_IMAGE) if local
                                else os.environ.get("COSMOS_SERVING_IMAGE", "unknown")),
              "provenance": source_provenance(), "predictions": None, "scores": None,
+             "execution_evidence": None,
+             "pinned_runtime_compatibility": PINNED_SERVING_COMPATIBILITY,
              "inference_timing": {"started_utc": started}}
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     _write_state(work, state)
@@ -209,6 +227,7 @@ def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         _write_state(work, state)
         run_command(command, log_path=work / "run.log")
+        state["execution_evidence"] = collect_execution_evidence(work, len(prepared["selected_indices"]))
         path = verify_predictions(work / "native", prepared["selected_indices"])
         state.update(status="inferred", predictions=str(path.relative_to(work)))
         state["inference_timing"].update(ended_utc=utc_now(), elapsed_seconds=time.monotonic() - clock)
@@ -220,6 +239,7 @@ def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
     except BaseException as exc:
         state = json.loads((work / "run.json").read_text())
         state.update(status="failed", error={"type": type(exc).__name__, "message": str(exc)})
+        state["execution_evidence"] = collect_execution_evidence(work, len(prepared["selected_indices"]))
         if "ended_utc" not in state["inference_timing"]:
             state["inference_timing"].update(ended_utc=utc_now(), elapsed_seconds=time.monotonic() - clock)
         _write_state(work, state)
@@ -271,6 +291,9 @@ def score(data_root, scope, work=None, predictions=None, score_dir=None, nframe=
                                     smoke=scope == "smoke", nframe=nframe)
         timing = {"started_utc": started, "ended_utc": utc_now(),
                   "elapsed_seconds": time.monotonic() - clock}
+        summary["execution_evidence"] = state.get("execution_evidence") if state is not None else {
+            "verification_counts": {"unknown": 1}, "reason": "existing predictions have no request/response evidence"}
+        (score_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         # Keep controller/model provenance beside the native trusted-label score artifact.
         (score_dir / "controller.json").write_text(json.dumps({
             "source": SOURCE, "scope": scope, "timing": timing,
@@ -279,6 +302,7 @@ def score(data_root, scope, work=None, predictions=None, score_dir=None, nframe=
             "model_revision": state.get("model_revision", "unknown") if state is not None else "unknown",
             "serving_image": state.get("serving_image", "unknown") if state is not None else "unknown",
             "generation_parameters": state.get("generation_parameters") if state is not None else None,
+            "execution_evidence": summary["execution_evidence"],
             "inference_run": str(work / "run.json") if work is not None else None,
         }, indent=2) + "\n")
         if state is not None:
