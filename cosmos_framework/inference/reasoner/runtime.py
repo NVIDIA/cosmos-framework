@@ -147,6 +147,13 @@ class CosmosFrameworkRuntime:
         self._load()
 
     def _load(self) -> None:
+        from cosmos_framework.inference.reasoner.precision import deployment_profile, install_deployment_profile
+
+        profile = deployment_profile(self.model_path)
+        if profile:
+            if self.dtype not in ("bfloat16", "bf16", "auto") or self.attn_implementation not in (None, "sdpa"):
+                raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
+            self.attn_implementation = "sdpa"
         logger.info(
             "Loading Cosmos Framework model from %s on %s (model_type=%s)",
             self.model_path,
@@ -196,11 +203,14 @@ class CosmosFrameworkRuntime:
             self.model_path,
             **model_load_kwargs,
         )
-        if self.model_type == "qwen3_vl":
+        if self.model_type == "qwen3_vl" and profile is None:
             from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
 
             apply_qwen3_vl_patch_embed_compat(self.model, model_type=self.model_type, mode="auto")
         self.model.eval()
+        if profile:
+            installed = install_deployment_profile(self.model, profile)
+            logger.info("Installed deployment profile %s on %d modules", profile, len(installed))
         if self.attn_implementation:
             actual_attn = getattr(getattr(self.model, "config", None), "_attn_implementation", None)
             if actual_attn != self.attn_implementation:
@@ -381,11 +391,15 @@ class CosmosFrameworkRuntime:
         generation_kwargs: dict[str, Any],
     ) -> Any:
         """Generate from a reusable video-prefix KV cache with isolated branches."""
+        import inspect
+
         import torch
 
         capacity = int(capacity)
         if capacity <= 0:
             return self.model.generate(**inputs, **generation_kwargs)
+        if generation_kwargs.get("use_cache", True) is False:
+            raise ValueError("video prefix reuse requires use_cache=True")
         if int(inputs["input_ids"].shape[0]) != 1:
             raise ValueError(
                 "vision.video_prefix_cache_size preserves singleton generation only; evaluation.batch_size must be 1"
@@ -405,12 +419,21 @@ class CosmosFrameworkRuntime:
         model_core = getattr(self.model, "model", None)
         if model_core is None or not hasattr(model_core, "get_rope_index"):
             raise RuntimeError("vision.video_prefix_cache_size requires Qwen3-VL mRoPE support")
-        full_position_ids, rope_deltas = model_core.get_rope_index(
-            input_ids,
-            inputs.get("image_grid_thw"),
-            inputs.get("video_grid_thw"),
-            attention_mask=attention_mask,
-        )
+        rope_inputs = {
+            "input_ids": input_ids,
+            "image_grid_thw": inputs.get("image_grid_thw"),
+            "video_grid_thw": inputs.get("video_grid_thw"),
+            "attention_mask": attention_mask,
+        }
+        # Transformers 5 adds mm_token_type_ids before the grid arguments;
+        # preserve the processor's IDs and use names across both pinned APIs.
+        if "mm_token_type_ids" in inspect.signature(model_core.get_rope_index).parameters:
+            if inputs.get("mm_token_type_ids") is None:
+                raise ValueError(
+                    "video prefix cache requires processor mm_token_type_ids with this Transformers version"
+                )
+            rope_inputs["mm_token_type_ids"] = inputs["mm_token_type_ids"]
+        full_position_ids, rope_deltas = model_core.get_rope_index(**rope_inputs)
 
         cache = self._video_prefix_cache
         entry = cache.pop(cache_key, None)
@@ -425,6 +448,8 @@ class CosmosFrameworkRuntime:
                 "return_dict": True,
                 "logits_to_keep": 1,
             }
+            if "mm_token_type_ids" in rope_inputs:
+                prefix_kwargs["mm_token_type_ids"] = rope_inputs["mm_token_type_ids"][:, :prefix_length]
             for name in (
                 "pixel_values",
                 "pixel_values_videos",
@@ -471,8 +496,12 @@ class CosmosFrameworkRuntime:
         reusable_length = int(reusable_cache.get_seq_length())
         branch_cache = self._fork_dynamic_cache(reusable_cache)
         model_core.rope_deltas = rope_deltas
+        # The prefix already consumed every media token. Transformers 5 keeps
+        # pixels on its first generation iteration even with a populated cache;
+        # passing them again would recompute features against suffix-only tokens.
+        continuation = {k: v for k, v in inputs.items() if k not in ("pixel_values", "pixel_values_videos")}
         generated = self.model.generate(
-            **inputs,
+            **continuation,
             past_key_values=branch_cache,
             **generation_kwargs,
         )

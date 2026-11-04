@@ -235,7 +235,9 @@ def overlay_compatibility_files(
     return copied
 
 
-def config_with_export_dtype(config: dict[str, Any], output_dtype: str) -> dict[str, Any]:
+def config_with_export_dtype(
+    config: dict[str, Any], output_dtype: str, *, execution_profile: str | None = None
+) -> dict[str, Any]:
     """Change only precision metadata; preserve the base's architecture dialect."""
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("explicit merged export precision supports float32|bfloat16")
@@ -244,13 +246,23 @@ def config_with_export_dtype(config: dict[str, Any], output_dtype: str) -> dict[
         # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
+    if execution_profile is not None:
+        if (
+            execution_profile != "qwen3_vl_bf16_residual_fp32_v1"
+            or output_dtype != "bfloat16"
+            or result.get("model_type") != "qwen3_vl"
+        ):
+            raise ValueError("residual FP32 deployment requires dense Qwen3-VL and bfloat16 output")
+        result["cosmos_inference_profile"] = execution_profile
     return result
 
 
-def verify_export_dtype(export: str, base: str, output_dtype: str) -> dict[str, Any]:
+def verify_export_dtype(
+    export: str, base: str, output_dtype: str, *, execution_profile: str | None = None
+) -> dict[str, Any]:
     """Torch-free verification of explicit precision, including idempotent skips."""
     with open(os.path.join(base, "config.json")) as handle:
-        expected = config_with_export_dtype(json.load(handle), output_dtype)
+        expected = config_with_export_dtype(json.load(handle), output_dtype, execution_profile=execution_profile)
     with open(os.path.join(export, "config.json")) as handle:
         if json.load(handle) != expected:
             raise ConversionError("merged export config differs beyond its declared output dtype")
@@ -267,7 +279,12 @@ def verify_export_dtype(export: str, base: str, output_dtype: str) -> dict[str, 
 
 
 def write_config_from_base(
-    export: str, base: str, backup_suffix: str = TRAINER_BACKUP_SUFFIX, *, output_dtype: str | None = None
+    export: str,
+    base: str,
+    backup_suffix: str = TRAINER_BACKUP_SUFFIX,
+    *,
+    output_dtype: str | None = None,
+    execution_profile: str | None = None,
 ) -> dict[str, Any]:
     """Make ``<export>/config.json`` the base's ``config.json`` verbatim, keeping the file transformers wrote once as
     ``config.json<backup_suffix>``.
@@ -296,7 +313,7 @@ def write_config_from_base(
         shutil.copy2(source, part)
     else:
         with open(source) as handle:
-            config = config_with_export_dtype(json.load(handle), output_dtype)
+            config = config_with_export_dtype(json.load(handle), output_dtype, execution_profile=execution_profile)
         with open(part, "w") as handle:
             json.dump(config, handle, indent=2)
             handle.write("\n")

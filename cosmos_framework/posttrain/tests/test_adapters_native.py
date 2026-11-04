@@ -423,13 +423,20 @@ def test_bf16_export_rounds_completed_fp32_merge_and_preserves_identity(tmp_path
     original = {name: value.clone() for name, value in policy.net.state_dict().items()}
     portable = tmp_path / "portable"
     save_adapter_artifact(policy.net, str(portable))
+    execution_profile = None
     if method == "lora" and not rslora:
         with pytest.raises(ValueError, match="ordinary LoRA BF16 merged deployment is not qualified"):
             export_merged_adapter(str(portable), str(base), str(tmp_path / "bfloat16"), output_dtype="bfloat16")
         assert not (tmp_path / "bfloat16").exists()
-        return
+        execution_profile = "qwen3_vl_bf16_residual_fp32_v1"
     for precision in ("float32", "bfloat16"):
-        export_merged_adapter(str(portable), str(base), str(tmp_path / precision), output_dtype=precision)
+        export_merged_adapter(
+            str(portable),
+            str(base),
+            str(tmp_path / precision),
+            output_dtype=precision,
+            execution_profile=execution_profile if precision == "bfloat16" else None,
+        )
     fp32 = AutoModelForImageTextToText.from_pretrained(tmp_path / "float32", dtype="auto").eval()
     bf16 = AutoModelForImageTextToText.from_pretrained(tmp_path / "bfloat16", dtype="auto").eval()
     assert all(p.dtype == torch.bfloat16 for p in bf16.parameters())
@@ -440,14 +447,42 @@ def test_bf16_export_rounds_completed_fp32_merge_and_preserves_identity(tmp_path
     marker = json.loads((tmp_path / "bfloat16/.materialized").read_text())["identity"]
     assert marker["output_dtype"] == "bfloat16"
     ident = policy.net._posttrain_adapter_identity
-    validate_merged_export_metadata(marker["export_metadata"], str(portable), ident, output_dtype="bfloat16")
+    validate_merged_export_metadata(
+        marker["export_metadata"], str(portable), ident, output_dtype="bfloat16", execution_profile=execution_profile
+    )
     with pytest.raises(ValueError, match="identity differs"):
         validate_merged_export_metadata(marker["export_metadata"], str(portable), ident)
     assert marker["export_metadata"]["deployment_precision"]["equivalence"] == "approximate_requires_task_qualification"
     assert (
-        export_merged_adapter(str(portable), str(base), str(tmp_path / "bfloat16"), output_dtype="bfloat16")
+        export_merged_adapter(
+            str(portable),
+            str(base),
+            str(tmp_path / "bfloat16"),
+            output_dtype="bfloat16",
+            execution_profile=execution_profile,
+        )
         == "skipped"
     )
+    from cosmos_framework.inference.reasoner.precision import deployment_profile
+
+    assert deployment_profile(str(tmp_path / "bfloat16")) == execution_profile
+    if execution_profile:
+        with pytest.raises(ValueError, match="execution_profile requires"):
+            export_merged_adapter(str(portable), str(base), str(tmp_path / "bad"), execution_profile=execution_profile)
+        config_path = tmp_path / "bfloat16/config.json"
+        config = json.loads(config_path.read_text())
+        config.pop("cosmos_inference_profile")
+        config_path.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="conflicting"):
+            deployment_profile(str(tmp_path / "bfloat16"))
+        with pytest.raises(RuntimeError, match="config differs"):
+            export_merged_adapter(
+                str(portable),
+                str(base),
+                str(tmp_path / "bfloat16"),
+                output_dtype="bfloat16",
+                execution_profile=execution_profile,
+            )
 
 
 @pytest.mark.parametrize("family", ["Gr00tN1d7", "alpamayo_r1", "pi05"])

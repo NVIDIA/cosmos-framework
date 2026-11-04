@@ -23,6 +23,39 @@ def _runtime():
     return runtime
 
 
+@pytest.mark.parametrize("modern", [False, True])
+def test_video_prefix_rope_call_preserves_both_pinned_signatures(modern):
+    class ReachedRope(Exception):
+        pass
+
+    ids = torch.tensor([[30, 118, 121, 119, 31]])
+    grid = torch.tensor([[1, 2, 2]])
+    mask = torch.ones_like(ids)
+    types = torch.tensor([[0, 0, 2, 0, 0]])
+
+    def old(input_ids, image_grid_thw=None, video_grid_thw=None, attention_mask=None):
+        assert input_ids is ids and image_grid_thw is None and video_grid_thw is grid
+        assert attention_mask is mask
+        raise ReachedRope
+
+    def new(input_ids, mm_token_type_ids, image_grid_thw=None, video_grid_thw=None, attention_mask=None):
+        assert mm_token_type_ids is types
+        return old(input_ids, image_grid_thw, video_grid_thw, attention_mask)
+
+    runtime = _runtime()
+    runtime.model = SimpleNamespace(
+        config=SimpleNamespace(video_token_id=121, vision_end_token_id=119),
+        model=SimpleNamespace(get_rope_index=new if modern else old),
+    )
+    inputs = dict(input_ids=ids, video_grid_thw=grid, attention_mask=mask, mm_token_type_ids=types)
+    with pytest.raises(ReachedRope):
+        runtime._generate_with_video_prefix_cache(inputs, active_key=("video",), capacity=1, generation_kwargs={})
+    if modern:
+        inputs.pop("mm_token_type_ids")
+        with pytest.raises(ValueError, match="processor mm_token_type_ids"):
+            runtime._generate_with_video_prefix_cache(inputs, active_key=("video",), capacity=1, generation_kwargs={})
+
+
 def _conversation():
     frames = [Image.fromarray(np.full((720, 1280, 3), n * 40, dtype=np.uint8)) for n in range(4)]
     return [

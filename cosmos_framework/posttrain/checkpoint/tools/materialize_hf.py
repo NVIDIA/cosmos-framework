@@ -1150,6 +1150,14 @@ def run_request(
             raise ValueError("export_metadata must contain only finite JSON values") from error
     if lock_wait_seconds is not None and not (math.isfinite(lock_wait_seconds) and lock_wait_seconds >= 0):
         raise ValueError(f"lock_wait_seconds must be a finite number >= 0, got {lock_wait_seconds!r}")
+    deployment_precision = (export_metadata or {}).get("deployment_precision", {})
+    execution_profile = (
+        deployment_precision.get("execution_profile") if isinstance(deployment_precision, dict) else None
+    )
+    profile_kwargs = {"execution_profile": execution_profile} if execution_profile is not None else {}
+    if execution_profile is not None:
+        with open(os.path.join(base, "config.json")) as handle:
+            hf.config_with_export_dtype(json.load(handle), output_dtype, **profile_kwargs)
     out = os.path.abspath(out.rstrip("/"))
     # Every torch-free refusal that reads the base alone, before anything destructive: nothing below
     # removes or writes until it has passed.
@@ -1200,7 +1208,7 @@ def run_request(
             report = verify_index(out, expect_tensors=expect_tensors, min_tensors=min_tensors)
             report.update(verify_sidecars(out, base, unified_chat_template=unified_chat_template))
             if output_dtype is not None:
-                report.update(hf.verify_export_dtype(out, base, output_dtype))
+                report.update(hf.verify_export_dtype(out, base, output_dtype, **profile_kwargs))
             _log(
                 f"already materialized: {out}: {why}; {report['n_tensors']} tensors, {report['sidecars_identical']} sidecars re-checked"
             )
@@ -1356,7 +1364,7 @@ def run_request(
             # Idempotent on a reused staging dir; returns what config.json is and where the transformers-written one is kept.
             stage = "config.json <- base"
             sync["config"] = hf.write_config_from_base(
-                tmp_out, base, **({"output_dtype": output_dtype} if output_dtype is not None else {})
+                tmp_out, base, **({"output_dtype": output_dtype} if output_dtype is not None else {}), **profile_kwargs
             )
             if unified_chat_template:
                 # After the sync, which re-copied the base's tokenizer_config.json (on a reused staging dir too): the one ruled
@@ -1395,7 +1403,7 @@ def run_request(
             stage = "verification (sidecars)"
             report["verify"].update(verify_sidecars(tmp_out, base, unified_chat_template=unified_chat_template))
             if output_dtype is not None:
-                report["verify"].update(hf.verify_export_dtype(tmp_out, base, output_dtype))
+                report["verify"].update(hf.verify_export_dtype(tmp_out, base, output_dtype, **profile_kwargs))
             report["verify"]["torch"] = verify
             if verify:
                 stage = "verification (torch)"
