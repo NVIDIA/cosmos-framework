@@ -17,7 +17,7 @@ AUDIO_START_TOKEN: str = "<audio_start>"
 AUDIO_PAD_TOKEN: str = "<audio_pad>"
 AUDIO_END_TOKEN: str = "<audio_end>"
 DEFAULT_REASONER_VIDEO_FPS: float = 4.0
-EDGE_REASONER_MODEL_NAME: str = "nvidia/Cosmos3-Edge-Reasoner"
+EDGE_REASONER_MODEL_NAME: str = "nvidia/Cosmos3-Edge"
 EDGE_RESERVED_AUDIO_TOKENS: tuple[str, str, str] = (
     "<SPECIAL_23>",
     "<SPECIAL_24>",
