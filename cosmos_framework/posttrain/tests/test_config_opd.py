@@ -466,13 +466,14 @@ def test_runtime_preflight_rejects_incompatible_opd_settings() -> None:
     )
     validate_opd_runtime(dpca, RolloutConfig())
     rollout = RolloutConfig()
-    validate_opd_runtime(
-        dpca,
-        rollout,
-        model_backend="qwen3_vl",
-        model_config=Qwen3VLModelConfig(name_or_path=rollout.name_or_path),
-    )
-    with pytest.raises(ValueError, match="DPCA requires model_backend='i4'"):
+    for backend in ("i4", "qwen3_vl"):
+        validate_opd_runtime(
+            dpca,
+            rollout,
+            model_backend=backend,
+            model_config=Qwen3VLModelConfig(name_or_path=rollout.name_or_path),
+        )
+    with pytest.raises(ValueError, match="DPCA requires a native multimodal policy"):
         validate_opd_runtime(dpca, RolloutConfig(), model_backend="hf")
     for invalid_rollout, field_name in (
         (RolloutConfig(temperature=0.8), "temperature"),
