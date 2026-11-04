@@ -2,7 +2,6 @@
   "schema_version": 1,
   "runtime_sources": {
     "cosmos-actions": {
-      "commit": "5cd9a79e5352c49dd96acfbe372873b6b4ed95ba",
       "source_worktree_dirty": true
     },
     "cosmos-rl": {
