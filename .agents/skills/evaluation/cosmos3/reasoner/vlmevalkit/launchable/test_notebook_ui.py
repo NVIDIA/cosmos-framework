@@ -4,7 +4,7 @@
 from pathlib import Path
 import unittest
 
-from notebook_ui import show_results
+from notebook_ui import in_expected_range, show_results
 
 
 class ResultIdentityTests(unittest.TestCase):
@@ -30,6 +30,22 @@ class ResultIdentityTests(unittest.TestCase):
                           'status': 'completed', 'coverage': {'expected': 1106, 'scored': 1105},
                           'primary_metric': {'value': 27.94, 'unit': 'percent'}},
                          'mmsivideo-bench', 'full', Path('/unused'))
+
+
+class ExpectedRangeTests(unittest.TestCase):
+    FULL = {'expected': 1106, 'scored': 1106}
+
+    def test_band_is_one_point_either_side_inclusive(self):
+        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 298 / 1106, self.FULL))
+        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 320 / 1106, self.FULL))
+        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 297 / 1106, self.FULL))
+        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 321 / 1106, self.FULL))
+
+    def test_partial_or_resized_run_is_never_in_range(self):
+        self.assertFalse(in_expected_range('mmsivideo-bench', 27.94, {'expected': 1000, 'scored': 1000}))
+
+    def test_benchmarks_without_an_approved_band_report_none(self):
+        self.assertIsNone(in_expected_range('videophy2', 48.13, {'expected': 3397, 'scored': 3397}))
 
 
 if __name__ == '__main__':

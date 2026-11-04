@@ -39,6 +39,8 @@
       "correct": 309,
       "examples": 1106,
       "measurement_date": "2026-10-30",
+      "expected_range_points": 1.0,
+      "expected_range_rule": "A full run is in the expected range when all 1,106 questions are scored and official accuracy is within 1.0 point of the pinned value (inclusive). Outside the range means check the setup, not proof that it is broken.",
       "protocol": "Uniform-50 canonical frames plus references; maximum processor pixels 151200; temperature 0, seed 1; 2048 output tokens; official pinned local answer extractor; invalid/truncated outputs included.",
       "paper_value": 27.2,
       "paper_note": "Close numerically, but the paper's exact frame/pixel/generation/scoring configuration is not public in the cited table; no identical-reference-protocol claim.",

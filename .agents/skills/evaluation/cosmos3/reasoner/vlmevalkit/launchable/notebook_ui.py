@@ -90,18 +90,44 @@ def show_plan(benchmark, scope, data, work, workers, score_only=False):
         show_baseline(benchmark)
 
 
+def _baselines():
+    return json.loads(Path(__file__).with_name("baselines.json").read_text())
+
+
+def expected_range(benchmark):
+    """Approved working-setup band for a full run, or None if not defined."""
+    baseline = _baselines()["benchmarks"].get(benchmark, {})
+    points = baseline.get("expected_range_points")
+    if points is None:
+        return None
+    return baseline["value"] - points, baseline["value"] + points
+
+
+def in_expected_range(benchmark, value, coverage):
+    """True/False against the approved band; None when no band applies."""
+    band = expected_range(benchmark)
+    if band is None or value is None:
+        return None
+    complete = coverage["scored"] == coverage["expected"] == _baselines()["benchmarks"][benchmark]["examples"]
+    return complete and band[0] <= value <= band[1]
+
+
 def show_baseline(benchmark):
     """Publish the pinned full-run target without presenting it as paper parity."""
-    record = json.loads(Path(__file__).with_name("baselines.json").read_text())
+    record = _baselines()
     baseline = record["benchmarks"][benchmark]
     suffix = "%" if baseline["unit"] == "percent" else " correlation points"
     paper = baseline["paper_value"]
     comparison = ("No reference in the cited Cosmos3 table." if paper is None
                   else f'Paper reference: {paper:.2f}{suffix}.')
+    band = expected_range(benchmark)
+    band_text = ("" if band is None else
+                 f'<p>Expected range: <strong>{band[0]:.2f}–{band[1]:.2f}{suffix}</strong> '
+                 f'with all {baseline["examples"]:,} examples scored.</p>')
     _html('<aside class="ev-note"><h2>Expected full-run result</h2>'
           f'<p><strong>{baseline["value"]:.2f}{suffix}</strong> on '
           f'{baseline["examples"]:,} examples · {escape(record["model"])} · '
-          f'{escape(record["model_revision"][:12])}</p>'
+          f'{escape(record["model_revision"][:12])}</p>{band_text}'
           f'<p class="ev-muted">Measured {escape(baseline.get("measurement_date", record["measurement_date"]))}. '
           f'{escape(comparison)}</p><p>{escape(baseline["paper_note"])}</p>'
           '<details><summary>Pinned baseline protocol</summary>'
@@ -220,6 +246,14 @@ def _show_results(summary, benchmark, scope, work, item, log_path=None):
         banner += "Smoke run only: this checks the pipeline, not full-benchmark performance."
     if scope == "custom":
         banner += "Customer-defined labeled data: not an official benchmark or leaderboard result."
+    in_range = in_expected_range(benchmark, value, coverage) if scope == "full" else None
+    if in_range is False:
+        low, high = expected_range(benchmark)
+        banner += (f"Outside the expected range ({low:.2f}–{high:.2f}%): check the setup "
+                   "against the pinned model, serving image and protocol.")
+    range_fact = ("" if in_range is None else
+                  '<div><dt>Expected range</dt><dd>' +
+                  ("Within range" if in_range else "Outside range") + '</dd></div>')
     execution = {
         "requested": summary.get("requested_execution"),
         "effective": summary.get("effective_execution"),
@@ -236,7 +270,7 @@ def _show_results(summary, benchmark, scope, work, item, log_path=None):
           f'<p class="ev-muted">{escape(detail)}</p></div>'
           '<dl class="ev-facts"><div><dt>Selected coverage</dt>'
           f'<dd>{coverage["scored"]:,} of {coverage["expected"]:,} examples</dd></div>'
-          f'<div><dt>Measured run time</dt><dd>{escape(elapsed_text)}</dd></div></dl>'
+          f'<div><dt>Measured run time</dt><dd>{escape(elapsed_text)}</dd></div>{range_fact}</dl>'
           f'{_execution_facts(summary)}'
           '<p class="ev-muted">Published-score equivalence has not been established.</p>'
           f'<details{" open" if issues else ""}><summary>Data and scoring notes</summary><ul>{notes}</ul></details>'
