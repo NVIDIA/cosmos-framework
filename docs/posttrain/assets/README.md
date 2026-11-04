@@ -26,6 +26,14 @@ architecture family is supported. Start with
   Qwen3-VL-2B. Duplicate SVG renderings are retained in the local review package
   and in the previous commits, rather than repeated in the cumulative patch.
 
+- `adapter-effective-execution.json.gz` indexes the versioned stock-compatible
+  MoE PiSSA qualification, three physical 2×2 HSDP profiles, repeated-prefix
+  correction and expanded BF16 failures. It separates the `e5d975d` trained/exported
+  artifact from `da4d98b` public admission and installed reload. Historical 48/47
+  counts remain unchanged. Decompressed SHA-256:
+  `4b888ba3e06902390f9e4c975af354b246bce8114a583b37b12ccd002351bf73`.
+  See [effective execution](../adapter-effective-execution.md) for scope and costs.
+
 Inspect the compressed evidence without installing the training dependencies:
 
 ```bash

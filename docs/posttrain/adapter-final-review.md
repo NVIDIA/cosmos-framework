@@ -7,7 +7,7 @@ The subsequent [independent code review](adapter-independent-review.md) records
 two confirmed corrections, their separate commits and affected installed-wheel
 validation.
 The [effective-execution extension](adapter-effective-execution.md) records later
-production changes and their own qualification; it does not relabel this baseline. Historical revisions and counts below are not relabeled as new runs.
+production changes and their own qualification; it does not relabel this baseline.
 
 This review starts from clean `feat/posttrain-family-adapters` at
 `06f59f89fb64f55216bec271bb581c0878a0b4e4`, against audited main

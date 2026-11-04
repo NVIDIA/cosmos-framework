@@ -4,8 +4,8 @@ This continues `feat/posttrain-family-adapters` from `2d14b95`. The production
 changes through `e5d975d` add explicitly versioned PiSSA execution, physical 2×2
 HSDP, safe full Alpamayo replay, and independent recurrent prefix-cache ownership.
 **The new whole-model MoE profile passes its 64-input stock-loader qualification.**
-The public exporter now admits that explicit v3 profile; the final installed-wheel
-public-CLI check is pending. Legacy v1/v2 MoE PiSSA exports remain refused.
+The public exporter admits that explicit v3 profile, and the final installed-wheel
+public CLI and fresh-process reload pass. Legacy v1/v2 MoE PiSSA exports remain refused.
 PR #342 stays closed; no branch is pushed and no PR is published.
 
 The historical [final review](adapter-final-review.md),
@@ -32,7 +32,7 @@ qualify a real checkpoint, precision or distributed backend.
 | Portable and merged physical artifacts | Existing model-owned exporters and `tests/reload_flow_adapters.py` | Fresh-process portable errors zero; FP32 merged errors below unchanged gates |
 | Broader BF16 deployment | Existing explicit residual profile and stock BF16 candidates tested on mixed recipes and Qwen3.5, new inputs/generation/cache/long contexts | **Incomplete**: output-error gates fail. Weight/memory/latency gates pass; those do not override numerical failures |
 | Recurrent prefix reuse | `inference/reasoner/runtime.py::_fork_dynamic_cache`; clone mutable recurrent/conv state, retain safe append-only KV sharing, reject unknown cache types | Implemented; real Qwen3.5 FP32 repeated-prefix checks pass |
-| Stock merged loading | `inference/reasoner/model_execution.py`, runtime `_load`, materializer/config transaction binding | Implemented; real v3 64-input stock-loader qualification passes; final public-CLI wheel check pending |
+| Stock merged loading | `inference/reasoner/model_execution.py`, runtime `_load`, materializer/config transaction binding | Implemented and validated: real v3 qualification, final public CLI and fresh installed-wheel 64-input stock reload all pass |
 
 ## PiSSA contracts and the new mechanism
 
@@ -137,7 +137,9 @@ Fresh-process BF16 portable reload also passes with zero controlled logit error.
 Stock portable FP32 and actual Framework→stock merged FP32 loading both pass all
 64 inputs with **zero** maximum/mean logit error, 512/512 equal controlled greedy
 positions, and bitwise equal router inputs/scores, selected experts and downstream
-expert outputs. The original 8, first unused 24 and second unused 32 inputs each
+expert outputs. A separate mmap inspection verifies exact expert **order**, as
+well as selected sets, across 3,072 layer comparisons and 2,371,872 token rows per
+stock stage. The original 8, first unused 24 and second unused 32 inputs each
 pass independently. Both unused populations include exact router-score ties; none
 is filtered out. All 882 serialized tensors verify, with no retained adapter
 branches or custom arithmetic in the stock merged model.
@@ -236,6 +238,14 @@ computation and supported FP32 merge. FP32 promotion changes computation and is
 reported separately from FP32 adapter/merge equivalence. Existing fixed-artifact
 qualification is preserved, but it cannot be generalized to new inputs or recipes.
 
+The three Qwen3-VL candidates use `Qwen/Qwen3-VL-2B-Instruct` at
+`89644892e4d85e24eaac8bacfd4f463576704203`. The additional checkpoint is
+`Qwen/Qwen3.5-0.8B` at `2fc06364715b967f1860aea9cf38778875588b17`.
+They reuse the recorded ordinary-LoRA WTS artifact, `native_a_hsdp` and
+`native_b_replicate` mixed artifacts, and `qwen3_5/dora-w2-full`; no adapter is
+retrained for these deployment comparisons. Their complete settings/identities
+remain in the saved portable manifests and the earlier profile-contract assets.
+
 The new corpus includes eight text, eight image and eight video inputs, differing
 sequence lengths, cached four-token generation, three repeated prefix uses, and
 2,048/8,192-token KV measurements. Original and new input populations are checked
@@ -286,6 +296,43 @@ is no container claim for these attested host-wheel executions.
 | `21f5cc821efd3f8c8be742c04f97f209e8a3a1f7` | `31b14e53db9ca6f935b027cce1fb8272ad8ed26b4891917fd67a3195369cfae9` | Dense PiSSA training and lifecycle; default-native merge subsequently fails |
 | `e8d86214e844753da3aab238c850c7511b5bf7ca` | `069c6e78fd578b80f926e12e864be16fee3c842a6f843cc2c83730a35a243627` | Three physical profiles, BF16 numerical/resource checks, recurrent-cache GPU validation |
 | `e5d975ddd17dd898c0937fe3102d486b584b4268` | `cdcdf340be832b43ce697eae1568693ff35f8886a031a0a8b512ea6eb6ed1cdc` | New stock-compatible MoE training/recovery/warm/portable and 64-input stock merged qualification pass; 1,896 packaged files verified |
+| `da4d98be088b87e476b48396bdae10ff1df0f4fe` | `ac9ad7eec509ea7876cd3c8a32f4b23ede21cbec6231e53bdda19cef15691268` | Reviewed public-admission change; 22 installed export/loader/legacy tests, real public CLI and fresh 64-input stock reload pass |
+
+The final public CLI at `da4d98b` reconstructs the same complete source payload
+(SHA-256 `8d87cf5c4aee35fc3f6bbda5d450f53cc10a22847877c598b34cc2061edbdaa7`),
+then validates idempotent reuse of the existing transaction, all 882 tensor entries,
+precision and eight sidecars. The marker/config remain byte-identical. This costs
+613.98 s and preserves `e5d975d` as the artifact producer; it is not relabeled as a
+second materialization. A fresh `da4d98b` process through the Framework stock loader
+passes all four population gates again, with zero logit error and 512/512 equal
+controlled positions (128.93 s including loading and comparisons).
+
+The public-admission delta changes only its guard/guidance and regression test;
+all training, routing, initialization, optimizer and checkpoint code is unchanged
+from the qualifying `e5d975d` wheel. Physical builders, Alpamayo replay, BF16
+arithmetic and shared adapter mathematics remain unchanged from their recorded
+`e8d8621` runs. The later opt-in identity/default paths pass 193 installed HF
+checks (one skip), 72 physical checks (one skip), two separately rerun HF lifecycle
+checks, and four adapter-disabled GPU checks per rank on two GPUs. The physical
+invocation also included two HF lifecycle tests that rejected its Transformers
+4.57.6 runtime; both pass in the correct 5.8.1 runtime. Two initial
+source-test invocations lacked optional repository-wide pytest plugins and did
+not execute tests; the corrected source and installed admission suites each pass
+22 tests. Raw errors and corrected invocations remain preserved.
+
+Independent reviews cover the new math, physical replay/HSDP, recurrent-cache
+ownership, model execution, qualification harness and final admission delta. The
+final reviewer independently verifies all 64 saved output tensors, ten refusal
+cases, fresh public build/skip and the actual tiny stock loader. Reviewed file
+hashes match `da4d98b`. Final documentation/evidence changes do not relabel or
+repeat GPU training.
+
+The compact [validation index](assets/adapter-effective-execution.json.gz) records
+identities, component settings, exact execution reports and hashes. The local
+review package includes the cumulative and incremental patches, a successful
+patch-application check, independent reviews and full recorded reproduction
+commands. Large checkpoints, raw tensor probes, datasets and runtime sources
+remain outside Git at the indexed immutable paths.
 
 New physical recipes run through the existing SFT qualification entrypoint, with
 staged immutable sources described in [flow adapters](guides/flow-adapters.md):
