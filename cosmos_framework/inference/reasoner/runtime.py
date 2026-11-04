@@ -373,14 +373,40 @@ class CosmosFrameworkRuntime:
 
     @staticmethod
     def _fork_dynamic_cache(cache: Any) -> Any:
-        """Fork a DynamicCache without copying immutable prefix tensors."""
+        """Share append-only KV tensors; isolate mutable recurrent prefix state.
+
+        Qwen3.5's linear-attention cache updates its convolution and recurrent
+        tensors in place, including inside fused decode kernels. A shallow layer
+        copy is sufficient only for dynamic attention's append-only KV storage.
+        Static, offloaded and unknown cache implementations require their own
+        ownership contract before they can participate in prefix reuse.
+        """
+        from transformers import cache_utils
+
         layers = getattr(cache, "layers", None)
-        if layers is None:
+        if type(cache) is not cache_utils.DynamicCache or layers is None or getattr(cache, "offloading", False):
             raise TypeError(
-                "vision.video_prefix_cache_size requires a Transformers cache with independently forkable layers"
+                "vision.video_prefix_cache_size requires a supported non-offloaded Transformers DynamicCache"
             )
+        supported = {
+            getattr(cache_utils, name)
+            for name in (
+                "DynamicLayer",
+                "DynamicSlidingWindowLayer",
+                "LinearAttentionLayer",
+                "LinearAttentionAndFullAttentionLayer",
+            )
+            if hasattr(cache_utils, name)
+        }
+        if any(type(layer) not in supported for layer in layers):
+            raise TypeError("video prefix reuse does not support this cache layer's mutation/ownership contract")
         forked = copy.copy(cache)
         forked.layers = [copy.copy(layer) for layer in layers]
+        for layer in forked.layers:
+            for name in ("conv_states", "recurrent_states"):
+                state = getattr(layer, name, None)
+                if state is not None:
+                    setattr(layer, name, state.clone())
         return forked
 
     def _video_prefix_boundary(self, input_ids: Any) -> int:
