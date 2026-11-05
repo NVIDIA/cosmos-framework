@@ -13,7 +13,7 @@ supports Qwen text models, dense Qwen3.5/3.8 multimodal models and the Qwen3-VL 
 families (all three ship `Qwen3VLProcessor`). A "seat" is the model construction path the SFT
 objective sits on. Qwen3.5/3.8 sits on the HF backend (`model_backend='hf'`,
 `model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the native policy builder
-(`model_backend='i4'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
+(`model_backend='native'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
 build_qwen3_vl_native_policy, ...)`, see [the native recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3_vl_moe_native.py)):
 the HF backend refuses MoE VLMs because the general weight loader has no fused-expert handling and
 Transformers 5 stores the MoE expert tensors transposed relative to a Transformers 4 checkpoint.

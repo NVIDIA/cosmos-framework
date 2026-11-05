@@ -13,15 +13,26 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_num_real_tokens,
+    get_und_seq,
+    has_pad_segment,
+    set_gen_seq,
+    set_und_seq,
+    zeros_like,
+)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
 )
 
-# Nemotron 3 Dense VL imports
+# dense vision-language backbone imports
 from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.configuration_nemotron_3_dense_vl import (
     Nemotron3DenseVLTextConfig,
 )
@@ -78,18 +89,7 @@ from cosmos_framework.model.generator.utils.load_balancing_stats import (
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.model.generator.utils.numerics import native_rms_norm
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    from_all_seq,
-    from_und_gen_splits,
-    get_gen_seq,
-    get_num_real_tokens,
-    get_und_seq,
-    has_pad_segment,
-    set_gen_seq,
-    set_und_seq,
-    zeros_like,
-)
+from cosmos_framework.utils import log
 
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
@@ -133,7 +133,7 @@ def _pad_packed_tokens_by_sample(
 
 # -----------------------------------------------------------------------------
 # Unified MoT (Mixture of Transformers) implementation supporting:
-#   - Qwen3-VL Dense, Qwen3-VL MoE, and Nemotron 3 Dense VL
+#   - Qwen3-VL Dense, Qwen3-VL MoE, and dense vision-language backbone
 #
 # Shared components:
 #   - PackedAttentionMoT (config-driven QK norm and RoPE)
@@ -471,7 +471,7 @@ class Qwen3VLMoeMoTConfig(_MoTConfigBase):
 
 
 class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
-    """MoT wrapper config for the Nemotron 3 Dense VL family.
+    """MoT wrapper config for the dense vision-language backbone family.
 
     Inherits the shared ``config_dict``-storing wrapper, MoT field
     handling, nested-vs-flat ``text_config`` resolution, and
@@ -484,7 +484,7 @@ class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
        alternating ``(attn, MLP)`` blocks (``num_hidden_layers == 56``)
        into MoT's fused decoder layers (28 effective).
 
-    Nemotron 3 Dense VL has no nested ``vision_config`` sub-section in
+    dense vision-language backbone has no nested ``vision_config`` sub-section in
     its JSON, so the inherited ``vision_config`` property is unused —
     callers leave the inherited ``include_visual`` at its default of
     ``False`` and never access the property.
@@ -503,7 +503,7 @@ class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
 
 
 # -----------------------------------------------------------------------------
-# Common layers between Qwen3VL Dense, MoE, and Nemotron 3 Dense VL models
+# Common layers between Qwen3VL Dense, MoE, and dense vision-language backbone models
 # -----------------------------------------------------------------------------
 
 
@@ -540,7 +540,7 @@ class PackedAttentionMoT(nn.Module):
     Dual-pathway packed attention for MoT architectures.
     Implements understanding and generation pathways with separate projections.
 
-    Used for Qwen3VL (Dense), Qwen3VL-MoE, and Nemotron 3 Dense VL variants.
+    Used for Qwen3VL (Dense), Qwen3VL-MoE, and dense vision-language backbone variants.
     QK normalisation and RoPE function are selected via ``layer_types`` and the
     ``qk_norm_for_text`` config attribute (the generation pathway always installs
     QK norm).
@@ -746,31 +746,32 @@ class PackedAttentionMoT(nn.Module):
                 memory_value,
             )
 
+        und, gen = get_und_seq(pack), get_gen_seq(pack)
+        skip_gen = getattr(memory_value, "und_only", False)
+        skip_und = getattr(memory_value, "frame_idx", 0) > 0 and und.shape[0] == 0
         text_cache = getattr(memory_value, "text_cache", None)
         projected_text = text_cache.projected if text_cache is not None else None
         cached_text = projected_text is not None
-        q_und_in = (
-            self.q_proj(get_und_seq(pack)) if projected_text is None else projected_text[0].flatten(-2)
-        )  # [N_und,num_heads*head_dim]
-        q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
 
-        k_und_in = (
-            self.k_proj(get_und_seq(pack)) if projected_text is None else projected_text[1].flatten(-2)
-        )  # [N_und,num_kv_heads*head_dim]
-        k_gen_in = self.k_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
+        if skip_und:
+            q_und = gen.new_empty((0, self.num_attention_heads, self.head_dim))
+            k_und = gen.new_empty((0, self.num_key_value_heads, self.head_dim))
+            v_und = gen.new_empty((0, self.num_key_value_heads, self.head_dim))
+        elif projected_text is not None:
+            q_und, k_und, v_und = projected_text
+        else:
+            q_und = self.q_proj(und).view(-1, self.num_attention_heads, self.head_dim)
+            k_und = self.k_proj(und).view(-1, self.num_key_value_heads, self.head_dim)
+            v_und = self.v_proj(und).view(-1, self.num_key_value_heads, self.head_dim)
 
-        v_und_in = (
-            self.v_proj(get_und_seq(pack)) if projected_text is None else projected_text[2].flatten(-2)
-        )  # [N_und,num_kv_heads*head_dim]
-        v_gen_in = self.v_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
-
-        q_und = q_und_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_und,num_heads,head_dim]
-        k_und = k_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
-        v_und = v_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
-
-        q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_gen,num_heads,head_dim]
-        k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
-        v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
+        if skip_gen:
+            q_gen = und.new_empty((0, self.num_attention_heads, self.head_dim))
+            k_gen = und.new_empty((0, self.num_key_value_heads, self.head_dim))
+            v_gen = und.new_empty((0, self.num_key_value_heads, self.head_dim))
+        else:
+            q_gen = self.q_proj_moe_gen(gen).view(-1, self.num_attention_heads, self.head_dim)
+            k_gen = self.k_proj_moe_gen(gen).view(-1, self.num_key_value_heads, self.head_dim)
+            v_gen = self.v_proj_moe_gen(gen).view(-1, self.num_key_value_heads, self.head_dim)
 
         # The sequence length is the only size that varies between steps, but Dynamo lifts the int
         # attributes of a module into SymInts, so the head counts reach the views above as symbols.
@@ -784,12 +785,13 @@ class PackedAttentionMoT(nn.Module):
             for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
                 torch._dynamo.mark_static(head_split, 1)
 
-        if not cached_text:
+        if not cached_text and not skip_und:
             q_und = _apply_request_rms_norm(self.q_norm, q_und, memory_value)  # [N_und,num_heads,head_dim]
             k_und = _apply_request_rms_norm(self.k_norm, k_und, memory_value)  # [N_und,num_kv_heads,head_dim]
 
-        q_gen = _apply_request_rms_norm(self.q_norm_moe_gen, q_gen, memory_value)  # [N_gen,num_heads,head_dim]
-        k_gen = _apply_request_rms_norm(self.k_norm_moe_gen, k_gen, memory_value)  # [N_gen,num_kv_heads,head_dim]
+        if not skip_gen:
+            q_gen = _apply_request_rms_norm(self.q_norm_moe_gen, q_gen, memory_value)  # [N_gen,num_heads,head_dim]
+            k_gen = _apply_request_rms_norm(self.k_norm_moe_gen, k_gen, memory_value)  # [N_gen,num_kv_heads,head_dim]
 
         packed_cos = packed_position_embeddings[0]
         packed_sin = packed_position_embeddings[1]
@@ -873,7 +875,7 @@ class PackedAttentionMoT(nn.Module):
             and not bool(getattr(memory_value, "target_only_no_text", False))
         ):
             und_len = pack["_num_causal_tokens"]
-            gen_len = pack["_num_full_tokens"]
+            gen_len = 0 if skip_gen else pack["_num_full_tokens"]
             # When und K-norm is active, AR frame 1+ gen→und cross-attention uses
             # the normalised K, so cache k_und_for_gen_ (RMSNorm+RoPE applied) instead
             # of raw k_und_.  Without the norm, k_und_for_gen_ is not defined, so
@@ -939,8 +941,16 @@ class PackedAttentionMoT(nn.Module):
                 # only keeps the existing packed geometry during media execution.
                 und_seq = text_cache.hidden_output  # [N_und,hidden_size]
             else:
-                und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
-            gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_gen,hidden_size]
+                und_seq = (
+                    get_gen_seq(pack).new_empty((0, self.hidden_size))
+                    if skip_und
+                    else self.o_proj(get_und_seq(packed_attn_output))
+                )  # [N_und,hidden_size]
+            gen_seq = (
+                get_und_seq(pack).new_empty((0, self.hidden_size))
+                if skip_gen
+                else self.o_proj_moe_gen(get_gen_seq(packed_attn_output))
+            )  # [N_gen,hidden_size]
         return from_und_gen_splits(und_seq, gen_seq, pack), kv_to_store  # [N_und+N_gen,hidden_size]
 
     def reasoner_forward(
@@ -1137,7 +1147,7 @@ def _impl_forward(
     natten_metadata_list: list | None = None,
     memory: MemoryState | None = None,
 ) -> tuple[SequencePack, dict[str, LBLMetadata]]:
-    """Shared training forward pass for the three MoT text models.
+    """Shared forward pass for the three MoT text models.
 
     Used by ``Qwen3VLTextModel``, ``Qwen3VLMoeTextModel``, and
     ``Nemotron3DenseVLTextModel``.
@@ -1165,6 +1175,9 @@ def _impl_forward(
     # tensor below is only used for its dtype and device
     _meta_tensor = get_gen_seq(pack)  # [S_gen,D]
     device = _meta_tensor.device
+    if memory is not None:
+        memory.init(pack, device)
+
     cos, sin = self.rotary_emb(
         _meta_tensor,
         position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1),
@@ -1184,10 +1197,6 @@ def _impl_forward(
     lbl_metadata_all: dict[str, list[LBLMetadata]] = dict(und=[], gen=[])
 
     hidden_states = pack
-
-    # --- MemoryState: per-step init (outside compile) ---
-    if memory is not None:
-        memory.init(hidden_states, device)
 
     # Derive gen_only once (outside compile) if using MemoryState
     memory_gen_only = memory.is_gen_only() if memory is not None else False
@@ -1441,6 +1450,31 @@ class MoTDecoderLayer(nn.Module):
                 Target-only teacher forcing also slices away control GEN rows
                 before every decoder operation and restores the full layout on return.
         """
+        if getattr(memory_value, "und_only", False):
+            und = get_und_seq(input)
+            normalized = self.input_layernorm(und)
+            und_pack = from_und_gen_splits(normalized, normalized.new_empty((0, normalized.shape[-1])), input)
+            cos, sin = packed_position_embeddings
+            positions = (
+                from_und_gen_splits(get_und_seq(cos), get_gen_seq(cos)[:0], cos),
+                from_und_gen_splits(get_und_seq(sin), get_gen_seq(sin)[:0], sin),
+            )
+            attn_out, kv_to_store = self.self_attn(
+                und_pack,
+                attention_mask,
+                positions,
+                memory_value=memory_value,
+            )
+            residual = und + get_und_seq(attn_out)
+            normalized = self.post_attention_layernorm(residual)
+            token_mask = _real_token_mask(normalized.shape[0], input["_num_causal_tokens"], normalized.device)
+            mlp_out, metadata = _run_mlp(self.mlp, normalized, token_mask)
+            return (
+                from_und_gen_splits(residual + mlp_out, get_gen_seq(input), input),
+                {"und": metadata} if metadata is not None else {},
+                kv_to_store,
+            )
+
         target_only_no_text = gen_only and bool(getattr(memory_value, "target_only_no_text", False))
         text_cache = getattr(memory_value, "text_cache", None)
         cached_text = text_cache is not None and text_cache.hidden_output is not None
@@ -1495,7 +1529,7 @@ class MoTDecoderLayer(nn.Module):
             )
 
         # Pre-Attention layernorm
-        if target_only_no_text or cached_text:
+        if gen_only or cached_text:
             norm_und = get_und_seq(layer_input)  # [N_und,hidden_size], empty in target-only mode
         else:
             norm_und = _apply_request_rms_norm(
@@ -1798,9 +1832,9 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
 
 class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
     """
-    Nemotron 3 Dense VL text model adapted for MoT training.
+    dense vision-language backbone text model adapted for MoT training.
     This is a wrapper around the _impl_* helpers defined above,
-    specialized for Nemotron 3 Dense VL models.
+    specialized for dense vision-language backbone models.
     """
 
     def __init__(
@@ -2137,7 +2171,7 @@ def _impl_generate_reasoner_text(
 
     ``prepare_multimodal_fn`` builds the image/video-conditioned prefill inputs
     (embeds + mrope positions). Defaults to the Qwen3-VL implementation; the
-    Nemotron 3 Dense VL reasoner injects its own SigLIP2 variant so the same
+    dense vision-language backbone reasoner injects its own SigLIP2 variant so the same
     decode loop serves both families.
 
     The loop has two phases:
@@ -2831,7 +2865,7 @@ def _load_bundled_vision_tower(local_dir: str | None) -> tuple[str, dict, dict] 
 
 
 class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
-    """Causal LM head on top of the Nemotron 3 Dense VL MoT text model."""
+    """Causal LM head on top of the dense vision-language backbone MoT text model."""
 
     _tied_weights_keys: list[str] = []
 
@@ -2857,7 +2891,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
 
-        assert config.vision_config is None, "Nemotron 3 Dense VL has no vision config"
+        assert config.vision_config is None, "dense vision-language backbone has no vision config"
 
         self.post_init()
 

@@ -75,7 +75,7 @@ def _init_from_env() -> None:
         logging.warning(
             f"Ignoring sparse tokenizer attention backend override {env_sparse_attn!r}. "
             "Tokenizer sparse attention now defers backend selection to cosmos_framework.model.attention. "
-            "If you need to filter i4 backend choices, use I4_ATTN_BACKENDS instead."
+            "If you need to filter native backend choices, use COSMOS_ATTN_BACKENDS instead."
         )
 
 

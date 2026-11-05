@@ -59,6 +59,13 @@ The two modalities take different contracts:
 `rl.init_from` is **required** — NFT always starts from a base checkpoint, and an empty value fails
 preflight rather than training from scratch.
 
+For profiles without a fixed backbone path, preflight accepts a caller-provided nonempty
+`model.config.vlm_config.pretrained_weights.backbone_path`. An explicit empty string is
+allowed only when `pretrained_weights.enabled=false`, as in the public full-checkpoint
+recipes; missing or non-string paths are rejected. Profiles with a fixed path still
+require an exact match. NFT initializes policy weights from `rl.init_from`; this check
+does not add a separate backbone-loading step.
+
 ## 4. Topology and launch
 
 Production online NFT is required to use exactly one shape. Preflight rejects anything else:

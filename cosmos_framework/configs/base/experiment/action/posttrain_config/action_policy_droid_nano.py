@@ -10,7 +10,7 @@ action heads from the public ``nvidia/Cosmos3-Nano`` base.
 
 Usage (1 node, 8 GPU)::
 
-    DROID_ROOT=/path/to/droid_lerobot_640x360/success \\
+    DROID_ROOT=/path/to/droid_plus_lerobot_640x360_20260412 \\
     BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir> \\
     WAN_VAE_PATH=<Wan2.2_VAE.pth> \\
     torchrun --nproc_per_node=8 -m cosmos_framework.scripts.train \\
@@ -208,6 +208,7 @@ action_policy_droid_nano = LazyDict(
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
                             filter_dict_path=None,
+                            filter_dict_source_prefix="",
                             action_normalization=None,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
                             resolution="480",  # 640x360 data @ 480p

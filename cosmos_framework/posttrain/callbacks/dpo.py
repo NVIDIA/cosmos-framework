@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""DPO observability callbacks (DESIGN §2.6) — real, non-blocking observers.
+"""DPO observability callbacks  — real, non-blocking observers.
 
 `DPOMetricLogger` records the per-step DPO metrics and prints a rolling line; it is the
 default training-visibility hook. `DPORewardTrendCallback` watches the implicit-reward

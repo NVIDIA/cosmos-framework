@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""User-facing role factory (DESIGN §2.7 Surface 1).
+"""User-facing role factory.
 
 `roles.env(...)`, `roles.rollout(...)`, `roles.trainer(...)`, `roles.reference(...)`,
 `roles.critic(...)`, `roles.reward(...)`, `roles.teacher(...)`, and `roles.buffer(...)` declare WorkerGroups.
@@ -18,7 +18,7 @@ from typing import Any
 
 from cosmos_framework.posttrain.workers.worker_group import WorkerGroup
 
-# needs_bulk default per role (DESIGN §3.4): rollout/trainer run model forward passes
+# needs_bulk default per role: rollout/trainer run model forward passes
 # (compute on bulk ⇒ materialize their inputs); env/reward/buffer route/filter on
 # metadata (BulkRefs flow through). Override per WG, e.g. a model-based reward:
 # `roles.reward("rm", needs_bulk=True)`.

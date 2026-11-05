@@ -29,8 +29,7 @@ the teacher: OPD adds no teacher-signal validation objective or metric contract 
 
 Alignment note: this entry's `distillation_mode=advantage`, `jsd_beta=1`, `kl_penalty_coef=1`, and
 `top_k=32` settings match the cosmos-rl reference configuration. Its `loss_type=token-sum` has no equivalent here — use
-`rl.loss_type=seq-mean-token-sum`, which reproduces that update up to the constant `mini_batch`
-(see the design doc).
+`rl.loss_type=seq-mean-token-sum`, which reproduces that update up to the constant `mini_batch`.
 """
 
 from __future__ import annotations
@@ -197,13 +196,13 @@ def build_teacher(config: Any) -> Any:
     """
     import torch
 
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import (
         build_vllm_teacher,
         policy_data_packer_build_spec,
     )
     from cosmos_framework.posttrain.config.model import DataPackerConfig
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data_packer_config = instantiate(getattr(config, "data_packer", DataPackerConfig()))
@@ -250,8 +249,6 @@ def make_setup(config_path: str, opts: list[str], roles: list[str]) -> Callable[
     """GRPO's setup plus the teacher; only strings cross into a Ray actor."""
 
     def _setup() -> dict[str, Any]:
-        from cosmos_framework.utils.config import load_config
-        from cosmos_framework.utils.lazy_config import instantiate
         from cosmos_framework.posttrain.algorithm.reward import RewardCombiner, resolve_reward_provider_catalog
         from cosmos_framework.posttrain.config.build import effective_model_id
         from cosmos_framework.posttrain.control import ExperienceBuffer
@@ -259,6 +256,8 @@ def make_setup(config_path: str, opts: list[str], roles: list[str]) -> Callable[
         from cosmos_framework.posttrain.roles.reward import RewardWorker
         from cosmos_framework.posttrain.utils.determinism import enable_determinism
         from cosmos_framework.posttrain.utils.dist import run_rank_converged
+        from cosmos_framework.utils.config import load_config
+        from cosmos_framework.utils.lazy_config import instantiate
 
         config = load_config(config_path, ["--", *opts])
         rl = instantiate(config.rl)
@@ -320,7 +319,6 @@ def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> None:
     `run` exists to express — the manifest, the role set and the actor/device grouping — while the part they
     share, the loop, is shared by reuse.
     """
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.algorithm.reward import resolve_reward_provider_catalog
     from cosmos_framework.posttrain.config.build import (
         prefix_filter_enabled,
@@ -341,6 +339,7 @@ def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> None:
     from cosmos_framework.posttrain.control.validation.rollout import validate_rollout_reward_sources
     from cosmos_framework.posttrain.data.packer import validate_data_packer_factories
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
+    from cosmos_framework.utils.lazy_config import instantiate
 
     app_start_time_ms = round(time.time() * 1000)  # the controller's app start, for the lifecycle observers
     from cosmos_framework.posttrain.utils.dist import (

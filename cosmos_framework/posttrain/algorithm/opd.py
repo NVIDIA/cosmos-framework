@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""On-policy-distillation objectives (OPD design 2026-08-18 §§6–8).
+"""On-policy-distillation objectives.
 
 This module is the trainer-facing half of OPD: it shapes trajectories through the `DataPacker`,
 runs the student forward, pairs each scored position with the teacher's `TeacherSignal`, and reduces

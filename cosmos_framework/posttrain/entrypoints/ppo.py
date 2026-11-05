@@ -87,7 +87,7 @@ def _model_parallelism(config: Any, role: str, ranks: int) -> tuple[int, int]:
         resolve_policy_parallelism,
     )
 
-    if normalize_model_backend(str(config.model_backend)) == "i4":
+    if normalize_model_backend(str(config.model_backend)) == "native":
         return resolve_policy_parallelism(config, ranks) if role == "policy" else (1, ranks)
     field = _model_config_field(role)
     return resolve_hf_model_parallelism(
@@ -278,10 +278,10 @@ def build_rollout(config: Any, rl: Any) -> Any:
     """Build the PPO vLLM rollout through the shared rollout construction seam."""
     import torch
 
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import build_ppo_vllm_rollout, policy_data_packer_build_spec
     from cosmos_framework.posttrain.config.model import DataPackerConfig
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rollout_config = instantiate(config.rollout)
     if rollout_config.tensor_parallel_size > 1:
@@ -407,10 +407,10 @@ def make_setup(config_path: str, opts: list[str], role: str) -> Any:
         raise ValueError(f"unknown PPO role {role!r}")
 
     def _setup() -> dict[str, Any]:
-        from cosmos_framework.utils.config import load_config
-        from cosmos_framework.utils.lazy_config import instantiate
         from cosmos_framework.posttrain.control import ExperienceBuffer
         from cosmos_framework.posttrain.utils.determinism import enable_determinism
+        from cosmos_framework.utils.config import load_config
+        from cosmos_framework.utils.lazy_config import instantiate
 
         config = load_config(config_path, ["--", *opts])
         rl = instantiate(config.rl)
@@ -473,7 +473,6 @@ def _device_groups(actors: Mapping[str, Any], gpu_placement: str) -> list[Any]:
 
 def loop(units: Mapping[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
     """Run the PPO role interaction sequence as plain imperative Python."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.algorithm.ppo.batch import make_ppo_update_plan
     from cosmos_framework.posttrain.algorithm.ppo.records import merge_ppo_step_metrics
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
@@ -487,6 +486,7 @@ def loop(units: Mapping[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data, rollout, reward, replay, reference, critic, policy = (units[name] for name, _kind in ROLE_SPECS)
@@ -646,7 +646,6 @@ def loop(units: Mapping[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
 
 def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> dict[str, Any]:
     """Validate, bind shared placement, and execute the PPO loop."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.config_ppo import validate_ppo_config
     from cosmos_framework.posttrain.control.bind import bind_check
     from cosmos_framework.posttrain.control.placement import (
@@ -654,6 +653,7 @@ def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> dict[st
         resolve_online_weight_placement,
         validate_online_weight_transport,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     validate_ppo_config(config)
     rl = instantiate(config.rl)
@@ -681,8 +681,8 @@ def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> dict[st
 
 
 def main() -> None:
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.config.config_ppo import validate_ppo_config
+    from cosmos_framework.utils.config import load_config
 
     config_path, opts, validate = cli(
         "Cosmos3 synchronous PPO",

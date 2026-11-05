@@ -108,15 +108,15 @@ def parse_backend_filter(env_var_value: str | None, default_backends: list[str])
 
 
 def filter_attention_backends(default_backends: list[str]) -> list[str]:
-    env_var_value = os.environ.get("I4_ATTN_BACKENDS")
+    env_var_value = os.environ.get("COSMOS_ATTN_BACKENDS")
     return parse_backend_filter(env_var_value, default_backends)
 
 
 def filter_multi_dim_attention_backends(default_backends: list[str]) -> list[str]:
-    env_var_value = os.environ.get("I4_ATTN_BACKENDS_MULTIDIM")
+    env_var_value = os.environ.get("COSMOS_ATTN_BACKENDS_MULTIDIM")
     return parse_backend_filter(env_var_value, default_backends)
 
 
 def filter_attention_merge_backends(default_backends: list[str]) -> list[str]:
-    env_var_value = os.environ.get("I4_ATTN_BACKENDS_MERGE")
+    env_var_value = os.environ.get("COSMOS_ATTN_BACKENDS_MERGE")
     return parse_backend_filter(env_var_value, default_backends)
