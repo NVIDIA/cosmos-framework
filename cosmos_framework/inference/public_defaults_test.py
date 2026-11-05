@@ -28,7 +28,8 @@ def test_named_model_defaults_resolve_through_hub() -> None:
         assert checkpoint.hf.revision
 
 
-def test_public_backbone_uri_preserves_registered_revision(monkeypatch, tmp_path):
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_public_backbone_uri_preserves_registered_revision(monkeypatch, tmp_path, suffix):
     import huggingface_hub
 
     from cosmos_framework.inference.common.checkpoints import register_checkpoints
@@ -45,7 +46,7 @@ def test_public_backbone_uri_preserves_registered_revision(monkeypatch, tmp_path
         return str(tmp_path)
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
-    assert _download_hf_checkpoint(f"hf://{repo}") == str(tmp_path)
+    assert _download_hf_checkpoint(f"hf://{repo}{suffix}") == str(tmp_path)
     assert calls[0]["repo_id"] == repo
     assert calls[0]["revision"] == registered.hf.revision
     assert "*.safetensors" in calls[0]["allow_patterns"]

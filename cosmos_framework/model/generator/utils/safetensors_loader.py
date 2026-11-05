@@ -100,7 +100,7 @@ def _download_hf_checkpoint(checkpoint_path: str) -> str:
 
     from cosmos_framework.utils.checkpoint_db import CheckpointConfig
 
-    repo_id = checkpoint_path.removeprefix(_HF_URI_PREFIX)
+    repo_id = checkpoint_path.removeprefix(_HF_URI_PREFIX).rstrip("/")
     registered = CheckpointConfig.maybe_from_uri(f"s3://bucket/cosmos3/pretrained/huggingface/{repo_id}")
     # Changing the address form must not move a registered public backbone to
     # a different revision. Keep the weight-specific download patterns below.
