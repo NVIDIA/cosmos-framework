@@ -1142,10 +1142,10 @@ class _HostImpl:
         _expose_peer_gpus()
         return os.environ["CUDA_VISIBLE_DEVICES"]
 
-    # --- placement introspection  ---
+    # --- placement introspection ---
     # Node IP / visible GPU belong to the worker process, not the role body: the driver
     # reads them through the backend (GridBackend.hosts()/gpus()) so role bodies stay
-    # placement-agnostic (§4.1) and Ray-free.
+    # placement-agnostic and Ray-free.
     def host(self) -> str:
         import ray
 
