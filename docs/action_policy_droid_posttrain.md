@@ -117,9 +117,9 @@ also pass `filter_dict_path` pointing to the downloaded JSON; there is no defaul
 The URI-shaped keys in that JSON are legacy trajectory identifiers used only for local
 lookup, not download endpoints. Access to the bucket named in those keys is not required;
 anonymous bucket listing is not available. Do not rewrite the keys, since they must match
-the filter dictionary. Use the Hugging Face downloads above for this recipe, or the
-[official DROID data instructions](https://droid-dataset.github.io/droid/the-droid-dataset)
-for the original RLDS/raw data (which require conversion before use with this LeRobot loader).
+the filter dictionary. Download NVIDIA's released
+[Cosmos3-DROID dataset](https://huggingface.co/datasets/nvidia/Cosmos3-DROID)
+and the filter JSON using the Hugging Face commands above.
 
 ## Checkpoints
 
