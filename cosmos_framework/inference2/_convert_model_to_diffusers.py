@@ -478,14 +478,20 @@ def _build_vision_encoder(
 ):
     try:
         from transformers import Qwen3VLVisionModel
+        from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLVisionConfig
     except ImportError as exc:
         raise ImportError(
             "Saving the Cosmos3 Qwen3-VL vision encoder requires a transformers version "
             "that provides Qwen3VLVisionModel."
         ) from exc
 
-    qwen_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-    vision_config = getattr(qwen_config, "vision_config", None)
+    try:
+        qwen_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        vision_config = getattr(qwen_config, "vision_config", None)
+    except ValueError:
+        # Published Cosmos3 omni repos (e.g. nvidia/Cosmos3-Nano) use a model_type transformers
+        # does not register, but carry the Qwen3-VL tower config as their top-level vision_config.
+        vision_config = Qwen3VLVisionConfig.from_pretrained(model_name_or_path)
     if vision_config is None:
         raise ValueError(f"{model_name_or_path!r} does not provide a Qwen3-VL vision_config.")
 
