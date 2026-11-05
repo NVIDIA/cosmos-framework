@@ -32,6 +32,7 @@ and in the spawned background process::
 
 import os
 import socket
+import sys
 from datetime import timedelta
 from typing import Optional, Tuple
 
@@ -40,6 +41,16 @@ from torch.distributed import TCPStore
 # Every rank's background process has to spawn, import torch, and initialize CUDA before it
 # joins this store, so allow well beyond the TCPStore default of 300s at large rank counts.
 DEFAULT_BACKGROUND_STORE_TIMEOUT = timedelta(minutes=30)
+
+
+def _tcpstore_platform_kwargs() -> dict:
+    """TCPStore options that depend on the platform.
+
+    Windows builds of torch ship without libuv while TCPStore defaults to the libuv backend,
+    so a store built with the defaults fails there with "use_libuv was requested but PyTorch
+    was built without libuv support". Turn it off on win32; Linux keeps the default.
+    """
+    return {"use_libuv": False} if sys.platform == "win32" else {}
 
 
 def reserve_background_store_socket() -> Tuple[socket.socket, int]:
@@ -101,4 +112,5 @@ def build_background_store(
         is_master=rank == 0,
         timeout=timeout,
         master_listen_fd=master_listen_fd,
+        **_tcpstore_platform_kwargs(),
     )
