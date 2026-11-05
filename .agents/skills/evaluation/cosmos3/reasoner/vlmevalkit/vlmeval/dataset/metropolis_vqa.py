@@ -50,7 +50,7 @@ class MetropolisVQA(VideoBaseDataset):
 
     This dataset supports loading from AWS S3 with the following configuration:
     - AWS credentials configured via environment variables or ~/.aws/credentials
-    - S3 path: s3://metropolis-benchmark-datasets/nv-metropolis_vqa_06_Aug_25/
+    - S3 stage: $VLMEVAL_METROPOLIS_S3_BUCKET/nv-metropolis_vqa_06_Aug_25/ (see EXTERNAL_CONFIGURATION.md)
 
     Contains VQA questions for:
     - Smart_Spaces: 311 questions from 84 videos
@@ -63,17 +63,18 @@ class MetropolisVQA(VideoBaseDataset):
     TYPE = 'VQA'
 
     # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Default cosmos row
-    # hits metropolis-benchmark-datasets via team-tao-fabric-metrics; VANTAGE row
-    # hits the HF-release stage via team-cosmos. The `dataset` arg from the JSON
-    # config selects which entry, so no JSON-level data-source knobs are needed.
+    # hits the Metropolis bucket via team-tao-fabric-metrics; VANTAGE row hits
+    # the HF-release stage via team-cosmos. Buckets come from env (unset = local
+    # only). The `dataset` arg from the JSON config selects which entry, so no
+    # JSON-level data-source knobs are needed.
     _S3_PATHS = {
         'MetropolisVQA': (
-            'metropolis-benchmark-datasets',
+            os.environ.get('VLMEVAL_METROPOLIS_S3_BUCKET'),
             'nv-metropolis_vqa_06_Aug_25',
             'team-tao-fabric-metrics',
         ),
         'VANTAGE_VQA': (
-            'cosmos_understanding',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/vantage_benchmark_hf_release_annotations/VQA',
             'team-cosmos',
         ),
@@ -207,6 +208,12 @@ Answer the question based only on the visual content of the image."""
         and structured; a recursive s3.get is faster + simpler than per-file
         downloads. Cosmos branch keeps the existing selective-download logic.
         """
+        if not self.S3_BUCKET:
+            var = 'VLMEVAL_BENCHMARK_S3_BUCKET' if dataset_name.startswith('VANTAGE_') else 'VLMEVAL_METROPOLIS_S3_BUCKET'
+            raise FileNotFoundError(
+                f"{dataset_name} not found under {osp.join(LMUDataRoot(), 'datasets', dataset_name)}; "
+                f"place the dataset there, or set {var} (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+            )
         try:
             from s3fs import S3FileSystem
         except ImportError:
@@ -215,7 +222,7 @@ Answer the question based only on the visual content of the image."""
         s3 = S3FileSystem(
             anon=False,
             profile=self.S3_PROFILE,
-            client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+            client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
         )
 
         local_dir = osp.join(LMUDataRoot(), 'datasets', dataset_name)

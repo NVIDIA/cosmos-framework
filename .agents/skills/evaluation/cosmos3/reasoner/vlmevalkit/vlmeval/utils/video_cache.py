@@ -27,9 +27,9 @@ class VideoCache:
 
     # S3 configuration for cache bucket
     S3_PFOFILE = 'team-cosmos'
-    S3_BUCKET = 'cosmos_understanding'
+    S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')  # unset = local cache only
     S3_PREFIX = 'video_cache'
-    S3_ENDPOINT = 'https://pdx.s8k.io'
+    S3_ENDPOINT = os.environ.get('AWS_ENDPOINT_URL')
 
     def __init__(self, cache_dir=None, enable_s3=True):
         if cache_dir is None:
@@ -37,7 +37,7 @@ class VideoCache:
             cache_dir = os.path.join(LMUDataRoot(), 'video_cache')
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.enable_s3 = enable_s3
+        self.enable_s3 = enable_s3 and bool(self.S3_BUCKET)
         self._s3 = None  # Lazy initialization
         logger.info(f"Video cache directory: {self.cache_dir}")
         if self.enable_s3:

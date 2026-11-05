@@ -102,19 +102,21 @@ class Astro2DDetectionDataset(ImageBaseDataset):
     # Per-dataset-name layout dispatch for the VANTAGE-bench stage. Cosmos rows
     # continue to read from datasets.yaml (legacy compat); VANTAGE rows live
     # here to select the layout; callers can override the private data_root.
-    # Private dataset defaults remain available for existing internal workflows.
+    # The S3 stage is opt-in via VLMEVAL_BENCHMARK_S3_BUCKET; without it the
+    # rows resolve to the hydrated local cache (see _CACHE_SEQUENCES).
+    _VANTAGE_S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')
     _VANTAGE_S3_BASE = (
-        's3://cosmos_understanding/benchmark/'
+        f's3://{_VANTAGE_S3_BUCKET}/benchmark/'
         'vantage_benchmark_hf_release_annotations/2dbbox'
-    )
+    ) if _VANTAGE_S3_BUCKET else None
     _LAYOUT = {
         'VANTAGE_Astro2D_C0065': dict(
-            data_root=f'{_VANTAGE_S3_BASE}/C0065-QA.m4v',
+            data_root=f'{_VANTAGE_S3_BASE}/C0065-QA.m4v' if _VANTAGE_S3_BASE else None,
             images_subdir='images',
             labels_subdir='labels',
         ),
         'VANTAGE_Astro2D_IVAKPI05': dict(
-            data_root=f'{_VANTAGE_S3_BASE}/IVA-0009-KPI-05_190916_10ft-60-deg.mp4',
+            data_root=f'{_VANTAGE_S3_BASE}/IVA-0009-KPI-05_190916_10ft-60-deg.mp4' if _VANTAGE_S3_BASE else None,
             images_subdir='images',
             labels_subdir='labels',
         ),
@@ -122,7 +124,7 @@ class Astro2DDetectionDataset(ImageBaseDataset):
             data_root=(
                 f'{_VANTAGE_S3_BASE}/IVA-0009-KPI-11_220320_NVR_ch2_main_'
                 '20220201180404_20220201190000_4_cut_4.mp4'
-            ),
+            ) if _VANTAGE_S3_BASE else None,
             images_subdir='images',
             labels_subdir='labels',
         ),
@@ -212,7 +214,7 @@ class Astro2DDetectionDataset(ImageBaseDataset):
                 s3 = S3FileSystem(
                     anon=False,
                     profile='team-cosmos',
-                    client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                    client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                 )
 
                 # Download all files from S3 recursively

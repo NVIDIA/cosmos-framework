@@ -10,6 +10,7 @@ the `answer` column, which would make scoring impossible).
 """
 
 import csv
+import os
 import os.path as osp
 import re
 from collections import defaultdict
@@ -23,7 +24,7 @@ from .image_mcq import ImageMCQDataset
 
 # VANTAGE-bench S3 stage: TSV + images_annotated/. The TSV here has the
 # `answer` and `target_point` columns that the public HF release omits.
-S3_BUCKET = 'cosmos_understanding'
+S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')  # unset = local data only
 S3_PREFIX = 'benchmark/vantage_benchmark_hf_release_annotations/datasets/Metropolis2DPointing'
 
 
@@ -66,6 +67,11 @@ class VANTAGE_2DPointing(ImageMCQDataset):
         return load(data_file)
 
     def _download_from_s3(self, local_dir: str) -> None:
+        if not S3_BUCKET:
+            raise FileNotFoundError(
+                f"VANTAGE_2DPointing not found under {local_dir}; place the dataset there, or set "
+                "VLMEVAL_BENCHMARK_S3_BUCKET (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+            )
         try:
             from s3fs import S3FileSystem
         except ImportError as e:
@@ -77,7 +83,7 @@ class VANTAGE_2DPointing(ImageMCQDataset):
         s3 = S3FileSystem(
             anon=False,
             profile='team-cosmos',
-            client_kwargs={'endpoint_url': 'https://pdx.s8k.io'},
+            client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')},
         )
         s3_path = f'{S3_BUCKET}/{S3_PREFIX}'
         print(f"Downloading VANTAGE_2DPointing from s3://{s3_path} to {local_dir} ...")

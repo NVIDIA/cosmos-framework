@@ -108,7 +108,7 @@ class MetropolisDVC(VideoBaseDataset):
     # VANTAGE-bench S3 stage: per-video <video>_events.json files under events/,
     # MP4s under videos/. The directory name has a literal space; s3fs handles
     # this fine since it doesn't shell-parse.
-    _VANTAGE_S3_BUCKET = 'cosmos_understanding'
+    _VANTAGE_S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')
     _VANTAGE_S3_PREFIX = 'benchmark/vantage_benchmark_hf_release_annotations/Dense Video Caption'
 
     def __init__(self, dataset='MetropolisDVC', pack=False, nframe=0, fps=0, total_pixels=8192 * 32 * 32,
@@ -196,10 +196,15 @@ class MetropolisDVC(VideoBaseDataset):
         tsv_path = local_dir / f'{dataset_name}.tsv'
 
         if not local_dir.exists() or not (events_dir.exists() and videos_dir.exists()):
+            if not self._VANTAGE_S3_BUCKET:
+                raise FileNotFoundError(
+                    f"{dataset_name} not found under {local_dir}; place the dataset there, or set "
+                    "VLMEVAL_BENCHMARK_S3_BUCKET (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+                )
             s3 = S3FileSystem(
                 anon=False,
                 profile='team-cosmos',
-                client_kwargs={'endpoint_url': 'https://pdx.s8k.io'},
+                client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')},
             )
             s3_source = f"{self._VANTAGE_S3_BUCKET}/{self._VANTAGE_S3_PREFIX}"
             print(f"Downloading VANTAGE_DVC from s3://{s3_source} to {local_dir} ...")

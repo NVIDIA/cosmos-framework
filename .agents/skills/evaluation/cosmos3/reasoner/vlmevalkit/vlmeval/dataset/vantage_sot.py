@@ -48,7 +48,7 @@ FREEZE_IOU_THRESHOLD = 0.95  # bbox is "frozen" if IoU with prev frame >= this
 # S3 stage for the HF-release-with-annotations VANTAGE-bench SOT subset.
 # Same prepared 8-frame layout regardless of which DATASET_CONFIGS preset is
 # selected — variants change only the inference-time slicing, not the source.
-S3_BUCKET = 'cosmos_understanding'
+S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')  # unset = local data only
 S3_PREFIX = 'benchmark/vantage_benchmark_hf_release_annotations/tracking/MetropolisSOT_benchmark_8f'
 
 
@@ -616,6 +616,11 @@ class VANTAGE_SOT(VideoBaseDataset):
         if has_sequences:
             return str(local_dir)
 
+        if not S3_BUCKET:
+            raise FileNotFoundError(
+                f"VANTAGE_SOT not found under {local_dir}; place the dataset there, or set "
+                "VLMEVAL_BENCHMARK_S3_BUCKET (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+            )
         try:
             from s3fs import S3FileSystem
         except ImportError as e:
@@ -626,7 +631,7 @@ class VANTAGE_SOT(VideoBaseDataset):
         s3 = S3FileSystem(
             anon=False,
             profile='team-cosmos',
-            client_kwargs={'endpoint_url': 'https://pdx.s8k.io'},
+            client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')},
         )
         s3_path = f'{S3_BUCKET}/{S3_PREFIX}'
         print(f"Downloading VANTAGE_SOT from s3://{s3_path} to {local_dir} ...")

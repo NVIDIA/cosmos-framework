@@ -540,7 +540,7 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                 s3 = S3FileSystem(
                     anon=False,
                     profile='team-cosmos',
-                    client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                    client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                 )
                 s3.get(self.data_root, str(dataset_dir_path), recursive=True)
                 print(f"Successfully downloaded dataset from S3")
@@ -556,7 +556,7 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                     s3 = S3FileSystem(
                         anon=False,
                         profile='team-cosmos',
-                        client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                        client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                     )
                 local_anno_path.parent.mkdir(parents=True, exist_ok=True)
                 s3.get(s3_anno_url, str(local_anno_path))

@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -36,17 +37,18 @@ class MetropolisEventVerification(VideoBaseDataset):
 
     TYPE = 'BCQ'
 
-    # Per-dataset-name (bucket, prefix) dispatch. Default cosmos row hits
-    # cosmos_understanding/benchmark/metropolis_event_verification (single
+    # Per-dataset-name (bucket, prefix) dispatch. Default cosmos row hits the
+    # benchmark bucket's metropolis_event_verification prefix (single
     # test_annotation.json); VANTAGE row hits the HF-release stage's
     # event_verification_subset/filtered/ tree (three sub-corpora dirs).
+    # The bucket comes from VLMEVAL_BENCHMARK_S3_BUCKET (unset = local data only).
     _S3_PATHS = {
         'MetropolisEventVerification': (
-            'cosmos_understanding',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/metropolis_event_verification',
         ),
         'VANTAGE_EventVerification': (
-            'cosmos_understanding',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/vantage_benchmark_hf_release_annotations/event_verification_subset/filtered',
         ),
     }
@@ -92,11 +94,16 @@ class MetropolisEventVerification(VideoBaseDataset):
         print(f"preparing dataset to {dataset_dir_path}")
 
         if not dataset_dir_path.exists():
+            if not bucket:
+                raise FileNotFoundError(
+                    f"{dataset_name} not found under {dataset_dir_path}; place the dataset there, or set "
+                    "VLMEVAL_BENCHMARK_S3_BUCKET (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+                )
             print(f"copying dataset from {s3_source} to {dataset_dir_path}")
             s3 = S3FileSystem(
                 anon=False,
                 profile='team-cosmos',
-                client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+                client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
             )
             s3.get(s3_source, str(dataset_dir_path), recursive=True)
             print(f"Successfully downloaded dataset from S3")
