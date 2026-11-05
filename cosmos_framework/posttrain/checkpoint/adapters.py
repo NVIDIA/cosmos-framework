@@ -428,7 +428,8 @@ def prepare_merged_state(
 
 
 def checkpoint_adapter_state(directory: str) -> tuple[dict, dict[str, torch.Tensor], dict]:
-    """Read committed consolidated or DCP checkpoints through existing IO/provenance."""
+    """Extract portable state from a committed checkpoint with bounded host memory."""
+    from cosmos_framework.posttrain.checkpoint.adapter_extract import load_adapter_tensors
     from cosmos_framework.posttrain.checkpoint.io import load_component
     from cosmos_framework.posttrain.checkpoint.provenance import load_with_stable_provenance
 
@@ -439,16 +440,9 @@ def checkpoint_adapter_state(directory: str) -> tuple[dict, dict[str, torch.Tens
             raise ValueError(
                 "checkpoint has no adapter identity; a model-only artifact cannot reconstruct adapter semantics"
             )
-        if os.path.isfile(os.path.join(directory, "model.pt")):
-            model = load_component(directory, "model")["net"]
-        else:
-            from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
-
-            with tempfile.TemporaryDirectory(prefix="cosmos-adapter-dcp-") as temporary:
-                path = os.path.join(temporary, "model.pt")
-                dcp_to_torch_save(os.path.join(directory, "model"), path)
-                model = torch.load(path, map_location="cpu", weights_only=True)
-        return identity, model
+        state = load_adapter_tensors(directory, state_spec(identity))
+        _validate_state(state, identity)
+        return identity, state
 
     (identity, state), provenance = load_with_stable_provenance(directory, read)
     return identity, state, provenance

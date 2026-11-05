@@ -12,7 +12,7 @@ import sys
 import pytest
 import torch
 
-from cosmos_framework.posttrain.checkpoint.adapters import checkpoint_adapter_state, prepare_merged_state
+from cosmos_framework.posttrain.checkpoint.adapters import checkpoint_adapter_state, prepare_merged_state, state_spec
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig as Component
 from cosmos_framework.posttrain.config.adapters import AdapterConfig
 from cosmos_framework.posttrain.model.adapters import assert_trainability, install_adapters
@@ -255,7 +255,7 @@ def test_native_trainer_checkpoint_matches_next_update(tmp_path, monkeypatch, me
             torch.testing.assert_close(tensor, expected_opt["state"][key][name], atol=0, rtol=0)
     artifact_identity, state, provenance = checkpoint_adapter_state(checkpoint)
     assert artifact_identity == ident and provenance
-    assert set(state) == set(expected)
+    assert set(state) == set(state_spec(ident))
     assert_trainability(restored.net, resumed.opt)
 
 
