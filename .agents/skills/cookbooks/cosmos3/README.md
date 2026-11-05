@@ -357,16 +357,31 @@ supports this payload: poll `GET /v1/videos/{id}`, then download it from
 
 ## TensorRT-LLM Reasoner
 
-OpenAI-compatible **reasoning** server for image and video understanding. Run
-TensorRT-LLM in the prebuilt
-[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
-container, or follow the
-[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator) to
-install TensorRT-LLM from source.
+OpenAI-compatible **reasoning** server for image and video understanding.
 Authenticate with Hugging Face before loading gated checkpoints.
 
-Install headless OpenCV in the environment that runs the server. Cosmos3
-Reasoner uses it to process vision inputs:
+**Cosmos3-Nano** and **Cosmos3-Super** run in the prebuilt
+[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
+container.
+
+**Cosmos3-Edge** requires TensorRT-LLM >=
+[`v1.4.0rc2`](https://github.com/NVIDIA/TensorRT-LLM/releases/tag/v1.4.0rc2).
+That release includes `Cosmos3EdgeForConditionalGeneration`. `v1.4.0rc1` and
+`release:1.3.0rc22` do not. Run Edge in
+[`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release/1.4.0rc2/tags).
+
+If that image is not available, build from the
+[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator)
+and run this checkout instead of the `git checkout` line in that block. A newer
+`main` commit also includes Edge:
+
+```bash
+git checkout 39a44fab74f4cfc0d4d498be385e746fdd182872
+```
+
+Install headless OpenCV with the same `python` that provides `trtllm-serve`.
+Inside a release container, that is the container's `python`. Cosmos3 Reasoner
+uses OpenCV to process vision inputs:
 
 ```bash
 python -m pip install opencv-python-headless
@@ -374,8 +389,7 @@ python -m pip install opencv-python-headless
 
 ### Start the server
 
-Run one of these commands inside the release container or activated local
-environment.
+**Cosmos3-Nano** and **Cosmos3-Super** — run inside the release container above.
 
 **Cosmos3-Nano** (single GPU, port 8001):
 
@@ -398,11 +412,20 @@ trtllm-serve nvidia/Cosmos3-Super \
   --max_num_tokens 32768
 ```
 
+**Cosmos3-Edge** (single GPU, port 8001) — run inside `release:1.4.0rc2`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+trtllm-serve nvidia/Cosmos3-Edge \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --max_num_tokens 32768
+```
+
 The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
 [Reasoner TensorRT-LLM notebook](reasoner/run_with_tensorrt_llm.ipynb) for image
 and video requests.
-
 
 ## TensorRT-Edge-LLM
 
