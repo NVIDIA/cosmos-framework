@@ -121,6 +121,7 @@ uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" --torch-backend=cu
   "diffusers @ git+https://github.com/huggingface/diffusers.git" \
   accelerate av cosmos_guardrail huggingface_hub imageio imageio-ffmpeg \
   torch torchvision transformers \
+  "nvidia-modelopt==0.44.0" \
   && uv pip uninstall --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python \
   && uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python-headless==5.0.0.93
 "$COSMOS3_DIFFUSERS_VENV/bin/python" -c "import cv2; from diffusers import Cosmos3OmniPipeline; print('pipeline import OK')"   # must pass before any checkpoint download
@@ -132,6 +133,8 @@ skill directory (the one with `assets/`); do not compose the pipeline call from 
 
 Edge (`t2i_edge`, `t2v_edge_noaudio`): run § 8.4 of `references/diffusers.md` the same way — its setup block plus only the block of the requested mode, verbatim; § 8.3 has the README's
 Edge settings and the video-mode rules (`num_frames=189`, `fps=24`, `export_to_video`).
+
+FP8: set `COSMOS3_DIFFUSERS_PRECISION=fp8` before `get_pipe`. The loader, cache key, and checkpoint map are in `references/diffusers.md` (Quantized Checkpoints). BF16 remains the default.
 
 ## Variant 2 — cosmos_framework (torchrun, in-repo)
 
