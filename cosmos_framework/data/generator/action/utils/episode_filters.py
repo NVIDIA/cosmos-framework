@@ -10,9 +10,11 @@ def normalize_episode_filter_keys(filters: dict[str, Any], *, source_prefix: str
     """Preserve complete relative episode IDs; URI keys require an explicit dataset prefix."""
     normalized: dict[str, Any] = {}
     for key, ranges in filters.items():
-        recording = key.split("--", 1)[0].removesuffix("/recordings/MP4").rstrip("/")
-        episode = recording
-        if "://" in recording:
+        episode = key
+        if "://" in key:
+            # Only composite URI keys carry the recording/trajectory delimiter.
+            # Relative episode IDs are opaque, including any '--' in their names.
+            recording = key.split("/recordings/MP4--", 1)[0].rstrip("/")
             if not source_prefix:
                 raise ValueError(
                     "filter_dict_source_prefix is required for URI-based episode filter keys. "

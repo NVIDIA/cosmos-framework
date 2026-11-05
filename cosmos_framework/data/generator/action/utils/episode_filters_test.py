@@ -18,6 +18,8 @@ pytestmark = [pytest.mark.L0, pytest.mark.CPU]
     [
         "episode-1",
         "dataset/episode-1",
+        "dataset/episode--left",
+        "dataset/recordings/MP4",
     ],
 )
 def test_filter_ranges_do_not_depend_on_storage_location(key: str) -> None:
@@ -30,6 +32,17 @@ def test_uri_filter_keys_preserve_nested_episode_ids() -> None:
     assert normalize_episode_filter_keys({key: [[0, 12]]}, source_prefix="s3://example-bucket/dataset") == {
         "day-1/episode-1": [[0, 12]]
     }
+
+
+@pytest.mark.parametrize("composite", [False, True])
+def test_filter_keys_keep_distinct_episode_ids_with_double_hyphens(composite: bool) -> None:
+    prefix = "s3://example-bucket/dataset"
+    expected = {"day--1/episode--left": [[0, 12]], "day--1/episode--right": [[20, 35]]}
+    filters = {
+        (f"{prefix}/{episode}/recordings/MP4--{prefix}/{episode}/trajectory.h5" if composite else episode): ranges
+        for episode, ranges in expected.items()
+    }
+    assert normalize_episode_filter_keys(filters, source_prefix=prefix if composite else "") == expected
 
 
 def test_uri_filter_keys_require_an_operator_prefix() -> None:

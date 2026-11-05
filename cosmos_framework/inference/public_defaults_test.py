@@ -28,6 +28,23 @@ def test_named_model_defaults_resolve_through_hub() -> None:
         assert checkpoint.hf.revision
 
 
+def test_custom_tokenizer_requires_a_checkpoint_before_instantiation() -> None:
+    import copy
+
+    from omegaconf.errors import MissingMandatoryValue
+
+    from cosmos_framework.configs.base.defaults import tokenizer
+    from cosmos_framework.utils.lazy_config import instantiate
+
+    config = copy.deepcopy(
+        tokenizer.UniAE4x16x16C48T16to160MixpFpsMixEncoderNoncausalDecoderNoncausalNoganS3Nemotron2bVAEConfig
+    )
+    with pytest.raises(MissingMandatoryValue, match="vae_path"):
+        instantiate(config)
+    config.vae_path = "/data/my-tokenizer.pt"
+    assert config.vae_path == "/data/my-tokenizer.pt"
+
+
 @pytest.mark.parametrize("suffix", ["", "/"])
 def test_public_backbone_uri_preserves_registered_revision(monkeypatch, tmp_path, suffix):
     import huggingface_hub
