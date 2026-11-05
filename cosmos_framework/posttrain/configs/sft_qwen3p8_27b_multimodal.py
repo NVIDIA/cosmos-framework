@@ -4,8 +4,6 @@
 
 Generate the dataset with scripts/prepare_sft_example.py. Prefer SFT_MODEL_PATH pointing at an
 immutable local HF snapshot. Torchrun chooses the DP world; no GPU allocation is made by this file.
-For Obj1k Blender code, use sft_qwen3p8_27b_obj1k.py, which inherits this recipe and increases the
-sequence budget for its longer text-only targets.
 """
 
 from __future__ import annotations
