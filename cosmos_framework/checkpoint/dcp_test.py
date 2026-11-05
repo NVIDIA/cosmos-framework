@@ -43,6 +43,12 @@ def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type
     allocate.assert_not_called()
 
 
+def test_staging_check_is_skipped_where_statvfs_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no os.statvfs and no /dev/shm; the check must return instead of raising."""
+    monkeypatch.delattr(checkpoint.os, "statvfs", raising=False)
+    checkpoint._check_staging_shared_memory({"model": (torch.empty(4), "model")})
+
+
 def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path: str) -> None:
     dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=2, timeout=timedelta(seconds=30))
     try:
