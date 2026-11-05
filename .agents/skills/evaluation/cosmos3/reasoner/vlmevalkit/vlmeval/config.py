@@ -6,16 +6,24 @@ import vlmeval.api as api
 import vlmeval.vlm as vlm
 
 
+def _build_when_configured(factory, environment, parameter, *args, **kwargs):
+    """Build the model once `parameter` is known: passed by the caller, or set in `environment`."""
+    value = kwargs.get(parameter) or os.environ.get(environment)
+    if not value:
+        raise ValueError(f"Set {environment} or pass {parameter}=... for this model configuration.")
+    kwargs[parameter] = value
+    return factory(*args, **kwargs)
+
+
 def _configured_model(factory, environment, parameter, *args, default=None, **kwargs):
-    """Resolve settings at config load; preserve standard lazy model partials."""
+    """Resolve settings at config load; preserve standard lazy model partials.
+
+    When the setting is not known yet, the partial defers the check to build time, so an
+    explicit `parameter=...` from the caller still works and `.keywords` stays editable.
+    """
     value = kwargs.get(parameter) or os.environ.get(environment) or default
     if not value:
-        message = f"Set {environment} or pass {parameter}=... for this model configuration."
-
-        def _unconfigured(*_args, **_kwargs):
-            raise ValueError(message)
-
-        return _unconfigured
+        return partial(_build_when_configured, factory, environment, parameter, *args, **kwargs)
     kwargs[parameter] = value
     return partial(factory, *args, **kwargs)
 
