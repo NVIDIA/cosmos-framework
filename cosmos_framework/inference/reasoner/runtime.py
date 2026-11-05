@@ -152,7 +152,14 @@ class CosmosFrameworkRuntime:
 
         profile = deployment_profile(self.model_path)
         model_profile = model_execution_profile(self.model_path)
-        if model_profile:
+        if model_profile == "merged_weight_bf16_v1":
+            config = json.loads((Path(self.model_path) / "config.json").read_text())
+            declared_dtype = config.get("dtype", config.get("torch_dtype"))
+            accepted = ("auto", declared_dtype, "bf16" if declared_dtype == "bfloat16" else "fp32")
+            if self.dtype not in accepted or self.attn_implementation not in (None, "sdpa"):
+                raise ValueError("this merged-weight artifact requires its recorded precision and stock SDPA")
+            self.dtype, self.attn_implementation = declared_dtype, "sdpa"
+        elif model_profile:
             if self.dtype not in ("float32", "fp32", "auto") or self.attn_implementation not in (None, "sdpa"):
                 raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
             self.dtype, self.attn_implementation = "float32", "sdpa"
@@ -205,7 +212,7 @@ class CosmosFrameworkRuntime:
         }
         if self.attn_implementation:
             model_load_kwargs["attn_implementation"] = self.attn_implementation
-        if model_profile:
+        if model_profile == "qwen3_vl_moe_stock_v1":
             model_load_kwargs["experts_implementation"] = "grouped_mm"
         if profile or model_profile:
             # HF can warn and initialize absent tensors even in a completed
@@ -231,7 +238,7 @@ class CosmosFrameworkRuntime:
                 self.model_path,
                 **model_load_kwargs,
             )
-        if self.model_type == "qwen3_vl" and profile is None:
+        if self.model_type == "qwen3_vl" and profile is None and model_profile != "merged_weight_bf16_v1":
             from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
 
             apply_qwen3_vl_patch_embed_compat(self.model, model_type=self.model_type, mode="auto")

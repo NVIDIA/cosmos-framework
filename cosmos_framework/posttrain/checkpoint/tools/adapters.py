@@ -122,7 +122,8 @@ def export_merged_adapter(
     identity = record["identity"]
     if output_dtype != "float32" and identity["architecture"] in ("Gr00tN1d7", "alpamayo_r1", "pi05"):
         raise ValueError("native physical merged formats currently require float32; BF16 deployment is HF-only")
-    if output_dtype == "bfloat16":
+    rounded = identity["resolved"].get("model_execution") == "merged_weight_bf16_v1"
+    if output_dtype == "bfloat16" and not rounded:
         if identity["architecture"] != "qwen3_vl":
             raise ValueError("BF16 adapter deployment is currently qualified only for dense Qwen3-VL; use float32")
         if execution_profile is None and any(

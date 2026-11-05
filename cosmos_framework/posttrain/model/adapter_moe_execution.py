@@ -24,6 +24,10 @@ def validate_model_execution(net, config, family):
         raise ValueError("base declares a different model execution profile; preserve its explicit execution contract")
     if config.model_execution == "default_v1":
         return
+    if config.model_execution == "merged_weight_bf16_v1":
+        from cosmos_framework.posttrain.model.adapter_bf16_execution import validate_model_execution as validate_bf16
+
+        return validate_bf16(net, config, family)
     if family != "qwen3_vl_moe" or config.model_execution != PROFILE:
         raise ValueError(f"{PROFILE} requires the Qwen3-VL-MoE family")
     if version("transformers") != "5.8.1" or version("torch").split("+")[0] != "2.10.0":
@@ -102,6 +106,10 @@ def install_model_execution(net, config):
     """Called only after validation and trainability policy, before FSDP."""
     if config.model_execution == "default_v1":
         return
+    if config.model_execution == "merged_weight_bf16_v1":
+        from cosmos_framework.posttrain.model.adapter_bf16_execution import install_model_execution as install_bf16
+
+        return install_bf16(net, config)
     if type(net).__module__ == _NATIVE:
         for layer in net.model.language_model.layers:
             experts = layer.mlp.experts

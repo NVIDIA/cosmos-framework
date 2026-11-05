@@ -20,7 +20,11 @@ from torch.nn import functional as F
 
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig, AdapterConfig
 from cosmos_framework.posttrain.model.adapter_families import AdapterFamily, adapter_family, family_for_model
-from cosmos_framework.utils.generator.lora import LoraInjectedLinear, init_lora_weights_post_materialization
+from cosmos_framework.utils.generator.lora import (
+    LoraInjectedLinear,
+    init_lora_weights_post_materialization,
+    lora_effective_weight,
+)
 
 
 def canonical_name(name: str) -> str:
@@ -197,6 +201,22 @@ def pissa_dense_weight(base, a, b, initial_a, initial_b, scale):
         return (base.double() + delta * scale).float()
 
 
+def merged_execution_weight(base, a, b, scale, *, method, magnitude=None, initial_a=None, initial_b=None):
+    """Versioned new-mode construction, identical for train/portable/export.
+
+    FP64 low-rank products and DoRA normalization avoid CPU/CUDA FP32 reduction
+    noise crossing a BF16 rounding boundary. Round once to FP32 before the
+    caller's declared base compute dtype. Reuse native LoRA and dense PiSSA math.
+    """
+    if method == "pissa":
+        return pissa_dense_weight(base, a, b, initial_a, initial_b, scale)
+    direction = lora_effective_weight(base.double(), a, b, scale, dtype=torch.float64)
+    if method == "dora":
+        norm = direction.norm(dim=1).clamp_min(torch.finfo(torch.float64).tiny).detach()
+        direction = direction * (magnitude.double() / norm)[:, None]
+    return direction.float()
+
+
 class PosttrainAdapterLinear(LoraInjectedLinear):
     """Native LoRA plus bounded DoRA/PiSSA extensions with pure merged export."""
 
@@ -248,6 +268,9 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
             return super().adapter_output(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.execution == "merged_weight_bf16_v1":
+            weight = self.effective_weight().to(self.weight.dtype)
+            return F.linear(x, weight, self.bias)
         if self.method == "lora":
             return super().forward(x)
         if self.execution == "pissa_dense_v1":
@@ -274,10 +297,34 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
             ratio = self.magnitude / norm
             return (base.float() + (ratio - 1) * base_dropped.float() + ratio * delta).to(base.dtype)
 
+    def effective_weight(self) -> torch.Tensor:
+        """Differentiable dense values; only factors/magnitudes are trainable leaves."""
+        return merged_execution_weight(
+            self.weight,
+            self.lora_A.weight,
+            self.lora_B.weight,
+            self._lora_scale,
+            method=self.method,
+            magnitude=getattr(self, "magnitude", None),
+            initial_a=getattr(self, "initial_A", None),
+            initial_b=getattr(self, "initial_B", None),
+        )
+
     @torch.no_grad()
     def merged_state_weight(self, state: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         base = state[prefix + ".weight"]
         a, b = state[prefix + ".lora_A.weight"], state[prefix + ".lora_B.weight"]
+        if self.execution == "merged_weight_bf16_v1":
+            return merged_execution_weight(
+                base,
+                a,
+                b,
+                self._lora_scale,
+                method=self.method,
+                magnitude=state.get(prefix + ".magnitude"),
+                initial_a=state.get(prefix + ".initial_A"),
+                initial_b=state.get(prefix + ".initial_B"),
+            ).to(base.dtype)
         if self.execution == "pissa_dense_v1":
             return pissa_dense_weight(
                 base, a, b, state[prefix + ".initial_A"], state[prefix + ".initial_B"], self._lora_scale
@@ -375,7 +422,12 @@ def install_adapters(
         parameter.requires_grad_(True)
         module = net.get_submodule(row["name"].rsplit(".", 1)[0])
         if id(module) not in extra_modules:
-            module.register_forward_hook(_preserve_normalization_output_dtype)
+            if config.model_execution == "merged_weight_bf16_v1":
+                from cosmos_framework.posttrain.model.adapter_bf16_execution import install_effective_norm
+
+                install_effective_norm(module)
+            else:
+                module.register_forward_hook(_preserve_normalization_output_dtype)
             extra_modules.add(id(module))
     net._posttrain_adapter_manifest = manifest
     install_model_execution(net, config)
@@ -416,6 +468,8 @@ def prepare_adapter_model(
 
     if resume and config.warm_start:
         raise ValueError("exact resume and adapter warm_start are mutually exclusive")
+    if config.model_execution == "merged_weight_bf16_v1" and base_dtype != "bfloat16":
+        raise ValueError("new merged-weight training requires a BF16 materialized base and FP32 adapter storage")
     binding = family_for_model(net, family)
     install_adapters(
         net,

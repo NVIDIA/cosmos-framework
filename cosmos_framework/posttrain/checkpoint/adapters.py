@@ -32,6 +32,7 @@ from cosmos_framework.posttrain.utils.object_store import file_sha256
 FORMAT = "cosmos-posttrain-adapter-v1"
 DENSE_FORMAT = "cosmos-posttrain-adapter-v2"
 MODEL_EXECUTION_FORMAT = "cosmos-posttrain-adapter-v3"
+MERGED_WEIGHT_FORMAT = "cosmos-posttrain-adapter-v4"
 MANIFEST = "adapter_manifest.json"
 WEIGHTS = "adapter.safetensors"
 
@@ -127,7 +128,9 @@ def make_adapter_identity(
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = None
     result = {
-        "format": MODEL_EXECUTION_FORMAT
+        "format": MERGED_WEIGHT_FORMAT
+        if targets.get("model_execution") == "merged_weight_bf16_v1"
+        else MODEL_EXECUTION_FORMAT
         if targets.get("model_execution", "default_v1") != "default_v1"
         else DENSE_FORMAT
         if any(row["settings"].get("execution") == "pissa_dense_v1" for row in targets["targets"])
@@ -169,7 +172,7 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         "parameter_dtypes"
     ):
         raise ValueError("model-defined adapter base precision requires the materialized parameter dtype map")
-    if identity.get("format") not in (FORMAT, DENSE_FORMAT, MODEL_EXECUTION_FORMAT):
+    if identity.get("format") not in (FORMAT, DENSE_FORMAT, MODEL_EXECUTION_FORMAT, MERGED_WEIGHT_FORMAT):
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
@@ -180,7 +183,7 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
     dense = False
     for row in identity["resolved"]["targets"]:
         execution = row["settings"].get("execution", "factorized_v1")
-        if execution not in ("factorized_v1", "pissa_dense_v1") or (
+        if execution not in ("factorized_v1", "pissa_dense_v1", "merged_weight_bf16_v1") or (
             execution == "pissa_dense_v1" and row["settings"]["method"] != "pissa"
         ):
             raise ValueError("unsupported adapter execution semantics; use the recorded compatible runtime")
@@ -197,9 +200,9 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
             result[prefix + "initial_B"] = (out_features, rank)
     result.update({row["name"]: tuple(row["shape"]) for row in identity["resolved"]["extra_parameters"]})
     profile = identity["resolved"].get("model_execution", "default_v1")
-    if profile not in ("default_v1", "qwen3_vl_moe_stock_v1"):
+    if profile not in ("default_v1", "qwen3_vl_moe_stock_v1", "merged_weight_bf16_v1"):
         raise ValueError("unsupported adapter model execution semantics")
-    if profile != "default_v1" and (
+    if profile == "qwen3_vl_moe_stock_v1" and (
         identity["architecture"] != "qwen3_vl_moe"
         or identity["resolved"]["extra_parameters"]
         or any(row["settings"].get("execution") != "pissa_dense_v1" for row in identity["resolved"]["targets"])
@@ -207,7 +210,31 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         or identity["dependencies"].get("torch") != "2.10.0"
     ):
         raise ValueError("stock MoE execution requires dense PiSSA and its pinned runtime identity")
-    expected_format = MODEL_EXECUTION_FORMAT if profile != "default_v1" else DENSE_FORMAT if dense else FORMAT
+    rounded = [row["settings"].get("execution") == "merged_weight_bf16_v1" for row in identity["resolved"]["targets"]]
+    if profile == "merged_weight_bf16_v1":
+        if (
+            not rounded
+            or not all(rounded)
+            or identity["architecture"] not in ("qwen3_vl", "qwen3_5")
+            or identity["base_storage_dtype"] != "bfloat16"
+            or any(row["settings"]["dropout"] for row in identity["resolved"]["targets"])
+            or identity["dependencies"].get("transformers") != "5.8.1"
+            or identity["dependencies"].get("torch") != "2.10.0"
+        ):
+            raise ValueError(
+                "merged-weight execution requires BF16 dense HF models, zero dropout and its pinned runtime"
+            )
+    elif any(rounded):
+        raise ValueError("rounded component execution requires its complete model execution contract")
+    expected_format = (
+        MERGED_WEIGHT_FORMAT
+        if profile == "merged_weight_bf16_v1"
+        else MODEL_EXECUTION_FORMAT
+        if profile != "default_v1"
+        else DENSE_FORMAT
+        if dense
+        else FORMAT
+    )
     if identity["format"] != expected_format:
         raise ValueError("adapter format/execution mismatch: preserve the recorded numerical execution contract")
     return result
@@ -363,11 +390,17 @@ def save_adapter_artifact(net: torch.nn.Module, directory: str, *, provenance: d
     )
 
 
-def prepare_merged_state(state: dict[str, torch.Tensor], identity: dict) -> dict[str, torch.Tensor]:
+def prepare_merged_state(
+    state: dict[str, torch.Tensor], identity: dict, *, merge_dtype: torch.dtype | None = None
+) -> dict[str, torch.Tensor]:
     """Pure full-model state transformation for HF export; never combines adapters."""
     state = {canonical_name(n): t for n, t in state.items()}
     spec = state_spec(identity)
     _validate_state({n: state[n] for n in spec if n in state}, identity)
+    if merge_dtype not in (None, torch.float32):
+        raise ValueError("promoted merge supports float32; round deployment weights after the merge")
+    if merge_dtype is not None:
+        state = {name: value.float() if value.is_floating_point() else value for name, value in state.items()}
     # Preserve separately trained modules; remove only adapter-owned tensors.
     extra = {row["name"] for row in identity["resolved"]["extra_parameters"]}
     result = {n: t for n, t in state.items() if n not in spec or n in extra}
@@ -375,7 +408,7 @@ def prepare_merged_state(state: dict[str, torch.Tensor], identity: dict) -> dict
         # Stock HF normalization must retain its base activation boundary. A
         # merged BF16 model rounds these trained FP32 values just like merged
         # projection weights; the portable artifact retains full FP32 precision.
-        dtype = identity["base_storage_dtype"]
+        dtype = "float32" if merge_dtype is not None else identity["base_storage_dtype"]
         if dtype == "model_defined":
             dtype = identity["model_contract"]["parameter_dtypes"][name]
         result[name] = state[name].to(getattr(torch, dtype))
@@ -445,11 +478,19 @@ def merged_export_metadata(
         result["deployment_precision"] = {
             "dtype": "bfloat16",
             "weight_conversion": "float32_merge_then_bfloat16",
-            "equivalence": "approximate_requires_task_qualification",
+            "equivalence": (
+                "precision_specific_dense_execution_v1"
+                if identity["resolved"].get("model_execution") == "merged_weight_bf16_v1"
+                else "approximate_requires_task_qualification"
+            ),
         }
     elif output_dtype != "float32":
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     if execution_profile is not None:
+        if identity["resolved"].get("model_execution") == "merged_weight_bf16_v1":
+            raise ValueError(
+                "merged-weight execution uses stock arithmetic; a residual deployment override is incompatible"
+            )
         if execution_profile != "qwen3_vl_bf16_residual_fp32_v1" or output_dtype != "bfloat16":
             raise ValueError("execution_profile requires qwen3_vl_bf16_residual_fp32_v1 and bfloat16 output")
         result["deployment_precision"]["execution_profile"] = execution_profile

@@ -259,7 +259,16 @@ def config_with_export_dtype(
             raise ValueError("residual FP32 deployment requires dense Qwen3-VL and bfloat16 output")
         result["cosmos_inference_profile"] = execution_profile
     if model_execution is not None:
-        if (
+        if model_execution == "merged_weight_bf16_v1":
+            if (
+                output_dtype not in ("float32", "bfloat16")
+                or result.get("model_type") not in ("qwen3_vl", "qwen3_5")
+                or execution_profile is not None
+            ):
+                raise ValueError(
+                    "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and stock arithmetic"
+                )
+        elif (
             model_execution != "qwen3_vl_moe_stock_v1"
             or output_dtype != "float32"
             or result.get("model_type") != "qwen3_vl_moe"

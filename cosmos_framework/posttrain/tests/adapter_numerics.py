@@ -166,7 +166,7 @@ def verify_promoted_merge(
     if reference is None:
         reference = logits(policy, batches)
     state = {name: value.detach().cpu() for name, value in policy.net.state_dict().items()}
-    merged = prepare_merged_state(state, {**identity, "base_storage_dtype": "float32"})
+    merged = prepare_merged_state(state, identity, merge_dtype=torch.float32)
     path = Path(exported)
     marker = json.loads((path / ".materialized").read_text())
     metadata = marker["identity"].get("export_metadata", {})

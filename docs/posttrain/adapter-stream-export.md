@@ -10,15 +10,15 @@ new-mode results are recorded in [adapter-effective-execution.md](adapter-effect
 
 | Requirement | Production path | Validation / status |
 | --- | --- | --- |
-| Bounded merged HF construction | `checkpoint/conversion/adapter_stream.py:AdapterTensorSource` | Implemented; small all-method exact-tensor tests pass; installed real-model resource measurement pending. |
+| Bounded merged HF construction | `checkpoint/conversion/adapter_stream.py:AdapterTensorSource` | Validated: real 30B fresh export in a 16 GiB cgroup; 4.02 GiB process-tree RSS, 603.18 seconds; installed-package exact-tensor and recovery checks. |
 | Preserve LoRA/rsLoRA/DoRA/PiSSA arithmetic | Existing `PosttrainAdapterLinear.merged_state_weight`, whole target tensors | Exact equality to the former full-state transformation for FP32 and BF16, including mixed components and trained norms. No new adapter math. |
 | Inventory, expert layout and ties | Meta architecture target resolution; source shapes; existing alias rejection | Exact key coverage, original fused expert layout, tied head ownership; real stock-loader fixture tests pass. |
 | Transaction, identity and reuse | Existing `materialize_hf.run_request` lock/staging/verification/publication | Interrupted shard write, completed serialization and marked staging recovery pass. Legacy completed-output reuse leaves its marker unchanged; legacy staging remains version-strict. |
 | Source integrity and incomplete/corrupt export rejection | Held/hash-verified shard inodes; captured portable state; full tensor/processor verification | Missing/shape/wrong-base, in-place mutation, processor mutation and same-size output corruption tests pass. |
-| Public fresh 30B export, every tensor, established input populations | New installed wheel and original qualified stock artifact | Pending; no retraining required. |
+| Public fresh 30B export, every tensor, established input populations | New installed wheel and original qualified stock artifact | Passed: all 882 tensors bitwise equal, 64 established stock-loader inputs pass, new/legacy completed exports reuse without marker mutation; no retraining. |
 | Broader ordinary-LoRA BF16 qualification | Existing deployment profile unchanged | New body-FP32/head-BF16 diagnostic fails old gates; no expanded support claim. |
 | Mixed/Qwen3.5 legacy BF16 references | Existing references and gates unchanged | Preserved incompatible-oracle failures; no candidate search against an impossible intersection. |
-| Prospective BF16 training/deployment semantics | Separate explicit new-artifact contract proposed for user review | Not enabled. Any change to the acceptance contract requires review before implementation/qualification claims. |
+| Prospective BF16 training/deployment semantics | Explicit `merged_weight_bf16_v1`, portable format v4, approved 2026-11-05 | Implemented with focused CPU tests; installed real-model GPU qualification pending. See [new execution contract](adapter-merged-weight-bf16.md). |
 
 ## Why the previous export used 329.6 GiB
 
@@ -84,7 +84,29 @@ expanded population's TV limit (0.1013375 > 0.1). It is diagnostic code only.
 Previous failed global-FP32 and head-only candidates, and the mixed/Qwen3.5
 incompatibility proofs, remain attached to their original revisions.
 
-The prospective new-artifact BF16 proposal is under review, not support. No
+The new-artifact BF16 contract was approved before its implementation qualification.
+Its real-model status is tracked separately; approval alone is not qualification. No
 legacy artifact, gate, routing semantic or historical result has been changed.
 Correctness, downstream WTS quality and resource measurements remain distinct.
 The 576-row scene-disjoint benchmark is reused, not an untouched final test.
+
+## Installed exporter provenance
+
+Fresh export used `b57792030527f0f680a9f0055a0653b76abe1bcf` (wheel SHA256
+`e08fd009e16ed277b71a5576274c39b01fe15e221a7efdb1402a9638ed228a8c`).
+The reviewed path-collision fix and unchanged metadata-helper relocation are
+`da387cc5fc3f6be49145852d2f0358ba8a989b35` (wheel
+`e368be022d9434b805506e4db00af88a3593e6c25f5003b14de27bc6cce0411b`).
+The latter passed 228 installed CPU tests, one CUDA deployment test, completed
+export reuse, all-tensor comparison, real 30B stock reload and dense/Qwen3.5
+fresh-export regressions. Source inputs, commands, timing and process/cgroup
+samples are preserved in `cosmos-adapter-export-precision-20261105`.
+
+The process-tree RSS measurement includes conversion and serialization; no
+allocator worker was moved outside the measured process. Page-cache accounting
+reached the 16 GiB cgroup limit and reclaimed cache; there was no OOM, swap or GPU
+allocation. Temporary disk peaked at 124,350,502,165 bytes, essentially the
+staged output, with no full `model.pt`. The 329.597 GiB / 1535.67-second historic
+run had different concurrent activity, so timing is observational, not a paired
+exclusive-host benchmark. New completed-export reuse took 353.36 seconds and
+legacy reuse 281.75 seconds, both below 3.94 GiB process-tree RSS.

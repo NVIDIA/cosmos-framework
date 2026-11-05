@@ -174,6 +174,7 @@ class HFModel(nn.Module):
         master_dtype: torch.dtype | None = None,
         reduce_dtype: torch.dtype = torch.float32,
         mixed_precision_mode: str = "fsdp",
+        adapter_model_execution: str = "default_v1",
     ) -> None:
         """Build the HF body on meta and declare its shard/load plans.
 
@@ -317,7 +318,12 @@ class HFModel(nn.Module):
         # lightweight dummy image and slices it to [0:0] so it contributes no features. Must
         # happen BEFORE setup()/parallelize() so FSDP captures the patched forward. Import is
         # guarded on the qwen3_vl model_type so the LLM path never imports the VLM monkey_patch.
-        if hf_config.model_type == "qwen3_vl" and hasattr(self.model, "model"):
+        if hf_config.model_type == "qwen3_vl" and adapter_model_execution == "merged_weight_bf16_v1":
+            from cosmos_framework.posttrain.model.qwen3_vl_hf import patch_ordered_forward
+
+            patch_ordered_forward(self.model.model)
+            logger.info("HFModel: installed versioned stock-order Qwen3-VL modality assembly")
+        elif hf_config.model_type == "qwen3_vl" and hasattr(self.model, "model"):
             from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_forward
 
             patch_qwen3_vl_forward(self.model.model)
@@ -644,6 +650,9 @@ def build_hf_model(
         precision = Precision(
             master=hf_cfg.dtype, param=hf_cfg.dtype, reduce=hf_cfg.fsdp_reduce_dtype, transfer=hf_cfg.dtype
         )
+    new_execution = adapters is not None and adapters.model_execution == "merged_weight_bf16_v1"
+    if new_execution and (precision.master != "bfloat16" or precision.param != "bfloat16" or precision.mode != "fsdp"):
+        raise ValueError("merged_weight_bf16_v1 requires BF16 base storage/compute without autocast")
     model = HFModel(
         hf_cfg.name_or_path,
         dtype=getattr(torch, precision.param),
@@ -654,6 +663,7 @@ def build_hf_model(
         master_dtype=getattr(torch, precision.master),
         reduce_dtype=getattr(torch, precision.reduce),
         mixed_precision_mode=precision.mode,
+        **({"adapter_model_execution": adapters.model_execution} if new_execution else {}),
     )
     if adapters is not None:
         from types import SimpleNamespace

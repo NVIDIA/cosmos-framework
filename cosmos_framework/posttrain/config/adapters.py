@@ -57,10 +57,12 @@ class AdapterComponentConfig:
                 raise ValueError("duplicate adapter layer indices")
         if self.method not in ("lora", "dora", "pissa"):
             raise ValueError(f"unsupported adapter method {self.method!r}")
-        if self.execution not in ("factorized_v1", "pissa_dense_v1"):
+        if self.execution not in ("factorized_v1", "pissa_dense_v1", "merged_weight_bf16_v1"):
             raise ValueError(f"unsupported adapter execution semantics {self.execution!r}")
         if self.execution == "pissa_dense_v1" and self.method != "pissa":
             raise ValueError("pissa_dense_v1 execution requires method=pissa")
+        if self.execution == "merged_weight_bf16_v1" and self.dropout:
+            raise ValueError("merged_weight_bf16_v1 requires dropout=0; keep factorized execution for branch dropout")
         if type(self.rank) is not int or self.rank <= 0:
             raise ValueError("adapter rank must be a positive integer")
         if not math.isfinite(self.alpha) or self.alpha <= 0:
@@ -127,8 +129,15 @@ class AdapterConfig:
             raise ValueError("adapter configuration must select at least one component")
         for group in [*self.components, *self.extra_modules]:
             group.__post_init__()
-        if self.model_execution not in ("default_v1", "qwen3_vl_moe_stock_v1"):
+        if self.model_execution not in ("default_v1", "qwen3_vl_moe_stock_v1", "merged_weight_bf16_v1"):
             raise ValueError(f"unsupported adapter model execution {self.model_execution!r}")
+        if (self.model_execution == "merged_weight_bf16_v1") != any(
+            group.execution == "merged_weight_bf16_v1" for group in self.components
+        ) or (
+            self.model_execution == "merged_weight_bf16_v1"
+            and any(group.execution != "merged_weight_bf16_v1" for group in self.components)
+        ):
+            raise ValueError("merged_weight_bf16_v1 requires matching model and every component execution semantics")
         if self.model_execution == "qwen3_vl_moe_stock_v1" and (
             self.extra_modules
             or any(group.method != "pissa" or group.execution != "pissa_dense_v1" for group in self.components)

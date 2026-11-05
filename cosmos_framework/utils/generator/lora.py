@@ -114,17 +114,7 @@ class LoraInjectedLinear(nn.Linear):
         automatic-export policy; the existing in-place/offline merge retains
         its delta rounding and ambient autocast behavior in ``merge_adapter_``.
         """
-        accumulation_dtype = torch.float64 if base.dtype == torch.float64 else torch.float32
-        previous_precision = torch.get_float32_matmul_precision() if base.is_cuda else None
-        try:
-            if previous_precision is not None:
-                torch.set_float32_matmul_precision("highest")
-            with torch.autocast(device_type=base.device.type, enabled=False):
-                delta = lora_b.to(accumulation_dtype) @ lora_a.to(accumulation_dtype)
-                return (base.to(accumulation_dtype) + self._lora_scale * delta).to(dtype=dtype or base.dtype)
-        finally:
-            if previous_precision is not None:
-                torch.set_float32_matmul_precision(previous_precision)
+        return lora_effective_weight(base, lora_a, lora_b, self._lora_scale, dtype=dtype)
 
     @torch.no_grad()
     def merge_adapter_(self) -> None:
@@ -408,3 +398,29 @@ def merge_and_strip_lora_adapters_(network: torch.nn.Module) -> int:
             setattr(parent, child_name, dense)
             merged += 1
     return merged
+
+
+def lora_effective_weight(
+    base: torch.Tensor,
+    lora_a: torch.Tensor,
+    lora_b: torch.Tensor,
+    scale: float,
+    *,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Differentiable native LoRA merge arithmetic; callers own trainability.
+
+    Export keeps its no-grad wrapper. Dense adapter execution shares this exact
+    computation without creating a new parameter or detaching low-rank factors.
+    """
+    accumulation_dtype = torch.float64 if base.dtype == torch.float64 else torch.float32
+    previous_precision = torch.get_float32_matmul_precision() if base.is_cuda else None
+    try:
+        if previous_precision is not None:
+            torch.set_float32_matmul_precision("highest")
+        with torch.autocast(device_type=base.device.type, enabled=False):
+            delta = lora_b.to(accumulation_dtype) @ lora_a.to(accumulation_dtype)
+            return (base.to(accumulation_dtype) + scale * delta).to(dtype=dtype or base.dtype)
+    finally:
+        if previous_precision is not None:
+            torch.set_float32_matmul_precision(previous_precision)
