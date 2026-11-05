@@ -57,3 +57,55 @@ def install_model_execution(net, config):
 
         patch_qwen3_5_forward(net.model)
     net._posttrain_model_execution = config.model_execution
+
+
+def _canonical_adapter_forward(self, inputs):
+    from cosmos_framework.utils.generator.bf16_cache import linear
+
+    return linear(inputs, self.effective_weight().to(self.weight.dtype), self.bias)
+
+
+def install_adapter_inference_profile(net, profile):
+    """Explicit portable inference override; never changes training or artifact tensors.
+
+    Load the portable adapter with its ordinary strict loader first, then call
+    this on the resulting single-device eval model. It cannot train or resume.
+    The merged artifact declares the same override via --execution-profile.
+    """
+    import torch
+
+    from cosmos_framework.posttrain.checkpoint.adapters import _validate_state, state_spec
+    from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear
+    from cosmos_framework.utils.generator.bf16_cache import install, validate_model
+    from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
+    from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
+
+    if profile != CACHE_PROFILE:
+        raise ValueError(f"unknown portable inference profile: {profile!r}")
+    identity = getattr(net, "_posttrain_adapter_identity", {})
+    validate_adapter_identity(identity)
+    spec = state_spec(identity)
+    state = net.state_dict()
+    _validate_state({name: state[name] for name in spec if name in state}, identity)
+    for name, parameter in net.named_parameters(remove_duplicate=False):
+        expected = torch.float32 if name in spec else torch.bfloat16
+        if parameter.dtype != expected:
+            raise ValueError(f"portable inference dtype differs for {name}: expected {expected}, got {parameter.dtype}")
+    validate_model(net, adapter_type=PosttrainAdapterLinear)
+    targets = [(name, module) for name, module in net.named_modules() if isinstance(module, PosttrainAdapterLinear)]
+    if not targets or any(module.execution != PROFILE for _, module in targets):
+        raise ValueError("canonical cache requires rounded-weight adapters throughout the portable model")
+    # All checks precede mutation. Reuse the adapter's existing effective-weight
+    # implementation, including DoRA magnitude and PiSSA initial-factor semantics.
+    changed = install(net, adapter_type=PosttrainAdapterLinear)
+    for name, module in targets:
+        if name.startswith("model.language_model."):
+            forward = MethodType(_canonical_adapter_forward, module)
+            if hasattr(module, "_hf_hook"):
+                module._old_forward = forward
+            else:
+                module.forward = forward
+            if name not in changed:
+                changed.append(name)
+    net._cosmos_deployment_modules = tuple(changed)
+    return changed

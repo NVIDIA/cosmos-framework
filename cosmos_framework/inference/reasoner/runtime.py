@@ -262,7 +262,8 @@ class CosmosFrameworkRuntime:
             print(
                 "COSMOS_ATTENTION_IMPLEMENTATION_ATTESTATION "
                 f"requested={self.attn_implementation} actual={actual_attn} "
-                f"pid={os.getpid()} rank={self.rank}",
+                f"pid={os.getpid()} rank={self.rank} deployment_profile={profile or 'none'} "
+                f"language_attention={getattr(getattr(self.model.config, 'text_config', None), '_attn_implementation', actual_attn)}",
                 flush=True,
             )
         if getattr(self.processor, "tokenizer", None) is not None:

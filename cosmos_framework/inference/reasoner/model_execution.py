@@ -60,12 +60,24 @@ def model_execution_profile(path):
         ):
             raise ValueError("merged-weight execution requires a committed dense Qwen3-VL/Qwen3.5 v4 adapter merge")
         precision = metadata.get("deployment_precision", {})
-        if dtype == "bfloat16" and precision != {
-            "dtype": "bfloat16",
-            "weight_conversion": "float32_merge_then_bfloat16",
-            "equivalence": "precision_specific_dense_execution_v1",
-        }:
-            raise ValueError("new BF16 execution requires its precision-specific deployment contract")
+        if dtype == "bfloat16":
+            expected = {
+                "dtype": "bfloat16",
+                "weight_conversion": "float32_merge_then_bfloat16",
+                "equivalence": "precision_specific_dense_execution_v1",
+            }
+            if precision.get("execution_profile") is not None:
+                from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
+                from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
+
+                validate_adapter_identity(adapter)
+                expected["execution_profile"] = CACHE_PROFILE
+                if config.get("cosmos_inference_profile") != CACHE_PROFILE:
+                    raise ValueError("canonical cache deployment is not bound to the model config")
+            if precision != expected:
+                raise ValueError("new BF16 execution requires its precision-specific deployment contract")
+        elif precision or config.get("cosmos_inference_profile") is not None:
+            raise ValueError("FP32 equivalence must not acquire BF16 deployment arithmetic")
     elif declared == FACTOR_PROFILE:
         if (
             config.get("model_type") != "qwen3_vl"

@@ -250,20 +250,23 @@ def config_with_export_dtype(
         # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
+    from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
+
     if execution_profile is not None:
         if (
-            execution_profile != "qwen3_vl_bf16_residual_fp32_v1"
+            execution_profile not in ("qwen3_vl_bf16_residual_fp32_v1", CACHE_PROFILE)
             or output_dtype != "bfloat16"
             or result.get("model_type") != "qwen3_vl"
+            or (execution_profile == CACHE_PROFILE and model_execution != "merged_weight_bf16_v1")
         ):
-            raise ValueError("residual FP32 deployment requires dense Qwen3-VL and bfloat16 output")
+            raise ValueError("BF16 deployment requires a compatible dense Qwen3-VL execution identity")
         result["cosmos_inference_profile"] = execution_profile
     if model_execution is not None:
         if model_execution == "merged_weight_bf16_v1":
             if (
                 output_dtype not in ("float32", "bfloat16")
                 or result.get("model_type") not in ("qwen3_vl", "qwen3_5")
-                or execution_profile is not None
+                or execution_profile not in (None, CACHE_PROFILE)
             ):
                 raise ValueError(
                     "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and stock arithmetic"
