@@ -18,8 +18,8 @@ from hydra.core.config_store import ConfigStore
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
 
-from cosmos_framework.utils.config import Config
 from cosmos_framework.utils import log
+from cosmos_framework.utils.config import Config
 
 _HYDRA_LOCK = threading.RLock()
 
@@ -145,11 +145,13 @@ def override(config: Config, overrides: Optional[list[str]] = None, remove_defau
 def get_config_module(config_file: str) -> str:
     if not config_file.endswith(".py"):
         log.error("Config file cannot be specified as module.")
-        log.error("Please provide the path to the Python config file (relative to the Imaginaire4 root).")
+        log.error(
+            "Please provide the path to the Python config file (relative to the Cosmos Framework repository root)."
+        )
     # Convert to importable module format.
     config_module = config_file.replace("/", ".").replace(".py", "")
     if importlib.util.find_spec(config_module) is None:
-        raise ValueError(f"Imaginaire4 config module ({config_module}) not found.")
+        raise ValueError(f"Cosmos Framework config module ({config_module}) not found.")
     return config_module
 
 

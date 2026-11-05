@@ -55,9 +55,9 @@ from safetensors.torch import load as load_safetensors
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils import log
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 # Prefixes stripped when matching checkpoint keys to model state-dict keys.
@@ -98,7 +98,15 @@ def _download_hf_checkpoint(checkpoint_path: str) -> str:
     """Download safetensors from Hugging Face Hub and return the local snapshot path."""
     from huggingface_hub import snapshot_download
 
-    repo_id = checkpoint_path.removeprefix(_HF_URI_PREFIX)
+    from cosmos_framework.utils.checkpoint_db import CheckpointConfig
+
+    repo_id = checkpoint_path.removeprefix(_HF_URI_PREFIX).rstrip("/")
+    registered = CheckpointConfig.maybe_from_uri(f"s3://bucket/cosmos3/pretrained/huggingface/{repo_id}")
+    # Changing the address form must not move a registered public backbone to
+    # a different revision. Keep the weight-specific download patterns below.
+    revision_kwargs = (
+        {"revision": registered.hf.revision} if registered is not None and registered.hf.repository == repo_id else {}
+    )
     hf_home = os.environ.get("HF_HOME")
     cache_dir = os.path.join(hf_home, "hub") if hf_home else None
     token = os.environ.get("HF_TOKEN")
@@ -108,6 +116,7 @@ def _download_hf_checkpoint(checkpoint_path: str) -> str:
         token=token,
         cache_dir=cache_dir,
         allow_patterns=["*.safetensors", "*.safetensors.index.json"],
+        **revision_kwargs,
     )
     log.info(f"Resolved Hugging Face checkpoint {repo_id} to {local_path}", rank0_only=False)
     return local_path
@@ -870,7 +879,7 @@ def convert_weight_from_nemotron_vl_hf(
 ) -> tuple[str | None, torch.Tensor | None]:
     """Map Nemotron VLM HF keys (56 hybrid blocks) to Cosmos3 VFM MoT keys (28 paired layers).
 
-    The Nemotron 3 Dense VL checkpoint (NVIDIA-Nemotron-3-Dense-VL-2B-BF16-Alignment)
+    The dense vision-language backbone checkpoint (NVIDIA-dense vision-language backbone-BF16-Alignment)
     uses a hybrid layout with 56 alternating attention and MLP blocks, where:
 
         - Even-indexed blocks (0, 2, 4, ...) contain attention (``mixer.q/k/v/o_proj``)
@@ -960,7 +969,7 @@ def convert_weight_from_nemotron_llm_hf(
 ) -> tuple[str | None, torch.Tensor | None]:
     """Map Nemotron pure-LLM HF keys (CosmosNemotronForCausalLM) to MoT language model keys.
 
-    The Nemotron 3 LLM checkpoint (NVIDIA-Nemotron-3-2B-BF16) uses a standard
+    The Nemotron 3 LLM checkpoint  uses a standard
     decoder-only layout with 28 layers, each containing attention and MLP. The key
     names are already close to the MoT model's expected layout, so most keys pass
     through with minimal renaming.
@@ -1064,7 +1073,13 @@ def load_language_model(
     Returns:
         Set of model state-dict keys successfully loaded from the checkpoint.
     """
-    if not INTERNAL:
+    # Repository directories go to the snapshot loader below; preserve the existing
+    # registry/local/single-file URI resolver for other checkpoint sources.
+    hub_directory = (
+        _is_hf_checkpoint_candidate(checkpoint_path)
+        and checkpoint_path.removeprefix(_HF_URI_PREFIX).strip("/").count("/") == 1
+    )
+    if not INTERNAL and not hub_directory:
         from cosmos_framework.utils.checkpoint_db import download_checkpoint, sanitize_uri
 
         checkpoint_path = download_checkpoint(sanitize_uri(checkpoint_path))

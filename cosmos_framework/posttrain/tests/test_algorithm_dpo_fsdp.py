@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""GPU test: the DPO objective composes with FSDP2 across ranks (DESIGN §1.1 / §6).
+"""GPU test: the DPO objective composes with FSDP2 across ranks.
 
 Locks the P2 core mechanism — the decoupled `algorithm.dpo` objective run under a real
 FSDP2 shard group, the way the grid's intra-replica rank axis works: `fully_shard` the

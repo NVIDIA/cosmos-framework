@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Local (reference) trainer body + adapter contract (DESIGN §6, §8.2 #6).
+"""Local (reference) trainer body + adapter contract.
 
 Adapter contract: the inner may wrap an existing trainer (delegate train_step) or
 absorb its loss as an objective plugin. The framework shell handles: receive batch
@@ -25,7 +25,7 @@ from cosmos_framework.posttrain.schema.checkpoint import CheckpointComponentPlan
 class LocalTrainer:
     """v0 trainer body sharing a model instance with LocalRollout.
 
-    Discipline (DESIGN §7): trainer/rollout are separate WGs with a weight-transfer
+    Discipline: trainer/rollout are separate WGs with a weight-transfer
     edge between them; they merely *happen* to point at the same `model` in v0, and
     `push_weights()` is a no-op. Do not let "same model" leak past the edge.
     """
@@ -56,7 +56,7 @@ class LocalTrainer:
         return 0.0
 
     def push_weights(self, target: Any = None) -> None:
-        """Weight-transfer edge (DESIGN §8.2 #4). v0: NO-OP (shared instance).
+        """Weight-transfer edge. v0: NO-OP (shared instance).
         TODO(v1+): reshard trainer mesh → rollout mesh over the weight plane; stamp
         weight_version onto produced samples."""
         return None

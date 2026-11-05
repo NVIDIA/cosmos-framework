@@ -436,7 +436,7 @@ def transport_capability_ok(
     """Pure, GPU-less transport decision shared by `resolve_mover` and the AOT bind check. Can a mover
     be resolved for this (relationship, plane, capability, hint)? Returns (ok, reason); constructs NO
     mover. Data-plane edges are always movable (LocalStoreMover); on the weight plane the answer is
-    read off the mover class itself, so it cannot drift from what `resolve_mover` builds (DESIGN §3.3).
+    read off the mover class itself, so it cannot drift from what `resolve_mover` builds.
 
     `hint`, when given, OVERRIDES `relationship`: placement is a fact, transport is a choice."""
     if plane == "data":

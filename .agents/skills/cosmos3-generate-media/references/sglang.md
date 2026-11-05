@@ -1,6 +1,6 @@
 # Cosmos3 Generator Audiovisual with SGLang — distilled from the cookbook notebook
 
-Scope: everything SGLang-specific in the notebook — prerequisites, server launch (Nano, Super, CFG Parallel, Edge, Distil), endpoint verification, the SGLang request helpers (`video_api_url`, `image_api_url`, `build_sglang_video_form`, `build_sglang_image_body`, `post_video`, `post_image`, `run_sglang_payload`) and all 14 use cases in one table; the material the notebook shares with the other backend notebooks (licence header, asset catalogue, path configuration, `FIXED_SAMPLING`, `ASSET_SETS`, `payload_dimensions`, `create_payload`, endpoints, output naming) lives in payloads.md and is referenced here, not repeated.
+Scope: everything SGLang-specific in the notebook — prerequisites, server launch (Nano, Super, CFG Parallel, Edge, Distil, FP8), endpoint verification, the SGLang request helpers (`video_api_url`, `image_api_url`, `build_sglang_video_form`, `build_sglang_image_body`, `post_video`, `post_image`, `run_sglang_payload`) and all 14 use cases in one table; the material the notebook shares with the other backend notebooks (licence header, asset catalogue, path configuration, `FIXED_SAMPLING`, `ASSET_SETS`, `payload_dimensions`, `create_payload`, endpoints, output naming) lives in payloads.md and is referenced here, not repeated.
 
 Licence header: see payloads.md § 2.1.
 
@@ -117,6 +117,29 @@ docker run --runtime nvidia --gpus all \
   lmsysorg/sglang:dev \
   sglang serve \
   --model-path nvidia/Cosmos3-Super-Image2Video-4Step \
+  --host 0.0.0.0
+```
+
+### FP8
+
+FP8 checkpoints are available for Cosmos3-Nano, Cosmos3-Super, and Cosmos3-Edge. You can either:
+
+- Download a prebuilt FP8 checkpoint from Hugging Face: `nvidia/Cosmos3-Nano-FP8`, `nvidia/Cosmos3-Super-FP8`, or `nvidia/Cosmos3-Edge-FP8`.
+- Quantize a checkpoint yourself by following the [quantization guide](../../cookbooks/cosmos3/quantization/README.md).
+
+To serve a prebuilt checkpoint, pass its Hugging Face ID to `--model-path`:
+
+```bash
+sglang serve \
+  --model-path nvidia/Cosmos3-Super-FP8 \
+  --host 0.0.0.0
+```
+
+To serve a checkpoint you quantized yourself, pass its local directory to `--model-path`. If the server runs in Docker, mount that directory and use its path inside the container.
+
+```bash
+sglang serve \
+  --model-path /path/to/fp8/checkpoint \
   --host 0.0.0.0
 ```
 

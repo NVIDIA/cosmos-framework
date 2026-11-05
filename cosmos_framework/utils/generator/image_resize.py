@@ -69,7 +69,7 @@ def choose_aspect_nearest_shape(
 
     if best is None:
         raise ValueError(
-            f"No I4-supported shape for source={original_size}, max_size={max_size}, "
+            f"No native-supported shape for source={original_size}, max_size={max_size}, "
             f"padding_constant={padding_constant}."
         )
     return best[1], best[2]

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Reward — unified abstraction (DESIGN §1.5).
+"""Reward — unified abstraction.
 
 THE public surface of this package: the reward FUNCTIONS a recipe can select, plus the machinery
 that runs them. Nothing else. `extract_gsm8k_answer` is deliberately absent — it is a helper of

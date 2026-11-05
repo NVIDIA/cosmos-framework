@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Multi-replica WorkerGroup backend + inter-replica communicator (DESIGN §1.1, §2.4).
+"""Multi-replica WorkerGroup backend + inter-replica communicator.
 
 Validates that a WorkerGroup grows from "1 body / 1 actor" to "N replicas (each a Ray
 actor) + an explicit, optional inter-replica communicator" **without changing the
@@ -11,7 +11,7 @@ recipe call or the Handle contract**.
   TP/PP/CP mesh is a separate axis, kept at 1 here).
 - A per-method **dispatch** (minimal stand-in for §2.4): selected methods aggregate compact
   per-execution-replica results; other calls retain their per-cell handles.
-- The **Communicator** is a first-class object (DESIGN §1.1). v0.5: driver-coordinated
+- The **Communicator** is a first-class object. v0.5: driver-coordinated
   all-reduce (gather→reduce) under single-controller — validates the seam.
   TODO(v1+): real peer-to-peer NCCL/gloo collective inside the step (e.g.
   ray.util.collective), no driver involvement; intra-replica mesh; weight-broadcast.
@@ -43,7 +43,7 @@ class _Replica:
 
 
 class Communicator:
-    """Explicit inter-replica communicator (DESIGN §1.1). v0.5: driver-coordinated."""
+    """Explicit inter-replica communicator. v0.5: driver-coordinated."""
 
     def __init__(self, actors: list):
         self.actors = actors

@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""vLLM rollout body (DESIGN §1.2 body=(a) local compute; §8.2 #6 engine integration).
+"""vLLM rollout body (the contract body=(a) local compute; §8.2 #6 engine integration).
 
 `VLLMRollout`: a real inference engine (vLLM) dropped in as a sibling to `HFRollout`,
 producing the unified Trajectory/Transition data model (§1.4). Route C (TP via
-`external_launcher` on a per-replica rendezvous) is specced in
-`docs/superpowers/specs/2026-07-06-per-replica-rendezvous-and-wg-shape-dispatch-design.md`.
+`external_launcher` on a per-replica rendezvous) keeps each execution replica's rank world independent.
 Contract:
 
   - MUST emit ``policy_info["rollout_logprobs"]`` (π_old, per completion token; the
@@ -231,7 +230,7 @@ class VLLMRollout(WeightReceiverBase):
                 engine_config, owner="VLLMRollout(topk_logprobs)"
             )
         # model: a `vllm.LLM` instance, built inside the Ray actor's setup() so the engine
-        # lives where the GPU is (DESIGN §8.2 #6). `sampling` overrides the SamplingParams
+        # lives where the GPU is. `sampling` overrides the SamplingParams
         # fields below (temperature/top_p/max_tokens/...).
         if packer is None:  # explicit packer=None: a bare TypeError would not say what to do
             raise ValueError(
@@ -259,7 +258,7 @@ class VLLMRollout(WeightReceiverBase):
         self._asleep_tags: set[str] = set()
         if packer.adds_special_tokens():
             # NOT fatal. This rollout records `req.prompt_token_ids` — vLLM's OWN tokenization — in
-            # policy_info, and the objective prefers those ids (design 2026-07-28 §10), so the
+            # policy_info, and the objective prefers those ids, so the
             # prefix scored IS the prefix generated no matter what the tokenizer adds. Refusing
             # here would block `llama`, which the packer registry explicitly supports. The warning
             # remains because the residual risk is real but narrow: a consumer that re-tokenizes
@@ -428,7 +427,7 @@ class VLLMRollout(WeightReceiverBase):
         if blocked:
             raise RuntimeError(f"vLLM rollout has {blocked} released; call wake_up() first")
 
-    # --- weight-transfer edge target (DESIGN §8.2 #4) ---
+    # --- weight-transfer edge target  ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """Import trainer weights into the RUNNING vLLM engine — PEER-ONLY surface.
 

@@ -22,7 +22,7 @@ The seam is deliberately narrow:
   pixels→latents encode stays in the model's forward (`model/cosmos3.py::encode_and_condition`),
   which is why the packer stays parallelizable off the GPU.
 - **It does not own heavy-payload transport.** `comm/codec.py`'s metadata/bulk split
-  already externalizes big tensors (DESIGN §3.4); `get_rollout_output` is an
+  already externalizes big tensors; `get_rollout_output` is an
   output-*shaping* hook, not an offload hook.
 
 Mechanism-level truth (invariants, alignment arguments) lives in the docstrings of
@@ -45,7 +45,7 @@ policy-owned decision to every actor-local packer and to the rollout engine.
 | `get_rollout_input(item)`                                                                | rollout         | abstract — the generation prompt. A raw `representations["prompt"]` **str** passes through verbatim; a conversation (`list[dict]`) is rendered with the tokenizer's chat template (`add_generation_prompt=True`); anything else raises                                      |
 | `get_pretokenized_rollout_input(item, token_ids)`                                        | rollout/teacher | base returns exact `prompt_token_ids`; multimodal packers attach original media without re-rendering; native and HF Qwen3-VL packers share prompt-only image-run collapse (vLLM re-expands placeholders on token prompts) and keep the completion tail verbatim             |
 | `rollout_collate_fn(items)`                                                              | rollout         | base default: passthrough                                                                                                                                                                                                                                                   |
-| `get_rollout_output(completions, ...)`                                                   | rollout         | base default: passthrough (optional decode/logprob-attach hook)                                                                                                                                                                                                             |
+| `get_rollout_output(completions,...)`                                                    | rollout         | base default: passthrough (optional decode/logprob-attach hook)                                                                                                                                                                                                             |
 | `get_policy_input(sample, rollout_output, n_ignore_prefix_tokens=0, *, prompt_ids=None)` | objective       | abstract — exact rollout `prompt_ids` are authoritative when present; the packer still restores model-specific media/tensors and accepts the completion as text or token IDs                                                                                                |
 | `policy_compute_max_len(processed)`                                                      | objective       | abstract — max `len(input_ids)`                                                                                                                                                                                                                                             |
 | `policy_collate_fn(processed, max_len)`                                                  | objective       | abstract — `{"input_ids": LongTensor[B,L], "logprob_masks": BoolTensor[B,L]}`, padded with `pad_token_id`, **on CPU**; plus `forward_replay_routing` (integer `[B,L,blocks,top_k]`) when the samples carry the rollout's recorded expert routing, via `add_forward_routing` |
@@ -92,7 +92,7 @@ Low-level selection order in
 2. otherwise `AutoConfig.from_pretrained(...)` resolves the model family and modality;
 3. `model_backend="hf"` selects `HFVLMDataPacker` for any config with `vision_config`, or
    `DecoderOnlyLLMDataPacker` for a recognized causal LM;
-4. `model_backend="i4"` (and the compatibility default `None`) first selects a registered native
+4. `model_backend="native"` (and the compatibility default `None`) first selects a registered native
    packer, then permits the decoder-only packer for causal-only model families.
 
 There is deliberately no broad text fallback: types also registered as masked or seq2seq models
@@ -169,7 +169,7 @@ data_packer.factory=cosmos_framework.posttrain.data.packer.qwen3_vl_video.make_p
 ```
 
 Video blocks must be `{"type": "video", "video": [<frame handles>], "fps": <float>,
-"total_num_frames": <int>, "frames_indices": [<int>, ...]}` (`"type": "video_frames"` is accepted
+"total_num_frames": <int>, "frames_indices": [<int>,...]}` (`"type": "video_frames"` is accepted
 as an alias and carried as `video` on the packer's copy of the messages) with a frame count that is
 a multiple of the video processor's `temporal_patch_size`; the same block feeds the rollout request
 and the policy input, and the policy side hands the HF processor the rollout's own decoded,
@@ -220,12 +220,12 @@ from cosmos_framework.posttrain.data.packer.base import DataPacker
 class MyVLMDataPacker(DataPacker):
     def setup(self, name_or_path: str) -> None:
         super().setup(name_or_path)          # builds self.tokenizer (+ pad fallback)
-        self.processor = ...                 # any extra per-model shaping state
+        self.processor =...                 # any extra per-model shaping state
 
-    def get_rollout_input(self, item): ...
-    def get_policy_input(self, sample, rollout_output, n_ignore_prefix_tokens=0, *, prompt_ids=None): ...
-    def policy_compute_max_len(self, processed_samples): ...
-    def policy_collate_fn(self, processed_samples, computed_max_len): ...
+    def get_rollout_input(self, item):...
+    def get_policy_input(self, sample, rollout_output, n_ignore_prefix_tokens=0, *, prompt_ids=None):...
+    def policy_compute_max_len(self, processed_samples):...
+    def policy_collate_fn(self, processed_samples, computed_max_len):...
 ```
 
 then register it for its HF `model_type`(s). The registration must actually be *executed*
@@ -297,9 +297,7 @@ Consequences, which are easy to get backwards:
 - A **string** completion always needs a packer (it cannot be concatenated with stored
   ids without tokenizing), so a string-emitting producer still needs a packer.
 
-This is the §10 amendment in the
-internal design spec, which supersedes the
-packer-always-shapes rule stated in that spec's §4/§9.
+The packer is required only when the producer's representation needs tokenization or shaping.
 
 ### The special-token consistency guard
 
@@ -367,8 +365,7 @@ shape should be driven by a real second consumer, not guessed.
 
 Note this is a *call-site* gap, not the signature difference: our `get_rollout_output` deliberately
 returns just `completions` instead of cosmos-rl's 5-tuple, and drops its Redis/UUID offload, because
-`comm/codec.py`'s automatic metadata/bulk split already externalizes heavy fields — see §0.3 of the
-internal design spec for that rationale.
+`comm/codec.py`'s automatic metadata/bulk split already externalizes heavy fields.
 
 ## Which seam do I use
 
@@ -376,7 +373,7 @@ A `DataPacker` subclass (+ `register`) when one sample is one token sequence —
 abstract methods assume. When the model's own collator owns batch assembly, or the unit is not a token
 sequence, write a **batch-assembly function** over `Trajectory` lists and hand it to the objective
 (`data/packer/preference.py` for DPO, `model/gr00t/packer.py` for GR00T-N1.7 flow-BC). Same invariants:
-weight-free, CPU-side, one owner per model × objective. Architecture statement: `DESIGN.md` v3,
+weight-free, CPU-side, one owner per model × objective. Architecture statement: `configuration` v3,
 "Batch-assembly seam"; spec §12.
 
 ## Deferred
