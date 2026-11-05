@@ -186,7 +186,7 @@ class TrainerProtocol(Protocol):
         co-located rollout peer the grid routes in; the engine stages each bucket and pushes it to that
         rollout, which loads in place — so a streaming engine (``LLMTrainer``) returns **None** (nothing
         is returned for the consumer to pull). Also **None** when there is no bound backend / the two
-        share a model instance (the SharedRef no-op, §8.2 #4), and for engines with no rollout edge
+        share a model instance (the SharedRef no-op), and for engines with no rollout edge
         (``DiffusionTrainer``/``LocalTrainer``). The ``WeightPayload`` arm of the union is the legacy
         whole-model batch return (``WeightSync.export``), retained for manual rigs."""
         ...
@@ -305,8 +305,8 @@ class BaseTrainer(ABC):
         # TOKEN_SUM + grad_accum>1 is not refused here: `backward` (algorithm/primitives/objective.py)
         # recovers the chunk sum and normalizes once at the step via the objective's weight sum,
         # still raising NotImplementedError if absent — the guard moved.
-        self._denom_accum = 0.0  # Σ of the objective's DP-mean divisors over the current window (§3.5)
-        self._skip_remaining = 0  # chunks of a POISONED window still to be discarded (§5.2)
+        self._denom_accum = 0.0  # Σ of the objective's DP-mean divisors over the current window
+        self._skip_remaining = 0  # chunks of a POISONED window still to be discarded
         if nonfinite_update not in ("skip", "fail_stop"):
             raise ValueError(f"nonfinite_update must be 'skip' or 'fail_stop', got {nonfinite_update!r}")
         self.nonfinite_update = nonfinite_update

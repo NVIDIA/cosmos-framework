@@ -104,9 +104,9 @@ def test_materialize_direct_is_zero_copy_and_consumes():
 
     out = materialize_payload(packed, LocalStoreMover())
     t = out[0].transitions[0]
-    assert t.action is action  # SAME object — zero-copy (§3.3)
+    assert t.action is action  # SAME object — zero-copy
     assert t.policy_info["prompt_ids"] is pid
-    assert len(store) == 0  # consume-once drained the store (§3.5)
+    assert len(store) == 0  # consume-once drained the store
     assert store.fetch_count == 2
 
 
@@ -139,7 +139,7 @@ def test_copy_transport_is_a_fresh_copy():
 
     out = materialize_payload(packed, LocalStoreMover(cross_process=True))
     t = out[0].transitions[0]
-    assert t.action is not action  # fresh copy, no aliasing (§3.5)
+    assert t.action is not action  # fresh copy, no aliasing
     assert t.action.nbytes == action.nbytes
 
 
@@ -428,7 +428,7 @@ def test_dataclass_field_round_trip():
 @pytest.mark.CPU
 def test_materialize_obs_deep_and_field_selective():
     # Pack recurses into container-valued representations; materialize_obs must resolve them for the
-    # selected key while leaving a non-selected bulk field as a lazy BulkRef (§3.4).
+    # selected key while leaving a non-selected bulk field as a lazy BulkRef.
     store = BulkStore()
     f0, f1, vid = _Blob(2000, "f0"), _Blob(2000, "f1"), _Blob(5000, "v")
     packed = pack_payload([ObsBundle(representations={"frames": [f0, f1], "video": vid})], store, threshold=0)

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Per-(kind, method, param) dispatch registry (spec 2026-07-22 §2.1).
+"""Per-(kind, method, param) dispatch registry.
 
 Routing semantics are a property of the METHOD's contract, not of a call site or a
 topology — "`train` consumes the producer's units grouped per my replica" holds at every
@@ -9,7 +9,7 @@ every entry file already imports driver-side. `roles/core/*` must stay Ray-free 
 torch-free) at import — this module is consulted driver-side by `GridBackend.submit`
 before any actor exists.
 
-`DISPATCH` maps `(kind, method, param)` to a `Sharded`/`Mirror` spec (Task A2 markers,
+`DISPATCH` maps `(kind, method, param)` to a `Sharded`/`Mirror` spec (the dispatch markers,
 constructed with `arg=None` — the registry declares SHAPE, not a wrapped value). `reduce`/
 `split` on those specs are STRING references (`"module:attr"`), resolved lazily actor-side
 via `resolve_fn` so the driver never imports the (possibly torch-heavy) role body module
@@ -19,7 +19,7 @@ that defines them.
 Its `RankAligned` entries require identical producer/consumer meshes and forward the exact
 `(replica, rank)` reference without a `Dispatched` materialization wrapper.
 
-Precedence (spec 2026-07-22 §2.1), all fail-loud, enforced by callers of this module (not here):
+Precedence, all fail-loud, enforced by callers of this module (not here):
 1. Call-site marker (explicit `RankAligned(...)`, `Sharded(...)`, or `Mirror(...)` wrapper on the arg).
 2. Registry default (`lookup` below) — the normal path; loops stay marker-free.
 3. Bare fallback — no entry, no marker: today's `dp_aligned` iff replica counts match,
@@ -66,7 +66,7 @@ _SIGNATURES: dict[tuple[str, str], tuple[str, ...]] = {
     ("critic", "install_targets"): ("targets",),
 }
 
-# Topology-independent, placement-independent routing defaults (spec 2026-07-22 §2.1). Both entries hold
+# Topology-independent, placement-independent routing defaults. Both entries hold
 # at EVERY topology and degenerate to op="one" (a single forwarded ref, byte-identical to the
 # pre-dispatch path) whenever producer units == consumer replicas — so a symmetric or single-cell
 # loop never pays for them. The string refs are resolved actor-side by `resolve_fn`:
@@ -78,7 +78,7 @@ _SIGNATURES: dict[tuple[str, str], tuple[str, ...]] = {
 DISPATCH: dict[tuple[str, str, str], DispatchSpec] = {
     ("trainer", "train", "batch"): Sharded(
         reduce="cosmos_framework.posttrain.roles.trainer.llm:concat_batches",
-        # Selection is OPT-IN on the presence of these sibling kwargs (spec 2026-08-12 §3.4).
+        # Selection is OPT-IN on the presence of these sibling kwargs.
         # GRPO always passes them; DPO never does, and absence means today's behaviour exactly.
         # This edge is keyed on the role KIND, so DPO shares it — see `take_control_kwargs`.
         select="cosmos_framework.posttrain.workers.dispatch:select_chunk",
@@ -145,7 +145,7 @@ def lookup(
     *,
     dispatch_profile: str | None = None,
 ) -> DispatchSpec | None:
-    """Registry default for a call-site arg (spec 2026-07-22 §2.1 precedence tier 2). None ⇒ no
+    """Registry default for a call-site arg (precedence tier 2). None ⇒ no
     registry entry; caller falls through to a call-site marker check then the bare path.
 
     Args:

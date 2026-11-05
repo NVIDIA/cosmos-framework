@@ -9,7 +9,7 @@ recipe call or the Handle contract**.
 
 - N replica actors, each holds a body copy (v0.5: replica = 1 actor; the intra-replica
   TP/PP/CP mesh is a separate axis, kept at 1 here).
-- A per-method **dispatch** (minimal stand-in for §2.4): selected methods aggregate compact
+- A per-method **dispatch** (minimal stand-in for full dispatch): selected methods aggregate compact
   per-execution-replica results; other calls retain their per-cell handles.
 - The **Communicator** is a first-class object. v0.5: driver-coordinated
   all-reduce (gather→reduce) under single-controller — validates the seam.

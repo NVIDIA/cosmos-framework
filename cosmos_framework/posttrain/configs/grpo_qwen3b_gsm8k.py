@@ -4,7 +4,7 @@
 
 `build_config()` returns a fully-populated:class:`PosttrainGRPOConfig` — the same ROOT the GRPO
 entrypoint uses (`config/config_grpo.py`) — whose values are copied verbatim from cosmos-rl's
-``qwen2-5-3b-p-fsdp2-colocated-grpo.toml`` (the real bf16 3B GRPO recipe), so the example (Task 6)
+``qwen2-5-3b-p-fsdp2-colocated-grpo.toml`` (the real bf16 3B GRPO recipe), so the example
 runs the same algorithm/optimizer/rollout knobs the reference does. The few knobs that are
 example-run sizing rather than TOML-exact (step count / prompts-per-step) are marked below.
 
@@ -156,7 +156,7 @@ def gsm8k_items_cosmos_rl(row: dict) -> dict:
     system message. Copied from `cosmos_rl/tools/dataset/gsm8k_grpo.py::GSM8kDataset.__getitem__`.
 
     This exists ONLY so a cross-stack comparison can hold the prompt constant. The prompt is worth
-    ~0.20 mean reward on GSM8K (parity doc section 2.1: 0.8233 with this recipe's wording against
+    ~0.20 mean reward on GSM8K (0.8233 with this recipe's wording against
     0.6237 with cosmos-rl's), which is larger than anything the trainer-side differences produce --
     a curve comparison that leaves it uncontrolled measures the prompt, not the stacks. It is NOT
     the recipe default and should not become one: the default wording scores better.

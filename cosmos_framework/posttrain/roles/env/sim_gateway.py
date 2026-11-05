@@ -385,7 +385,7 @@ class SimGatewayBody:
             # `__init__`, so every failure below this line escapes with no object bound to any
             # name -- and the child is already spawned, holding this cell's card. Ray reports an
             # actor that failed to construct; the simulator and Isaac's helpers keep the GPU.
-            # That is the orphan §9.9 check 6 exists to catch, produced by us.
+            # That is the kind of orphan the orphan check exists to catch, produced by us.
             #
             # HERE rather than at a third kill site: the listen path already kills on
             # `socket.timeout` and `_finish_handshake` on `WireTimeout`, but neither covers the
@@ -649,7 +649,7 @@ class SimGatewayBody:
         self._seg = Segment.create(capacity)
         send_frame(self._sock, "attach", {"segment": self._seg.name, "obs_capacity": capacity})
         self._expect("ready")
-        # THE START RECEIPT, and it is the ONLY artifact SPEC §9.9 criteria 3 and 4 can be
+        # THE START RECEIPT, and it is the ONLY artifact criteria 3 and 4 can be
         # judged from. Both criteria are about values that exist solely inside this process:
         # criterion 3 is "the child resolved the SIM venv's interpreter, not the framework's",
         # criterion 4 is "the child holds the card this cell was given". Until this line the
@@ -1215,7 +1215,7 @@ def refuse_cross_card_gateway(policy_wg: Any, sim_wg: Any, n_ranks: int, *, tag:
 
     The owner's ruling is "do not put it on a different card, or a different machine, from the
     sim" -- the gateway and the simulator share one card so the observation crosses through
-    shared memory rather than a network. ``SPEC_sim_role_decouple.md`` §9.9 criterion 4 has
+    shared memory rather than a network. The same-card criterion has
     carried it as **EXPRESSIBLE
     AND UNVERIFIED** since 2026-08-28 for a specific reason: at ``ranks_per_pod=1`` the
     gateway's ``sim_gpu = REPLICA_INDEX % ranks_per_pod`` is always ``"0"`` and the policy
@@ -1228,7 +1228,7 @@ def refuse_cross_card_gateway(policy_wg: Any, sim_wg: Any, n_ranks: int, *, tag:
     independent derivations of one quantity, never compared. At ``ranks_per_pod >= 2`` Ray is
     free to hand replica 0's policy actor GPU 1, and then cell 0's simulator runs on GPU 0
     while the policy it feeds runs on GPU 1 -- still one host, so **shmem still works and the
-    run still produces correct episodes**. Nothing fails. What breaks is the argument: §2.2's
+    run still produces correct episodes**. Nothing fails. What breaks is the argument: the
     isolation cost, and the leader's decision that rests on it, are measurements of a
     same-card pair.
 

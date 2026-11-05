@@ -8,7 +8,7 @@ metadata; bulk stays where produced; trainer pulls point-to-point after dispatch
 
 v0: single process ⇒ no metadata/bulk split needed; the buffer just holds whole
 Trajectories in memory. The interface (insert/select/evict) is the real one so the
-metadata-index + on-demand-pull implementation drops in later (§3.4).
+metadata-index + on-demand-pull implementation drops in later.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class ExperienceBuffer:
     lease_releasing_output_methods: frozenset[str] = frozenset({"drain"})
 
     def __init__(self, staleness: int = 0, exact_batch_size: int | None = None) -> None:
-        self.staleness = staleness  # async knob (§2.2/§5); v0 sync ⇒ unused
+        self.staleness = staleness  # async knob; v0 sync ⇒ unused
         if exact_batch_size is not None and (
             isinstance(exact_batch_size, bool) or not isinstance(exact_batch_size, int) or exact_batch_size < 1
         ):
@@ -74,10 +74,10 @@ class ExperienceBuffer:
         self._items: list[Trajectory] = []
 
     def insert(self, trajectories: list[Trajectory]) -> None:
-        # v0: store whole trajectories. TODO(§5): store metadata only + bulk lease.
+        # v0: store whole trajectories. TODO: store metadata only + bulk lease.
         self._items.extend(t for t in trajectories if t.status != Status.ABORTED)
 
-    # convenience alias matching the §2.7 naive surface (buffer.put_samples)
+    # convenience alias matching the naive surface (buffer.put_samples)
     def put_samples(self, trajectories: list[Trajectory]) -> None:
         self.insert(trajectories)
 
@@ -86,7 +86,7 @@ class ExperienceBuffer:
 
         ``where`` is a `MetadataGate` or nothing: the only filtering the buffer performs compares a
         precomputed metadata scalar, so no caller can make it peek at trajectory content or bulk.
-        TODO(v1+, §5/§2.2): drop entries older than `staleness` weight versions (async/off-policy);
+        TODO(v1+): drop entries older than `staleness` weight versions (async/off-policy);
         v0 is sync/on-policy so `staleness` is accepted but ignored. Also curriculum, on metadata.
         """
         if where is not None:
@@ -102,7 +102,7 @@ class ExperienceBuffer:
         self._items = [t for t in self._items if id(t) not in batch_ids]
         return batch
 
-    # alias matching §2.7 (buffer.get_samples)
+    # alias matching the naive surface (buffer.get_samples)
     def get_samples(self, size: int) -> list[Trajectory]:
         return self.select(size)
 
@@ -179,7 +179,7 @@ class ExperienceBuffer:
 
     def evict(self, predicate: MetadataGate) -> None:
         """Drop every buffered trajectory whose stamped metadata passes ``predicate`` (a `MetadataGate`)."""
-        # TODO(§5): release bulk lease on evict; spill HBM→host→NVMe for kept-but-cold
+        # TODO: release bulk lease on evict; spill HBM→host→NVMe for kept-but-cold
         predicate = _declared_gate(predicate, argument="predicate")
         self._items = [t for t in self._items if not predicate(t)]
 
