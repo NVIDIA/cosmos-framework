@@ -496,7 +496,7 @@ class WorkerGroup:
     def _bind_backend(self, backend: Any) -> None:
         self._backend = backend
 
-    # Placement introspection (DESIGN §4.1): real methods (not routed through
+    # Placement introspection: real methods (not routed through
     # __getattr__ to a body) so a driver reads node IP / GPU from the bound backend
     # without reaching into `_backend`. Empty for the local/eager backend (one
     # in-process cell, no placement to report).

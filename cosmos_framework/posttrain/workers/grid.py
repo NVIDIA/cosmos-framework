@@ -951,7 +951,7 @@ class GridBackend:
 
     def hosts(self) -> dict:
         """{(r, k): node_ip} across the mesh — placement introspection read from the
-        actors (DESIGN §4.1), so role bodies don't report their own node."""
+        actors, so role bodies don't report their own node."""
         import ray
 
         vals = ray.get([h.host.remote() for h in self.actors.values()])
