@@ -12,14 +12,14 @@ physical GPUs through placement bundles. The Ray machinery — actor, `.remote()
 Each actor runs the metadata/bulk seam:
 - egress: `pack`s tensor-bearing Trajectory/ObsBundle results into its local BulkStore,
   returning only BulkRef metadata — so the controller round-trip carries metadata, never
-  tensor bytes (#7).
+  tensor bytes.
 - ingress: `materialize`s BulkRef args ONLY for WGs in `materialize_names` (those that
   compute on bulk — rollout/trainer); reward-on-text / buffer let BulkRefs flow through,
-  so bulk moves once where needed (§3.4) and the buffer holds only metadata (§5).
-- transport (§3.2 backend / §3.3): `RayStoreMover` — local ref ⇒ zero-copy
+  so bulk moves once where needed and the buffer holds only metadata.
+- transport: `RayStoreMover` — local ref ⇒ zero-copy
   LocalStoreMover; remote ref ⇒ one-sided pull from the producer actor via Ray
   (peer-to-peer A→B, the controller never touches the bulk). The {store_id → actor}
-  peer map (the §3.2 connection registry) is built eagerly by `bind` and pushed via
+  peer map (the connection registry) is built eagerly by `bind` and pushed via
   `set_peers`, so cross-actor (tier-2) edges get the same metadata/bulk treatment.
 
 Placement groups, per-cell actors, peer-to-peer ObjectRef routing, IPC, and NIXL are implemented.
@@ -346,12 +346,12 @@ class RayStoreMover:
 
         Args:
             refs: BulkRefs to pull; local-store refs are skipped (stay zero-copy, no RPC).
-            readers: reader claims (Task A5) threaded to each producer's refcounted `BulkStore.fetch`,
-                so a batch shared across consumer cells pops only once every reader has pulled (§3.4).
+            readers: reader claims threaded to each producer's refcounted `BulkStore.fetch`,
+                so a batch shared across consumer cells pops only once every reader has pulled.
         """
         # Batch all REMOTE refs into ONE fetch per producer actor (local refs stay
-        # zero-copy, no RPC). Turns a per-field pull into one RPC per consumer (§3.4).
-        # `readers` (Task A5) threads through to the producer's refcounted BulkStore.fetch
+        # zero-copy, no RPC). Turns a per-field pull into one RPC per consumer.
+        # `readers` threads through to the producer's refcounted BulkStore.fetch
         # so a batch shared by multiple consumer cells pops only once every reader has pulled.
         by_owner: dict[str, list] = {}
         for r in refs:
@@ -400,8 +400,8 @@ def _resolve_dispatched(
     dp_rank: int = 0,
     dp_world: int = 1,
 ) -> Any:
-    """Actor-side execution of a `Dispatched` descriptor (Task A2/A4 build it; Task A5 runs
-    it): resolve THIS arg's own producer refs, materialize bulk if the consuming WG needs it
+    """Actor-side execution of a `Dispatched` descriptor (built driver-side; run
+    here): resolve THIS arg's own producer refs, materialize bulk if the consuming WG needs it
     (readers threaded through so a fan-out edge's refcounted `BulkStore` entry pops only once
     every reader has pulled — the contract), then apply the reduce/split/one adaptation so the
     body signature never sees a list/shard, only the adapted value.
@@ -419,7 +419,7 @@ def _resolve_dispatched(
     on the PACKED payload — the metadata skeleton, BulkRefs still attached — BEFORE any fetch,
     instead of after. Every BulkRef present in the full skeleton but absent from the kept slice
     is "dropped": it is never fetched; its producer-side refcount is decremented instead via
-    `releaser(refs, readers)` (§2.4 release protocol). Only the kept slice is then materialized
+    `releaser(refs, readers)` (release protocol). Only the kept slice is then materialized
     (readers=d.readers, same refcounted pop as the default path). Net effect: an on_metadata
     split edge moves exactly the kept fraction of bulk, never the whole producer payload.
 
@@ -432,7 +432,7 @@ def _resolve_dispatched(
     caller bug, so it raises rather than silently leaking the entry.
 
     When `on_metadata=False` (the default), or `d.op != "split"`, or this call doesn't
-    materialize, behavior is byte-identical to Task A5 — no split-before-materialize, no
+    materialize, behavior is byte-identical to the default path — no split-before-materialize, no
     release, `releaser` unused.
 
     `d.select` (Task 7 plumbs it, Task 8 — this task — executes it): the mini/micro/dp ingress-selection predicate (`select_chunk`),
@@ -446,12 +446,12 @@ def _resolve_dispatched(
     pulled by a DIFFERENT rank, and one the micro predicate drops is pulled by a LATER call on
     this same rank (the dp/micro predicates just partition the same skeleton differently across
     calls). Only the refcount differs, which is why `d.readers` (not a release) carries the
-    correction (§9.5: `readers = K_c / dp_world`, not `K_c`).
+    correction (`readers = K_c / dp_world`, not `K_c`).
 
     `dp_rank`/`dp_world` are resolved by the CALLER (actor-side — `_Host.invoke`, which is where
     `ParallelDims` lives; the driver knows the cell `(r, k)` but does not own the model-mesh
     factorization). The default `(0, 1)` here is this FUNCTION's no-arg behavior
-    (used directly by callers/tests that want an explicit no-op) — `_Host.invoke` (Task 9) passes
+    (used directly by callers/tests that want an explicit no-op) — `_Host.invoke` passes
     the actor's REAL `_dp_coords(self._pdims)` on every call instead, since `dp_group_sharded` (the
     objective wrapper that used to own the dp axis on this path) is deleted and `select_chunk` is now
     the sole owner end to end.
@@ -462,7 +462,7 @@ def _resolve_dispatched(
             optional `select`/`select_kw` ingress-selection pair.
         transport: the `Mover` (`RayStoreMover`/`LocalStoreMover`) used to materialize BulkRefs.
         materialize: True when the consuming WG computes on bulk ⇒ fetch payloads; else leave packed.
-        releaser: `(dropped_refs, readers) -> None` release hook (§2.4); required only when an
+        releaser: `(dropped_refs, readers) -> None` release hook; required only when an
             `on_metadata` split actually drops refs, else may stay `None`. Never called by the
             `d.select` branch (it never drops/releases — see above).
         dp_rank: this rank's dp-shard coordinate, consulted only when `d.select is not None`.
@@ -515,7 +515,7 @@ def _resolve_dispatched(
 # _pending_releases sweep assume it. Pinning guards against a future async-def method on
 # this actor flipping Ray's default-group concurrency (async actors default to >1).
 class _HostImpl:
-    """A single actor process hosting one ActorGroup's role bodies (§4.2 same-process grouping).
+    """A single actor process hosting one ActorGroup's role bodies (same-process grouping).
 
     Concurrency model (deadlock fix 2026-07-22): the actor declares one named concurrency
     group, "bulk" (max_concurrency 2). Ray leaves every UNDECLARED method — `invoke`,
@@ -544,7 +544,7 @@ class _HostImpl:
         self._store: BulkStore | None = None
         self._transport: Any = LocalStoreMover()  # upgraded to RayStoreMover by set_peers
         self._threshold = 0
-        self._materialize: set[str] = set()  # WG names that pull bulk on ingress (§3.4)
+        self._materialize: set[str] = set()  # WG names that pull bulk on ingress
         self._data_pool_config: dict[str, int] | None = None
         self._producer_pool: ProducerDataPool | None = None
         self._consumer_pool: ConsumerDataPool | None = None
@@ -552,7 +552,7 @@ class _HostImpl:
         self._weight_comm = None  # set by init_weight_plane; the cross-role side group
         self._nixl_probe_source: Any = None  # keeps the pre-model fabric publication alive
         self._nixl_probe_mover: Any = None  # producer or consumer mover backing the capability probe
-        self._pending_releases: list = []  # fire-and-forget release_bulk ObjectRefs awaiting a sweep (Task A6 fix)
+        self._pending_releases: list = []  # fire-and-forget release_bulk ObjectRefs awaiting a sweep
         # Final blocking drain on actor-process exit: the per-invoke sweep can't cover the LAST batch
         # of a run (no next op), so register a teardown drain that surfaces a last-step release failure.
         atexit.register(self.drain_pending_releases)
@@ -662,7 +662,7 @@ class _HostImpl:
         if codec:
             # store_id is bind-assigned + globally unique (the per-process auto counter
             # would collide across actors — every actor's first store would be "store0").
-            self._store = BulkStore(store_id)  # producer-side bulk residence (§3.4)
+            self._store = BulkStore(store_id)  # producer-side bulk residence
         return list(self._bodies.keys())
 
     def set_peers(self, peers: dict) -> None:
@@ -670,9 +670,9 @@ class _HostImpl:
         deferred weight-pairing lead lanes now that store_ids resolve.
 
         Args:
-            peers: `{store_id: _Host actor handle}` connection registry (§3.2 layer 5), eager at bind.
+            peers: `{store_id: _Host actor handle}` connection registry, eager at bind.
         """
-        # connection registry (§3.2 layer 5): store_id → owning actor, eager at bind.
+        # connection registry: store_id → owning actor, eager at bind.
         self._peers = peers
         self._transport = RayStoreMover(peers, self._consumer_pool)
 
@@ -880,7 +880,7 @@ class _HostImpl:
             dist.init_process_group(backend=backend, init_method="env://", rank=rank, world_size=world_size)
         return rank
 
-    # --- cross-role weight plane (side group; design §3) ---
+    # --- cross-role weight plane (side group) ---
     def init_weight_plane(
         self,
         coord_host: str,
@@ -907,7 +907,7 @@ class _HostImpl:
         (spec §3). ``recv_manifest`` (a ``[(name, shape, dtype_str),...]`` list the driver computes
         from the policy's ``full_state_dict``) becomes the collective mover's recv layout for
         SHARDED sinks (vLLM TP) that cannot self-derive the full param shapes; an unsharded HF sink
-        leaves it None and self-derives from its own model (§2.4)."""
+        leaves it None and self-derives from its own model."""
         from cosmos_framework.posttrain.comm.transfer.weight_comm import build_weight_comm
 
         if self._weight_comm is None:
@@ -1237,7 +1237,7 @@ class _HostImpl:
 
     @ray.method(concurrency_group="bulk")
     def fetch_bulk(self, ref, readers: int = 1) -> Any:
-        """Producer side of a remote one-sided pull (§3.4): serve one `ref` from the local `BulkStore`.
+        """Producer side of a remote one-sided pull: serve one `ref` from the local `BulkStore`.
 
         Args:
             ref: the BulkRef to serve to the pulling consumer actor.
@@ -1246,7 +1246,7 @@ class _HostImpl:
         Returns:
             The bulk value for `ref`.
         """
-        # producer side of a remote one-sided pull (§3.4): hand the bulk to the
+        # producer side of a remote one-sided pull: hand the bulk to the
         # consumer actor directly (refcounted); the controller is not in this path.
         # Runs in the "bulk" concurrency group so a peer pulling this actor's bulk is
         # served even while this actor's own body is blocked in a collective (see the
@@ -1433,8 +1433,8 @@ class _HostImpl:
         # producer's metadata payload moves object-store→this actor directly.
         # No-op for RayBackend (it passes already-resolved values, not refs).
         #
-        # A `Dispatched` arg (Task A2/A4 asymmetric-mesh routing descriptor) carries its OWN
-        # list of producer refs plus a reduce/split adaptation; `_resolve_dispatched` (Task A5)
+        # A `Dispatched` arg (asymmetric-mesh routing descriptor) carries its OWN
+        # list of producer refs plus a reduce/split adaptation; `_resolve_dispatched`
         # folds THIS arg's ref-resolve + materialize + adapt into a single step (readers
         # threaded through for refcounted bulk pop) so the body never sees a list/shard — only
         # the adapted value. Non-Dispatched args keep the exact same resolve-then-materialize
@@ -1467,7 +1467,7 @@ class _HostImpl:
             if isinstance(a, PeerClient):
                 return _BoundPeerClient(a, self, self._codec and name in self._materialize)
             if isinstance(a, Dispatched):
-                # Task 9: the actor's REAL dp coordinate. With `dp_group_sharded` deleted from this
+                # The actor's REAL dp coordinate. With `dp_group_sharded` deleted from this
                 # path, `select_chunk` is the sole dp-axis owner and needs the actor's true
                 # `(dp_rank, dp_world)` — computed actor-side because only the actor holds the
                 # `ParallelDims` mapping this cell's rank `k` to a dp coordinate (the driver knows only
@@ -1485,7 +1485,7 @@ class _HostImpl:
                 # TODO(Option B — rank0-pull + intra-replica NCCL broadcast for large bulk): the
                 # plain (non-Dispatched) arg path — a mirror/identity edge where every consumer rank
                 # independently pulls the SAME payload. The Dispatched trainer-batch edge above no
-                # longer has this shape (Task 8: each rank materializes only its own kept share), so
+                # longer has this shape (each rank materializes only its own kept share), so
                 # this is narrowed to edges that still mirror. For a big multimodal obs there, have
                 # rank 0 pull once and broadcast to ranks 1..K-1 over the per-replica torch.distributed
                 # group (up since spawn_grid Pass 2). Needs (a) the replica-rank + group handle, (b) a

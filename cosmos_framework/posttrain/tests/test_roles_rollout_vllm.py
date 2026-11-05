@@ -4,8 +4,8 @@
 """Tests for VLLMRollout (the contract body=(a); §8.2 #6 engine integration).
 
 Needs a GPU and the `vllm` package (the vLLM venv: vllm==0.19.1 / torch==2.10.0), so it is
-skip-guarded and marked L1/GPU (vLLM engine init > 30s). Verifies the Task #3 MVP contract
-(RL_PLAN_AND_NOTES_zh.md §1.2): group integrity + per-token logprob (π_old)."""
+skip-guarded and marked L1/GPU (vLLM engine init > 30s). Verifies the MVP contract:
+group integrity + per-token logprob (π_old)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def test_generate_returns_group_trajectories_with_logprob(llm):
     G = 3
     trajs = rollout.generate(prompts, group=G)
 
-    # Group integrity: exactly P*G trajectories in P complete groups (§2.3). group_id is the
+    # Group integrity: exactly P*G trajectories in P complete groups. group_id is the
     # prompt's own id (obs.id) so groups never collide across replicas at fan-in.
     assert len(trajs) == 2 * G
     assert {t.group_id for t in trajs} == {"p0", "p1"}
@@ -55,7 +55,7 @@ def test_generate_returns_group_trajectories_with_logprob(llm):
         assert tr.action is not None
         assert "completion_text" in tr.policy_info
         assert "prompt_ids" in tr.policy_info
-        # π_old: one logprob per generated token (§2.4), non-empty, all finite floats.
+        # π_old: one logprob per generated token, non-empty, all finite floats.
         lp = tr.policy_info["rollout_logprobs"]
         assert isinstance(lp, list) and len(lp) == len(tr.action)
         assert len(lp) > 0
@@ -69,7 +69,7 @@ def test_apply_weights_bumps_version_noop(llm):
     rollout = VLLMRollout(llm, packer=init_data_packer(MODEL), sampling={"temperature": 1.0, "max_tokens": 2})
     assert rollout._weight_version == 0
     rollout.apply_weights()
-    assert rollout._weight_version == 1  # static-weights seam: version bump only (§8.2 #4)
+    assert rollout._weight_version == 1  # static-weights seam: version bump only
 
 
 # --- L0 packer wiring tests (no vLLM engine) ---

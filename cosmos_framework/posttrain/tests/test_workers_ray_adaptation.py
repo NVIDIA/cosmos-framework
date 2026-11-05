@@ -3,7 +3,7 @@
 """Actor-side dispatch adaptation in `_Host.invoke` (Task A5).
 
 `_resolve_dispatched` (workers/ray.py, module-level) is the piece that actually EXECUTES a
-`Dispatched` descriptor (built driver-side by `GridBackend._align_one`, Task A4): resolve its
+`Dispatched` descriptor (built driver-side by `GridBackend._align_one`): resolve its
 own producer refs, materialize bulk with `readers` threaded through for refcounted pop, then
 apply the reduce/split/one adaptation so the body signature never sees a list/shard.
 
@@ -228,9 +228,9 @@ def test_materialize_false_leaves_bulkref_unresolved():
 
 def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identical():
     """Guards the new on_metadata branch's gate: with `on_metadata=False` (the dataclass
-    default, and the only value that existed before Task A6), a split payload carrying real
+    default, and the only value that existed before the fast path), a split payload carrying real
     BulkRefs still takes the OLD path — materialize the whole producer payload first, THEN
-    apply the split fn to already-resolved values, exactly as Task A5 shipped it. Every
+    apply the split fn to already-resolved values, exactly as the original path did. Every
     BulkRef in this payload is fetched -- the OLD path materializes the WHOLE producer payload
     (all 4 samples) before splitting, so with readers=1 all 4 entries pop, not just the 2 the
     split fn eventually keeps. That "wasted" fetch of the dropped half is exactly the traffic
@@ -347,16 +347,16 @@ def _fake_bulk_plane(n_items: int) -> tuple[BulkStore, _CountingMover]:
 
 def _dispatched(items: list, *, select_kw: dict, readers: int = 1) -> Dispatched:
     """A `Dispatched` wrapping the full packed `items` skeleton as a single `op="one"` producer
-    unit, carrying `select_chunk` (Task 6) parameterised by `select_kw` — the shape
+    unit, carrying `select_chunk` parameterised by `select_kw` — the shape
     `GridBackend._dispatch_from_spec` builds for the `("trainer", "train", "batch")` edge once a
-    call passes its control kwargs (Task 7), minus the driver-side plumbing this test bypasses."""
+    call passes its control kwargs, minus the driver-side plumbing this test bypasses."""
     return Dispatched(
         refs=[items], op="one", fn=None, index=0, n=1, readers=readers, select=_SELECT_CHUNK_REF, select_kw=select_kw
     )
 
 
 def test_unselected_bulk_is_never_fetched():
-    """The whole point (§3.4): bulk outside this rank's mini/micro/dp chunk must never move.
+    """The whole point: bulk outside this rank's mini/micro/dp chunk must never move.
     64 items -> micro (n_micro=4) keeps 16 -> dp (dp_world=2) keeps 8: only those 8 BulkRefs may
     ever reach `transport.fetch`."""
     store, transport = _fake_bulk_plane(n_items=64)
@@ -386,7 +386,7 @@ def test_unselected_bulk_is_not_released():
 
 @pytest.mark.parametrize("k_c,dp_world,expected_readers", [(4, 4, 1), (8, 4, 2), (2, 2, 1)])
 def test_reader_refcount_pops_each_entry_exactly_once(k_c, dp_world, expected_readers):
-    """readers = K_c / dp_world (§9.5). The pure-DP case (4, 4, 1) and (2, 2, 1) — where
+    """readers = K_c / dp_world. The pure-DP case (4, 4, 1) and (2, 2, 1) — where
     K_c == dp_world — PASSES even with the WRONG formula (readers=1 either way); (8, 4, 2) is the
     one that actually matters: with TP inside the replica (K_c=8 ranks sharing dp_world=4 DP
     groups, 2 TP-mirror ranks per group), each of the dp_world groups' kept items must be
@@ -444,7 +444,7 @@ def test_invoke_resolves_dispatched_reduce_arg_end_to_end():
 @pytest.mark.CPU
 def test_invoke_non_dispatched_arg_unaffected():
     """A plain (non-Dispatched) arg through `_Host.invoke` is completely unaffected by the
-    Dispatched-recognition branch — byte-identical to before Task A5."""
+    Dispatched-recognition branch — byte-identical to before that branch existed."""
     ray.init(ignore_reinit_error=True, num_cpus=2, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
         host = _Host.remote()
@@ -534,7 +534,7 @@ def _on_metadata_split_invoke_setup():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_invoke_on_metadata_split_pulls_only_kept_bulk_via_the_release_seam():
-    """Closes the loop for Task A6's release-protocol seam (`_Host.invoke`'s `_release_dropped`
+    """Closes the loop for the release-protocol seam (`_Host.invoke`'s `_release_dropped`
     closure over `self._store`/`self._transport`) with a real local `_Host` actor -- mirrors
     A5's `test_invoke_materializes_dispatched_and_refcount_pops_at_zero` pattern.
 
@@ -679,7 +679,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
         ray.shutdown()
 
 
-# ── Task 9: `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ──────────
+# ── `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ─────────────────
 
 
 @pytest.mark.L0
@@ -688,7 +688,7 @@ def test_invoke_threads_the_actors_real_dp_coordinate_into_select_chunk():
     """`dp_group_sharded` is deleted; `select_chunk` is now the sole dp-axis owner, and it must see
     the ACTOR's real `(dp_rank, dp_world)` from `config/build.py::_dp_coords(self._pdims)` — not
     the `(0, 1)` pin `_Host.invoke` used while `dp_group_sharded` was still the live owner on this
-    path (Task 8). A pdims reporting `dp_rank=1, dp_world=2` must make this rank keep only its HALF
+    path. A pdims reporting `dp_rank=1, dp_world=2` must make this rank keep only its HALF
     of a select-carrying batch; the (0, 1) pin would have handed it all 4.
 
     `set_mesh` is bypassed (it calls `pdims.build_device_mesh`, which needs a live process group

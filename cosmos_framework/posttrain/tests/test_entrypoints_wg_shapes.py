@@ -153,7 +153,7 @@ def test_reward_annotators_resolve_the_same_model_id_the_trainer_loads():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grpo_per_role_shapes_from_grid_shapes():
-    """§8.2: with `grid.shapes` set, policy and rollout carry their OWN (R, K); the experience roles
+    """With `grid.shapes` set, policy and rollout carry their OWN (R, K); the experience roles
     (data/rm/replay) derive at R = R_rollout, K = 1 — that keeps `data → rollout` at op="one" and
     leaves `replay → policy` the single asymmetric edge."""
     from cosmos_framework.posttrain.config.rl import GridConfig

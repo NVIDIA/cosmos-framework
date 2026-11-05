@@ -6,13 +6,24 @@ import vlmeval.api as api
 import vlmeval.vlm as vlm
 
 
+def _build_when_configured(factory, environment, parameter, *args, **kwargs):
+    """Build the model once `parameter` is known: passed by the caller, or set in `environment`."""
+    value = kwargs.get(parameter) or os.environ.get(environment)
+    if not value:
+        raise ValueError(f"Set {environment} or pass {parameter}=... for this model configuration.")
+    kwargs[parameter] = value
+    return factory(*args, **kwargs)
+
+
 def _configured_model(factory, environment, parameter, *args, default=None, **kwargs):
-    """Resolve settings at config load; preserve standard lazy model partials."""
+    """Resolve settings at config load; preserve standard lazy model partials.
+
+    When the setting is not known yet, the partial defers the check to build time, so an
+    explicit `parameter=...` from the caller still works and `.keywords` stays editable.
+    """
     value = kwargs.get(parameter) or os.environ.get(environment) or default
     if not value:
-        raise ValueError(
-            f"Set {environment} or pass {parameter}=... for this model configuration."
-        )
+        return partial(_build_when_configured, factory, environment, parameter, *args, **kwargs)
     kwargs[parameter] = value
     return partial(factory, *args, **kwargs)
 
@@ -157,7 +168,7 @@ o1_apis = {
 }
 
 api_models = {
-    # Optional VLMEVAL_*_API_BASE overrides preserve existing private defaults.
+    # Set the VLMEVAL_*_API_BASE environment variable for each endpoint you use.
     "qwen3_235b_a22b": _configured_model(
         api.CosmosReason2, "VLMEVAL_QWEN3_235B_API_BASE", "api_base",
         model="Qwen3-VL-235B-A22B-Instruct",
@@ -165,7 +176,6 @@ api_models = {
         retry=10,
         timeout=300,  # Increased timeout for video processing (5 minutes)
         verbose=False,
-        default='https://b5k2m9x7-qwen3-vl-235b-a22b-instruct.xenon.lepton.run/v1/chat/completions',
     ),
     "qwen3_30b_a3b": _configured_model(
         api.CosmosReason2, "VLMEVAL_QWEN3_30B_API_BASE", "api_base",
@@ -173,21 +183,18 @@ api_models = {
         temperature=0,
         retry=10,
         timeout=300,  # Increased timeout for video processing (5 minutes)
-        default='https://b5k2m9x7-qwen3-vl-30b-a3b-instruct.xenon.lepton.run/v1/chat/completions',
     ),
     "qwen3_8b": _configured_model(
         api.CosmosReason2, "VLMEVAL_QWEN3_8B_API_BASE", "api_base",
         model="Qwen3-VL-8B-Instruct",
         temperature=0,
         retry=10,
-        default='https://b5k2m9x7-qwen3-vl-8b.xenon.lepton.run/v1/chat/completions',
     ),
     "cosmos_reason1_7b": _configured_model(
         api.CosmosReason1, "VLMEVAL_COSMOS_REASON1_API_BASE", "api_base",
         model="Cosmos-Reason1-7B",
         temperature=0,
         retry=10,
-        default='https://b5k2m9x7-cosmos-reason1-7b-1107.xenon.lepton.run/v1/chat/completions',
     ),
     "GeminiPro3-0": partial(
         api.Gemini, model="gemini-3-pro-preview", temperature=0, retry=10, max_tokens=16384
@@ -202,7 +209,6 @@ api_models = {
         fail_msg={"events": [], "total_events": 0, "video_summary": ""},
         chunk_duration=10,
         num_frames_per_chunk=15,
-        default='http://10.111.53.95:8009',
     ),
     # GPT
     "GPT4V": partial(
@@ -746,7 +752,6 @@ api_models = {
         system_template_type="CommonSystemTemplate",
         # extra prompt to adapt to the ARM-Thinker prompt template [CommonSystemTemplate]
         extra_pt="\n\n**Important Requirement:**\nThe given image is `original_image`. You must output your reasoning inside `<think>...</think>`. After reasoning, either output the final answer within `<answer>...</answer>` or call a tool within `<tool_call>...</tool_call>`. You may call tools multiple times across turns to assist with judgment or verification, **but only one tool per turn**. If a tool call fails, you can retry or stop and give your final answer. Once no more tool calls are needed, provide your final answer or judgment within `<answer>...</answer>`.",
-        default='http://100.97.158.184:38888/v1/chat/completions',
     ),
     "Qwen3-VL-8B--crop--official_prompt--vllm": partial(
         api.ARM_thinker,

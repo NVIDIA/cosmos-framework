@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Mover implementations + selection (design spec §2.3/§2.4).
+"""Mover implementations + selection.
 
-shared/copy are plane-specific (spec §2.2b); ipc/nccl (added in later tasks) are shared by
+shared/copy are plane-specific; ipc/nccl (added in later tasks) are shared by
 both planes. resolve_mover keys on (relationship, plane, capability) with fail-loud guardrails.
 Ray-free: the Ray-backed data mover lives in workers/ray.py, not here.
 """
@@ -250,9 +250,9 @@ class IpcMover:
 
 
 class NcclMover:
-    """Disaggregated cross-device: bytes over an injected weight-plane WeightComm (§2.2).
+    """Disaggregated cross-device: bytes over an injected weight-plane WeightComm.
     COLLECTIVE — stage(broadcast-send)/fetch(broadcast-recv) are a co-scheduled matched pair the
-    edge co-schedules send and recv (pull_stream_from_peer's COLLECTIVE branch, §4). v1 moves each tensor whole (policy
+    edge co-schedules send and recv (pull_stream_from_peer's COLLECTIVE branch). v1 moves each tensor whole (policy
     full_tensor() upstream) in SORTED KEY ORDER; the consumer derives its receive layout from its
     OWN model (same architecture as the trainer in v1) via `recv_plan`, set by WeightSync.apply
     before fetch — so send and recv share no data dependency and cannot deadlock."""
@@ -289,7 +289,7 @@ class NcclMover:
         import torch
 
         # Receive buffers must land on the transport's own device (TorchDistComm sets `_dev` per its
-        # backend: cuda for nccl, cpu for gloo, §2.2) — NOT a global torch.cuda.is_available() guess,
+        # backend: cuda for nccl, cpu for gloo) — NOT a global torch.cuda.is_available() guess,
         # which would silently allocate on a CUDA device the comm never touches (wrong for a gloo
         # comm on a GPU-visible host) and would fight loopback/mock comms with no CUDA affinity at
         # all. Fall back to CPU when the comm doesn't expose a device.
@@ -457,7 +457,7 @@ def resolve_mover(
     hint: str | None = None,
     comm: Any = None,
 ) -> Mover:
-    """Placement-aware selection (spec §2.4). The capability/relationship decision is delegated to
+    """Placement-aware selection. The capability/relationship decision is delegated to
     `transport_capability_ok` (one source of truth with the AOT bind check) and the class comes from the
     same `_weight_mover_cls` lookup; this only supplies each mover's arguments. Fails loud at selection.
 

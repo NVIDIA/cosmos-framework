@@ -831,7 +831,7 @@ def test_zero_means_degenerate_to_today():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grpo_rejects_a_non_default_grad_accum():
-    """Retired as a GRPO knob — the trainer's value is derived from n_micro (§5.2)."""
+    """Retired as a GRPO knob — the trainer's value is derived from n_micro."""
     with pytest.raises(ValueError, match="grad_accum"):
         GRPOConfig(batch_per_replica=64, group_size=8, grad_accum=4)
 
@@ -852,7 +852,7 @@ def test_prompts_per_data_replica_derives_from_batch_per_replica():
 def test_dpo_grad_accum_is_unaffected():
     """`grad_accum` is retired as a GRPO knob only. DPO really uses it —
     wallace_8b_hpdv3_repro_v1.py:51 sets 32, ga_32b_hpdv3_repro_v1.py:58 sets 4 — and DPO's
-    MEAN reduction is untouched by any of this (§5.2)."""
+    MEAN reduction is untouched by any of this."""
     assert DPOConfig(grad_accum=4).grad_accum == 4
 
 
@@ -891,7 +891,7 @@ def test_batch_per_replica_must_divide_by_group_size():
     assert cfg.prompts_per_data_replica == 8
 
 
-# --------------------------------------------------------------------------- §8.2/§8.4 grid.shapes
+# --------------------------------------------------------------------------- grid.shapes
 
 
 @pytest.mark.L0

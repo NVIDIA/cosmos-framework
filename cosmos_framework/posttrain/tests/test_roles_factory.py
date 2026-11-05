@@ -58,7 +58,7 @@ def test_ppo_model_role_factories_declare_typed_model_parallelism(
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_needs_bulk_defaults_by_role() -> None:
-    # rollout/trainer compute on bulk → materialize inputs; others route metadata (§3.4)
+    # rollout/trainer compute on bulk → materialize inputs; others route metadata
     assert roles.rollout("p").needs_bulk is True
     assert roles.trainer("a").needs_bulk is True
     assert roles.reference("ref").needs_bulk is True

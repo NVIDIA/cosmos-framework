@@ -148,7 +148,7 @@ class StaticUnits:
 
         ``prefer`` is accepted and ignored. Honouring it here would mean keeping a scene
         open across claims, which is the cross-episode reuse an earlier collection run ruled out
-        (spec §7.3) -- so the parameter exists for protocol conformance and does nothing.
+        -- so the parameter exists for protocol conformance and does nothing.
         """
         del prefer  # see docstring: deliberately not honoured
         taken: list[Lease] = []

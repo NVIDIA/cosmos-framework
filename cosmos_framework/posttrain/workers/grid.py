@@ -14,7 +14,7 @@ args). So the controller forwards only the tiny ref — never the producer's met
 — and bulk still moves peer-to-peer at materialize. The remaining efficiency
 hooks (async overlap, SQ/CQ engine, real IPC/UCX/NCCL backend) are §3.2 future work.
 
-AlignPolicy is §2.4 dispatch expressed at the mesh level (mesh→mesh rank↔rank mapping); this
+AlignPolicy is dispatch expressed at the mesh level (mesh→mesh rank↔rank mapping); this
 version only implements dp_aligned — locality/reshard/gather are left as hooks, to migrate to
 control/dispatch + edge(dispatch=) later.
 """
@@ -59,9 +59,9 @@ def dp_aligned(producer_shape: tuple, consumer_shape: tuple, meta: Any = None) -
 # TODO(Option B — NCCL-broadcast align for large bulk): dp_aligned makes a low-rank producer
 # feed a high-rank SPMD consumer by having EVERY consumer rank independently pull producer (r,0)
 # (N object-store pulls of the same payload — fine for text/small metadata, wasteful for a big
-# multimodal obs, §3.4). This still applies to edges that keep dp_aligned's mirror-on-rank-axis
+# multimodal obs). This still applies to edges that keep dp_aligned's mirror-on-rank-axis
 # shape (e.g. a same-shape identity/Mirror edge with no per-rank selection); it no longer applies
-# to the `("trainer", "train", "batch")` edge, which as of Task 8 carries a `select`
+# to the `("trainer", "train", "batch")` edge, which now carries a `select`
 # (`workers/dispatch.py:select_chunk`) and materializes only THIS rank's kept share at
 # `workers/ray.py:_resolve_dispatched`, not the full mirrored producer payload — so there is
 # nothing left to broadcast on that specific edge. Add a `bcast_aligned` variant that still maps
@@ -463,11 +463,11 @@ class GridBackend:
     cell — no redundant execution, no reliance on determinism. Unregistered WGs fall back to
     the mesh shape (direct-construction tests).
 
-    Args (positional and keyword) are aligned per consumer actor via the AlignPolicy (§2.4)
+    Args (positional and keyword) are aligned per consumer actor via the AlignPolicy
     over the two WGs' OWN shapes (producer shape → consumer shape): a ``CollectiveHandle``
-    forwards the aligned producer ObjectRef (controller routes metadata only, §3.4/#7); a peer
+    forwards the aligned producer ObjectRef (controller routes metadata only); a peer
     ``WorkerGroup`` becomes a Ray-free ``PeerClient`` to the aligned producer cell (inline
-    outbound calls, §1.2 (b)); a ``Scatter`` gives each cell its ``seq[r]`` slice. ``dp_aligned``
+    outbound calls); a ``Scatter`` gives each cell its ``seq[r]`` slice. ``dp_aligned``
     clamp-to-0 broadcasts low→high (every consumer rank ← producer (r, 0)) and gathers high→low
     (consumer (r, 0) ← producer (r, 0)) by construction.
 
@@ -497,15 +497,15 @@ class GridBackend:
         Args:
             grid: ``{(r, k): (store_id, actor)}`` from ``spawn_grid``; only the actors are retained.
             shape: ``(R, K)`` physical mesh shape (union of the group's WG sub-shapes).
-            align: ``AlignPolicy`` mapping producer↔consumer cells (§2.4); default ``dp_aligned``.
+            align: ``AlignPolicy`` mapping producer↔consumer cells; default ``dp_aligned``.
             dp_methods: method names reduced over replica leads instead of returning a ``CollectiveHandle``.
             dp_reduce_op: ``"mean"`` for typed execution-replica contributions, ``"identical"``
                 when the body's Torch model world already reduced the report, or ``"replica0"``
                 for a lower-level diagnostic backend.
             wg_shapes: ``{wg_name: (R, K)}`` per-WG resolved sub-shape; unregistered ⇒ fall back to ``shape``.
             weight_routes: weight-edge overrides consulted only for the gated weight-sync peer edge
-                in ``_align_one``. On a POLICY backend (producer-driven ``push_weights``, design
-                2026-07-27 §2), this is one total flat-actor map from every policy cell to zero or
+                in ``_align_one``. On a POLICY backend (producer-driven ``push_weights``),
+                this is one total flat-actor map from every policy cell to zero or
                 more rollout cells. None ⇒ symmetric ``dp_aligned`` peer edge.
             weight_broadcast_enabled: whether the rollout WG uses the optional post-P2R replica
                 broadcast. This is driver-visible mode state; communicators remain actor-local.
@@ -534,8 +534,8 @@ class GridBackend:
             raise TypeError(f"weight_broadcast_enabled must be bool, got {weight_broadcast_enabled!r}")
         self.weight_broadcast_enabled = weight_broadcast_enabled
         R, _K = shape
-        # Per-replica rank-0 actor list = inter-replica Communicator endpoints (§1.1).
-        # TODO(v1+, §1.1): real peer-to-peer NCCL/gloo collective inside the step;
+        # Per-replica rank-0 actor list = inter-replica Communicator endpoints.
+        # TODO(v1+): real peer-to-peer NCCL/gloo collective inside the step;
         # currently driver-coordinated gather→reduce (same as ReplicaBackend.Communicator).
         self.comm = Communicator([self.actors[(r, 0)] for r in range(R)])
 
@@ -567,7 +567,7 @@ class GridBackend:
             param: parameter name (used in error messages).
             select_kw: resolved ingress-selection kwargs, carried onto the returned
                 ``Dispatched`` alongside ``spec.select`` so the actor can apply it once it
-                materializes (Task 8). ``None`` ⇒ no selection — carried through as
+                materializes. ``None`` ⇒ no selection — carried through as
                 ``Dispatched(select=None, select_kw=None)``, inert.
 
         Returns:
@@ -593,8 +593,8 @@ class GridBackend:
                     f"reduce= and split=; a Sharded edge carries at most one (reduce for P>R_c fan-in, "
                     f"split for R_c>P fan-out) — declare exactly one"
                 )
-            # Fail loud on a MULTI-RANK SPMD producer behind a Sharded edge BEFORE routing (spec
-            # 2026-07-22 §2.2). ``flat_units`` counts every producer cell as a unit, but a K_p>1 SPMD
+            # Fail loud on a MULTI-RANK SPMD producer behind a Sharded edge BEFORE routing.
+            # ``flat_units`` counts every producer cell as a unit, but a K_p>1 SPMD
             # producer's rank lanes are MIRRORS of one another — so it contributes K_p duplicate units.
             # The old-canonical uniform shape then either silently K-folds the training batch through
             # the registered reduce (loss corruption, NO error) or raises a misdirected "reduce=
@@ -606,7 +606,7 @@ class GridBackend:
                     f"counting them as {P} units double-counts each replica's output (silently K-folds "
                     f"the registered reduce, corrupting the training batch, or misfires a 'reduce= "
                     f"required'). Declare the SPMD helper at ranks=1 so its mirrored outputs are not "
-                    f"double-counted as units — spec 2026-07-22 §2.2"
+                    f"double-counted as units"
                 )
         if isinstance(spec, Mirror):
             if P != 1:
@@ -635,11 +635,11 @@ class GridBackend:
         else:  # op == "one"
             fn = None
         index = routing.split_index(op, n, r)
-        # select/select_kw (Task 7 plumbs them onto Dispatched; Task 8 consumes them actor-side in
+        # select/select_kw (plumbed onto Dispatched here; consumed actor-side in
         # `workers/ray.py:_resolve_dispatched`). None ⇒ no selection, which is both the DPO case
         # (select_kw absent) and every non-selecting Sharded edge.
         select = spec.select if select_kw is not None else None
-        # readers = the non-DP group size per kept ref (§9.5): ranks sharing a dp_rank but differing
+        # readers = the non-DP group size per kept ref: ranks sharing a dp_rank but differing
         # in TP/PP pull the SAME sample, so Kc/dp_world of them count. `select` is opt-in (only
         # GRPO's train passes the kwargs; DPO shares the entry and doesn't), and without it every
         # rank materializes the full slice — so readers stays Kc there or the BulkStore entry pops
@@ -724,8 +724,7 @@ class GridBackend:
         (f) anything else: broadcast, hardcoded identity routing (not align-delegated).
 
         ``RankAligned`` in (a)/(b) forwards one exact-rank ref directly; the other marker/registry
-        forms build a ``Dispatched``. (d)/(e)/(f) are BYTE-IDENTICAL to before this task
-        (WorkerGroup branch changes in Task C1).
+        forms build a ``Dispatched``. (d)/(e)/(f) are BYTE-IDENTICAL to the pre-dispatch path.
 
         Args:
             arg: the single call argument to align (dispatch marker, bare
@@ -864,7 +863,7 @@ class GridBackend:
         if isinstance(arg, Scatter):
             # NOTE: routing here is hardcoded strict-identity (seq[r]), NOT delegated to
             # self.align — a scatter needs error-on-mismatch, unlike dp_aligned's lenient
-            # clamp. When dispatch grows (§8.2 #4 / gather), model this as a virtual
+            # clamp. When dispatch grows (gather), model this as a virtual
             # producer of shape (len,1) through a pluggable Dispatch strategy.
             consumer_replicas = consumer_shape[0]
             if len(arg.seq) != consumer_replicas:
@@ -903,10 +902,10 @@ class GridBackend:
             kwargs are STRIPPED here (via ``take_control_kwargs``) and never reach ``actor_kwargs``
             — the actor body is still invoked as ``train(batch)``. They are carried instead on that
             one param's ``Dispatched.select``/``select_kw`` for the actor to apply once it
-            materializes (Task 8); absent control kwargs (the DPO case) leave everything unchanged.
+            materializes; absent control kwargs (the DPO case) leave everything unchanged.
         """
         # Param names: positional args bind via the registry's (kind, method) signature
-        # table (Task A3 `bind_param_names`); kwargs already carry their own name.
+        # table (`bind_param_names`); kwargs already carry their own name.
         pos_names = registry.bind_param_names(kind, method, args, kw)[: len(args)]
         target_name, spec = None, None
         for name in list(pos_names) + list(kw.keys()):

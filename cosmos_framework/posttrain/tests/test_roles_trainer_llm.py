@@ -180,7 +180,7 @@ def test_checkpoint_plan_extracts_only_selected_llm_state(
 
 
 # ---------------------------------------------------------------------------
-# `.net` contract + grad-clip knob (Task 7). The trainer's `model` may be a raw
+# `.net` contract + grad-clip knob. The trainer's `model` may be a raw
 # nn.Module (no `.net` — today's GPT2 path) or an HFModel body (owns `.net`); the
 # `_net()` helper unifies both and everything parameter-touching goes through it.
 # ---------------------------------------------------------------------------
@@ -1371,7 +1371,7 @@ def test_llm_trainer_token_sum_grad_accum_gt_1_steps_with_deferred_denom():
     """token_sum + grad_accum>1 now completes end to end: `train()` forwards the objective's own
     divisor (`metrics[OBJECTIVE_WEIGHT_SUM]`) into `backward`, which recovers each chunk's unnormalised
     SUM, and the trainer defers the token-mean division to the optimizer step (accumulating Σ
-    denom across the window in `_denom_accum`, spec §3.5) instead of raising. Two micro-batches
+    denom across the window in `_denom_accum`) instead of raising. Two micro-batches
     of one trajectory each accumulate into ONE optimizer step."""
     model, tok = _tiny()
     trainer = LLMTrainer(model, make_objective(), torch.optim.SGD(model.parameters(), lr=1.0), grad_accum=2)
@@ -1588,7 +1588,7 @@ def test_reduce_metrics_single_collective_cross_rank_mean():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_get_bucket_plan_lazy_cached_and_requires_backend():
-    # Weight-channel plan negotiation (peer-pull design §1.3): the policy computes its plan lazily
+    # Weight-channel plan negotiation: the policy computes its plan lazily
     # from its OWN manifest, caches it on the backend (same object returned thereafter), and refuses
     # without a weight backend (a plan is meaningless without a weight edge).
     import torch.nn as nn

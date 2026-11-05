@@ -239,7 +239,7 @@ class Transition:
     next_obs: Optional[ObsBundle] = None  # actual next condition, captured before environment reset
     policy_info: dict[str, Any] = field(default_factory=dict)  # logprob, dist_params?, weight_version
     # PPO also carries per-action process rewards in this mapping.
-    reward: Optional[dict[str, Any]] = None  # named components (§1.5); filled by RewardProvider/Combiner
+    reward: Optional[dict[str, Any]] = None  # named components; filled by RewardProvider/Combiner
     targets: Any = None  # supervised signal: SFTTarget, Preference, TeacherSignal, ...
     # Filled by the algorithm (#2 hook) at REWARD time — see `algorithm/annotators/advantage.py`.
     # Scalar or per-token `[n_completion_tokens]`; see the class docstring.
@@ -247,7 +247,7 @@ class Transition:
     step_idx: int = 0
     done: bool = True
     mask: Any = None
-    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm (#2)
+    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm
     # APPENDED, not inserted, and the grouping this costs is deliberate. `truncated` reads
     # next to `done` and `info` next to `algo_extra`; both were written there first. But a
     # dataclass field's POSITION is its positional constructor ABI, and `schema/` is an
@@ -264,7 +264,7 @@ class Transition:
     # hits the token cap is `done` (the episode ended) with `truncated` True. Fixed-duration
     # sessions additionally use feedback.episode_complete for their physical reset boundary.
     truncated: bool = False
-    # The `info` of DESIGN 1.3's own Env contract, `step(action) -> (obs, reward, done,
+    # The `info` of the Env contract, `step(action) -> (obs, reward, done,
     # info)`. Env-owned per-step facts that are neither observation nor reward (BDDL goal
     # counts, collision flags, sim diagnostics). Distinct from `algo_extra`, which is
     # reserved for the algorithm: an Env writing there would collide with it.
@@ -279,7 +279,7 @@ class Transition:
 class Trajectory:
     transitions: list[Transition] = field(default_factory=list)
     id: str = ""
-    lineage: tuple[str, ...] = ()  # correlation / provenance (observability §11.2)
+    lineage: tuple[str, ...] = ()  # correlation / provenance (observability)
     session: Optional[str] = None
     status: Status = Status.PENDING
     group_id: Optional[str] = None  # GRPO grouping
@@ -287,7 +287,7 @@ class Trajectory:
     # downstream role transforms the corresponding field, so the driver can release every source
     # lease together at the synchronous step boundary. ``Any`` keeps this public schema Ray-free.
     pool_leases: tuple[Any, ...] = ()
-    # TODO(v2, §2.8): parent / sub_trajectories for hierarchical (macro→micro) ops
+    # TODO(v2): parent / sub_trajectories for hierarchical (macro→micro) ops
 
     @property
     def final_reward(self) -> Optional[float]:

@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""WeightComm — the backend-agnostic weight-plane transport (design §2.2).
+"""WeightComm — the backend-agnostic weight-plane transport.
 
 A WeightComm is a NCCL/gloo group spanning policy+rollout ranks that is INDEPENDENT of each
 actor's default process group (already the FSDP or vLLM-TP group). We build a standalone
 ProcessGroup from a fresh TCPStore and drive it with the WORK-based c10d API
 (pg.broadcast([t], opts).wait()) — which, unlike dist.broadcast(group=pg), does not rely on the
 global `_world` registry that only init_process_group/new_group populate. This is engine-agnostic
-(no vLLM import); NcclMover holds one. A future PyncclComm implements the same surface (§2.2b).
+(no vLLM import); NcclMover holds one. A future PyncclComm implements the same surface.
 """
 
 from __future__ import annotations

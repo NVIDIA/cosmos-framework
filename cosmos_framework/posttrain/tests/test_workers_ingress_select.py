@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Control-kwargs plumbing through `WorkerGroup`'s LOCAL call path (spec 2026-08-12 §3.4).
+"""Control-kwargs plumbing through `WorkerGroup`'s LOCAL call path.
 
 `WorkerGroup._submit`'s `self._backend is None` branch (`workers/worker_group.py:309`) invokes
 the body directly — it never reaches `GridBackend._actor_args`/`_align_one`
@@ -14,8 +14,8 @@ DPO's `policy` WG shares this SAME entry (`entrypoints/dpo.py: ROLE_SPECS = [...
 presence (`test_a_call_without_control_kwargs_is_untouched` below is the DPO regression guard).
 
 Note: the driver always passes all four of `select_chunk`'s required keyword-only axis
-parameters (`mini`, `micro`, `n_mini`, `n_micro` — see `workers/dispatch.py:select_chunk`,
-Task 6); the registry's `select_params` (`roles/core/dispatch.py:60`) declares exactly those
+parameters (`mini`, `micro`, `n_mini`, `n_micro` — see `workers/dispatch.py:select_chunk`);
+the registry's `select_params` (`roles/core/dispatch.py:60`) declares exactly those
 four, and this file's calls always supply all four together (never a subset) precisely because
 `select_chunk` has no defaults for any of them.
 """
