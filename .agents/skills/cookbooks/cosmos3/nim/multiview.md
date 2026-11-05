@@ -48,10 +48,7 @@ them in this canonical order regardless of request order:
 | 10    | `camera_rear_fisheye_200fov`  |
 
 
-The request schema accepts 1 to 11 unique cameras. The eleven-camera rig and
-the three-camera subset of front-wide, cross-left, and cross-right have been run
-on GPU, for camera-only and joint requests. Other subsets are accepted by the
-schema but have not been qualified. The scripted examples send the seven
+The request schema accepts 1 to 11 unique cameras. The scripted examples send the seven
 cameras of the shared Auto sample described in [Prepare inputs](#prepare-inputs).
 
 ## Deploy the multiview Generator
@@ -80,15 +77,14 @@ docker run -d --name cosmos3-multiview \
 
 Notes for this variant:
 
-- **Profile.** Multiview profiles are BF16. Run the
+- **Profile.** Multiview profiles are BF16 or FP8. Run the
 [pre-download profile preflight](deployment.md) with
 `NIM_MODEL_VARIANT=multiview` to confirm a candidate profile, then expose
 the GPU count the selected profile requires.
 - **Request timeout.** An eleven-camera request is long-running, and a joint
 camera and LiDAR request can exceed an hour on a single GPU. The
 `NIM_TRITON_REQUEST_TIMEOUT` value above raises the backend timeout from its
-30-minute default to two hours, in microseconds. Changing the client timeout
-alone does not change the backend setting; the examples use a two-hour client
+30-minute default to two hours, in microseconds. ; the examples use a two-hour client
 timeout (`--timeout`). See
 [Generator configuration](configuration.md#generator-configuration).
 - **Attention backend.** `VLLM_OMNI_COSMOS3_MULTIVIEW_BACKEND` accepts
@@ -110,32 +106,6 @@ the bundled one, add `NIM_MODEL_PATH` as described in
 its `transformer/config.json` must declare
 `"backbone_type": "cosmos3_multiview"` with a `multiview` block.
 
-### GPU memory and `layer` profiles
-
-Profiles tagged `offload: layer` use VRAM reduction techniques: transformer
-layer offload to host memory, VAE tiling, VAE offload, grouped attention, and
-host-memory SeaCache history. These reduce performance but enable inference on
-GPUs with less memory than the resident profiles require. The `layer` profiles
-were benchmarked at 720p with 200 frames, eleven cameras, and joint LiDAR
-generation.
-
-For smaller payloads, such as fewer cameras, 480p, fewer frames, or camera-only
-output, you can turn these reductions off with override environment variables
-to recover speed. The overrides keep the selected `layer` profile and change
-only what runs on it; each reduction has its own variable. See
-[Multiview configuration](configuration.md#multiview). For example, to keep the
-transformer on the GPU and process whole frames, add these to the launch
-command:
-
-```bash
-  -e NIM_MULTIVIEW_LAYER_OFFLOAD=false \
-  -e NIM_MULTIVIEW_VAE_TILING=false \
-```
-
-Turning a reduction off raises peak GPU memory, and a request that no longer
-fits fails with an out-of-memory error. Validate each change with your largest
-expected request. At startup the Generator logs a `VRAM optimizations for
-profile <id>` block that lists each reduction in effect.
 
 ## Verify the service
 
@@ -198,8 +168,7 @@ contains a camera key, a `camera_view` label, control instructions such as
 "follow the WSM", or a resolution or duration template returns HTTP 422. A
 JSON-object caption is also rejected.
 - **Negative prompt.** `multiview.per_view_negative_prompt` is required. It is
-one string applied to every camera, and an empty string disables it. A
-top-level `negative_prompt`, even an empty one, returns HTTP 422.
+one string applied to every camera, and an empty string disables it.
 
 The scripts parse their command line before doing endpoint or media work.
 Before submitting a request, each requires `/v1/metadata` to report the
@@ -291,11 +260,12 @@ It writes one MP4 per camera to
 Set `model_mode=image2video` and add a `vision` input to **every** view. Each
 view's `vision` conditions the first frame of its camera, and can be either:
 
+- **an image** (JPEG, PNG, or WebP) of that first frame. Up to 20,000,000
+encoded characters. (Recommended)
 - **an RGB video:** the NIM decodes it and uses only its first frame. Send
 the synchronized RGB clip unchanged; its length and FPS need not match the
-WSM control. Up to 100,000,000 encoded characters.
-- **an image** (JPEG, PNG, or WebP) of that first frame. Up to 20,000,000
-encoded characters.
+WSM control. Up to 100,000,000 encoded characters. Sending video insted of
+image may impact performance.
 
 Run the RGB-conditioned case, which sends the sample's RGB clips as `vision`
 videos alongside its WSM controls:
@@ -342,8 +312,7 @@ backend ignores trailing sweeps. The control must come from the same scene and
 time interval as the WSM controls. The sample's control converts to 100 sweeps.
 
 All values must be finite, range must be non-negative, and intensity and
-validity must lie in `[0, 1]`. The NIM checks the header and the sweeps it
-reads before generation starts and returns HTTP 422 otherwise.
+validity must lie in `[0, 1]`. 
 
 Send the file as raw base64 or as
 `data:application/octet-stream;base64,...`, up to 860,000,000 encoded
@@ -518,6 +487,33 @@ videos, and LiDAR for joint requests, response bodies are large; configure
 client and proxy body limits accordingly. Each MP4 holds a VP9 track; play it
 with `ffplay` or re-encode it as described in
 [Output and playback](generation.md#output-and-playback).
+
+### GPU memory and `layer` profiles
+
+Profiles tagged `offload: layer` use VRAM reduction techniques: transformer
+layer offload to host memory, VAE tiling, VAE offload, grouped attention, and
+host-memory SeaCache history. These reduce performance but enable inference on
+GPUs with less memory than the resident profiles require. The `layer` profiles
+were benchmarked at 720p with 200 frames, eleven cameras, and joint LiDAR
+generation.
+
+For smaller payloads, such as fewer cameras, 480p, fewer frames, or camera-only
+output, you can turn these reductions off with override environment variables
+to recover speed. The overrides keep the selected `layer` profile and change
+only what runs on it; each reduction has its own variable. See
+[Multiview configuration](configuration.md#multiview). For example, to keep the
+transformer on the GPU and process whole frames, add these to the launch
+command:
+
+```bash
+  -e NIM_MULTIVIEW_LAYER_OFFLOAD=false \
+  -e NIM_MULTIVIEW_VAE_TILING=false \
+```
+
+Turning a reduction off raises peak GPU memory, and a request that no longer
+fits fails with an out-of-memory error. Validate each change with your largest
+expected request. At startup the Generator logs a `VRAM optimizations for
+profile <id>` block that lists each reduction in effect.
 
 ## Guardrails
 
