@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for ArithmeticEnv (DESIGN §1.3 degenerate 1-step Env), the JSONL prompt source, and the
-split_prompts dispatch adaptation (Task C2, DESIGN §2.3)."""
+"""Tests for ArithmeticEnv, the JSONL prompt source, and the
+split_prompts dispatch adaptation (Task C2)."""
 
 from __future__ import annotations
 

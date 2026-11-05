@@ -70,9 +70,9 @@ except ImportError:
 
 
 def _configure_inference_cudnn() -> None:
-    """Match the cuDNN runtime used by native I4 inference.
+    """Match the cuDNN runtime used by native native inference.
 
-    I4 inherits these flags from its trainer setup. Framework inference loads
+    native inherits these flags from its trainer setup. Framework inference loads
     models directly, so configure them explicitly before constructing the model.
     """
     torch.backends.cudnn.deterministic = False

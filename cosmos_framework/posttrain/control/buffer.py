@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Experience buffer — a metadata index, not a data store (DESIGN §5).
+"""Experience buffer — a metadata index, not a data store.
 
 Final form: holds only minimal inline metadata (id/status/version/group/reward/
 advantage/size/lineage + bulk locator+lease); filter/dispatch/advantage run on
@@ -21,7 +21,7 @@ from cosmos_framework.posttrain.schema import Status, Trajectory
 
 @dataclass(frozen=True)
 class MetadataGate:
-    """Declared buffer predicate: terminal ``algo_extra[key] > threshold`` (DESIGN §5).
+    """Declared buffer predicate: terminal ``algo_extra[key] > threshold``.
 
     The gating scalar must be precomputed by the stage that owns it (for GRPO, the reward-time
     advantage estimator stamps its group facts); the buffer only compares it. Declaring the predicate
@@ -46,7 +46,7 @@ class MetadataGate:
 def _declared_gate(predicate: object, *, argument: str) -> MetadataGate:
     """Reject anything but a `MetadataGate` at the buffer's public filtering surface.
 
-    The buffer is a metadata index (DESIGN §5): a filter may read one precomputed scalar stamp and
+    The buffer is a metadata index: a filter may read one precomputed scalar stamp and
     nothing else. A bare callable could inspect the full `Trajectory`, including bulk, so it is
     refused rather than trusted by convention.
     """
@@ -61,7 +61,7 @@ def _declared_gate(predicate: object, *, argument: str) -> MetadataGate:
 class ExperienceBuffer:
     # Methods whose returned items leave the data plane for good: the actor host releases every bulk
     # lease they carry at its owning store (a refcount decrement, no fetch) before the metadata
-    # returns — DESIGN §5 "evict releases the bulk lease", declared by the buffer, run by the host.
+    # returns — the contract "evict releases the bulk lease", declared by the buffer, run by the host.
     lease_releasing_output_methods: frozenset[str] = frozenset({"drain"})
 
     def __init__(self, staleness: int = 0, exact_batch_size: int | None = None) -> None:
@@ -96,7 +96,7 @@ class ExperienceBuffer:
         # Drop exactly the batched items, keeping everything else (filtered-out items
         # AND filtered-but-not-batched items) in original order. Identity, not __eq__:
         # a Trajectory holds tensors, and tensor __eq__ returns a tensor (ambiguous as
-        # bool). DESIGN §5: the buffer holds object references — identity is the right
+        # bool). the contract: the buffer holds object references — identity is the right
         # equality predicate here.
         batch_ids = {id(t) for t in batch}
         self._items = [t for t in self._items if id(t) not in batch_ids]

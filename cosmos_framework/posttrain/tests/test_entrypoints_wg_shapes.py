@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Entry-point WorkerGroup shape wiring (spec 2026-07-22 §2.2).
+"""Entry-point WorkerGroup shape wiring.
 
 The GRPO / DPO entries must declare their SPMD helper roles (env / reward / buffer) at ranks=1. NFT's
 collective-coupled WFM roles instead share one exact-rank mesh behind an algorithm dispatch profile. In the
@@ -87,7 +87,7 @@ def test_reward_wg_declares_needs_bulk_exactly_when_prefix_filtering_is_on():
 
     BOTH directions are asserted. `needs_bulk=True` materializes EVERY bulk field, obs
     representations included, so pinning it on unconditionally would drag raw video/images into a
-    reward worker that only wanted token ids — the traffic DESIGN §3.4 exists to prevent. And the
+    reward worker that only wanted token ids — the traffic the contract exists to prevent. And the
     predicate must be the one `build_reward_annotators` uses, or the shape and the body disagree:
     `min_filter_prefix_tokens=-1` is truthy but DISABLED, so a truthiness test would pull bulk for a
     filter that does nothing.

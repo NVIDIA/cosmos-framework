@@ -390,7 +390,7 @@ class QwenSFTDataPacker(DataPacker):
             raise ValueError(
                 f"SFT supervise=last_assistant: history assistant turn {index} carries reasoning ({why}); the default "
                 "serve renders no reasoning in the history, so the row's prefix would not be the served prefix (review "
-                "R151-04); strip it from the history turns or supervise all_assistant"
+                "serving contract); strip it from the history turns or supervise all_assistant"
             )
 
     def _validate_boundaries(
@@ -608,7 +608,7 @@ class QwenSFTDataPacker(DataPacker):
                 f"SFT opener=prefilled: supervised assistant block(s) {bare} (indices among the row's assistant turns) do "
                 f"not carry exactly one <think> opener to mask (masked per supervised block {supervised}: "
                 f"{[counts[i] for i in supervised]}); a prefilled row needs a reasoning block in every supervised assistant "
-                "turn (review R149-01)"
+                "turn (serving contract)"
             )
 
     def _mask_think_openers(self, ids: list[int], labels: list[int]) -> list[int]:

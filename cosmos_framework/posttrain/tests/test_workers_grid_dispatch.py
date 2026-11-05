@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Registry-driven per-edge routing in ``GridBackend`` (Task A4, DESIGN §2.1/§2.2).
+"""Registry-driven per-edge routing in ``GridBackend`` (Task A4).
 
 Drives ``GridBackend._align_one`` / ``_actor_args`` directly with a fake ``CollectiveHandle``
 (sentinel-string refs, identity getter) — CPU-only, no actors ever invoked. ``_Host.invoke``
@@ -43,7 +43,7 @@ def _gb() -> GridBackend:
 
 def test_marker_overrides_registry_hit():
     """A call-site Sharded marker wins over a registry entry for the SAME (kind, method,
-    param) — DESIGN §2.1 precedence tier 1 over tier 2. Uses the real registered
+    param) — the contract precedence tier 1 over tier 2. Uses the real registered
     ("trainer", "train", "batch") entry (Task A3) so a hit is guaranteed without monkeypatch,
     then wraps the SAME edge in a marker with a DIFFERENT reduce= to prove the marker's own
     spec — not the registry's — was used."""
@@ -211,7 +211,7 @@ def test_actor_args_kwarg_uses_its_own_name(monkeypatch):
 
 
 def test_sharded_multi_rank_spmd_producer_raises_naming_ranks1(monkeypatch):
-    """Fix (spec 2026-07-22 §2.2): a Sharded edge whose PRODUCER declares K_p > 1 is a rank-mirror
+    """Fix: a Sharded edge whose PRODUCER declares K_p > 1 is a rank-mirror
     SPMD helper — its lanes duplicate the same output, so ``flat_units`` double-counts them. Reject
     BEFORE routing, naming the edge + sub-shape + the ranks=1 remedy, rather than silently K-folding
     the reduce (loss corruption) or misfiring a 'reduce= required'. Uses the real registered

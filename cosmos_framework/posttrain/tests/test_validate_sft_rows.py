@@ -783,8 +783,8 @@ def test_missing_split_is_that_splits_load_refusal_and_never_blocks_the_other(
     ``split="all"`` does both. The trainer's own ``validate_config`` still refuses the configuration.
     """
     _packer_module()
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints import sft as entry
+    from cosmos_framework.utils.config import load_config
 
     _builder_for_this_transformers(monkeypatch)
     model = tmp_path / "model"
@@ -922,13 +922,13 @@ _EMPTY_FACTORY = f"{__name__}.empty_factory"
 
 
 def test_redaction_keeps_the_last_two_path_components_and_bounds_length() -> None:
-    text = "/path/to/shared-storage missing image file /path/to/shared-storage"
+    text = "/example/root/x/y/rows.jsonl:2: missing image file /example/root/media/missing_0042.png"
     assert validator.redact(text) == "y/rows.jsonl:2: missing image file media/missing_0042.png"
     assert (
         validator.redact("Got /nonexistent/dir/secret_item_0042.png. Failed") == "Got dir/secret_item_0042.png. Failed"
     )
-    a = validator.redact("missing image file /path/to/shared-storage")
-    b = validator.redact("missing image file /path/to/shared-storage")
+    a = validator.redact("missing image file /example/data/item_0007/image.png")
+    b = validator.redact("missing image file /example/data/item_0008/image.png")
     assert a == "missing image file item_0007/image.png" and a != b, "the item directory still discriminates"
     assert validator.redact("~/rel/x.png and ./rel/y.png and ratio 3/4") == "~/rel/x.png and ./rel/y.png and ratio 3/4"
     assert validator.redact("no path here") == "no path here"
@@ -1572,7 +1572,7 @@ def test_census_read_refusal_redacts_and_bounds_the_item_id_in_its_prefix(
         raise PermissionError(13, "Permission denied", path)
 
     monkeypatch.setattr(datasets, "sha256_file", unreadable)
-    item = "/path/to/shared-storage" + "x" * 600
+    item = "/path/to/shared-storage/item_7/" + "x" * 600
     validation = _backed_source(tmp_path / "held", [_image_row(tmp_path / "media" / "img_0.png", item), _HELD_ROWS[1]])
     train = _jsonl_source(tmp_path / "train.jsonl", _TRAIN_ROWS)
     status, printed, lines, out = _run_pair(text_packer, tmp_path, train, validation, capsys)
@@ -1829,8 +1829,8 @@ def test_native_seat_config_builds_the_packer_from_sft_policy_source(
     ``model_hf.name_or_path`` is refused by that same function. The entrypoint defines no ``packer_source`` and contains
     no ``globals()``."""
     _packer_module()
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints import sft as entry
+    from cosmos_framework.utils.config import load_config
 
     assert not hasattr(entry, "packer_source") and "globals()" not in Path(entry.__file__).read_text()
     _builder_for_this_transformers(monkeypatch)
@@ -1978,7 +1978,7 @@ def test_prefilled_row_with_a_bare_supervised_turn_is_the_packers_refusal(text_p
     refusal = (
         "packer refused the row: SFT opener=prefilled: supervised assistant block(s) {bare} (indices among the row's "
         "assistant turns) do not carry exactly one <think> opener to mask (masked per supervised block {supervised}: "
-        "{counts}); a prefilled row needs a reasoning block in every supervised assistant turn (review R149-01)"
+        "{counts}); a prefilled row needs a reasoning block in every supervised assistant turn (serving contract)"
     )
     rows = [
         {
@@ -2069,7 +2069,7 @@ def test_meta_disagreement_is_the_loaders_refusal_and_an_agreeing_prefix_row_cou
     assert reports[1].reasons == [
         "source refused the row: SFT factory row 1: opener=prefilled requires a non-empty reasoning_content on every "
         "supervised assistant turn (all of them under all_assistant, the last under last_assistant); message(s) [1, 3] "
-        "carry none (review R149-01)"
+        "carry none (serving contract)"
     ]
     assert reports[2].ok and reports[2].loss_tokens_per_block == [15] and reports[2].assistant_tokens == 15
     assert (reports[2].supervise, reports[2].opener, reports[2].supervised_blocks) == ("last_assistant", "prefilled", 1)

@@ -155,7 +155,7 @@ class _FakeProducer:
 
 
 def test_producer_ships_plan_pushes_buckets_then_stamps_version():
-    """Producer-driven stream (design 2026-07-27 §2), the mirror of pull_stream_from_peer: the policy
+    """Producer-driven stream, the mirror of pull_stream_from_peer: the policy
     ships its bucket plan to the rollout, PUSHES each staged payload (carrying its training _iter) via
     apply_bucket in fixed order, then stamps the rollout's version EXACTLY ONCE at the end."""
     from cosmos_framework.posttrain.comm import weight_transfer as wt
@@ -362,7 +362,7 @@ class _FakeRolloutBackend:  # stand-in for the rollout GridBackend the routed ar
 
 
 def test_align_one_routes_policy_actor_to_flat_rollout_target_set() -> None:
-    """PRODUCER-DRIVEN grid flip (design 2026-07-27 §2): ``_align_one`` for a policy cell over a
+    """PRODUCER-DRIVEN grid flip: ``_align_one`` for a policy cell over a
     ``push_weights(rollout)`` edge returns a target set containing the flat-index rollout actor.
     Policy (1,8) ⇒ rollout (4,2): policy cell (0,5) (flat g=5) pairs with rollout cell (2,1)
     (5 = 2*2+1). The peer's actor is the ROLLOUT backend's (2,1) actor (the arg's ``_backend``),
@@ -550,7 +550,7 @@ def test_push_weights_is_noop_with_shared_mover():
 
 
 def test_weight_sync_drives_producer_push_weights():
-    """The loop entry is PRODUCER-driven (design 2026-07-27 §2): weight_sync(rollout, policy) calls
+    """The loop entry is PRODUCER-driven: weight_sync(rollout, policy) calls
     policy.push_weights(rollout), NOT rollout.apply_weights(policy). Passing the rollout as the arg is
     what the grid's push_weights edge routes to a co-located rollout PeerClient at invoke time."""
     from cosmos_framework.posttrain.control.loop.weight_sync import weight_sync

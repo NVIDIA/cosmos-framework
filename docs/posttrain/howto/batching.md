@@ -55,7 +55,7 @@ collected batch
 ```
 
 The loop that drives this lives in the entrypoint and passes **indices only** — never data. Which
-chunk each index refers to is resolved by the dispatch layer (see the *dispatch* design doc): the
+chunk each index refers to is resolved by the dispatch layer: the
 driver says "mini 0, micro 1," and each policy rank materializes exactly that chunk of its own
 data-parallel share. The trainer's method is still plain `train(batch)`.
 
@@ -421,6 +421,7 @@ weight_sync / reward report / save    #  ONCE, at the batch boundary ───�
 
 This document covers the *consumption* side — how a collected batch becomes several normalized
 optimizer steps. The *delivery* side — how a `(mini, micro)` index turns into exactly the tensors one
-rank needs, without pulling the rest — is the **data dispatch mechanism** (`docs/design/data-dispatch.md`).
+rank needs, without pulling the rest — is the **data dispatch mechanism** implemented by
+`cosmos_framework/posttrain/workers/dispatch.py`.
 The two meet at one line: the driver's `train(batch, mini, micro, …)`, whose control kwargs the
 dispatch layer consumes so the trainer body still sees a plain `train(batch)`.

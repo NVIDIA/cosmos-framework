@@ -493,7 +493,7 @@ QWEN3_SPEC = TextDecoderFamilySpec(
 
 NEMOTRON_2B_SPEC = TextDecoderFamilySpec(
     family="nemotron_2b",
-    default_model_name="nvidia/NVIDIA-Nemotron-3-2B-BF16",
+    default_model_name="",
     pad_token_id=NEMOTRON_2B_PAD_TOKEN_ID,
     eos_token_ids=(NEMOTRON_2B_EOS_TOKEN_ID,),
     vision_start_token_id=NEMOTRON_2B_VISION_START_TOKEN_ID,
@@ -1033,6 +1033,8 @@ class TextDecoderWrapper(nn.Module):
         self.gradient_checkpoint_scope: str = gradient_checkpoint_scope
         self.position_embedding_mode: str = position_embedding_mode
         self._model_name: str = model_name or self.spec.default_model_name
+        if not self._model_name:
+            raise ValueError(f"model_name is required for the {self.spec.family!r} text decoder family")
         self._model_revision: str | None = model_revision
         resolved_attn_implementation = _resolve_attn_implementation(attn_implementation)
         if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Unified Sample / Trajectory data model (DESIGN §1.4).
+"""Unified Sample / Trajectory data model.
 
 This is the foundation everything operates on. The schema here is the *general*
 one (shaped to the final form); v0 only fills the text+image subset.
 
-Discipline (DESIGN §1.4):
+Discipline:
 - a Transition may carry BOTH `reward` (RL signal) and `targets` (supervised
   signal); at least one. v0 uses only `reward`.
 - reward and targets channels stay isolated (combiner only touches reward;
@@ -88,9 +88,9 @@ class Status(str, Enum):
 
 @dataclass
 class ObsBundle:
-    """Multi-representation observation (DESIGN §1.4).
+    """Multi-representation observation.
 
-    v0: store everything inline in `representations` (e.g. {"prompt": ..., "image": ...}).
+    v0: store everything inline in `representations` (e.g. {"prompt":..., "image":...}).
     TODO(v1+, §3.4): large fields (video/image) become lazy *handles* (metadata +
     remote addressing) pulled on demand; small fields stay inline.
 
@@ -260,7 +260,7 @@ class Transition:
     # terminal state, so bootstrapping V(s') through it is correct while bootstrapping
     # through a real terminal is not -- conflating the two is a value-function bug that
     # trains quietly. Gym split its own `done` for this reason. Multi-step embodied Envs
-    # (DESIGN 1.3) were the first consumer, and single-turn text RL sets it too: a PPO rollout that
+    #  were the first consumer, and single-turn text RL sets it too: a PPO rollout that
     # hits the token cap is `done` (the episode ended) with `truncated` True. Fixed-duration
     # sessions additionally use feedback.episode_complete for their physical reset boundary.
     truncated: bool = False
@@ -300,7 +300,7 @@ class Trajectory:
 
 @dataclass
 class Preference:
-    """Typed supervised signal for offline DPO (DESIGN §1.4): the winner/loser pair a
+    """Typed supervised signal for offline DPO: the winner/loser pair a
     `Transition` carries in `targets`. Each side is the per-sample batch dict the DPO
     objective consumes (`data.packer.preference.unpack_preferences` → `dpo_objective`).
 

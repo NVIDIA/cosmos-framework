@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""comm — DATA PLANE (DESIGN §3, §9).
+"""comm — DATA PLANE.
 
 v1+: NCCL/Gloo primitives → transport (Codec / SQ-CQ engine / backends / registry /
 metadata-bulk) → channel semantics + weight_transfer. The controller never touches

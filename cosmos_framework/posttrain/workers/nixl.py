@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""NIXL weight transport over Ray Direct Transport (design 2026-08-12-nixl-transport).
+"""NIXL weight transport over Ray Direct Transport.
 
 EVERY ray / nixl / cuda-python / cupy import is FUNCTION-SCOPED: the training container ships none
 of them, and this module is reachable from `workers/`, so a module-scope import would break

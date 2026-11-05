@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""roles.core — shared role base + the user-facing factory (DESIGN §2.7)."""
+"""roles.core — shared role base + the user-facing factory."""
 
 from cosmos_framework.posttrain.roles.core.factory import (
     buffer,
