@@ -185,3 +185,24 @@ def link_dir(target: Union[str, os.PathLike], link: Union[str, os.PathLike]) -> 
     with open(link_s + ".txt", "w", encoding="utf-8") as handle:
         handle.write(target_s + "\n")
     return "pointer-file"
+
+
+def attention_implementation(requested: str) -> str:
+    """Return the attention implementation to use for ``requested`` on this platform.
+
+    ``cosmos`` gives the Qwen3-VL vision tower a single varlen attention call per block, which
+    only the FlashAttention backends serve (cuDNN has no varlen integration). FlashAttention has
+    no Windows build, so on ``win32`` the first training step fails with "Could not find a
+    compatible Attention backend". Fall back to ``sdpa`` there: the trainer forwards
+    ``attention_mask`` under sdpa, so the fallback trains correctly. Other platforms and other
+    implementations are returned unchanged.
+    """
+    if requested == "cosmos" and sys.platform == "win32":
+        from cosmos_framework.utils import log
+
+        log.warning(
+            "attn_implementation='cosmos' has no attention backend for the Qwen3-VL vision tower on "
+            "Windows (no FlashAttention build; cuDNN rejects varlen). Using 'sdpa' instead."
+        )
+        return "sdpa"
+    return requested
