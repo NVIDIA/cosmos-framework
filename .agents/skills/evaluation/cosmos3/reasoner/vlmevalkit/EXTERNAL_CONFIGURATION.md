@@ -1,17 +1,18 @@
 # Deployment and dataset configuration
 
-The evaluation toolkit accepts caller-provided model endpoints and local dataset
-inputs. Remote dataset stages and model endpoints are not built in: they are
-supplied through the environment variables below, and without them the toolkit
-reads datasets from the local `LMUData` tree only.
+This page covers the model endpoints and the VANTAGE / Metropolis benchmarks
+that NVIDIA added to the toolkit; datasets inherited from upstream VLMEvalKit keep
+their own download behavior. For these, model endpoints and remote dataset stages
+are opt-in: they come from the environment variables below, and without them the
+benchmarks read from the local `LMUData` tree only.
 Configuration does not grant access to a dataset or service.
 
 ## Model endpoints and local installations
 
 The following environment variables supply the endpoint for each model entry.
 Set these variables before loading the model configuration (normally before
-launching `run.py`). Models are still constructed lazily. An explicit constructor
-argument has priority over the resolved configuration.
+launching `run.py`). Models are still constructed lazily. An `api_base` passed
+explicitly to the model constructor has priority over the environment variable.
 The Qwen, Cosmos Reason1, and ARM Thinker values are complete chat-completions
 URLs; `LVS_service` expects its service base URL.
 
@@ -23,7 +24,12 @@ URLs; `LVS_service` expects its service base URL.
 | `cosmos_reason1_7b` | `VLMEVAL_COSMOS_REASON1_API_BASE` |
 | `LVS_service` | `VLMEVAL_LVS_API_BASE` |
 | `Qwen3-VL-8B--crop--arm_thinker_prompt--sglang` | `VLMEVAL_ARM_THINKER_SGLANG_API_BASE` |
-| `Qwen3-VL-8B--crop--official_prompt--vllm` | `LMDEPLOY_API_BASE` (read by the ARM Thinker wrapper when no `api_base` is passed; required when this entry is selected). `LMDEPLOY_API_KEY`, when set, replaces the entry's placeholder key. |
+| `Qwen3-VL-8B--crop--official_prompt--vllm` | `LMDEPLOY_API_BASE` (read by the ARM Thinker wrapper; required unless an `api_base` is passed) |
+
+API keys are resolved separately from endpoints. The Qwen and Cosmos Reason1
+entries read `COSMOS_API_KEY` (a `key` argument is ignored). Both ARM Thinker
+entries use `LMDEPLOY_API_KEY` when it is set, otherwise their configured
+placeholder key `EMPTY`. `LVS_service` uses its `key` argument.
 
 `INTERN_S1_MINI_MODEL_PATH` optionally overrides the existing Intern-S1-mini
 model directory. `MINIGPT4_ROOT` optionally overrides the existing MiniGPT-4
@@ -38,24 +44,30 @@ For an uncached DSS dataset, set both `NVDATASET_TENANTID` and `NGC_API_KEY`;
 there is no default tenant, and the download stops with a `ValueError` when
 either is missing.
 
-Metropolis2D adapters accept `data_root` and `annotation_file` through their
-constructor or dataset configuration (`datasets.yaml` ships placeholders only).
+Metropolis2D adapters accept `data_root` (and, for grounding, `annotation_file`)
+through their constructor or dataset configuration (`datasets.yaml` ships
+placeholders only).
 Without either, the VANTAGE rows resolve to the hydrated local cache under
 `LMUData`. Missing or nonexistent grounding annotation files produce a clear
 `ValueError`.
 
 ## Dataset storage
 
-Every dataset loader except `VANTAGE_2DGrounding` looks for its data under
-`LMUData` first. A remote fetch is attempted only when the local copy is absent
-**and** a bucket is configured; otherwise the loader raises `FileNotFoundError`
-naming the expected directory.
+The VANTAGE and Metropolis loaders look for their data under `LMUData` first
+(paths in the table below). A remote fetch is attempted only when the local copy
+is absent **and** the matching bucket variable is set. Without the bucket, the
+VQA, Temporal, DVC, event-verification, pointing and SOT loaders raise
+`FileNotFoundError` naming the expected directory; the Metropolis2D adapters
+(Astro2D and 2D grounding) raise `ValueError` instead. `MetropolisDVC` uses the
+DSS route above rather than a bucket. Set the storage variables before starting
+the run.
 
 `VANTAGE_2DGrounding` does not read the bucket variables. It needs either the
 hydrated local cache (see the table below) or both `data_root` and
 `annotation_file`, passed to the constructor or set in `datasets.yaml`. Both may
 be local paths or `s3://` URIs; `s3://` URIs are fetched through
-`AWS_ENDPOINT_URL`. With neither the cache nor both paths, it raises a
+`AWS_ENDPOINT_URL` with the `VLMEVAL_BENCHMARK_S3_PROFILE` profile when it is set.
+With neither the cache nor both paths, it raises a
 `ValueError`.
 
 | Variable | Used for |
@@ -63,7 +75,7 @@ be local paths or `s3://` URIs; `s3://` URIs are fetched through
 | `VLMEVAL_BENCHMARK_S3_BUCKET` | VANTAGE stages, `MetropolisEventVerification`, and the optional video frame cache (`VideoCache`; off when unset) |
 | `VLMEVAL_METROPOLIS_S3_BUCKET` | `MetropolisVQA` and `MetropolisTemporal` |
 | `AWS_ENDPOINT_URL` | S3-compatible endpoint for the buckets above (standard AWS variable; unset = AWS default) |
-| `VLMEVAL_BENCHMARK_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_BENCHMARK_S3_BUCKET` |
+| `VLMEVAL_BENCHMARK_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_BENCHMARK_S3_BUCKET` and for `s3://` paths passed to the Metropolis2D adapters |
 | `VLMEVAL_METROPOLIS_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_METROPOLIS_S3_BUCKET` |
 
 Without a `*_S3_PROFILE` variable, AWS credentials come from the standard AWS
