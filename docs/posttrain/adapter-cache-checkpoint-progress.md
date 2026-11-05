@@ -7,7 +7,7 @@ not replace their precision, checkpoint, backend or benchmark identities.
 | Requirement | Implementation | Qualification |
 |---|---|---|
 | Selective DCP/consolidated adapter extraction | `checkpoint/adapter_extract.py`; existing checkpoint boundary/provenance | Public MoE DCP fresh/reuse under 16 GiB whole-job cap; public consolidated and DCP recovery under 8 GiB; exact 882/625 tensors; stock-loader check pending |
-| Canonical BF16 cached inference | `utils/generator/bf16_cache*.py`, explicit portable API and tagged merged loader | Operator/ownership/metadata source tests pass; real installed qualification pending |
+| Canonical BF16 cached inference | `utils/generator/bf16_cache*.py`, explicit portable API and tagged merged loader | Operator/ownership/metadata source tests and installed 6a1a36d Qwen3-VL 96/104-case reload/cache/merge/resource checks pass |
 | Matched full WTS training | `configs/sft_wts_execution_comparison.py`, explicit factorized stock-HF5 control | Both lifecycle preflights pass; full one-epoch jobs running on immutable `4423805` |
 | Independent review | Local review package | Extraction/control reviewed; cache profile review in progress |
 
@@ -39,8 +39,19 @@ trainability flags and optimizer membership remain unchanged; inference calls
 cannot silently detach a training graph.
 
 The unmodified legacy BF16 failures, original populations and all numerical gates
-remain in the local evidence package. Qwen3.5 cache arithmetic remains an
-investigation; no production cache profile is enabled for it.
+remain in the local evidence package. Qwen3.5's separate `qwen3_5_bf16_canonical_cache_v1` uses the same linear and
+attention kernels plus one FP64 gated-delta recurrence for prefill, suffix and
+decode, rounding recurrent state to FP32 after every token. It allocates request
+state in ordinary DynamicCache without global Transformers patches; recurrent
+state is FP32, convolution and full-attention KV remain BF16. Source operator and
+multimodal cache tests pass; installed real-model qualification is pending.
+
+Portable training builders derive generation defaults from the model config.
+For cross-loader generation, explicitly use the same saved base generation
+configuration, including both EOS IDs. The initial comparison retained different
+EOS masks on closed-chat training probes: all first logits were exact, but
+continuations differed. Its failed records remain; controlled decode v2 uses the
+same EOS/pad/BOS settings for both loaders and retains every input and threshold.
 
 ## Export and evidence boundaries
 

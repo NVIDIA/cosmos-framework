@@ -250,26 +250,26 @@ def config_with_export_dtype(
         # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
-    from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
+    from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
 
     if execution_profile is not None:
         if (
-            execution_profile not in ("qwen3_vl_bf16_residual_fp32_v1", CACHE_PROFILE)
+            execution_profile not in ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES)
             or output_dtype != "bfloat16"
-            or result.get("model_type") != "qwen3_vl"
-            or (execution_profile == CACHE_PROFILE and model_execution != "merged_weight_bf16_v1")
+            or result.get("model_type") != PROFILE_FAMILIES.get(execution_profile, "qwen3_vl")
+            or (execution_profile in PROFILE_FAMILIES and model_execution != "merged_weight_bf16_v1")
         ):
-            raise ValueError("BF16 deployment requires a compatible dense Qwen3-VL execution identity")
+            raise ValueError("BF16 deployment requires a compatible dense Qwen execution identity")
         result["cosmos_inference_profile"] = execution_profile
     if model_execution is not None:
         if model_execution == "merged_weight_bf16_v1":
             if (
                 output_dtype not in ("float32", "bfloat16")
                 or result.get("model_type") not in ("qwen3_vl", "qwen3_5")
-                or execution_profile not in (None, CACHE_PROFILE)
+                or execution_profile not in (None, *PROFILE_FAMILIES)
             ):
                 raise ValueError(
-                    "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and stock arithmetic"
+                    "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and compatible deployment arithmetic"
                 )
         elif model_execution == "qwen3_vl_hf_stock_v1":
             if output_dtype != "float32" or result.get("model_type") != "qwen3_vl" or execution_profile is not None:

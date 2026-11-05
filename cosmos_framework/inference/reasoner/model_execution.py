@@ -67,12 +67,12 @@ def model_execution_profile(path):
                 "equivalence": "precision_specific_dense_execution_v1",
             }
             if precision.get("execution_profile") is not None:
-                from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
                 from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
 
-                validate_adapter_identity(adapter)
-                expected["execution_profile"] = CACHE_PROFILE
-                if config.get("cosmos_inference_profile") != CACHE_PROFILE:
+                deployment = precision["execution_profile"]
+                validate_adapter_identity(adapter, profile=deployment)
+                expected["execution_profile"] = deployment
+                if config.get("cosmos_inference_profile") != deployment:
                     raise ValueError("canonical cache deployment is not bound to the model config")
             if precision != expected:
                 raise ValueError("new BF16 execution requires its precision-specific deployment contract")

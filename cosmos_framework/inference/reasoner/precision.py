@@ -15,6 +15,7 @@ import types
 from pathlib import Path
 
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
+from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES, QWEN3_5_PROFILE
 
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
@@ -42,20 +43,20 @@ def deployment_profile(path: str) -> str | None:
     bound = precision.get("execution_profile")
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, CACHE_PROFILE) or bound != declared:
+    if declared not in (PROFILE, *PROFILE_FAMILIES) or bound != declared:
         raise ValueError("missing, conflicting or unknown deployment profile in config/.materialized; re-export")
     if (
-        config.get("model_type") != "qwen3_vl"
+        config.get("model_type") != PROFILE_FAMILIES.get(declared, "qwen3_vl")
         or config.get("dtype", config.get("torch_dtype")) != "bfloat16"
         or identity.get("output_dtype") != "bfloat16"
         or precision.get("dtype") != "bfloat16"
         or metadata.get("format") != "cosmos-merged-adapter-v1"
     ):
         raise ValueError("residual FP32 deployment requires a committed dense Qwen3-VL BF16 merged artifact")
-    if declared == CACHE_PROFILE:
+    if declared in PROFILE_FAMILIES:
         from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
 
-        validate_adapter_identity(metadata.get("adapter_identity", {}))
+        validate_adapter_identity(metadata.get("adapter_identity", {}), profile=declared)
         if config.get("cosmos_model_execution") != "merged_weight_bf16_v1":
             raise ValueError("canonical cache profile requires its merged-weight model execution identity")
     return declared
@@ -119,6 +120,10 @@ def install_deployment_profile(model, profile: str) -> list[str]:
     import torch
     from torch import nn
 
+    if profile == QWEN3_5_PROFILE:
+        from cosmos_framework.utils.generator.qwen3_5_cache import install
+
+        return install(model)
     if profile == CACHE_PROFILE:
         from cosmos_framework.utils.generator.bf16_cache import install
 

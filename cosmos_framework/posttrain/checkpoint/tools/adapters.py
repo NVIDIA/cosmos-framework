@@ -115,7 +115,8 @@ def export_merged_adapter(
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     if execution_profile is not None and (
-        execution_profile not in ("qwen3_vl_bf16_residual_fp32_v1", "qwen3_vl_bf16_canonical_cache_v1")
+        execution_profile
+        not in ("qwen3_vl_bf16_residual_fp32_v1", "qwen3_vl_bf16_canonical_cache_v1", "qwen3_5_bf16_canonical_cache_v1")
         or output_dtype != "bfloat16"
     ):
         raise ValueError("execution_profile requires a supported BF16 deployment profile and bfloat16 output")
@@ -223,7 +224,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--execution-profile",
-        choices=["qwen3_vl_bf16_residual_fp32_v1", "qwen3_vl_bf16_canonical_cache_v1"],
+        choices=[
+            "qwen3_vl_bf16_residual_fp32_v1",
+            "qwen3_vl_bf16_canonical_cache_v1",
+            "qwen3_5_bf16_canonical_cache_v1",
+        ],
         help="BF16 merged inference arithmetic; requires Framework loading, not plain stock HF execution",
     )
     args = parser.parse_args(argv)

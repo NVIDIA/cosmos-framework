@@ -77,13 +77,18 @@ def install_adapter_inference_profile(net, profile):
     from cosmos_framework.posttrain.checkpoint.adapters import _validate_state, state_spec
     from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear
     from cosmos_framework.utils.generator.bf16_cache import install, validate_model
-    from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
-    from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
+    from cosmos_framework.utils.generator.bf16_cache_contract import (
+        PROFILE_FAMILIES,
+        QWEN3_5_PROFILE,
+        validate_adapter_identity,
+    )
 
-    if profile != CACHE_PROFILE:
+    if profile not in PROFILE_FAMILIES:
         raise ValueError(f"unknown portable inference profile: {profile!r}")
     identity = getattr(net, "_posttrain_adapter_identity", {})
-    validate_adapter_identity(identity)
+    validate_adapter_identity(identity, profile=profile)
+    if profile == QWEN3_5_PROFILE:
+        from cosmos_framework.utils.generator.qwen3_5_cache import install, validate_model
     spec = state_spec(identity)
     state = net.state_dict()
     _validate_state({name: state[name] for name in spec if name in state}, identity)

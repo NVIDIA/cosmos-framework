@@ -492,13 +492,12 @@ def merged_export_metadata(
     elif output_dtype != "float32":
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     if execution_profile is not None:
-        from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
-        from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
+        from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES, validate_adapter_identity
 
         if output_dtype != "bfloat16":
             raise ValueError("execution_profile requires bfloat16 output")
-        if execution_profile == CACHE_PROFILE:
-            validate_adapter_identity(identity)
+        if execution_profile in PROFILE_FAMILIES:
+            validate_adapter_identity(identity, profile=execution_profile)
         elif execution_profile == "qwen3_vl_bf16_residual_fp32_v1":
             if identity["resolved"].get("model_execution") == "merged_weight_bf16_v1":
                 raise ValueError("merged-weight execution cannot acquire the legacy residual deployment override")
