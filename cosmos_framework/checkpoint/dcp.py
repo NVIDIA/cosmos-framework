@@ -785,6 +785,14 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 "inconsistent checkpoint: the optimizer moments would track the original "
                 "reg-weight trajectory, not the EMA weights just copied in."
             )
+        if config_checkpoint.dcp_async_mode_enabled and not disable_async and sys.platform == "win32":
+            # The async path stages the whole state dict through pinned host memory. On a
+            # unified-memory Windows device (RTX Spark) that copy competes with the resident
+            # model and the save dies with CUDA out of memory, so save synchronously there.
+            log.warning(
+                "checkpoint.dcp_async_mode_enabled=true is not supported on Windows; saving synchronously instead."
+            )
+            disable_async = True
         if config_checkpoint.dcp_async_mode_enabled and not disable_async:
             self.async_mode = AsyncMode.ASYNC_WITH_PINNED_MEM
         else:
@@ -1221,6 +1229,13 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 path=checkpoint_path,
                 enable_gcs_patch_in_boto3=self.config_checkpoint.enable_gcs_patch_in_boto3,
             )
+        if sys.platform == "win32":
+            # torch's default writer stages every tensor through pinned host memory
+            # (per_thread_copy_ahead) and the pinned-memory cache never shrinks. On a
+            # unified-memory Windows device that cache competes with the resident model and
+            # the save dies with CUDA out of memory part way through; per_thread_copy_ahead=0
+            # selects the serial, pageable loader instead.
+            return FileSystemWriter(path=checkpoint_path, per_thread_copy_ahead=0)
         return FileSystemWriter(path=checkpoint_path)
 
     def get_storage_reader(
