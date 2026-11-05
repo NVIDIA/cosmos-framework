@@ -208,6 +208,7 @@ action_policy_droid_nano = LazyDict(
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
                             filter_dict_path=None,
+                            filter_dict_source_prefix="",
                             action_normalization=None,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
                             resolution="480",  # 640x360 data @ 480p
