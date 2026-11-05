@@ -71,7 +71,7 @@ export UV_PROJECT_ENVIRONMENT="$COSMOS3_QUANTIZE_VENV"
 export GIT_LFS_SKIP_SMUDGE=1
 uv sync --all-extras --group="$COSMOS3_UV_GROUP"
 uv pip install --python "$COSMOS3_QUANTIZE_VENV/bin/python" \
-  "nvidia-modelopt[torch]" datasets ipykernel jupyter-client nbconvert
+  "nvidia-modelopt[torch]==0.44.0" datasets ipykernel jupyter-client nbconvert
 "$COSMOS3_QUANTIZE_VENV/bin/python" -m ipykernel install --user \
   --name cosmos3-quantize --display-name "Cosmos3 Quantize (Python 3.13)"
 export RUN_ARTIFACTS="$(mktemp -d /tmp/cosmos3-quantize.XXXXXX)"
