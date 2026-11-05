@@ -1,4 +1,4 @@
-# Adapter export memory and prospective BF16 execution
+# Adapter export memory and BF16 execution
 
 This continuation starts at `338971dcf8f0b02281f81df2546c9318a9053d6b`.
 The qualified versioned MoE PiSSA execution, physical 2×2 HSDP and full
@@ -18,7 +18,7 @@ new-mode results are recorded in [adapter-effective-execution.md](adapter-effect
 | Public fresh 30B export, every tensor, established input populations | New installed wheel and original qualified stock artifact | Passed: all 882 tensors bitwise equal, 64 established stock-loader inputs pass, new/legacy completed exports reuse without marker mutation; no retraining. |
 | Broader ordinary-LoRA BF16 qualification | Existing deployment profile unchanged | New body-FP32/head-BF16 diagnostic fails old gates; no expanded support claim. |
 | Mixed/Qwen3.5 legacy BF16 references | Existing references and gates unchanged | Preserved incompatible-oracle failures; no candidate search against an impossible intersection. |
-| Prospective BF16 training/deployment semantics | Explicit `merged_weight_bf16_v1`, portable format v4, approved 2026-11-05 | Implemented with focused CPU tests; installed real-model GPU qualification pending. See [new execution contract](adapter-merged-weight-bf16.md). |
+| Prospective BF16 training/deployment semantics | Explicit `merged_weight_bf16_v1`, portable format v4, approved 2026-11-05 | Three real profiles pass training/resume and precision-matched stock exports; broad BF16 cache gates fail, so deployment qualification is incomplete. See [new execution contract](adapter-merged-weight-bf16.md). |
 
 ## Why the previous export used 329.6 GiB
 
@@ -110,3 +110,12 @@ staged output, with no full `model.pt`. The 329.597 GiB / 1535.67-second histori
 run had different concurrent activity, so timing is observational, not a paired
 exclusive-host benchmark. New completed-export reuse took 353.36 seconds and
 legacy reuse 281.75 seconds, both below 3.94 GiB process-tree RSS.
+
+The final installed `df334fc` package also passed an actual process interruption
+check: SIGTERM after the first public-export shard left an uncommitted staging
+tree; the normal public CLI rejected its missing index, rebuilt it, and committed
+the export. All 625 recovered Qwen3-VL tensors match the independently completed
+reference exactly. The first comparator invocation correctly refused a stale
+wheel attestation; only the comparison was rerun with the correct installed
+revision. The completed recovery was not repeated. See local
+`public-recovery/final-report.json` and preserved failed invocation logs.
