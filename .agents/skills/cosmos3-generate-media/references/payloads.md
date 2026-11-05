@@ -1443,7 +1443,6 @@ def create_payload(use_case: str, *, backend: str) -> tuple[Path, Path, str]:
             print(f"video:   {vision_display_path.relative_to(COSMOS_ROOT)}")
         else:
             print(f"image:   {vision_display_path.relative_to(COSMOS_ROOT)}")
-    print(json.dumps({k: payload[k] for k in ["model_mode", "name", "enable_sound", "num_steps", "guidance", "shift", "fps", "num_frames", "resolution", "aspect_ratio", "seed"]}, indent=2))
     summary_keys = ["model_mode", "name", "enable_sound", "num_steps", "guidance", "shift", "fps", "num_frames", "resolution", "aspect_ratio", "seed"]
     print(json.dumps({k: payload[k] for k in summary_keys if k in payload}, indent=2))
     if payload.get("distilled"):
