@@ -23,7 +23,7 @@ URLs; `LVS_service` expects its service base URL.
 | `cosmos_reason1_7b` | `VLMEVAL_COSMOS_REASON1_API_BASE` |
 | `LVS_service` | `VLMEVAL_LVS_API_BASE` |
 | `Qwen3-VL-8B--crop--arm_thinker_prompt--sglang` | `VLMEVAL_ARM_THINKER_SGLANG_API_BASE` |
-| `Qwen3-VL-8B--crop--official_prompt--vllm` | `LMDEPLOY_API_BASE` (read by the ARM Thinker wrapper; required when this entry is selected) |
+| `Qwen3-VL-8B--crop--official_prompt--vllm` | `LMDEPLOY_API_BASE` (read by the ARM Thinker wrapper when no `api_base` is passed; required when this entry is selected). `LMDEPLOY_API_KEY`, when set, replaces the entry's placeholder key. |
 
 `INTERN_S1_MINI_MODEL_PATH` optionally overrides the existing Intern-S1-mini
 model directory. `MINIGPT4_ROOT` optionally overrides the existing MiniGPT-4
@@ -63,8 +63,13 @@ be local paths or `s3://` URIs; `s3://` URIs are fetched through
 | `VLMEVAL_BENCHMARK_S3_BUCKET` | VANTAGE stages, `MetropolisEventVerification`, and the optional video frame cache (`VideoCache`; off when unset) |
 | `VLMEVAL_METROPOLIS_S3_BUCKET` | `MetropolisVQA` and `MetropolisTemporal` |
 | `AWS_ENDPOINT_URL` | S3-compatible endpoint for the buckets above (standard AWS variable; unset = AWS default) |
+| `VLMEVAL_BENCHMARK_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_BENCHMARK_S3_BUCKET` |
+| `VLMEVAL_METROPOLIS_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_METROPOLIS_S3_BUCKET` |
 
-AWS credentials come from the usual AWS sources (named profiles or environment).
+Without a `*_S3_PROFILE` variable, AWS credentials come from the standard AWS
+credential chain: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment,
+`AWS_PROFILE`, or the shared AWS config and credentials files. Set a
+`*_S3_PROFILE` variable only when a bucket needs a different named profile.
 
 ### Where each VANTAGE benchmark expects its local data
 

@@ -82,7 +82,7 @@ class VANTAGE_2DPointing(ImageMCQDataset):
         Path(local_dir).parent.mkdir(parents=True, exist_ok=True)
         s3 = S3FileSystem(
             anon=False,
-            profile='team-cosmos',
+            profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
             client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')},
         )
         s3_path = f'{S3_BUCKET}/{S3_PREFIX}'

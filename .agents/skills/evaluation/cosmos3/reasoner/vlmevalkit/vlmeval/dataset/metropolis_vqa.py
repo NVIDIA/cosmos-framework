@@ -62,21 +62,19 @@ class MetropolisVQA(VideoBaseDataset):
     MD5 = ''
     TYPE = 'VQA'
 
-    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Default cosmos row
-    # hits the Metropolis bucket via team-tao-fabric-metrics; VANTAGE row hits
-    # the HF-release stage via team-cosmos. Buckets come from env (unset = local
-    # only). The `dataset` arg from the JSON config selects which entry, so no
+    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Buckets come from env
+    # (unset = local only); an unset profile uses the standard AWS credential chain. The `dataset` arg from the JSON config selects which entry, so no
     # JSON-level data-source knobs are needed.
     _S3_PATHS = {
         'MetropolisVQA': (
             os.environ.get('VLMEVAL_METROPOLIS_S3_BUCKET'),
             'nv-metropolis_vqa_06_Aug_25',
-            'team-tao-fabric-metrics',
+            os.environ.get('VLMEVAL_METROPOLIS_S3_PROFILE'),
         ),
         'VANTAGE_VQA': (
             os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/vantage_benchmark_hf_release_annotations/VQA',
-            'team-cosmos',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
         ),
     }
     # Back-compat aliases — left as fallbacks for callers that read the class

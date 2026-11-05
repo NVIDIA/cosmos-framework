@@ -98,19 +98,18 @@ class MetropolisTemporal(VideoBaseDataset):
     MD5 = ''  # To be determined based on actual data file
     TYPE = 'Video-Temporal-Localization'
 
-    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Cosmos row hits
-    # nv-temporal-06-Aug-25 via team-tao-fabric-metrics; VANTAGE row hits the
-    # HF-release stage via team-cosmos.
+    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Buckets and the optional
+    # AWS profile come from env; an unset profile uses the standard AWS credential chain.
     _S3_PATHS = {
         'MetropolisTemporal': (
             os.environ.get('VLMEVAL_METROPOLIS_S3_BUCKET'),
             'nv-temporal-06-Aug-25',
-            'team-tao-fabric-metrics',
+            os.environ.get('VLMEVAL_METROPOLIS_S3_PROFILE'),
         ),
         'VANTAGE_Temporal': (
             os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/vantage_benchmark_hf_release_annotations/Temporal',
-            'team-cosmos',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
         ),
     }
     S3_BUCKET = _S3_PATHS['MetropolisTemporal'][0]

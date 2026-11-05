@@ -102,7 +102,7 @@ class MetropolisEventVerification(VideoBaseDataset):
             print(f"copying dataset from {s3_source} to {dataset_dir_path}")
             s3 = S3FileSystem(
                 anon=False,
-                profile='team-cosmos',
+                profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
                 client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
             )
             s3.get(s3_source, str(dataset_dir_path), recursive=True)

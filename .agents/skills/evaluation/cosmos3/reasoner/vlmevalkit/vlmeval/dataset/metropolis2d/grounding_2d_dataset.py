@@ -539,7 +539,7 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                 print(f"copying dataset from {self.data_root} to {dataset_dir_path}")
                 s3 = S3FileSystem(
                     anon=False,
-                    profile='team-cosmos',
+                    profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
                     client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                 )
                 s3.get(self.data_root, str(dataset_dir_path), recursive=True)
@@ -555,7 +555,7 @@ class Metropolis2DGroundingDataset(ImageBaseDataset):
                 if s3 is None:
                     s3 = S3FileSystem(
                         anon=False,
-                        profile='team-cosmos',
+                        profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
                         client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                     )
                 local_anno_path.parent.mkdir(parents=True, exist_ok=True)

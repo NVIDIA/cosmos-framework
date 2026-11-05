@@ -202,7 +202,7 @@ class MetropolisDVC(VideoBaseDataset):
                 )
             s3 = S3FileSystem(
                 anon=False,
-                profile='team-cosmos',
+                profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
                 client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')},
             )
             s3_source = f"{self._VANTAGE_S3_BUCKET}/{self._VANTAGE_S3_PREFIX}"

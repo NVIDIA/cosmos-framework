@@ -210,10 +210,10 @@ class Astro2DDetectionDataset(ImageBaseDataset):
             if not dataset_dir_path.exists():
                 print(f"copying dataset from {self.data_root} to {dataset_dir_path}")
 
-                # Use S3FileSystem with team-cosmos profile and custom endpoint
+                # Standard AWS credential chain unless VLMEVAL_BENCHMARK_S3_PROFILE names a profile
                 s3 = S3FileSystem(
                     anon=False,
-                    profile='team-cosmos',
+                    profile=os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
                     client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
                 )
 
