@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""vLLM rollout body (body=(a) local compute; engine integration).
+"""vLLM rollout body (the contract body=(a) local compute; engine integration).
 
 `VLLMRollout`: a real inference engine (vLLM) dropped in as a sibling to `HFRollout`,
-producing the unified Trajectory/Transition data model. Route C runs TP via
-`external_launcher` on a per-replica rendezvous.
+producing the unified Trajectory/Transition data model. Route C (TP via
+`external_launcher` on a per-replica rendezvous) keeps each execution replica's rank world independent.
 Contract:
 
   - MUST emit ``policy_info["rollout_logprobs"]`` (π_old, per completion token; the
@@ -427,7 +427,7 @@ class VLLMRollout(WeightReceiverBase):
         if blocked:
             raise RuntimeError(f"vLLM rollout has {blocked} released; call wake_up() first")
 
-    # --- weight-transfer edge target ---
+    # --- weight-transfer edge target  ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """Import trainer weights into the RUNNING vLLM engine — PEER-ONLY surface.
 

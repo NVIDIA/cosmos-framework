@@ -81,11 +81,12 @@ class LocalPeerClient:
 
 
 class CollectiveHandle(Handle):
-    """Mesh result handle (replica×rank). Holds one ObjectRef per
+    """Mesh result handle. Holds one ObjectRef per
     (replica, rank); at the next WG boundary the backend aligns it onto each consumer
     actor via an AlignPolicy and forwards the producer ObjectRef into the actor, which
     resolves it actor-side. The controller forwards only the tiny ref — never the
-    producer's metadata payload — and bulk is pulled peer-to-peer at materialize time."""
+    producer's metadata payload — and bulk is pulled peer-to-peer at materialize time
+    ."""
 
     def __init__(self, refs: dict, shape: tuple, getter=None):
         self._refs = refs  # {(r, k): ref}
@@ -485,7 +486,7 @@ class WorkerGroup:
         self.dispatch_profile: str | None = dispatch_profile
         # needs_bulk: does this WG's body COMPUTE on bulk fields (so its inputs must be
         # materialized), or does it only route/filter on metadata? A consumer-declared
-        # port property (field-level / move-once-where-needed); the bind/
+        # port property; the bind/
         # transport layer pulls bulk only at WGs that set this. Default False ⇒ BulkRefs
         # flow through untouched (e.g. reward-on-text, buffer holds metadata).
         self.needs_bulk: bool = needs_bulk
@@ -534,7 +535,7 @@ class WorkerGroup:
             # RankAligned unwraps its one eager producer value.
             args = tuple(_resolve_local_dispatch(a) for a in args)
             kw = {k: _resolve_local_dispatch(v) for k, v in kw.items()}
-            args, kw = _local_select(self.role, method, args, kw)
+            args, kw = _local_select(self.role, method, args, kw)  # the implementation
             return Handle(getattr(self.body, method)(*args, **kw))  # default local sync-eager
         submit = self._backend.submit
         if "kind" in inspect.signature(submit).parameters:

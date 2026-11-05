@@ -3,7 +3,7 @@
 
 """Cosmos RL — async-native (also sync-capable) post-training framework.
 
-See the README. Roles = env(dataset) /
+Roles separate env(dataset) /
 rollout / reward / trainer(policy) (+buffer), decoupled as model ↔ algorithm(objective) ↔
 trainer(engine); typed config over inherited upstream experiments; per-algorithm entrypoints
 (DPO end-to-end on the 8B); orchestration spans local(torchrun/FSDP) and Ray, single-node

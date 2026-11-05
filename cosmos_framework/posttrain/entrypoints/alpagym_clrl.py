@@ -24,7 +24,7 @@ CONFIG. This entry reads AlpaGym's already-resolved run config (`alpagym_host.co
 load_run_config`), the same file `cosmos/entrypoint.py` reads today — it does NOT go through the framework's
 config root. That root needs `multi-storage-client`, which moves protobuf 4.25.9 → 7.35.1 in
 AlpaGym's venv, under a link where AlpaGym exchanges protobuf messages with the simulator on every
-one of an episode's 22 ticks. Migrating the config surface is milestone 2.
+one of an episode's 22 ticks. Migrating the config surface is a later milestone.
 """
 
 from __future__ import annotations
@@ -710,8 +710,8 @@ def loop(units: dict, config: EntryConfig) -> dict:
                 f"step {step}: rollout weight_version {rollout_version} != trainer iteration "
                 f"{trainer_iteration} -- the rollout would sample from stale weights"
             )
-        # The version rides in the metrics dict, not a separate line: it is the staleness signal,
-        # so the channel that carries metrics to the console -- and to W&B once that
+        # The version rides in the metrics dict, not a separate line: it is the staleness signal
+        # , so the channel that carries metrics to the console -- and to W&B once that
         # is wired -- is the one that should carry it.
         # `emit_metric_frame`, not a bare `report`: it converges a schema rejection across ranks
         # (one rank raising while the others carry on hangs the next collective) and isolates a

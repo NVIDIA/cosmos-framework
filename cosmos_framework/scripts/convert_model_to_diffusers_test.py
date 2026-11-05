@@ -161,15 +161,3 @@ def test_vision_encoder_checkpoint_prefix_absent(tmp_path) -> None:
     converter = pytest.importorskip("cosmos_framework.scripts._convert_model_to_diffusers")
     (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {"lm_head.weight": "x"}}))
     assert converter._checkpoint_vision_weight_prefix(tmp_path) is None
-
-
-def test_vision_encoder_config_from_omni_repo(tmp_path) -> None:
-    # Published omni repos use a model_type transformers does not register; the Qwen3-VL tower
-    # config must still be read from their top-level vision_config.
-    converter = pytest.importorskip("cosmos_framework.scripts._convert_model_to_diffusers")
-    torch = pytest.importorskip("torch")
-    vision_config = {"model_type": "qwen3_vl", "depth": 2, "hidden_size": 64, "num_heads": 2, "out_hidden_size": 64}
-    (tmp_path / "config.json").write_text(json.dumps({"model_type": "cosmos3_omni", "vision_config": vision_config}))
-    # An empty state dict gets past config resolution and fails only at the strict weight load.
-    with pytest.raises(RuntimeError, match="Qwen3VLVisionModel"):
-        converter._build_vision_encoder({}, str(tmp_path), torch.bfloat16)

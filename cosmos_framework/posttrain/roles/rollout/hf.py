@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""HuggingFace rollout body (body=(a) local compute).
+"""HuggingFace rollout body (the contract body=(a) local compute).
 
 `HFRollout`: HF `generate` with group sampling. In the training loop the POLICY pushes weights
 into this PASSIVE receiver (producer-driven): `apply_bucket` loads each
 pushed bucket and the controller's prepare/commit barrier publishes the version. `apply_weights` is the KEPT
 consumer-pull surface (manual / NCCL rigs), NOT the loop entry, and a no-op only when trainer &
-rollout share one model instance. A real inference engine (SGLang/vLLM/TRT-LLM) drops in as a
+rollout share one model instance. A real inference engine (SGLang/vLLM/TRT-LLM, #6) drops in as a
 sibling variant.
 """
 
@@ -51,7 +51,7 @@ def _trim_at_stop(comp_ids, stop_ids: "set[int]"):
     unless BOTH `skip_special_tokens=False` AND `include_stop_str_in_output=True` are set; cosmos-rl
     sets neither on its rollout SamplingParams, and its `DecoderOnlyLLMDataPacker` re-tokenizes the
     TEXT. So cosmos-rl trains one token shorter than we do on every stopped completion. That single
-    token was the entire residual loss gap between the two stacks.
+    token changes the supervised sequence, so preserving token IDs matters.
 
     Args:
         comp_ids: 1-D tensor of completion token ids, right-padded by `generate`.

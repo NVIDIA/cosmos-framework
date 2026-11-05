@@ -184,13 +184,7 @@ def convert_model_to_diffusers(args: Args) -> None:
     vlm_checkpoint_path = vlm_checkpoint.download()
     for pattern in vlm_checkpoint.include:
         for p in Path(vlm_checkpoint_path).glob(pattern):
-            # Published omni repos also ship the pipeline-layout files this export writes itself.
-            if p.name in (
-                "model.safetensors.index.json",
-                "model_index.json",
-                "modular_model_index.json",
-                "checkpoint.json",
-            ):
+            if p.name == "model.safetensors.index.json":
                 continue
             shutil.copy(p, args.output_path / p.name)
 

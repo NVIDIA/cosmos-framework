@@ -13,7 +13,7 @@ implementation (`callbacks/one_logger.py`); `build_controller_observers` assembl
 run has asked for. GRPO/OPD construction is best effort; Joint PPO retains fail-fast admission
 and synchronous initialization before creating model roles.
 
-Two kinds of event, matching the two kinds of callback:
+Two kinds of event have different delivery contracts:
 
 - The interval events (train step/batch, checkpoint save) are *observer* events: queued, delivered on
   the worker in emission order, dropped when the queue is full. Every queued event carries the clocks
@@ -147,7 +147,7 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
     (`control/dispatch.py`, 1024 events) that one lazily created daemon worker thread drains in
     emission order, so the emitting controller thread never blocks and never waits for an observer
     (observers are async, off-hot-path, must not block). Each queued event is stamped with the
-    emitting thread's clocks (`LifecycleEvent`), which :meth:`ControllerLifecycleObserver.observe`
+    emitting thread's clocks (`LifecycleEvent`), which:meth:`ControllerLifecycleObserver.observe`
     hands to an observer that measures intervals. An event the full queue cannot take is dropped and
     counted (a warning on the first drop and at every power of ten), never queued behind a slow
     observer; start/end pairs are dropped together (``LIFECYCLE_PAIRS``), never split.
@@ -160,7 +160,7 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
     gate therefore can neither be dropped by a full queue nor overtaken by queued events, and it never
     enters an observer while the worker is still inside one of its hooks: the intervals observers close
     at ``on_train_end`` are closed when the call returns, and ``on_app_end`` reaches the backends'
-    teardown (OneLogger's finish/destroy) after every earlier event and before :meth:`shutdown` stops
+    teardown (OneLogger's finish/destroy) after every earlier event and before:meth:`shutdown` stops
     the worker and logs the drop total. ``on_app_start`` initialises the backends' singletons
     (OneLogger's global object) once, before the loop and before any worker exists, so it runs inline
     on the caller's thread and the entry and the tests read the result right after the call; the
@@ -169,12 +169,12 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
     off-hot-path observer. When the wait runs out (an observer parked inside a hook for longer than
     the bound), the caller returns with a warning naming the hook and the events queued ahead, and the
     gate stays queued: it is delivered, in order, when the observer returns, never forced onto the
-    caller's thread while a hook is still running. ``on_app_end`` then bounds :meth:`shutdown` the
+    caller's thread while a hook is still running. ``on_app_end`` then bounds:meth:`shutdown` the
     same way, so a hung observer holds the controller for at most two bounds plus the join, never
     indefinitely.
 
     ``dispatch="sync"`` calls the observers inline, for deterministic unit tests and the checkpoint
-    coordinators, which never see the train or app end and must not own a worker; :meth:`coerce`
+    coordinators, which never see the train or app end and must not own a worker;:meth:`coerce`
     builds the list it wraps with the mode it is given and leaves an existing list's mode alone.
 
     A raising observer is logged and skipped for that event only; the other observers still see the

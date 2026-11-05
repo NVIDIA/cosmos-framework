@@ -8,7 +8,7 @@ worker thread through a bounded FIFO. The emitter never blocks and never waits o
 Delivery order is emission order, so a listener sees the sequence a synchronous fan-out would have
 given it, just later.
 
-Every event is stamped at the controller boundary: :meth:`BoundedEventDispatcher.submit` records the
+Every event is stamped at the controller boundary::meth:`BoundedEventDispatcher.submit` records the
 emitting thread's wall clock and monotonic clock in the queued `LifecycleEvent`, so a listener that
 measures intervals (OneLogger's timers) reads WHEN THE CONTROLLER EMITTED, not when the worker got
 round to delivering. Without the stamps a slow listener ahead in the queue collapses a 200 ms
@@ -22,7 +22,7 @@ the queue has room for it AND for its followers, and once admitted its followers
 never sees an end without its start or a start without its end, and the groups dropped together are
 counted (:attr:`BoundedEventDispatcher.dropped_pairs`) and logged as groups.
 
-Terminal boundary events (the bus's gates, `control/lifecycle.py`) go through :meth:`deliver_gate`:
+Terminal boundary events (the bus's gates, `control/lifecycle.py`) go through:meth:`deliver_gate`:
 a non-droppable marker placed behind everything queued and delivered by the same worker, in FIFO
 order, while the caller waits a bounded time for it. The marker takes no capacity and is never
 dropped, and because only the worker delivers it, a gate can never run concurrently with a hook the

@@ -23,12 +23,12 @@ from typing import TypeVar
 
 import attrs
 
-from cosmos_framework.trainer import ImaginaireTrainer as Trainer
-from cosmos_framework.utils.config_helper import import_all_modules_from_package
 from cosmos_framework.configs.base import config as c3
-from cosmos_framework.posttrain.config.model import HF, I4, QWEN3_VL, HFModelConfig, Qwen3VLModelConfig
+from cosmos_framework.posttrain.config.model import HF, NATIVE, QWEN3_VL, HFModelConfig, Qwen3VLModelConfig
 from cosmos_framework.posttrain.config.rl import GridConfig, RunConfig
 from cosmos_framework.posttrain.utils.log import logger
+from cosmos_framework.trainer import ImaginaireTrainer as Trainer
+from cosmos_framework.utils.config_helper import import_all_modules_from_package
 
 
 @attrs.define(slots=False)
@@ -39,18 +39,18 @@ class PosttrainConfig(c3.Config):
     algorithm: str = "dpo"
     rl: RunConfig = attrs.field(factory=RunConfig)
     grid: GridConfig = attrs.field(factory=GridConfig)
-    # Model sourcing is top-level, not an RL concern: "i4" uses the inherited `model` tree, while
+    # Model sourcing is top-level, not an RL concern: "native" uses the inherited `model` tree, while
     # the typed load specs below are shared by every algorithm root.
-    model_backend: str = "i4"
+    model_backend: str = "native"
     model_hf: HFModelConfig = attrs.field(factory=HFModelConfig)
     model_qwen3_vl: Qwen3VLModelConfig = attrs.field(factory=Qwen3VLModelConfig)
 
     def __attrs_post_init__(self) -> None:
         """Reject unknown backend selectors when the typed root is constructed."""
-        if self.model_backend not in (I4, HF, QWEN3_VL):
+        if self.model_backend not in (NATIVE, HF, QWEN3_VL):
             raise ValueError(
                 f"unknown model_backend {self.model_backend!r} "
-                f"(expected {I4!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
+                f"(expected {NATIVE!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
             )
 
 
@@ -152,8 +152,6 @@ def _register_experiment_catalogs() -> None:
                 f"optional dependencies {sorted(set(skipped.values()))}. Those experiments cannot "
                 f"be selected with experiment=<name>."
             )
-
-
 
 
 def build_root(

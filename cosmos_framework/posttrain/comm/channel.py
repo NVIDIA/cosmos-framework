@@ -39,7 +39,7 @@ class Channel:
         self._q: collections.deque = collections.deque()
 
     def put(self, item: Any) -> None:
-        # Contract: put transfers ownership. v0 in-process: just enqueue.
+        # Ownership contract: put transfers ownership. v0 in-process: just enqueue.
         self._q.append(item)
 
     def get(self) -> Any:
@@ -50,4 +50,4 @@ class Channel:
 
 
 # TODO(v1+): resolve_transport(payload, placement_relationship, plane, capability)
-#   → direct | UCX | NCCL ...; v0 always `direct`.
+#   → direct | UCX | NCCL.... v0 always `direct`.

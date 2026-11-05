@@ -117,20 +117,14 @@ NANO_MODEL_CONFIG = dict(
         use_system_prompt=False,
         pretrained_weights=dict(
             enabled=False,
-            backbone_path=(
-                "s3://bucket0/cosmos3/pretrained/huggingface/"
-                "Qwen/Qwen3-VL-8B-Instruct/"
-            ),
+            backbone_path="hf://Qwen/Qwen3-VL-8B-Instruct",
             credentials_path="",
             enable_gcs_patch_in_boto3=True,
         ),
         model_instance=L(Qwen3VLTextForCausalLM)(
             config=L(create_vlm_config)(
                 base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                    json_file=(
-                        "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/"
-                        "Qwen3-VL-8B-Instruct.json"
-                    ),
+                    json_file=("cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"),
                 ),
                 freeze_und=False,
                 layer_module="MoTDecoderLayer",

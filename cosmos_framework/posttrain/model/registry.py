@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Model registry (explicit construction, no lazy-instantiate).
+"""Model registry.
 
 Maps a config `name` to a builder that returns a `FlowMatchingPolicy`. Config
 selects a model by name (`model.name = "cosmos3" | "hf_sdxl"`); the builder

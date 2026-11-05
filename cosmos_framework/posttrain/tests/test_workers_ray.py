@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """Test that _Host.run_setup constructs bodies INSIDE the actor and they share a
-resource constructed there (tier-3, worker-resident)."""
+resource constructed there."""
 
 from __future__ import annotations
 

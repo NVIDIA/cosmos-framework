@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""GPU test: NCCL rendezvous across Ray `_Host` actors (FSDP).
+"""GPU test: NCCL rendezvous across Ray `_Host` actors.
 
 Locks the framework piece that lets the grid run real FSDP (vs the rank-0 mirror): a
 torch.distributed group formed ACROSS Ray actors via `_Host.init_distributed`, verified

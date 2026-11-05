@@ -534,8 +534,8 @@ class CheckpointConfig(pydantic.BaseModel):
 
     config_file: ConfigFile
     """Path to config file."""
-    s3_uri: str
-    """Checkpoint S3 URI."""
+    s3_uri: str = ""
+    """Optional operator-supplied checkpoint S3 URI."""
     hf: CheckpointDirHf
     """Config for checkpoint on Hugging Face."""
 

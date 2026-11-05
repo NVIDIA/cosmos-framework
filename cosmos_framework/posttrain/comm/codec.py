@@ -6,8 +6,7 @@
 Decides inline-vs-lazy per field by size: small fields stay inline (travel with the
 metadata); large fields (video/image, and — for this demo — token tensors) go to the
 producer's BulkStore as a `BulkRef` (lazy, pulled on demand). The consumer
-`materialize`s the bulk; **the controller only ever routes the metadata**, so
-bulk never crosses the control plane.
+`materialize`s the bulk; **the controller only ever routes the metadata**, so bulk never crosses the control plane.
 
 Entry points:
 - `pack_payload` / `materialize_payload` — payload dispatchers that walk a Trajectory
@@ -39,14 +38,14 @@ def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | 
     deep-walked, so a container-valued representation (e.g. `frames=[BulkRef, BulkRef]`) resolves and
     not just a top-level BulkRef — symmetric with the recursive pack (a top-level ref is the depth-0
     case). Non-selected fields keep their BulkRef untouched → e.g. raw video never reaches the trainer
-    if it only needs encoded features (VLA split-worker)."""
+    if it only needs encoded features."""
     reps: dict[str, object] = {}
     for k, v in bundle.representations.items():
         reps[k] = _unpack_val(v, transport) if (fields is None or k in fields) else v
     return ObsBundle(representations=reps, modality_tags=bundle.modality_tags, id=bundle.id)
 
 
-# ── Trajectory-level metadata/bulk (scatter-gather, field-level) ──────────
+# ── Trajectory-level metadata/bulk (scatter-gather, field-level) ─────────────────
 # A tensor-bearing field (action / mask / targets / tensor values inside
 # policy_info|algo_extra|obs.representations) above `threshold` is externalized to the
 # producer's BulkStore; everything else (ids, reward/advantage scalars, completion_text,

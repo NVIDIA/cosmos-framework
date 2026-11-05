@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for LLMTrainer (model/algorithm decoupled). Tiny random GPT2 on CPU.
+"""Tests for LLMTrainer. Tiny random GPT2 on CPU.
 
 Verifies the engine trainer is objective-driven: it drives the GRPO objective
 (`algorithm.grpo.make_objective`) — `train(batch)` returns metrics + the optimizer steps.

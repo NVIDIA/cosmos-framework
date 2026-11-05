@@ -9,7 +9,7 @@ K-rank Torch model world already reduced. The WG/Handle/loop contract is unchang
 
 Arg alignment: a CollectiveHandle arg is aligned per consumer (r, k) and the producer
 ObjectRef is forwarded into the actor nested in the args tuple; _Host.invoke resolves it
-actor-side (Ray does not auto-resolve refs nested in a container, only direct .remote()
+actor-side (Ray does not auto-resolve refs nested in a container, only direct.remote()
 args). So the controller forwards only the tiny ref — never the producer's metadata payload
 — and bulk still moves peer-to-peer at materialize. The remaining efficiency
 hooks (async overlap, SQ/CQ engine, real IPC/UCX/NCCL backend) are future work.
@@ -30,8 +30,8 @@ from typing import Any, Callable
 
 
 def bundle_index(r: int, k: int, k_own: int) -> int:
-    """Row-major flat bundle index of cell (r, k) within a group of rank width ``k_own``:
-    ``global = r * k_own + k``. Cross-group cells with EQUAL flat index
+    """Row-major flat bundle index of cell (r, k) within a group of rank width ``k_own``
+    : ``global = r * k_own + k``. Cross-group cells with EQUAL flat index
     share a bundle (⇒ share a GPU); different cells of the SAME group get distinct bundles. Pure —
     the extracted seam the bind (colocate.py) and spawn_grid below both flatten through. At equal
     shapes (``k_own == K_max``) this is bit-identical to the former ``r * K_max + k`` layout.
@@ -61,7 +61,7 @@ def dp_aligned(producer_shape: tuple, consumer_shape: tuple, meta: Any = None) -
 # (N object-store pulls of the same payload — fine for text/small metadata, wasteful for a big
 # multimodal obs). This still applies to edges that keep dp_aligned's mirror-on-rank-axis
 # shape (e.g. a same-shape identity/Mirror edge with no per-rank selection); it no longer applies
-# to the `("trainer", "train", "batch")` edge, which now carries a `select`
+# to the `("trainer", "train", "batch")` edge, which carries a `select`
 # (`workers/dispatch.py:select_chunk`) and materializes only THIS rank's kept share at
 # `workers/ray.py:_resolve_dispatched`, not the full mirrored producer payload — so there is
 # nothing left to broadcast on that specific edge. Add a `bcast_aligned` variant that still maps
@@ -565,8 +565,7 @@ class GridBackend:
             kind: producer role / registry ``kind`` (used in error messages).
             method: method name (used in error messages).
             param: parameter name (used in error messages).
-            select_kw: resolved ingress-selection kwargs (from
-                ``take_control_kwargs`` in ``_actor_args``), carried onto the returned
+            select_kw: resolved ingress-selection kwargs, carried onto the returned
                 ``Dispatched`` alongside ``spec.select`` so the actor can apply it once it
                 materializes. ``None`` ⇒ no selection — carried through as
                 ``Dispatched(select=None, select_kw=None)``, inert.
@@ -714,7 +713,7 @@ class GridBackend:
             pulled; a single-reader ref forwards the raw ref unwrapped (byte-identical to the
             pre-dispatch path). Replica counts differ ⇒ ``ValueError`` naming the unregistered
             ``(kind, method, param)`` and both shapes (the old silent replica-axis clamp is
-            gone — precedence tier 3).
+            gone — the contract precedence tier 3).
         (d) ``WorkerGroup`` (a peer WG passed to be *called inline*, body-mode (b)):
             inject a Ray-free ``PeerClient`` bound to the aligned producer cell's actor. One
             weight-sync sub-case routes BEFORE the general peer form when ``self.weight_routes``
@@ -725,7 +724,7 @@ class GridBackend:
         (f) anything else: broadcast, hardcoded identity routing (not align-delegated).
 
         ``RankAligned`` in (a)/(b) forwards one exact-rank ref directly; the other marker/registry
-        forms build a ``Dispatched``. (d)/(e)/(f) are BYTE-IDENTICAL to the pre-dispatch path.
+        forms build a ``Dispatched``. (d)/(e)/(f) do not consult the dispatch registry.
 
         Args:
             arg: the single call argument to align (dispatch marker, bare
@@ -737,8 +736,7 @@ class GridBackend:
             method: method name for the lookup (and the ``push_weights`` weight-edge gate).
             param: parameter name for the lookup.
             dispatch_profile: optional algorithm-specific contract selected by the consumer WG.
-            select_kw: resolved ingress-selection kwargs for THIS param (from
-                ``take_control_kwargs`` in ``_actor_args``), threaded onto the registry-hit
+            select_kw: resolved ingress-selection kwargs for THIS param, threaded onto the registry-hit
                 (tier 2) ``Dispatched`` only. ``None`` for every other param and for a call-site
                 marker (out of scope here — a marker declares its own spec).
 
@@ -811,8 +809,8 @@ class GridBackend:
             if producer_backend is None:
                 raise RuntimeError(f"peer WG {arg.name!r} passed as arg is not bound to a backend")
 
-            # ---- Weight-sync edge: policy.push_weights(rollout) — PRODUCER-DRIVEN colocated push.
-            # Called ON the policy WG, so this runs on the POLICY body over the
+            # ---- Weight-sync edge: policy.push_weights(rollout) — PRODUCER-DRIVEN colocated push
+            # . Called ON the policy WG, so this runs on the POLICY body over the
             # ``rollout`` arg. Gated on method + role so ONLY the genuine policy→rollout push edge enters
             # here; no other peer-WG edge is rerouted. ``self.weight_routes`` is the POLICY backend's
             # total flat-actor map: every policy cell owns zero or more rollout cells, independently
@@ -899,7 +897,7 @@ class GridBackend:
 
         Returns:
             ``(actor_args, actor_kwargs)`` aligned for the cell. When the registry hit for one
-            param declares ``select=`` and the call passes its
+            param declares ``select=``  and the call passes its
             ``select_params`` control kwargs (``mini``/``micro``/``n_mini``/``n_micro``), those
             kwargs are STRIPPED here (via ``take_control_kwargs``) and never reach ``actor_kwargs``
             — the actor body is still invoked as ``train(batch)``. They are carried instead on that

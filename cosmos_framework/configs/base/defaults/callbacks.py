@@ -5,18 +5,14 @@
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.callbacks.manual_gc import ManualGarbageCollection
-from cosmos_framework.utils.lazy_config import PLACEHOLDER
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
 from cosmos_framework.callbacks.compile_tokenizer import CompileTokenizer
-
 from cosmos_framework.callbacks.dit_image_sample import DiTImageSampleCallback
 from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample
 from cosmos_framework.callbacks.expert_heatmap import ExpertHeatmap
 from cosmos_framework.callbacks.grad_clip import GradClip
 from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.load_pretrained import LoadPretrained
+from cosmos_framework.callbacks.manual_gc import ManualGarbageCollection
 from cosmos_framework.callbacks.mfu import MFUCallback
 from cosmos_framework.callbacks.moe_specialization_callback import (
     MoERouterGeometryCallback,
@@ -35,6 +31,9 @@ from cosmos_framework.callbacks.training_stats import TrainingStatsCallback
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_log_eval import WandbCallback as WandBCallbackEval
 from cosmos_framework.configs.base.defaults.job_monitor import JOB_MONITOR_CALLBACKS as JOB_MONITOR_CALLBACKS
+from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
+from cosmos_framework.utils.lazy_config import PLACEHOLDER
+from cosmos_framework.utils.lazy_config import LazyCall as L
 
 MOE_DIAGNOSTICS_EVERY_N = 250
 
@@ -80,7 +79,7 @@ BASIC_CALLBACKS = dict(
     sampled_media=L(SampledMediaRecorder)(
         enabled=False,
         output_uri=(
-            "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/imaginaire4-output}/"
+            "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/cosmos-framework-output}/"
             "${job.project}/${job.group}/${job.name}/sampled_media.lance"
         ),
         creds_path=None,

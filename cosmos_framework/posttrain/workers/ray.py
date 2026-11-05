@@ -12,7 +12,7 @@ physical GPUs through placement bundles. The Ray machinery — actor, `.remote()
 Each actor runs the metadata/bulk seam:
 - egress: `pack`s tensor-bearing Trajectory/ObsBundle results into its local BulkStore,
   returning only BulkRef metadata — so the controller round-trip carries metadata, never
-  tensor bytes.
+  tensor bytes (#7).
 - ingress: `materialize`s BulkRef args ONLY for WGs in `materialize_names` (those that
   compute on bulk — rollout/trainer); reward-on-text / buffer let BulkRefs flow through,
   so bulk moves once where needed and the buffer holds only metadata.
@@ -124,8 +124,7 @@ def current_pdims():
 
 
 class PeerClient:
-    """Ray-free callable client bound to one producer cell's ``_Host`` actor
-    (body-mode (b): outbound-call). A role body that must call a *peer* WG inline
+    """Ray-free callable client bound to one producer cell's ``_Host`` actor (the contract body-mode (b): outbound-call). A role body that must call a *peer* WG inline
     during its own step (e.g. a simulator calling the policy per env step) receives one
     of these in place of the peer ``WorkerGroup`` arg — see ``GridBackend._align``.
 
@@ -401,10 +400,10 @@ def _resolve_dispatched(
     dp_rank: int = 0,
     dp_world: int = 1,
 ) -> Any:
-    """Actor-side execution of a `Dispatched` descriptor (built driver-side; run
+    """Actor-side execution of a `Dispatched` descriptor (built by `GridBackend`; run
     here): resolve THIS arg's own producer refs, materialize bulk if the consuming WG needs it
     (readers threaded through so a fan-out edge's refcounted `BulkStore` entry pops only once
-    every reader has pulled), then apply the reduce/split/one adaptation so the
+    every reader has pulled — the contract), then apply the reduce/split/one adaptation so the
     body signature never sees a list/shard, only the adapted value.
 
     Module-level (not a `_Host` method) so it needs no actor/Ray runtime to test — a plain
@@ -415,7 +414,7 @@ def _resolve_dispatched(
     (built from `CollectiveHandle.ref_at`); tolerate already-resolved plain values too (the
     local/test path, and the CPU helper tests below never construct real Ray refs).
 
-    `d.on_metadata` (opt-in fast path): when True, `d.op == "split"`,
+    `d.on_metadata`: when True, `d.op == "split"`,
     and this call actually materializes (the consuming WG computes on bulk), the split fn runs
     on the PACKED payload — the metadata skeleton, BulkRefs still attached — BEFORE any fetch,
     instead of after. Every BulkRef present in the full skeleton but absent from the kept slice
@@ -436,9 +435,8 @@ def _resolve_dispatched(
     materialize, behavior is byte-identical to the default path — no split-before-materialize, no
     release, `releaser` unused.
 
-    `d.select` (plumbed by `GridBackend`, executed here): the mini/micro/dp ingress-selection
-    predicate (`select_chunk`),
-    carried alongside `d.select_kw` (the resolved `mini`/`micro`/`n_mini`/`n_micro` control
+    `d.select` (plumbed by `GridBackend`, executed here): the mini/micro/dp ingress-selection predicate
+    (`select_chunk`), carried alongside `d.select_kw` (the resolved `mini`/`micro`/`n_mini`/`n_micro` control
     kwargs). ORDER IS THE WHOLE POINT and mirrors the on_metadata branch's intent but is a
     DISTINCT mechanism (that branch requires `op == "split"`; this one applies to `one`/`reduce`,
     which is what the `("trainer", "train", "batch")` edge actually is):
@@ -617,7 +615,7 @@ class _HostImpl:
                 _warm = _torch.zeros(1, device="cuda" if _torch.cuda.is_available() else "cpu")  # [1]
                 dist.all_reduce(_warm)  # [1]
         # Construct ALL role bodies inside the actor (so trainer & rollout share one
-        # in-actor model). setup_fn() -> {wg_name: body}.
+        # in-actor model). setup_fn() -> {wg_name: body}. the contract tier-3.
         # Publish the injected model dims to the module-global accessor for the
         # duration of the build so the model build (build_backbone -> current_pdims())
         # reads the live mesh WITHOUT changing setup_fn's no-arg contract. Per-process
@@ -685,9 +683,9 @@ class _HostImpl:
         return self._producer_pool.release_all_leases()
 
     def set_weight_backend(self, spec: dict, body_names: tuple[str, ...] | None = None) -> None:
-        # Attach the weight-sync backend only to the declared WEIGHT endpoint
+        # Attach the weight-sync backend  only to the declared WEIGHT endpoint
         # bodies. ``body_names=None`` retains the legacy direct-test behavior (all model owners).
-        # spec is either {"relationship": ...} — resolved via the mover resolver,
+        # spec is either {"relationship":...} — resolved via the relationship resolver,
         # the single source of truth used by resolved grouping — or {"kind": ...} for legacy/direct
         # mover selection. Picked from ActorGroup/DeviceGroup placement at bind; the push/apply seam
         # then rides dp_aligned. No-model
@@ -820,7 +818,7 @@ class _HostImpl:
             pp=p.pp,
         )
 
-    # --- intra-/inter-replica torch.distributed rendezvous (FSDP) ---
+    # --- intra-/inter-replica torch.distributed rendezvous  ---
     def rendezvous_endpoint(self) -> tuple[str, int]:
         """Return (node_ip, free_port) for this actor's node — the rank-0 actor's endpoint
         becomes MASTER_ADDR:PORT for the NCCL rendezvous (picked just before init so the
@@ -906,7 +904,7 @@ class _HostImpl:
         ``WeightSync.bind_comm`` (the backend owns its mover's wiring — this layer never touches
         ``mover.*``): ``set_weight_backend`` runs at bind, BEFORE the plane exists, so a collective
         mover starts with ``_comm=None`` — the comm must be injected here or stage/fetch would raise.
-        ``recv_manifest`` (a ``[(name, shape, dtype_str), ...]`` list the driver computes
+        ``recv_manifest`` (a ``[(name, shape, dtype_str),...]`` list the driver computes
         from the policy's ``full_state_dict``) becomes the collective mover's recv layout for
         SHARDED sinks (vLLM TP) that cannot self-derive the full param shapes; an unsharded HF sink
         leaves it None and self-derives from its own model."""
@@ -1503,7 +1501,7 @@ class _HostImpl:
         with profile.phase("body"):
             out = getattr(body, method)(*args, **kw)
         if self._codec and method in getattr(body, "lease_releasing_output_methods", ()):
-            # Terminal egress ("evict releases the bulk lease"): a metadata-only body that
+            # Terminal egress: a metadata-only body that
             # declares this method returns items whose bulk nobody will consume. Release every BulkRef
             # the payload carries at its owning store — a refcount decrement, never a fetch — so a
             # dropped trajectory's bulk stays where it was produced instead of being mirrored onto a

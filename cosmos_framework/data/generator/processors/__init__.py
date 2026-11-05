@@ -113,7 +113,11 @@ def build_processor(
     bucket: Optional[str] = None,
     cache_dir: Optional[str] = None,
     use_native_edge_processor: bool = False,
+    processor_family: str = "auto",
 ):
+    """Build a public or local processor; select processor_family explicitly for custom artifacts."""
+    if processor_family not in ("auto", "dense_vl", "llm"):
+        raise ValueError("processor_family must be auto, dense_vl, or llm")
     if not isinstance(use_native_edge_processor, bool):
         raise TypeError("use_native_edge_processor must be a bool")
     if use_native_edge_processor:
@@ -128,7 +132,12 @@ def build_processor(
     # Cosmos3-Edge snapshots use the Nemotron bridge; other local artifacts use
     # Qwen3VLProcessor.
     if os.path.isdir(tokenizer_type):
-        if is_cosmos3_edge_native_snapshot(tokenizer_type) or "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type:
+        if processor_family == "llm":
+            _patch_nemotron_llm_tokenizer_vision_tokens(tokenizer_type)
+            return LLMTokenizerProcessor(
+                PreTrainedTokenizerFast.from_pretrained(tokenizer_type, trust_remote_code=True)
+            )
+        if processor_family == "dense_vl" or is_cosmos3_edge_native_snapshot(tokenizer_type):
             return Nemotron3DenseVLProcessor(tokenizer_type, cache_dir=cache_dir)
         if "Qwen/Qwen3-VL" in tokenizer_type and "Nemo-Chat" in tokenizer_type:
             return Qwen3VLNemoChatProcessor(tokenizer_type, cache_dir=cache_dir)
@@ -143,6 +152,12 @@ def build_processor(
         bucket = bucket if bucket is not None else variant_bucket
     elif config_variant is not None:
         raise ValueError("Provide either config_variant or (credentials, bucket), not both")
+    if processor_family == "llm":
+        local_path = _download_llm_tokenizer(tokenizer_type, credentials, bucket, cache_dir)
+        _patch_nemotron_llm_tokenizer_vision_tokens(local_path)
+        return LLMTokenizerProcessor(PreTrainedTokenizerFast.from_pretrained(local_path, trust_remote_code=True))
+    if processor_family == "dense_vl":
+        return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     if "Qwen/Qwen3-VL" in tokenizer_type and "Nemo-Chat" in tokenizer_type:
         return Qwen3VLNemoChatProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif (
@@ -155,20 +170,11 @@ def build_processor(
         return Qwen3VLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16" in tokenizer_type:
         return NemotronVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
-    elif (
-        "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type
-        or "Qwen3-2B-ViT" in tokenizer_type
-        # nvidia/Cosmos3-Edge ships the same Nemotron bridge processor.
-        or "nvidia/Cosmos3-Edge" in tokenizer_type
-    ):
+    elif "nvidia/Cosmos3-Edge" in tokenizer_type:
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "Qwen/Qwen3-0.6B" in tokenizer_type:
         local_path = _download_llm_tokenizer(tokenizer_type, credentials, bucket, cache_dir)
         return LLMTokenizerProcessor(Qwen2Tokenizer.from_pretrained(local_path))
-    elif "Nemotron/NVIDIA-Nemotron-3-2B-BF16" in tokenizer_type:
-        local_path = _download_llm_tokenizer(tokenizer_type, credentials, bucket, cache_dir)
-        _patch_nemotron_llm_tokenizer_vision_tokens(local_path)
-        return LLMTokenizerProcessor(PreTrainedTokenizerFast.from_pretrained(local_path, trust_remote_code=True))
     else:
         raise ValueError(f"Tokenizer type {tokenizer_type} not supported")
 

@@ -214,6 +214,7 @@ def register_checkpoints():
 
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {}
+
 """Checkpoints used by tests."""
 
 

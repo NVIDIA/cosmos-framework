@@ -13,6 +13,7 @@ over `Trajectory` lists, handed to the objective instead of registered by `model
 collator owns tokenization, patchifying and padding). Same invariants as a DataPacker: weight-free,
 CPU-side, one owner per model x objective. Use a DataPacker when the unit is a token sequence (the
 abstract methods below assume prompt ids and a padded max_len); otherwise a batch-assembly function.
+The packer owns batch assembly; the objective consumes the resulting model inputs.
 """
 
 from __future__ import annotations

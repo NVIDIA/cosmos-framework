@@ -63,7 +63,7 @@ def shared_model_identity(model: Any) -> str:
 
 def full_state_dict(model: Any) -> dict:
     """Materialize a model's params as FULL (unsharded) detached tensors: an FSDP2 DTensor is
-    all-gathered via .full_tensor() (a collective — every policy rank must call together);
+    all-gathered via.full_tensor() (a collective — every policy rank must call together);
     a plain tensor passes through. No physical clone beyond what full_tensor() allocates; the
     durable snapshot/copy is the mover's job. Unwraps `.net` so a wrapped HFModel exports the
     same (raw-module) keys the rollout loads into."""
@@ -180,7 +180,7 @@ def bucket_plan(manifest: WireManifest, bucket_bytes: int = BUCKET_BYTES) -> Buc
     Raises on an unsorted manifest (see _check_name_sorted — ordering is a transfer invariant).
 
     Args:
-        manifest: sorted `[(name, shape, dtype_str), ...]` param metadata (e.g. from `model_manifest`).
+        manifest: sorted `[(name, shape, dtype_str),...]` param metadata (e.g. from `model_manifest`).
         bucket_bytes: soft per-bucket byte cap; a single param exceeding it forms its own bucket.
 
     Returns:

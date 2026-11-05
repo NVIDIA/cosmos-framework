@@ -419,6 +419,7 @@ weight_sync / reward report / save    #  ONCE, at the batch boundary ───�
 
 This document covers the *consumption* side — how a collected batch becomes several normalized
 optimizer steps. The *delivery* side — how a `(mini, micro)` index turns into exactly the tensors one
-rank needs, without pulling the rest — is the **data dispatch mechanism**.
+rank needs, without pulling the rest — is the **data dispatch mechanism** implemented by
+`cosmos_framework/posttrain/workers/dispatch.py`.
 The two meet at one line: the driver's `train(batch, mini, micro, …)`, whose control kwargs the
 dispatch layer consumes so the trainer body still sees a plain `train(batch)`.

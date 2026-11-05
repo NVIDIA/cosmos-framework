@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Model capability protocols (model ↔ algorithm decoupling).
+"""Model capability protocols.
 
 A model exposes a small, modality-typed capability protocol; algorithms
 (`algorithm/`) are written against the protocol, never against a concrete model.
 So a new model needs only an adapter implementing the protocol — no new trainer,
 no new objective — and a new objective works with every model that satisfies the
-protocol. This is the decoupling that removes cosmos-rl's "one trainer .py per
+protocol. This is the decoupling that removes cosmos-rl's "one trainer.py per
 model" coupling (where `compute_dpo_loss` was a method *on* the model).
 
 `FlowMatchingPolicy` is the general staged-denoising contract for diffusion/flow

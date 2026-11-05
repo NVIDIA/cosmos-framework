@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Concrete GRPO config: Qwen2.5-3B-Instruct on GSM8K, mirroring the cosmos-rl reference TOML.
 
-`build_config()` returns a fully-populated :class:`PosttrainGRPOConfig` — the same ROOT the GRPO
+`build_config()` returns a fully-populated:class:`PosttrainGRPOConfig` — the same ROOT the GRPO
 entrypoint uses (`config/config_grpo.py`) — whose values are copied verbatim from cosmos-rl's
 ``qwen2-5-3b-p-fsdp2-colocated-grpo.toml`` (the real bf16 3B GRPO recipe), so the example
 runs the same algorithm/optimizer/rollout knobs the reference does. The few knobs that are
@@ -13,8 +13,8 @@ engine are **top-level** sections (``config.model_hf``, ``config.rollout``), NOT
 ``rl`` holds the algorithm + lifecycle knobs only. A recipe has to pin all three, so it returns the
 root that owns them.
 
-Porting another cosmos-rl TOML? Check the fields
-whose names match while their units do not, the ones with no counterpart that must not be mapped to
+When porting another TOML, check field units and semantics rather than copying matching names.
+Some fields have no counterpart and must not be mapped to
 something adjacent, and the settings that pass validation and only fail at launch. Two rows of the
 table below once asserted values the TOML never declared (the sampling temperature and
 ``transfer_dtype``, both of which then silently defaulted): a mapping table is a CLAIM about the other
@@ -108,8 +108,7 @@ _QWEN_3B = "Qwen/Qwen2.5-3B-Instruct"
 #
 # Deliberately stricter than cosmos-rl's inline `Let's think step by step and output the final
 # answer after "####".` -- ours also forbids units and commas, which matters because the verifier is
-# EXACT-MATCH: `#### 72.` or `#### 1,234` scores 0 against gold `72`/`1234`. Measured worth roughly
-# +0.20 mean reward (0.82 vs 0.62).
+# EXACT-MATCH: `#### 72.` or `#### 1,234` scores 0 against gold `72`/`1234`.
 # The column holding the problem text. ONE definition, read by `gsm8k_items` (which rewrites it in
 # place) and by `build_config` (which names it as `rl.data.prompt_column`). Two copies of this would
 # be exactly the drift the prompt/verifier note below warns about: the map writes the conversation
@@ -157,7 +156,7 @@ def gsm8k_items_cosmos_rl(row: dict) -> dict:
     system message. Copied from `cosmos_rl/tools/dataset/gsm8k_grpo.py::GSM8kDataset.__getitem__`.
 
     This exists ONLY so a cross-stack comparison can hold the prompt constant. The prompt is worth
-    ~0.20 mean reward on GSM8K (0.8233 with this recipe's wording against
+    ~0.20 mean reward on GSM8K (parity doc section 2.1: 0.8233 with this recipe's wording against
     0.6237 with cosmos-rl's), which is larger than anything the trainer-side differences produce --
     a curve comparison that leaves it uncontrolled measures the prompt, not the stacks. It is NOT
     the recipe default and should not become one: the default wording scores better.

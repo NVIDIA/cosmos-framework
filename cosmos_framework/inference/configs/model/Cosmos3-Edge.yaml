@@ -153,7 +153,7 @@ model:
       model_name: nvidia/Cosmos3-Edge
       pretrained_weights:
         _type: cosmos3._src.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig
-        backbone_path: s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge/
+        backbone_path: hf://nvidia/Cosmos3-Edge
         checkpoint_format: null
         credentials_path: credentials/gcp_checkpoint.secret
         enable_gcs_patch_in_boto3: true

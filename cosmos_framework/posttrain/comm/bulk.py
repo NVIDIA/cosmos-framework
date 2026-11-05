@@ -115,7 +115,7 @@ class BulkStore:
         Returns:
             The stored bulk object.
         """
-        # Refcounted consume: the routing map knows how many
+        # Refcounted consume (design the implementation): the routing map knows how many
         # consumer cells will materialize this ref; first fetch initializes the counter,
         # each consuming fetch decrements, pop at zero. readers=1 == the old consume-once.
         # Lock-guarded: this runs on the actor's "bulk" thread and may race a put/pack on the

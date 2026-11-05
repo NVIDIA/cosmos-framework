@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for VLLMRollout (engine integration).
+"""Tests for VLLMRollout (the contract body=(a); engine integration).
 
 Needs a GPU and the `vllm` package (the vLLM venv: vllm==0.19.1 / torch==2.10.0), so it is
 skip-guarded and marked L1/GPU (vLLM engine init > 30s). Verifies the MVP contract:
@@ -209,7 +209,7 @@ def test_engine_input_accepts_both_str_and_dict():
 def test_action_keeps_the_stop_token_that_completion_text_drops(llm):
     """`action` is the ENGINE's ids and KEEPS the stop token; re-tokenizing `completion_text` loses it.
 
-    This pins the divergence measured against cosmos-rl. vLLM omits
+    This pins the difference between decoded text and token IDs. vLLM omits
     the stop token from `.text` while keeping it in `.token_ids` unless BOTH
     `skip_special_tokens=False` AND `include_stop_str_in_output=True` are set — neither of which is
     on by default. A consumer that re-tokenizes the text therefore trains one token short on every

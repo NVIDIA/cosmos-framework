@@ -228,7 +228,7 @@ def test_materialize_false_leaves_bulkref_unresolved():
 
 def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identical():
     """Guards the new on_metadata branch's gate: with `on_metadata=False` (the dataclass
-    default, and the only value that existed before the fast path), a split payload carrying real
+    default, and the original value), a split payload carrying real
     BulkRefs still takes the OLD path — materialize the whole producer payload first, THEN
     apply the split fn to already-resolved values, exactly as the original path did. Every
     BulkRef in this payload is fetched -- the OLD path materializes the WHOLE producer payload
@@ -249,7 +249,7 @@ def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identi
 
 
 def test_on_metadata_split_fetches_only_kept_refs_and_releases_the_rest():
-    """Opt-in fast path + release protocol: a list-of-samples
+    """the contract opt-in fast path + release protocol: a list-of-samples
     payload (each sample its own Trajectory carrying its own BulkRef `action`) is split on the
     PACKED metadata skeleton BEFORE materialization. Two simulated replicas (n=2) each keep a
     contiguous half and, per grid.py's split readers formula (readers = Kc·n, Kc=1 here),
@@ -316,7 +316,7 @@ def test_on_metadata_split_without_materialize_falls_through_unresolved():
     assert len(store) == 4  # nothing fetched, nothing released -- fully untouched
 
 
-# ── ingress selection: select on metadata, materialize the kept share ──────────────────────────────
+# ── ingress selection: select on metadata, materialize the kept share ──
 
 
 class _CountingMover:
@@ -444,7 +444,7 @@ def test_invoke_resolves_dispatched_reduce_arg_end_to_end():
 @pytest.mark.CPU
 def test_invoke_non_dispatched_arg_unaffected():
     """A plain (non-Dispatched) arg through `_Host.invoke` is completely unaffected by the
-    Dispatched-recognition branch — byte-identical to before that branch existed."""
+    Dispatched-recognition branch — byte-identical to the default path."""
     ray.init(ignore_reinit_error=True, num_cpus=2, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
         host = _Host.remote()
@@ -536,7 +536,7 @@ def _on_metadata_split_invoke_setup():
 def test_invoke_on_metadata_split_pulls_only_kept_bulk_via_the_release_seam():
     """Closes the loop for the release-protocol seam (`_Host.invoke`'s `_release_dropped`
     closure over `self._store`/`self._transport`) with a real local `_Host` actor -- mirrors
-    A5's `test_invoke_materializes_dispatched_and_refcount_pops_at_zero` pattern.
+    the `test_invoke_materializes_dispatched_and_refcount_pops_at_zero` pattern.
 
     One actor plays producer AND (as two simulated replicas) consumer. `producer.produce()`
     returns a list of 4 samples; `_Host.invoke`'s existing egress `pack_payload` externalizes
@@ -621,7 +621,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
     """Coverage gap: `_release_dropped`'s cross-actor branch fires `release_bulk.remote`
     and discarded the returned ObjectRef -- a remote-side failure (double release / accounting
     drift) would resolve into a Ray object nobody ever inspects, so it failed SILENTLY, unlike
-    the local branch which raises inline (KeyError posture). Fix: stash the
+    the local branch which raises inline. Fix: stash the
     ObjectRef in `self._pending_releases`; the top of every `_release_dropped` call does a
     bounded, non-blocking sweep (`ray.wait(timeout=0)`) and `ray.get`s anything that finished,
     raising `RuntimeError` on failure. Finding-3: that sweep is hoisted to the TOP of every
@@ -679,7 +679,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
         ray.shutdown()
 
 
-# ── `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ─────────────────
+# ── `_Host.invoke` resolves the actor's REAL dp coordinate, not the (0, 1) pin ──────────
 
 
 @pytest.mark.L0
@@ -740,7 +740,7 @@ def _stamped_group(group_id: str, spread: float) -> list[Trajectory]:
 
 
 def test_buffer_drain_releases_dropped_bulk_without_a_fetch_under_tp2() -> None:
-    """Dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
+    """the contract: dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
     releases each drained BulkRef at its store instead of a bulk consumer materializing it. The kept
     group is pulled once per TP rank (readers=2) as usual; the dropped group is never fetched at all."""
     from cosmos_framework.posttrain.control.buffer import ExperienceBuffer, MetadataGate

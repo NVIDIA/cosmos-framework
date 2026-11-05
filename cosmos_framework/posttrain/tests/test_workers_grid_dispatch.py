@@ -43,7 +43,7 @@ def _gb() -> GridBackend:
 
 def test_marker_overrides_registry_hit():
     """A call-site Sharded marker wins over a registry entry for the SAME (kind, method,
-    param) — precedence tier 1 over tier 2. Uses the real registered
+    param) — the contract precedence tier 1 over tier 2. Uses the real registered
     ("trainer", "train", "batch") entry so a hit is guaranteed without monkeypatch,
     then wraps the SAME edge in a marker with a DIFFERENT reduce= to prove the marker's own
     spec — not the registry's — was used."""
@@ -114,8 +114,8 @@ def test_mirror_requires_single_producer_unit():
 
 # These three pin the BARE-fallback invariants (tier 3): rank-mirror refcount wrap, symmetric
 # raw-ref byte-identity, and replica-mismatch raise. They key off ("reward","score","trajs") — a
-# genuinely UNREGISTERED edge (reward/buffer edges stay bare / dp_aligned by design). A later change
-# registered ("rollout","generate","prompts") as a Sharded split, so it is no longer bare and
+# genuinely UNREGISTERED edge (reward/buffer edges stay bare / dp_aligned by design).
+# ("rollout","generate","prompts") is registered as a Sharded split, so it is no longer bare and
 # can't stand in for these bare-path cases (it would produce a Dispatched via tier 2 instead).
 def test_bare_equal_replica_rank_mirror_wraps_multireader():
     """Bare (4,1) -> (4,2) rank mirror: producer ranks=1 feeds consumer ranks=2, so producer

@@ -52,7 +52,7 @@ def test_lookup_hit_returns_registered_sharded_spec():
 
 
 def test_lookup_hit_returns_registered_generate_split_spec():
-    # generate/prompts is now registered (was None before split_prompts existed).
+    # generate/prompts is registered (it was None before split_prompts existed).
     spec = lookup("rollout", "generate", "prompts")
     assert isinstance(spec, Sharded)
     assert spec.split == "cosmos_framework.posttrain.roles.env.dataset:split_prompts"
@@ -126,7 +126,7 @@ def test_resolve_fn_imports_module_attr_ref():
 def test_resolve_fn_round_trips_registered_reduce_and_split():
     """The registry ships STRING refs (`"module:attr"`) so the driver stays torch-free; the actor
     resolves them via `resolve_fn`. Prove both registered strings actually import to the real
-    Task-C2 helpers — a typo or a moved helper would fail loud here, not silently at first sync."""
+    helpers — a typo or a moved helper would fail loud here, not silently at first sync."""
     from cosmos_framework.posttrain.roles.env.dataset import split_prompts
     from cosmos_framework.posttrain.roles.trainer.llm import concat_batches
 

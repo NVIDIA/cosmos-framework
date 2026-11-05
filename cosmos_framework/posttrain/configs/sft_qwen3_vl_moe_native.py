@@ -6,7 +6,7 @@ r"""Qwen3-VL-MoE full-parameter SFT through the native policy builder (the "nati
 (``model/hf.py::_is_moe_vlm``: the general weight loader has no fused-expert handling, and the Transformers 5
 ``Qwen3VLMoeTextExperts`` stores ``gate_up_proj`` / ``down_proj`` transposed relative to a Transformers 4
 checkpoint). ``model/qwen3_vl.py::build_qwen3_vl_native_policy`` is the construction the online algorithms
-train and its state dict matches such a checkpoint key for key, so SFT selects it with ``model_backend='i4'``
+train and its state dict matches such a checkpoint key for key, so SFT selects it with ``model_backend='native'``
 and the ``NativePolicyBuildSpec`` shape of ``ppo_qwen3vl30b_a3b.py``.
 
 Training stack, each field with its reason:
@@ -181,7 +181,7 @@ def build_config(variant: str | None = None) -> PosttrainSFTConfig:
     config.job.group = "qwen3_vl_moe_sft_example"
     config.job.name = "native_seat_canary_seed42"
     config.job.wandb_mode = "disabled"
-    config.model_backend = "i4"
+    config.model_backend = "native"
     config.model = NativePolicyBuildSpec(
         builder=NATIVE_POLICY_BUILDER,
         model_id=model_id,

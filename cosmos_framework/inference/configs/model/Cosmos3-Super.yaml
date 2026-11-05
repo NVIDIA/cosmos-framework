@@ -165,10 +165,10 @@ model:
             json_file: cosmos3/_src/vfm/models/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json
           include_visual: true
           qk_norm_for_text: true
-      model_name: nvidia/Cosmos3-Super
+      model_name: Qwen/Qwen3-VL-32B-Instruct
       pretrained_weights:
         _type: cosmos3._src.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig
-        backbone_path: s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Super/
+        backbone_path: hf://Qwen/Qwen3-VL-32B-Instruct
         checkpoint_format: null
         credentials_path: credentials/gcp_checkpoint.secret
         enable_gcs_patch_in_boto3: true

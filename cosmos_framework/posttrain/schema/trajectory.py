@@ -90,7 +90,7 @@ class Status(str, Enum):
 class ObsBundle:
     """Multi-representation observation.
 
-    v0: store everything inline in `representations` (e.g. {"prompt": ..., "image": ...}).
+    v0: store everything inline in `representations` (e.g. {"prompt":..., "image":...}).
     TODO(v1+): large fields (video/image) become lazy *handles* (metadata +
     remote addressing) pulled on demand; small fields stay inline.
 
@@ -247,7 +247,7 @@ class Transition:
     step_idx: int = 0
     done: bool = True
     mask: Any = None
-    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm
+    algo_extra: dict[str, Any] = field(default_factory=dict)  # reserved for algorithm (#2)
     # APPENDED, not inserted, and the grouping this costs is deliberate. `truncated` reads
     # next to `done` and `info` next to `algo_extra`; both were written there first. But a
     # dataclass field's POSITION is its positional constructor ABI, and `schema/` is an
@@ -260,7 +260,7 @@ class Transition:
     # terminal state, so bootstrapping V(s') through it is correct while bootstrapping
     # through a real terminal is not -- conflating the two is a value-function bug that
     # trains quietly. Gym split its own `done` for this reason. Multi-step embodied Envs
-    # were the first consumer, and single-turn text RL sets it too: a PPO rollout that
+    #  were the first consumer, and single-turn text RL sets it too: a PPO rollout that
     # hits the token cap is `done` (the episode ended) with `truncated` True. Fixed-duration
     # sessions additionally use feedback.episode_complete for their physical reset boundary.
     truncated: bool = False

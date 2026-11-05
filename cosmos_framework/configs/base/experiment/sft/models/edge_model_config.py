@@ -145,9 +145,7 @@ EDGE_MODEL_CONFIG = dict(
         # to False (nano omits it too), so it is intentionally left unset.
         pretrained_weights=dict(
             enabled=False,  # SFT loads from the DCP, not the HF backbone
-            backbone_path=(
-                "s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge/"
-            ),  # kept for parity, unused while enabled=False
+            backbone_path=("hf://nvidia/Cosmos3-Edge"),  # kept for parity, unused while enabled=False
             credentials_path="",
             enable_gcs_patch_in_boto3=True,
         ),

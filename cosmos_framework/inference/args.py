@@ -2057,7 +2057,6 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
         "nvidia/Cosmos3-Edge": "2B",
-        "nvidia/Cosmos3-Nano": "8B",
     }
 
     _NUM_FRAMES_DEFAULTS: ClassVar[dict[str, int]] = {
@@ -2066,6 +2065,15 @@ class OmniSampleOverrides(
         # (189). Keyed by ``vlm_config.model_name`` so only Edge is affected.
         "nvidia/Cosmos3-Edge": 121,
     }
+
+    @staticmethod
+    def _vlm_model_key(vlm_config: Any) -> str:
+        """Resolve public defaults from architecture as well as a checkpoint's descriptive name."""
+        model_instance = getattr(vlm_config, "model_instance", None)
+        target = str(_mapping_get(model_instance, "_target_") or "")
+        if "Nemotron3DenseVLTextForCausalLM" in target:
+            return "nvidia/Cosmos3-Edge"
+        return getattr(vlm_config, "model_name", "") or ""
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
         # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
@@ -2217,7 +2225,7 @@ class OmniSampleOverrides(
             and not sample_meta.model_mode.is_action
             and not sample_meta.model_mode.is_reasoner
         ):
-            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(model_config.vlm_config.model_name)
+            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(self._vlm_model_key(model_config.vlm_config))
             if num_frames_default is not None:
                 self.num_frames = num_frames_default
 
@@ -2267,7 +2275,7 @@ class OmniSampleOverrides(
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             # Unregistered backbone names (custom fine-tunes) simply skip shift
             # defaulting rather than KeyError-ing.
-            model_size = self._VLM_MODEL_SIZE.get(model_config.vlm_config.model_name)
+            model_size = self._VLM_MODEL_SIZE.get(self._vlm_model_key(model_config.vlm_config))
             key = (model_size, self.resolution)
             if key in self._RESOLUTION_SHIFT_DEFAULTS:
                 self.shift = self._RESOLUTION_SHIFT_DEFAULTS[key]
@@ -2311,7 +2319,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Nano": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["8B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Nano.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_16bm8b_v2_midtrain/checkpoints/iter_000006000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Nano",
             revision="main",
@@ -2320,7 +2327,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Edge": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["2B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Edge.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_4bm2b_v1_midtrain_0630a/checkpoints/iter_000028000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Edge",
             revision="main",
@@ -2329,19 +2335,16 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_64bm32b_v3_midtrain/checkpoints/iter_000001800/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super",
             revision="main",
         ),
     ),
     # Task-specialized Super variants published as diffusers HF checkpoints.
-    # s3_uri is unused for HF-backed checkpoints (kept for parity with the
-    # registry schema); the architecture lives in each model YAML.
+    # Each public checkpoint carries its own Hub source and architecture YAML.
     "Cosmos3-Super-Image2Video": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video",
             revision="main",
@@ -2353,7 +2356,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image",
             revision="main",
@@ -2365,7 +2367,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image-4Step",
             revision="main",
@@ -2387,7 +2388,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Image2Video-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video-4Step",
             revision="main",

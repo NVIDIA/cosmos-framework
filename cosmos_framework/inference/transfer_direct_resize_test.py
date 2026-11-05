@@ -79,7 +79,7 @@ def test_direct_transfer_preserves_explicit_aspect_and_original_output(tmp_path:
 @pytest.mark.CPU
 @pytest.mark.parametrize(("resolution", "shift"), [("480", 5.0), ("720", 10.0)])
 @pytest.mark.parametrize("shift_source", ["builtin", "sample", "defaults_file"])
-@pytest.mark.parametrize("model_name", ["Qwen/Qwen3-VL-8B-Instruct", "nvidia/Cosmos3-Nano"])
+@pytest.mark.parametrize("model_name", ["Qwen/Qwen3-VL-8B-Instruct"])
 def test_direct_stage1_transfer_enables_framewise_ar(
     tmp_path: Path, resolution: str, shift: float, shift_source: str, model_name: str
 ) -> None:

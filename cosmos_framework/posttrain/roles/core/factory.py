@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""User-facing role factory (Surface 1).
+"""User-facing role factory.
 
 `roles.env(...)`, `roles.rollout(...)`, `roles.trainer(...)`, `roles.reference(...)`,
 `roles.critic(...)`, `roles.reward(...)`, `roles.teacher(...)`, and `roles.buffer(...)` declare WorkerGroups.

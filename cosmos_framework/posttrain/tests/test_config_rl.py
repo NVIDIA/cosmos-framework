@@ -15,7 +15,6 @@ import warnings
 import pytest
 from omegaconf import OmegaConf
 
-from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.posttrain.config import build
 from cosmos_framework.posttrain.config.config_grpo import PosttrainGRPOConfig
 from cosmos_framework.posttrain.config.model import HFModelConfig
@@ -45,6 +44,7 @@ from cosmos_framework.posttrain.config.rl import (
 from cosmos_framework.posttrain.control.loop.batching import informative_quota_per_cell, prompts_per_data_cell
 from cosmos_framework.posttrain.schema.checkpoint import FULL_CHECKPOINT_COMPONENTS, CheckpointComponentPlan
 from cosmos_framework.posttrain.tests.helpers.config import skip_recipe_registration
+from cosmos_framework.utils.lazy_config import instantiate
 
 
 @pytest.mark.L0
@@ -1215,7 +1215,7 @@ def test_fixed_normaliser_optimizer_eps_warning() -> None:
     messages = [str(w.message) for w in record if "eps-dominated" in str(w.message)]
     assert len(messages) == 1
     assert "rl.optimizer.eps=1e-06" in messages[0]
-    assert "(lr/eps)*m" in messages[0] and "1e-8" in messages[0] and "re-tune lr" in messages[0]
+    assert "lr/eps" in messages[0] and "1e-8" in messages[0] and "re-tune lr" in messages[0]
     with pytest.warns(UserWarning, match="eps-dominated"):
         GRPOConfig(loss_type=fixed, optimizer=OptimizerConfig(eps=2e-7))  # just above the ceiling
     with warnings.catch_warnings():
@@ -1452,7 +1452,7 @@ def test_native_backend_refuses_autocast_mode() -> None:
 def test_native_backend_refuses_autocast_mode_without_any_dtype_field() -> None:
     """The mode check asks whether the BUILDER has an autocast path, which no native builder has; it must not hide
     behind the dtype comparisons, so a native config exposing neither `dtype` nor `fsdp_reduce_dtype` is still
-    refused (`docs/reference/config.md` promises the refusal unconditionally for `model_backend="i4"`)."""
+    refused (`docs/reference/config.md` promises the refusal unconditionally for `model_backend="native"`)."""
     from types import SimpleNamespace
 
     bare = SimpleNamespace()

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Dataset-backed 1-step Envs (degenerate form).
+"""Dataset-backed 1-step Envs.
 
 v0 implements the 1-step dataset Env for VLM RL plus a synthetic arithmetic Env for
 GRPO. The `step()` hook is kept so multi-step sims slot in later with no interface
@@ -694,7 +694,7 @@ def hf_items(cfg: Any, row_map: Any | None = None) -> _ColumnMapped:
 
 
 class DatasetEnv:
-    """v0: a 1-step Env over a prompt dataset (degenerate form).
+    """v0: a 1-step Env over a prompt dataset.
 
     `reset()` yields the next prompt as an ObsBundle; `step(completion)` ends the episode
     immediately (done=True). Reward is NOT computed here in v0 (a separate RewardProvider scores

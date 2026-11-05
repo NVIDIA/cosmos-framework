@@ -1,9 +1,7 @@
 {
   "_generated_at": "2026-10-10T08:17:56.247549+00:00",
   "_manifest_version": 2,
-  "_source_commit": "cf3d9f42b2e1fdead7cc9dda7029644766aa1bb6",
   "_source_tree_sha256": "51bd9529ba04e0c7041b8f78d1495b49af22ee45a65c57cc56a79894b54815ba",
-  "_target_base_commit": "d4d5bef9eb52a2bfd63b5ad472a4b519d743fe9f",
   "destination_roots": [
     "cosmos_framework/posttrain",
     "docs/posttrain",
@@ -674,16 +672,6 @@
       "destination": "cosmos_framework/posttrain/configs/sft_qwen3p8_27b_multimodal.py",
       "kind": "file",
       "sha256": "9fd8dff56ceb0e2cd89774949e971b83e973aa8e5f864fd8f9f8c0bfa091adf5"
-    },
-    "projects/cosmos3/posttrain/configs/sft_qwen3p8_27b_obj1k.py": {
-      "destination": "cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k.py",
-      "kind": "file",
-      "sha256": "e179bf976b2eab87d88d3f04f6380f8924be018548bf6c3fd78ff918855df445"
-    },
-    "projects/cosmos3/posttrain/configs/sft_qwen3p8_27b_obj1k_gcp.json": {
-      "destination": "cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k_gcp.json",
-      "kind": "file",
-      "sha256": "a97bcbe5a53762dc63a208cdd9f31eb8e113ab0fbe1288cb3cda103b2248ca97"
     },
     "projects/cosmos3/posttrain/control/__init__.py": {
       "destination": "cosmos_framework/posttrain/control/__init__.py",

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """roles — concrete role bodies as variant subpackages (env / rollout / reward /
-trainer) + the role factory (`core.factory`, used as `from ..roles import roles`
+trainer) + the role factory (`core.factory`, used as `from..roles import roles`
 -> `roles.env(...)`). Each role is declared via the factory and backed by a
 WorkerGroup (workers/). New engine / algorithm variants drop into the matching
 subpackage without touching callers.
@@ -12,9 +12,8 @@ or any submodule under it, e.g. `roles.core.dispatch` (Python must run this __in
 first to reach a submodule) — must NOT eager-import the env/rollout/reward/trainer
 subpackages. `roles.rollout` in particular pulls a torch-heavy body at package-init
 time (`rollout.hf` -> `import torch`), which would make `roles.core.dispatch`
-un-importable in a torch-free driver process ("the driver stays
-torch-free" — dispatch.py is consulted driver-side by `GridBackend.submit`). The
-concrete classes below (`Env`, `HFRollout`, ...) still work as `roles.HFRollout` etc.
+un-importable in a torch-free driver process. The
+concrete classes below (`Env`, `HFRollout`,...) still work as `roles.HFRollout` etc.
 — resolved lazily on first access.
 """
 

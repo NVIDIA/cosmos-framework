@@ -3,7 +3,7 @@
 """Role-body builder registry: `impl_key -> builder(config) -> body`.
 
 Bodies are constructed by heterogeneous builders — `build_vllm_rollout(cfg, packer=...)`,
-`LLMTrainer(model, opt, objective, ...)` — so what is registered is the BUILDER, not the class. A
+`LLMTrainer(model, opt, objective,...)` — so what is registered is the BUILDER, not the class. A
 class registry constructed through one uniform signature would force every existing body to grow a
 `from_config`, which is churn with no payoff; entrypoints already own `build_rollout(config)` /
 `build_trainer(config, rl)` helpers of exactly this shape.
@@ -21,8 +21,7 @@ escape hatch for replacing a built-in under one key — what an out-of-tree body
 
 SCOPE, WIDER THAN TODAY'S USE, DELIBERATELY. `rollout` has one registrant (AlpaGym's) and one call
 site; `env` and `trainer` have none yet. That is below the bar this repo usually sets for an
-abstraction, and component registration is still deferred — so read the three
-kinds as the declared seam for out-of-tree bodies, kept knowingly rather than left by oversight.
+abstraction. The three kinds provide an explicit extension seam for out-of-tree bodies.
 Collapsing it to `rollout` alone would make the first env or trainer plugged in from outside the
 tree re-open the same design question.
 

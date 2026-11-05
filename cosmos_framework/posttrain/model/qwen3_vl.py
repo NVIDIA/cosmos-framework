@@ -49,12 +49,13 @@ _NON_MODEL_BATCH_KEYS: frozenset[str] = frozenset(
 
 
 # =============================================================================
-# TEMPORARY I4 QWEN3-VL COMPATIBILITY BOUNDARY — DELETE WHEN UPSTREAM SUPPORTS IT
+# TEMPORARY NATIVE QWEN3-VL COMPATIBILITY BOUNDARY — DELETE WHEN UPSTREAM SUPPORTS IT
 #
 # The forward override below and the native config, causal-mask, RoPE, and padded-MoE adapters in
 # this module and `qwen3_vl_moe.py` bridge the currently vendored upstream modeling snapshot. They must
 # not become a second permanent model implementation. Remove them once upstream natively supports the
 # same multimodal forward contract, installed Transformers version, and padded MoE policy batches.
+# The compatibility code below is scoped to these native policy builders.
 # =============================================================================
 def override_qwen3_vl_forward(model: nn.Module) -> None:
     """Override one native ``Qwen3VLModel`` / ``Qwen3VLMoeModel`` instance's forward.
@@ -79,7 +80,7 @@ def override_qwen3_vl_forward(model: nn.Module) -> None:
     model_identity = (type(model).__module__, type(model).__name__)
     if model_identity not in _NATIVE_BACKBONE_IDENTITIES:
         raise ValueError(
-            "Qwen3-VL forward override requires an exact i4-native Qwen3VLModel/Qwen3VLMoeModel, "
+            "Qwen3-VL forward override requires an exact native-native Qwen3VLModel/Qwen3VLMoeModel, "
             f"got {type(model).__module__}.{type(model).__name__}"
         )
     if bool(getattr(model, "_posttrain_forward_override", False)):
@@ -466,7 +467,7 @@ def _coerce_native_config(config_cls: type[Any], model_config: Any, attn_impleme
     return native_config
 
 
-# END TEMPORARY I4 QWEN3-VL COMPATIBILITY BOUNDARY
+# END TEMPORARY NATIVE QWEN3-VL COMPATIBILITY BOUNDARY
 
 
 def _normalize_parameter_dtype(model: nn.Module, dtype: torch.dtype) -> None:
@@ -635,7 +636,7 @@ def build_qwen3_vl_policy(
     if initialize_on_meta and not checkpoint_path and hooks.load_weights is None:
         raise ValueError("meta-initialized Qwen3-VL requires checkpoint_path or an injected load_weights hook")
     if parallel_dims is not None and hooks.parallelize is None:
-        raise ValueError("distributed Qwen3-VL build requires an injected i4 FSDP/activation-checkpointing hook")
+        raise ValueError("distributed Qwen3-VL build requires an injected native FSDP/activation-checkpointing hook")
 
     if initialize_on_meta:
         from accelerate import init_on_device

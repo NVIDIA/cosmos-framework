@@ -17,7 +17,7 @@
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens
-#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics)
+#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics) + Nano ModelOpt FP8
 #   * distilled-inference-smoke     — Super 4-step T2I + I2V inference
 #   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage
 #   * reasoner-training-regression  — llava_ov loss vs goldens
@@ -26,7 +26,9 @@
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with at least 4
 #     GPUs, NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
-#     streamed LLaVA-OneVision-Data dataset).
+#     streamed LLaVA-OneVision-Data dataset). Optional Nano ModelOpt FP8 cases
+#     use the COSMOS_FP8_CHECKPOINT_* repository variables. When configured,
+#     missing checkpoint access fails the job; without configuration those cases skip.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -190,7 +192,10 @@ jobs:
     needs: [pre-commit, changes]
     if: ${{ always() && !cancelled() && needs.pre-commit.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.run_gpu != 'false') }}
     runs-on: [self-hosted, gpu, h200]
-    timeout-minutes: 60
+    # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
+    # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
+    # on a cold cache plus three more full-width runs.
+    timeout-minutes: 105
     env:
       # Per-job pytest temp root; the cleanup step at the end of this job removes
       # only this directory. These jobs share one self-hosted runner.
@@ -200,6 +205,12 @@ jobs:
       # Both steps use the `throughput` preset, whose layout is derived from
       # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
       TEST_MAX_GPUS: "4"
+      # A configured FP8 artifact must be exercised. Access failures are not
+      # silently converted to skips; unconfigured runs retain optional coverage.
+      COSMOS_FP8_CHECKPOINT_REPOSITORY: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY }}
+      COSMOS_FP8_CHECKPOINT_REVISION: ${{ vars.COSMOS_FP8_CHECKPOINT_REVISION || 'main' }}
+      COSMOS_FP8_CHECKPOINT_SUBDIRECTORY: ${{ vars.COSMOS_FP8_CHECKPOINT_SUBDIRECTORY }}
+      REQUIRE_FP8: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY != '' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -215,9 +226,14 @@ jobs:
         run: uv sync --all-extras --group=cu128-train
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
+      # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
+      # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
+      # diffusion steps (W8A16 edge steps; exact schedule asserted from the
+      # MIXED_PRECISION_TRACE log). FP8 coverage runs when a checkpoint repository
+      # is configured above, with REQUIRE_FP8 enforcing access in that case.
       # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
-      - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 4 GPU)
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"

@@ -158,7 +158,7 @@ def register_checkpoints():
             uuid=uuid4().hex,
             name="Cosmos3-Edge",
             s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge",
+                uri="s3://bucket/Cosmos3-Edge",
             ),
             hf=CheckpointDirHf(
                 repository="nvidia/Cosmos3-Edge",
@@ -233,6 +233,7 @@ def register_checkpoints():
 
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {}
+
 """Checkpoints used by tests."""
 
 

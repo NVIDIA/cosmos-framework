@@ -105,7 +105,7 @@ def test_reasoner_vision_capable_edge_lazy_tower():
 def test_reasoner_vision_capable_qwen_with_visual():
     config = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano",
+        model_name="Qwen/Qwen3-VL-8B-Instruct",
         include_visual=True,
     )
     assert _reasoner_vision_capable(config)
@@ -114,7 +114,7 @@ def test_reasoner_vision_capable_qwen_with_visual():
 def test_reasoner_vision_capable_qwen_without_visual():
     config = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano",
+        model_name="Qwen/Qwen3-VL-8B-Instruct",
         include_visual=False,
     )
     assert not _reasoner_vision_capable(config)
@@ -138,7 +138,7 @@ def test_build_reasoner_data_fails_fast_for_visionless_qwen(tmp_path: Path):
 
     visionless = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano",
+        model_name="Qwen/Qwen3-VL-8B-Instruct",
         include_visual=False,
     )
     with pytest.raises(ValueError, match="visual tower"):

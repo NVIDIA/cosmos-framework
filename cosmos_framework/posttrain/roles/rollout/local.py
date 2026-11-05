@@ -1,16 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Local (reference) rollout body (body=(a) local compute).
+"""Local (reference) rollout body (the contract body=(a) local compute).
 
 `LocalRollout` wraps a shared model instance and generates completions for a batch
 of prompts, returning Trajectories.
 
 KEY DISCIPLINE: when the trainer and rollout share ONE model instance the weight
 edge is a no-op (rollout already sees the trainer's step); otherwise it receives pushed weights
-through the producer-driven edge (`apply_bucket` + rollout-wide version prepare/commit).
+through the producer-driven edge (`apply_bucket` + rollout-wide version prepare/commit,
+the implementation).
 Either way the rollout uses *its own* model reference and never reaches into the trainer, so a
-separate inference engine + real resharding drops in later without changing the runner.
+separate inference engine + real resharding drops in later (#4) without changing the runner.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ class LocalRollout(WeightReceiverBase):
             context="local rollout validation semantics identity",
         )
 
-    # --- weight-transfer edge target ---
+    # --- weight-transfer edge target  ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """v0: NO-OP. Shared instance → rollout already sees updated weights after
         the trainer's optimizer step. The edge exists so v1+ can do real resharding
@@ -87,9 +88,9 @@ class LocalRollout(WeightReceiverBase):
     def generate(self, prompts: list[ObsBundle], **knobs: Any) -> list[Trajectory]:
         """sim → policy is degenerate here: source is a prompt batch (1-step Env). Accepts the
         shared `**knobs` surface (roles/rollout/base.py); v0 ignores group/seed (one completion
-        per prompt, no group sampling) — a real inference engine will honor them."""
+        per prompt, no group sampling) — a real inference engine (#6) will honor them."""
         # TODO: set eval()/no_grad on the shared model; real batched generate via the
-        # inference engine (SGLang/vLLM). v0: a placeholder single-turn generate.
+        # inference engine (SGLang/vLLM, #6). v0: a placeholder single-turn generate.
         trajs: list[Trajectory] = []
         for i, obs in enumerate(prompts):
             completion, rollout_logprobs = self._generate_one(obs)

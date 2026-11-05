@@ -254,7 +254,8 @@ _QWEN2_TOKENIZER_FILES = ("tokenizer_config.json", "vocab.json", "merges.txt")
 _QWEN3VL_TOKENIZER_TYPES = ("Qwen/Qwen3-VL", "Siglip2-Qwen3-1.7B")
 
 # Repos served by the native Cosmos3-Edge (Nemotron bridge) processor; covers
-# nvidia/Cosmos3-Edge (mirrors the substring dispatch in ``build_processor``).
+# nvidia/Cosmos3-Edge and nvidia/Cosmos3-Edge (mirrors the substring
+# dispatch in ``build_processor``).
 _EDGE_REPO_SUBSTRING = "nvidia/Cosmos3-Edge"
 
 

@@ -250,7 +250,7 @@ def group_relative(
         # to None, and bucketing on it would collapse every such trajectory into ONE group -- so G
         # completions of G DIFFERENT prompts would be normalized against each other, and the
         # advantage would measure question difficulty rather than completion quality. That is the
-        # confound the cosmos-rl comparison had to neutralize by hand; producing it internally is worse.
+        # confound that requiring explicit group IDs prevents.
         #
         # The `group_size` check below CANNOT catch this, which is what makes it dangerous: exactly
         # `group_size` id-less trajectories form one bucket of the right size, so the check passes

@@ -29,7 +29,7 @@ from cosmos_framework.posttrain.config.build import (
 )
 from cosmos_framework.posttrain.config.config_grpo import PosttrainGRPOConfig
 from cosmos_framework.posttrain.config.config_opd import PosttrainOPDConfig
-from cosmos_framework.posttrain.config.model import DataPackerConfig, HFModelConfig, Qwen3VLModelConfig
+from cosmos_framework.posttrain.config.model import NATIVE, DataPackerConfig, HFModelConfig, Qwen3VLModelConfig
 from cosmos_framework.posttrain.config.rl import (
     DatasetConfig,
     GRPOConfig,
@@ -466,13 +466,14 @@ def test_runtime_preflight_rejects_incompatible_opd_settings() -> None:
     )
     validate_opd_runtime(dpca, RolloutConfig())
     rollout = RolloutConfig()
-    validate_opd_runtime(
-        dpca,
-        rollout,
-        model_backend="qwen3_vl",
-        model_config=Qwen3VLModelConfig(name_or_path=rollout.name_or_path),
-    )
-    with pytest.raises(ValueError, match="DPCA requires model_backend='i4'"):
+    for backend in (NATIVE, "qwen3_vl"):
+        validate_opd_runtime(
+            dpca,
+            rollout,
+            model_backend=backend,
+            model_config=Qwen3VLModelConfig(name_or_path=rollout.name_or_path),
+        )
+    with pytest.raises(ValueError, match="DPCA requires a native multimodal policy"):
         validate_opd_runtime(dpca, RolloutConfig(), model_backend="hf")
     for invalid_rollout, field_name in (
         (RolloutConfig(temperature=0.8), "temperature"),

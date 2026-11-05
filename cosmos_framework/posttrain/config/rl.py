@@ -549,7 +549,7 @@ class RolloutConfig:
     max_model_len: int = 1024
     dtype: str = "bfloat16"
     # vLLM weight loader, auto|dummy. dummy skips the checkpoint read, and the rollout then refuses to
-    # sample until a weight publication commits (docs/howto/qwen-scaleout.md, "Startup weight I/O").
+    # sample until a weight publication commits.
     load_format: str = "auto"
     enforce_eager: bool = True
     # vLLM sleep level for the colocated hand-off cycle. Level 1 keeps a host copy of the
@@ -614,7 +614,7 @@ class RolloutConfig:
     # `from_pretrained` would silently adopt the checkpoint's generation_config.json instead). Passing
     # both explicitly makes the sampled distribution a property of this config alone.
     # Both mappings live together in `config/build.py` (`sampling_params` / `hf_sampling_params`) so
-    # the backends cannot drift.
+    # the backends share the same sampling convention.
     top_k: int = -1  # <= 0 disables top-k filtering (HF spells that None, vLLM -1)
     repetition_penalty: float = 1.0  # 1.0 == no penalty
 
@@ -720,7 +720,7 @@ class GridConfig:
     #     "ray": bodies live in a mesh of Ray worker processes (K=`ranks` per group);
     #       single-node, or joined to a multinode cluster via RAY_ADDRESS.
     #   grouping — HOW roles pack into those hosts (process-level; NOT the GPU-level
-    #     colocated/disaggregated placement):
+    #     colocated/disaggregated placement — see DESIGN "GPU-level placement"):
     #     "single" (default): all roles of a cell share one process (one setup builds all).
     #     "per_role": each role gets its own process per cell (ray only — local+per_role
     #       is rejected at run()).
@@ -1413,7 +1413,7 @@ class HFRunConfig(RunConfig):
     `fsdp_reduce_dtype`/`transfer_dtype`, and its `[policy]` model config carries no dtype at all
     (`policy/model/base.py` reads `config.train.master_dtype` at construction time).
 
-    NOT ON `RunConfig`, deliberately. DPO's backend is `i4` (`config_dpo.py`), whose model comes from
+    NOT ON `RunConfig`, deliberately. DPO's backend is `native` (`config_dpo.py`), whose model comes from
     the inherited LazyConfig tree and carries its own dtype — these fields would be silently ignored
     there, and "a knob the layers below refuse to honor is worse than no knob". Declaring them one
     level down makes `rl.master_dtype=...` on a DPO run an unknown-key error at config load, which
