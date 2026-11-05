@@ -55,7 +55,6 @@ _NON_MODEL_BATCH_KEYS: frozenset[str] = frozenset(
 # this module and `qwen3_vl_moe.py` bridge the currently vendored upstream modeling snapshot. They must
 # not become a second permanent model implementation. Remove them once upstream natively supports the
 # same multimodal forward contract, installed Transformers version, and padded MoE policy batches.
-# See `cosmos_framework/posttrain/docs/design/DESIGN.md#v5-native-qwen3-vl-compatibility-boundary`.
 # =============================================================================
 def override_qwen3_vl_forward(model: nn.Module) -> None:
     """Override one native ``Qwen3VLModel`` / ``Qwen3VLMoeModel`` instance's forward.

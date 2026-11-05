@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""ActorGroup / DeviceGroup placement and binding primitives (DESIGN §4).
-This is placement/bind, NOT graph construction (§2.2: graph machinery is an async-only
+"""ActorGroup / DeviceGroup placement and binding primitives.
+This is placement/bind, NOT graph construction (graph machinery is an async-only
 optimization, skipped under sync). The B.1 train() loop then drives the bound WGs
 directly.
 

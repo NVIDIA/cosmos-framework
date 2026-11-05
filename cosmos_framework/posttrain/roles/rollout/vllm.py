@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""vLLM rollout body (DESIGN §1.2 body=(a) local compute; §8.2 #6 engine integration).
+"""vLLM rollout body (body=(a) local compute; engine integration).
 
 `VLLMRollout`: a real inference engine (vLLM) dropped in as a sibling to `HFRollout`,
-producing the unified Trajectory/Transition data model (§1.4). Route C (TP via
-`external_launcher` on a per-replica rendezvous) is specced in
-`docs/superpowers/specs/2026-07-06-per-replica-rendezvous-and-wg-shape-dispatch-design.md`.
+producing the unified Trajectory/Transition data model. Route C runs TP via
+`external_launcher` on a per-replica rendezvous.
 Contract:
 
   - MUST emit ``policy_info["rollout_logprobs"]`` (π_old, per completion token; the
@@ -21,12 +20,12 @@ Contract:
     input position of prompt + completion, the record the sparse-MoE policy replays
     (``data/packer/forward_routing.py`` aligns it; the codec carries it as bulk).
   - MUST carry a correct ``group_id`` with group integrity (GRPO advantage needs the
-    whole group, §2.3). vLLM ``SamplingParams(n=group)`` returns the G completions for a
+    whole group). vLLM ``SamplingParams(n=group)`` returns the G completions for a
     prompt atomically, so a group is all-or-nothing by construction.
 
 ``apply_weights`` is REAL: the bound backend's mover receives FULL tensors over the weight
 plane and vLLM's own ``load_weights`` slices each into this rank's TP shard (the recv layout
-is injected at bind from the policy for the COLLECTIVE/NCCL path — §2.4/§4). No bound backend
+is injected at bind from the policy for the COLLECTIVE/NCCL path). No bound backend
 ⇒ version-bump no-op (static-weight fallback).
 """
 
@@ -231,7 +230,7 @@ class VLLMRollout(WeightReceiverBase):
                 engine_config, owner="VLLMRollout(topk_logprobs)"
             )
         # model: a `vllm.LLM` instance, built inside the Ray actor's setup() so the engine
-        # lives where the GPU is (DESIGN §8.2 #6). `sampling` overrides the SamplingParams
+        # lives where the GPU is. `sampling` overrides the SamplingParams
         # fields below (temperature/top_p/max_tokens/...).
         if packer is None:  # explicit packer=None: a bare TypeError would not say what to do
             raise ValueError(
@@ -259,7 +258,7 @@ class VLLMRollout(WeightReceiverBase):
         self._asleep_tags: set[str] = set()
         if packer.adds_special_tokens():
             # NOT fatal. This rollout records `req.prompt_token_ids` — vLLM's OWN tokenization — in
-            # policy_info, and the objective prefers those ids (design 2026-07-28 §10), so the
+            # policy_info, and the objective prefers those ids, so the
             # prefix scored IS the prefix generated no matter what the tokenizer adds. Refusing
             # here would block `llama`, which the packer registry explicitly supports. The warning
             # remains because the residual risk is real but narrow: a consumer that re-tokenizes
@@ -269,7 +268,7 @@ class VLLMRollout(WeightReceiverBase):
                 "SAFE for the GRPO objective, which scores policy_info['prompt_ids'] (vLLM's own "
                 "req.prompt_token_ids). It is only a hazard for a consumer that re-tokenizes the "
                 "prompt instead — such a path needs a no-BOS tokenizer (e.g. Qwen) or pre-tokenized "
-                "prompts (spec §9.6)."
+                "prompts."
             )
         self._weight_version = 0
         # A load_format="dummy" engine skipped its checkpoint read and holds random weights until
@@ -428,7 +427,7 @@ class VLLMRollout(WeightReceiverBase):
         if blocked:
             raise RuntimeError(f"vLLM rollout has {blocked} released; call wake_up() first")
 
-    # --- weight-transfer edge target (DESIGN §8.2 #4) ---
+    # --- weight-transfer edge target ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """Import trainer weights into the RUNNING vLLM engine — PEER-ONLY surface.
 
@@ -436,7 +435,7 @@ class VLLMRollout(WeightReceiverBase):
         injects a PeerClient per dp-aligned cell); the sync streams bucket-by-bucket via
         ``pull_stream_from_peer`` (plan pulled lazily, transport from the bound mover). The mover
         delivers FULL (unsharded) tensors and vLLM's own ``load_weights`` slices each into this
-        rank's TP shard (design §2.4/§4). ``None`` keeps the degenerate contracts (no backend /
+        rank's TP shard. ``None`` keeps the degenerate contracts (no backend /
         SharedMover ⇒ stamp-only). The old WeightPayload batch form was REMOVED — for a manual
         whole-model sync drive ``WeightSync.apply/export`` directly (as the NCCL rigs do).
         A ``load_format="dummy"`` engine refuses the stamp-only contracts: they would advertise a
@@ -681,7 +680,7 @@ class VLLMRollout(WeightReceiverBase):
     def prepare_recv(self) -> dict[str, ShardSpec]:
         """This TP rank's receive layout per param as a `ShardSpec`. v1 receives whole tensors and
         lets vLLM's ``load_weights`` slice, so report the full extent of the engine's local params;
-        v2 reports the real TP slice so the planner can send only that slice (§2.4)."""
+        v2 reports the real TP slice so the planner can send only that slice."""
         shapes = weight_compat._apply_to_model(self.model, weight_compat._vllm_named_shapes)
         return {n: ShardSpec(0, (shape[0] if ndim else 0), 0) for n, shape, ndim in shapes}
 
@@ -863,7 +862,7 @@ class VLLMRollout(WeightReceiverBase):
                     },
                     "prompt_ids": prompt_ids,
                     "weight_version": self._weight_version,
-                    # π_old, per generated token (§2.4). Field name matches HFRollout so the
+                    # π_old, per generated token. Field name matches HFRollout so the
                     # clipped objective reads one key for both.
                     "rollout_logprobs": self._token_logprobs(out),
                     # The engine's verdict on how this completion ended: "stop" | "length" (cut at

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""control — CONTROL PLANE (DESIGN §2, §4, §5; §9).
+"""control — CONTROL PLANE.
 
 Imperative control, NO graph: topology is explicit WG + channel wiring; placement/bind
 and the buffer live here. Runs in the controller/driver process.

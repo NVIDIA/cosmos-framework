@@ -22,7 +22,7 @@ The seam is deliberately narrow:
   pixels→latents encode stays in the model's forward (`model/cosmos3.py::encode_and_condition`),
   which is why the packer stays parallelizable off the GPU.
 - **It does not own heavy-payload transport.** `comm/codec.py`'s metadata/bulk split
-  already externalizes big tensors (DESIGN §3.4); `get_rollout_output` is an
+  already externalizes big tensors; `get_rollout_output` is an
   output-*shaping* hook, not an offload hook.
 
 Mechanism-level truth (invariants, alignment arguments) lives in the docstrings of
@@ -297,9 +297,7 @@ Consequences, which are easy to get backwards:
 - A **string** completion always needs a packer (it cannot be concatenated with stored
   ids without tokenizing), so a string-emitting producer still needs a packer.
 
-This is the §10 amendment in the
-internal design spec, which supersedes the
-packer-always-shapes rule stated in that spec's §4/§9.
+This supersedes the earlier packer-always-shapes rule.
 
 ### The special-token consistency guard
 
@@ -327,7 +325,7 @@ re-tokenizes `obs` instead of using the stored ids would score a shifted prefix.
 should call `assert_no_special_tokens()` explicitly.
 
 Remedies if you hit it: use a no-BOS tokenizer (Qwen), or feed vLLM pre-tokenized prompts
-(specced, not built — see spec §9.6).
+(specced, not built).
 
 ## Troubleshooting
 
@@ -367,8 +365,7 @@ shape should be driven by a real second consumer, not guessed.
 
 Note this is a *call-site* gap, not the signature difference: our `get_rollout_output` deliberately
 returns just `completions` instead of cosmos-rl's 5-tuple, and drops its Redis/UUID offload, because
-`comm/codec.py`'s automatic metadata/bulk split already externalizes heavy fields — see §0.3 of the
-internal design spec for that rationale.
+`comm/codec.py`'s automatic metadata/bulk split already externalizes heavy fields.
 
 ## Which seam do I use
 
@@ -376,8 +373,7 @@ A `DataPacker` subclass (+ `register`) when one sample is one token sequence —
 abstract methods assume. When the model's own collator owns batch assembly, or the unit is not a token
 sequence, write a **batch-assembly function** over `Trajectory` lists and hand it to the objective
 (`data/packer/preference.py` for DPO, `model/gr00t/packer.py` for GR00T-N1.7 flow-BC). Same invariants:
-weight-free, CPU-side, one owner per model × objective. Architecture statement: `DESIGN.md` v3,
-"Batch-assembly seam"; spec §12.
+weight-free, CPU-side, one owner per model × objective.
 
 ## Deferred
 

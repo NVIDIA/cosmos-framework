@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Model capability protocols (DESIGN §1.4 / §6 — model ↔ algorithm decoupling).
+"""Model capability protocols (model ↔ algorithm decoupling).
 
 A model exposes a small, modality-typed capability protocol; algorithms
 (`algorithm/`) are written against the protocol, never against a concrete model.
@@ -283,7 +283,7 @@ class SupervisedFlowMatchingPolicy(Protocol):
 
 @runtime_checkable
 class FlowMatchingPolicy(Protocol):
-    """Capability contract for a rectified-flow / diffusion policy (DESIGN §1.4).
+    """Capability contract for a rectified-flow / diffusion policy.
 
     The policy owns its network(s), private conditioning representation, stochastic
     inputs, and staged denoiser mechanics; algorithms only drive these primitives.

@@ -133,7 +133,7 @@ def test_the_core_adds_nothing_beyond_the_repo_itself():
     added = _delta(body)
 
     # "projects" and nothing else: the core imports schema/ (zero-dep, and the framework's
-    # shared data contract per DESIGN 9's "Shared library" bucket) plus its own modules.
+    # shared data contract, the "Shared library" bucket) plus its own modules.
     assert added == ["projects"], (
         f"embodied/ core pulled in non-stdlib packages beyond numpy: {added}. The core must "
         f"load in the Isaac venv, the policy venv and the trainer venv alike; move the "

@@ -609,7 +609,7 @@ def test_sync_dispatch_is_deterministic_and_starts_no_worker():
 
 
 def test_app_start_is_the_synchronous_gate():
-    """`on_app_start` runs on the caller's thread (DESIGN §2.6 gate; §11.2 precedent): the backend's
+    """`on_app_start` runs on the caller's thread: the backend's
     singleton exists when the call returns, and nothing was queued for it."""
     rec = _RecordingObserver()
     observers = ControllerLifecycleObservers([rec])

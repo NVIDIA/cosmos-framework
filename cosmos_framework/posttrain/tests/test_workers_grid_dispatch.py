@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Registry-driven per-edge routing in ``GridBackend`` (Task A4, DESIGN §2.1/§2.2).
+"""Registry-driven per-edge routing in ``GridBackend``.
 
 Drives ``GridBackend._align_one`` / ``_actor_args`` directly with a fake ``CollectiveHandle``
 (sentinel-string refs, identity getter) — CPU-only, no actors ever invoked. ``_Host.invoke``
-(Task A5) is what would actually EXECUTE a returned ``Dispatched``; these tests only check
+is what would actually EXECUTE a returned ``Dispatched``; these tests only check
 that ``submit``-side routing builds the right descriptor.
 """
 
@@ -43,8 +43,8 @@ def _gb() -> GridBackend:
 
 def test_marker_overrides_registry_hit():
     """A call-site Sharded marker wins over a registry entry for the SAME (kind, method,
-    param) — DESIGN §2.1 precedence tier 1 over tier 2. Uses the real registered
-    ("trainer", "train", "batch") entry (Task A3) so a hit is guaranteed without monkeypatch,
+    param) — precedence tier 1 over tier 2. Uses the real registered
+    ("trainer", "train", "batch") entry so a hit is guaranteed without monkeypatch,
     then wraps the SAME edge in a marker with a DIFFERENT reduce= to prove the marker's own
     spec — not the registry's — was used."""
     assert registry.lookup("trainer", "train", "batch") is not None  # sanity: registry entry exists
@@ -114,7 +114,7 @@ def test_mirror_requires_single_producer_unit():
 
 # These three pin the BARE-fallback invariants (tier 3): rank-mirror refcount wrap, symmetric
 # raw-ref byte-identity, and replica-mismatch raise. They key off ("reward","score","trajs") — a
-# genuinely UNREGISTERED edge (reward/buffer edges stay bare / dp_aligned by design). Task C2
+# genuinely UNREGISTERED edge (reward/buffer edges stay bare / dp_aligned by design). A later change
 # registered ("rollout","generate","prompts") as a Sharded split, so it is no longer bare and
 # can't stand in for these bare-path cases (it would produce a Dispatched via tier 2 instead).
 def test_bare_equal_replica_rank_mirror_wraps_multireader():
@@ -211,7 +211,7 @@ def test_actor_args_kwarg_uses_its_own_name(monkeypatch):
 
 
 def test_sharded_multi_rank_spmd_producer_raises_naming_ranks1(monkeypatch):
-    """Fix (spec 2026-07-22 §2.2): a Sharded edge whose PRODUCER declares K_p > 1 is a rank-mirror
+    """Fix: a Sharded edge whose PRODUCER declares K_p > 1 is a rank-mirror
     SPMD helper — its lanes duplicate the same output, so ``flat_units`` double-counts them. Reject
     BEFORE routing, naming the edge + sub-shape + the ranks=1 remedy, rather than silently K-folding
     the reduce (loss corruption) or misfiring a 'reduce= required'. Uses the real registered
@@ -222,7 +222,7 @@ def test_sharded_multi_rank_spmd_producer_raises_naming_ranks1(monkeypatch):
         gb._align_one(h, 0, 0, (2, 4), kind="trainer", method="train", param="batch")
     msg = str(ei.value)
     assert "trainer" in msg and "train" in msg and "batch" in msg
-    assert "(1, 2)" in msg and "ranks=1" in msg and "§2.2" in msg
+    assert "(1, 2)" in msg and "ranks=1" in msg
 
 
 def test_rank_partitioned_sharded_edge_reduces_distinct_producer_rank_lanes() -> None:

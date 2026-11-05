@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """End-to-end: the offline DPO loop over the decoupled stack, toy model, local backend.
 
-Validates the model↔algorithm↔trainer decoupling (DESIGN §6) end-to-end without a
+Validates the model↔algorithm↔trainer decoupling end-to-end without a
 GPU: the GENERIC `DiffusionTrainer` drives the `algorithm.dpo` objective against a
 `FlowMatchingPolicy` (the toy flow model), over `preference Env → buffer → trainer`.
 Synthetic separable pairs guarantee a nonzero reward margin so a real optimizer step

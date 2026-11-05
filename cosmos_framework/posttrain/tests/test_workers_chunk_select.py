@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""The ingress selection predicate (spec §3.4): one owner for the mini, micro and dp axes."""
+"""The ingress selection predicate: one owner for the mini, micro and dp axes."""
 
 import itertools
 from dataclasses import dataclass
@@ -64,8 +64,8 @@ def test_selection_is_an_exact_partition() -> None:
     """Every item claimed by exactly ONE (rank, mini, micro) triple — never twice, never dropped.
     This is the 1/dp_world**2 regression test: a double-shard drops items and fails here."""
     # Both batch sizes are multiples of 64 = max(n_mini) * max(n_micro) * max(dp_world), so
-    # `chunk_len % dp_world == 0` (the precondition select_chunk is documented to assume, per
-    # spec §5.1) holds for every combination below and "equal shares, always" is achievable.
+    # `chunk_len % dp_world == 0` (the precondition select_chunk is documented to assume)
+    # holds for every combination below and "equal shares, always" is achievable.
     cases = itertools.product([64, 128], [1, 2, 4], [1, 2, 4], [1, 2, 4])
     for batch, n_mini, n_micro, dp_world in cases:
         items = _items(batch)
@@ -179,7 +179,7 @@ def test_enabled_path_keeps_each_episode_on_one_dp_rank() -> None:
 def test_short_batch_raises_instead_of_silently_dropping_the_tail() -> None:
     """A length not divisible by n_mini*n_micro would floor-divide its tail into oblivion. The
     conservation law keeps the batch exact today, but a short batch is structurally reachable
-    (`ExperienceBuffer.select` slices `pool[:size]`) and the §5 dynamic-filter TODO would make it
+    (`ExperienceBuffer.select` slices `pool[:size]`) and the dynamic-filter TODO would make it
     live — so the predicate must fail loud, not train on a silent 24/31 subset."""
     items = _items(31)  # 31 = 4*2*3 + 7; mini_len=7, micro_len=3 -> 4*2*3=24 used, 7 vanish
     with pytest.raises(ValueError, match="not a multiple of"):

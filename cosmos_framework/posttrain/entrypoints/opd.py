@@ -29,8 +29,7 @@ the teacher: OPD adds no teacher-signal validation objective or metric contract 
 
 Alignment note: this entry's `distillation_mode=advantage`, `jsd_beta=1`, `kl_penalty_coef=1`, and
 `top_k=32` settings match the cosmos-rl reference configuration. Its `loss_type=token-sum` has no equivalent here — use
-`rl.loss_type=seq-mean-token-sum`, which reproduces that update up to the constant `mini_batch`
-(see the design doc).
+`rl.loss_type=seq-mean-token-sum`, which reproduces that update up to the constant `mini_batch`.
 """
 
 from __future__ import annotations

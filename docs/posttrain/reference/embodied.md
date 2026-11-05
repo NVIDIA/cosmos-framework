@@ -19,7 +19,7 @@ writing a new backend touches only the third row, and only the parts of it under
 ## Why a simulator fills the Env role without implementing `Env`
 
 **Two things are called `Env` here, and keeping them apart is the whole of this section.**
-DESIGN §1.3's *Env-as-source* is a ROLE — the thing a rollout draws observations from.
+*Env-as-source* is a ROLE — the thing a rollout draws observations from.
 `roles/env/base.py::Env` is a Python Protocol with a Gym signature. A simulator fills the
 first and does not implement the second; what it implements is `SimSession`.
 
@@ -43,14 +43,14 @@ arrive later in this series. `sim_manifest()` is declare-only for the same reaso
 
 ## Where it sits in the framework
 
-| DESIGN element               | how `embodied/` relates                                                                                                                                                                                                   |
+| Framework element            | how `embodied/` relates                                                                                                                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §1.3 Env-as-source           | **Adopted, in the role sense.** `SimSession` is the runtime protocol that fills it — lane-batched and caller-driven rather than Gym `reset()/step()`, so it does not implement `roles/env/base.py::Env`.                  |
-| §1.4 Trajectory / Transition | **Adopted.** `Transition` gains `truncated` and `info`, both additive with defaults: a time-limit cut is not a terminal state, and bootstrapping `V(s')` through the two differently is what `done` alone cannot express. |
-| §4.0 naming (normative)      | `Rollout` is the generation seam; `policy` stays reserved for the trainer/learner role.                                                                                                                                   |
-| §4.2 colocation tiers / §7   | sim↔policy colocation is a placement instance, not a mechanism here: `bind_colocated_groups(..., colocate="host_affinity")`, unchanged.                                                                                   |
-| §9 Shared library bucket     | `embodied/` imports `schema` and nothing else outside stdlib+numpy — enforced by gate G4.                                                                                                                                 |
-| roles taxonomy               | No new role kind. `sim_manifest()` declares `env` and `policy`, matching `eval_system.md` §8.                                                                                                                             |
+| Env-as-source                | **Adopted, in the role sense.** `SimSession` is the runtime protocol that fills it — lane-batched and caller-driven rather than Gym `reset()/step()`, so it does not implement `roles/env/base.py::Env`.                  |
+| Trajectory / Transition      | **Adopted.** `Transition` gains `truncated` and `info`, both additive with defaults: a time-limit cut is not a terminal state, and bootstrapping `V(s')` through the two differently is what `done` alone cannot express. |
+| naming (normative)           | `Rollout` is the generation seam; `policy` stays reserved for the trainer/learner role.                                                                                                                                   |
+| colocation tiers             | sim↔policy colocation is a placement instance, not a mechanism here: `bind_colocated_groups(..., colocate="host_affinity")`, unchanged.                                                                                   |
+| Shared library bucket        | `embodied/` imports `schema` and nothing else outside stdlib+numpy — enforced by gate G4.                                                                                                                                 |
+| roles taxonomy               | No new role kind. `sim_manifest()` declares `env` and `policy`.                                                                                                                                                           |
 
 ## The import discipline (gate G4)
 

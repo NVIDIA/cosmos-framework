@@ -12,7 +12,7 @@ or any submodule under it, e.g. `roles.core.dispatch` (Python must run this __in
 first to reach a submodule) — must NOT eager-import the env/rollout/reward/trainer
 subpackages. `roles.rollout` in particular pulls a torch-heavy body at package-init
 time (`rollout.hf` -> `import torch`), which would make `roles.core.dispatch`
-un-importable in a torch-free driver process (DESIGN §2.1: "the driver stays
+un-importable in a torch-free driver process ("the driver stays
 torch-free" — dispatch.py is consulted driver-side by `GridBackend.submit`). The
 concrete classes below (`Env`, `HFRollout`, ...) still work as `roles.HFRollout` etc.
 — resolved lazily on first access.

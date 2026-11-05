@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""GridBackend — one replicas×ranks _Host actor mesh per group (DESIGN §1.1/§4.2).
+"""GridBackend — one replicas×ranks _Host actor mesh per group.
 
 Per ActorGroup: R execution replicas, each with K worker ranks. Every WG method call fans out over
 its own resolved sub-shape and aligns arguments through an AlignPolicy. Compact execution-replica
@@ -11,10 +11,10 @@ Arg alignment: a CollectiveHandle arg is aligned per consumer (r, k) and the pro
 ObjectRef is forwarded into the actor nested in the args tuple; _Host.invoke resolves it
 actor-side (Ray does not auto-resolve refs nested in a container, only direct .remote()
 args). So the controller forwards only the tiny ref — never the producer's metadata payload
-— and bulk still moves peer-to-peer at materialize (DESIGN §3.4/#7). The remaining efficiency
-hooks (async overlap, SQ/CQ engine, real IPC/UCX/NCCL backend) are §3.2 future work.
+— and bulk still moves peer-to-peer at materialize. The remaining efficiency
+hooks (async overlap, SQ/CQ engine, real IPC/UCX/NCCL backend) are future work.
 
-AlignPolicy is §2.4 dispatch expressed at the mesh level (mesh→mesh rank↔rank mapping); this
+AlignPolicy is dispatch expressed at the mesh level (mesh→mesh rank↔rank mapping); this
 version only implements dp_aligned — locality/reshard/gather are left as hooks, to migrate to
 control/dispatch + edge(dispatch=) later.
 """
@@ -30,8 +30,8 @@ from typing import Any, Callable
 
 
 def bundle_index(r: int, k: int, k_own: int) -> int:
-    """Row-major flat bundle index of cell (r, k) within a group of rank width ``k_own``
-    (spec 2026-07-22 §4.2): ``global = r * k_own + k``. Cross-group cells with EQUAL flat index
+    """Row-major flat bundle index of cell (r, k) within a group of rank width ``k_own``:
+    ``global = r * k_own + k``. Cross-group cells with EQUAL flat index
     share a bundle (⇒ share a GPU); different cells of the SAME group get distinct bundles. Pure —
     the extracted seam the bind (colocate.py) and spawn_grid below both flatten through. At equal
     shapes (``k_own == K_max``) this is bit-identical to the former ``r * K_max + k`` layout.
@@ -59,9 +59,9 @@ def dp_aligned(producer_shape: tuple, consumer_shape: tuple, meta: Any = None) -
 # TODO(Option B — NCCL-broadcast align for large bulk): dp_aligned makes a low-rank producer
 # feed a high-rank SPMD consumer by having EVERY consumer rank independently pull producer (r,0)
 # (N object-store pulls of the same payload — fine for text/small metadata, wasteful for a big
-# multimodal obs, §3.4). This still applies to edges that keep dp_aligned's mirror-on-rank-axis
+# multimodal obs). This still applies to edges that keep dp_aligned's mirror-on-rank-axis
 # shape (e.g. a same-shape identity/Mirror edge with no per-rank selection); it no longer applies
-# to the `("trainer", "train", "batch")` edge, which as of Task 8 carries a `select`
+# to the `("trainer", "train", "batch")` edge, which now carries a `select`
 # (`workers/dispatch.py:select_chunk`) and materializes only THIS rank's kept share at
 # `workers/ray.py:_resolve_dispatched`, not the full mirrored producer payload — so there is
 # nothing left to broadcast on that specific edge. Add a `bcast_aligned` variant that still maps
@@ -455,7 +455,7 @@ def setup_grid(
 
 
 class GridBackend:
-    """WorkerGroup backend: one replicas×ranks _Host actor mesh per group (DESIGN §1.1/§4.2).
+    """WorkerGroup backend: one replicas×ranks _Host actor mesh per group.
 
     Each WG dispatches over its OWN placement-resolved ``(replicas, ranks)`` sub-shape, not the physical
     mesh: ``wg_shapes[wg_name]`` (registered at bind). So in one shared mesh a rollout WG at
@@ -463,11 +463,11 @@ class GridBackend:
     cell — no redundant execution, no reliance on determinism. Unregistered WGs fall back to
     the mesh shape (direct-construction tests).
 
-    Args (positional and keyword) are aligned per consumer actor via the AlignPolicy (§2.4)
+    Args (positional and keyword) are aligned per consumer actor via the AlignPolicy
     over the two WGs' OWN shapes (producer shape → consumer shape): a ``CollectiveHandle``
-    forwards the aligned producer ObjectRef (controller routes metadata only, §3.4/#7); a peer
+    forwards the aligned producer ObjectRef (controller routes metadata only); a peer
     ``WorkerGroup`` becomes a Ray-free ``PeerClient`` to the aligned producer cell (inline
-    outbound calls, §1.2 (b)); a ``Scatter`` gives each cell its ``seq[r]`` slice. ``dp_aligned``
+    outbound calls); a ``Scatter`` gives each cell its ``seq[r]`` slice. ``dp_aligned``
     clamp-to-0 broadcasts low→high (every consumer rank ← producer (r, 0)) and gathers high→low
     (consumer (r, 0) ← producer (r, 0)) by construction.
 
@@ -497,15 +497,15 @@ class GridBackend:
         Args:
             grid: ``{(r, k): (store_id, actor)}`` from ``spawn_grid``; only the actors are retained.
             shape: ``(R, K)`` physical mesh shape (union of the group's WG sub-shapes).
-            align: ``AlignPolicy`` mapping producer↔consumer cells (§2.4); default ``dp_aligned``.
+            align: ``AlignPolicy`` mapping producer↔consumer cells; default ``dp_aligned``.
             dp_methods: method names reduced over replica leads instead of returning a ``CollectiveHandle``.
             dp_reduce_op: ``"mean"`` for typed execution-replica contributions, ``"identical"``
                 when the body's Torch model world already reduced the report, or ``"replica0"``
                 for a lower-level diagnostic backend.
             wg_shapes: ``{wg_name: (R, K)}`` per-WG resolved sub-shape; unregistered ⇒ fall back to ``shape``.
             weight_routes: weight-edge overrides consulted only for the gated weight-sync peer edge
-                in ``_align_one``. On a POLICY backend (producer-driven ``push_weights``, design
-                2026-07-27 §2), this is one total flat-actor map from every policy cell to zero or
+                in ``_align_one``. On a POLICY backend (producer-driven ``push_weights``),
+                this is one total flat-actor map from every policy cell to zero or
                 more rollout cells. None ⇒ symmetric ``dp_aligned`` peer edge.
             weight_broadcast_enabled: whether the rollout WG uses the optional post-P2R replica
                 broadcast. This is driver-visible mode state; communicators remain actor-local.
@@ -534,8 +534,8 @@ class GridBackend:
             raise TypeError(f"weight_broadcast_enabled must be bool, got {weight_broadcast_enabled!r}")
         self.weight_broadcast_enabled = weight_broadcast_enabled
         R, _K = shape
-        # Per-replica rank-0 actor list = inter-replica Communicator endpoints (§1.1).
-        # TODO(v1+, §1.1): real peer-to-peer NCCL/gloo collective inside the step;
+        # Per-replica rank-0 actor list = inter-replica Communicator endpoints.
+        # TODO(v1+): real peer-to-peer NCCL/gloo collective inside the step;
         # currently driver-coordinated gather→reduce (same as ReplicaBackend.Communicator).
         self.comm = Communicator([self.actors[(r, 0)] for r in range(R)])
 
@@ -552,7 +552,7 @@ class GridBackend:
         select_kw: dict | None = None,
     ) -> Dispatched:
         """Build a ``Dispatched`` from a ``Sharded``/``Mirror`` spec applied to producer
-        ``handle`` for consumer replica ``r`` (DESIGN §2.2/§2.3, Task A4). Units are the
+        ``handle`` for consumer replica ``r``. Units are the
         producer's OWN resolved sub-shape — ``handle.shape`` is already that sub-shape (set
         in ``submit`` from ``wg_shapes``, mirroring the ``WorkerGroup`` branch of
         ``_align_one`` below), flattened row-major (``flat_units``).
@@ -565,10 +565,10 @@ class GridBackend:
             kind: producer role / registry ``kind`` (used in error messages).
             method: method name (used in error messages).
             param: parameter name (used in error messages).
-            select_kw: resolved ingress-selection kwargs (spec 2026-08-12 §3.4; from
+            select_kw: resolved ingress-selection kwargs (from
                 ``take_control_kwargs`` in ``_actor_args``), carried onto the returned
                 ``Dispatched`` alongside ``spec.select`` so the actor can apply it once it
-                materializes (Task 8). ``None`` ⇒ no selection — carried through as
+                materializes. ``None`` ⇒ no selection — carried through as
                 ``Dispatched(select=None, select_kw=None)``, inert.
 
         Returns:
@@ -594,8 +594,8 @@ class GridBackend:
                     f"reduce= and split=; a Sharded edge carries at most one (reduce for P>R_c fan-in, "
                     f"split for R_c>P fan-out) — declare exactly one"
                 )
-            # Fail loud on a MULTI-RANK SPMD producer behind a Sharded edge BEFORE routing (spec
-            # 2026-07-22 §2.2). ``flat_units`` counts every producer cell as a unit, but a K_p>1 SPMD
+            # Fail loud on a MULTI-RANK SPMD producer behind a Sharded edge BEFORE routing.
+            # ``flat_units`` counts every producer cell as a unit, but a K_p>1 SPMD
             # producer's rank lanes are MIRRORS of one another — so it contributes K_p duplicate units.
             # The old-canonical uniform shape then either silently K-folds the training batch through
             # the registered reduce (loss corruption, NO error) or raises a misdirected "reduce=
@@ -607,7 +607,7 @@ class GridBackend:
                     f"counting them as {P} units double-counts each replica's output (silently K-folds "
                     f"the registered reduce, corrupting the training batch, or misfires a 'reduce= "
                     f"required'). Declare the SPMD helper at ranks=1 so its mirrored outputs are not "
-                    f"double-counted as units — spec 2026-07-22 §2.2"
+                    f"double-counted as units"
                 )
         if isinstance(spec, Mirror):
             if P != 1:
@@ -636,11 +636,11 @@ class GridBackend:
         else:  # op == "one"
             fn = None
         index = routing.split_index(op, n, r)
-        # select/select_kw (Task 7 plumbs them onto Dispatched; Task 8 consumes them actor-side in
+        # select/select_kw (plumbed onto Dispatched here; consumed actor-side in
         # `workers/ray.py:_resolve_dispatched`). None ⇒ no selection, which is both the DPO case
         # (select_kw absent) and every non-selecting Sharded edge.
         select = spec.select if select_kw is not None else None
-        # readers = the non-DP group size per kept ref (§9.5): ranks sharing a dp_rank but differing
+        # readers = the non-DP group size per kept ref: ranks sharing a dp_rank but differing
         # in TP/PP pull the SAME sample, so Kc/dp_world of them count. `select` is opt-in (only
         # GRPO's train passes the kwargs; DPO shares the entry and doesn't), and without it every
         # rank materializes the full slice — so readers stays Kc there or the BulkStore entry pops
@@ -699,7 +699,7 @@ class GridBackend:
     ) -> Any:
         """Align ONE arg onto consumer cell (r, k) over the consumer WG's OWN shape.
 
-        Registry-driven per-edge routing (DESIGN §2.1/§2.2, Task A4), in precedence order:
+        Registry-driven per-edge routing, in precedence order:
 
         (a) call-site marker: ``RankAligned`` requires identical producer/consumer shapes and
             forwards the exact ``(r, k)`` peer; ``Sharded``/``Mirror`` unwrap ``.arg`` and build
@@ -714,19 +714,18 @@ class GridBackend:
             pulled; a single-reader ref forwards the raw ref unwrapped (byte-identical to the
             pre-dispatch path). Replica counts differ ⇒ ``ValueError`` naming the unregistered
             ``(kind, method, param)`` and both shapes (the old silent replica-axis clamp is
-            gone — DESIGN §2.1 precedence tier 3).
-        (d) ``WorkerGroup`` (a peer WG passed to be *called inline*, §1.2 body-mode (b)):
+            gone — precedence tier 3).
+        (d) ``WorkerGroup`` (a peer WG passed to be *called inline*, body-mode (b)):
             inject a Ray-free ``PeerClient`` bound to the aligned producer cell's actor. One
             weight-sync sub-case routes BEFORE the general peer form when ``self.weight_routes``
             carries an entry: ``push_weights(rollout)`` on a ``rollout`` arg (producer-driven
-            flat-index bijection, design 2026-07-27 §2). A bind without a route entry (symmetric /
+            flat-index bijection). A bind without a route entry (symmetric /
             non-weight peer edge) takes the general peer form.
         (e) ``Scatter`` (a per-cell sequence): give this cell its slice ``seq[r]``.
         (f) anything else: broadcast, hardcoded identity routing (not align-delegated).
 
         ``RankAligned`` in (a)/(b) forwards one exact-rank ref directly; the other marker/registry
-        forms build a ``Dispatched``. (d)/(e)/(f) are BYTE-IDENTICAL to before this task
-        (WorkerGroup branch changes in Task C1).
+        forms build a ``Dispatched``. (d)/(e)/(f) are BYTE-IDENTICAL to the pre-dispatch path.
 
         Args:
             arg: the single call argument to align (dispatch marker, bare
@@ -738,8 +737,8 @@ class GridBackend:
             method: method name for the lookup (and the ``push_weights`` weight-edge gate).
             param: parameter name for the lookup.
             dispatch_profile: optional algorithm-specific contract selected by the consumer WG.
-            select_kw: resolved ingress-selection kwargs for THIS param (spec 2026-08-12 §3.4,
-                from ``take_control_kwargs`` in ``_actor_args``), threaded onto the registry-hit
+            select_kw: resolved ingress-selection kwargs for THIS param (from
+                ``take_control_kwargs`` in ``_actor_args``), threaded onto the registry-hit
                 (tier 2) ``Dispatched`` only. ``None`` for every other param and for a call-site
                 marker (out of scope here — a marker declares its own spec).
 
@@ -812,8 +811,8 @@ class GridBackend:
             if producer_backend is None:
                 raise RuntimeError(f"peer WG {arg.name!r} passed as arg is not bound to a backend")
 
-            # ---- Weight-sync edge: policy.push_weights(rollout) — PRODUCER-DRIVEN colocated push
-            # (design 2026-07-27 §2). Called ON the policy WG, so this runs on the POLICY body over the
+            # ---- Weight-sync edge: policy.push_weights(rollout) — PRODUCER-DRIVEN colocated push.
+            # Called ON the policy WG, so this runs on the POLICY body over the
             # ``rollout`` arg. Gated on method + role so ONLY the genuine policy→rollout push edge enters
             # here; no other peer-WG edge is rerouted. ``self.weight_routes`` is the POLICY backend's
             # total flat-actor map: every policy cell owns zero or more rollout cells, independently
@@ -866,7 +865,7 @@ class GridBackend:
         if isinstance(arg, Scatter):
             # NOTE: routing here is hardcoded strict-identity (seq[r]), NOT delegated to
             # self.align — a scatter needs error-on-mismatch, unlike dp_aligned's lenient
-            # clamp. When dispatch grows (§8.2 #4 / gather), model this as a virtual
+            # clamp. When dispatch grows (gather), model this as a virtual
             # producer of shape (len,1) through a pluggable Dispatch strategy.
             consumer_replicas = consumer_shape[0]
             if len(arg.seq) != consumer_replicas:
@@ -900,15 +899,15 @@ class GridBackend:
 
         Returns:
             ``(actor_args, actor_kwargs)`` aligned for the cell. When the registry hit for one
-            param declares ``select=`` (spec 2026-08-12 §3.4) and the call passes its
+            param declares ``select=`` and the call passes its
             ``select_params`` control kwargs (``mini``/``micro``/``n_mini``/``n_micro``), those
             kwargs are STRIPPED here (via ``take_control_kwargs``) and never reach ``actor_kwargs``
             — the actor body is still invoked as ``train(batch)``. They are carried instead on that
             one param's ``Dispatched.select``/``select_kw`` for the actor to apply once it
-            materializes (Task 8); absent control kwargs (the DPO case) leave everything unchanged.
+            materializes; absent control kwargs (the DPO case) leave everything unchanged.
         """
         # Param names: positional args bind via the registry's (kind, method) signature
-        # table (Task A3 `bind_param_names`); kwargs already carry their own name.
+        # table (`bind_param_names`); kwargs already carry their own name.
         pos_names = registry.bind_param_names(kind, method, args, kw)[: len(args)]
         target_name, spec = None, None
         for name in list(pos_names) + list(kw.keys()):
@@ -951,7 +950,7 @@ class GridBackend:
 
     def hosts(self) -> dict:
         """{(r, k): node_ip} across the mesh — placement introspection read from the
-        actors (DESIGN §4.1), so role bodies don't report their own node."""
+        actors, so role bodies don't report their own node."""
         import ray
 
         vals = ray.get([h.host.remote() for h in self.actors.values()])

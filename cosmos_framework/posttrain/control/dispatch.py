@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Bounded asynchronous event dispatch for the control plane's observer bus (DESIGN §2.6, §11.2).
+"""Bounded asynchronous event dispatch for the control plane's observer bus.
 
 `BoundedEventDispatcher` moves `LifecycleEvent`s from the emitting thread to ONE lazily created daemon
-worker thread through a bounded FIFO. The emitter never blocks and never waits on a listener (§2.6:
-observers are async and off the hot path; §11.2: "All observers, off-hot-path, must not block").
+worker thread through a bounded FIFO. The emitter never blocks and never waits on a listener
+(observers are async and off the hot path and must not block).
 Delivery order is emission order, so a listener sees the sequence a synchronous fan-out would have
 given it, just later.
 

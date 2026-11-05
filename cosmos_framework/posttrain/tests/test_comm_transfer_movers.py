@@ -168,7 +168,7 @@ def test_resolver_cross_device_requires_tensor():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_resolver_rejects_unknown_relationship():
-    # DESIGN §3.3: an unresolvable relationship fails loud, never silently degrades to CopyMover.
+    # An unresolvable relationship fails loud, never silently degrades to CopyMover.
     with pytest.raises(ValueError, match="unknown relationship"):
         resolve_mover(relationship="bogus", plane="weight", capability="tensor")
 

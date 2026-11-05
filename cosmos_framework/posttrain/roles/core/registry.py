@@ -21,7 +21,7 @@ escape hatch for replacing a built-in under one key — what an out-of-tree body
 
 SCOPE, WIDER THAN TODAY'S USE, DELIBERATELY. `rollout` has one registrant (AlpaGym's) and one call
 site; `env` and `trainer` have none yet. That is below the bar this repo usually sets for an
-abstraction, and DESIGN §11.3 still lists component registration as deferred — so read the three
+abstraction, and component registration is still deferred — so read the three
 kinds as the declared seam for out-of-tree bodies, kept knowingly rather than left by oversight.
 Collapsing it to `rollout` alone would make the first env or trainer plugged in from outside the
 tree re-open the same design question.

@@ -443,7 +443,7 @@ def test_grpo_loop_batch_boundary_not_optimizer_step_drives_generate_and_sync(mo
         def train(self, batch, *, mini=0, micro=0, n_mini=1, n_micro=1):
             # The driver passes INDICES ONLY. In production the dispatch layer CONSUMES these and
             # the body is invoked as `train(batch)`; this fake stands in for the whole WorkerGroup,
-            # so it receives them and records the order (spec §3.4).
+            # so it receives them and records the order.
             del batch, n_mini, n_micro
             self.calls.append((mini, micro))
             n["train"] += 1
@@ -862,7 +862,7 @@ def test_grpo_loop_nan_step_aborts_before_weight_sync(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": float("nan") if n["train"] == 2 else 0.5}  # NaN on the 2nd step
@@ -903,7 +903,7 @@ def test_grpo_loop_rejected_update_aborts_before_weight_sync_or_checkpoint(monke
         def iteration(self) -> int:
             return self._iteration
 
-        def train(self, batch: list[Any], **_control: Any) -> dict[str, Any]:  # **_control: mini/micro (§3.4)
+        def train(self, batch: list[Any], **_control: Any) -> dict[str, Any]:  # **_control: mini/micro
             del batch
             n["train"] += 1
             if n["train"] == 2:
@@ -959,7 +959,7 @@ def test_grpo_loop_resumes_from_iteration(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1908,7 +1908,7 @@ def test_grpo_loop_preemption_emergency_saves(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1947,7 +1947,7 @@ def test_grpo_loop_preemption_no_double_save_when_already_checkpointed(monkeypat
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1985,7 +1985,7 @@ def _preemption_plan_saves(monkeypatch, **rl_overrides) -> list[tuple[str, tuple
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -3046,7 +3046,7 @@ def test_build_env_hf_branch_works_without_an_items_fn(monkeypatch):
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grid_build_rejects_micro_batches_that_do_not_divide_by_dp_world() -> None:
-    """The `select_chunk` precondition (§5.1: `chunk_len % dp_world == 0`) must be checked at
+    """The `select_chunk` precondition (`chunk_len % dp_world == 0`) must be checked at
     grid-build time, not discovered by a rank whose share silently rounds to zero.
 
     Cannot live in `GRPOConfig.__post_init__` -- `dp_world` is `ParallelDims`-derived and
@@ -3250,7 +3250,7 @@ def test_grpo_loop_resume_rejects_a_mid_batch_checkpoint(monkeypatch):
         )
 
 
-# --------------------------------------------------------------------------- §8.3 generalized sizing
+# --------------------------------------------------------------------------- generalized sizing
 
 
 @pytest.mark.L0

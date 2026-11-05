@@ -397,5 +397,4 @@ The bar for a new backend, concretely:
 ## Where to look next
 
 - `embodied/sims/example.py` — the whole contract, working, in one file.
-- `docs/reference/embodied.md` — the package's own design notes and the import discipline.
-- `docs/design/DESIGN.md` §1.3 — who owns which seam, and why the loop and sink stay on your side.
+- `docs/posttrain/reference/embodied.md` — the package's layering and the import discipline.

@@ -18,12 +18,11 @@ Two link shapes are checked, because the sources write them differently:
   ones: moving a document one directory deeper breaks its ``../pyproject.toml`` links exactly as
   readily as its ``../README.md`` links, and a target may legitimately be a directory.
 * Everything else — Python docstrings, shell launchers, Dockerfiles, ``.gitignore`` — points at
-  documents by repository-relative path (``docs/design/DESIGN.md``), resolved against the posttrain
+  documents by repository-relative path (``docs/reference/config.md``), resolved against the posttrain
   package root.
 
 Only files tracked by git are scanned. Untracked local scratch notes may legitimately record
-historical paths, and planning artifacts under ``docs/superpowers/`` reference paths that are
-planned but not yet created.
+historical paths.
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ POSTTRAIN = Path(__file__).resolve().parents[1]
 _MD_LINK = re.compile(r"\]\(\s*([^)\s#]+)(?:#[^)\s]*)?\s*\)")
 _NOT_A_PATH = ("http://", "https://", "mailto:", "#")
 _PY_DOC_PATH = re.compile(r"(?<![\w/])((?:\.\./)*docs/[\w./-]+\.md)")
-_SKIP_SUBTREE = Path("docs") / "superpowers"
 # Any tracked text file may cite a document; a restructure breaks a shell script's reference exactly
 # as readily as a markdown link.
 _TEXT_SUFFIXES = {".md", ".py", ".sh", ".toml", ".yaml", ".yml", ".cfg", ".txt", ".json"}
@@ -60,7 +58,7 @@ def _tracked_files() -> list[Path]:
         check=True,
     ).stdout
     paths = [POSTTRAIN / name for name in listing.split("\0") if name]
-    return [p for p in paths if _SKIP_SUBTREE not in p.relative_to(POSTTRAIN).parents and _is_scannable(p)]
+    return [p for p in paths if _is_scannable(p)]
 
 
 def _is_scannable(path: Path) -> bool:

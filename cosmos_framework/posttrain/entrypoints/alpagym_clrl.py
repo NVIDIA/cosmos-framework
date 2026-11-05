@@ -6,11 +6,11 @@ Scope is bounded to what that launcher did — stand up the trainer and rollout 
 the RL loop. AlpaGym keeps everything around it: its host CLI, the AlpaSim wizard bring-up, the
 endpoint registry, and the Slurm `srun` wrapping. Only the command that step launches changes.
 
-TOPOLOGY (design §3). The two meshes are TRANSPOSED — policy `(1, gpus)` FSDP, rollout
+TOPOLOGY. The two meshes are TRANSPOSED — policy `(1, gpus)` FSDP, rollout
 `(gpus, 1)` independent engines — because AlpaGym's rollout is an HF model behind an
 InferenceEngine and does not tensor-parallel shard, while its trainer needs FSDP.
 
-`entrypoints/grpo.py::declare_wgs` now takes `shapes` (`grid.shapes`, §8.2) and would express
+`entrypoints/grpo.py::declare_wgs` now takes `shapes` (`grid.shapes`) and would express
 exactly this pair, so the shapes are no longer the reason to keep a separate declaration. What
 still differs is `data`: that entry derives every experience role at `(R_rollout, 1)`, while this
 recipe's scene source is smaller than `gpus` and `DatasetEnv` rejects sharding it, so `data` stays
@@ -24,7 +24,7 @@ CONFIG. This entry reads AlpaGym's already-resolved run config (`alpagym_host.co
 load_run_config`), the same file `cosmos/entrypoint.py` reads today — it does NOT go through the framework's
 config root. That root needs `multi-storage-client`, which moves protobuf 4.25.9 → 7.35.1 in
 AlpaGym's venv, under a link where AlpaGym exchanges protobuf messages with the simulator on every
-one of an episode's 22 ticks. Migrating the config surface is milestone 2 (design §12).
+one of an episode's 22 ticks. Migrating the config surface is milestone 2.
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ class EntryConfig:
     # iteration count and the trainer's grad_accum -- they MUST agree (see `loop`).
     ticks_per_episode: int
     # "colocated" (default) or "disaggregated" — see `declare_wgs` and `run`. The word is the
-    # framework's, normative on the GPU axis (DESIGN §4.0): it says whether policy and rollout
+    # framework's, normative on the GPU axis: it says whether policy and rollout
     # occupy the SAME physical GPUs, not how the processes are packed.
     placement: GpuPlacement = "colocated"
 
@@ -159,7 +159,7 @@ def declare_wgs(gpus: int, placement: str = "colocated") -> dict[str, WorkerGrou
         # The fan-in to the single FSDP replica does not disappear — the meshes are transposed, so it
         # cannot — but it lands on the ONE edge the registry already covers. Ranks stay 1: a
         # multi-rank producer behind a Sharded edge is rejected, its mirrored lanes double-counting
-        # as producer units (spec 2026-07-22 §2.2).
+        # as producer units.
         return {"replicas": width, "ranks": 1}
 
     return {name: getattr(role_factory, kind)(name, **_shape(name)) for name, kind in ROLE_SPECS}
@@ -169,7 +169,7 @@ class EpisodeScorer:
     """The `rm` role: score whole episodes, then emit one trajectory per drive tick.
 
     AlpaSim already writes the episode reward onto the trajectory, so this is the env-native
-    placement contract from DESIGN 1.5 rather than an online `RewardProvider`. It runs the configured
+    placement contract rather than an online `RewardProvider`. It runs the configured
     whole-group annotators transactionally, preserving the simulator's reward terms and final value,
     then splits each episode for replay.
 
@@ -710,8 +710,8 @@ def loop(units: dict, config: EntryConfig) -> dict:
                 f"step {step}: rollout weight_version {rollout_version} != trainer iteration "
                 f"{trainer_iteration} -- the rollout would sample from stale weights"
             )
-        # The version rides in the metrics dict, not a separate line: it is the staleness signal
-        # (DESIGN 1.4), so the channel that carries metrics to the console -- and to W&B once that
+        # The version rides in the metrics dict, not a separate line: it is the staleness signal,
+        # so the channel that carries metrics to the console -- and to W&B once that
         # is wired -- is the one that should carry it.
         # `emit_metric_frame`, not a bare `report`: it converges a schema rejection across ranks
         # (one rank raising while the others carry on hangs the next collective) and isolates a

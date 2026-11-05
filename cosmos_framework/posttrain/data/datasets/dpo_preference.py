@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """DPO preference dataset for Cosmos3 OmniMoT flow-matching DPO — the DATA LAYER.
 
-Per DESIGN §1.3 the concrete dataset (storage/decode/snap/shuffle) lives in
+The concrete dataset (storage/decode/snap/shuffle) lives in
 `data/datasets/`, separate from the `roles/env/` source node that wraps it: this file
 produces samples and knows nothing about `Trajectory`/roles/placement;
 `roles/env/preference.py::DPOPreferenceEnv` adds the pipeline-facing Env.

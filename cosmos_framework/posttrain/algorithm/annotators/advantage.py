@@ -63,7 +63,7 @@ INFORMATIVE_GROUP_GATE: tuple[str, float] = (GROUP_REWARD_SPREAD, 0.0)
 "Informative" is a reward-stage fact — the estimator stamps the complete group's spread — and this
 pair is its only definition. `is_informative` reads it for the algorithm side (the reward report's
 informative/tied group counts); a buffer evaluates the same pair as a `control.buffer.MetadataGate`
-without reconstructing group semantics from rewards (DESIGN §5)."""
+without reconstructing group semantics from rewards."""
 
 
 def is_informative(trajectory: Trajectory) -> bool:
@@ -250,8 +250,7 @@ def group_relative(
         # to None, and bucketing on it would collapse every such trajectory into ONE group -- so G
         # completions of G DIFFERENT prompts would be normalized against each other, and the
         # advantage would measure question difficulty rather than completion quality. That is the
-        # confound the cosmos-rl comparison had to neutralize by hand (docs/design/grpo-cosmos-rl-parity.md
-        # section 2.1); producing it internally is worse.
+        # confound the cosmos-rl comparison had to neutralize by hand; producing it internally is worse.
         #
         # The `group_size` check below CANNOT catch this, which is what makes it dangerous: exactly
         # `group_size` id-less trajectories form one bucket of the right size, so the check passes

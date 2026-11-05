@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """OneLogger as one `ControllerLifecycleObserver` implementation of the bus in `control/lifecycle.py`.
 
-Lives in `callbacks/` with the other observability implementations (DESIGN §9, Appendix A: callbacks
+Lives in `callbacks/` with the other observability implementations (callbacks
 hang on control's event bus; `control/` owns the bus, not its backends). It is imported lazily by
 `build_controller_observers` at the composition boundary and is not part of the package's eager
 `callbacks/__init__` exports, so an absent `one_logger` wheel or torch is touched only by a run that

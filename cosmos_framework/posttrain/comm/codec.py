@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Codec — payload ↔ metadata/bulk, field-level (DESIGN §3.2 Codec, §3.4 field-level).
+"""Codec — payload ↔ metadata/bulk, field-level.
 
 Decides inline-vs-lazy per field by size: small fields stay inline (travel with the
 metadata); large fields (video/image, and — for this demo — token tensors) go to the
 producer's BulkStore as a `BulkRef` (lazy, pulled on demand). The consumer
-`materialize`s the bulk; **the controller only ever routes the metadata** (DESIGN §3.4
-/ principle #7), so bulk never crosses the control plane.
+`materialize`s the bulk; **the controller only ever routes the metadata**, so
+bulk never crosses the control plane.
 
 Entry points:
 - `pack_payload` / `materialize_payload` — payload dispatchers that walk a Trajectory
   (or list/tuple of them) and swap its tensor-bearing fields ↔ `BulkRef`, **non-mutating**
-  (fresh dataclasses, so producer/buffer objects are untouched). This is the §3.2
+  (fresh dataclasses, so producer/buffer objects are untouched). This is the
   "scatter-gather for nested trajectories (never pickle tensors)" seam.
 - `materialize_obs` — consumer-side field-selective pull of a single `ObsBundle`'s bulk.
 
@@ -31,7 +31,7 @@ from cosmos_framework.posttrain.comm.bulk import BulkRef, BulkStore
 from cosmos_framework.posttrain.comm.transfer.mover import Mover as Transport
 from cosmos_framework.posttrain.schema import ObsBundle, Trajectory, Transition
 
-DEFAULT_THRESHOLD = 1024  # bytes — small inline, large → lazy BulkRef (DESIGN §3.4)
+DEFAULT_THRESHOLD = 1024  # bytes — small inline, large → lazy BulkRef
 
 
 def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | None = None) -> ObsBundle:
@@ -39,18 +39,18 @@ def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | 
     deep-walked, so a container-valued representation (e.g. `frames=[BulkRef, BulkRef]`) resolves and
     not just a top-level BulkRef — symmetric with the recursive pack (a top-level ref is the depth-0
     case). Non-selected fields keep their BulkRef untouched → e.g. raw video never reaches the trainer
-    if it only needs encoded features (DESIGN §3.4 / VLA split-worker)."""
+    if it only needs encoded features (VLA split-worker)."""
     reps: dict[str, object] = {}
     for k, v in bundle.representations.items():
         reps[k] = _unpack_val(v, transport) if (fields is None or k in fields) else v
     return ObsBundle(representations=reps, modality_tags=bundle.modality_tags, id=bundle.id)
 
 
-# ── Trajectory-level metadata/bulk (§3.2 scatter-gather, §3.4 field-level) ──────────
+# ── Trajectory-level metadata/bulk (scatter-gather, field-level) ──────────
 # A tensor-bearing field (action / mask / targets / tensor values inside
 # policy_info|algo_extra|obs.representations) above `threshold` is externalized to the
 # producer's BulkStore; everything else (ids, reward/advantage scalars, completion_text,
-# weight_version, status) stays inline as metadata. NOTE: §3.4 keeps small fields like
+# weight_version, status) stays inline as metadata. NOTE: the design keeps small fields like
 # `action` inline in production (bulk = video/image); here threshold defaults to 0 so the
 # LLM example's token tensors exercise the seam — they are the only tensors we have.
 
@@ -161,7 +161,7 @@ def _pack_val(
 def _unpack_val(v: Any, transport: Transport, readers: int = 1) -> Any:
     """Materialize `v` via `transport`: fetch every `BulkRef` LEAF (recursively, via `_walk`),
     pass inline values through. Threads `readers` to each fetch so a shared ref pops only after
-    every consumer has pulled it (refcounted `BulkStore`, DESIGN §2.4).
+    every consumer has pulled it (refcounted `BulkStore`).
 
     Args:
         v: A packed field — a `BulkRef`, an inline value, or a structure nesting them.
@@ -289,16 +289,16 @@ def _rebuild_sequence_like(obj: list[Any] | tuple[Any, ...], values: list[Any]) 
 
 def collect_bulk_refs(obj: Any) -> list[BulkRef]:
     """All BulkRefs in a payload — lets a transport batch-prefetch them in one shot
-    (§3.4 / §3.2 SQ-CQ spirit: one pull per consumer, not per field). A read-only fold
+    (SQ-CQ spirit: one pull per consumer, not per field). A read-only fold
     (`_visit_bulk_leaves`), so the prefetch scan gathers refs without rebuilding anything —
     neither the nested field values NOR the per-transition shell. The field list mirrors
     `_map_transition`; the per-field nesting tests (policy_info + algo_extra) pin both routings,
     so a divergence fails in CI rather than silently.
 
-    Public (not `_`-prefixed): the on_metadata split fast path in `workers/ray.py` (Task A6) also
+    Public (not `_`-prefixed): the on_metadata split fast path in `workers/ray.py` also
     uses this ref-walk to diff a full packed payload against its kept slice — the BulkRefs present
     in the former but absent from the latter are exactly what a metadata-only split drops without
-    ever fetching (DESIGN §2.3/§2.4). Kept Ray-free (comm/ constraint).
+    ever fetching. Kept Ray-free (comm/ constraint).
 
     Args:
         obj: A `Trajectory`, `ObsBundle`, or list/tuple of either to walk (other payloads yield none).
@@ -421,7 +421,7 @@ def materialize_payload(obj: Any, transport: Transport, readers: int = 1) -> Any
     If the transport offers `prefetch`, batch-load all refs first (one RPC per producer
     instead of one per field) — local refs stay zero-copy.
 
-    `readers` (Task A5, DESIGN §2.4): the expected reader count for THIS pull, threaded
+    `readers`: the expected reader count for THIS pull, threaded
     down to `transport.fetch`/`prefetch` -> `BulkStore.fetch` so a bulk entry shared by
     multiple consumer cells (a `Dispatched` fan-out edge) is refcounted rather than popped
     on the first fetch. Default 1 == the old consume-once behavior — every existing caller
@@ -434,7 +434,7 @@ def materialize_payload(obj: Any, transport: Transport, readers: int = 1) -> Any
     the broadcast rather than pulling. Same entry point here — it just dispatches on the transport
     type. Metadata stays tiny (the ref reaches every rank via bcast_aligned, see workers/grid.py);
     only Trajectory/ObsBundle tensor fields ride the broadcast. Wins when bulk is large (multimodal
-    obs, §3.4).
+    obs).
 
     Args:
         obj: A `Trajectory`, `ObsBundle`, or list/tuple of either (other payloads pass through).

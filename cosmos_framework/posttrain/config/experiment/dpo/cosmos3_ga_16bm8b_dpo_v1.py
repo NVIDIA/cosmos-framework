@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Example posttrain DPO experiment — inherits an upstream experiment + adds the RL section.
 
-This is the researcher-facing shape (DESIGN: config system, requirement #1): inherit the
+This is the researcher-facing shape: inherit the
 full model/data tree from an upstream experiment via `defaults`, then add only the typed `rl`
 section. Launch + ablate via the unified loader:
 
