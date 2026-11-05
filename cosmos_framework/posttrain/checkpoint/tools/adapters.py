@@ -233,6 +233,19 @@ def main(argv: list[str] | None = None) -> None:
             "--output-dtype applies only to merged models; portable adapters preserve their training precision"
         )
     if args.checkpoint:
+        source_path = os.path.realpath(args.checkpoint)
+        output_root = os.path.abspath(args.out.rstrip("/"))
+        # The intermediate portable artifact does not replace the original
+        # checkpoint's ownership boundary. Protect it before any transaction
+        # path or temporary directory can modify its immutable inventory.
+        for suffix in ("", ".tmp", ".previous", ".lock"):
+            destination = os.path.realpath(output_root + suffix)
+            if os.path.commonpath((source_path, destination)) in (source_path, destination):
+                raise ValueError(
+                    "adapter export output and transaction paths must not overlap the immutable checkpoint"
+                )
+        if args.merged and os.path.commonpath((source_path, os.path.realpath(tempfile.gettempdir()))) == source_path:
+            raise ValueError("merged adapter export TMPDIR must be outside the immutable checkpoint")
         identity, state, provenance = checkpoint_adapter_state(args.checkpoint)
         portable = {name: state[name] for name in state_spec(identity)}
         if not args.merged:

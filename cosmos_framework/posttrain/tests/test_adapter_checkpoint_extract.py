@@ -96,3 +96,39 @@ def test_consolidated_alias_disagreement_rejected(tmp_path):
     torch.save(state, path / "model.pt")
     with pytest.raises(ValueError, match="aliases disagree"):
         checkpoint_adapter_state(str(path))
+
+
+@pytest.mark.parametrize("suffix", ["", ".tmp", ".previous", ".lock"])
+@pytest.mark.parametrize("spelling", ["", "/", "/./"])
+def test_public_output_cannot_mutate_immutable_checkpoint(tmp_path, suffix, spelling, monkeypatch):
+    from cosmos_framework.posttrain.checkpoint.tools import adapters
+
+    source = tmp_path / ("destination" + suffix)
+    source.mkdir()
+    monkeypatch.setattr(adapters, "checkpoint_adapter_state", lambda _: pytest.fail("must reject before reading"))
+    with pytest.raises(ValueError, match="overlap the immutable checkpoint"):
+        adapters.main(["--checkpoint", str(source), "--out", str(tmp_path / "destination") + spelling])
+    assert not list(source.iterdir())
+
+
+def test_public_checkpoint_child_output_and_temporary_directory_are_rejected(tmp_path, monkeypatch):
+    from cosmos_framework.posttrain.checkpoint.tools import adapters
+
+    source = tmp_path / "checkpoint"
+    source.mkdir()
+    with pytest.raises(ValueError, match="overlap the immutable checkpoint"):
+        adapters.main(["--checkpoint", str(source), "--out", str(source / "adapter")])
+    monkeypatch.setattr(adapters.tempfile, "gettempdir", lambda: str(source))
+    with pytest.raises(ValueError, match="TMPDIR must be outside"):
+        adapters.main(
+            [
+                "--checkpoint",
+                str(source),
+                "--out",
+                str(tmp_path / "export"),
+                "--merged",
+                "--base",
+                str(tmp_path / "base"),
+            ]
+        )
+    assert not list(source.iterdir())
