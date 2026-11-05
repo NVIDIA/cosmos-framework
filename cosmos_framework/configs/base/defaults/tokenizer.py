@@ -3,8 +3,6 @@
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.utils.lazy_config import PLACEHOLDER, LazyDict
-from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.model.generator.tokenizers.audio.avae import AVAEInterface
 from cosmos_framework.model.generator.tokenizers.dc_ae.dc_ae_4x32x32 import DCAE4x32x32Interface
 from cosmos_framework.model.generator.tokenizers.flux_vae_8x8 import FluxVAEInterface
@@ -15,6 +13,8 @@ from cosmos_framework.model.generator.tokenizers.stable_diffusion_vae_8x8 import
 from cosmos_framework.model.generator.tokenizers.uniae.noncausal_4x16x16 import UniAEVAEInterface
 from cosmos_framework.model.generator.tokenizers.wan2pt1_vae_4x8x8 import Wan2pt1VAEInterface
 from cosmos_framework.model.generator.tokenizers.wan2pt2_vae_4x16x16 import Wan2pt2VAEInterface
+from cosmos_framework.utils.lazy_config import PLACEHOLDER, LazyDict
+from cosmos_framework.utils.lazy_config import LazyCall as L
 
 PRETRAINED_TOKENIZER_SD_VAE_REPO = "stabilityai/sd-vae-ft-ema"
 PRETRAINED_TOKENIZER_WAN2PT1_VAE_PTH = "pretrained/tokenizers/video/wan2pt1/Wan2.1_VAE.pth"
@@ -22,10 +22,7 @@ PRETRAINED_TOKENIZER_WAN2PT2_VAE_PTH = "pretrained/tokenizers/video/wan2pt2/Wan2
 PRETRAINED_TOKENIZER_FLUX_VAE_PTH = "pretrained/tokenizers/image/flux/ae.safetensors"
 
 # UniAE checkpoint paths
-PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_S3_NEMOTRON2B_VAE_PTH = (
-    "s3://bucket1/uniae/tok_experiments/"
-    "s3_siglip2_so400m_singledec_l48_textdec_nemotron2b_32node_bucketed_256480_v45i32c23_t16-160_exp009/checkpoints/iter_000050000.pt"
-)
+PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_S3_NEMOTRON2B_VAE_PTH = PLACEHOLDER
 
 # DCAE checkpoint paths
 PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_3_V0PT23_LCR_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_3_v0.23_lcr.pt"
@@ -162,7 +159,6 @@ AVAE_48k_25hzConfig: LazyDict = L(AVAEInterface)(
 )
 
 
-
 def register_tokenizer() -> None:
     cs = ConfigStore.instance()
 
@@ -192,8 +188,6 @@ def register_tokenizer() -> None:
         name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_3_v0.23_lcr_tokenizer",
         node=DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad3V0pt23LCRConfig,
     )
-
-
 
 
 def register_sound_tokenizer() -> None:

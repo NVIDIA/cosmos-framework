@@ -472,7 +472,7 @@ def test_runtime_preflight_rejects_incompatible_opd_settings() -> None:
         model_backend="qwen3_vl",
         model_config=Qwen3VLModelConfig(name_or_path=rollout.name_or_path),
     )
-    with pytest.raises(ValueError, match="DPCA requires model_backend='i4'"):
+    with pytest.raises(ValueError, match="DPCA requires model_backend='native'"):
         validate_opd_runtime(dpca, RolloutConfig(), model_backend="hf")
     for invalid_rollout, field_name in (
         (RolloutConfig(temperature=0.8), "temperature"),

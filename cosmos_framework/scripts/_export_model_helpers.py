@@ -22,7 +22,7 @@ import numpy as np
 if TYPE_CHECKING:
     from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 
-_EDGE_MODEL_NAME = "nvidia/Cosmos3-Edge-Reasoner"
+_EDGE_MODEL_NAME = "nvidia/Cosmos3-Edge"
 
 # HF-standard processor/tokenizer files shipped at the snapshot root. The exported
 # config.json is deliberately absent (it must never be overwritten by bundling).

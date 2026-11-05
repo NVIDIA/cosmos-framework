@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Trainer contracts and shared engine implementation (DESIGN §6).
+"""Trainer contracts and shared engine implementation.
 
 A **trainer is an ENGINE body**, not an algorithm. Its job is fwd/bwd/step + sharding +
 save/load for a model family (Diffusion / LLM / Local). The **algorithm is the `objective`
@@ -182,7 +182,7 @@ class TrainerProtocol(Protocol):
         ...
 
     def push_weights(self, target: Any = None) -> WeightPayload | None:
-        """PRODUCER-DRIVEN weight push (design 2026-07-27 §2): the POLICY drives. ``target`` is the
+        """PRODUCER-DRIVEN weight push: the POLICY drives. ``target`` is the
         co-located rollout peer the grid routes in; the engine stages each bucket and pushes it to that
         rollout, which loads in place — so a streaming engine (``LLMTrainer``) returns **None** (nothing
         is returned for the consumer to pull). Also **None** when there is no bound backend / the two

@@ -3,8 +3,6 @@
   "mode": "torchrun",
   "nodes": 2,
   "gpus_per_node": 4,
-  "account": "cosmos_base_training",
-  "partition": "batch_long",
   "wckey": "p0",
   "time": "7-00:00:00",
   "timeout": 86400,
@@ -23,7 +21,6 @@
     "TOKENIZERS_PARALLELISM": "false"
   },
   "container_image": "/path/to/shared-storage",
-  "container_mounts": "/lustre:/lustre",
   "container_name": "sft_obj1k_v2",
   "venv": "/opt/venv/posttrain/bin/activate",
   "no_pip": true

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Obj1k v2 text-to-Blender SFT with thinking traces: 960/40 split, three epochs at eight DP ranks.
 
-Publish the splits externally using docs/howto/sft-obj1k-data.md. SFT_DATA_ROOT defaults
+Prepare the train and validation splits before launching. SFT_DATA_ROOT defaults
 to the versioned GCS S3 prefix; SFT_S3_CREDENTIALS selects the mounted credential file for
 data and checkpoint uploads. Set SFT_MODEL_PATH to a complete immutable local HF snapshot. The paired
 sft_qwen3p8_27b_obj1k_gcp.json launch profile selects two four-GPU nodes.

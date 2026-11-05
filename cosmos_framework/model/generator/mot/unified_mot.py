@@ -13,15 +13,26 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_num_real_tokens,
+    get_und_seq,
+    has_pad_segment,
+    set_gen_seq,
+    set_und_seq,
+    zeros_like,
+)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
 )
 
-# Nemotron 3 Dense VL imports
+# dense vision-language backbone imports
 from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.configuration_nemotron_3_dense_vl import (
     Nemotron3DenseVLTextConfig,
 )
@@ -78,18 +89,7 @@ from cosmos_framework.model.generator.utils.load_balancing_stats import (
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.model.generator.utils.numerics import native_rms_norm
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    from_all_seq,
-    from_und_gen_splits,
-    get_gen_seq,
-    get_num_real_tokens,
-    get_und_seq,
-    has_pad_segment,
-    set_gen_seq,
-    set_und_seq,
-    zeros_like,
-)
+from cosmos_framework.utils import log
 
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
@@ -133,7 +133,7 @@ def _pad_packed_tokens_by_sample(
 
 # -----------------------------------------------------------------------------
 # Unified MoT (Mixture of Transformers) implementation supporting:
-#   - Qwen3-VL Dense, Qwen3-VL MoE, and Nemotron 3 Dense VL
+#   - Qwen3-VL Dense, Qwen3-VL MoE, and dense vision-language backbone
 #
 # Shared components:
 #   - PackedAttentionMoT (config-driven QK norm and RoPE)
@@ -471,7 +471,7 @@ class Qwen3VLMoeMoTConfig(_MoTConfigBase):
 
 
 class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
-    """MoT wrapper config for the Nemotron 3 Dense VL family.
+    """MoT wrapper config for the dense vision-language backbone family.
 
     Inherits the shared ``config_dict``-storing wrapper, MoT field
     handling, nested-vs-flat ``text_config`` resolution, and
@@ -484,7 +484,7 @@ class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
        alternating ``(attn, MLP)`` blocks (``num_hidden_layers == 56``)
        into MoT's fused decoder layers (28 effective).
 
-    Nemotron 3 Dense VL has no nested ``vision_config`` sub-section in
+    dense vision-language backbone has no nested ``vision_config`` sub-section in
     its JSON, so the inherited ``vision_config`` property is unused —
     callers leave the inherited ``include_visual`` at its default of
     ``False`` and never access the property.
@@ -503,7 +503,7 @@ class Nemotron3DenseVLMoTConfig(_MoTConfigBase):
 
 
 # -----------------------------------------------------------------------------
-# Common layers between Qwen3VL Dense, MoE, and Nemotron 3 Dense VL models
+# Common layers between Qwen3VL Dense, MoE, and dense vision-language backbone models
 # -----------------------------------------------------------------------------
 
 
@@ -540,7 +540,7 @@ class PackedAttentionMoT(nn.Module):
     Dual-pathway packed attention for MoT architectures.
     Implements understanding and generation pathways with separate projections.
 
-    Used for Qwen3VL (Dense), Qwen3VL-MoE, and Nemotron 3 Dense VL variants.
+    Used for Qwen3VL (Dense), Qwen3VL-MoE, and dense vision-language backbone variants.
     QK normalisation and RoPE function are selected via ``layer_types`` and the
     ``qk_norm_for_text`` config attribute (the generation pathway always installs
     QK norm).
@@ -1832,9 +1832,9 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
 
 class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
     """
-    Nemotron 3 Dense VL text model adapted for MoT training.
+    dense vision-language backbone text model adapted for MoT training.
     This is a wrapper around the _impl_* helpers defined above,
-    specialized for Nemotron 3 Dense VL models.
+    specialized for dense vision-language backbone models.
     """
 
     def __init__(
@@ -2171,7 +2171,7 @@ def _impl_generate_reasoner_text(
 
     ``prepare_multimodal_fn`` builds the image/video-conditioned prefill inputs
     (embeds + mrope positions). Defaults to the Qwen3-VL implementation; the
-    Nemotron 3 Dense VL reasoner injects its own SigLIP2 variant so the same
+    dense vision-language backbone reasoner injects its own SigLIP2 variant so the same
     decode loop serves both families.
 
     The loop has two phases:
@@ -2865,7 +2865,7 @@ def _load_bundled_vision_tower(local_dir: str | None) -> tuple[str, dict, dict] 
 
 
 class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
-    """Causal LM head on top of the Nemotron 3 Dense VL MoT text model."""
+    """Causal LM head on top of the dense vision-language backbone MoT text model."""
 
     _tied_weights_keys: list[str] = []
 
@@ -2891,7 +2891,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
 
-        assert config.vision_config is None, "Nemotron 3 Dense VL has no vision config"
+        assert config.vision_config is None, "dense vision-language backbone has no vision config"
 
         self.post_init()
 

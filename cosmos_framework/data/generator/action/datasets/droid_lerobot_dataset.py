@@ -37,6 +37,7 @@ from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset_confi
     LEROBOT_ROOTS,
     STATE_FEATURES,
 )
+from cosmos_framework.data.generator.action.utils.episode_filters import normalize_episode_filter_keys
 from cosmos_framework.data.generator.action.utils.pose_utils import (
     PoseConvention,
     build_abs_pose_from_components,
@@ -45,8 +46,6 @@ from cosmos_framework.data.generator.action.utils.pose_utils import (
 )
 from cosmos_framework.data.generator.action.utils.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
-
-_FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"
 
 _NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
 
@@ -63,7 +62,10 @@ _DROID_TO_OPENCV: np.ndarray = np.array(
 
 
 class DROIDLeRobotDataset(BaseActionLeRobotDataset):
-    """ """
+    """Read an explicit dataset root and optional filters keyed by complete episode IDs.
+
+    URI-based filter metadata also requires filter_dict_source_prefix, the dataset URI prefix.
+    """
 
     EMBODIMENT_TYPE: str = "droid_lerobot"
 
@@ -79,7 +81,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
 
     def __init__(
         self,
-        root: str = "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",
+        root: str,
         fps: float = 15.0,
         chunk_length: int = 16,
         split_seed: int = 42,
@@ -104,6 +106,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         # would shift every later argument for positional callers.
         apply_forward_clamp: bool = False,
         jitter_after_compose: bool = False,
+        filter_dict_source_prefix: str = "",
     ) -> None:
         """ """
         super().__init__(
@@ -127,7 +130,9 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         self._action_space = action_space
         self._use_state = use_state
         self._use_filter_dict = use_filter_dict
-        self._filter_dict_path = filter_dict_path or _FILTER_DICT_PATH
+        if use_filter_dict and not filter_dict_path:
+            raise ValueError("filter_dict_path is required when use_filter_dict=True")
+        self._filter_dict_path = filter_dict_path
         self._max_num_history_actions = max_num_history_actions
         self._use_image_augmentation = use_image_augmentation
         self._jitter_after_compose = jitter_after_compose
@@ -183,7 +188,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
 
         if self._use_filter_dict:
             with open(self._filter_dict_path) as f:
-                self._filter_dict = json.load(f)
+                self._filter_dict = normalize_episode_filter_keys(json.load(f), source_prefix=filter_dict_source_prefix)
 
         self._image_augmentor: T.Compose | None = None
         self._color_augmentor: T.ColorJitter | None = None
@@ -221,7 +226,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         filtered_count = 0
         for episode_id, sample_start, valid_len in episode_spans:
             ep_id_str = meta.episodes[episode_id]["episode_id"]
-            episode_key = f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/recordings/MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/trajectory.h5"
+            episode_key = str(ep_id_str)
             ranges = self._filter_dict.get(episode_key)
             if ranges is None:
                 continue

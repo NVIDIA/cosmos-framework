@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Codec metadata/bulk seam (DESIGN §3.2/§3.4): tensor-bearing Trajectory fields are
+"""Codec metadata/bulk seam: tensor-bearing Trajectory fields are
 externalized to a producer BulkStore as BulkRefs (controller sees only metadata),
 then pulled back — zero-copy same-process (LocalStoreMover) or a fresh copy
 cross-process (LocalStoreMover(cross_process=True)). Pure CPU, no torch: a `_Blob`
@@ -166,7 +166,7 @@ def test_resolve_mover_same_process_is_local_store():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_obsbundle_payload_packs_bulk_keeps_text_inline():
-    # multimodal prompts: text inline, image-like blob externalized (DESIGN §3.4)
+    # multimodal prompts: text inline, image-like blob externalized
     store = BulkStore()
     img = _Blob(5000)
     prompts = [ObsBundle(representations={"prompt": "1+2=", "image": img})]

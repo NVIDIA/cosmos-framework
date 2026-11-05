@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""WeightTransfer — trainer → rollout weight sync on the weight plane (DESIGN §8.2 #4).
+"""WeightTransfer — trainer → rollout weight sync on the weight plane.
 
 The seam is push_weights()/apply_weights() on the role bodies; this module holds the swappable
 pieces: a WeightSync (holds a Mover, the transfer primitive) + a WeightMapper (param key/layout).
@@ -63,7 +63,7 @@ def shared_model_identity(model: Any) -> str:
 
 def full_state_dict(model: Any) -> dict:
     """Materialize a model's params as FULL (unsharded) detached tensors: an FSDP2 DTensor is
-    all-gathered via .full_tensor() (a collective — every policy rank must call together, §2.3);
+    all-gathered via.full_tensor() (a collective — every policy rank must call together, §2.3);
     a plain tensor passes through. No physical clone beyond what full_tensor() allocates; the
     durable snapshot/copy is the mover's job (§2.1). Unwraps `.net` so a wrapped HFModel exports the
     same (raw-module) keys the rollout loads into."""
@@ -180,7 +180,7 @@ def bucket_plan(manifest: WireManifest, bucket_bytes: int = BUCKET_BYTES) -> Buc
     Raises on an unsorted manifest (see _check_name_sorted — ordering is a transfer invariant).
 
     Args:
-        manifest: sorted `[(name, shape, dtype_str), ...]` param metadata (e.g. from `model_manifest`).
+        manifest: sorted `[(name, shape, dtype_str),...]` param metadata (e.g. from `model_manifest`).
         bucket_bytes: soft per-bucket byte cap; a single param exceeding it forms its own bucket.
 
     Returns:
@@ -421,7 +421,7 @@ def bucket_full_tensors(model: Any, bucket: list[WireTensor], mapper: Any | None
 
 @dataclass
 class WeightPayload:
-    """What export() returns / apply() consumes: a version stamp (staleness, DESIGN §1.4) + the
+    """What export() returns / apply() consumes: a version stamp (staleness) + the
     shared-primitive MoveHandle carrying the weights."""
 
     version: int

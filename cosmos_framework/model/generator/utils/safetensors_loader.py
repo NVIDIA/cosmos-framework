@@ -55,9 +55,9 @@ from safetensors.torch import load as load_safetensors
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils import log
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 # Prefixes stripped when matching checkpoint keys to model state-dict keys.
@@ -870,7 +870,7 @@ def convert_weight_from_nemotron_vl_hf(
 ) -> tuple[str | None, torch.Tensor | None]:
     """Map Nemotron VLM HF keys (56 hybrid blocks) to Cosmos3 VFM MoT keys (28 paired layers).
 
-    The Nemotron 3 Dense VL checkpoint (NVIDIA-Nemotron-3-Dense-VL-2B-BF16-Alignment)
+    The dense vision-language backbone checkpoint (NVIDIA-dense vision-language backbone-BF16-Alignment)
     uses a hybrid layout with 56 alternating attention and MLP blocks, where:
 
         - Even-indexed blocks (0, 2, 4, ...) contain attention (``mixer.q/k/v/o_proj``)
@@ -960,7 +960,7 @@ def convert_weight_from_nemotron_llm_hf(
 ) -> tuple[str | None, torch.Tensor | None]:
     """Map Nemotron pure-LLM HF keys (CosmosNemotronForCausalLM) to MoT language model keys.
 
-    The Nemotron 3 LLM checkpoint (NVIDIA-Nemotron-3-2B-BF16) uses a standard
+    The Nemotron 3 LLM checkpoint  uses a standard
     decoder-only layout with 28 layers, each containing attention and MLP. The key
     names are already close to the MoT model's expected layout, so most keys pass
     through with minimal renaming.
