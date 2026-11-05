@@ -559,7 +559,7 @@ from cosmos_framework.posttrain.workers.worker_group import scatter  # noqa: E40
 @pytest.mark.CPU
 def test_grid_scatter_distributes_per_cell():
     """A ``scatter(seq)`` arg gives consumer cell (r, 0) its element ``seq[r]`` instead
-    of broadcasting the whole sequence (DESIGN §2.4)."""
+    of broadcasting the whole sequence."""
     from cosmos_framework.posttrain.control.placement import ActorGroup, DeviceGroup, bind_device_groups
     from cosmos_framework.posttrain.roles.core import factory as roles
 
