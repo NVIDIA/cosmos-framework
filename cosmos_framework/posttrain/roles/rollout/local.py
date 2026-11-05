@@ -11,7 +11,7 @@ edge is a no-op (rollout already sees the trainer's step); otherwise it receives
 through the producer-driven edge (`apply_bucket` + rollout-wide version prepare/commit,
 the implementation).
 Either way the rollout uses *its own* model reference and never reaches into the trainer, so a
-separate inference engine + real resharding drops in later (#4) without changing the runner.
+separate inference engine + real resharding drops in later without changing the runner.
 """
 
 from __future__ import annotations
@@ -88,9 +88,9 @@ class LocalRollout(WeightReceiverBase):
     def generate(self, prompts: list[ObsBundle], **knobs: Any) -> list[Trajectory]:
         """sim → policy is degenerate here: source is a prompt batch (1-step Env). Accepts the
         shared `**knobs` surface (roles/rollout/base.py); v0 ignores group/seed (one completion
-        per prompt, no group sampling) — a real inference engine (#6) will honor them."""
+        per prompt, no group sampling) — a real inference engine will honor them."""
         # TODO: set eval()/no_grad on the shared model; real batched generate via the
-        # inference engine (SGLang/vLLM, #6). v0: a placeholder single-turn generate.
+        # inference engine (SGLang/vLLM). v0: a placeholder single-turn generate.
         trajs: list[Trajectory] = []
         for i, obs in enumerate(prompts):
             completion, rollout_logprobs = self._generate_one(obs)

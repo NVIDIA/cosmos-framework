@@ -11,7 +11,7 @@ producer's BulkStore as a `BulkRef` (lazy, pulled on demand). The consumer
 Entry points:
 - `pack_payload` / `materialize_payload` — payload dispatchers that walk a Trajectory
   (or list/tuple of them) and swap its tensor-bearing fields ↔ `BulkRef`, **non-mutating**
-  (fresh dataclasses, so producer/buffer objects are untouched). This is the §3.2
+  (fresh dataclasses, so producer/buffer objects are untouched). This is the
   "scatter-gather for nested trajectories (never pickle tensors)" seam.
 - `materialize_obs` — consumer-side field-selective pull of a single `ObsBundle`'s bulk.
 
@@ -45,11 +45,11 @@ def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | 
     return ObsBundle(representations=reps, modality_tags=bundle.modality_tags, id=bundle.id)
 
 
-# ── Trajectory-level metadata/bulk (§3.2 scatter-gather, §3.4 field-level) ──────────
+# ── Trajectory-level metadata/bulk (scatter-gather, field-level) ──────────
 # A tensor-bearing field (action / mask / targets / tensor values inside
 # policy_info|algo_extra|obs.representations) above `threshold` is externalized to the
 # producer's BulkStore; everything else (ids, reward/advantage scalars, completion_text,
-# weight_version, status) stays inline as metadata. NOTE: §3.4 keeps small fields like
+# weight_version, status) stays inline as metadata. NOTE: the design keeps small fields like
 # `action` inline in production (bulk = video/image); here threshold defaults to 0 so the
 # LLM example's token tensors exercise the seam — they are the only tensors we have.
 
@@ -288,13 +288,13 @@ def _rebuild_sequence_like(obj: list[Any] | tuple[Any, ...], values: list[Any]) 
 
 def collect_bulk_refs(obj: Any) -> list[BulkRef]:
     """All BulkRefs in a payload — lets a transport batch-prefetch them in one shot
-    (§3.4 / §3.2 SQ-CQ spirit: one pull per consumer, not per field). A read-only fold
+    (SQ-CQ spirit: one pull per consumer, not per field). A read-only fold
     (`_visit_bulk_leaves`), so the prefetch scan gathers refs without rebuilding anything —
     neither the nested field values NOR the per-transition shell. The field list mirrors
     `_map_transition`; the per-field nesting tests (policy_info + algo_extra) pin both routings,
     so a divergence fails in CI rather than silently.
 
-    Public (not `_`-prefixed): the on_metadata split fast path in `workers/ray.py` (Task A6) also
+    Public (not `_`-prefixed): the on_metadata split fast path in `workers/ray.py` also
     uses this ref-walk to diff a full packed payload against its kept slice — the BulkRefs present
     in the former but absent from the latter are exactly what a metadata-only split drops without
     ever fetching. Kept Ray-free (comm/ constraint).
@@ -433,7 +433,7 @@ def materialize_payload(obj: Any, transport: Transport, readers: int = 1) -> Any
     the broadcast rather than pulling. Same entry point here — it just dispatches on the transport
     type. Metadata stays tiny (the ref reaches every rank via bcast_aligned, see workers/grid.py);
     only Trajectory/ObsBundle tensor fields ride the broadcast. Wins when bulk is large (multimodal
-    obs, §3.4).
+    obs).
 
     Args:
         obj: A `Trajectory`, `ObsBundle`, or list/tuple of either (other payloads pass through).

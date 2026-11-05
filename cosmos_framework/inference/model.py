@@ -70,10 +70,10 @@ except ImportError:
 
 
 def _configure_inference_cudnn() -> None:
-    """Match the cuDNN runtime used by native native inference.
+    """Enable cuDNN benchmarking and nondeterministic algorithms for inference.
 
-    native inherits these flags from its trainer setup. Framework inference loads
-    models directly, so configure them explicitly before constructing the model.
+    Configure these flags before constructing the model, since direct model
+    loading does not run the trainer setup.
     """
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True

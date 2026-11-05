@@ -264,7 +264,7 @@ def build_lr_scheduler(optimizer: Any, opt_cfg: OptimizerConfig):
     defaults to 0.0 — so cosmos-rl DOES burn a zero-LR first step, and its ramp sits below this one
     at every step but the last.
 
-    The two ARE reconcilable, which the parity doc previously denied: setting cosmos-rl's
+    The two ARE reconcilable: setting cosmos-rl's
     `optm_warmup_start_factor = 1/optm_warmup_steps` makes its factor `1/w + k/w == (k+1)/w`,
     identical to this one at every step.
 
@@ -1517,9 +1517,9 @@ def build_objective(
     config, so the algorithm is usable without the config system at all. Keeping the config→primitive
     mapping here preserves that and keeps both surrogate mappings readable together.
 
-    `pdims` no longer changes what this function returns (Task 9 deleted `dp_group_sharded`, the
+    `pdims` no longer changes what this function returns (`dp_group_sharded`, the
     objective wrapper that used to divide the dp axis here when `_dp_coords(pdims)` reported an
-    extent > 1). Partitioning the dp axis is now the ingress predicate's job alone
+    extent > 1, was deleted). Partitioning the dp axis is now the ingress predicate's job alone
     (`workers/dispatch.py::select_chunk`, applied by the WorkerGroup `train` edge when its
     `mini`/`micro`/`n_mini`/`n_micro` control kwargs are passed — the implementation); wrapping the
     objective here too would divide the same axis twice, training on `1/dp_world**2` of the batch
@@ -1623,7 +1623,7 @@ def build_objective(
             }
     obj.identity = identity
 
-    # No dp-axis wrapping here any more (Task 9) — see the docstring above. `obj` scores exactly the
+    # No dp-axis wrapping here any more — see the docstring above. `obj` scores exactly the
     # batch its caller hands it; partitioning that batch across dp ranks is the ingress predicate's
     # job (`workers/dispatch.py::select_chunk`), applied before the objective ever runs.
     return obj
@@ -2292,8 +2292,8 @@ def build_opd_objective(rl: OPDConfig, packer: DataPacker, pdims: Any = None) ->
         rl: the OPD run config.
         packer: the shaping seam, shared with the objective's GRPO siblings.
         pdims: this actor's `ParallelDims`, or None for single-device. As in `build_objective`, it no
-            longer changes what this returns — Task 9 deleted `dp_group_sharded` and moved dp-axis
-            partitioning to the ingress predicate (`workers/dispatch.py::select_chunk`), applied by
+            longer changes what this returns — `dp_group_sharded` was deleted and dp-axis
+            partitioning moved to the ingress predicate (`workers/dispatch.py::select_chunk`), applied by
             the WorkerGroup `train` edge before the objective ever runs. Kept so the two builders
             stay signature-compatible behind `build_trainer`'s seam.
 

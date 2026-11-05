@@ -7,9 +7,9 @@
 `roles.critic(...)`, `roles.reward(...)`, `roles.teacher(...)`, and `roles.buffer(...)` declare WorkerGroups.
 In v0 you pass a concrete `body` directly; the runner then drives them with plain imperative calls.
 
-TODO(§2.7): allow declaring by spec (body class + args) so YAML / a graph builder
+TODO: allow declaring by spec (body class + args) so YAML / a graph builder
 can construct the same WGs; placement kwargs (pin_to / colocate_with) are recorded
-on the WG and consumed by Placement (§4).
+on the WG and consumed by Placement.
 """
 
 from __future__ import annotations

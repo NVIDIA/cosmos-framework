@@ -33,12 +33,12 @@ from cosmos_framework.posttrain.comm.weight_transfer import (
 __all__ = [
     "Channel",
     "Plane",
-    # weight plane (§8.2 #4)
+    # weight plane
     "WeightSync",
     "WeightMapper",
     "WeightPayload",
     "make_weight_backend",
-    # metadata/bulk + transfer primitive (§3.2-§3.4)
+    # metadata/bulk + transfer primitive
     "BulkRef",
     "BulkStore",
     "store_for",

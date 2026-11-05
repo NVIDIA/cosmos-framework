@@ -105,7 +105,7 @@ def make_frame(
     return Transition(
         obs=ObsBundle(representations=dict(view), modality_tags=("rgb", "proprio"), id=episode_id),
         action=action,
-        # A named component, per DESIGN 1.5. "final" is left for the RL sink to fill from the
+        # A named component. "final" is left for the RL sink to fill from the
         # outcome; the per-step env reward is not a terminal signal and labelling it "final"
         # would make Trajectory.final_reward report the last step's reward as the return.
         reward={"env": float(reward)},

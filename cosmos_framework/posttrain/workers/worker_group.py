@@ -488,9 +488,9 @@ class WorkerGroup:
         # materialized), or does it only route/filter on metadata? A consumer-declared
         # port property; the bind/
         # transport layer pulls bulk only at WGs that set this. Default False ⇒ BulkRefs
-        # flow through untouched (e.g. reward-on-text, buffer holds metadata, §5).
+        # flow through untouched (e.g. reward-on-text, buffer holds metadata).
         self.needs_bulk: bool = needs_bulk
-        self.placement: dict[str, Any] = placement  # pin_to / colocate_with — consumed by Placement (§4)
+        self.placement: dict[str, Any] = placement  # pin_to / colocate_with — consumed by Placement
         self._backend: Any = None  # set by bind_device_groups(); None ⇒ local sync-eager
 
     def _bind_backend(self, backend: Any) -> None:

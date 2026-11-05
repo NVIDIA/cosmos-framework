@@ -698,7 +698,7 @@ class DatasetEnv:
 
     `reset()` yields the next prompt as an ObsBundle; `step(completion)` ends the episode
     immediately (done=True). Reward is NOT computed here in v0 (a separate RewardProvider scores
-    the trajectory, §1.5).
+    the trajectory).
 
     Traversal — order, shuffle, epoch wrap, shard stride — is `cursor.IndexedCursor`, shared with
     `DatasetPreferenceEnv`. This class only turns an item into an `ObsBundle`. The two used to

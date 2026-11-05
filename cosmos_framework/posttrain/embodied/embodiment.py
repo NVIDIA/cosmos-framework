@@ -34,7 +34,7 @@ class EmbodimentMap:
     """What a robot's observation looks like, in the flattened key space the policy uses.
 
     ``proprio_key`` is a single key: OmniGibson emits one ``robot_r1::proprio`` vector, and
-    ``state61`` is its first ``state_dim`` entries (§5.2 of the round-4 spec, normative about
+    ``state61`` is its first ``state_dim`` entries (normative about
     the package contract). There is no separate ``observation/joint_position`` key on this
     path.
     """
@@ -420,7 +420,7 @@ def to_record_view(obs: ObsBundle, emb: EmbodimentMap) -> dict:
     ``D`` is whatever OmniGibson emits and is deliberately not asserted: RLinf's v1
     packages carried a 256-wide ``raw_proprio`` from a different observation entirely, and
     claiming parity with it would be false. The width is recorded in ``episode.json``
-    instead (spec §5.3).
+    instead.
 
     Frames are returned as views, not copies. The writer contract
     (:meth:`sink.EpisodeWriter.append`) is that a frame passed to ``append`` is consumed

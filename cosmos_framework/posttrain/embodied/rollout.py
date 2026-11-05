@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """The generation seam.
 
-Named ``rollout``, not ``policy``: DESIGN 4.0 reserves ``policy`` for the trainer/learner
+Named ``rollout``, not ``policy``: the framework reserves ``policy`` for the trainer/learner
 role and ``rollout`` for the generation role, precisely to kill the actor/policy ambiguity.
 This module describes the SERVING surface, so it is a rollout.
 
