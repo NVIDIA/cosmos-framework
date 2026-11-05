@@ -5,10 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import huggingface_hub.constants as hf_constants
 import pytest
 import torch
 import torchvision.transforms.v2 as T
 
+from cosmos_framework.data.generator.action.datasets import cosmos3_action_lerobot
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _IMAGE_FEATURES = {"wrist": "wrist_key", "left": "left_key", "right": "right_key"}
@@ -140,6 +142,10 @@ def test_filter_requires_explicit_path(filter_dict_path: str | None) -> None:
 @pytest.mark.CPU
 @pytest.mark.parametrize("use_filter_dict", [False, True])
 def test_dataset_filter_is_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_filter_dict: bool) -> None:
+    # Keep offline-mode environment and cached flags local to this test.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(hf_constants, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(cosmos3_action_lerobot, "_hf_offline_applied", True)
     # Source registration needs downloaded episodes; exercise configuration and
     # real JSON loading without opening video datasets.
     monkeypatch.setattr(DROIDLeRobotDataset, "_register_sources", lambda self: None)
