@@ -145,6 +145,148 @@ def test_edge_reasoner_uri_resolves_in_registry():
     assert set(helpers.PROCESSOR_HF_INCLUDE) <= set(helpers.EDGE_VIT_BUNDLE_HF_INCLUDE)
 
 
+@pytest.mark.parametrize("tier", ["nano", "super", "edge"])
+@pytest.mark.parametrize("trailing_slash", [False, True])
+def test_sft_backbone_uri_preserves_export_checkpoint(tier, trailing_slash):
+    import importlib
+
+    module = importlib.import_module(f"cosmos_framework.configs.base.experiment.sft.models.{tier}_model_config")
+    config = getattr(module, f"{tier.upper()}_MODEL_CONFIG")
+    uri = config["vlm_config"]["pretrained_weights"]["backbone_path"]
+    assert uri.startswith("hf://")
+    register_checkpoints()
+    repository = uri.removeprefix("hf://")
+    legacy_uri = _EDGE_BACKBONE_URI if tier == "edge" else f"s3://bucket/cosmos3/pretrained/huggingface/{repository}"
+    expected = CheckpointConfig.from_uri(legacy_uri)
+    resolved = helpers.resolve_backbone_download(uri + ("/" if trailing_slash else ""))
+    assert resolved is expected.hf
+    assert resolved.repository == repository
+    assert resolved.revision == expected.hf.revision
+    assert helpers.resolve_backbone_download(legacy_uri) is expected.hf
+
+
+@pytest.mark.parametrize("uri", ["s3://example/unregistered", "hf://Qwen/Qwen3-VL-8B-Instruct/model.safetensors"])
+def test_export_backbone_uri_does_not_guess_unregistered_sources(uri):
+    register_checkpoints()
+    assert helpers.resolve_backbone_download(uri) is None
+
+
+def test_export_unregistered_hf_repository_uses_explicit_source():
+    spec = helpers.resolve_backbone_download("hf://example/custom-backbone/")
+    assert spec.repository == "example/custom-backbone"
+    assert spec.revision == "main"
+    assert spec.include == ()
+
+
+@pytest.mark.parametrize("tier", ["nano", "super", "edge"])
+@pytest.mark.parametrize("local_override", [False, True])
+@pytest.mark.parametrize("source", ["sft", "inference"])
+def test_export_entry_resolves_vision_source(tier, local_override, source, tmp_path, monkeypatch):
+    import copy
+    import importlib
+    from types import SimpleNamespace
+
+    from cosmos_framework.scripts import export_model as exporter
+    from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
+
+    if source == "sft":
+        module = importlib.import_module(f"cosmos_framework.configs.base.experiment.sft.models.{tier}_model_config")
+        config = copy.deepcopy(getattr(module, f"{tier.upper()}_MODEL_CONFIG"))
+    else:
+        from omegaconf import OmegaConf
+
+        path = Path(__file__).parents[1] / "inference" / "configs" / "model" / f"Cosmos3-{tier.title()}.yaml"
+        config = OmegaConf.to_container(OmegaConf.load(path))["model"]["config"]
+    config["action_gen"] = False
+    model_dict = {"config": config}
+    checkpoint_args = SimpleNamespace(load_model_config_dict=lambda: model_dict)
+    snapshot = tmp_path / "vision"
+    snapshot.mkdir()
+    downloads = []
+
+    def download(spec):
+        downloads.append(spec)
+        return str(snapshot)
+
+    class BeforeModelConstruction(Exception):
+        pass
+
+    def stop_before_model_construction(_model_dict):
+        raise BeforeModelConstruction
+
+    monkeypatch.setattr(CheckpointDirHf, "download", download)
+    monkeypatch.setattr(exporter, "_coerce_to_base_model", stop_before_model_construction)
+    args = SimpleNamespace(
+        checkpoint=SimpleNamespace(build_checkpoint=lambda **_: checkpoint_args),
+        output_dir=tmp_path / "exported",
+        config_only=False,
+        bundle_lidar_vae=False,
+        vit=True,
+        vit_checkpoint_path=snapshot if local_override else None,
+    )
+    # Run the actual export entry through vision-source resolution, stopping only
+    # before large model construction. The local override must bypass downloads.
+    with pytest.raises(BeforeModelConstruction):
+        exporter.export_model(args)
+    if local_override:
+        assert downloads == []
+    else:
+        assert len(downloads) == 1
+        expected = helpers.resolve_backbone_download(config["vlm_config"]["pretrained_weights"]["backbone_path"])
+        assert downloads[0].repository == expected.repository
+        assert downloads[0].revision == expected.revision
+        assert downloads[0].include == (helpers.EDGE_VIT_BUNDLE_HF_INCLUDE if tier == "edge" else expected.include)
+
+
+def test_public_preset_backbones_agree_between_training_and_export(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    from cosmos_framework.configs.base.defaults import reasoner
+    from cosmos_framework.model.generator.utils.safetensors_loader import _download_hf_checkpoint
+
+    register_checkpoints()
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+    presets = [value for value in vars(reasoner).values() if isinstance(value, reasoner.VLMConfig)]
+    assert presets
+    for preset in presets:
+        uri = preset.pretrained_weights.backbone_path
+        if not uri or uri == "???":
+            continue
+        assert uri.startswith("hf://")
+        assert _download_hf_checkpoint(uri) == str(tmp_path)
+        exported = helpers.resolve_backbone_download(uri)
+        assert exported.repository == calls[-1]["repo_id"]
+        assert exported.revision == calls[-1].get("revision", "main")
+        assert "*.safetensors" in calls[-1]["allow_patterns"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Cosmos3NanoReasoner_VLM_GCP_Config",
+        "Cosmos3NanoReasoner_VLM_GCP_Config_0517",
+        "Cosmos3NanoReasoner_VLM_S3_EAST2_Config_0517",
+    ],
+)
+def test_external_reasoner_presets_require_explicit_checkpoint(name):
+    from omegaconf import OmegaConf
+    from omegaconf.errors import MissingMandatoryValue
+
+    from cosmos_framework.configs.base.defaults import reasoner
+
+    config = OmegaConf.structured(getattr(reasoner, name))
+    with pytest.raises(MissingMandatoryValue, match="pretrained_weights.backbone_path"):
+        _ = config.pretrained_weights.backbone_path
+    config.pretrained_weights.backbone_path = "/data/my-compatible-backbone"
+    assert config.pretrained_weights.backbone_path == "/data/my-compatible-backbone"
+
+
 class TestIsEdgeModel:
     def test_by_model_name(self):
         assert helpers.is_edge_model(_model_dict())

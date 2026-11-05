@@ -555,6 +555,8 @@ Qwen3VLMoT_VLM_8b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     ),
 )
 
+# These presets require a user-supplied, compatible reasoner backbone.
+# OmegaConf rejects the mandatory value before attempting a checkpoint download.
 Cosmos3NanoReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
     model_name="nvidia/Cosmos3-Nano-Reasoner",
     model_instance=L(Qwen3VLTextForCausalLM)(
@@ -570,7 +572,7 @@ Cosmos3NanoReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
         config_variant="gcp",
     ),
     pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="hf://nvidia/Cosmos3-Nano-Reasoner",
+        backbone_path="???",
         credentials_path="credentials/gcp_checkpoint.secret",
         enable_gcs_patch_in_boto3=True,
     ),
@@ -591,7 +593,7 @@ Cosmos3NanoReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
         config_variant="gcp",
     ),
     pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="hf://nvidia/Cosmos3-Nano-Reasoner",
+        backbone_path="???",
         credentials_path="credentials/gcp_checkpoint.secret",
         enable_gcs_patch_in_boto3=True,
     ),
@@ -612,7 +614,7 @@ Cosmos3NanoReasoner_VLM_S3_EAST2_Config_0517: VLMConfig = VLMConfig(
         config_variant="s3_east2",
     ),
     pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="hf://nvidia/Cosmos3-Nano-Reasoner",
+        backbone_path="???",
         credentials_path="credentials/s3_east2_checkpoint.secret",
     ),
 )
