@@ -112,6 +112,15 @@ The **keep_ranges_1_0_1.json filter** maps each DROID trajectory key to a list o
 ranges; only windows whose start falls inside a kept range are trained on (episodes absent from
 the dict are dropped). To train on the full window set instead, leave `EXTRA_TAIL_OVERRIDES` unset.
 
+The dataset constructor requires an explicit local `root`. When `use_filter_dict=True`,
+also pass `filter_dict_path` pointing to the downloaded JSON; there is no default filter path.
+The URI-shaped keys in that JSON are legacy trajectory identifiers used only for local
+lookup, not download endpoints. Access to the bucket named in those keys is not required;
+anonymous bucket listing is not available. Do not rewrite the keys, since they must match
+the filter dictionary. Use the Hugging Face downloads above for this recipe, or the
+[official DROID data instructions](https://droid-dataset.github.io/droid/the-droid-dataset)
+for the original RLDS/raw data (which require conversion before use with this LeRobot loader).
+
 ## Checkpoints
 
 - Saved every `save_iter` iters (1000 in the validated run) to the object store, at
