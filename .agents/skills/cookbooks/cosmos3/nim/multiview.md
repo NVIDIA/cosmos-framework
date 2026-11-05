@@ -70,7 +70,6 @@ docker run -d --name cosmos3-multiview \
   -e NIM_MODEL_VARIANT=multiview \
   -e NIM_PERF_PROFILE=latency \
   -e NIM_ENABLE_TEXT_GUARDRAILS=0 \
-  -e NIM_TRITON_REQUEST_TIMEOUT=7200000000 \
   -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
   "$NIM_IMAGE"
 ```
@@ -82,11 +81,11 @@ Notes for this variant:
 `NIM_MODEL_VARIANT=multiview` to confirm a candidate profile, then expose
 the GPU count the selected profile requires.
 - **Request timeout.** An eleven-camera request is long-running, and a joint
-camera and LiDAR request can exceed an hour on a single GPU. The
-`NIM_TRITON_REQUEST_TIMEOUT` value above raises the backend timeout from its
-30-minute default to two hours, in microseconds. ; the examples use a two-hour client
-timeout (`--timeout`). See
-[Generator configuration](configuration.md#generator-configuration).
+camera and LiDAR request can exceed an hour on a single GPU. Multiview
+profiles therefore default `NIM_TRITON_REQUEST_TIMEOUT` to four hours instead
+of the 30 minutes used by other variants; set it at launch, in microseconds,
+only to change that. The examples use a two-hour client timeout (`--timeout`).
+See [Generator configuration](configuration.md#generator-configuration).
 - **Attention backend.** `VLLM_OMNI_COSMOS3_MULTIVIEW_BACKEND` accepts
 `maskless` or `triton`. Leave it unset normally: the runtime then selects
 `maskless` when its bundled FlashAttention is available and `triton`
@@ -96,8 +95,9 @@ otherwise.
 examples have not been qualified against the text blocklist. The output video
 guardrails stay enabled. Disabling a guardrail reduces safety protections: do it only for
 an approved, isolated evaluation. See [Guardrails](#guardrails).
-- **Unsupported for multiview.** Prompt upsampling and Generator model warmup
-are not used by this variant.
+- **Warmup.** `NIM_ENABLE_WARMUP=1` runs a synthetic multiview request before
+readiness. Warmup is off by default.
+- **Unsupported for multiview.** Prompt upsampling is not used by this variant.
 
 To serve your own exported Cosmos3-Nano-Transfer-Auto checkpoint instead of
 the bundled one, add `NIM_MODEL_PATH` as described in
@@ -275,7 +275,7 @@ uv run python examples/mv_rgb.py --case i2v
 ```
 
 Outputs are written to `examples/outputs/mv_rgb_i2v/`. A missing `vision` on any
-view returns HTTP 422 naming the camera.
+view returns HTTP 422.
 
 Multiview does not support `video2video`; RGB video conditioning beyond the
 first frame is not available.
@@ -315,7 +315,7 @@ All values must be finite, range must be non-negative, and intensity and
 validity must lie in `[0, 1]`. 
 
 Send the file as raw base64 or as
-`data:application/octet-stream;base64,...`, up to 860,000,000 encoded
+`data:application/octet-stream;base64,...`, up to 853,333,336 encoded
 characters. Do not send a LiDAR preview image in place of the tensor. Raw
 HD-map range-map archives must first be projected into this numeric layout;
 `mv_sample.py` and `mv_joint.py` do this for the sample's `control.tar` with the
@@ -448,7 +448,7 @@ values that differ are rejected unless the table allows them:
 
 | Field                                | Default                             | Accepted values                                                                                                     |
 | ------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `resolution`                         | `480` (832 × 480 for 16:9 controls) | Any `480` or `720` key; a bare tier sizes output from the first WSM control's aspect                                |
+| `resolution`                         | `720` (1280 × 720 for 16:9 controls) | Any `480` or `720` key; a bare tier sizes output from the first WSM control's aspect                                |
 | `num_frames`                         | `201` per camera                    | `200` through `401`; a count that is not `4k + 1` is generated at the next `4k + 1` and each camera is trimmed back |
 | `num_inference_steps`                | `35`                                | `35` only                                                                                                           |
 | `guidance_scale`                     | `1.5`                               | `1.0` through `7.0`                                                                                                 |
@@ -457,8 +457,7 @@ values that differ are rejected unless the table allows them:
 
 
 The single-view frame ceilings in [Generation](generation.md#frame-counts-and-limits)
-do not apply to multiview. `480` with 201 frames is the validated
-configuration. Always set `seed` when comparing runs.
+do not apply to multiview. Always set `seed` when comparing runs.
 
 Multiview has no `fps` field. Cameras are always generated and encoded at
 30 FPS, the only rate the model is trained and conditioned on, and a request
@@ -523,7 +522,8 @@ frames before the response is split per camera, so face blurring and content
 checks apply to every camera.
 
 When the text guardrail is enabled, it checks every camera caption in
-`views[].prompt` and `per_view_negative_prompt`. A request that a text check blocks is stopped before
+`views[].prompt`. `per_view_negative_prompt` only steers generation and is not
+checked. A request that a text check blocks is stopped before
 generation starts and returns HTTP 422. The sample captions have not been
 qualified against the blocklist, so with the check enabled, review a blocked
 caption and reword it. See [Guardrails](operations.md#guardrails).
@@ -535,6 +535,7 @@ caption and reword it. See [Guardrails](operations.md#guardrails).
 | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | HTTP 422, `multiview requests require a selected model variant of 'multiview'`         | The running Generator is not the multiview variant                                                                                                     | Relaunch with `NIM_MODEL_VARIANT=multiview`                                                                                                                           |
 | HTTP 422, `Selected model variant 'multiview' requires a multiview field`              | A single-view request was sent to the multiview variant                                                                                                | Use a multiview request, or launch a general-purpose variant                                                                                                          |
+| HTTP 422, `supports text2video and image2video requests only`                         | Another `model_mode`, such as `text2image` or `video2video`, was sent to the multiview variant                                                         | Use `text2video`, or `image2video` with `vision` on every view                                                                                                        |
 | HTTP 422, camera key or duplicate                                                      | Unknown or repeated `camera_key`                                                                                                                       | Use the eleven keys in [Camera rig](#camera-rig), each once                                                                                                           |
 | HTTP 422, control has insufficient frames                                              | A WSM control is shorter than the requested output                                                                                                     | Use longer controls or request fewer `num_frames`                                                                                                                     |
 | HTTP 422, `per_view_negative_prompt` field required                                    | The negative prompt was omitted or sent as a top-level `negative_prompt`                                                                               | Send `multiview.per_view_negative_prompt`, using an empty string to disable it, and drop `negative_prompt`                                                            |
@@ -545,15 +546,15 @@ caption and reword it. See [Guardrails](operations.md#guardrails).
 | HTTP 422, `multiview.lidar.control` tensor, dtype, shape, or sweep count               | The safetensors file does not match the `[3, sweeps, 128, 1800]` FP32 `frames` layout, or has fewer sweeps than the request needs                      | Re-export in the [LiDAR control](#lidar-control) layout with at least the required sweeps                                                                             |
 | HTTP 422, LiDAR `values must be finite` or `must be in [0, 1]`                         | NaN or Inf, negative range, or intensity or validity outside `[0, 1]` in the sweeps used                                                               | Clean or clip the values before encoding                                                                                                                              |
 | HTTP 422, `num_conditional_sweeps=N must leave at least one`                           | Conditioning would cover every LiDAR sweep in the request                                                                                              | Use at most the stated maximum, or request more frames                                                                                                                |
-| HTTP 422, `This request has been blocked by our AI guidelines`                         | The text guardrail is enabled and a caption or the negative prompt was blocked | Reword the blocked text, or launch with `NIM_ENABLE_TEXT_GUARDRAILS=0` for an approved, isolated evaluation                                                           |
-| HTTP 422, `requires vision for <camera>`                                               | `image2video` view without `vision`                                                                                                                    | Add an RGB image or video to every view                                                                                                                               |
-| HTTP 422, `num_frames between 200 and 401`, or `less than or equal to 401`             | Explicit frame count outside the supported range                                                                                                       | Request 200 to 401 frames, or omit `num_frames` for 201                                                                                                               |
+| HTTP 422, `This request has been blocked by our AI guidelines`                         | The text guardrail is enabled and a camera caption was blocked | Reword the blocked caption, or launch with `NIM_ENABLE_TEXT_GUARDRAILS=0` for an approved, isolated evaluation                                                           |
+| HTTP 422, `requires vision for every view`                                             | `image2video` view without `vision`                                                                                                                    | Add an RGB image or video to every view                                                                                                                               |
+| HTTP 422, `greater than or equal to 200` or `less than or equal to 401`                | Explicit frame count outside the supported range                                                                                                       | Request 200 to 401 frames, or omit `num_frames` for 201                                                                                                               |
 | HTTP 422, `fixed 30 FPS; remove fps`                                                   | `fps` sent with a multiview request                                                                                                                    | Remove `fps`; multiview always generates at 30 FPS                                                                                                                    |
 | HTTP 422, `guidance_scale` `greater than or equal to 1` or `less than or equal to 7`   | Guidance outside the request bounds                                                                                                                    | Request 1.0 to 7.0, or omit `guidance_scale` for 1.5                                                                                                                  |
 | HTTP 422, `text2video multiview requests do not accept vision inputs`                  | `vision` sent with `text2video`                                                                                                                        | Remove `vision`, or use `image2video`                                                                                                                                 |
 | HTTP 422, `camera_lidar` requires `multiview.lidar.control`                            | Joint output without the LiDAR control                                                                                                                 | Add `multiview.lidar.control`                                                                                                                                         |
 | HTTP 422, `multiview.lidar is accepted only with output_modality 'camera_lidar'`       | LiDAR control sent with camera-only output                                                                                                             | Set `output_modality` to `camera_lidar`, or remove `lidar`                                                                                                            |
-| HTTP 422, `requires num_inference_steps=35` or similar                                 | A fixed sampling field was overridden                                                                                                                  | Omit the field to use the default                                                                                                                                     |
+| HTTP 422, `num_inference_steps` `Input should be 35`                                   | The fixed step count was overridden                                                                                                                    | Omit the field to use the default                                                                                                                                     |
 | Joint request fails after admission                                                    | LiDAR control is not a valid FP32 `frames` tensor, has too few sweeps, or contains non-finite values                                                   | Check shape, dtype, and values in the control file                                                                                                                    |
 | Client timeout                                                                         | Generation exceeded the client or backend timeout                                                                                                      | Raise both: the client `--timeout`, and the backend with `NIM_TRITON_REQUEST_TIMEOUT` at launch. A timed-out client does not cancel the server, which keeps computing |
 | `Broken pipe`, `Connection reset by peer`, or `Server disconnected`, with nothing in the server log | A pooled client connection sat idle longer than the server keep-alive while the client built a large camera and LiDAR body, so it was reused after the server closed it | Launch with `-e NIM_HTTP_KEEP_ALIVE_TIMEOUT_SECS=120` (default 10), or open a new connection per request; images without this variable close idle connections after 5 seconds |

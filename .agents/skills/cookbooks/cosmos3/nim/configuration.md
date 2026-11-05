@@ -117,8 +117,8 @@ profile-pin variables, refer to [Advanced Settings](#advanced-settings).
 | Name | Default | Use |
 | --- | --- | --- |
 | `NIM_ALLOW_URL_INPUT` | `true` | Allow HTTP(S) image, video, and Transfer inputs; set `false` to require encoded input |
-| `NIM_TRITON_REQUEST_TIMEOUT` | 30 minutes (`1800000000` microseconds) | Set the queue-plus-execution timeout in microseconds |
-| `NIM_HTTP_KEEP_ALIVE_TIMEOUT_SECS` | `10` | Close an idle client connection after this many seconds; raise it for clients that reuse connections between large requests (refer to [Multiview Common Failures](multiview.md#common-failures)) |
+| `NIM_TRITON_REQUEST_TIMEOUT` | 30 minutes (`1800000000` microseconds); 4 hours (`14400000000`) for multiview | Set the queue-plus-execution timeout in microseconds |
+| `NIM_HTTP_KEEP_ALIVE_TIMEOUT_SECS` | `10` for multiview; unset (5 seconds) otherwise | Close an idle client connection after this many seconds; raise it for clients that reuse connections between large requests (refer to [Multiview Common Failures](multiview.md#common-failures)) |
 
 Client HTTP timeouts do not change this backend ceiling. Refer to
 [Long-Running Requests](operations.md#long-running-requests).

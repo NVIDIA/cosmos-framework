@@ -18,7 +18,7 @@ Choose the model. The NIM selects a compatible profile and precision. Refer to
 | Generator | `nano` | General-purpose Generator tasks |
 | Generator | `edge-droid` | DROID policy with action-only output; BF16 only; **experimental** |
 | Generator | `nano-droid` | DROID policy with action-only output; BF16 only |
-| Generator | `multiview` | Multi-camera driving video with optional LiDAR; BF16 only; refer to [Multiview](multiview.md) |
+| Generator | `multiview` | Multi-camera driving video with optional LiDAR; BF16 or FP8; refer to [Multiview](multiview.md) |
 | Generator | `super` | General-purpose Generator tasks |
 | Generator | `super-t2i` | Full-step T2I only |
 | Generator | `super-t2i-4step` | Four-step T2I only |
@@ -210,6 +210,42 @@ GeForce RTX 5090, which does not meet their 35-GiB Transfer minimum.
 
 Leave offload and guardrail residency on automatic selection unless a
 configuration is validated for the deployment.
+
+## Multiview Profiles
+
+The `multiview` Generator has its own profiles and is not covered by the
+[Generator Profiles](#generator-profiles) table. BF16 and FP8 profiles share
+the same layouts and floors except where a row names one precision. Every
+profile keeps the guardrails resident, and none supports unified-memory
+systems or Transfer.
+
+**Model VRAM Optimized** is `True` for profiles tagged `offload: layer`. These
+profiles offload transformer layers to host memory and enable the other VRAM
+reductions described in
+[GPU Memory and `layer` Profiles](multiview.md#gpu-memory-and-layer-profiles).
+They run slower but fit GPUs with less memory.
+
+| Precision | Performance Profile | GPUs | Parallelism | Model VRAM Optimized | Minimum VRAM/Device | System-Memory Floor |
+| --- | --- | ---: | --- | --- | ---: | ---: |
+| BF16, FP8 | `latency` | 1 | None | False | 150 GiB | 40 GiB |
+| BF16, FP8 | `latency` | 1 | None | True | 72 GiB | 64 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | False | 150 GiB | 40 GiB |
+| BF16, FP8 | `latency` | 2 | Ulysses 2 | False | 93 GiB | 40 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | True | 72 GiB | 64 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | False | 93 GiB | 40 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | True | 72 GiB | 64 GiB |
+| BF16, FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | False | 93 GiB | 40 GiB |
+| BF16 | `latency` | 8 | CFG 2 × Ulysses 2 × TP 2 | True | 72 GiB | 64 GiB |
+| FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | True | 72 GiB | 64 GiB |
+| BF16, FP8 | `throughput` | 2, 4, 8 | One replica per GPU | False | 93 GiB | 40 GiB |
+| BF16, FP8 | `throughput` | 2, 4, 8 | One replica per GPU | True | 72 GiB | 64 GiB |
+
+Latency layouts without Ulysses or tensor parallelism (one GPU, or CFG 2 on two
+GPUs) hold the whole model and sequence on every GPU, so they need the
+150-GiB floor of B200-class GPUs. Two-GPU `latency` deployments have both a
+CFG 2 and a Ulysses 2 profile. To require Ulysses, set
+`NIM_TAGS_SELECTOR='n_gpus=2,nim_up=2'`. Each `throughput` replica runs a full
+one-GPU engine and serves its own requests.
 
 ## Reasoner Profiles
 

@@ -43,7 +43,7 @@ selects a compatible profile, as described in
 | Policy | Generator | Image + task/state | Video + predicted action | [Action](action.md#policy) |
 | Nano-DROID policy | Generator | Image + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
 | Edge-DROID policy ([experimental](support-matrix.md#choose-a-model)) | Generator | Composed camera views + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
-| Multiview driving video and LiDAR | Generator | Per-camera captions + WSM controls, optional RGB and LiDAR control | One MP4 per camera, optional LiDAR tensor | [Multiview](multiview.md) |
+| Multiview driving video and LiDAR | Generator | Per-camera captions + WSM controls, optional RGB first frames; LiDAR control required for LiDAR output | One MP4 per camera, optional LiDAR tensor | [Multiview](multiview.md) |
 | Inverse dynamics | Generator | Video | Video + predicted action | [Action](action.md#inverse-dynamics) |
 | Video Transfer | Generator | Prompt + spatial control | Controlled MP4 video | [Transfer](transfer.md) |
 | Image/video reasoning | Reasoner | Media + text | Text or structured result | [Reasoning](reasoning.md) |
