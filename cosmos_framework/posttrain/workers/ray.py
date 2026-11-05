@@ -900,7 +900,7 @@ class _HostImpl:
         NOTE (interim): no production caller yet — the disaggregated cross-device weight plane is
         not auto-wired at bind (control/placement/colocate.py raises NotImplementedError for
         cross_device). Exercised only via tests today; drop this note when bind auto-wires the
-        plane (DESIGN §2.4 / §4).
+        plane.
 
         Wires the live comm into each model-bearing body's already-bound backend via
         ``WeightSync.bind_comm`` (the backend owns its mover's wiring — this layer never touches

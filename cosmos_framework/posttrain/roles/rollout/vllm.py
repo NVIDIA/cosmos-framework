@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""vLLM rollout body (DESIGN §1.2 body=(a) local compute; §8.2 #6 engine integration).
+"""vLLM rollout body (local compute; engine integration).
 
 `VLLMRollout`: a real inference engine (vLLM) dropped in as a sibling to `HFRollout`,
 producing the unified Trajectory/Transition data model (§1.4). Route C (TP via
@@ -231,7 +231,7 @@ class VLLMRollout(WeightReceiverBase):
                 engine_config, owner="VLLMRollout(topk_logprobs)"
             )
         # model: a `vllm.LLM` instance, built inside the Ray actor's setup() so the engine
-        # lives where the GPU is (DESIGN §8.2 #6). `sampling` overrides the SamplingParams
+        # lives where the GPU is. `sampling` overrides the SamplingParams
         # fields below (temperature/top_p/max_tokens/...).
         if packer is None:  # explicit packer=None: a bare TypeError would not say what to do
             raise ValueError(
@@ -428,7 +428,7 @@ class VLLMRollout(WeightReceiverBase):
         if blocked:
             raise RuntimeError(f"vLLM rollout has {blocked} released; call wake_up() first")
 
-    # --- weight-transfer edge target (DESIGN §8.2 #4) ---
+    # --- weight-transfer edge target ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """Import trainer weights into the RUNNING vLLM engine — PEER-ONLY surface.
 

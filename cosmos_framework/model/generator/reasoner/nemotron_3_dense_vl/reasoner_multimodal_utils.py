@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Image/video-conditioned prefill helpers for the Nemotron 3 Dense VL reasoner.
+"""Image/video-conditioned prefill helpers for the Edge reasoner.
 
 Mirrors ``reasoner/qwen3_vl/utils.py::prepare_multimodal_reasoner_inputs`` for
 the Edge reasoner. The multimodal rope index (``get_rope_index``) and the

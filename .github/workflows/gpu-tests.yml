@@ -27,8 +27,9 @@
 #     GPUs, NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
 #     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
-#     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
-#     (they do not fail) when it cannot.
+#     need it, plus the `FP8_CHECKPOINT_REPOSITORY` / `FP8_CHECKPOINT_REVISION`
+#     repository secrets, to read a checkpoint repository that is not public; they
+#     skip (they do not fail) when it cannot.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -201,12 +202,14 @@ jobs:
       # only this directory. These jobs share one self-hosted runner.
       PYTEST_DEBUG_TEMPROOT: /tmp/pytest-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      FP8_CHECKPOINT_REPOSITORY: ${{ secrets.FP8_CHECKPOINT_REPOSITORY }}
+      FP8_CHECKPOINT_REVISION: ${{ secrets.FP8_CHECKPOINT_REVISION }}
       HF_HUB_DISABLE_XET: "1"
       # Both steps use the `throughput` preset, whose layout is derived from
       # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
       TEST_MAX_GPUS: "4"
       # This is the job whose stated purpose includes FP8 coverage: promote the
-      # cannot-reach-nvidia/Cosmos3-Experimental skip to a hard failure, so a
+      # cannot-reach-the-FP8-checkpoint skip to a hard failure, so a
       # token rotation or a permissions change turns the job red instead of
       # silently dropping all three FP8 cases. Forks and local runs (which do
       # not set this) keep the skip behaviour.
@@ -230,8 +233,8 @@ jobs:
       # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
       # diffusion steps (W8A16 edge steps; exact schedule asserted from the
       # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo; elsewhere those three
-      # cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
+      # access-controlled repo named by the FP8_CHECKPOINT_* secrets; elsewhere those
+      # three cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
       # skip a hard failure here, so a green run is guaranteed to have covered FP8.
       # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.

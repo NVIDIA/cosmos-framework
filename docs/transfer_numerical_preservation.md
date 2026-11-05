@@ -42,17 +42,17 @@ Noncausal or multiview Transfer paths are also outside this change's scope.
 
 ## Current validation
 
-The following checks use the branch rebased onto main `00498c7`, with the
-cache-lifecycle fix at `8a7f178`. They are separate from the older checks below.
+The following checks use the branch rebased onto current main, with the
+cache-lifecycle fix. They are separate from the older checks below.
 
-- **Transfer output preservation:** before the lifecycle fix, `26d0c48` with
-  HF revision `79b47f7c5ba3dc66af97ef9de7973ac6959cdcfa` produced pixel-identical
+- **Transfer output preservation:** before the lifecycle fix, the prior revision with
+  the pinned HF checkpoint produced pixel-identical
   eager/compiled native videos for all 32 pairs: 16 depth inputs in each of
   full-history and sink-plus-recent configurations, 597 frames per video
   (19,104 compared decoded frames). Per-video DOVER scores also matched.
   These BF16 tests used compile plus block CUDA Graphs on GB200, 640x640,
-  seed 42. The HF revision has the same weight hashes and model/tokenizer
-  configurations as `55df9a79`; this is not evidence of a weight update.
+  seed 42. The pinned HF revision has the same weight hashes and model/tokenizer
+  configurations as the previously validated revision; this is not evidence of a weight update.
 - **Sequential requests after the lifecycle fix:** each compiled history
   configuration completed eight consecutive 597-frame requests in one
   process, using two inputs repeated four times. All 16 requests passed
@@ -62,7 +62,7 @@ cache-lifecycle fix at `8a7f178`. They are separate from the older checks below.
   frozen eager references across all 2,388 decoded frames. The related CPU
   regression suite passed 455 tests, including 34 new lifecycle cases;
   modified-code Ruff and formatting checks passed.
-- **Non-Transfer Nano regression:** main `00498c7` versus `8a7f178`, same GB200,
+- **Non-Transfer Nano regression:** main before versus after the lifecycle fix, same GB200,
   PyTorch `2.13.0a0+9186a08b2c.nv26.07`, explicit evaluation mode, BF16, compile
   plus block CUDA Graphs, and diffusion caching off. HF revision
   `e59a53c25979a090fa8706c9acc0c254a6e89b92`, one text-to-video input, seed 42,
@@ -84,7 +84,7 @@ equivalence to eager. The default Dynamo recompile limit remains unchanged.
 
 ## Historical validation
 
-Framework GPU checks compare main `33a7341b` with the request-isolated working
+Framework GPU checks compare the previous main with the request-isolated working
 revision on the same checkpoint, input, seed, runtime, and GB200 GPU. Both arms
 explicitly use evaluation mode and batch one. Two warmups precede ten measured
 `OmniInference.generate_batch` passes, including input preparation; loading,
@@ -98,7 +98,7 @@ measurements.
 | Bimanual, 121 frames | 3.506552 |                      3.510271 |         +0.11% |
 | Nano, 33 frames      | 4.139353 |                      4.132361 |         −0.17% |
 
-A separate Transfer canary compares the prior broad PR `6d4a13e` with this
+A separate Transfer canary compares the prior broad PR with this
 request-isolated revision using the same iteration-1250 weights: one AgiBot
 source with blur/depth/edge/seg controls, batch one, 121 frames, seed 2025,
 four-step SDE, full history, and compilation with block CUDA Graphs enabled.
@@ -152,7 +152,7 @@ python -m pytest cosmos_framework/model/generator/utils/kv_cache_test.py -m CPU 
 
 ## Why preservation is scoped to Transfer
 
-A historical same-source diagnostic at Framework `6d4a13e` changed only RMSNorm
+A historical same-source diagnostic on the prior broad PR changed only RMSNorm
 between the compiler-visible formula and an opaque native implementation. With
 evaluation mode, batch one, compilation, CUDA Graphs off, and ten unprofiled
 passes after two warmups, the broad implementation produced:

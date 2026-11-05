@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-FORBIDDEN_IMPORTS = {"imaginaire", "projects", "packages", "cosmos_framework"}
+FORBIDDEN_IMPORTS = {"imagin" + "aire", "projects", "packages", "cosmos_framework"}
 # Assemble patterns so that this checker is itself scanned like every other file.
 FORBIDDEN_TEXT = re.compile(
     rb"/(?:" + b"lustre|home|mnt|workspace|nfs|raid|scratch" + rb")/"

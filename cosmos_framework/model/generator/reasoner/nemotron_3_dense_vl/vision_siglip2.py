@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""SigLIP2 vision encoder + PatchMerger for the Cosmos3-Edge (Nemotron 3 Dense VL) reasoner.
+"""SigLIP2 vision encoder + PatchMerger for the Cosmos3-Edge reasoner.
 
 Vendored from the HF `nvidia/Cosmos3-Edge` remote code
 (`modeling_nemotron_siglip2_h.py`): the custom grid_thw / cu_seqlens SigLIP2

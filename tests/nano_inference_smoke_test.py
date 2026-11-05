@@ -169,12 +169,14 @@ _MULTI_CONTROL_SPEC = {
 # ModelOpt static-FP8 Cosmos3-Nano checkpoint. It is not published under its own
 # repository yet, so it cannot be a ``--checkpoint-path`` registry name (see
 # ``_CHECKPOINTS`` in ``cosmos_framework/inference/args.py``): it lives in a
-# subdirectory of the access-controlled nvidia/Cosmos3-Experimental repo, pinned to
-# the revision the FP8 loader was validated against. The test downloads that one
-# subdirectory and passes the resulting local path to the CLI. Once the checkpoint
-# is released under its own name, register it and drop ``_download_fp8_checkpoint``.
-_FP8_REPOSITORY = "nvidia/Cosmos3-Experimental"
-_FP8_REVISION = "f0cdb8ea37360e8510e2c0caf84c0f9f3e8751c8"
+# subdirectory of an access-controlled repository, pinned to the revision the FP8
+# loader was validated against. The repository and revision come from the
+# ``FP8_CHECKPOINT_REPOSITORY`` / ``FP8_CHECKPOINT_REVISION`` environment variables.
+# The test downloads that one subdirectory and passes the resulting local path to the
+# CLI. Once the checkpoint is released under its own name, register it and drop
+# ``_download_fp8_checkpoint``.
+_FP8_REPOSITORY = os.environ.get("FP8_CHECKPOINT_REPOSITORY", "")
+_FP8_REVISION = os.environ.get("FP8_CHECKPOINT_REVISION", "")
 _FP8_SUBDIRECTORY = "cosmos3-nano-fp8-14072026"
 
 # Emitted by ``swap_modelopt_fp8_linears_on_meta`` / ``install_torchao_float8_fsdp_support``
@@ -376,7 +378,7 @@ def _download_fp8_checkpoint() -> Path:
 
     Skips the test — rather than failing it — when the repository is unreachable
     for a credentials reason (no ``HF_TOKEN``, or a token without access to
-    nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
+    the FP8 checkpoint repository), so a fork PR without the runner secret does not
     go red. Any other failure (a deleted revision, a broken download) still fails
     loudly: a silently-skipping FP8 job would look green while testing nothing.
 
@@ -393,6 +395,9 @@ def _download_fp8_checkpoint() -> Path:
             pytest.fail(f"REQUIRE_FP8=1 but the FP8 checkpoint is unreachable: {reason}")
         pytest.skip(reason)
 
+    if not (_FP8_REPOSITORY and _FP8_REVISION):
+        _skip_or_fail_no_access("FP8_CHECKPOINT_REPOSITORY / FP8_CHECKPOINT_REVISION are not set")
+
     try:
         repo_root = snapshot_download(
             repo_id=_FP8_REPOSITORY,
@@ -400,17 +405,17 @@ def _download_fp8_checkpoint() -> Path:
             allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
         )
     except (GatedRepoError, RepositoryNotFoundError) as error:
-        _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
+        _skip_or_fail_no_access(f"no access to the FP8 checkpoint repository (needs an HF_TOKEN with read access): {error!r}")
     except HfHubHTTPError as error:
         status_code = getattr(error.response, "status_code", None)
         if status_code in (401, 403):
-            _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
+            _skip_or_fail_no_access(f"no access to the FP8 checkpoint repository (HTTP {status_code}): {error!r}")
         raise
 
     checkpoint_path = Path(repo_root) / _FP8_SUBDIRECTORY
     assert (checkpoint_path / "hf_quant_config.json").is_file(), (
         f"{checkpoint_path} is not a ModelOpt FP8 checkpoint (no hf_quant_config.json); "
-        f"revision {_FP8_REVISION} may have changed"
+        "the pinned revision may have changed"
     )
     return checkpoint_path
 

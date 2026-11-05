@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for VLLMRollout (DESIGN §1.2 body=(a); §8.2 #6 engine integration).
+"""Tests for VLLMRollout (local compute; engine integration).
 
 Needs a GPU and the `vllm` package (the vLLM venv: vllm==0.19.1 / torch==2.10.0), so it is
 skip-guarded and marked L1/GPU (vLLM engine init > 30s). Verifies the Task #3 MVP contract

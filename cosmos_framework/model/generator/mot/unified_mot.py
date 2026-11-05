@@ -2171,7 +2171,7 @@ def _impl_generate_reasoner_text(
 
     ``prepare_multimodal_fn`` builds the image/video-conditioned prefill inputs
     (embeds + mrope positions). Defaults to the Qwen3-VL implementation; the
-    Nemotron 3 Dense VL reasoner injects its own SigLIP2 variant so the same
+    Edge reasoner injects its own SigLIP2 variant so the same
     decode loop serves both families.
 
     The loop has two phases:
