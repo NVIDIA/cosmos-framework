@@ -80,7 +80,7 @@ def override_qwen3_vl_forward(model: nn.Module) -> None:
     model_identity = (type(model).__module__, type(model).__name__)
     if model_identity not in _NATIVE_BACKBONE_IDENTITIES:
         raise ValueError(
-            "Qwen3-VL forward override requires an exact native-native Qwen3VLModel/Qwen3VLMoeModel, "
+            "Qwen3-VL forward override requires an exact native Qwen3VLModel/Qwen3VLMoeModel, "
             f"got {type(model).__module__}.{type(model).__name__}"
         )
     if bool(getattr(model, "_posttrain_forward_override", False)):
