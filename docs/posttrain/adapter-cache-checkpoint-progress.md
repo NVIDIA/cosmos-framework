@@ -7,6 +7,9 @@ validation revisions. Historical results remain **12 named checkpoints, 48 fixed
 profiles and 47 fully passing legacy profiles**. The versioned MoE execution,
 physical HSDP/replay and earlier rounded-weight training qualifications remain
 attached to their original artifacts and revisions.
+The subsequent [final trained-artifact deployment](adapter-final-deployment.md)
+qualifies the update-1111 BF16 weights and records inference optimizations and
+their separate correctness, task and performance outcomes.
 
 | Requirement | Production code / focused tests | Evidence and status |
 | --- | --- | --- |

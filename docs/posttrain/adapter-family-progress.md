@@ -13,6 +13,9 @@ The [cache and checkpoint continuation](adapter-cache-checkpoint-progress.md)
 records selective training-checkpoint export, explicit BF16 cache profiles and
 the matched full-WTS execution comparison. Its results have separate revision
 and runtime provenance.
+The [final trained-artifact deployment](adapter-final-deployment.md) qualifies
+update-1111 BF16 artifacts, implements canonical/portable inference optimizations,
+and records the remaining long-prefill performance and factorized merge limitations.
 
 Work branch: `feat/posttrain-family-adapters`. This extends the original Cosmos3
 implementation; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)
