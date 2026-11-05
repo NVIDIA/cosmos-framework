@@ -1371,6 +1371,7 @@ def verify_with_torch(
     compare_base: bool = True,
     unified_chat_template: bool = False,
     payload: BinaryIO | None = None,
+    source_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run-time-relevant checks on the OUTPUT directory: config identity with the base, on-disk expert layout equal to
     the checkpoint layout, EVERY tensor of ``model.pt`` bitwise equal to its shard tensor (with per-tensor sha256
@@ -1382,6 +1383,10 @@ def verify_with_torch(
     (``load_consolidated_state_dict``; the same one the materializer hashed under its lock and the overlay consumed), never
     from a fresh resolution of ``model_pt``: a path replaced by the merge tool meanwhile can neither fail a correct build
     nor pass a wrong one. Without it the path is loaded, for standalone callers.
+
+    ``source_state`` may be a lazy tensor mapping supplied by the adapter shard
+    writer. It gets the same complete tensor/config/processor verification without
+    a full model.pt or a full in-memory state.
 
     The earlier single-tensor probe (``model.language_model.norm.weight``) was the one tensor a bf16 run does not move,
     so it passed against the base too; the full comparison runs before any caller deletes
@@ -1416,7 +1421,7 @@ def verify_with_torch(
             )
     report["architectures"] = list(config.architectures or [])
 
-    state_dict = load_consolidated_state_dict(model_pt, payload)  # values: [*shape]
+    state_dict = load_consolidated_state_dict(model_pt, payload) if source_state is None else source_state
     weight_map = _read_weight_map(os.path.join(out, INDEX_FILE))
     verify_index(out, expect_keys=set(state_dict), min_tensors=0)
     expert_keys = sorted(k for k in state_dict if ".mlp.experts." in k)
@@ -1444,10 +1449,12 @@ def verify_with_torch(
         by_shard.setdefault(weight_map[key], []).append(key)
     for shard_name, keys in sorted(by_shard.items()):
         shard = os.path.join(out, shard_name)
-        with safe_open(shard, framework="pt") as handle:
-            for key in sorted(keys):
-                disk = handle.get_tensor(key)  # [*shape]
-                expected = state_dict[key]  # [*shape]
+        for key in sorted(keys):
+            # Close each mapping after one tensor: an old completed export may
+            # have 50GB shards even when its new source is bounded-memory.
+            expected = state_dict[key]
+            with safe_open(shard, framework="pt") as handle:
+                disk = handle.get_tensor(key)
                 if (
                     tuple(disk.shape) != tuple(expected.shape)
                     or disk.dtype != expected.dtype
@@ -1455,6 +1462,8 @@ def verify_with_torch(
                 ):
                     unequal.append(key)
                 digests[key] = tensor_sha256(expected)
+                del disk
+            del expected
     if unequal:
         raise ConversionError(
             f"verify: {len(unequal)} of {len(state_dict)} tensors differ bitwise between {model_pt} and the shards under "

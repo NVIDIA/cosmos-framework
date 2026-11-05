@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Public Qwen3.5 sources include MTP weights outside the trained HF model."""
 
+from contextlib import ExitStack
+
 import pytest
 import torch
 import transformers
@@ -36,7 +38,9 @@ def test_export_explicitly_accounts_for_unused_source_head(tmp_path, monkeypatch
 
     def materialize(**kwargs):
         captured.update(kwargs)
-        merged = torch.load(kwargs["ckpt_dir"] + "/model.pt", weights_only=True)["net"]
+        with ExitStack() as held:
+            kwargs["tensor_source"].open(held)
+            merged = dict(kwargs["tensor_source"])
         assert extra not in merged
         net.load_state_dict(merged, strict=True)
         return kwargs["out"]

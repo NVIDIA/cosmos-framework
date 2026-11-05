@@ -16,13 +16,11 @@ import tempfile
 from pathlib import Path
 
 import torch
-from safetensors.torch import load_file
 
 from cosmos_framework.posttrain.checkpoint.adapters import (
     MANIFEST,
     adapter_configuration,
     checkpoint_adapter_state,
-    prepare_merged_state,
     read_adapter_snapshot,
     snapshot_identity,
     state_spec,
@@ -93,7 +91,7 @@ def validate_merged_export_metadata(
         raise ValueError("merged artifact contains an unsupported source-tensor exclusion")
 
 
-def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
+def validate_export_targets(base: str, identity: dict) -> dict[str, tuple[int, ...]]:
     """Re-resolve the portable map against the stock export architecture on meta.
 
     Tensor names and shapes alone cannot prove a module's type, component,
@@ -126,7 +124,7 @@ def validate_export_targets(base: str, identity: dict) -> frozenset[str]:
             "adapter resolved-target manifest disagrees with the base architecture "
             "(module types/shapes, scaling, ownership or trainable counts); re-export from its training checkpoint"
         )
-    return frozenset(net.state_dict())
+    return {name: tuple(tensor.shape) for name, tensor in net.state_dict().items()}
 
 
 def export_merged_adapter(
@@ -217,76 +215,27 @@ def export_merged_adapter(
         raise ValueError(
             "adapter artifact lacks a supported materialized base dtype; re-export from its training checkpoint"
         )
-    if snapshot_identity(base, weights=True) != identity["base"]:
-        raise ValueError("wrong base identity for adapter merge; stage the exact original weight snapshot")
+    # Hash the actual held shard inodes under the materializer's output lock.
+    # The tensor source retains the captured portable record and original merge
+    # rounding; no full-state model.pt or temporary HF model is constructed.
+    from cosmos_framework.posttrain.checkpoint.conversion.adapter_stream import AdapterTensorSource
+
     if snapshot_identity(base, weights=False) != identity["processor"]:
         raise ValueError("merged export requires the recorded processor/tokenizer/template beside the base")
-    architecture_keys = validate_export_targets(base, identity)
-    root = Path(base)
-    index = root / "model.safetensors.index.json"
-    shards = (
-        sorted(set(json.loads(index.read_text())["weight_map"].values())) if index.is_file() else ["model.safetensors"]
+    architecture = validate_export_targets(base, identity)
+    source = AdapterTensorSource(base, adapter, record, state, architecture, output_dtype)
+    if source.excluded:
+        metadata["excluded_base_tensors"] = source.excluded
+    result = run_request(
+        base=base,
+        out=out,
+        tensor_source=source,
+        min_tensors=1,
+        expect_tensors=len(source),
+        verify=True,
+        output_dtype=output_dtype,
+        export_metadata=metadata,
     )
-    weights = {}
-    excluded = {}
-    for shard in shards:
-        for name, tensor in load_file(str(root / shard), device="cpu").items():
-            if name in weights or name in excluded:
-                raise ValueError(f"duplicate base tensor {name!r}")
-            if name not in architecture_keys:
-                # Qwen3.5's public source also carries a multi-token prediction
-                # head. Transformers' Qwen3_5ForConditionalGeneration declares
-                # ^mtp.* as ignored on load; HFModel never executes or trains it.
-                # Bound this exception to that family and exact namespace. Other
-                # unexpected weights still fail instead of disappearing silently.
-                if identity["architecture"] == "qwen3_5" and name.startswith("mtp."):
-                    excluded[name] = {"shape": list(tensor.shape), "reason": "unused_source_mtp_head"}
-                    continue
-                raise ValueError(f"base tensor {name!r} is absent from the bound export architecture")
-            # Native materialization converts all floating parameters before loading.
-            # Apply that same conversion before merging, even when source shards are
-            # FP32 or mix FP32 normalization weights with BF16 projections.
-            weights[name] = tensor.to(getattr(torch, base_dtype)).float() if tensor.is_floating_point() else tensor
-    if excluded:
-        metadata["excluded_base_tensors"] = excluded
-    for row in identity["resolved"]["targets"]:
-        name = row["name"] + ".weight"
-        if name not in weights or list(weights[name].shape) != row["shape"]:
-            raise ValueError(
-                f"base cannot resolve native adapter target {name}; packed/renamed HF conversions are unsupported"
-            )
-    weights.update(state)
-    merged = prepare_merged_state(weights, {**identity, "base_storage_dtype": "float32"})
-    if output_dtype == "bfloat16":
-        merged = {name: tensor.bfloat16() if tensor.is_floating_point() else tensor for name, tensor in merged.items()}
-    config = json.loads((root / "config.json").read_text())
-    if config.get("tie_word_embeddings", False) and "lm_head.weight" in merged:
-        from cosmos_framework.posttrain.model.adapter_families import adapter_family
-
-        embedding = adapter_family(identity["architecture"]).embedding
-        if embedding not in merged or not torch.equal(merged[embedding], merged["lm_head.weight"]):
-            raise ValueError("base declares tied embeddings but embedding/head tensors disagree")
-        # Stock HF serializes one owner and reconstructs this frozen alias.
-        del merged["lm_head.weight"]
-    with tempfile.TemporaryDirectory(prefix="cosmos-adapter-merge-") as temporary:
-        torch.save({"net": merged}, os.path.join(temporary, "model.pt"))
-        expected_tensor_count = len(merged)
-        # The materializer mmap-loads the saved state and may transpose all MoE
-        # experts. Release the original FP32 allocation before that phase.
-        del weights, merged, tensor, state
-        import gc
-
-        gc.collect()
-        result = run_request(
-            base=base,
-            out=out,
-            ckpt_dir=temporary,
-            min_tensors=1,
-            expect_tensors=expected_tensor_count,
-            verify=True,
-            output_dtype=output_dtype,
-            export_metadata=metadata,
-        )
     return result
 
 

@@ -315,6 +315,7 @@ def make_identity(
     unified_chat_template: bool = False,
     output_dtype: str | None = None,
     export_metadata: dict[str, Any] | None = None,
+    conversion: str = CONVERSION_VERSION,
 ) -> dict[str, Any]:
     """The fields a reuse (final output or ``<out>.tmp``) must reproduce exactly.
 
@@ -325,7 +326,7 @@ def make_identity(
     publication. Adapter exports use it for their original base, methods, targets, processor and media semantics.
     """
     identity = {
-        "conversion": CONVERSION_VERSION,
+        "conversion": conversion,
         "source_sha256": source["sha256"],
         "source_bytes": source["bytes"],
         "base_digest": base_id["digest"],
@@ -1118,6 +1119,7 @@ def run_request(
     lock_wait_seconds: float | None = None,
     output_dtype: str | None = None,
     export_metadata: dict[str, Any] | None = None,
+    tensor_source: Any | None = None,
 ) -> str:
     """Idempotent entry point: ``"skipped"`` (``out`` provably holds this request) or ``"built"``.
 
@@ -1134,8 +1136,21 @@ def run_request(
     when the archive fetch refuses (a foreign staged copy, an unprovable payload), ``FileNotFoundError`` / ``ValueError``
     for an invalid request (no ``model.pt`` in ``ckpt_dir``, a malformed ``artifact_uri``).
     """
-    if bool(ckpt_dir) == bool(artifact_uri):
-        raise ValueError("pass exactly one of ckpt_dir or artifact_uri")
+    if sum((bool(ckpt_dir), bool(artifact_uri), tensor_source is not None)) != 1:
+        raise ValueError("pass exactly one of ckpt_dir, artifact_uri or tensor_source")
+    if tensor_source is not None:
+        # This is the bounded adapter source, not a generic unverified callback.
+        from cosmos_framework.posttrain.checkpoint.conversion.adapter_stream import AdapterTensorSource
+
+        if not isinstance(tensor_source, AdapterTensorSource) or tensor_source.base != base:
+            raise ValueError("tensor_source must be an AdapterTensorSource for this base")
+        if not verify or output_dtype != tensor_source.output_dtype:
+            raise ValueError("adapter tensor sources require full verification and matching output_dtype")
+        destination = os.path.realpath(out)
+        for source_path in (base, tensor_source.adapter):
+            source_path = os.path.realpath(source_path)
+            if os.path.commonpath((destination, source_path)) in (destination, source_path):
+                raise ValueError("merged adapter output must not overlap its immutable base or portable source")
     if output_dtype not in (None, "float32", "bfloat16"):
         raise ValueError("explicit merged export output_dtype supports float32|bfloat16")
     if export_metadata is not None:
@@ -1148,6 +1163,8 @@ def run_request(
             export_metadata = json.loads(json.dumps(export_metadata, sort_keys=True, allow_nan=False))
         except (TypeError, ValueError) as error:
             raise ValueError("export_metadata must contain only finite JSON values") from error
+    if tensor_source is not None:
+        tensor_source.validate_metadata(export_metadata)
     if lock_wait_seconds is not None and not (math.isfinite(lock_wait_seconds) and lock_wait_seconds >= 0):
         raise ValueError(f"lock_wait_seconds must be a finite number >= 0, got {lock_wait_seconds!r}")
     deployment_precision = (export_metadata or {}).get("deployment_precision", {})
@@ -1174,9 +1191,15 @@ def run_request(
     # overlay then maps, which is the identity the decision, the source record and the marker use: the lock may wait up to
     # --lock-wait-seconds and the merge tool (tmp + os.replace over model.pt) is not excluded by it, so the path may change while
     # the request waits or while the overlay runs.
-    probe_before = probe_local_source(ckpt_dir) if ckpt_dir else probe_archived_source(str(artifact_uri), credentials)
+    probe_before = (
+        tensor_source.probe
+        if tensor_source is not None
+        else probe_local_source(ckpt_dir)
+        if ckpt_dir
+        else probe_archived_source(str(artifact_uri), credentials)
+    )
     want = {
-        "conversion": CONVERSION_VERSION,
+        "conversion": tensor_source.conversion if tensor_source is not None else CONVERSION_VERSION,
         "base_digest": base_id["digest"],
         "base_path": base_id["path"],
         "unified_chat_template": unified_chat_template,
@@ -1185,7 +1208,7 @@ def run_request(
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with (
-        output_lock(out, source=ckpt_dir or artifact_uri, wait_seconds=lock_wait_seconds),
+        output_lock(out, source=ckpt_dir or artifact_uri or tensor_source.adapter, wait_seconds=lock_wait_seconds),
         contextlib.ExitStack() as held,
     ):
         # The identity of record is read here, under the lock. A local model.pt is OPENED ONCE (closed when
@@ -1194,7 +1217,9 @@ def run_request(
         # hashed the same way after the fetch and must match the manifest identity.
         payload: BinaryIO | None = None
         opened: os.stat_result | None = None
-        if ckpt_dir:
+        if tensor_source is not None:
+            probe = tensor_source.open(held)
+        elif ckpt_dir:
             payload = held.enter_context(open(os.path.join(ckpt_dir, PAYLOAD), "rb"))
             probe, opened = probe_opened_source(payload, os.path.join(ckpt_dir, PAYLOAD))
         else:
@@ -1209,11 +1234,33 @@ def run_request(
         # per-output lock, so decision and publication happen in one lock hold; a materializer that paused before the lock
         # while another one published a different source now sees that export's marker and is refused without --force.
         status, why = marker_status(out, want, probe)
+        if tensor_source is not None and status == "mismatch" and not force:
+            # Only a completed legacy output may be reused across source
+            # formats. Never reinterpret legacy staging identities. Every tensor
+            # is verified below; the old marker/payload digest stays untouched.
+            try:
+                legacy = _load_json(os.path.join(out, MATERIALIZED_MARKER))
+                old = legacy["identity"]
+                if (
+                    legacy.get("protocol") == MARKER_PROTOCOL
+                    and legacy.get("identity_digest") == identity_digest(old)
+                    and old.get("conversion") == CONVERSION_VERSION
+                ):
+                    status, why = marker_status(
+                        out,
+                        {**want, "conversion": CONVERSION_VERSION},
+                        {"sha256": old["source_sha256"], "bytes": old["source_bytes"]},
+                    )
+                    why = "legacy model.pt export; full tensor verification required: " + why
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         if status == "match" and not force:
             report = verify_index(out, expect_tensors=expect_tensors, min_tensors=min_tensors)
             report.update(verify_sidecars(out, base, unified_chat_template=unified_chat_template))
             if output_dtype is not None:
                 report.update(hf.verify_export_dtype(out, base, output_dtype, **profile_kwargs))
+            if tensor_source is not None:
+                report.update(tensor_source.verify(out, unified_chat_template=unified_chat_template))
             _log(
                 f"already materialized: {out}: {why}; {report['n_tensors']} tensors, {report['sidecars_identical']} sidecars re-checked"
             )
@@ -1253,37 +1300,42 @@ def run_request(
             _log(f"building beside the {replaces}; it is kept until the staged build is verified and swapped in")
 
         staged: StagedSource | None = None
-        if ckpt_dir:
-            source_dir = ckpt_dir
+        if tensor_source is not None:
+            source_dir, model_pt = "", tensor_source.adapter
+            source = dict(probe)
         else:
-            staged = fetch_archived_source(probe, stage_dir or out + ".stage", credentials)
-            source_dir = staged.artifact_dir
-        model_pt = os.path.join(source_dir, PAYLOAD)
-        if (
-            payload is None
-        ):  # an archived artifact: open the fetched copy once; its bytes must be the manifest's identity
-            payload = held.enter_context(open(model_pt, "rb"))
-            fetched, opened = probe_opened_source(payload, model_pt)
-            if (fetched["sha256"], fetched["bytes"]) != (probe["sha256"], probe["bytes"]):
-                raise ConversionError(
-                    f"the fetched copy {model_pt} (sha256 {fetched['sha256'][:12]}, {fetched['bytes']} bytes) is not the artifact the "
-                    f"manifest identifies (sha256 {probe['sha256'][:12]}, {probe['bytes']} bytes); not materialized"
-                )
-        assert opened is not None
-        source = {
-            "kind": probe["kind"],
-            "path": os.path.abspath(model_pt),
-            "sha256": probe["sha256"],
-            "bytes": probe["bytes"],
-            "artifact_uri": probe.get("artifact_uri"),
-            "manifest_sha256": probe.get("manifest_sha256"),
-        }
+            if ckpt_dir:
+                source_dir = ckpt_dir
+            else:
+                staged = fetch_archived_source(probe, stage_dir or out + ".stage", credentials)
+                source_dir = staged.artifact_dir
+            model_pt = os.path.join(source_dir, PAYLOAD)
+            if (
+                payload is None
+            ):  # an archived artifact: open the fetched copy once; its bytes must be the manifest's identity
+                payload = held.enter_context(open(model_pt, "rb"))
+                fetched, opened = probe_opened_source(payload, model_pt)
+                if (fetched["sha256"], fetched["bytes"]) != (probe["sha256"], probe["bytes"]):
+                    raise ConversionError(
+                        f"the fetched copy {model_pt} (sha256 {fetched['sha256'][:12]}, {fetched['bytes']} bytes) is not the artifact the "
+                        f"manifest identifies (sha256 {probe['sha256'][:12]}, {probe['bytes']} bytes); not materialized"
+                    )
+            assert opened is not None
+            source = {
+                "kind": probe["kind"],
+                "path": os.path.abspath(model_pt),
+                "sha256": probe["sha256"],
+                "bytes": probe["bytes"],
+                "artifact_uri": probe.get("artifact_uri"),
+                "manifest_sha256": probe.get("manifest_sha256"),
+            }
         identity = make_identity(
             source,
             base_id,
             unified_chat_template=unified_chat_template,
             output_dtype=output_dtype,
             export_metadata=export_metadata,
+            conversion=want["conversion"],
         )
         _log(f"identity {identity_digest(identity)[:12]}: {_short(identity)}")
         tmp_out = out + STAGING_SUFFIX
@@ -1346,12 +1398,18 @@ def run_request(
                     _log(f"staging dir {tmp_out} not reusable ({why}); rebuilding")
                     shutil.rmtree(tmp_out)
                 stage = "overlay"
-                _log(
-                    f"materialize {model_pt} ({probe['bytes'] / 2**30:.1f} GiB, inode {opened.st_ino}) onto {base} -> {tmp_out}"
-                )
-                hf.overlay_consolidated_onto_hf(source_dir, base, tmp_out, payload=payload)
-                stage = "source identity after the overlay"
-                _refuse_if_opened_inode_changed(payload, opened, model_pt, probe)
+                if tensor_source is not None:
+                    _log(f"stream merged adapter tensors from {base} -> {tmp_out}")
+                    tensor_source.build(tmp_out)
+                    stage = "source identity after serialization"
+                    tensor_source.assert_unchanged()
+                else:
+                    _log(
+                        f"materialize {model_pt} ({probe['bytes'] / 2**30:.1f} GiB, inode {opened.st_ino}) onto {base} -> {tmp_out}"
+                    )
+                    hf.overlay_consolidated_onto_hf(source_dir, base, tmp_out, payload=payload)
+                    stage = "source identity after the overlay"
+                    _refuse_if_opened_inode_changed(payload, opened, model_pt, probe)
                 transformers = sys.modules.get("transformers")
                 atomic_write_json(
                     os.path.join(tmp_out, SOURCE_STAMP),
@@ -1412,11 +1470,14 @@ def run_request(
             report["verify"]["torch"] = verify
             if verify:
                 stage = "verification (torch)"
-                report["verify"].update(
-                    verify_with_torch(
-                        tmp_out, base, model_pt, unified_chat_template=unified_chat_template, payload=payload
+                if tensor_source is not None:
+                    report["verify"].update(tensor_source.verify(tmp_out, unified_chat_template=unified_chat_template))
+                else:
+                    report["verify"].update(
+                        verify_with_torch(
+                            tmp_out, base, model_pt, unified_chat_template=unified_chat_template, payload=payload
+                        )
                     )
-                )
             stage = "shard inventory"
             report["shards"] = shard_inventory(tmp_out)
             stage = "marker"
