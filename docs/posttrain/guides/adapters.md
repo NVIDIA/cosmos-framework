@@ -235,8 +235,15 @@ module execution, evaluation with no gradients/autocast, and the recorded librar
 versions. KV tensors are FP32. See the
 [deployment continuation](../adapter-deployment-continuation.md) for exact
 precision semantics, resource costs, paired results and reproduction commands.
+For newly trained v4 `merged_weight_bf16_v1` artifacts, the separate
+[canonical cache profiles](../adapter-cache-checkpoint-progress.md) qualify
+explicit Cosmos BF16 execution on the named Qwen3-VL-2B and Qwen3.5-0.8B
+mixed recipes. They retain BF16 activations/KV (Qwen3.5 recurrent state is FP32),
+require their declared loaders and have substantial Qwen3-VL long-prefill cost.
+They do not repair or relabel the legacy artifacts discussed here.
 Other families/physical formats remain refused. New mixed recipes and other
-checkpoints are not additional BF16 qualifications. The broader input and
+checkpoints outside those explicitly qualified profiles are not additional
+BF16 qualifications. The broader input and
 mixed-component checks in the effective-execution extension fail the unchanged
 numerical gates despite passing resource gates; the previous fixed-artifact
 results must not be generalized to them.

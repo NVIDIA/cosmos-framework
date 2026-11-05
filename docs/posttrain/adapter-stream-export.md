@@ -1,5 +1,10 @@
 # Adapter export memory and BF16 execution
 
+This is the preserved portable-export qualification. The subsequent
+[cache and checkpoint continuation](adapter-cache-checkpoint-progress.md)
+extends bounded extraction to training checkpoints and qualifies explicit
+inference arithmetic; it does not relabel the stock BF16 failures below.
+
 This continuation starts at `338971dcf8f0b02281f81df2546c9318a9053d6b`.
 The qualified versioned MoE PiSSA execution, physical 2×2 HSDP and full
 Alpamayo replay remain unchanged. Historical qualification remains 12 named
@@ -67,9 +72,10 @@ Its original marker and source digest are preserved. A v6 staging tree is not
 reinterpreted as a new-format staging tree; protection of the sole complete
 marked copy remains in force.
 
-This change bounds the portable-adapter-to-HF materialization path. Extraction
-from a full consolidated/DCP training checkpoint and physical model-owned
-exporters retain their existing memory behavior.
+This change bounds the portable-adapter-to-HF materialization path. At this
+revision, extraction from a full consolidated/DCP training checkpoint and
+physical model-owned exporters retained their existing memory behavior. The
+later checkpoint extension is linked above; physical exporters remain separate.
 
 ## Precision limits
 

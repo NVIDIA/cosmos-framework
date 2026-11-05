@@ -11,6 +11,12 @@ merger and vision selection; its qualification matrix is separate from full-para
 Ray execution, sequence packing and MTP training are not supported.
 There is no rollout engine, reference model or reward function.
 
+For the qualified HF Qwen3-VL rounded-weight adapter recipe, see the
+[matched execution comparison](../adapter-cache-checkpoint-progress.md).
+It distinguishes the new artifact contract, an explicit factorized control,
+selective checkpoint export and optional Cosmos BF16 cache execution. Native
+and HF model paths retain their separate qualification scopes.
+
 Physical-action adapter SFT also uses this entry point with `rl.task="flow_bc"`.
 The [π0.5, Alpamayo and GR00T recipes](flow-adapters.md) supply model-owned action packers
 and differentiable forwards. They use the Transformers 4.57.6 robotics runtime;
@@ -22,11 +28,14 @@ SFT opts into Transformers 5.8.1; existing RL/GR00T defaults stay on 4.57.6. The
 supports Qwen text models, dense Qwen3.5/3.8 multimodal models and the Qwen3-VL / Qwen3-VL-MoE
 families (all three ship `Qwen3VLProcessor`). A "seat" is the model construction path the SFT
 objective sits on. Qwen3.5/3.8 sits on the HF backend (`model_backend='hf'`,
-`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the native policy builder
+`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE have a native policy builder
 (`model_backend='i4'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
 build_qwen3_vl_native_policy, ...)`, see [the native recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3_vl_moe_native.py)):
 the HF backend refuses MoE VLMs because the general weight loader has no fused-expert handling and
 Transformers 5 stores the MoE expert tensors transposed relative to a Transformers 4 checkpoint.
+Dense Qwen3-VL also has an HF adapter path: the explicitly versioned rounded-weight
+and matched factorized recipes above use `HFModel`. Their qualification is separate
+from the native recipes and does not admit HF MoE loading.
 For full-parameter training on the native seat the parameters are stored in bfloat16 (the MoE expert kernel requires it), so the
 recipe uses `attn_impl='sdpa'` and `OptimizerConfig(name='fusedadam')` (apex fp32 master weights and
 moments inside the optimizer); `validate_config` refuses `adamw` there because its bfloat16 moments

@@ -1,6 +1,11 @@
 # Versioned rounded-weight BF16 adapter execution
 
-Status: this opt-in new-artifact execution was approved on 2026-11-05 and is
+This records the original new-artifact qualification. The subsequent
+[canonical cache profiles](adapter-cache-checkpoint-progress.md) address cache
+consistency with explicit Cosmos loader activation. Those custom profiles do
+not change the original stock-execution failures or the historical results here.
+
+Status at `df334fc`: this opt-in new-artifact execution was approved on 2026-11-05 and is
 implemented. Real GPU training, exact resume, portable warm start/reload, both
 precision-specific stock exports and resource gates pass for the three profiles
 below. **Broad BF16 deployment qualification is incomplete:** stock cached/full

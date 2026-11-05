@@ -9,6 +9,10 @@ training runs or changing the historical fixed-profile counts.
 The [effective-execution extension](adapter-effective-execution.md) separately records
 versioned dense/stock-compatible PiSSA, physical HSDP/full replay, recurrent cache
 ownership and broader BF16 failures. Historical counts and legacy artifacts stay unchanged.
+The [cache and checkpoint continuation](adapter-cache-checkpoint-progress.md)
+records selective training-checkpoint export, explicit BF16 cache profiles and
+the matched full-WTS execution comparison. Its results have separate revision
+and runtime provenance.
 
 Work branch: `feat/posttrain-family-adapters`. This extends the original Cosmos3
 implementation; [PR #342](https://github.com/NVIDIA/cosmos-framework/pull/342)
