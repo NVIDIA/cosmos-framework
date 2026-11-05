@@ -1,6 +1,6 @@
 # Cosmos3 Generator Action
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
 and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
 
 Cosmos3-Nano action-generation supports three distinct tasks:
