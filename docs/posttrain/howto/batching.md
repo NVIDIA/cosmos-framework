@@ -376,8 +376,6 @@ are what surface one that does not. The knob is inert under disaggregated placem
    not: `n_mini > 1` reaches the identical "N unconstrained steps on one batch" state, was never
    guarded, and destroyed a real run before the ahead pass landed. Both doors, one requirement.
 
-*(Both are tracked in the design spec's §3.7 and §6.)* <!-- rumdl-disable-line MD036 -->
-
 ---
 
 ## Reference

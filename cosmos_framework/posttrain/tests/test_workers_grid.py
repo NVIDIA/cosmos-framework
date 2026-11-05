@@ -586,7 +586,7 @@ def test_grid_scatter_distributes_per_cell():
 @pytest.mark.CPU
 def test_grid_peer_wg_client_identity_alignment():
     """Passing a peer ``WorkerGroup`` as a method arg injects a ``PeerClient`` bound to
-    the dp-aligned producer cell: consumer cell r reaches producer cell r (§1.2 (b))."""
+    the dp-aligned producer cell: consumer cell r reaches producer cell r."""
     from cosmos_framework.posttrain.control.placement import ActorGroup, DeviceGroup, bind_device_groups
     from cosmos_framework.posttrain.roles.core import factory as roles
 
@@ -626,7 +626,7 @@ def test_grid_peer_wg_client_identity_alignment():
 def test_grid_driver_dispatch_shape_scatter_peer_and_as_completed():
     """The eval driver's exact dispatch on toy bodies: ``sim.run(scatter(bins),
     policy=policy_wg)`` — each sim cell gets its bin AND a peer client to policy cell r —
-    drained via ``Handle.as_completed()`` (§2.4/§1.2 (b))."""
+    drained via ``Handle.as_completed()``."""
     from cosmos_framework.posttrain.control.placement import ActorGroup, DeviceGroup, bind_device_groups
     from cosmos_framework.posttrain.roles.core import factory as roles
 
@@ -694,7 +694,7 @@ def test_handle_as_completed_surfaces_per_cell_error():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grid_hosts_and_gpus_introspection():
-    """Placement introspection is read from the backend, not from role bodies (§4.1)."""
+    """Placement introspection is read from the backend, not from role bodies."""
     ray.init(ignore_reinit_error=True, num_cpus=3, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
         grid = spawn_grid(

@@ -646,7 +646,7 @@ def make_direct_objective(
 ) -> Objective:
     """The differentiable OPD objective: minimize the teacher/student divergence directly.
 
-    Keyword knobs rather than a config object, deliberately. `OPDConfig` (design §4) is a run-level
+    Keyword knobs rather than a config object, deliberately. `OPDConfig` is a run-level
     config that also owns the teacher, the data source and the entrypoint wiring; binding this
     factory to it now would couple the objective to a type that does not exist yet. The entrypoint
     passes the fields through when it lands, and the tests construct it directly meanwhile.

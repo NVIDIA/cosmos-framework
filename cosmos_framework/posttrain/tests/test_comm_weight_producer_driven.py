@@ -342,7 +342,7 @@ def test_actor_fanout_failure_marks_no_target_ready() -> None:
 
 
 def test_rollout_mark_weight_version_ready_raises_without_backend():
-    # design §5 symmetric fail-loud: a backendless rollout silently drops every pushed bucket in
+    # Symmetric fail-loud: a backendless rollout silently drops every pushed bucket in
     # apply_bucket, so it must REFUSE to mark a fresh version ready (mirrors pull's unsynced-model guard).
     pytest.importorskip("torch")
     import torch.nn as nn

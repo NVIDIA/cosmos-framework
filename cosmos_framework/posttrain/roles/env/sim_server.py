@@ -366,7 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[sim] fault injector: disarmed (armed check, not silence)", flush=True)
 
     # THE EXECUTION-ENVIRONMENT RECEIPT. This process is the SLOW SIDE of the ~1.8x attach
-    # regression (SPEC 0.43), and 94-99% of the extra wall clock is inside its own stepping
+    # regression, and 94-99% of the extra wall clock is inside its own stepping
     # loop -- not boot, not bind, not scene load, and not the policy, whose diffusion sampler
     # matches across arms to 0.1-0.3%. The per-step code path is byte-identical in both modes
     # (`self._attach` is read at eight sites in `sim_gateway.py`, none of them in the hot loop),

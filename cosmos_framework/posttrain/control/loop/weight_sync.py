@@ -153,7 +153,7 @@ def weight_sync(
     dispatches on the bound mover — STAGED (Copy/IPC/NIXL) per-bucket push plus unequal-pool routing,
     SharedMover/no-backend byte-free confirmation — and works for plain bodies (returns None), the
     local backend (Handles, unwrapped), and the Ray grid (CollectiveHandle). The drain lives HERE, not
-    in user code: it is REQUIRED on the grid (peer design §1.7 — _Host.invoke blocks the actor while
+    in user code: it is REQUIRED on the grid (_Host.invoke blocks the actor while
     resolving nested-ref args, so an undrained follow-up task at the policy WG can deadlock the push)
     and a no-op elsewhere.
 

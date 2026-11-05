@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Shared root-config machinery for the posttrain entrypoints (DESIGN: config system).
+"""Shared root-config machinery for the posttrain entrypoints.
 
 The registration + base that the per-algorithm roots build on. `PosttrainConfig` subclasses the
 cosmos3 root `Config` and adds the typed posttrain fields (`rl`/`grid` and model backends);

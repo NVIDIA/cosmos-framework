@@ -1,6 +1,5 @@
 {
   "component": "WSM4 reference renderer",
-  "source_commit": "add7252561b68af9e0de6d3876d8b6181aab25f5",
   "files": {
     ".gitignore": {
       "source_sha256": "89a9c4505e11a740c9dabd1ece37411a358e451552f5ce72dec63d25cf387b72",

@@ -64,7 +64,7 @@ if _OK:  # import only when the stack exists, so collection succeeds without ray
             leaves this test GREEN. In a single-actor sequential run the previous
             `MoveHandle` is a temporary already dropped before the next `stage`, so the
             write-after-read window never opens. This therefore demonstrates correct reuse;
-            it does NOT falsify the §4 invariant.
+            it does NOT falsify the ordering invariant.
 
             What actually guards that invariant is
             `test_workers_nixl.py::test_stage_waits_before_reassigning_views`, which is
@@ -86,7 +86,7 @@ if _OK:  # import only when the stack exists, so collection succeeds without ray
 
         def one_descriptor_per_bucket(self):
             """Publishing is per-descriptor-priced, so a bucket must travel as ONE tensor
-            however many parameters it holds (design §3.2)."""
+            however many parameters it holds."""
             from cosmos_framework.posttrain.comm.transfer.flat import flat_plan
             from cosmos_framework.posttrain.workers.nixl import NixlWeightMover
 

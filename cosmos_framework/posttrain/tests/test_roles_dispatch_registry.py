@@ -52,7 +52,7 @@ def test_lookup_hit_returns_registered_sharded_spec():
 
 
 def test_lookup_hit_returns_registered_generate_split_spec():
-    # Task C2: generate/prompts is now registered (was None pre-C2, when split_prompts didn't exist).
+    # generate/prompts is now registered (was None before split_prompts existed).
     spec = lookup("rollout", "generate", "prompts")
     assert isinstance(spec, Sharded)
     assert spec.split == "cosmos_framework.posttrain.roles.env.dataset:split_prompts"

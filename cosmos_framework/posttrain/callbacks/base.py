@@ -6,8 +6,8 @@ Callbacks hang on the control loop's event points and declare a *kind*: **observ
 (async-safe, off-hot-path, must not block / mutate training) or **gate** (sync,
 on-path, rare). v0 implements the observer slice for the single-process loop: the
 `DiffusionTrainer` invokes the registered callbacks synchronously at the event points
-it owns (`on_init`, `on_train_step`, `on_checkpoint`). This is the §2.6 subscription
-seam; the full async control-plane event bus (§11.2, designed-not-built) can later
+it owns (`on_init`, `on_train_step`, `on_checkpoint`). This is the subscription
+seam; the full async control-plane event bus (designed-not-built) can later
 drive these same hooks without changing callback code.
 
 Distinct from the typed plugin points (reward / objective / dispatch / filter) — those
@@ -44,7 +44,7 @@ class CallbackList:
         for cb in self.callbacks:
             try:
                 getattr(cb, event)(*args)
-            except Exception as e:  # observers must never break the train loop (§2.6)
+            except Exception as e:  # observers must never break the train loop
                 logger.warning(f"callback {type(cb).__name__}.{event} raised (ignored): {e}")
 
     def on_init(self, trainer: Any) -> None:

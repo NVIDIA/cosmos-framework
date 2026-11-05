@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-r"""Qwen3-VL-8B-Instruct full-parameter SFT on RoboVQA, on one GPU, through the native-native policy builder.
+r"""Qwen3-VL-8B-Instruct full-parameter SFT on RoboVQA, on one GPU, through the native policy builder.
 
 A worked example with a measured before and after: one epoch over the RoboVQA training clips written by the
 ``prepare_robovqa.py`` script of the ``cosmos3-qwen3-vl-robovqa-sft`` skill, scored by the skill's ``eval_robovqa.py`` on

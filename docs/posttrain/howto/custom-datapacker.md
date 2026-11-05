@@ -325,7 +325,7 @@ re-tokenizes `obs` instead of using the stored ids would score a shifted prefix.
 should call `assert_no_special_tokens()` explicitly.
 
 Remedies if you hit it: use a no-BOS tokenizer (Qwen), or feed vLLM pre-tokenized prompts
-(specced, not built — see spec §9.6).
+(specced, not built).
 
 ## Troubleshooting
 

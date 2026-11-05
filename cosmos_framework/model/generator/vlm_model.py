@@ -195,8 +195,7 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
     raise NotImplementedError(
         f"VLMModel: backbone.pretrained_weights overlay not yet supported for "
         f"model_type={model_type!r}. Supported types: {sorted(_QWEN_VL_TYPES)}. "
-        f"Add a new entry in _get_overlay_config() when onboarding a new VLM family "
-        f"(see docs/superpowers/specs/2026-04-20-vlm-pretrain-weights-path-llm-design.md §7)."
+        f"Add a new entry in _get_overlay_config() when onboarding a new VLM family."
     )
 
 

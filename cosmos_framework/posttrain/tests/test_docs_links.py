@@ -22,8 +22,7 @@ Two link shapes are checked, because the sources write them differently:
   repository root. Legacy package-relative documentation paths resolve under docs/posttrain/.
 
 Only files tracked by git are scanned. Untracked local scratch notes may legitimately record
-historical paths, and planning artifacts under ``docs/superpowers/`` reference paths that are
-planned but not yet created.
+historical paths.
 """
 
 from __future__ import annotations
@@ -40,7 +39,6 @@ DOCS = REPO_ROOT / "docs" / "posttrain"
 _MD_LINK = re.compile(r"\]\(\s*([^)\s#]+)(?:#[^)\s]*)?\s*\)")
 _NOT_A_PATH = ("http://", "https://", "mailto:", "#")
 _PY_DOC_PATH = re.compile(r"(?<![\w/])((?:\.\./)*docs/[\w./-]+\.md)")
-_SKIP_SUBTREE = Path("docs") / "superpowers"
 # Any tracked text file may cite a document; a restructure breaks a shell script's reference exactly
 # as readily as a markdown link.
 _TEXT_SUFFIXES = {".md", ".py", ".sh", ".toml", ".yaml", ".yml", ".cfg", ".txt", ".json"}
@@ -62,7 +60,7 @@ def _tracked_files() -> list[Path]:
         check=True,
     ).stdout
     paths = [REPO_ROOT / name for name in listing.split("\0") if name]
-    return [p for p in paths if _SKIP_SUBTREE not in p.relative_to(REPO_ROOT).parents and _is_scannable(p)]
+    return [p for p in paths if _is_scannable(p)]
 
 
 def _is_scannable(path: Path) -> bool:

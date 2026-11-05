@@ -152,7 +152,7 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
     counted (a warning on the first drop and at every power of ten), never queued behind a slow
     observer; start/end pairs are dropped together (``LIFECYCLE_PAIRS``), never split.
 
-    Gates: ``on_app_start``, ``on_train_end`` and ``on_app_end`` are the §2.6 *gate* kind (sync,
+    Gates: ``on_app_start``, ``on_train_end`` and ``on_app_end`` are the *gate* kind (sync,
     on-path, rare). Each is stamped with the caller's clocks at the call (its emission time, like every
     other event, so OneLogger's finish times exclude the wait) and handed to the dispatcher as a
     non-droppable marker behind everything queued (:meth:`BoundedEventDispatcher.deliver_gate`); the
@@ -164,9 +164,9 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
     the worker and logs the drop total. ``on_app_start`` initialises the backends' singletons
     (OneLogger's global object) once, before the loop and before any worker exists, so it runs inline
     on the caller's thread and the entry and the tests read the result right after the call; the
-    precedent is §11.2: "The GRPO reward-boundary validator in §1.5 is deliberately synchronous and
+    precedent is the GRPO reward-boundary validator, which is deliberately synchronous and
     fail-closed; only its already-computed scalar report feeds the telemetry sinks. It is not an
-    off-hot-path observer." When the wait runs out (an observer parked inside a hook for longer than
+    off-hot-path observer. When the wait runs out (an observer parked inside a hook for longer than
     the bound), the caller returns with a warning naming the hook and the events queued ahead, and the
     gate stays queued: it is delivered, in order, when the observer returns, never forced onto the
     caller's thread while a hook is still running. ``on_app_end`` then bounds:meth:`shutdown` the
@@ -255,7 +255,7 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
         for observer in tuple(self._observers):
             try:
                 deliver_event(observer, event)
-            except Exception as e:  # observers must never break the control loop (§2.6)
+            except Exception as e:  # observers must never break the control loop
                 if event.name == "on_app_start" and getattr(observer, "fail_fast_start", False):
                     raise
                 logger.warning(f"lifecycle observer {type(observer).__name__}.{event.name} raised (ignored): {e}")
@@ -282,7 +282,7 @@ class ControllerLifecycleObservers(ControllerLifecycleObserver):
         self._dispatcher.deliver_gate(item, self.DRAIN_TIMEOUT_S)  # warns when the bound ran out
 
     def on_app_start(self) -> None:
-        """The §2.6 gate: the caller blocks until it is delivered (inline before any worker exists; behind the queue
+        """The gate: the caller blocks until it is delivered (inline before any worker exists; behind the queue
         otherwise)."""
         self._gate("on_app_start")
 

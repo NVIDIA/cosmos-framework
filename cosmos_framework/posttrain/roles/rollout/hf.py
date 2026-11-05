@@ -6,7 +6,7 @@
 into this PASSIVE receiver (producer-driven): `apply_bucket` loads each
 pushed bucket and the controller's prepare/commit barrier publishes the version. `apply_weights` is the KEPT
 consumer-pull surface (manual / NCCL rigs), NOT the loop entry, and a no-op only when trainer &
-rollout share one model instance. A real inference engine (SGLang/vLLM/TRT-LLM, #6) drops in as a
+rollout share one model instance. A real inference engine (SGLang/vLLM/TRT-LLM) drops in as a
 sibling variant.
 """
 

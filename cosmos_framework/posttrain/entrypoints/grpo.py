@@ -648,7 +648,7 @@ def build_trainer(
         opt,
         # DERIVED, not configured: GRPO retires `rl.grad_accum` (GRPOConfig rejects a non-default
         # value). The trainer's accumulation count IS the micro count, so its existing
-        # accumulate-then-step fires on the last micro call of each mini-batch (spec §5.2).
+        # accumulate-then-step fires on the last micro call of each mini-batch.
         grad_accum=rl.n_micro,
         # Bookkeeping only — the trainer never uses it, but the CHECKPOINT records the batching
         # shape it was written under, so a resume under a different n_mini fails loud instead of

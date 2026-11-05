@@ -328,8 +328,12 @@ GPUs.
 Set up the environment and start the server with the shared
 [TensorRT-LLM Reasoner setup](../README.md#tensorrt-llm-reasoner). It covers the
 prebuilt release container or a local source installation, Hugging Face
-authentication, and launch commands for **Cosmos3-Nano** on one GPU or
-**Cosmos3-Super** on four GPUs.
+authentication, and launch commands for **Cosmos3-Nano** or **Cosmos3-Edge**
+on one GPU, or **Cosmos3-Super** on four GPUs. Nano and Super use the pinned
+`release:1.3.0rc22` image. Edge requires TensorRT-LLM >= `v1.4.0rc2` and uses
+`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`. `v1.4.0rc1` does not include
+`Cosmos3EdgeForConditionalGeneration`. A source build at or after `39a44fab`
+is the fallback when that image is unavailable.
 
 The [`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) notebook
 publishes the selected server on host port **8001** and waits for `/health`
@@ -365,10 +369,16 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+For **Cosmos3-Edge**, the Cosmos Framework example asks for one sentence.
+Change the text to `Describe what is happening in this image in one sentence.`
+and set `max_tokens=1024` and `temperature=0`.
+
 ### Notebook walkthrough
 
-[`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) launches either
-**Cosmos3-Nano** or **Cosmos3-Super**, waits for the server to become healthy,
+[`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) launches
+**Cosmos3-Nano** or **Cosmos3-Super** from `release:1.3.0rc22`, or
+**Cosmos3-Edge** from `release:1.4.0rc2`.
+It waits for the server to become healthy
 and walks through image and video examples covering detailed captioning,
 temporal localization, embodied reasoning, common-sense reasoning, 2D
 grounding, describe-anything, action CoT trajectories, driving scenes,

@@ -137,7 +137,7 @@ class BaseDataPacker(ABC):
         self, completions: list, token_ids: list | None = None, logprobs: list | None = None, **kw
     ) -> list:
         # Optional output-shaping hook (token decode / logprob attach); default passthrough.
-        # NO external offload: posttrain's codec owns the metadata/bulk split (design §0).
+        # NO external offload: posttrain's codec owns the metadata/bulk split.
         return completions
 
     # --- policy (RL) side ---
@@ -257,7 +257,7 @@ class DataPacker(BaseDataPacker, ABC):
                 "packer tokenizer adds special tokens (add_special_tokens=True != False); the "
                 "vLLM+packer path scores completions under a different prompt prefix than vLLM "
                 "generated from. Use a no-BOS tokenizer (e.g. Qwen) or feed vLLM pre-tokenized "
-                "prompts (spec §9.6)."
+                "prompts."
             )
 
     def save_state(self, dest_path: str) -> None:
