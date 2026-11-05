@@ -1146,11 +1146,15 @@ def run_request(
             raise ValueError("tensor_source must be an AdapterTensorSource for this base")
         if not verify or output_dtype != tensor_source.output_dtype:
             raise ValueError("adapter tensor sources require full verification and matching output_dtype")
-        destination = os.path.realpath(out)
-        for source_path in (base, tensor_source.adapter):
-            source_path = os.path.realpath(source_path)
-            if os.path.commonpath((destination, source_path)) in (destination, source_path):
-                raise ValueError("merged adapter output must not overlap its immutable base or portable source")
+        destination_root = os.path.abspath(out.rstrip("/"))
+        for suffix in ("", STAGING_SUFFIX, PREVIOUS_SUFFIX, ".lock"):
+            destination = os.path.realpath(destination_root + suffix)
+            for source_path in (base, tensor_source.adapter):
+                source_path = os.path.realpath(source_path)
+                if os.path.commonpath((destination, source_path)) in (destination, source_path):
+                    raise ValueError(
+                        "merged adapter output and transaction paths must not overlap its immutable base or portable source"
+                    )
     if output_dtype not in (None, "float32", "bfloat16"):
         raise ValueError("explicit merged export output_dtype supports float32|bfloat16")
     if export_metadata is not None:

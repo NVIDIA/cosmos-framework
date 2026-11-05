@@ -105,6 +105,18 @@ def test_output_cannot_replace_or_modify_its_sources(tmp_path, destination):
         run(source, tmp_path / destination)
 
 
+@pytest.mark.parametrize("suffix", [".tmp", ".previous", ".lock"])
+def test_transaction_paths_cannot_consume_a_source(tmp_path, suffix):
+    base, _, source, _ = case(tmp_path)
+    moved = tmp_path / ("merged" + suffix)
+    os.rename(base, moved)
+    source.base = str(moved)
+    marker = (moved / "config.json").read_bytes()
+    with pytest.raises(ValueError, match="transaction paths must not overlap"):
+        run(source, tmp_path / "merged")
+    assert (moved / "config.json").read_bytes() == marker
+
+
 @pytest.mark.parametrize("method", ["mixed", "lora", "dora", "pissa"])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_stream_exactly_matches_full_state_math_and_shard_bound(tmp_path, method, dtype):

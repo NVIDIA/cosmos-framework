@@ -10,15 +10,12 @@ its locking, staged verification, sidecars and atomic publication.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import tempfile
-from pathlib import Path
 
 import torch
 
 from cosmos_framework.posttrain.checkpoint.adapters import (
-    MANIFEST,
     adapter_configuration,
     checkpoint_adapter_state,
     read_adapter_snapshot,
@@ -26,41 +23,9 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     state_spec,
     write_adapter_artifact,
 )
-
-
-def merged_export_metadata(
-    adapter: str,
-    identity: dict,
-    *,
-    artifact_record: dict | None = None,
-    output_dtype: str = "float32",
-    execution_profile: str | None = None,
-) -> dict:
-    """Retain the validated portable contract in the materializer's commit marker."""
-    # Export uses its captured record, so later path replacement cannot label
-    # already consumed tensors with another run's weight digest. Validation of
-    # an existing export still compares against the currently supplied artifact.
-    manifest = artifact_record if artifact_record is not None else json.loads((Path(adapter) / MANIFEST).read_text())
-    if manifest.get("kind") != "portable_adapter" or manifest.get("identity") != identity:
-        raise ValueError("portable adapter manifest changed during export; use an immutable artifact")
-    result = {
-        "format": "cosmos-merged-adapter-v1",
-        "adapter_identity": identity,
-        "adapter_weights_sha256": manifest["weights_sha256"],
-    }
-    if output_dtype == "bfloat16":
-        result["deployment_precision"] = {
-            "dtype": "bfloat16",
-            "weight_conversion": "float32_merge_then_bfloat16",
-            "equivalence": "approximate_requires_task_qualification",
-        }
-    elif output_dtype != "float32":
-        raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
-    if execution_profile is not None:
-        if execution_profile != "qwen3_vl_bf16_residual_fp32_v1" or output_dtype != "bfloat16":
-            raise ValueError("execution_profile requires qwen3_vl_bf16_residual_fp32_v1 and bfloat16 output")
-        result["deployment_precision"]["execution_profile"] = execution_profile
-    return result
+from cosmos_framework.posttrain.checkpoint.adapters import (
+    merged_export_metadata as merged_export_metadata,
+)
 
 
 def validate_merged_export_metadata(

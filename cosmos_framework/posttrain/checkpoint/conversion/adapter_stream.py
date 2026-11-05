@@ -23,7 +23,7 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-from cosmos_framework.posttrain.checkpoint.adapters import snapshot_identity
+from cosmos_framework.posttrain.checkpoint.adapters import merged_export_metadata, snapshot_identity
 from cosmos_framework.posttrain.checkpoint.conversion import hf
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig
@@ -131,8 +131,6 @@ class AdapterTensorSource(Mapping[str, torch.Tensor]):
     def validate_metadata(self, metadata: dict | None) -> None:
         # Reuse the same semantic record as the public adapter exporter, using
         # the captured record (never reread a possibly replaced adapter path).
-        from cosmos_framework.posttrain.checkpoint.tools.adapters import merged_export_metadata
-
         precision = (metadata or {}).get("deployment_precision", {})
         profile = precision.get("execution_profile") if isinstance(precision, dict) else None
         expected = merged_export_metadata(
