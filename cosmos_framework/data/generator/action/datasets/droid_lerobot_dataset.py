@@ -191,9 +191,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         if self._use_filter_dict:
             assert filter_dict_path is not None  # Validated before dataset initialization.
             with open(filter_dict_path) as f:
-                self._filter_dict = normalize_episode_filter_keys(
-                    json.load(f), source_prefix=filter_dict_source_prefix
-                )
+                self._filter_dict = normalize_episode_filter_keys(json.load(f), source_prefix=filter_dict_source_prefix)
 
         self._image_augmentor: T.Compose | None = None
         self._color_augmentor: T.ColorJitter | None = None
