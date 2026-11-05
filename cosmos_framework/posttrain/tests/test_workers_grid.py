@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""dp_aligned mapping + GridBackend mesh fan-out (DESIGN §1.1/§2.4)."""
+"""dp_aligned mapping + GridBackend mesh fan-out."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for LLMTrainer (DESIGN §6, model/algorithm decoupled). Tiny random GPT2 on CPU.
+"""Tests for LLMTrainer. Tiny random GPT2 on CPU.
 
 Verifies the engine trainer is objective-driven: it drives the GRPO objective
 (`algorithm.grpo.make_objective`) — `train(batch)` returns metrics + the optimizer steps.
@@ -63,7 +63,7 @@ def _with_advantages(trajs, unbiased: bool = False):
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_concat_batches_flattens_trajectory_lists_in_order():
-    # The ("trainer","train","batch") reduce adaptation (DESIGN §2.3): n producer units, each a
+    # The ("trainer","train","batch") reduce adaptation: n producer units, each a
     # list of Trajectory, concatenate into ONE batch the body consumes — order-preserving so the
     # first producer unit's trajectories lead.
     from cosmos_framework.posttrain.roles.trainer.llm import concat_batches

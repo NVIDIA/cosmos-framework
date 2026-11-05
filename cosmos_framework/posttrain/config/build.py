@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Shared construction primitives (DESIGN: config system).
+"""Shared construction primitives.
 
 `config/rl.py` is the typed *schema*; this module holds the **shared, algorithm-agnostic**
 building blocks that entries compose:
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from cosmos_framework.posttrain.config.model import (
     HF,
-    I4,
+    NATIVE,
     QWEN3_VL,
     DataPackerConfig,
     HFModelConfig,
@@ -105,7 +105,7 @@ def _resolve_hf_config_with_local_retry(name_or_path: str, *, trust_remote_code:
 
 
 def normalize_model_backend(backend: str) -> str:
-    """Normalize a public backend name to the generic ``i4 | hf`` online split.
+    """Normalize a public backend name to the generic ``native | hf`` online split.
 
     ``qwen3_vl`` is retained only as a compatibility alias for existing OPD configs. Concrete
     model-family selection belongs to ``config.model``'s native build spec, never to an entrypoint.
@@ -114,15 +114,15 @@ def normalize_model_backend(backend: str) -> str:
         backend: Raw root ``model_backend`` value.
 
     Returns:
-        ``"i4"`` or ``"hf"``.
+        ``"native"`` or ``"hf"``.
 
     Raises:
         ValueError: The backend is unknown.
     """
-    normalized = I4 if backend == QWEN3_VL else backend
-    if normalized not in (I4, HF):
+    normalized = NATIVE if backend == QWEN3_VL else backend
+    if normalized not in (NATIVE, HF):
         raise ValueError(
-            f"unknown model_backend {backend!r} (expected {I4!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
+            f"unknown model_backend {backend!r} (expected {NATIVE!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
         )
     return normalized
 
@@ -181,9 +181,9 @@ def native_policy_build_spec(config: Any) -> Any | None:
     """Return the generic native-policy spec selected by ``config``, if one is present.
 
     The legacy ``model_backend='qwen3_vl'`` + ``model_qwen3_vl`` pair is projected onto the generic
-    seam here. This is the only compatibility boundary; callers and entrypoints see ``i4``.
+    seam here. This is the only compatibility boundary; callers and entrypoints see ``native``.
     """
-    raw_backend = str(getattr(config, "model_backend", I4))
+    raw_backend = str(getattr(config, "model_backend", NATIVE))
     if raw_backend == QWEN3_VL:
         model_config = getattr(config, "model_qwen3_vl", None)
         if model_config is None:
@@ -196,7 +196,7 @@ def native_policy_build_spec(config: Any) -> Any | None:
             parallelism=NativePolicyParallelismConfig(dp_replicate=1, dp_shard=-1),
             requires_collated_policy_forward=True,
         )
-    if normalize_model_backend(raw_backend) != I4:
+    if normalize_model_backend(raw_backend) != NATIVE:
         return None
     model = getattr(config, "model", None)
     if model is None:
@@ -226,7 +226,7 @@ def native_policy_build_spec(config: Any) -> Any | None:
 
 def select_policy_backend(config: Any) -> PolicyBackendSelection:
     """Resolve backend, identity, model config, and native spec exactly once."""
-    backend = normalize_model_backend(str(getattr(config, "model_backend", I4)))
+    backend = normalize_model_backend(str(getattr(config, "model_backend", NATIVE)))
     if backend == HF:
         model_config = getattr(config, "model_hf", None)
         model_id = getattr(model_config, "name_or_path", "") or getattr(
@@ -266,7 +266,7 @@ def build_lr_scheduler(optimizer: Any, opt_cfg: OptimizerConfig):
 
     The two ARE reconcilable, which the parity doc previously denied: setting cosmos-rl's
     `optm_warmup_start_factor = 1/optm_warmup_steps` makes its factor `1/w + k/w == (k+1)/w`,
-    identical to this one at every step. Verified for w=20. See docs/design/grpo-cosmos-rl-parity.md.
+    identical to this one at every step.
 
     Args:
         optimizer: the optimizer whose param-group LRs are scaled.
@@ -937,7 +937,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
     else:
         model = getattr(config, "model")
         if model is None:
-            raise AttributeError("model_backend='i4' requires config.model before resolving policy parallelism")
+            raise AttributeError("model_backend='native' requires config.model before resolving policy parallelism")
         parallelism = getattr(getattr(model, "config"), "parallelism")
         for field_name in ("context_parallel_shard_degree", "cfg_parallel_shard_degree"):
             degree = int(getattr(parallelism, field_name, 1))
@@ -959,7 +959,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
     # A legacy native tree must consume the same normalized factorization the trainer WG carries.
     # Generic native and HF specs retain their inference sentinel so this helper remains repeatable
     # when a caller validates the same config against another policy width.
-    if backend == I4 and native_spec is None:
+    if backend == NATIVE and native_spec is None:
         parallelism.data_parallel_replicate_degree = replicate
         parallelism.data_parallel_shard_degree = shard
     return replicate, shard
@@ -1053,7 +1053,7 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
     spec = select_policy_backend(config).native_spec
     if spec is None:
         raise TypeError(
-            "online model_backend='i4' requires config.model=NativePolicyBuildSpec; "
+            "online model_backend='native' requires config.model=NativePolicyBuildSpec; "
             "legacy config.model trees remain supported by build_backbone for non-online callers"
         )
     builder_path = str(getattr(spec, builder_field, "") or "")
@@ -1069,7 +1069,7 @@ def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
     spec = select_policy_backend(config).native_spec
     if spec is None:
         raise TypeError(
-            "online model_backend='i4' requires config.model=NativePolicyBuildSpec; "
+            "online model_backend='native' requires config.model=NativePolicyBuildSpec; "
             "legacy config.model trees remain supported by build_backbone for non-online callers"
         )
     policy_world = int(pdims.world_size) if pdims is not None else world_size_or_1()
@@ -1097,7 +1097,7 @@ def build_native_value_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
 def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
     """Backend dispatch to a legacy native model, generic native policy, or HF model.
 
-    A legacy ``model_backend='i4'`` config still instantiates ``config.model`` and moves it to CUDA.
+    A legacy ``model_backend='native'`` config still instantiates ``config.model`` and moves it to CUDA.
     When ``config.model`` is a :class:`NativePolicyBuildSpec`, its dotted builder owns construction
     and receives the resolved policy mesh. ``qwen3_vl`` is normalized to that same generic seam.
 
@@ -1113,7 +1113,7 @@ def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
 
     selection = select_policy_backend(config)
     backend = selection.backend
-    if backend == I4:
+    if backend == NATIVE:
         if selection.native_spec is None:
             return instantiate(config.model).cuda()
         # Native construction owns its mesh resolution. Keeping that in one place avoids validating
@@ -1521,7 +1521,7 @@ def build_objective(
     objective wrapper that used to divide the dp axis here when `_dp_coords(pdims)` reported an
     extent > 1). Partitioning the dp axis is now the ingress predicate's job alone
     (`workers/dispatch.py::select_chunk`, applied by the WorkerGroup `train` edge when its
-    `mini`/`micro`/`n_mini`/`n_micro` control kwargs are passed — spec 2026-08-12 §3.4); wrapping the
+    `mini`/`micro`/`n_mini`/`n_micro` control kwargs are passed — the implementation); wrapping the
     objective here too would divide the same axis twice, training on `1/dp_world**2` of the batch
     while every metric reported the full count. `pdims` is kept as a parameter (rather than dropped)
     so existing callers that resolve and pass it need no signature change, and because a future
@@ -1839,7 +1839,7 @@ def _validate_native_policy_precision(rl: Any, model_config: Any) -> None:
     from types import SimpleNamespace
 
     precision = resolve_precision(
-        SimpleNamespace(rl=rl, model_config=model_config, model_backend=I4),
+        SimpleNamespace(rl=rl, model_config=model_config, model_backend=NATIVE),
     )
     mismatches: list[str] = []
     if native_dtype is not None:
@@ -1855,7 +1855,7 @@ def _validate_native_policy_precision(rl: Any, model_config: Any) -> None:
         )
     if mismatches:
         raise ValueError(
-            "model_backend='i4' cannot apply the resolved precision: "
+            "model_backend='native' cannot apply the resolved precision: "
             + "; ".join(mismatches)
             + ". Align rl.*_dtype with config.model.model_config, or use model_backend='hf' when a "
             "storage/compute precision split is required."
@@ -1886,15 +1886,15 @@ def _validate_online_policy_identity(
         if policy_model_id is not None
         else ("" if model_config is None else getattr(model_config, "name_or_path", ""))
     )
-    if backend == I4 and not configured_policy_id:
-        raise ValueError("model_backend='i4' requires config.model.model_id for online training")
+    if backend == NATIVE and not configured_policy_id:
+        raise ValueError("model_backend='native' requires config.model.model_id for online training")
     policy_model_id = configured_policy_id or str(rollout.name_or_path)
     if policy_model_id != str(rollout.name_or_path):
         raise ValueError(
             f"{backend} policy and rollout must start from the same model/tokenizer artifact before weight sync, "
             f"got policy={policy_model_id!r} rollout={rollout.name_or_path!r}"
         )
-    if backend == I4:
+    if backend == NATIVE:
         if model_config is not None:
             _validate_native_policy_precision(rl, model_config)
     else:

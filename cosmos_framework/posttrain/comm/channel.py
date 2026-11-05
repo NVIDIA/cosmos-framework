@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Channel + transport (DESIGN §3.1-§3.3).
+"""Channel + transport.
 
 A channel connects two WG ports. Its semantics are `capacity / staleness / plane`;
 the transport backend is resolved by placement. v0: everything is in one process,
@@ -39,7 +39,7 @@ class Channel:
         self._q: collections.deque = collections.deque()
 
     def put(self, item: Any) -> None:
-        # DESIGN §3.5 contract: put transfers ownership. v0 in-process: just enqueue.
+        # Ownership contract: put transfers ownership. v0 in-process: just enqueue.
         self._q.append(item)
 
     def get(self) -> Any:
@@ -50,4 +50,4 @@ class Channel:
 
 
 # TODO(v1+): resolve_transport(payload, placement_relationship, plane, capability)
-#   → direct | UCX | NCCL ... (DESIGN §3.3). v0 always `direct`.
+#   → direct | UCX | NCCL.... v0 always `direct`.

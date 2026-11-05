@@ -1,9 +1,7 @@
 {
   "_generated_at": "2026-10-10T08:17:56.247549+00:00",
   "_manifest_version": 2,
-  "_source_commit": "cf3d9f42b2e1fdead7cc9dda7029644766aa1bb6",
   "_source_tree_sha256": "51bd9529ba04e0c7041b8f78d1495b49af22ee45a65c57cc56a79894b54815ba",
-  "_target_base_commit": "d4d5bef9eb52a2bfd63b5ad472a4b519d743fe9f",
   "destination_roots": [
     "cosmos_framework/posttrain",
     "docs/posttrain",

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Typed posttrain RL config schema (DESIGN: config system).
+"""Typed posttrain RL config schema.
 
 The **authoring + agent-facing schema** for the RL half of a posttrain experiment.
 Dependency-light (no torch / no model imports) so it can be read, type-checked, and
@@ -549,7 +549,7 @@ class RolloutConfig:
     max_model_len: int = 1024
     dtype: str = "bfloat16"
     # vLLM weight loader, auto|dummy. dummy skips the checkpoint read, and the rollout then refuses to
-    # sample until a weight publication commits (docs/howto/qwen-scaleout.md, "Startup weight I/O").
+    # sample until a weight publication commits.
     load_format: str = "auto"
     enforce_eager: bool = True
     # vLLM sleep level for the colocated hand-off cycle. Level 1 keeps a host copy of the
@@ -614,7 +614,7 @@ class RolloutConfig:
     # `from_pretrained` would silently adopt the checkpoint's generation_config.json instead). Passing
     # both explicitly makes the sampled distribution a property of this config alone.
     # Both mappings live together in `config/build.py` (`sampling_params` / `hf_sampling_params`) so
-    # the backends cannot drift; docs/design/grpo-cosmos-rl-parity.md §2.3 records what this measured.
+    # the backends share the same sampling convention.
     top_k: int = -1  # <= 0 disables top-k filtering (HF spells that None, vLLM -1)
     repetition_penalty: float = 1.0  # 1.0 == no penalty
 
@@ -727,7 +727,7 @@ class GridConfig:
     backend: str = "local"
     # GPU placement is independent of transport. ``colocated`` puts compatible ActorGroups in one
     # GPU DeviceGroup; ``disaggregated`` assigns them disjoint GPU DeviceGroups. Entry points build
-    # that structure first, then select a compatible weight mover (DESIGN §4.0).
+    # that structure first, then select a compatible weight mover.
     # Keep ``str`` for OmegaConf structured-config compatibility; __post_init__ narrows the value.
     gpu_placement: str = "colocated"
     # Fallback rollout execution-replica count. The fallback policy shape is `(1, ranks)` while the
@@ -1413,7 +1413,7 @@ class HFRunConfig(RunConfig):
     `fsdp_reduce_dtype`/`transfer_dtype`, and its `[policy]` model config carries no dtype at all
     (`policy/model/base.py` reads `config.train.master_dtype` at construction time).
 
-    NOT ON `RunConfig`, deliberately. DPO's backend is `i4` (`config_dpo.py`), whose model comes from
+    NOT ON `RunConfig`, deliberately. DPO's backend is `native` (`config_dpo.py`), whose model comes from
     the inherited LazyConfig tree and carries its own dtype — these fields would be silently ignored
     there, and "a knob the layers below refuse to honor is worse than no knob". Declaring them one
     level down makes `rl.master_dtype=...` on a DPO run an unknown-key error at config load, which

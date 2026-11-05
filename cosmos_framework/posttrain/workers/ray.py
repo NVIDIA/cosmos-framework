@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Ray backend — validates the Ray seam (DESIGN §1.1, §2.1, §4.2; §3).
+"""Ray backend — validates the Ray seam.
 
 Each ActorGroup bound by `bind_device_groups` becomes an R×K mesh with one `_Host` Ray actor per
 cell. WorkerGroups listed in the same ActorGroup share the body-construction closure inside each
@@ -9,7 +9,7 @@ cell's single OS process; different ActorGroups use different actor processes an
 physical GPUs through placement bundles. The Ray machinery — actor, `.remote()`, ObjectRef → Handle
 — is exercised with no change to the control loop.
 
-Each actor runs the metadata/bulk seam (DESIGN §3.2/§3.4):
+Each actor runs the metadata/bulk seam:
 - egress: `pack`s tensor-bearing Trajectory/ObsBundle results into its local BulkStore,
   returning only BulkRef metadata — so the controller round-trip carries metadata, never
   tensor bytes (#7).
@@ -124,8 +124,7 @@ def current_pdims():
 
 
 class PeerClient:
-    """Ray-free callable client bound to one producer cell's ``_Host`` actor (DESIGN
-    §1.2 body-mode (b): outbound-call). A role body that must call a *peer* WG inline
+    """Ray-free callable client bound to one producer cell's ``_Host`` actor (the contract body-mode (b): outbound-call). A role body that must call a *peer* WG inline
     during its own step (e.g. a simulator calling the policy per env step) receives one
     of these in place of the peer ``WorkerGroup`` arg — see ``GridBackend._align``.
 
@@ -295,7 +294,7 @@ class _PeerFuture:
 
 
 class RayStoreMover:
-    """Mover backend over Ray (DESIGN §3.2 backend / §3.3): local refs pull
+    """Mover backend over Ray: local refs pull
     zero-copy from the in-process store; remote refs pull one-sided from the producer
     actor, resolved through the `peers` connection registry. Implements the comm
     `Mover` protocol (duck-typed `fetch` + optional `prefetch`); kept here (not in
@@ -404,7 +403,7 @@ def _resolve_dispatched(
     """Actor-side execution of a `Dispatched` descriptor (Task A2/A4 build it; Task A5 runs
     it): resolve THIS arg's own producer refs, materialize bulk if the consuming WG needs it
     (readers threaded through so a fan-out edge's refcounted `BulkStore` entry pops only once
-    every reader has pulled — DESIGN §2.4), then apply the reduce/split/one adaptation so the
+    every reader has pulled — the contract), then apply the reduce/split/one adaptation so the
     body signature never sees a list/shard, only the adapted value.
 
     Module-level (not a `_Host` method) so it needs no actor/Ray runtime to test — a plain
@@ -415,7 +414,7 @@ def _resolve_dispatched(
     (built from `CollectiveHandle.ref_at`); tolerate already-resolved plain values too (the
     local/test path, and the CPU helper tests below never construct real Ray refs).
 
-    `d.on_metadata` (Task A6, DESIGN §2.3/§2.4 opt-in fast path): when True, `d.op == "split"`,
+    `d.on_metadata` (Task A6): when True, `d.op == "split"`,
     and this call actually materializes (the consuming WG computes on bulk), the split fn runs
     on the PACKED payload — the metadata skeleton, BulkRefs still attached — BEFORE any fetch,
     instead of after. Every BulkRef present in the full skeleton but absent from the kept slice
@@ -436,8 +435,7 @@ def _resolve_dispatched(
     materialize, behavior is byte-identical to Task A5 — no split-before-materialize, no
     release, `releaser` unused.
 
-    `d.select` (Task 7 plumbs it, Task 8 — this task — executes it; DESIGN §3.4, spec
-    2026-08-12 §3.4/§9.5): the mini/micro/dp ingress-selection predicate (`select_chunk`),
+    `d.select` (Task 7 plumbs it, Task 8 — this task — executes it): the mini/micro/dp ingress-selection predicate (`select_chunk`),
     carried alongside `d.select_kw` (the resolved `mini`/`micro`/`n_mini`/`n_micro` control
     kwargs). ORDER IS THE WHOLE POINT and mirrors the on_metadata branch's intent but is a
     DISTINCT mechanism (that branch requires `op == "split"`; this one applies to `one`/`reduce`,
@@ -617,7 +615,7 @@ class _HostImpl:
                 _warm = _torch.zeros(1, device="cuda" if _torch.cuda.is_available() else "cpu")  # [1]
                 dist.all_reduce(_warm)  # [1]
         # Construct ALL role bodies inside the actor (so trainer & rollout share one
-        # in-actor model). setup_fn() -> {wg_name: body}. DESIGN §4.2 tier-3 / §9.
+        # in-actor model). setup_fn() -> {wg_name: body}. the contract tier-3 / §9.
         # Publish the injected model dims to the module-global accessor for the
         # duration of the build so the model build (build_backbone -> current_pdims())
         # reads the live mesh WITHOUT changing setup_fn's no-arg contract. Per-process
@@ -685,9 +683,9 @@ class _HostImpl:
         return self._producer_pool.release_all_leases()
 
     def set_weight_backend(self, spec: dict, body_names: tuple[str, ...] | None = None) -> None:
-        # Attach the weight-sync backend (DESIGN §8.2 #4) only to the declared WEIGHT endpoint
+        # Attach the weight-sync backend  only to the declared WEIGHT endpoint
         # bodies. ``body_names=None`` retains the legacy direct-test behavior (all model owners).
-        # spec is either {"relationship": ...} — resolved via the §3.3 resolver,
+        # spec is either {"relationship":...} — resolved via the §3.3 resolver,
         # the single source of truth used by resolved grouping — or {"kind": ...} for legacy/direct
         # mover selection. Picked from ActorGroup/DeviceGroup placement at bind; the push/apply seam
         # then rides dp_aligned. No-model
@@ -820,7 +818,7 @@ class _HostImpl:
             pp=p.pp,
         )
 
-    # --- intra-/inter-replica torch.distributed rendezvous (DESIGN §1.1 FSDP) ---
+    # --- intra-/inter-replica torch.distributed rendezvous  ---
     def rendezvous_endpoint(self) -> tuple[str, int]:
         """Return (node_ip, free_port) for this actor's node — the rank-0 actor's endpoint
         becomes MASTER_ADDR:PORT for the NCCL rendezvous (picked just before init so the
@@ -900,13 +898,13 @@ class _HostImpl:
         NOTE (interim): no production caller yet — the disaggregated cross-device weight plane is
         not auto-wired at bind (control/placement/colocate.py raises NotImplementedError for
         cross_device). Exercised only via tests today; drop this note when bind auto-wires the
-        plane (DESIGN §2.4 / §4).
+        plane.
 
         Wires the live comm into each model-bearing body's already-bound backend via
         ``WeightSync.bind_comm`` (the backend owns its mover's wiring — this layer never touches
         ``mover.*``): ``set_weight_backend`` runs at bind, BEFORE the plane exists, so a collective
         mover starts with ``_comm=None`` — the comm must be injected here or stage/fetch would raise
-        (spec §3). ``recv_manifest`` (a ``[(name, shape, dtype_str), ...]`` list the driver computes
+        (spec §3). ``recv_manifest`` (a ``[(name, shape, dtype_str),...]`` list the driver computes
         from the policy's ``full_state_dict``) becomes the collective mover's recv layout for
         SHARDED sinks (vLLM TP) that cannot self-derive the full param shapes; an unsharded HF sink
         leaves it None and self-derives from its own model (§2.4)."""
@@ -1357,7 +1355,7 @@ class _HostImpl:
                 ) from e
 
     def _release_refs(self, refs: list, readers: int) -> None:
-        """Release protocol seam (Task A6, DESIGN §2.4): drop reader claims on ``refs`` WITHOUT fetching.
+        """Release protocol seam (Task A6): drop reader claims on ``refs`` WITHOUT fetching.
 
         Passed as `_resolve_dispatched`'s `releaser` for the BulkRefs an on_metadata split drops, and
         run at egress for a body method declared in ``lease_releasing_output_methods`` (the buffer's
@@ -1432,7 +1430,7 @@ class _HostImpl:
         # Resolve ObjectRefs passed nested in args/kw (Ray only auto-resolves refs that are
         # DIRECT .remote() args, not ones nested in a container). Resolving here — on the
         # actor — keeps the controller out of the path: it forwards only the tiny ref and the
-        # producer's metadata payload moves object-store→this actor directly (DESIGN §3.4/#7).
+        # producer's metadata payload moves object-store→this actor directly.
         # No-op for RayBackend (it passes already-resolved values, not refs).
         #
         # A `Dispatched` arg (Task A2/A4 asymmetric-mesh routing descriptor) carries its OWN
@@ -1503,7 +1501,7 @@ class _HostImpl:
         with profile.phase("body"):
             out = getattr(body, method)(*args, **kw)
         if self._codec and method in getattr(body, "lease_releasing_output_methods", ()):
-            # Terminal egress (DESIGN §5 "evict releases the bulk lease"): a metadata-only body that
+            # Terminal egress: a metadata-only body that
             # declares this method returns items whose bulk nobody will consume. Release every BulkRef
             # the payload carries at its owning store — a refcount decrement, never a fetch — so a
             # dropped trajectory's bulk stays where it was produced instead of being mirrored onto a

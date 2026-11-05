@@ -212,7 +212,7 @@ def test_online_i4_rejects_legacy_model_before_instantiate(monkeypatch: pytest.M
     from cosmos_framework.posttrain.entrypoints import grpo
 
     legacy = SimpleNamespace(
-        model_backend="i4",
+        model_backend="native",
         model=SimpleNamespace(config=SimpleNamespace(parallelism=object())),
     )
     monkeypatch.setattr(
@@ -237,7 +237,7 @@ def test_native_spec_declares_whether_grpo_requires_collated_forward() -> None:
 
     def _config(*, requires_collated: bool) -> SimpleNamespace:
         return SimpleNamespace(
-            model_backend="i4",
+            model_backend="native",
             model=NativePolicyBuildSpec(
                 builder="cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy",
                 model_id=model_id,
@@ -2201,7 +2201,7 @@ def test_injected_i4_builder_resolves_transfer_precision(monkeypatch, tmp_path) 
     loaded: dict[str, Any] = {}
     _mock_build_trainer_deps(monkeypatch, tmp_path, loaded)
     config = _resume_config(model_name="")
-    config.model_backend = "i4"
+    config.model_backend = "native"
     model_config = Qwen3VLModelConfig(name_or_path="native/model", dtype="bfloat16")
     config.model = NativePolicyBuildSpec(
         builder="tests.fake.build_policy",

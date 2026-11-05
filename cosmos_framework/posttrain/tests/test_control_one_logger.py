@@ -274,7 +274,7 @@ def test_config_matches_the_trainer_schema_with_imaginaire_timer_semantics():
     """One train iteration = one optimizer update (max_steps * n_mini); one train batch = one
     forward/backward, so global_batch_size is the trajectories one forward/backward consumes."""
     c = _config()
-    assert c["enable_for_current_rank"] is True and c["one_logger_project"] == "imaginaire4"
+    assert c["enable_for_current_rank"] is True and c["one_logger_project"] == "cosmos-framework"
     assert c["one_logger_run_name"] == c["app_tag_run_name"] == "cosmos_reason2/carla_pivot/grpo_run"
     assert c["world_size"] == 4
     assert c["train_iterations_target"] == 600  # 300 collected batches x n_mini=2 optimizer updates
@@ -609,7 +609,7 @@ def test_sync_dispatch_is_deterministic_and_starts_no_worker():
 
 
 def test_app_start_is_the_synchronous_gate():
-    """`on_app_start` runs on the caller's thread (DESIGN §2.6 gate; §11.2 precedent): the backend's
+    """`on_app_start` runs on the caller's thread: the backend's
     singleton exists when the call returns, and nothing was queued for it."""
     rec = _RecordingObserver()
     observers = ControllerLifecycleObservers([rec])

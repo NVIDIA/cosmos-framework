@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Synthetic preference Env — a TEST FIXTURE (DESIGN §1.3).
+"""Synthetic preference Env — a TEST FIXTURE.
 
 Not a production source. Fabricates separable preference pairs so the offline DPO loop
 runs on CPU with no data / dataset wiring — the counterpart to the toy model fixture

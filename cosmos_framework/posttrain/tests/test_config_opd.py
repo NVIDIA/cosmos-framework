@@ -29,7 +29,7 @@ from cosmos_framework.posttrain.config.build import (
 )
 from cosmos_framework.posttrain.config.config_grpo import PosttrainGRPOConfig
 from cosmos_framework.posttrain.config.config_opd import PosttrainOPDConfig
-from cosmos_framework.posttrain.config.model import DataPackerConfig, HFModelConfig, Qwen3VLModelConfig
+from cosmos_framework.posttrain.config.model import NATIVE, DataPackerConfig, HFModelConfig, Qwen3VLModelConfig
 from cosmos_framework.posttrain.config.rl import (
     DatasetConfig,
     GRPOConfig,
@@ -466,7 +466,7 @@ def test_runtime_preflight_rejects_incompatible_opd_settings() -> None:
     )
     validate_opd_runtime(dpca, RolloutConfig())
     rollout = RolloutConfig()
-    for backend in ("i4", "qwen3_vl"):
+    for backend in (NATIVE, "qwen3_vl"):
         validate_opd_runtime(
             dpca,
             rollout,

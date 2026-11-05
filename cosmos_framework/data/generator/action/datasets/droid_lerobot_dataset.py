@@ -37,6 +37,7 @@ from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset_confi
     LEROBOT_ROOTS,
     STATE_FEATURES,
 )
+from cosmos_framework.data.generator.action.utils.episode_filters import normalize_episode_filter_keys
 from cosmos_framework.data.generator.action.utils.pose_utils import (
     PoseConvention,
     build_abs_pose_from_components,
@@ -61,7 +62,10 @@ _DROID_TO_OPENCV: np.ndarray = np.array(
 
 
 class DROIDLeRobotDataset(BaseActionLeRobotDataset):
-    """ """
+    """Read an explicit dataset root and optional filters keyed by complete episode IDs.
+
+    URI-based filter metadata also requires filter_dict_source_prefix, the dataset URI prefix.
+    """
 
     EMBODIMENT_TYPE: str = "droid_lerobot"
 
@@ -102,6 +106,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         # would shift every later argument for positional callers.
         apply_forward_clamp: bool = False,
         jitter_after_compose: bool = False,
+        filter_dict_source_prefix: str = "",
     ) -> None:
         """Load a local DROID dataset; filtering requires an explicit JSON path."""
         if not root:
@@ -186,7 +191,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         if self._use_filter_dict:
             assert filter_dict_path is not None  # Validated before dataset initialization.
             with open(filter_dict_path) as f:
-                self._filter_dict = json.load(f)
+                self._filter_dict = normalize_episode_filter_keys(json.load(f), source_prefix=filter_dict_source_prefix)
 
         self._image_augmentor: T.Compose | None = None
         self._color_augmentor: T.ColorJitter | None = None
@@ -224,9 +229,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         filtered_count = 0
         for episode_id, sample_start, valid_len in episode_spans:
             ep_id_str = meta.episodes[episode_id]["episode_id"]
-            # Legacy JSON lookup key only; this URI is never fetched. See
-            # docs/action_policy_droid_posttrain.md for public data and filter downloads.
-            episode_key = f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/recordings/MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/trajectory.h5"
+            episode_key = str(ep_id_str)
             ranges = self._filter_dict.get(episode_key)
             if ranges is None:
                 continue
