@@ -94,7 +94,7 @@ class EntryConfig:
     # iteration count and the trainer's grad_accum -- they MUST agree (see `loop`).
     ticks_per_episode: int
     # "colocated" (default) or "disaggregated" — see `declare_wgs` and `run`. The word is the
-    # framework's, normative on the GPU axis (DESIGN §4.0): it says whether policy and rollout
+    # framework's, normative on the GPU axis: it says whether policy and rollout
     # occupy the SAME physical GPUs, not how the processes are packed.
     placement: GpuPlacement = "colocated"
 
@@ -159,7 +159,7 @@ def declare_wgs(gpus: int, placement: str = "colocated") -> dict[str, WorkerGrou
         # The fan-in to the single FSDP replica does not disappear — the meshes are transposed, so it
         # cannot — but it lands on the ONE edge the registry already covers. Ranks stay 1: a
         # multi-rank producer behind a Sharded edge is rejected, its mirrored lanes double-counting
-        # as producer units (spec 2026-07-22 §2.2).
+        # as producer units.
         return {"replicas": width, "ranks": 1}
 
     return {name: getattr(role_factory, kind)(name, **_shape(name)) for name, kind in ROLE_SPECS}
@@ -711,7 +711,7 @@ def loop(units: dict, config: EntryConfig) -> dict:
                 f"{trainer_iteration} -- the rollout would sample from stale weights"
             )
         # The version rides in the metrics dict, not a separate line: it is the staleness signal
-        # (DESIGN 1.4), so the channel that carries metrics to the console -- and to W&B once that
+        # , so the channel that carries metrics to the console -- and to W&B once that
         # is wired -- is the one that should carry it.
         # `emit_metric_frame`, not a bare `report`: it converges a schema rejection across ranks
         # (one rank raising while the others carry on hangs the next collective) and isolates a

@@ -14,7 +14,12 @@ import torch
 
 from cosmos_framework.model.attention.checks import attention_param_checks, attention_tensor_checks
 from cosmos_framework.model.attention.cudnn import CUDNN_SUPPORTED
-from cosmos_framework.model.attention.cudnn.meta import CUDNN_HEAD_DIM_ALIGNMENT, get_bwd_dtypes, get_fwd_dtypes, get_max_head_dim
+from cosmos_framework.model.attention.cudnn.meta import (
+    CUDNN_HEAD_DIM_ALIGNMENT,
+    get_bwd_dtypes,
+    get_fwd_dtypes,
+    get_max_head_dim,
+)
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.attention.utils import get_arch_tag, log_or_raise_error
 
@@ -174,7 +179,7 @@ def cudnn_attention_check(
         # captured from whichever context asked first and silently reused in the other.
         #
         # Declining here rather than at the call site keeps the fallback narrow. The workaround
-        # this replaces was I4_ATTN_BACKENDS=-cudnn, which bans cuDNN for every call in the
+        # this replaces was COSMOS_ATTN_BACKENDS=-cudnn, which bans cuDNN for every call in the
         # process, including the many that never ask for a log-sum-exp.
         target_fn(
             "cuDNN Attention cannot return a log-sum-exp for a differentiable call under "

@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Codec — payload ↔ metadata/bulk, field-level (DESIGN §3.2 Codec, §3.4 field-level).
+"""Codec — payload ↔ metadata/bulk, field-level.
 
 Decides inline-vs-lazy per field by size: small fields stay inline (travel with the
 metadata); large fields (video/image, and — for this demo — token tensors) go to the
 producer's BulkStore as a `BulkRef` (lazy, pulled on demand). The consumer
-`materialize`s the bulk; **the controller only ever routes the metadata** (DESIGN §3.4
-/ principle #7), so bulk never crosses the control plane.
+`materialize`s the bulk; **the controller only ever routes the metadata**, so bulk never crosses the control plane.
 
 Entry points:
 - `pack_payload` / `materialize_payload` — payload dispatchers that walk a Trajectory
@@ -31,7 +30,7 @@ from cosmos_framework.posttrain.comm.bulk import BulkRef, BulkStore
 from cosmos_framework.posttrain.comm.transfer.mover import Mover as Transport
 from cosmos_framework.posttrain.schema import ObsBundle, Trajectory, Transition
 
-DEFAULT_THRESHOLD = 1024  # bytes — small inline, large → lazy BulkRef (DESIGN §3.4)
+DEFAULT_THRESHOLD = 1024  # bytes — small inline, large → lazy BulkRef
 
 
 def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | None = None) -> ObsBundle:
@@ -39,7 +38,7 @@ def materialize_obs(bundle: ObsBundle, transport: Transport, fields: set[str] | 
     deep-walked, so a container-valued representation (e.g. `frames=[BulkRef, BulkRef]`) resolves and
     not just a top-level BulkRef — symmetric with the recursive pack (a top-level ref is the depth-0
     case). Non-selected fields keep their BulkRef untouched → e.g. raw video never reaches the trainer
-    if it only needs encoded features (DESIGN §3.4 / VLA split-worker)."""
+    if it only needs encoded features."""
     reps: dict[str, object] = {}
     for k, v in bundle.representations.items():
         reps[k] = _unpack_val(v, transport) if (fields is None or k in fields) else v
@@ -161,7 +160,7 @@ def _pack_val(
 def _unpack_val(v: Any, transport: Transport, readers: int = 1) -> Any:
     """Materialize `v` via `transport`: fetch every `BulkRef` LEAF (recursively, via `_walk`),
     pass inline values through. Threads `readers` to each fetch so a shared ref pops only after
-    every consumer has pulled it (refcounted `BulkStore`, DESIGN §2.4).
+    every consumer has pulled it (refcounted `BulkStore`).
 
     Args:
         v: A packed field — a `BulkRef`, an inline value, or a structure nesting them.
@@ -298,7 +297,7 @@ def collect_bulk_refs(obj: Any) -> list[BulkRef]:
     Public (not `_`-prefixed): the on_metadata split fast path in `workers/ray.py` (Task A6) also
     uses this ref-walk to diff a full packed payload against its kept slice — the BulkRefs present
     in the former but absent from the latter are exactly what a metadata-only split drops without
-    ever fetching (DESIGN §2.3/§2.4). Kept Ray-free (comm/ constraint).
+    ever fetching. Kept Ray-free (comm/ constraint).
 
     Args:
         obj: A `Trajectory`, `ObsBundle`, or list/tuple of either to walk (other payloads yield none).
@@ -421,7 +420,7 @@ def materialize_payload(obj: Any, transport: Transport, readers: int = 1) -> Any
     If the transport offers `prefetch`, batch-load all refs first (one RPC per producer
     instead of one per field) — local refs stay zero-copy.
 
-    `readers` (Task A5, DESIGN §2.4): the expected reader count for THIS pull, threaded
+    `readers` (Task A5): the expected reader count for THIS pull, threaded
     down to `transport.fetch`/`prefetch` -> `BulkStore.fetch` so a bulk entry shared by
     multiple consumer cells (a `Dispatched` fan-out edge) is refcounted rather than popped
     on the first fetch. Default 1 == the old consume-once behavior — every existing caller

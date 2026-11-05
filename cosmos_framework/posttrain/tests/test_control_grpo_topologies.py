@@ -5,7 +5,7 @@
 
 Synthetic variance reward (by completion length parity) guarantees nonzero advantage
 so we exercise the full loop + a real optimizer step. This is a flow test, NOT a
-convergence test (DESIGN §12)."""
+convergence test."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ G = 3
 def _setup():
     cfg = GPT2Config(n_layer=2, n_head=2, n_embd=32, vocab_size=50257, n_positions=64)
     model = GPT2LMHeadModel(cfg)
-    packer = init_data_packer("gpt2")  # rollout + objective shaping seam; owns the tokenizer (design 2026-07-28)
+    packer = init_data_packer("gpt2")  # rollout + objective shaping seam; owns the tokenizer
     opt = torch.optim.SGD(model.parameters(), lr=1.0)
     return {
         "data": ArithmeticEnv(seed=0, max_operand=9),
@@ -188,7 +188,7 @@ def _setup_rollout():
     """Build the rollout policy body: data env, rollout, reward model, replay buffer."""
     cfg = GPT2Config(n_layer=2, n_head=2, n_embd=32, vocab_size=50257, n_positions=64)
     model = GPT2LMHeadModel(cfg)
-    packer = init_data_packer("gpt2")  # rollout-side shaping seam; owns the tokenizer (design 2026-07-28)
+    packer = init_data_packer("gpt2")  # rollout-side shaping seam; owns the tokenizer
     return {
         "data": ArithmeticEnv(seed=0, max_operand=9),
         "rollout": _ProbeRollout(model, packer=packer, sampling={"do_sample": True, "max_new_tokens": 4}),
@@ -206,7 +206,7 @@ def _setup_trainer():
     """Build the trainer policy body: trainable model + optimizer."""
     cfg = GPT2Config(n_layer=2, n_head=2, n_embd=32, vocab_size=50257, n_positions=64)
     model = GPT2LMHeadModel(cfg)
-    packer = init_data_packer("gpt2")  # objective-side shaping seam (design 2026-07-28)
+    packer = init_data_packer("gpt2")  # objective-side shaping seam
     opt = torch.optim.SGD(model.parameters(), lr=1.0)
     return {"policy": _ProbeTrainer(model, make_objective(packer), opt)}
 

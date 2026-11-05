@@ -67,6 +67,8 @@ This notebook runs Cosmos3 audiovisual generation directly with `Cosmos3OmniPipe
 
 Run the Cosmos3-Nano, Cosmos3-Super, or Cosmos3-Edge examples independently. Cosmos3-Edge has no audio modules and uses its 480p generation settings. The notebook also includes Nano and Super video-to-video examples, while Super T2V/I2V examples run without audio. Each section loads the matching model explicitly.
 
+FP8 checkpoints: set `COSMOS3_DIFFUSERS_PRECISION=fp8` before loading. Nano, Super, and Edge use the dedicated Hub repos `nvidia/Cosmos3-Nano-FP8`, `nvidia/Cosmos3-Super-FP8`, and `nvidia/Cosmos3-Edge-FP8`. Super 4-Step T2I/I2V keep the existing model cards with `revision=fp8`. Use-case cells stay the same.
+
 ## 1. Prerequisites
 
 - Machine, Hugging Face model access, `uvx hf@latest auth login` / `HF_TOKEN`: see payloads.md § 2.2 (`run_with_diffusers.ipynb` § 1 entry).
@@ -83,6 +85,7 @@ export COSMOS3_TORCH_BACKEND=cu130
 export HF_HOME=/path/to/large/huggingface/cache
 export UV_LINK_MODE=copy
 export CUDA_VISIBLE_DEVICES=0
+export COSMOS3_DIFFUSERS_PRECISION=bf16  # or fp8
 ```
 
 Path configuration (`COSMOS_ROOT`, `COSMOS3_AUDIOVISUAL_ROOT`, `OUT` = `COSMOS3_AUDIOVISUAL_OUTPUT_ROOT`): see payloads.md § 4.1, which replaces the notebook's `find_repo_root()` and output-root lines. The remainder of the notebook's configuration cell runs on top of it:
@@ -108,6 +111,7 @@ def configure_diffusers_environment() -> None:
     os.environ.setdefault("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+    os.environ.setdefault("COSMOS3_DIFFUSERS_PRECISION", "bf16")
 
 
 configure_diffusers_environment()
@@ -115,12 +119,13 @@ configure_diffusers_environment()
 
 Backend-only variables the cell sets (the notebook's echo loop printed these together with `COSMOS_ROOT`, `COSMOS3_AUDIOVISUAL_OUTPUT_ROOT`, `UV_CACHE_DIR`, `HF_HOME`, `CUDA_VISIBLE_DEVICES` and `HF_TOKEN: <set>`/`<unset>`; those shared variables are in payloads.md § 4.1 and § 4.4):
 
-| Variable                 | Default in the cell                                                   | Documented example (export block above) |
-| ------------------------ | --------------------------------------------------------------------- | --------------------------------------- |
-| `COSMOS3_DIFFUSERS_VENV` | `COSMOS_ROOT / ".venv-cosmos3-diffusers"`, resolved and exported back | `/path/to/.venv-cosmos3-diffusers`      |
-| `COSMOS3_TORCH_BACKEND`  | `"cu130"`, exported back                                              | `cu130` (`cu128` for CUDA 12.8)         |
-| `UV_LINK_MODE`           | `"copy"` (`setdefault`)                                               | `copy`                                  |
-| `HF_HUB_DISABLE_XET`     | `"1"` (`setdefault`)                                                  | —                                       |
+| Variable                      | Default in the cell                                                   | Documented example (export block above)       |
+| ----------------------------- | --------------------------------------------------------------------- | --------------------------------------------- |
+| `COSMOS3_DIFFUSERS_VENV`      | `COSMOS_ROOT / ".venv-cosmos3-diffusers"`, resolved and exported back | `/path/to/.venv-cosmos3-diffusers`            |
+| `COSMOS3_TORCH_BACKEND`       | `"cu130"`, exported back                                              | `cu130` (`cu128` for CUDA 12.8)               |
+| `UV_LINK_MODE`                | `"copy"` (`setdefault`)                                               | `copy`                                        |
+| `HF_HUB_DISABLE_XET`          | `"1"` (`setdefault`)                                                  | —                                             |
+| `COSMOS3_DIFFUSERS_PRECISION` | `"bf16"` (`setdefault`)                                               | `bf16` (`fp8` selects a quantized checkpoint) |
 
 ## 3. Install Diffusers Dependencies
 
@@ -147,6 +152,7 @@ uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" --torch-backend="$
   torch \
   torchvision \
   transformers \
+  "nvidia-modelopt==0.44.0" \
   && uv pip uninstall --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python \
   && uv pip install --no-config --python "$COSMOS3_DIFFUSERS_VENV" opencv-python-headless==5.0.0.93
 
@@ -224,6 +230,114 @@ _pipe_model = None
 
 # resolve_model_id and is_distilled_model: see payloads.md § 5
 
+FP8_SEPARATE_REPOS = {
+    "Cosmos3-Nano": "nvidia/Cosmos3-Nano-FP8",
+    "Cosmos3-Super": "nvidia/Cosmos3-Super-FP8",
+    "Cosmos3-Edge": "nvidia/Cosmos3-Edge-FP8",
+}
+
+FP8_SUPPORTED_MODELS = set(FP8_SEPARATE_REPOS) | set(DISTILLED_MODELS)
+
+
+def precision_mode() -> str:
+    return os.environ.get("COSMOS3_DIFFUSERS_PRECISION", "bf16").strip().lower()
+
+
+def is_fp8_precision() -> bool:
+    return precision_mode() == "fp8"
+
+
+def resolve_pretrained_source(model: str):
+    """Hub repo id or local path for the requested precision."""
+    if is_fp8_precision() and model not in FP8_SUPPORTED_MODELS:
+        raise RuntimeError(
+            f"FP8 is only supported for {sorted(FP8_SUPPORTED_MODELS)}; got {model}. "
+            "Unset COSMOS3_DIFFUSERS_PRECISION or set it to bf16."
+        )
+    override = os.environ.get("COSMOS3_FP8_MODEL_PATH")
+    if is_fp8_precision() and override:
+        return Path(override).expanduser().resolve()
+    if is_fp8_precision() and model in FP8_SEPARATE_REPOS:
+        return FP8_SEPARATE_REPOS[model]
+    return resolve_model_id(model)
+
+
+def pretrained_from_kwargs(model: str) -> dict:
+    kwargs = {"token": os.environ.get("HF_TOKEN") or None}
+    if (
+        is_fp8_precision()
+        and not os.environ.get("COSMOS3_FP8_MODEL_PATH")
+        and model in DISTILLED_MODELS
+    ):
+        kwargs["revision"] = os.environ.get("COSMOS3_FP8_REVISION", "fp8")
+    return kwargs
+
+
+def materialize_checkpoint_dir(pretrained_source, from_kwargs: dict) -> Path:
+    """Return a local checkpoint root (download from Hub when given a repo id)."""
+    path = Path(str(pretrained_source))
+    if path.is_dir():
+        return path.resolve()
+    from huggingface_hub import snapshot_download
+
+    return Path(
+        snapshot_download(
+            str(pretrained_source),
+            revision=from_kwargs.get("revision"),
+            token=from_kwargs.get("token"),
+        )
+    ).resolve()
+
+
+
+def ensure_modelopt_state(pretrained_source, *, token=None, revision=None) -> Path:
+    """Ensure ModelOpt state is present before Diffusers resolves its Hub allowlist."""
+    checkpoint_root = Path(str(pretrained_source))
+    if isinstance(pretrained_source, Path) or checkpoint_root.is_absolute():
+        state_path = checkpoint_root / "transformer" / "modelopt_state.pth"
+    else:
+        from huggingface_hub import hf_hub_download
+
+        state_path = Path(
+            hf_hub_download(
+                repo_id=str(pretrained_source),
+                filename="transformer/modelopt_state.pth",
+                revision=revision,
+                token=token,
+            )
+        )
+    if not state_path.is_file():
+        raise RuntimeError(
+            f"FP8 requested but no ModelOpt state at {state_path}. "
+            "Use a ModelOpt FP8 checkpoint or set COSMOS3_FP8_MODEL_PATH to one."
+        )
+    return state_path
+
+
+def validate_fp8_transformer(transformer) -> tuple[int, int, int]:
+    """Smoke-check that ModelOpt restored FP8 weights and the quantizer graph.
+
+    Counts float8 weights, quantizer modules, and meta tensors. It does not check
+    that the W8A8 GEMM path is active.
+    """
+    tensors = list(transformer.named_parameters()) + list(transformer.named_buffers())
+    fp8 = sum(parameter.dtype == torch.float8_e4m3fn for parameter in transformer.parameters())
+    quantizers = sum("quantizer" in name.lower() for name, _ in transformer.named_modules())
+    meta = sum(tensor.is_meta for _, tensor in tensors)
+    if not fp8 or not quantizers or meta:
+        raise RuntimeError(f"Invalid FP8 load: weights={fp8}, quantizers={quantizers}, meta={meta}")
+    return fp8, quantizers, meta
+
+def distilled_components_root(checkpoint_dir: Path) -> str:
+    """Local Diffusers root for modular `load_components` after transformer preload."""
+    return str(Path(checkpoint_dir).resolve())
+
+
+def verify_fp8(model: str) -> None:
+    """Confirm ModelOpt restored FP8 weights and quantizers, not that GEMM is active."""
+    fp8, quantizers, meta = validate_fp8_transformer(get_pipe(model).transformer)
+    print(f"FP8 state restored: weights={fp8}, quantizers={quantizers}, meta={meta}")
+
 
 def cuda_allocated_gib() -> float:
     return torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
@@ -261,13 +375,31 @@ def release_pipe() -> None:
 
 def get_pipe(model: str):
     global _pipe, _pipe_model
-    model_id = resolve_model_id(model)
-    if _pipe is not None and _pipe_model == model_id:
+    prec = precision_mode()
+    pretrained_source = resolve_pretrained_source(model)
+    from_kwargs = pretrained_from_kwargs(model)
+    # Distilled FP8 keeps one repo id and selects the checkpoint with revision.
+    # The revision has to be in the cache key before the hit check; otherwise
+    # changing COSMOS3_FP8_REVISION returns the pipeline loaded for the previous revision.
+    cache_key = f"{pretrained_source}@{prec}"
+    if "revision" in from_kwargs:
+        cache_key = f"{cache_key}@{from_kwargs['revision']}"
+    if _pipe is not None and _pipe_model == cache_key:
         return _pipe
     release_pipe()
     diffusers_logging.set_verbosity_info()
-    print(f"loading {model_id}...")
     t0 = time.time()
+    fp8 = is_fp8_precision()
+    if fp8:
+        # ModelOpt FP8 graph restore + kernels (required before from_pretrained).
+        import modelopt.torch.quantization.backends.fp8_per_tensor_gemm  # noqa: F401
+        from modelopt.torch.opt import enable_huggingface_checkpointing
+
+        enable_huggingface_checkpointing()
+        print(f"loading FP8 {pretrained_source}...")
+    else:
+        print(f"loading {pretrained_source}...")
+
     if is_distilled_model(model):
         if Cosmos3DistilledModularPipeline is None:
             raise RuntimeError(
@@ -275,24 +407,55 @@ def get_pipe(model: str):
                 "Reinstall diffusers from a revision that includes the Cosmos3 distilled pipeline."
             )
         pipe = Cosmos3DistilledModularPipeline.from_pretrained(
-            model_id,
-            token=os.environ.get("HF_TOKEN") or None,
+            pretrained_source,
+            **from_kwargs,
         )
-        pipe.load_components(torch_dtype=torch.bfloat16)
+        if fp8:
+            # Pre-load the transformer from its full path so ModelOpt 0.44 finds
+            # transformer/modelopt_state.pth and restores the FP8 quantizer graph.
+            # Modular load_components uses repo+subfolder; ModelOpt ignores subfolder.
+            from diffusers import AutoModel
+
+            ckpt_dir = materialize_checkpoint_dir(pretrained_source, from_kwargs)
+            transformer_dir = ckpt_dir / "transformer"
+            if not (transformer_dir / "modelopt_state.pth").is_file():
+                raise RuntimeError(
+                    f"FP8 requested but no ModelOpt state at {transformer_dir / 'modelopt_state.pth'}. "
+                    "Point COSMOS3_FP8_MODEL_PATH at a pre-quantized distilled export directory."
+                )
+            transformer = AutoModel.from_pretrained(str(transformer_dir), torch_dtype=torch.bfloat16)
+            pipe.update_components(transformer=transformer)
+            # names=None loads only components that are still unset, so the preloaded transformer stays.
+            pipe.load_components(
+                pretrained_model_name_or_path=distilled_components_root(ckpt_dir),
+                torch_dtype=torch.bfloat16,
+            )
+        else:
+            pipe.load_components(torch_dtype=torch.bfloat16)
         pipe.enable_safety_checker()
     else:
+        if fp8:
+            state_path = ensure_modelopt_state(
+                pretrained_source,
+                token=from_kwargs.get("token"),
+                revision=from_kwargs.get("revision"),
+            )
+            print(f"ModelOpt state: {state_path}")
         pipe = Cosmos3OmniPipeline.from_pretrained(
-            model_id,
+            pretrained_source,
             torch_dtype=torch.bfloat16,
             safety_checker=None,
             enable_safety_checker=True,
-            token=os.environ.get("HF_TOKEN") or None,
+            **from_kwargs,
         )
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=FIXED_SAMPLING["shift"])
+    if fp8:
+        fp8_weights, quantizers, meta = validate_fp8_transformer(pipe.transformer)
+        print(f"FP8 state restored: weights={fp8_weights}, quantizers={quantizers}, meta={meta}")
     pipe.to("cuda")
     _pipe = pipe
-    _pipe_model = model_id
-    print(f"loaded pipeline in {time.time() - t0:.1f}s")
+    _pipe_model = cache_key
+    print(f"loaded pipeline in {time.time() - t0:.1f}s (precision={prec})")
     return _pipe
 
 
@@ -392,6 +555,23 @@ def run_diffusers_payload(payload_path: Path, output_dir: str | Path, *, model: 
 ```
 
 Viewer helpers (`display_video`, `view_run`) are Jupyter-only and are not migrated; `view_run`'s media discovery rule is in payloads.md § 4.2 (`view_run` discovery row). How each payload key reaches the pipeline call: payloads.md § 10 (diffusers column).
+
+## Quantized Checkpoints (FP8)
+
+Default loads are BF16 (`COSMOS3_DIFFUSERS_PRECISION=bf16`). Set the env var to `fp8` before calling `get_pipe` in § 7. Use-case requests stay the same.
+
+- **Nano / Super / Edge:** load `nvidia/Cosmos3-Nano-FP8`, `nvidia/Cosmos3-Super-FP8`, and `nvidia/Cosmos3-Edge-FP8` (default revision on those repos). Do not pass `revision=fp8` on the BF16 cards.
+- **Super 4-Step T2I / I2V:** load the existing cards with `revision=fp8`. `get_pipe` includes that revision in the pipeline cache key, so changing `COSMOS3_FP8_REVISION` does not reuse the pipeline loaded for the previous revision.
+
+Diffusers follows the checkpoint schedule (W8A16 on the first and last few steps, W8A8 in between). Distilled 4-Step stays all W8A8. See the [Cosmos 3 Diffusers docs](https://huggingface.co/docs/diffusers/main/en/api/pipelines/cosmos3).
+
+Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint directory. Distilled FP8 preloads `transformer/` so ModelOpt 0.44 restores `modelopt_state.pth`. After load, `verify_fp8("Cosmos3-Nano")` (or another supported model) checks FP8 weights and quantizer modules. It counts float8 weights, quantizer modules, and meta tensors. It does not check that the W8A8 GEMM path is active.
+
+```python
+# Default is bf16. Uncomment to load FP8 checkpoints.
+# os.environ["COSMOS3_DIFFUSERS_PRECISION"] = "fp8"
+print("COSMOS3_DIFFUSERS_PRECISION:", os.environ.get("COSMOS3_DIFFUSERS_PRECISION", "bf16"))
+```
 
 ## Use Cases
 

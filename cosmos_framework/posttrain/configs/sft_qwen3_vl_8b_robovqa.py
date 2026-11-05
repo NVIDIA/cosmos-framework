@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-r"""Qwen3-VL-8B-Instruct full-parameter SFT on RoboVQA, on one GPU, through the i4-native policy builder.
+r"""Qwen3-VL-8B-Instruct full-parameter SFT on RoboVQA, on one GPU, through the native-native policy builder.
 
 A worked example with a measured before and after: one epoch over the RoboVQA training clips written by the
 ``prepare_robovqa.py`` script of the ``cosmos3-qwen3-vl-robovqa-sft`` skill, scored by the skill's ``eval_robovqa.py`` on
@@ -15,7 +15,7 @@ Measured on one NVIDIA GB300 at seed 0, two independent runs (training is not bi
 | after this recipe (run 1 / run 2) | 0.632 / 0.620 | 0.809 / 0.798 | 0.953 / 0.946 |
 
 Training stack, each field with its reason:
-- ``model_backend='i4'`` with ``build_qwen3_vl_native_policy``: the seat the SFT guide gives Qwen3-VL
+- ``model_backend='native'`` with ``build_qwen3_vl_native_policy``: the seat the SFT guide gives Qwen3-VL
   (``docs/posttrain/guides/sft.md`` section 1), with the precision stack of ``sft_qwen3_vl_moe_native.py``: bfloat16
   storage and compute, fp32 master weights and moments inside ``OptimizerConfig(name='fusedadam')`` (apex), SDPA,
   full activation checkpointing.
@@ -64,7 +64,7 @@ def build_config() -> PosttrainSFTConfig:
     config.job.group = "qwen3_vl_8b_robovqa"
     config.job.name = "seed0"
     config.job.wandb_mode = "disabled"
-    config.model_backend = "i4"
+    config.model_backend = "native"
     config.model = NativePolicyBuildSpec(
         builder=NATIVE_POLICY_BUILDER,
         model_id=os.environ.get("SFT_MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"),

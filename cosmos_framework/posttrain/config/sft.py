@@ -35,7 +35,7 @@ def refuse_unacknowledged_opener_mask(serve_contract: str) -> None:
             f"rl.mask_think_opener=True is refused under rl.serve_contract={serve_contract!r}: it unsupervises the "
             "<think> opener, which fits only a serve that prefills <think> for the student, and the serving path of "
             "record (Codex --thinking high -> a Responses request with reasoning.effort and the harness's 8 tools -> "
-            "vLLM 0.24) prefills NO opener with tools present (review R138-01: the served prefix is "
+            "vLLM 0.24) prefills NO opener with tools present (serving contract: the served prefix is "
             "<|im_start|>assistant\\n, ids 151644 77091 198; tests/fixtures/served_prefix_with_tools.json), so the "
             "student must emit <think> itself and its loss is the only training signal for that token. Set "
             f"rl.serve_contract={SFT_SERVE_CONTRACT_PREFILLS_OPENER} only for a student that will be served by a path "

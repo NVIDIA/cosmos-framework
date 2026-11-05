@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Test ActorGroup binding drives the SAME B.1 calls over local and ray (DESIGN §2.7/§4.2).
+"""Test ActorGroup binding drives the SAME B.1 calls over local and ray.
 Also: ActorGroup shape = max over WGs, and WG-shape-aware dispatch
 (a ranks=1 role runs only on its (r, 0) cell; dp_aligned broadcasts/gathers across ranks)."""
 

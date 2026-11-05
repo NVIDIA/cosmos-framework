@@ -577,8 +577,18 @@ def validate_nft_runtime_config(
             "pretrained_weights",
             "backbone_path",
         )
-        if str(backbone_path) != image_profile.backbone_path:
-            errors.append("the matched T2I HPSv3 recipe requires the private Cosmos3 32B reasoner backbone")
+        if image_profile.backbone_path:
+            if str(backbone_path) != image_profile.backbone_path:
+                errors.append("the matched T2I recipe requires the profile's configured reasoner backbone")
+        elif not isinstance(backbone_path, str) or (
+            not backbone_path.strip()
+            and _nested_value(config, "model", "config", "vlm_config", "pretrained_weights", "enabled") is not False
+        ):
+            # A released profile has no fixed path. Full-checkpoint recipes explicitly
+            # disable separate backbone initialization and retain an empty string.
+            errors.append(
+                "T2I backbone_path must be a string; a nonempty path is required unless pretrained_weights.enabled=false"
+            )
     try:
         from cosmos_framework.posttrain.roles.env import WFMSeedContract
 
@@ -688,7 +698,6 @@ def build_shared_bodies(
     reward_client: Any | None = None,
 ) -> dict[str, Any]:
     """Build all roles around one shared Cosmos3 model instance."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.algorithm.annotators.advantage import distributed_group_relative
     from cosmos_framework.posttrain.algorithm.nft import NFTObjectiveConfig, make_objective
     from cosmos_framework.posttrain.algorithm.reward import RewardCombiner
@@ -705,6 +714,7 @@ def build_shared_bodies(
     from cosmos_framework.posttrain.roles.trainer import CopyInventoryPolicy, DiffusionTrainer
     from cosmos_framework.posttrain.utils.dist import raise_if_any_rank_failed, world_size_or_1
     from cosmos_framework.posttrain.utils.rank_state import state_for_current_rank
+    from cosmos_framework.utils.lazy_config import instantiate
 
     if config.dataloader_train is None:
         raise ValueError("online NFT needs config.dataloader_train")
@@ -1095,7 +1105,6 @@ def online_nft_step(units: dict[str, Any], rl: Any, *, step: int) -> dict[str, A
 
 def loop(units: dict[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
     """Drive synchronous online steps and checkpoint only committed boundaries."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.termination import TerminationWatch
     from cosmos_framework.posttrain.utils.report import (
@@ -1105,6 +1114,7 @@ def loop(units: dict[str, Any], config: Any, out_dir: str) -> dict[str, Any]:
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     checkpoint_lifecycle = CheckpointLifecycle.from_config(config, rl, run_out_dir=out_dir)
@@ -1235,8 +1245,8 @@ def run(config: Any, config_path: str, opts: list[str], out_dir: str) -> None:
 
 
 def _validate_and_exit(config: Any) -> None:
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.recipe import nft_manifest
+    from cosmos_framework.utils.lazy_config import instantiate
 
     output, ok = render_manifest_validation(nft_manifest(ROLE_SPECS))
     print(output)

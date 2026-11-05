@@ -26,9 +26,9 @@
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with at least 4
 #     GPUs, NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
-#     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
-#     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
-#     (they do not fail) when it cannot.
+#     streamed LLaVA-OneVision-Data dataset). Optional Nano ModelOpt FP8 cases
+#     use the COSMOS_FP8_CHECKPOINT_* repository variables. When configured,
+#     missing checkpoint access fails the job; without configuration those cases skip.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -205,12 +205,12 @@ jobs:
       # Both steps use the `throughput` preset, whose layout is derived from
       # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
       TEST_MAX_GPUS: "4"
-      # This is the job whose stated purpose includes FP8 coverage: promote the
-      # cannot-reach-nvidia/Cosmos3-Experimental skip to a hard failure, so a
-      # token rotation or a permissions change turns the job red instead of
-      # silently dropping all three FP8 cases. Forks and local runs (which do
-      # not set this) keep the skip behaviour.
-      REQUIRE_FP8: "1"
+      # A configured FP8 artifact must be exercised. Access failures are not
+      # silently converted to skips; unconfigured runs retain optional coverage.
+      COSMOS_FP8_CHECKPOINT_REPOSITORY: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY }}
+      COSMOS_FP8_CHECKPOINT_REVISION: ${{ vars.COSMOS_FP8_CHECKPOINT_REVISION || 'main' }}
+      COSMOS_FP8_CHECKPOINT_SUBDIRECTORY: ${{ vars.COSMOS_FP8_CHECKPOINT_SUBDIRECTORY }}
+      REQUIRE_FP8: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY != '' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -229,10 +229,8 @@ jobs:
       # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
       # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
       # diffusion steps (W8A16 edge steps; exact schedule asserted from the
-      # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo; elsewhere those three
-      # cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
-      # skip a hard failure here, so a green run is guaranteed to have covered FP8.
+      # MIXED_PRECISION_TRACE log). FP8 coverage runs when a checkpoint repository
+      # is configured above, with REQUIRE_FP8 enforcing access in that case.
       # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 4 GPU)

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Placement (DESIGN §4) — logical/physical decoupling.
+"""Placement  — logical/physical decoupling.
 
 Final form: produce a mapping (WG, replica, rank) → (node, bundle, process-slot);
 manage memory arbitration + heterogeneous resource profiles; colocation tiers +

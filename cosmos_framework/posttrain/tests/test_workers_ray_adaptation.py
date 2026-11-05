@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Actor-side dispatch adaptation in `_Host.invoke` (Task A5, DESIGN §2.2/§2.3/§2.4).
+"""Actor-side dispatch adaptation in `_Host.invoke` (Task A5).
 
 `_resolve_dispatched` (workers/ray.py, module-level) is the piece that actually EXECUTES a
 `Dispatched` descriptor (built driver-side by `GridBackend._align_one`, Task A4): resolve its
@@ -193,7 +193,7 @@ def test_readers_threaded_store_pops_only_after_the_4th_consumer_fetch():
     """A single producer unit fed to 4 consumer cells (readers=4, e.g. a rank-mirror or
     Mirror fan-out edge): each simulated consumer resolves the SAME Dispatched (materialize
     True) — the refcounted `BulkStore` entry must survive the first 3 fetches and pop only
-    on the 4th (DESIGN §2.4), proving `readers` actually reaches `BulkStore.fetch` through
+    on the 4th, proving `readers` actually reaches `BulkStore.fetch` through
     `materialize_payload` -> transport.fetch."""
     store = BulkStore()
     action = _Blob(2000)  # above threshold=0 -> externalized to a BulkRef
@@ -249,7 +249,7 @@ def test_split_on_metadata_false_with_bulk_is_still_post_materialize_byte_identi
 
 
 def test_on_metadata_split_fetches_only_kept_refs_and_releases_the_rest():
-    """DESIGN §2.3 opt-in fast path + §2.4 release protocol (Task A6): a list-of-samples
+    """the contract opt-in fast path + §2.4 release protocol (Task A6): a list-of-samples
     payload (each sample its own Trajectory carrying its own BulkRef `action`) is split on the
     PACKED metadata skeleton BEFORE materialization. Two simulated replicas (n=2) each keep a
     contiguous half and, per grid.py's split readers formula (readers = Kc·n, Kc=1 here),
@@ -316,7 +316,7 @@ def test_on_metadata_split_without_materialize_falls_through_unresolved():
     assert len(store) == 4  # nothing fetched, nothing released -- fully untouched
 
 
-# ── ingress selection (Task 8, DESIGN §3.4/§9.5): select on metadata, materialize the kept share ──
+# ── ingress selection (Task 8): select on metadata, materialize the kept share ──
 
 
 class _CountingMover:
@@ -487,7 +487,7 @@ def test_invoke_materializes_dispatched_and_refcount_pops_at_zero():
     to Dispatched — the existing egress path) externalizes into the actor's OWN `BulkStore`.
     That packed skeleton becomes `Dispatched(refs=[...], readers=2)` and is carried through TWO
     separate `invoke` calls simulating two consumer cells reading the same producer unit — the
-    refcounted entry must survive the first and pop only on the second (DESIGN §2.4), proven via
+    refcounted entry must survive the first and pop only on the second, proven via
     the actor-introspection `run` test seam (`len(actor._store)`), not the helper-level bypass."""
     ray.init(ignore_reinit_error=True, num_cpus=2, include_dashboard=False, log_to_driver=False, _temp_dir="/tmp/rcray")
     try:
@@ -621,7 +621,7 @@ def test_invoke_cross_actor_release_failure_surfaces_on_the_next_sweep():
     """Coverage gap: `_release_dropped`'s cross-actor branch fires `release_bulk.remote`
     and discarded the returned ObjectRef -- a remote-side failure (double release / accounting
     drift) would resolve into a Ray object nobody ever inspects, so it failed SILENTLY, unlike
-    the local branch which raises inline (DESIGN §2.4's KeyError posture). Fix: stash the
+    the local branch which raises inline. Fix: stash the
     ObjectRef in `self._pending_releases`; the top of every `_release_dropped` call does a
     bounded, non-blocking sweep (`ray.wait(timeout=0)`) and `ray.get`s anything that finished,
     raising `RuntimeError` on failure. Finding-3: that sweep is hoisted to the TOP of every
@@ -740,7 +740,7 @@ def _stamped_group(group_id: str, spread: float) -> list[Trajectory]:
 
 
 def test_buffer_drain_releases_dropped_bulk_without_a_fetch_under_tp2() -> None:
-    """DESIGN §5: dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
+    """the contract: dropped bulk never moves. The buffer's `drain` is a lease-releasing egress: the host
     releases each drained BulkRef at its store instead of a bulk consumer materializing it. The kept
     group is pulled once per TP rank (readers=2) as usual; the dropped group is never fetched at all."""
     from cosmos_framework.posttrain.control.buffer import ExperienceBuffer, MetadataGate
