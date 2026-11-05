@@ -166,16 +166,10 @@ _MULTI_CONTROL_SPEC = {
     "emphasize_control_in_prompt": False,
 }
 
-# ModelOpt static-FP8 Cosmos3-Nano checkpoint. It is not published under its own
-# repository yet, so it cannot be a ``--checkpoint-path`` registry name (see
-# ``_CHECKPOINTS`` in ``cosmos_framework/inference/args.py``): it lives in a
-# subdirectory of the access-controlled nvidia/Cosmos3-Experimental repo, pinned to
-# the revision the FP8 loader was validated against. The test downloads that one
-# subdirectory and passes the resulting local path to the CLI. Once the checkpoint
-# is released under its own name, register it and drop ``_download_fp8_checkpoint``.
-_FP8_REPOSITORY = "nvidia/Cosmos3-Experimental"
-_FP8_REVISION = "f0cdb8ea37360e8510e2c0caf84c0f9f3e8751c8"
-_FP8_SUBDIRECTORY = "cosmos3-nano-fp8-14072026"
+# Optional FP8 coverage uses an operator-selected checkpoint. No default artifact is downloaded.
+_FP8_REPOSITORY = os.environ.get("COSMOS_FP8_CHECKPOINT_REPOSITORY", "")
+_FP8_REVISION = os.environ.get("COSMOS_FP8_CHECKPOINT_REVISION", "main")
+_FP8_SUBDIRECTORY = os.environ.get("COSMOS_FP8_CHECKPOINT_SUBDIRECTORY", "")
 
 # Emitted by ``swap_modelopt_fp8_linears_on_meta`` / ``install_torchao_float8_fsdp_support``
 # (``cosmos_framework/utils/generator/quantization.py``). The swap count is parsed rather
@@ -243,7 +237,7 @@ _MIXED_PRECISION_TRACE_LOG = re.compile(r"MIXED_PRECISION_TRACE steps=([A-Za-z0-
 
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
-_PEAK_SANITY_CEIL = 1.5    # decoded float audio should sit within ~[-1, 1]
+_PEAK_SANITY_CEIL = 1.5  # decoded float audio should sit within ~[-1, 1]
 
 
 def _free_port() -> int:
@@ -264,8 +258,13 @@ def _run(cmd: list[str], log_file: Path) -> str:
     captured: list[str] = []
     with log_file.open("w") as fp:
         proc = subprocess.Popen(
-            cmd, env=env, cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            cmd,
+            env=env,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -376,7 +375,7 @@ def _download_fp8_checkpoint() -> Path:
 
     Skips the test — rather than failing it — when the repository is unreachable
     for a credentials reason (no ``HF_TOKEN``, or a token without access to
-    nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
+    the configured checkpoint repository), so a fork PR without the runner secret does not
     go red. Any other failure (a deleted revision, a broken download) still fails
     loudly: a silently-skipping FP8 job would look green while testing nothing.
 
@@ -393,11 +392,13 @@ def _download_fp8_checkpoint() -> Path:
             pytest.fail(f"REQUIRE_FP8=1 but the FP8 checkpoint is unreachable: {reason}")
         pytest.skip(reason)
 
+    if not _FP8_REPOSITORY:
+        _skip_or_fail_no_access("Set COSMOS_FP8_CHECKPOINT_REPOSITORY to enable FP8 coverage")
     try:
         repo_root = snapshot_download(
             repo_id=_FP8_REPOSITORY,
             revision=_FP8_REVISION,
-            allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
+            allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"] if _FP8_SUBDIRECTORY else None,
         )
     except (GatedRepoError, RepositoryNotFoundError) as error:
         _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
@@ -580,9 +581,7 @@ if MAX_GPUS in (4, 8):
         _run(cmd, tmp_path / "inference_multi_control.log")
 
         results = sorted(out_dir.rglob("sample_outputs.json"))
-        assert len(results) == 1, (
-            f"expected 1 multi-control sample_outputs.json, found {[str(p) for p in results]}"
-        )
+        assert len(results) == 1, f"expected 1 multi-control sample_outputs.json, found {[str(p) for p in results]}"
         so = results[0]
         args = json.loads(so.read_text()).get("args", {})
         # Multi-control-specific: BOTH edge and blur hints are active (2 controls ->
@@ -723,9 +722,7 @@ if MAX_GPUS in (4, 8):
             + ["W8A16"] * _MIXED_PRECISION_LAST_STEPS
         )
         traces = [m.split(",") for m in _MIXED_PRECISION_TRACE_LOG.findall(log)]
-        assert expected in traces, (
-            f"expected a MIXED_PRECISION_TRACE of {'/'.join(expected)}, got traces={traces}"
-        )
+        assert expected in traces, f"expected a MIXED_PRECISION_TRACE of {'/'.join(expected)}, got traces={traces}"
 
         results = sorted(out_dir.rglob("sample_outputs.json"))
         assert len(results) == 1, f"expected 1 mixed-precision sample_outputs.json, found {[str(p) for p in results]}"

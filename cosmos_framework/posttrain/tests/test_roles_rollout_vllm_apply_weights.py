@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """VLLMRollout weight-sink: structural contract (no vLLM needed) + a real load-into-engine check
 (skipped without vLLM). The COLLECTIVE path fetches FULL tensors over the weight plane and hands
-them to vLLM's load_weights, which slices to the local TP shard (§2.4/§4)."""
+them to vLLM's load_weights, which slices to the local TP shard."""
 
 from __future__ import annotations
 

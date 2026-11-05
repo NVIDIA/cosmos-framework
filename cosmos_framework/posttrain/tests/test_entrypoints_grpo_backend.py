@@ -81,11 +81,11 @@ def test_hf_qwen3_vl_backend_selects_generic_hf_model_and_packer(monkeypatch: py
 @pytest.mark.parametrize(
     ("model_type", "has_vision", "backend", "expected_name"),
     [
-        ("qwen3_vl", True, "i4", "Qwen3VLDataPacker"),
+        ("qwen3_vl", True, "native", "Qwen3VLDataPacker"),
         ("qwen3_vl", True, "hf", "HFVLMDataPacker"),
         ("unregistered_vision_language_model", True, "hf", "HFVLMDataPacker"),
         ("qwen3", False, "hf", "DecoderOnlyLLMDataPacker"),
-        ("llama", False, "i4", "DecoderOnlyLLMDataPacker"),
+        ("llama", False, "native", "DecoderOnlyLLMDataPacker"),
     ],
 )
 def test_backend_and_modality_select_one_packer(
@@ -156,7 +156,7 @@ class Qwen3VLConfig:
 model_id = {_QWEN3_VL_MODEL!r}
 model_config = Qwen3VLModelConfig(name_or_path=model_id)
 config = SimpleNamespace(
-    model_backend="i4",
+    model_backend="native",
     model=NativePolicyBuildSpec(
         builder="cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy",
         model_id=model_id,

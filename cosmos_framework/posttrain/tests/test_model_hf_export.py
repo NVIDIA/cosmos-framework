@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for HFModel.export (Task 10): HF safetensors round-trip.
+"""Tests for HFModel.export: HF safetensors round-trip.
 
 Single-device (CPU) here: build a tiny GPT2 via HFModel, export it, reload with
 ``AutoModelForCausalLM.from_pretrained`` and assert bit-exact weights + config.json.

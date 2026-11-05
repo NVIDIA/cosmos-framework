@@ -93,8 +93,8 @@ class MixedPrecisionRuntime:
         self._modules_by_path: dict[str, list[nn.Module]] = {path: [] for path in PRECISION_PATHS}
         self._generation_high_precision = False
         self._trace: list[str] = []
-        self._block_provider = None  # set by Task 4
-        self.cached_bytes = 0  # set by Task 3
+        self._block_provider = None  # set later
+        self.cached_bytes = 0  # set later
 
     def install(self, net: nn.Module, blocks: list[nn.Module] | None = None) -> None:
         """Discover, validate, and tag every ModelOpt FP8 linear under ``net``."""

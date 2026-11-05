@@ -19,6 +19,7 @@ from cosmos_framework.inference.transfer import (
     _latent_frames_for_pixel_frames,
     _require_causal_transfer_pyav,
     _resolve_transfer_seed,
+    _warn_unused_length_and_fps,
     load_transfer_control_frames,
 )
 from cosmos_framework.inference.vision import (
@@ -199,6 +200,8 @@ def _prepare_streaming_transfer_input(
     height = media.height
     width = media.width
     temporal_compression_factor = int(model.config.tokenizer.temporal_compression_factor)
+    # Same check as the non-streaming path; an image source reports its sample fps, so it never warns.
+    _warn_unused_length_and_fps(sample_args, total_frames, media.output_fps, temporal_compression_factor)
     chunk_size = int(getattr(model.config, "teacher_forcing_frames_per_chunk", 1) or 1)
     if input_frames is not None:
         input_frames = pad_temporal_frames(input_frames, total_frames)  # [3,T,H,W]

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""End-to-end cross-device weight sync over a REAL NCCL weight plane (spec §7.1), 2 GPUs, 2 procs.
+"""End-to-end cross-device weight sync over a REAL NCCL weight plane, 2 GPUs, 2 procs.
 
 Rank 0 is the policy; rank 1 is a random-initialized HFRollout on a different GPU. The two procs
 form the side group and run a genuinely concurrent broadcast (rank-0 export ∥ rank-1 apply). We

@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""CUDA-IPC tensor sharing (design spec §2.3 IpcMover).
+"""CUDA-IPC tensor sharing (IpcMover).
 
 torch.multiprocessing.reductions.reduce_tensor turns a CUDA tensor into a picklable (rebuild, args)
 pair whose args carry a CUDA IPC handle -- the handle crosses the control plane, the GPU memory does
 not. A consumer on the SAME physical GPU rebuilds a tensor pointing at that memory (zero-copy
 transfer; the caller then D2D-loads to snapshot). GPU-only.
 
-TODO(v1+, spec §3.5): versioned-buffer lifetime/lease (keep the exported tensor alive until the
+TODO(v1+): versioned-buffer lifetime/lease (keep the exported tensor alive until the
 consumer swaps) for async/off-policy.
 """
 

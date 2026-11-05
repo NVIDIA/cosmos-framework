@@ -115,14 +115,10 @@ def test_empty_caption_preserves_the_camera_interval(tmp_path: Path, caption: st
     assert (chunk.frame_start, chunk.frame_end) == (0, 300)
 
 
-def test_chunks_carry_the_per_view_field_the_frontend_will_fill(tmp_path: Path) -> None:
-    """``view_prompts`` is None until the per-view caption frontend lands, and must stay readable.
-
-    A checkpoint trained with separate_view_text_tokenization hangs each camera's caption off this
-    field. Nothing populates it here yet -- the refusal in inference.py still turns those
-    checkpoints away -- but the chunk type carrying it is what lets that land without another
-    parser change.
-    """
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_single_caption_chunks_leave_view_prompts_unset(tmp_path: Path) -> None:
+    """Single-caption parsing leaves per-view prompts to the per-view loader."""
     (chunk,) = load_multiview_caption_chunks(_write(tmp_path, _structured((0, 300))))
 
     assert isinstance(chunk, MultiviewCaptionChunk)
@@ -353,21 +349,6 @@ def test_the_system_prompt_follows_the_caption_layout() -> None:
     )
 
     assert _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER != _SYSTEM_PROMPT_TRANSFER
-
-
-def test_the_refusal_no_longer_covers_the_caption_chunk_path() -> None:
-    """Narrowed, not removed.
-
-    Per-camera text only exists on the caption-chunk path; the one-shot builder has a single
-    prompt and nowhere to get eleven. So a per-view checkpoint is still refused there, and is now
-    served on the path that can supply the text.
-    """
-    import inspect
-
-    from cosmos_framework.inference import inference
-
-    source = inspect.getsource(inference.OmniInference.generate_batch)
-    assert "if self.per_view_captions and not mv_args.multiview.load_caption_from_data:" in source
 
 
 def _decode_to_pixels(latent_value: float) -> float:

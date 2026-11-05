@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""roles.rollout — rollout variants (DESIGN §1.2). `local` (reference) + `hf` +
+"""roles.rollout — rollout variants. `local` (reference) + `hf` +
 `vllm` (real inference engine, #6); SGLang / TRT-LLM drop in as further siblings.
 
 `vllm.py` imports the `vllm` package only inside `generate()` (call time), so importing

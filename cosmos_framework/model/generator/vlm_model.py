@@ -28,18 +28,16 @@ import torch
 import torch.nn as nn
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.lazy_config import instantiate
+from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
+from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
+from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.algorithm.loss.cross_entropy import (
     cross_entropy_loss,
     weighted_ce_denominator_from_labels,
     weighted_cross_entropy_loss,
 )
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
-from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
-from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
-from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.generator.context_parallel import (
     ContextParallelBatchPolicy,
     context_parallel_router_mean,
@@ -53,6 +51,7 @@ from cosmos_framework.model.generator.reasoner.qwen35_caption import (
 )
 from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.attention_chunks import plan_varlen_attention_chunks
 from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_forward_result,
@@ -68,6 +67,7 @@ from cosmos_framework.utils.generator.reasoner.true_packing import (
     TRUE_PACKING_CPU_PREPARED_KEY,
     assert_packing_temporal_inputs_supported,
 )
+from cosmos_framework.utils.lazy_config import instantiate
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
@@ -195,8 +195,7 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
     raise NotImplementedError(
         f"VLMModel: backbone.pretrained_weights overlay not yet supported for "
         f"model_type={model_type!r}. Supported types: {sorted(_QWEN_VL_TYPES)}. "
-        f"Add a new entry in _get_overlay_config() when onboarding a new VLM family "
-        f"(see docs/superpowers/specs/2026-04-20-vlm-pretrain-weights-path-llm-design.md §7)."
+        f"Add a new entry in _get_overlay_config() when onboarding a new VLM family."
     )
 
 
@@ -707,7 +706,7 @@ class VLMModel(ImaginaireModel):
 
     def on_after_backward(self, iteration: int = 0) -> None:
         """Capture exact pre-clip gradients when deep parity probing is enabled."""
-        maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="i4")
+        maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="native")
 
     def prepare_accumulation_window(self, batches: tuple[dict[str, Any], ...]) -> None:
         """Know the full CE denominator before mixing CE and auxiliary gradients.
@@ -779,7 +778,7 @@ class VLMModel(ImaginaireModel):
     ) -> None:
         """Capture post-step parameters and optimizer state before gradients are cleared."""
         del scheduler, iteration
-        maybe_dump_post_optimizer(self.model.model, optimizer, self._parity_probe_step, tag="i4")
+        maybe_dump_post_optimizer(self.model.model, optimizer, self._parity_probe_step, tag="native")
 
     def state_dict(
         self,
@@ -1045,18 +1044,18 @@ class VLMModel(ImaginaireModel):
         labels = data.pop("labels")
         self._set_moe_token_mask(data.get("context_parallel_token_mask", data.get("attention_mask")))
 
-        maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
+        maybe_dump_model_inputs(data, iteration, tag="native", labels=labels)
         self._parity_probe_step = iteration
 
         forward_loss_kwargs = (
             {"labels": labels} if getattr(self.config.policy, "enable_fused_weighted_ce", False) else {}
         )
-        logits = self.model(_probe_step=iteration, _probe_tag="i4", **forward_loss_kwargs, **data)
+        logits = self.model(_probe_step=iteration, _probe_tag="native", **forward_loss_kwargs, **data)
         loss_kwargs: dict[str, Any] = {}
         if self.config.policy.use_weighted_ce:
             loss_kwargs = {
                 "probe_step": iteration,
-                "probe_tag": "i4",
+                "probe_tag": "native",
                 "cu_seq_lens": data.get("cu_seq_lens_q"),
             }
         loss_result = (
@@ -1118,7 +1117,7 @@ class VLMModel(ImaginaireModel):
                 self._weighted_ce_window_metrics.add_(metrics)
         if not isinstance(logits, Qwen35CaptionLoss):
             # The fused path deliberately never creates vocabulary logits for a probe.
-            maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
+            maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="native")
 
         # Callbacks accumulate these primitives on every microbatch and reduce over WORLD only at
         # logging cadence. With explicit window normalization they are the local ratio-of-sums

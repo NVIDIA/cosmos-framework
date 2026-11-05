@@ -18,12 +18,11 @@ Two link shapes are checked, because the sources write them differently:
   ones: moving a document one directory deeper breaks its ``../pyproject.toml`` links exactly as
   readily as its ``../README.md`` links, and a target may legitimately be a directory.
 * Everything else — Python docstrings, shell launchers, Dockerfiles, ``.gitignore`` — points at
-  documents by repository-relative path (``docs/design/DESIGN.md``), resolved against the posttrain
-  package root.
+  documents by repository-relative path (``docs/posttrain/reference/config.md``), resolved against the posttrain
+  repository root. Legacy package-relative documentation paths resolve under docs/posttrain/.
 
 Only files tracked by git are scanned. Untracked local scratch notes may legitimately record
-historical paths, and planning artifacts under ``docs/superpowers/`` reference paths that are
-planned but not yet created.
+historical paths.
 """
 
 from __future__ import annotations
@@ -35,10 +34,11 @@ from pathlib import Path
 import pytest
 
 POSTTRAIN = Path(__file__).resolve().parents[1]
+REPO_ROOT = POSTTRAIN.parents[1]
+DOCS = REPO_ROOT / "docs" / "posttrain"
 _MD_LINK = re.compile(r"\]\(\s*([^)\s#]+)(?:#[^)\s]*)?\s*\)")
 _NOT_A_PATH = ("http://", "https://", "mailto:", "#")
 _PY_DOC_PATH = re.compile(r"(?<![\w/])((?:\.\./)*docs/[\w./-]+\.md)")
-_SKIP_SUBTREE = Path("docs") / "superpowers"
 # Any tracked text file may cite a document; a restructure breaks a shell script's reference exactly
 # as readily as a markdown link.
 _TEXT_SUFFIXES = {".md", ".py", ".sh", ".toml", ".yaml", ".yml", ".cfg", ".txt", ".json"}
@@ -53,14 +53,14 @@ _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".sqsh", ".lock", "
 def _tracked_files() -> list[Path]:
     """Return the git-tracked ``.md`` and ``.py`` files under the posttrain package."""
     listing = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=POSTTRAIN,
+        ["git", "ls-files", "-z", "--", "cosmos_framework/posttrain", "docs/posttrain", "docker/posttrain/environment"],
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    paths = [POSTTRAIN / name for name in listing.split("\0") if name]
-    return [p for p in paths if _SKIP_SUBTREE not in p.relative_to(POSTTRAIN).parents and _is_scannable(p)]
+    paths = [REPO_ROOT / name for name in listing.split("\0") if name]
+    return [p for p in paths if _is_scannable(p)]
 
 
 def _is_scannable(path: Path) -> bool:
@@ -89,12 +89,15 @@ def collect_doc_links(files: list[Path] | None = None) -> list[tuple[Path, int, 
         if path.name.startswith("Dockerfile"):
             is_markdown = False
         pattern = _MD_LINK if is_markdown else _PY_DOC_PATH
-        base = path.parent if is_markdown else POSTTRAIN
+        base = path.parent if is_markdown else REPO_ROOT
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for target in pattern.findall(line):
                 if target.startswith(_NOT_A_PATH):
                     continue
-                found.append((path, lineno, target, (base / target).resolve()))
+                resolved = (base / target).resolve()
+                if not is_markdown and not resolved.exists() and target.startswith("docs/"):
+                    resolved = (DOCS / target.removeprefix("docs/")).resolve()
+                found.append((path, lineno, target, resolved))
     return found
 
 
@@ -104,7 +107,7 @@ def test_every_docs_link_resolves() -> None:
     links = collect_doc_links()
     assert links, "scanner found no documentation links at all - the patterns or the root are wrong"
     broken = [
-        f"{path.relative_to(POSTTRAIN)}:{lineno} -> {target}"
+        f"{path.relative_to(REPO_ROOT)}:{lineno} -> {target}"
         for path, lineno, target, resolved in links
         if not resolved.exists()
     ]
@@ -115,12 +118,10 @@ def test_every_docs_link_resolves() -> None:
 @pytest.mark.CPU
 def test_index_reaches_every_user_document() -> None:
     """`docs/index.md` is the documentation home: no user-facing document may be unreachable."""
-    index = POSTTRAIN / "docs" / "index.md"
+    index = DOCS / "index.md"
     linked = {resolved for _, _, _, resolved in collect_doc_links([index])}
     user_areas = ("guides", "howto", "reference", "eval")
-    expected = {path.resolve() for area in user_areas for path in (POSTTRAIN / "docs" / area).glob("*.md")}
-    expected |= {
-        (POSTTRAIN / "docs" / name).resolve() for name in ("getting-started.md", "glossary.md", "troubleshooting.md")
-    }
-    missing = sorted(str(p.relative_to(POSTTRAIN)) for p in expected - linked if p.is_file())
+    expected = {path.resolve() for area in user_areas for path in (DOCS / area).glob("*.md")}
+    expected |= {(DOCS / name).resolve() for name in ("getting-started.md", "glossary.md", "troubleshooting.md")}
+    missing = sorted(str(p.relative_to(REPO_ROOT)) for p in expected - linked if p.is_file())
     assert not missing, "documents not reachable from docs/index.md:\n" + "\n".join(missing)

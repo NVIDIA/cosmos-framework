@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""model — model backends behind narrow capability protocols (DESIGN §6, §1.4).
+"""model — model backends behind narrow capability protocols.
 
 `FlowMatchingPolicy` and `VLMPolicy` (`protocol`) are the contracts; backends register builders in
 `registry`. Importing this package wires the built-in `cosmos3` OmniMoT adapter. Concrete causal

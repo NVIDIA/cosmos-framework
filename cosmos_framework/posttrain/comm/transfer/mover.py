@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""The transfer primitive: a placement-keyed tensor Mover (design spec §2).
+"""The transfer primitive: a placement-keyed tensor Mover.
 
 A Mover moves a tensor (or dict of tensors) from a producer placement to a consumer
 placement. `stage` (producer) makes the payload movable and returns an opaque `MoveHandle`;
 `fetch` (consumer) realizes it at this endpoint.
 
 For the data-plane movers `stage` is cheap and the byte movement happens in `fetch`, which is
-what makes filter-before-transfer work (§3.4): an un-fetched handle never moves. The same-GPU
+what makes filter-before-transfer work: an un-fetched handle never moves. The same-GPU
 weight mover is NOT one of these — it packs the payload inside `stage` — but every staged weight
 bucket is pushed and there is nothing to filter. `resolve_mover` keeps the two planes apart.
 
@@ -16,8 +16,8 @@ Capability flags keep mechanisms honest:
   (nccl — stage/fetch are a co-scheduled matched pair).
 - tensors_only: ipc/nccl require torch tensors; shared/copy accept any object.
 
-`reserve`/`release_staged` are the staging-buffer lifetime pair — §3.5 #3's registered-buffer
-pool and §3.5 #4's explicit release. Every mover implements them because the callers
+`reserve`/`release_staged` are the staging-buffer lifetime pair — the registered-buffer
+pool and its explicit release. Every mover implements them because the callers
 (`WeightSync.set_bucket_plan`, the stream seams) are generic; they are a no-op for movers and
 modes that stage nothing worth reusing.
 
