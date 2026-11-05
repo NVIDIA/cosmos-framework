@@ -102,8 +102,7 @@ class MetropolisDVC(VideoBaseDataset):
     # Cosmos uses DSS (nvdataset) below; VANTAGE uses S3. Both names are
     # registered, but the dispatch is asymmetric (no shared _S3_PATHS table
     # since the fetch mechanisms differ — DSS vs s3fs).
-    DSS_TENANT_ID = "0573334707593577"  # tenantid for metropolis-dataset
-    DSS_DATASET_NAME = "metropolis_dvc"  # dataset name in DSS
+    DSS_DATASET_NAME = "metropolis_dvc"  # dataset name in DSS; tenant comes from NVDATASET_TENANTID
 
     # VANTAGE-bench S3 stage: per-video <video>_events.json files under events/,
     # MP4s under videos/. The directory name has a literal space; s3fs handles
@@ -161,7 +160,7 @@ class MetropolisDVC(VideoBaseDataset):
             print(f"Dataset directory already exists at {dataset_root_dir_path}")
             return dataset_root_dir_path
 
-        tenant = os.environ.get('NVDATASET_TENANTID') or self.DSS_TENANT_ID
+        tenant = os.environ.get('NVDATASET_TENANTID')
         if not tenant:
             raise ValueError(
                 'Set NVDATASET_TENANTID for DSS downloads, or provide the local '

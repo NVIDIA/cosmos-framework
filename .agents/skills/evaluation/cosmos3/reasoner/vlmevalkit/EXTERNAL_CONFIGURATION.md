@@ -34,8 +34,9 @@ Other model entries keep their existing settings.
 
 The DSS route reuses an existing local cache without importing `nvdataset` or
 requiring credentials.
-For an uncached DSS dataset, `NVDATASET_TENANTID` overrides the existing tenant;
-`NGC_API_KEY` is still required for the download.
+For an uncached DSS dataset, set both `NVDATASET_TENANTID` and `NGC_API_KEY`;
+there is no default tenant, and the download stops with a `ValueError` when
+either is missing.
 
 Metropolis2D adapters accept `data_root` and `annotation_file` through their
 constructor or dataset configuration (`datasets.yaml` ships placeholders only).
@@ -45,9 +46,17 @@ Without either, the VANTAGE rows resolve to the hydrated local cache under
 
 ## Dataset storage
 
-Every dataset loader looks for its data under `LMUData` first. A remote fetch
-is attempted only when the local copy is absent **and** a bucket is configured;
-otherwise the loader raises `FileNotFoundError` naming the expected directory.
+Every dataset loader except `VANTAGE_2DGrounding` looks for its data under
+`LMUData` first. A remote fetch is attempted only when the local copy is absent
+**and** a bucket is configured; otherwise the loader raises `FileNotFoundError`
+naming the expected directory.
+
+`VANTAGE_2DGrounding` does not read the bucket variables. It needs either the
+hydrated local cache (see the table below) or both `data_root` and
+`annotation_file`, passed to the constructor or set in `datasets.yaml`. Both may
+be local paths or `s3://` URIs; `s3://` URIs are fetched through
+`AWS_ENDPOINT_URL`. With neither the cache nor both paths, it raises a
+`ValueError`.
 
 | Variable | Used for |
 | --- | --- |
