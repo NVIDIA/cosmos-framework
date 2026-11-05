@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Local (reference) rollout body (DESIGN §1.2 body=(a) local compute).
+"""Local (reference) rollout body (the contract body=(a) local compute).
 
 `LocalRollout` wraps a shared model instance and generates completions for a batch
 of prompts, returning Trajectories.
 
-KEY DISCIPLINE (DESIGN §7): when the trainer and rollout share ONE model instance the weight
+KEY DISCIPLINE: when the trainer and rollout share ONE model instance the weight
 edge is a no-op (rollout already sees the trainer's step); otherwise it receives pushed weights
 through the producer-driven edge (`apply_bucket` + rollout-wide version prepare/commit,
-design 2026-07-27 §2).
+the implementation).
 Either way the rollout uses *its own* model reference and never reaches into the trainer, so a
 separate inference engine + real resharding drops in later (#4) without changing the runner.
 """
@@ -61,7 +61,7 @@ class LocalRollout(WeightReceiverBase):
             context="local rollout validation semantics identity",
         )
 
-    # --- weight-transfer edge target (DESIGN §8.2 #4) ---
+    # --- weight-transfer edge target  ---
     def apply_weights(self, source: "Any | None" = None) -> None:
         """v0: NO-OP. Shared instance → rollout already sees updated weights after
         the trainer's optimizer step. The edge exists so v1+ can do real resharding

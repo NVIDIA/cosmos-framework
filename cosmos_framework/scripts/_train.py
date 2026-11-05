@@ -30,15 +30,15 @@ from cosmos_framework.inference.common.config import (
     structure_config,
 )
 from cosmos_framework.inference.common.init import init_output_dir, is_rank0
-from cosmos_framework.utils.flags import SMOKE
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
+from cosmos_framework.utils.flags import SMOKE
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
 
-    from cosmos_framework.utils.config import Config
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+    from cosmos_framework.utils.config import Config
 
 
 def _validate_config_file(v: Path) -> Path:
@@ -88,7 +88,7 @@ def _get_config_overrides(args: Args, config_dict: dict) -> list[str]:
 
 
 def _get_job_dir(project: str, group: str, name: str) -> Path:
-    output_root = Path(os.environ.get("IMAGINAIRE_OUTPUT_ROOT", "/tmp/imaginaire4-output"))
+    output_root = Path(os.environ.get("IMAGINAIRE_OUTPUT_ROOT", "/tmp/cosmos-framework-output"))
     return output_root / project / group / name
 
 

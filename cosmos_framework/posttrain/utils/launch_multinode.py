@@ -146,15 +146,23 @@ def _mount_probe(container_mounts: str) -> str:
 def resolve_config(
     *, container_image=None, container_mounts=None, account=None, partition=None, repo_root=None
 ) -> LaunchConfig:
-    """Resolve env-specific config (arg -> env -> default). container_image is required."""
+    """Resolve execution settings from arguments or environment; image, mounts, account and partition are required."""
     image = _pick(container_image, ["POSTTRAIN_CONTAINER_IMAGE"], None)
     if not image:
         raise ValueError("no container image: set POSTTRAIN_CONTAINER_IMAGE or pass --container-image")
+    required = {
+        "container_mounts": _pick(container_mounts, ["POSTTRAIN_CONTAINER_MOUNTS"], None),
+        "account": _pick(account, ["POSTTRAIN_SLURM_ACCOUNT", "SBATCH_ACCOUNT"], None),
+        "partition": _pick(partition, ["POSTTRAIN_SLURM_PARTITION"], None),
+    }
+    for key, value in required.items():
+        if not value:
+            raise ValueError(
+                f"{key} is required: pass --{key.replace('_', '-')} or set its POSTTRAIN environment variable"
+            )
     return LaunchConfig(
         container_image=image,
-        container_mounts=_pick(container_mounts, ["POSTTRAIN_CONTAINER_MOUNTS"], "/lustre:/lustre"),
-        account=_pick(account, ["POSTTRAIN_SLURM_ACCOUNT", "SBATCH_ACCOUNT"], ""),
-        partition=_pick(partition, ["POSTTRAIN_SLURM_PARTITION"], "interactive"),
+        **required,
         repo_root=_pick(repo_root, ["POSTTRAIN_REPO_ROOT"], _default_repo_root()),
     )
 
@@ -300,7 +308,7 @@ done
 #     {cn} already exists from step 1, so pyxis REUSES it (no second extract, no race) — and the mount
 #     namespace stays live as long as this step, so every later `--overlap --container-name` attach
 #     (probe, pip, the Ray launcher's run_in_container) inherits /lustre. A mount-less keep-alive here
-#     instead drops the mounts the moment step 1 exits, so attaches then fail with `cd: .../imaginaire4:
+#     instead drops the mounts the moment step 1 exits, so attaches then fail with `cd: .../repository:
 #     No such file or directory`.
 srun --overlap --ntasks-per-node=1 --container-image {img} --container-mounts {mounts}{root_flag} \\
   --container-name {cn} --container-workdir {workdir} sleep infinity &

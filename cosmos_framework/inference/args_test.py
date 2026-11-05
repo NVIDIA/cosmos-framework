@@ -317,9 +317,11 @@ def test_sample_args(tmp_path: Path):
     args = overrides.build_sample(model_config=model_dict.config)
 
     # Check idempotent
-    assert overrides.build_sample(model_config=model_dict.config) == args
+    # Compare the public fields: a built sample also records which fields were requested.
+    assert overrides.build_sample(model_config=model_dict.config).model_dump() == args.model_dump()
     overrides_dump = {k: v for k, v in args.model_dump().items() if k in OmniSampleOverrides.model_fields}
-    assert OmniSampleOverrides.model_validate(overrides_dump).build_sample(model_config=model_dict.config) == args
+    rebuilt = OmniSampleOverrides.model_validate(overrides_dump).build_sample(model_config=model_dict.config)
+    assert rebuilt.model_dump() == args.model_dump()
 
     text2image_args = OmniSampleOverrides(
         name="text2image",

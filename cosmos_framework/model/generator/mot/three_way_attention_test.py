@@ -8,7 +8,7 @@ Instructions
 
 This test will fail with many backends; use natten.  Run with:
 
-I4_ATTN_BACKENDS=natten I4_ATTN_BACKENDS_MERGE=natten \
+COSMOS_ATTN_BACKENDS=natten COSMOS_ATTN_BACKENDS_MERGE=natten \
 pytest cosmos_framework/model/generator/mot/three_way_attention_test.py -v -rA
 
 It is also worth checking whether clamp_empty_varlen_kv is needed on any
@@ -104,7 +104,7 @@ import os
 # unrelated to what the test is meant to check.
 #
 # ``setdefault`` preserves an explicit user override, e.g.
-#   ``I4_ATTN_BACKENDS=cudnn pytest ...``
+#   ``COSMOS_ATTN_BACKENDS=cudnn pytest ...``
 # still wins.  Must run BEFORE any import that triggers attention backend
 # selection — cosmos_framework.model.attention.backends.choose_backend is
 # ``@lru_cache``'d, so once it's been called the env var won't take effect.
@@ -113,14 +113,19 @@ import os
 # To test with other backends, remove the backend="natten" arguments, and
 # (optionally) uncomment the following:
 #
-# os.environ.setdefault("I4_ATTN_BACKENDS", "natten")
-# os.environ.setdefault("I4_ATTN_BACKENDS_MERGE", "natten")
+# os.environ.setdefault("COSMOS_ATTN_BACKENDS", "natten")
+# os.environ.setdefault("COSMOS_ATTN_BACKENDS_MERGE", "natten")
 #
 from collections.abc import Callable
 
 import pytest
 import torch
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_causal_seq,
+    get_gen_seq,
+)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.attention import SplitInfo
@@ -130,11 +135,6 @@ from cosmos_framework.model.generator.mot.causal_attention import (
 from cosmos_framework.model.generator.utils.kv_cache import (
     KVTrainMemoryValue,
     TFNoisyMemoryValue,
-)
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_causal_seq,
-    get_gen_seq,
 )
 
 # Shape / config constants.

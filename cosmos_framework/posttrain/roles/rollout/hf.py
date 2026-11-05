@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""HuggingFace rollout body (DESIGN §1.2 body=(a) local compute).
+"""HuggingFace rollout body (the contract body=(a) local compute).
 
 `HFRollout`: HF `generate` with group sampling. In the training loop the POLICY pushes weights
-into this PASSIVE receiver (producer-driven, design 2026-07-27 §2): `apply_bucket` loads each
+into this PASSIVE receiver (producer-driven): `apply_bucket` loads each
 pushed bucket and the controller's prepare/commit barrier publishes the version. `apply_weights` is the KEPT
 consumer-pull surface (manual / NCCL rigs), NOT the loop entry, and a no-op only when trainer &
 rollout share one model instance. A real inference engine (SGLang/vLLM/TRT-LLM, #6) drops in as a
@@ -51,8 +51,7 @@ def _trim_at_stop(comp_ids, stop_ids: "set[int]"):
     unless BOTH `skip_special_tokens=False` AND `include_stop_str_in_output=True` are set; cosmos-rl
     sets neither on its rollout SamplingParams, and its `DecoderOnlyLLMDataPacker` re-tokenizes the
     TEXT. So cosmos-rl trains one token shorter than we do on every stopped completion. That single
-    token was the entire residual loss gap between the two stacks — see
-    docs/design/grpo-cosmos-rl-parity.md.
+    token changes the supervised sequence, so preserving token IDs matters.
 
     Args:
         comp_ids: 1-D tensor of completion token ids, right-padded by `generate`.
@@ -116,8 +115,8 @@ def _require_identical_validation_prompt(
 
 class HFRollout(WeightReceiverBase):
     """HF `generate` rollout with group sampling. Shares its model instance with LLMTrainer when
-    colocated (DESIGN §7); receives pushed weights as a passive producer-driven receiver
-    (`apply_bucket` + rollout-wide version prepare/commit, design 2026-07-27 §2)."""
+    colocated; receives pushed weights as a passive producer-driven receiver
+    (`apply_bucket` + rollout-wide version prepare/commit)."""
 
     def __init__(
         self,
@@ -173,7 +172,7 @@ class HFRollout(WeightReceiverBase):
             )
         self.model = model
         self.packer = packer
-        # The packer owns the tokenizer (rollout-side shaping seam, design 2026-07-28).
+        # The packer owns the tokenizer (rollout-side shaping seam).
         self.tok = packer.tokenizer
         # top_k/repetition_penalty are spelled out rather than left off — an omitted knob inherits
         # from the model object, not from a framework default (`RolloutConfig.top_k`). This fallback

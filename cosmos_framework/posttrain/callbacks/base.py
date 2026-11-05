@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Callback base (DESIGN §2.6) — cross-cutting observability hooks.
+"""Callback base  — cross-cutting observability hooks.
 
 Callbacks hang on the control loop's event points and declare a *kind*: **observer**
 (async-safe, off-hot-path, must not block / mutate training) or **gate** (sync,

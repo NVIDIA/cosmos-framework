@@ -15,7 +15,7 @@ These notebooks are walkthroughs of that API.
 
 | Path | Role |
 | --- | --- |
-| [quantize_nano_super.ipynb](./quantize_nano_super.ipynb) | Nano and Super video-model quantization. |
+| [quantize_cosmos3.ipynb](./quantize_cosmos3.ipynb) | Edge, Nano, and Super video-model quantization. |
 | [quantize_super_text2image.ipynb](./quantize_super_text2image.ipynb) | Base and distilled Text-to-Image quantization. |
 | [quantize_super_image2video.ipynb](./quantize_super_image2video.ipynb) | Base and distilled Image-to-Video quantization. |
 
@@ -33,7 +33,7 @@ quantize_fp8_checkpoint(
 ```
 
 `calibration_behavior="framework"` is the default for new checkpoints and is
-explicit in all six notebook calls. It uses the framework sampler and model
+explicit in the notebook calls. It uses the framework sampler and model
 behavior. `calibration_behavior="legacy"` is an opt-in compatibility recipe;
 it is not the normal calibration path in these notebooks.
 
@@ -89,10 +89,10 @@ By default **DEMO=1** uses one calibration prompt and a smaller shape; it still
 loads the full checkpoint and runs every sampler step. `DEMO=0` uses the larger
 shape and eight prompts. Neither mode guarantees published-quality reproduction.
 
-## Quantize Cosmos3-Nano and Cosmos3-Super
+## Quantize Cosmos3-Edge, Cosmos3-Nano, and Cosmos3-Super
 
-Convert the Nano (16B) and Super (64B) checkpoints. Same recipe, different checkpoint —
-Nano first, then Super.
+Convert the base Edge (4B), Nano (16B), and Super (64B) checkpoints with the same recipe.
+The notebook runs Edge first, then Nano and Super.
 
 ### Run
 
@@ -101,13 +101,13 @@ cd "$FRAMEWORK_ROOT/.agents/skills/cookbooks/cosmos3/quantization"
 DEMO=1 "$COSMOS3_QUANTIZE_VENV/bin/jupyter" nbconvert --to notebook --execute --output-dir "$RUN_ARTIFACTS" \
   --ExecutePreprocessor.kernel_name=cosmos3-quantize \
   --ExecutePreprocessor.timeout=7200 \
-  quantize_nano_super.ipynb
+  quantize_cosmos3.ipynb
 ```
 
 ### Notebook walkthrough
 
-[`quantize_nano_super.ipynb`](./quantize_nano_super.ipynb) walks
-through prerequisites, environment setup, and then quantizes Nano and Super in separate
+[`quantize_cosmos3.ipynb`](./quantize_cosmos3.ipynb) walks
+through prerequisites, environment setup, and then quantizes Edge, Nano, and Super in separate
 sections, printing a short summary of each FP8 checkpoint it writes.
 
 ## Quantize Cosmos3-Super Text-to-Image (base and distilled)
@@ -194,8 +194,8 @@ Point your serving stack at this directory.
 The FP8 output is a **drop-in checkpoint** — the same layout as the bf16 source, plus an
 `hf_quant_config.json` and a `quantization_config` in `transformer/config.json`. A
 compatible serving backend detects the ModelOpt FP8 format from checkpoint metadata. Serve it from a **local
-directory** — either the output produced above, or the published `nvidia/Cosmos3-Nano-FP8` / `nvidia/Cosmos3-Super-FP8` checkpoint
-downloaded with `snapshot_download` (pass `--served-model-name` so clients see the usual model id):
+directory** — either the output produced above, or a published `nvidia/Cosmos3-Edge-FP8`,
+`nvidia/Cosmos3-Nano-FP8`, or `nvidia/Cosmos3-Super-FP8` checkpoint downloaded with `snapshot_download` (pass `--served-model-name` so clients see the usual model id):
 
 ```bash
 # A) the local FP8 output produced above
@@ -227,6 +227,6 @@ launch details ([vLLM](../README.md#vllm), [vLLM-Omni](../README.md#vllm-omni)).
 
 For the four specialized Super checkpoints, use the locally quantized outputs;
 this guide does not assume published `fp8` revisions. The audiovisual notebook
-maps all six output directories to their original served model IDs. Generated
+maps all seven output directories to their original served model IDs. Generated
 outputs contain symlinks: mount the source checkpoint (and any backing HF cache)
 at its original absolute path inside Docker as shown in the serving notebooks.

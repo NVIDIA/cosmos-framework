@@ -575,7 +575,7 @@ def _load_sft_metadata_from_s3(
 
 
 def get_sft_dataset(
-    jsonl_paths: str | list[str] = "s3://bucket3/cosmos3_video_sft/human_1k/captions_full.jsonl",
+    jsonl_paths: str | list[str],
     resolution: str = "720",
     num_video_frames: int = 93,
     temporal_interval_mode: str = "entire_chunk",

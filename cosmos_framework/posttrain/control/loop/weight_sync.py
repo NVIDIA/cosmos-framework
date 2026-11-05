@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""THE weight-sync entry point (producer-driven weight channel, design 2026-07-27 §2).
+"""THE weight-sync entry point (producer-driven weight channel).
 
 ``weight_sync(rollout, policy)`` is the ONE call every training loop makes, whatever the topology.
 It drives the role edge's PRODUCER form — ``policy.push_weights(rollout)`` — where the transport
