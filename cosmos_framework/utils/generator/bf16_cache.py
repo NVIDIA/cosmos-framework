@@ -102,6 +102,15 @@ def _linear_forward(self, inputs):
     return linear(inputs, self.weight, self.bias)
 
 
+def _attention_warp_count(module, query_length, head_dim):
+    # Long Qwen3-VL prefill benefits from eliminating cross-warp exchanges in
+    # each query's reductions. This is the *same* kernel, 64-key tiles, FP64
+    # arithmetic and online recurrence; decode/short inputs retain the original
+    # launch. Keep the four-warp launch as the independent correctness reference.
+    family = getattr(getattr(module, "config", None), "model_type", None)
+    return 1 if family == "qwen3_vl_text" and query_length >= 1024 and head_dim == 128 else 4
+
+
 def _attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
     import triton
 
@@ -166,7 +175,7 @@ def _attention_forward(module, query, key, value, attention_mask=None, dropout=0
             attention_mask is not None and attention_mask.dtype == torch.bool,
             64,
             triton.next_power_of_2(d),
-            num_warps=4,
+            num_warps=_attention_warp_count(module, m, d),
             num_stages=1,
         )
     return output.transpose(1, 2).contiguous(), None

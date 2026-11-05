@@ -86,6 +86,46 @@ def test_cpu_install_rejection_preserves_model(tmp_path):
     assert all(p is before[n][0] and torch.equal(p, before[n][1]) for n, p in model.named_parameters())
 
 
+def test_prefill_launch_is_bounded_to_qualified_geometry():
+    from cosmos_framework.utils.generator.bf16_cache import _attention_warp_count
+
+    vl = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_vl_text"))
+    other = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text"))
+    assert _attention_warp_count(vl, 8192, 128) == 1
+    for model, length, dim in [(vl, 1, 128), (vl, 1023, 128), (vl, 2048, 64), (vl, 2048, 256), (other, 8192, 128)]:
+        assert _attention_warp_count(model, length, dim) == 4
+
+
+@pytest.mark.parametrize("mask_kind", ["none", "bool", "inf", "finite", "broadcast"])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="canonical kernels require CUDA")
+def test_prefill_launch_matches_original_kernel_bitwise(mask_kind, monkeypatch):
+    from cosmos_framework.utils.generator import bf16_cache
+
+    torch.manual_seed(51109)
+    m, n, d = 1025, 1049, 128
+    # Non-contiguous inputs/cache views and partial query/key tiles.
+    q = torch.randn(1, m * 2, 4, d, device="cuda", dtype=torch.bfloat16)[:, ::2].transpose(1, 2)
+    k, v = [torch.randn(1, n * 2, 2, d, device="cuda", dtype=torch.bfloat16)[:, ::2].transpose(1, 2) for _ in range(2)]
+    mask = None
+    if mask_kind != "none":
+        valid = torch.arange(n, device="cuda")[None, :] <= torch.arange(m, device="cuda")[:, None] + n - m
+        valid[2] = False
+        if mask_kind == "bool":
+            mask = valid[None, None]
+        elif mask_kind == "broadcast":
+            mask = torch.tensor(True, device="cuda").expand(1, 1, 1, n)
+        else:
+            mask = torch.zeros((1, 1, m, n), device="cuda").masked_fill(
+                ~valid, float("-inf") if mask_kind == "inf" else torch.finfo(torch.float32).min
+            )
+    module = SimpleNamespace(training=False, config=SimpleNamespace(model_type="qwen3_vl_text"))
+    with torch.no_grad():
+        actual, _ = bf16_cache._attention_forward(module, q, k, v, mask)
+        monkeypatch.setattr(bf16_cache, "_attention_warp_count", lambda *_: 4)
+        reference, _ = bf16_cache._attention_forward(module, q, k, v, mask)
+    assert torch.equal(actual, reference)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="canonical kernels require CUDA")
 def test_linear_shape_consistency_and_fp64_reference():
     from cosmos_framework.utils.generator.bf16_cache import linear

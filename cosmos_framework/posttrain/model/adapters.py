@@ -220,6 +220,18 @@ def merged_execution_weight(base, a, b, scale, *, method, magnitude=None, initia
 class PosttrainAdapterLinear(LoraInjectedLinear):
     """Native LoRA plus bounded DoRA/PiSSA extensions with pure merged export."""
 
+    def _apply(self, fn, recurse=True):
+        cache = getattr(self, "_cosmos_effective_weight_cache", None)
+        if cache is not None:
+            cache.clear()
+        return super()._apply(fn, recurse=recurse)
+
+    def train(self, mode=True):
+        cache = getattr(self, "_cosmos_effective_weight_cache", None)
+        if mode and cache is not None:
+            cache.clear()
+        return super().train(mode)
+
     def __init__(self, base: nn.Linear, config: AdapterComponentConfig, *, initialize: bool = True) -> None:
         super().__init__(
             base,
