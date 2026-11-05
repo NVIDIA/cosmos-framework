@@ -6,7 +6,7 @@ Every test pins a behavior whose failure is SILENT or first surfaces as an expen
 the BATCH boundary (not the optimizer step) driving generate/weight_sync, and resume
 converting between the two clocks; a NaN step never streams weights into
 the running engine; a resumed loop runs only the remaining steps; `build_trainer` resumes from the latest
-checkpoint (dinghaoy's requeue-restarts-from-base bug); preemption saves before exit; run_ts pinned into
+checkpoint (a requeue once restarted from the base); preemption saves before exit; run_ts pinned into
 worker opts. The real vLLM rollout + FSDP trainer are GPU-tested; these use stub roles / fakes.
 """
 

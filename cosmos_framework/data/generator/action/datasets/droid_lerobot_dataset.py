@@ -93,8 +93,8 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         tolerance_s=2e-4,
         viewpoint: Viewpoint = "concat_view",
         use_success_only: bool = False,
-        video_mode: str | None = None,  # TODO (ychao): remove
-        action_space: str = "midtrain",  # TODO (ychao): remove
+        video_mode: str | None = None,  # TODO: remove
+        action_space: str = "midtrain",  # TODO: remove
         use_state: bool = False,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
@@ -108,7 +108,11 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         jitter_after_compose: bool = False,
         filter_dict_source_prefix: str = "",
     ) -> None:
-        """ """
+        """Load a local DROID dataset; filtering requires an explicit JSON path."""
+        if not root:
+            raise ValueError("root must be a non-empty local DROID dataset path")
+        if use_filter_dict and not filter_dict_path:
+            raise ValueError("filter_dict_path is required when use_filter_dict=True")
         super().__init__(
             fps=fps,
             chunk_length=chunk_length,
@@ -130,8 +134,6 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         self._action_space = action_space
         self._use_state = use_state
         self._use_filter_dict = use_filter_dict
-        if use_filter_dict and not filter_dict_path:
-            raise ValueError("filter_dict_path is required when use_filter_dict=True")
         self._filter_dict_path = filter_dict_path
         self._max_num_history_actions = max_num_history_actions
         self._use_image_augmentation = use_image_augmentation
@@ -187,8 +189,11 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
             self._delta_timestamps[_GRIPPER_STATE_FEATURE] = observation_ts
 
         if self._use_filter_dict:
-            with open(self._filter_dict_path) as f:
-                self._filter_dict = normalize_episode_filter_keys(json.load(f), source_prefix=filter_dict_source_prefix)
+            assert filter_dict_path is not None  # Validated before dataset initialization.
+            with open(filter_dict_path) as f:
+                self._filter_dict = normalize_episode_filter_keys(
+                    json.load(f), source_prefix=filter_dict_source_prefix
+                )
 
         self._image_augmentor: T.Compose | None = None
         self._color_augmentor: T.ColorJitter | None = None

@@ -673,16 +673,6 @@
       "kind": "file",
       "sha256": "9fd8dff56ceb0e2cd89774949e971b83e973aa8e5f864fd8f9f8c0bfa091adf5"
     },
-    "projects/cosmos3/posttrain/configs/sft_qwen3p8_27b_obj1k.py": {
-      "destination": "cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k.py",
-      "kind": "file",
-      "sha256": "e179bf976b2eab87d88d3f04f6380f8924be018548bf6c3fd78ff918855df445"
-    },
-    "projects/cosmos3/posttrain/configs/sft_qwen3p8_27b_obj1k_gcp.json": {
-      "destination": "cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k_gcp.json",
-      "kind": "file",
-      "sha256": "a97bcbe5a53762dc63a208cdd9f31eb8e113ab0fbe1288cb3cda103b2248ca97"
-    },
     "projects/cosmos3/posttrain/control/__init__.py": {
       "destination": "cosmos_framework/posttrain/control/__init__.py",
       "kind": "file",
