@@ -1950,10 +1950,9 @@ def validate_opd_policy_backend(
         policy_model_id=policy_model_id,
     )
     normalized_backend = None if model_backend is None else normalize_model_backend(str(model_backend))
-    if rl.teacher.signal_mode == "dpca" and normalized_backend is not None and normalized_backend != I4:
+    if rl.teacher.signal_mode == "dpca" and normalized_backend == HF:
         raise ValueError(
-            f"DPCA requires model_backend={I4!r}, got {normalized_backend!r}; the generic HF path "
-            "does not provide the native multimodal policy capability"
+            "DPCA requires a native multimodal policy; the generic HF path does not provide this capability"
         )
 
 

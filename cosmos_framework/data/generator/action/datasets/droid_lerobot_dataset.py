@@ -46,8 +46,6 @@ from cosmos_framework.data.generator.action.utils.pose_utils import (
 from cosmos_framework.data.generator.action.utils.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
 
-_FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"
-
 _NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
 
 # 90-degree clockwise rotation about the Z axis (in local frame), converting
@@ -79,7 +77,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
 
     def __init__(
         self,
-        root: str = "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",
+        root: str,
         fps: float = 15.0,
         chunk_length: int = 16,
         split_seed: int = 42,
@@ -91,8 +89,8 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         tolerance_s=2e-4,
         viewpoint: Viewpoint = "concat_view",
         use_success_only: bool = False,
-        video_mode: str | None = None,  # TODO (ychao): remove
-        action_space: str = "midtrain",  # TODO (ychao): remove
+        video_mode: str | None = None,  # TODO: remove
+        action_space: str = "midtrain",  # TODO: remove
         use_state: bool = False,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
@@ -105,7 +103,11 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         apply_forward_clamp: bool = False,
         jitter_after_compose: bool = False,
     ) -> None:
-        """ """
+        """Load a local DROID dataset; filtering requires an explicit JSON path."""
+        if not root:
+            raise ValueError("root must be a non-empty local DROID dataset path")
+        if use_filter_dict and not filter_dict_path:
+            raise ValueError("filter_dict_path is required when use_filter_dict=True")
         super().__init__(
             fps=fps,
             chunk_length=chunk_length,
@@ -127,7 +129,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         self._action_space = action_space
         self._use_state = use_state
         self._use_filter_dict = use_filter_dict
-        self._filter_dict_path = filter_dict_path or _FILTER_DICT_PATH
+        self._filter_dict_path = filter_dict_path
         self._max_num_history_actions = max_num_history_actions
         self._use_image_augmentation = use_image_augmentation
         self._jitter_after_compose = jitter_after_compose
@@ -182,7 +184,8 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
             self._delta_timestamps[_GRIPPER_STATE_FEATURE] = observation_ts
 
         if self._use_filter_dict:
-            with open(self._filter_dict_path) as f:
+            assert filter_dict_path is not None  # Validated before dataset initialization.
+            with open(filter_dict_path) as f:
                 self._filter_dict = json.load(f)
 
         self._image_augmentor: T.Compose | None = None
@@ -221,6 +224,8 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         filtered_count = 0
         for episode_id, sample_start, valid_len in episode_spans:
             ep_id_str = meta.episodes[episode_id]["episode_id"]
+            # Legacy JSON lookup key only; this URI is never fetched. See
+            # docs/action_policy_droid_posttrain.md for public data and filter downloads.
             episode_key = f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/recordings/MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/trajectory.h5"
             ranges = self._filter_dict.get(episode_key)
             if ranges is None:

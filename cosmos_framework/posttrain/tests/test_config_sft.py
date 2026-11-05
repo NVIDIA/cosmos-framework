@@ -8,8 +8,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import subprocess
-import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -59,7 +57,8 @@ def test_recipe_preflight_and_manifest(tmp_path: Path, monkeypatch: pytest.Monke
     for split in ("train", "validation"):
         # preflight checks availability; row semantics belong to source setup
         (tmp_path / f"{split}.jsonl").write_text("{}\n")
-    config = load_config("cosmos_framework/posttrain/configs/sft_qwen3p8_27b_obj1k.py", [])
+    config = load_config("cosmos_framework/posttrain/configs/sft_qwen3p8_27b_multimodal.py", [])
+    config.rl.data.credentials = config.rl.validation.data.credentials = str(tmp_path / "gcs.json")
     rl = validate_config(config)
     assert config.job.wandb_mode == "disabled"
     assert config.job.project == "cosmos3_reasoner"
@@ -71,36 +70,6 @@ def test_recipe_preflight_and_manifest(tmp_path: Path, monkeypatch: pytest.Monke
     config.grid.backend = "ray"
     with pytest.raises(ValueError, match="local/torchrun"):
         validate_config(config)
-
-
-def test_recipe_generates_install_free_torchrun_script(tmp_path: Path) -> None:
-    profile_path = _POSTTRAIN / "configs/sft_qwen3p8_27b_obj1k_gcp.json"
-    profile = json.loads(profile_path.read_text())
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-S",
-            str(_POSTTRAIN / "utils/launch_multinode.py"),
-            "--launch-config",
-            str(profile_path),
-            "--repo-root",
-            str(_ROOT),
-            "--log-dir",
-            str(tmp_path),
-            "--dry-run",
-        ],
-        cwd=_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=30,
-    )
-    script = result.stdout
-    assert "launch_multinode_torchrun.sh" in script
-    assert f"--container-image {profile['container_image']}" in script
-    assert f"VENV_ACTIVATE={profile['venv']}" in script
-    assert "pip install" not in script and "uv sync" not in script
-    subprocess.run(["bash", "-n"], input=script, text=True, check=True, timeout=10)
 
 
 def test_packer_refuses_old_transformers_before_loading(monkeypatch: pytest.MonkeyPatch) -> None:

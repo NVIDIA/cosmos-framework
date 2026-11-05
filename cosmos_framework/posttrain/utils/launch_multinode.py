@@ -152,7 +152,7 @@ def resolve_config(
         raise ValueError("no container image: set POSTTRAIN_CONTAINER_IMAGE or pass --container-image")
     return LaunchConfig(
         container_image=image,
-        container_mounts=_pick(container_mounts, ["POSTTRAIN_CONTAINER_MOUNTS"], "/lustre:/lustre"),
+        container_mounts=_pick(container_mounts, ["POSTTRAIN_CONTAINER_MOUNTS"], ""),
         account=_pick(account, ["POSTTRAIN_SLURM_ACCOUNT", "SBATCH_ACCOUNT"], ""),
         partition=_pick(partition, ["POSTTRAIN_SLURM_PARTITION"], "interactive"),
         repo_root=_pick(repo_root, ["POSTTRAIN_REPO_ROOT"], _default_repo_root()),
