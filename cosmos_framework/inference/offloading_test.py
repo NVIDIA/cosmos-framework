@@ -174,6 +174,23 @@ def test_cpu_materialization_preserves_fp8_payload_and_scales():
         assert getattr(weight, part).device.type == "cpu"
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float8_e4m3fn])
+def test_weight_binding_preserves_alignment_and_values(dtype):
+    # Scalar scales and odd-sized payloads must stay aligned after packing.
+    tensors = [torch.arange(size, dtype=torch.float32).to(dtype) for size in (1, 1, 3, 5)]
+    tensors.append(torch.arange(6, dtype=torch.float32).reshape(2, 3).t().to(dtype))
+    expected = [tensor.clone() for tensor in tensors]
+    strides = [tensor.stride() for tensor in tensors]
+    weights = _LayerWeights(tensors)
+    for device in ("cpu", "cuda", "cpu"):
+        backing = {dtype: host.to(device) for dtype, host in weights.host.items()}
+        weights.bind(backing)
+        for tensor, reference, stride in zip(tensors, expected, strides, strict=True):
+            assert tensor.data_ptr() % 16 == 0
+            assert tensor.stride() == stride
+            torch.testing.assert_close(tensor.cpu().float(), reference.float(), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("inference_parameter", [False, True])
 def test_weight_binding_preserves_inference_status(inference_parameter):
     with torch.inference_mode(inference_parameter):

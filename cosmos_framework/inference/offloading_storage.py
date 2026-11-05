@@ -90,6 +90,9 @@ class _LayerWeights:
         for tensor in physical:
             entries = self.views.setdefault(tensor.dtype, [])
             offset = entries[-1].offset + entries[-1].span if entries else 0
+            # Work around cuBLAS 12.9/13.0 requiring 16-byte-aligned FP8 scalar scales.
+            alignment = max(1, 16 // tensor.element_size())
+            offset = (offset + alignment - 1) // alignment * alignment
             span = 1 + sum((size - 1) * stride for size, stride in zip(tensor.shape, tensor.stride(), strict=True))
             entries.append(_WeightView(tensor, offset, span if tensor.numel() else 0, tensor.shape, tensor.stride()))
         # Complete the copies before changing any module storage.
