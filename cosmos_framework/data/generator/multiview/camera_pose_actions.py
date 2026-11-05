@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 
 from cosmos_framework.data.generator.action.utils.action_processing import (
@@ -47,6 +45,11 @@ from cosmos_framework.data.generator.action.utils.unified_action_schema import (
 # augmentation chain. A sidecar's rows are stamped with the source stream ID, which a
 # discovering source cannot recover from the camera name: it binds a row's own streams
 # to generic view slots, so the slot a stream lands in varies from sample to sample.
+from cosmos_framework.utils.optional_import import optional_import
+
+pa = optional_import("pyarrow")
+pq = optional_import("pyarrow.parquet")
+
 SOURCE_STREAM_ID_KEY = "_camera_source_stream_id"
 # Per-sample ``CameraActionSlots`` of a ``unified_wrist_slots`` source, carried through the
 # augmentation chain like ``SOURCE_STREAM_ID_KEY``: which unified_v1 block each camera's pose

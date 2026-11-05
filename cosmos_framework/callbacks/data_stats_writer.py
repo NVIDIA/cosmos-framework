@@ -13,6 +13,7 @@ presence marks the save complete. Rank 0 runs that merge in the background as
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -24,14 +25,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 import torch.distributed as dist
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.callback import Callback
+from cosmos_framework.utils.optional_import import optional_import
+
+pa = optional_import("pyarrow")
+pq = optional_import("pyarrow.parquet")
 
 DATA_STATS_DIRNAME = "data_stats"
 MERGED_FILE = "merged.parquet"
@@ -43,81 +46,88 @@ _SAVE_DIR_PATTERN = re.compile(r"^iter_(\d{9})$")
 @dataclass(frozen=True)
 class _Field:
     name: str
-    dtype: pa.DataType
+    dtype: str  # pyarrow type factory name, resolved when the schema is built
     description: str
 
     def arrow(self) -> pa.Field:
-        return pa.field(self.name, self.dtype, metadata={b"description": self.description.encode()})
+        return pa.field(self.name, getattr(pa, self.dtype)(), metadata={b"description": self.description.encode()})
 
 
 _FIELDS = (
-    _Field("phase", pa.string(), 'Data split that produced the row: "train", "val", or "data_only".'),
-    _Field("step", pa.int64(), "Completed training iteration or data-loading step associated with the sample."),
-    _Field("rank", pa.int32(), "Distributed process rank that consumed the sample."),
-    _Field("sample_rank", pa.int32(), "Rank recorded by the dataset distributor."),
-    _Field("worker_id", pa.int32(), "Dataloader worker that selected the sample."),
-    _Field("epoch", pa.int32(), "WDS distributor epoch or Lance recipe epoch (legacy: per-source pass)."),
-    _Field("sample_index", pa.int64(), "WDS epoch shard index or zero-based Lance worker-local schedule position."),
-    _Field("dataset_name", pa.string(), "Recipe dataset/category name."),
-    _Field("source_backend", pa.string(), "Source identity domain: webdataset or lance."),
-    _Field("dataset_population", pa.int64(), "Lance grouped sample count; null for WebDataset."),
-    _Field("sample_id", pa.string(), "Stable sample identity independent of GCS or Lustre storage."),
-    _Field("source_occurrence", pa.int64(), "Worker-local Lance source cursor after this occurrence."),
-    _Field("group_index", pa.int64(), "Source-local Lance grouped sample index; null for WebDataset or legacy runs."),
-    _Field("batch_sample_index", pa.int32(), "Logical sample position within the delivered batch."),
-    _Field("file_name", pa.string(), "Sample key with the leading dataset prefix removed."),
-    _Field("url", pa.string(), "Source artifact URL/path; a TAR for WebDataset."),
-    _Field("num_trainable_tokens", pa.int32(), "Valid next-token labels for this sample."),
-    _Field("token_ce_sum", pa.float32(), "Cross entropy summed over valid labels in this sample."),
-    _Field("mean_token_ce", pa.float32(), "token_ce_sum divided by num_trainable_tokens."),
-    _Field("objective_numerator", pa.float32(), "Sample contribution to the configured CE numerator."),
-    _Field("objective_weight", pa.float32(), "Sample contribution to the configured CE denominator."),
+    _Field("phase", "string", 'Data split that produced the row: "train", "val", or "data_only".'),
+    _Field("step", "int64", "Completed training iteration or data-loading step associated with the sample."),
+    _Field("rank", "int32", "Distributed process rank that consumed the sample."),
+    _Field("sample_rank", "int32", "Rank recorded by the dataset distributor."),
+    _Field("worker_id", "int32", "Dataloader worker that selected the sample."),
+    _Field("epoch", "int32", "WDS distributor epoch or Lance recipe epoch (legacy: per-source pass)."),
+    _Field("sample_index", "int64", "WDS epoch shard index or zero-based Lance worker-local schedule position."),
+    _Field("dataset_name", "string", "Recipe dataset/category name."),
+    _Field("source_backend", "string", "Source identity domain: webdataset or lance."),
+    _Field("dataset_population", "int64", "Lance grouped sample count; null for WebDataset."),
+    _Field("sample_id", "string", "Stable sample identity independent of GCS or Lustre storage."),
+    _Field("source_occurrence", "int64", "Worker-local Lance source cursor after this occurrence."),
+    _Field("group_index", "int64", "Source-local Lance grouped sample index; null for WebDataset or legacy runs."),
+    _Field("batch_sample_index", "int32", "Logical sample position within the delivered batch."),
+    _Field("file_name", "string", "Sample key with the leading dataset prefix removed."),
+    _Field("url", "string", "Source artifact URL/path; a TAR for WebDataset."),
+    _Field("num_trainable_tokens", "int32", "Valid next-token labels for this sample."),
+    _Field("token_ce_sum", "float32", "Cross entropy summed over valid labels in this sample."),
+    _Field("mean_token_ce", "float32", "token_ce_sum divided by num_trainable_tokens."),
+    _Field("objective_numerator", "float32", "Sample contribution to the configured CE numerator."),
+    _Field("objective_weight", "float32", "Sample contribution to the configured CE denominator."),
     _Field(
         "objective_contribution",
-        pa.float32(),
+        "float32",
         "objective_numerator divided by the global denominator for this forward pass.",
     ),
-    _Field("is_thinking_stripped", pa.bool_(), "Whether a reasoning trace was removed from this sample."),
-    _Field("system_prompt", pa.string(), "Effective system prompt passed to the chat template."),
-    _Field("num_images", pa.int32(), "Image references in the selected raw conversation."),
-    _Field("num_videos", pa.int32(), "Video references in the selected raw conversation."),
-    _Field("raw_image_tokens", pa.int64(), "Estimated native-resolution tokens across retained images."),
-    _Field("raw_video_tokens", pa.int64(), "Estimated native-resolution/native-FPS video tokens."),
-    _Field("video_native_fps", pa.float32(), "Mean native FPS across videos; null when unavailable."),
-    _Field("video_native_num_frames", pa.int32(), "Total native frames across videos; null without video."),
-    _Field("video_sampled_num_frames", pa.int32(), "Frames retained by decoding across videos; null without video."),
+    _Field("is_thinking_stripped", "bool_", "Whether a reasoning trace was removed from this sample."),
+    _Field("system_prompt", "string", "Effective system prompt passed to the chat template."),
+    _Field("num_images", "int32", "Image references in the selected raw conversation."),
+    _Field("num_videos", "int32", "Video references in the selected raw conversation."),
+    _Field("raw_image_tokens", "int64", "Estimated native-resolution tokens across retained images."),
+    _Field("raw_video_tokens", "int64", "Estimated native-resolution/native-FPS video tokens."),
+    _Field("video_native_fps", "float32", "Mean native FPS across videos; null when unavailable."),
+    _Field("video_native_num_frames", "int32", "Total native frames across videos; null without video."),
+    _Field("video_sampled_num_frames", "int32", "Frames retained by decoding across videos; null without video."),
     _Field(
         "video_pixels_per_frame",
-        pa.int64(),
+        "int64",
         "Mean native spatial pixels per video frame; null without video.",
     ),
-    _Field("video_duration_sec", pa.float32(), "Mean native video duration in seconds; null without video."),
-    _Field("max_image_token_length", pa.int32(), "Configured image-token budget for the sample."),
-    _Field("max_video_token_length", pa.int32(), "Configured video-token budget before random augmentation."),
+    _Field("video_duration_sec", "float32", "Mean native video duration in seconds; null without video."),
+    _Field("max_image_token_length", "int32", "Configured image-token budget for the sample."),
+    _Field("max_video_token_length", "int32", "Configured video-token budget before random augmentation."),
     _Field(
         "effective_max_video_token_length",
-        pa.int32(),
+        "int32",
         "Video-token budget after decoder randomization; null without video.",
     ),
-    _Field("raw_image_pixels", pa.int64(), "Native H*W summed across retained images."),
-    _Field("raw_video_pixels", pa.int64(), "Native H*W*frames summed across videos."),
-    _Field("image_min_pixels", pa.int64(), "Effective minimum image-pixel budget; null without image."),
-    _Field("image_max_pixels", pa.int64(), "Effective maximum image-pixel budget; null without image."),
-    _Field("video_min_pixels", pa.int64(), "Effective minimum video-pixel budget; null without video."),
-    _Field("video_max_pixels", pa.int64(), "Effective maximum video-pixel budget; null without video."),
-    _Field("seq_image_tokens", pa.int64(), "Image placeholders before context-length filtering."),
-    _Field("seq_video_tokens", pa.int64(), "Video placeholders before context-length filtering."),
-    _Field("raw_text_tokens", pa.int64(), "All non-image/video tokens before context-length filtering."),
-    _Field("context_length", pa.int32(), "Configured model context length."),
-    _Field("dataset_weight", pa.float64(), "Effective normalized sampling share of the dataset."),
-    _Field("dataset_num_urls", pa.int64(), "Dataset URL count after recipe expansion."),
-    _Field("total_training_steps", pa.int64(), "Configured maximum training or data-loading iterations."),
+    _Field("raw_image_pixels", "int64", "Native H*W summed across retained images."),
+    _Field("raw_video_pixels", "int64", "Native H*W*frames summed across videos."),
+    _Field("image_min_pixels", "int64", "Effective minimum image-pixel budget; null without image."),
+    _Field("image_max_pixels", "int64", "Effective maximum image-pixel budget; null without image."),
+    _Field("video_min_pixels", "int64", "Effective minimum video-pixel budget; null without video."),
+    _Field("video_max_pixels", "int64", "Effective maximum video-pixel budget; null without video."),
+    _Field("seq_image_tokens", "int64", "Image placeholders before context-length filtering."),
+    _Field("seq_video_tokens", "int64", "Video placeholders before context-length filtering."),
+    _Field("raw_text_tokens", "int64", "All non-image/video tokens before context-length filtering."),
+    _Field("context_length", "int32", "Configured model context length."),
+    _Field("dataset_weight", "float64", "Effective normalized sampling share of the dataset."),
+    _Field("dataset_num_urls", "int64", "Dataset URL count after recipe expansion."),
+    _Field("total_training_steps", "int64", "Configured maximum training or data-loading iterations."),
 )
 
-DATA_STATS_SCHEMA = pa.schema(
-    [field.arrow() for field in _FIELDS],
-    metadata={b"schema_version": b"2"},
-)
+
+@functools.cache
+def data_stats_schema() -> pa.Schema:
+    """Arrow schema of the data_stats rows, built on first use so importing this module needs no pyarrow."""
+    return pa.schema([field.arrow() for field in _FIELDS], metadata={b"schema_version": b"2"})
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DATA_STATS_SCHEMA":
+        return data_stats_schema()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def data_stats_root(checkpoint_root: Path) -> Path:
@@ -235,7 +245,7 @@ _COMPUTED_FIELDS = (
     )
     | _PROVENANCE_KEYS
 )
-_METADATA_KEYS = frozenset(DATA_STATS_SCHEMA.names) - _COMPUTED_FIELDS
+_METADATA_KEYS = frozenset(field.name for field in _FIELDS) - _COMPUTED_FIELDS
 
 
 def _check_sample(key: str, metadata: dict[str, Any], batch_values: dict[str, Any]) -> None:
@@ -436,7 +446,7 @@ class DataStatsWriterCallback(Callback):
                 }
             )
         try:
-            self._tables.append(pa.Table.from_pylist(rows, schema=DATA_STATS_SCHEMA))
+            self._tables.append(pa.Table.from_pylist(rows, schema=data_stats_schema()))
         except (pa.ArrowException, OverflowError) as error:
             raise ValueError(f"data_stats rows of samples {keys} do not match the schema: {error}") from error
         self._last_recorded_iteration = iteration
@@ -503,7 +513,7 @@ class DataStatsWriterCallback(Callback):
             save_dir.mkdir(parents=True, exist_ok=True)
             path = rank_file(save_dir, self._rank, self._world_size)
             temporary_path = path.with_name(f"{path.name}.tmp")
-            table = pa.concat_tables(self._tables) if self._tables else DATA_STATS_SCHEMA.empty_table()
+            table = pa.concat_tables(self._tables) if self._tables else data_stats_schema().empty_table()
             pq.write_table(table, temporary_path, compression="zstd")
             os.replace(temporary_path, path)
         except Exception as caught:  # noqa: BLE001 - every rank must reach the success collective

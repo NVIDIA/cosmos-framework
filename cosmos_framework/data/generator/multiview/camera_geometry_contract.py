@@ -10,93 +10,132 @@ Changes to the persisted format need an explicit reader compatibility update;
 the canonical Parquet fixtures in ``test_data`` pin the supported v1 format.
 """
 
-import math
-from typing import cast
+from __future__ import annotations
 
-import pyarrow as pa
+import functools
+import math
+from typing import Any, cast
+
+from cosmos_framework.utils.optional_import import optional_import
+
+pa = optional_import("pyarrow")
 
 CAMERA_SIDECAR_SCHEMA_VERSION = b"1.0.0"
 CAMERA_CALIBRATION_SCHEMA_NAME = b"cosmos.multiview.camera_calibration"
 CAMERA_POSE_SCHEMA_NAME = b"cosmos.multiview.camera_pose"
 TIMESTAMPS_SCHEMA_NAME = b"cosmos.multiview.timestamps"
-
-CAMERA_CALIBRATION_SCHEMA = pa.schema(
-    [
-        pa.field("stream_id", pa.string(), nullable=False),
-        pa.field("camera_model", pa.string(), nullable=False),
-        pa.field("width_px", pa.int64(), nullable=False),
-        pa.field("height_px", pa.int64(), nullable=False),
-        pa.field("fx_px", pa.float64(), nullable=False),
-        pa.field("fy_px", pa.float64(), nullable=False),
-        pa.field("cx_px", pa.float64(), nullable=False),
-        pa.field("cy_px", pa.float64(), nullable=False),
-        pa.field("distortion_model", pa.string(), nullable=False),
-        pa.field("distortion_coefficients", pa.list_(pa.float64()), nullable=False),
-    ],
-    metadata={
-        b"schema_name": CAMERA_CALIBRATION_SCHEMA_NAME,
-        b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
-        b"image_axes": b"x_right_y_down",
-        b"length_unit": b"pixel",
-    },
-)
-
-POSE_SCHEMA = pa.schema(
-    [
-        pa.field("stream_id", pa.string(), nullable=False),
-        pa.field("sample_index", pa.int64(), nullable=False),
-        pa.field("episode_time_ns", pa.int64(), nullable=False),
-        pa.field("position_x_m", pa.float64(), nullable=False),
-        pa.field("position_y_m", pa.float64(), nullable=False),
-        pa.field("position_z_m", pa.float64(), nullable=False),
-        pa.field("orientation_qw", pa.float64(), nullable=False),
-        pa.field("orientation_qx", pa.float64(), nullable=False),
-        pa.field("orientation_qy", pa.float64(), nullable=False),
-        pa.field("orientation_qz", pa.float64(), nullable=False),
-    ],
-    metadata={
-        b"schema_name": CAMERA_POSE_SCHEMA_NAME,
-        b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
-        b"camera_axes": b"x_right_y_down_z_forward",
-        b"coordinate_system": b"right_handed",
-        b"quaternion_order": b"qw_qx_qy_qz",
-        b"transform_direction": b"camera_to_world",
-        b"translation_unit": b"meter",
-    },
-)
-
-TIMESTAMPS_SCHEMA = pa.schema(
-    [
-        pa.field("stream_id", pa.string(), nullable=False),
-        pa.field("sample_index", pa.int64(), nullable=False),
-        pa.field("native_timestamp_ns", pa.int64(), nullable=False),
-        pa.field("episode_time_ns", pa.int64(), nullable=False),
-    ],
-    metadata={
-        b"schema_name": TIMESTAMPS_SCHEMA_NAME,
-        b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
-        b"clock": b"episode_clock",
-        b"time_unit": b"nanosecond",
-    },
-)
-
-# Released v1.1.0 sidecars (e.g. Alpamayo AV). Calibration adds the media-to-native
-# pixel scale of ``nvidia_ftheta_polynomial`` rows, whose six backward terms are in
-# native sensor pixels while cx/cy/width/height are in media pixels. Timestamps keep
-# the v1.0.0 fields and clock semantics.
+# Released v1.1.0 sidecars (e.g. Alpamayo AV); see ``_schemas`` for what changed.
 CAMERA_SIDECAR_SCHEMA_VERSION_V1_1 = b"1.1.0"
-CAMERA_CALIBRATION_SCHEMA_V1_1 = pa.schema(
-    [
-        *(CAMERA_CALIBRATION_SCHEMA.field(name) for name in CAMERA_CALIBRATION_SCHEMA.names[:8]),
-        pa.field("pixel_to_native_scale_x", pa.float64(), nullable=False),
-        pa.field("pixel_to_native_scale_y", pa.float64(), nullable=False),
-        *(CAMERA_CALIBRATION_SCHEMA.field(name) for name in CAMERA_CALIBRATION_SCHEMA.names[8:]),
-    ],
-    metadata={**(CAMERA_CALIBRATION_SCHEMA.metadata or {}), b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION_V1_1},
+
+_SCHEMA_NAMES = frozenset(
+    (
+        "CAMERA_CALIBRATION_SCHEMA",
+        "POSE_SCHEMA",
+        "TIMESTAMPS_SCHEMA",
+        "CAMERA_CALIBRATION_SCHEMA_V1_1",
+        "TIMESTAMPS_SCHEMA_V1_1",
+    )
 )
-TIMESTAMPS_SCHEMA_V1_1 = TIMESTAMPS_SCHEMA.with_metadata(
-    {**(TIMESTAMPS_SCHEMA.metadata or {}), b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION_V1_1}
-)
+
+
+@functools.cache
+def _schemas() -> dict[str, Any]:
+    """Build the canonical sidecar schemas on first use.
+
+    pyarrow has no wheel for every platform (none for Windows on Arm) and this module sits on
+    the reasoner config import graph, so the schemas are built lazily instead of at import;
+    :func:`__getattr__` serves them as module attributes.
+    """
+    CAMERA_CALIBRATION_SCHEMA = pa.schema(
+        [
+            pa.field("stream_id", pa.string(), nullable=False),
+            pa.field("camera_model", pa.string(), nullable=False),
+            pa.field("width_px", pa.int64(), nullable=False),
+            pa.field("height_px", pa.int64(), nullable=False),
+            pa.field("fx_px", pa.float64(), nullable=False),
+            pa.field("fy_px", pa.float64(), nullable=False),
+            pa.field("cx_px", pa.float64(), nullable=False),
+            pa.field("cy_px", pa.float64(), nullable=False),
+            pa.field("distortion_model", pa.string(), nullable=False),
+            pa.field("distortion_coefficients", pa.list_(pa.float64()), nullable=False),
+        ],
+        metadata={
+            b"schema_name": CAMERA_CALIBRATION_SCHEMA_NAME,
+            b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
+            b"image_axes": b"x_right_y_down",
+            b"length_unit": b"pixel",
+        },
+    )
+
+    POSE_SCHEMA = pa.schema(
+        [
+            pa.field("stream_id", pa.string(), nullable=False),
+            pa.field("sample_index", pa.int64(), nullable=False),
+            pa.field("episode_time_ns", pa.int64(), nullable=False),
+            pa.field("position_x_m", pa.float64(), nullable=False),
+            pa.field("position_y_m", pa.float64(), nullable=False),
+            pa.field("position_z_m", pa.float64(), nullable=False),
+            pa.field("orientation_qw", pa.float64(), nullable=False),
+            pa.field("orientation_qx", pa.float64(), nullable=False),
+            pa.field("orientation_qy", pa.float64(), nullable=False),
+            pa.field("orientation_qz", pa.float64(), nullable=False),
+        ],
+        metadata={
+            b"schema_name": CAMERA_POSE_SCHEMA_NAME,
+            b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
+            b"camera_axes": b"x_right_y_down_z_forward",
+            b"coordinate_system": b"right_handed",
+            b"quaternion_order": b"qw_qx_qy_qz",
+            b"transform_direction": b"camera_to_world",
+            b"translation_unit": b"meter",
+        },
+    )
+
+    TIMESTAMPS_SCHEMA = pa.schema(
+        [
+            pa.field("stream_id", pa.string(), nullable=False),
+            pa.field("sample_index", pa.int64(), nullable=False),
+            pa.field("native_timestamp_ns", pa.int64(), nullable=False),
+            pa.field("episode_time_ns", pa.int64(), nullable=False),
+        ],
+        metadata={
+            b"schema_name": TIMESTAMPS_SCHEMA_NAME,
+            b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION,
+            b"clock": b"episode_clock",
+            b"time_unit": b"nanosecond",
+        },
+    )
+
+    # Released v1.1.0 sidecars (e.g. Alpamayo AV). Calibration adds the media-to-native
+    # pixel scale of ``nvidia_ftheta_polynomial`` rows, whose six backward terms are in
+    # native sensor pixels while cx/cy/width/height are in media pixels. Timestamps keep
+    # the v1.0.0 fields and clock semantics.
+    CAMERA_CALIBRATION_SCHEMA_V1_1 = pa.schema(
+        [
+            *(CAMERA_CALIBRATION_SCHEMA.field(name) for name in CAMERA_CALIBRATION_SCHEMA.names[:8]),
+            pa.field("pixel_to_native_scale_x", pa.float64(), nullable=False),
+            pa.field("pixel_to_native_scale_y", pa.float64(), nullable=False),
+            *(CAMERA_CALIBRATION_SCHEMA.field(name) for name in CAMERA_CALIBRATION_SCHEMA.names[8:]),
+        ],
+        metadata={**(CAMERA_CALIBRATION_SCHEMA.metadata or {}), b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION_V1_1},
+    )
+    TIMESTAMPS_SCHEMA_V1_1 = TIMESTAMPS_SCHEMA.with_metadata(
+        {**(TIMESTAMPS_SCHEMA.metadata or {}), b"schema_version": CAMERA_SIDECAR_SCHEMA_VERSION_V1_1}
+    )
+    return {
+        "CAMERA_CALIBRATION_SCHEMA": CAMERA_CALIBRATION_SCHEMA,
+        "POSE_SCHEMA": POSE_SCHEMA,
+        "TIMESTAMPS_SCHEMA": TIMESTAMPS_SCHEMA,
+        "CAMERA_CALIBRATION_SCHEMA_V1_1": CAMERA_CALIBRATION_SCHEMA_V1_1,
+        "TIMESTAMPS_SCHEMA_V1_1": TIMESTAMPS_SCHEMA_V1_1,
+    }
+
+
+def __getattr__(name: str) -> Any:
+    if name in _SCHEMA_NAMES:
+        return _schemas()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 QuaternionXyzw = tuple[float, float, float, float]
 Rotation3 = tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
