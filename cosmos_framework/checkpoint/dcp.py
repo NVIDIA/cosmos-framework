@@ -48,6 +48,7 @@ import pickle
 import queue
 import re
 import socket
+import sys
 import time
 from datetime import timedelta
 from multiprocessing import get_context
@@ -220,6 +221,11 @@ def _check_staging_shared_memory(state_dict: dict[str, Any]) -> None:
     All training ranks participate before allocating. Aggregate ranks sharing
     a host and mount, then raise on every rank if any mount is too small.
     """
+    if not hasattr(os, "statvfs"):
+        # POSIX-only check: Windows has neither statvfs nor a /dev/shm mount, and pinned
+        # staging there is ordinary pageable host memory with nothing to budget against.
+        log.warning("Skipping the /dev/shm staging check: os.statvfs is unavailable on this platform.")
+        return
     if dist.is_initialized():
         # Distillation releases its previous staging tree before each save.
         # Wait for every rank to release it before sampling shared free space;
