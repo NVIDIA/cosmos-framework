@@ -422,7 +422,7 @@ def install_adapters(
         parameter.requires_grad_(True)
         module = net.get_submodule(row["name"].rsplit(".", 1)[0])
         if id(module) not in extra_modules:
-            if config.model_execution == "merged_weight_bf16_v1":
+            if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
                 from cosmos_framework.posttrain.model.adapter_bf16_execution import install_effective_norm
 
                 install_effective_norm(module)
@@ -468,7 +468,7 @@ def prepare_adapter_model(
 
     if resume and config.warm_start:
         raise ValueError("exact resume and adapter warm_start are mutually exclusive")
-    if config.model_execution == "merged_weight_bf16_v1" and base_dtype != "bfloat16":
+    if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1") and base_dtype != "bfloat16":
         raise ValueError("new merged-weight training requires a BF16 materialized base and FP32 adapter storage")
     binding = family_for_model(net, family)
     install_adapters(

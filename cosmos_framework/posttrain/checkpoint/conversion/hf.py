@@ -268,6 +268,9 @@ def config_with_export_dtype(
                 raise ValueError(
                     "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and stock arithmetic"
                 )
+        elif model_execution == "qwen3_vl_hf_stock_v1":
+            if output_dtype != "float32" or result.get("model_type") != "qwen3_vl" or execution_profile is not None:
+                raise ValueError("stock HF factorized Qwen3-VL merged execution requires float32 output")
         elif (
             model_execution != "qwen3_vl_moe_stock_v1"
             or output_dtype != "float32"

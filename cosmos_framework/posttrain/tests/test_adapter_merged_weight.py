@@ -126,10 +126,16 @@ def test_ordered_hf5_forward_matches_stock_values_and_gradients(modality, checkp
             assert right.grad is not None and torch.count_nonzero(right.grad) == 0, name
 
 
-def test_new_artifact_lifecycle_and_both_stock_export_precisions(tmp_path):
+@pytest.mark.parametrize("profile", [PROFILE, "qwen3_vl_hf_stock_v1"])
+def test_new_artifact_lifecycle_and_both_stock_export_precisions(tmp_path, profile):
     base = tmp_path / "base"
     tiny_snapshot(base, tied=True)
     cfg = configuration()
+    if profile != PROFILE:
+        cfg.model_execution = profile
+        for group in cfg.components:
+            group.execution = "factorized_v1"
+        cfg.__post_init__()
     model_cfg = HFModelConfig(name_or_path=str(base), dtype="bfloat16", attn_impl="sdpa", grad_ckpt=True)
     policy = build_hf_model(model_cfg, adapters=cfg)
     assert policy.net.lm_head.weight is policy.net.model.language_model.embed_tokens.weight
@@ -142,9 +148,11 @@ def test_new_artifact_lifecycle_and_both_stock_export_precisions(tmp_path):
     portable = tmp_path / "portable"
     save_adapter_artifact(policy.net, str(portable))
     identity = policy.net._posttrain_adapter_identity
-    assert identity["format"] == "cosmos-posttrain-adapter-v4"
+    assert identity["format"] == (
+        "cosmos-posttrain-adapter-v4" if profile == PROFILE else "cosmos-posttrain-adapter-v3"
+    )
     bad = copy.deepcopy(identity)
-    bad["format"] = "cosmos-posttrain-adapter-v3"
+    bad["format"] = "cosmos-posttrain-adapter-v1"
     with pytest.raises(ValueError, match="format/execution mismatch"):
         state_spec(bad)
     warm = adapter_configuration(identity)
@@ -157,25 +165,30 @@ def test_new_artifact_lifecycle_and_both_stock_export_precisions(tmp_path):
         torch.testing.assert_close(policy.net(**inputs).logits, reloaded.net(**inputs).logits, atol=0, rtol=0)
     from cosmos_framework.inference.reasoner.model_execution import model_execution_profile, validate_loaded_model
 
-    for dtype in ("bfloat16", "float32"):
+    for dtype in ("bfloat16", "float32") if profile == PROFILE else ("float32",):
         if dtype == "float32":
             policy.net.float()
         target = tmp_path / dtype
         assert export_merged_adapter(str(portable), str(base), str(target), output_dtype=dtype) == "built"
-        assert model_execution_profile(target) == PROFILE
+        assert model_execution_profile(target) == profile
         loaded = transformers.AutoModelForImageTextToText.from_pretrained(
             target, dtype="auto", attn_implementation="sdpa"
         ).eval()
         validate_loaded_model(loaded)
         with torch.no_grad():
-            torch.testing.assert_close(policy.net(**inputs).logits, loaded(**inputs).logits, atol=0, rtol=0)
+            torch.testing.assert_close(
+                policy.net(**inputs).logits,
+                loaded(**inputs).logits,
+                atol=0 if profile == PROFILE else 5e-4,
+                rtol=0 if profile == PROFILE else 2e-4,
+            )
         expected = prepare_merged_state(policy.net.state_dict(), identity, merge_dtype=torch.float32)
         for name, value in loaded.state_dict().items():
             assert torch.equal(value, expected[name].to(value.dtype)), name
     legacy = copy.deepcopy(identity)
     legacy["resolved"].pop("model_execution")
     for row in legacy["resolved"]["targets"]:
-        row["settings"].pop("execution")
+        row["settings"].pop("execution", None)
     legacy["format"] = "cosmos-posttrain-adapter-v1"
     reloaded.net._posttrain_adapter_identity = legacy
     with pytest.raises(ValueError, match="compatibility mismatch"):

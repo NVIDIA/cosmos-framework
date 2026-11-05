@@ -318,7 +318,10 @@ class HFModel(nn.Module):
         # lightweight dummy image and slices it to [0:0] so it contributes no features. Must
         # happen BEFORE setup()/parallelize() so FSDP captures the patched forward. Import is
         # guarded on the qwen3_vl model_type so the LLM path never imports the VLM monkey_patch.
-        if hf_config.model_type == "qwen3_vl" and adapter_model_execution == "merged_weight_bf16_v1":
+        if hf_config.model_type == "qwen3_vl" and adapter_model_execution in (
+            "merged_weight_bf16_v1",
+            "qwen3_vl_hf_stock_v1",
+        ):
             from cosmos_framework.posttrain.model.qwen3_vl_hf import patch_ordered_forward
 
             patch_ordered_forward(self.model.model)
@@ -650,7 +653,10 @@ def build_hf_model(
         precision = Precision(
             master=hf_cfg.dtype, param=hf_cfg.dtype, reduce=hf_cfg.fsdp_reduce_dtype, transfer=hf_cfg.dtype
         )
-    new_execution = adapters is not None and adapters.model_execution == "merged_weight_bf16_v1"
+    new_execution = adapters is not None and adapters.model_execution in (
+        "merged_weight_bf16_v1",
+        "qwen3_vl_hf_stock_v1",
+    )
     if new_execution and (precision.master != "bfloat16" or precision.param != "bfloat16" or precision.mode != "fsdp"):
         raise ValueError("merged_weight_bf16_v1 requires BF16 base storage/compute without autocast")
     model = HFModel(

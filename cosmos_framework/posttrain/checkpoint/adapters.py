@@ -200,7 +200,7 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
             result[prefix + "initial_B"] = (out_features, rank)
     result.update({row["name"]: tuple(row["shape"]) for row in identity["resolved"]["extra_parameters"]})
     profile = identity["resolved"].get("model_execution", "default_v1")
-    if profile not in ("default_v1", "qwen3_vl_moe_stock_v1", "merged_weight_bf16_v1"):
+    if profile not in ("default_v1", "qwen3_vl_moe_stock_v1", "merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
         raise ValueError("unsupported adapter model execution semantics")
     if profile == "qwen3_vl_moe_stock_v1" and (
         identity["architecture"] != "qwen3_vl_moe"
@@ -210,6 +210,17 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         or identity["dependencies"].get("torch") != "2.10.0"
     ):
         raise ValueError("stock MoE execution requires dense PiSSA and its pinned runtime identity")
+    if profile == "qwen3_vl_hf_stock_v1" and (
+        identity["architecture"] != "qwen3_vl"
+        or identity["base_storage_dtype"] != "bfloat16"
+        or any(
+            row["settings"].get("execution", "factorized_v1") != "factorized_v1"
+            for row in identity["resolved"]["targets"]
+        )
+        or identity["dependencies"].get("transformers") != "5.8.1"
+        or identity["dependencies"].get("torch") != "2.10.0"
+    ):
+        raise ValueError("stock HF Qwen3-VL factorized execution requires BF16 storage and its pinned runtime")
     rounded = [row["settings"].get("execution") == "merged_weight_bf16_v1" for row in identity["resolved"]["targets"]]
     if profile == "merged_weight_bf16_v1":
         if (

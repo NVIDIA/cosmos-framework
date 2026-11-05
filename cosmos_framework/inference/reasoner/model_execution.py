@@ -12,6 +12,7 @@ from pathlib import Path
 
 PROFILE = "qwen3_vl_moe_stock_v1"
 MERGED_WEIGHT_PROFILE = "merged_weight_bf16_v1"
+FACTOR_PROFILE = "qwen3_vl_hf_stock_v1"
 
 
 def model_execution_profile(path):
@@ -35,7 +36,7 @@ def model_execution_profile(path):
     bound = resolved.get("model_execution") if isinstance(resolved, dict) else None
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, MERGED_WEIGHT_PROFILE) or bound != declared:
+    if declared not in (PROFILE, MERGED_WEIGHT_PROFILE, FACTOR_PROFILE) or bound != declared:
         raise ValueError("missing, conflicting or unknown model execution profile in config/.materialized; re-export")
     if declared == MERGED_WEIGHT_PROFILE:
         dtype = config.get("dtype", config.get("torch_dtype"))
@@ -65,6 +66,24 @@ def model_execution_profile(path):
             "equivalence": "precision_specific_dense_execution_v1",
         }:
             raise ValueError("new BF16 execution requires its precision-specific deployment contract")
+    elif declared == FACTOR_PROFILE:
+        if (
+            config.get("model_type") != "qwen3_vl"
+            or config.get("dtype", config.get("torch_dtype")) != "float32"
+            or identity.get("output_dtype") != "float32"
+            or metadata.get("format") != "cosmos-merged-adapter-v1"
+            or adapter.get("format") != "cosmos-posttrain-adapter-v3"
+            or adapter.get("architecture") != "qwen3_vl"
+            or adapter.get("base_storage_dtype") != "bfloat16"
+            or not resolved.get("targets")
+            or any(
+                row.get("settings", {}).get("execution", "factorized_v1") != "factorized_v1"
+                for row in resolved["targets"]
+            )
+            or adapter.get("dependencies", {}).get("transformers") != "5.8.1"
+            or adapter.get("dependencies", {}).get("torch") != "2.10.0"
+        ):
+            raise ValueError("stock HF factorized execution requires a committed FP32 Qwen3-VL v3 adapter merge")
     else:
         if (
             config.get("model_type") != "qwen3_vl_moe"
@@ -85,7 +104,8 @@ def model_execution_profile(path):
 def validate_loaded_model(model):
     import torch
 
-    if getattr(model.config, "cosmos_model_execution", None) == MERGED_WEIGHT_PROFILE:
+    profile = getattr(model.config, "cosmos_model_execution", None)
+    if profile in (MERGED_WEIGHT_PROFILE, FACTOR_PROFILE):
         family = model.config.model_type
         expected = {"qwen3_vl": "Qwen3VLForConditionalGeneration", "qwen3_5": "Qwen3_5ForConditionalGeneration"}
         dtype = getattr(model.config, "dtype", None)
@@ -93,6 +113,7 @@ def validate_loaded_model(model):
         configs.extend(getattr(module, "config", None) for module in model.modules())
         if (
             family not in expected
+            or (profile == FACTOR_PROFILE and (family != "qwen3_vl" or dtype != torch.float32))
             or type(model).__name__ != expected[family]
             or type(model).__module__ != f"transformers.models.{family}.modeling_{family}"
             or dtype not in (torch.float32, torch.bfloat16)

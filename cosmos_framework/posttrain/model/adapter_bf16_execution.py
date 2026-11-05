@@ -7,6 +7,7 @@ from importlib.metadata import version
 from types import MethodType
 
 PROFILE = "merged_weight_bf16_v1"
+CONTROL_PROFILE = "qwen3_vl_hf_stock_v1"
 _MODELS = {
     "qwen3_vl": ("transformers.models.qwen3_vl.modeling_qwen3_vl", "Qwen3VLForConditionalGeneration"),
     "qwen3_5": ("transformers.models.qwen3_5.modeling_qwen3_5", "Qwen3_5ForConditionalGeneration"),
@@ -14,7 +15,9 @@ _MODELS = {
 
 
 def validate_model_execution(net, config, family):
-    if config.model_execution != PROFILE or family not in _MODELS:
+    if config.model_execution == CONTROL_PROFILE and family != "qwen3_vl":
+        raise ValueError(f"{CONTROL_PROFILE} requires the dense HF Qwen3-VL training path")
+    if config.model_execution not in (PROFILE, CONTROL_PROFILE) or family not in _MODELS:
         raise ValueError(f"{PROFILE} requires the dense HF Qwen3-VL or Qwen3.5 training path")
     if (type(net).__module__, type(net).__name__) != _MODELS[family]:
         raise ValueError(f"{PROFILE} requires the exact stock HF model class; select model_backend='hf'")

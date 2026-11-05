@@ -129,7 +129,12 @@ class AdapterConfig:
             raise ValueError("adapter configuration must select at least one component")
         for group in [*self.components, *self.extra_modules]:
             group.__post_init__()
-        if self.model_execution not in ("default_v1", "qwen3_vl_moe_stock_v1", "merged_weight_bf16_v1"):
+        if self.model_execution not in (
+            "default_v1",
+            "qwen3_vl_moe_stock_v1",
+            "merged_weight_bf16_v1",
+            "qwen3_vl_hf_stock_v1",
+        ):
             raise ValueError(f"unsupported adapter model execution {self.model_execution!r}")
         if (self.model_execution == "merged_weight_bf16_v1") != any(
             group.execution == "merged_weight_bf16_v1" for group in self.components
@@ -138,6 +143,12 @@ class AdapterConfig:
             and any(group.execution != "merged_weight_bf16_v1" for group in self.components)
         ):
             raise ValueError("merged_weight_bf16_v1 requires matching model and every component execution semantics")
+        if self.model_execution == "qwen3_vl_hf_stock_v1" and any(
+            group.execution != "factorized_v1" for group in self.components
+        ):
+            raise ValueError(
+                "qwen3_vl_hf_stock_v1 requires factorized adapters; use merged_weight_bf16_v1 for rounded execution"
+            )
         if self.model_execution == "qwen3_vl_moe_stock_v1" and (
             self.extra_modules
             or any(group.method != "pissa" or group.execution != "pissa_dense_v1" for group in self.components)

@@ -24,7 +24,7 @@ def validate_model_execution(net, config, family):
         raise ValueError("base declares a different model execution profile; preserve its explicit execution contract")
     if config.model_execution == "default_v1":
         return
-    if config.model_execution == "merged_weight_bf16_v1":
+    if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
         from cosmos_framework.posttrain.model.adapter_bf16_execution import validate_model_execution as validate_bf16
 
         return validate_bf16(net, config, family)
@@ -106,7 +106,7 @@ def install_model_execution(net, config):
     """Called only after validation and trainability policy, before FSDP."""
     if config.model_execution == "default_v1":
         return
-    if config.model_execution == "merged_weight_bf16_v1":
+    if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
         from cosmos_framework.posttrain.model.adapter_bf16_execution import install_model_execution as install_bf16
 
         return install_bf16(net, config)

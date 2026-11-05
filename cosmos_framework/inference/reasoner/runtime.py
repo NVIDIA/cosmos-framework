@@ -152,7 +152,7 @@ class CosmosFrameworkRuntime:
 
         profile = deployment_profile(self.model_path)
         model_profile = model_execution_profile(self.model_path)
-        if model_profile == "merged_weight_bf16_v1":
+        if model_profile in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
             config = json.loads((Path(self.model_path) / "config.json").read_text())
             declared_dtype = config.get("dtype", config.get("torch_dtype"))
             accepted = ("auto", declared_dtype, "bf16" if declared_dtype == "bfloat16" else "fp32")
@@ -238,7 +238,11 @@ class CosmosFrameworkRuntime:
                 self.model_path,
                 **model_load_kwargs,
             )
-        if self.model_type == "qwen3_vl" and profile is None and model_profile != "merged_weight_bf16_v1":
+        if (
+            self.model_type == "qwen3_vl"
+            and profile is None
+            and model_profile not in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1")
+        ):
             from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
 
             apply_qwen3_vl_patch_embed_compat(self.model, model_type=self.model_type, mode="auto")
