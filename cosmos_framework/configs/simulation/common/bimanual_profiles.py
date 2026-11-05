@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from cosmos_framework.callbacks.initialize_ema import InitializeEmaFromRegular
-from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config_0517
+from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 EXPERIMENT_NAMES: tuple[str, ...] = (
@@ -115,8 +115,8 @@ def make_bimanual_experiment(stage: int) -> dict[str, Any]:
         )
     if distillation:
         model_config.update(
-            vlm_config_teacher=Cosmos3NanoReasoner_VLM_GCP_Config_0517,
-            vlm_config_fake_score=Cosmos3NanoReasoner_VLM_GCP_Config_0517,
+            vlm_config_teacher=Cosmos3NanoReasoner_VLM_GCP_Config,
+            vlm_config_fake_score=Cosmos3NanoReasoner_VLM_GCP_Config,
             action_conditioned_teacher_guidance=1.0,
             simulation_mode="self_forcing",
             sf_keep_student_fsdp_unsharded_during_rollout=True,
@@ -188,7 +188,7 @@ def make_bimanual_experiment(stage: int) -> dict[str, Any]:
         {"override /scheduler": "constant" if distillation else "lambdalinear"},
         {"override /tokenizer": "wan2pt2_tokenizer"},
         {"override /sound_tokenizer": None},
-        {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp_0517"},
+        {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp"},
         {"override /checkpoint": "local"},
         {"override /ema": "power"},
         {"override /ckpt_type": "dcp_distill_cosmos3" if distillation else "dcp"},

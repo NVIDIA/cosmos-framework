@@ -65,7 +65,7 @@ def make_transfer_bidirectional_experiment() -> LazyDict:
                 {"override /scheduler": "lambdalinear"},
                 {"override /tokenizer": "wan2pt2_tokenizer"},
                 {"override /sound_tokenizer": "avae_48k_25hz"},
-                {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp_0517"},
+                {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp"},
                 {"override /checkpoint": "local"},
                 {"override /ema": "power"},
                 {"override /callbacks": ["basic", "optimization", "job_monitor"]},

@@ -150,10 +150,10 @@ model:
           include_visual: null
           qk_norm_for_text: false
           use_und_k_norm_for_gen: true
-      model_name: nvidia/Cosmos3-Edge-Reasoner
+      model_name: nvidia/Cosmos3-Edge
       pretrained_weights:
         _type: cosmos3._src.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig
-        backbone_path: s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0/
+        backbone_path: s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge/
         checkpoint_format: null
         credentials_path: credentials/gcp_checkpoint.secret
         enable_gcs_patch_in_boto3: true

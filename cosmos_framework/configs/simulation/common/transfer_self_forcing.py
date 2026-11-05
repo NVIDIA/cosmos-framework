@@ -8,7 +8,7 @@ from typing import Any
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config_0517
+from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config
 from cosmos_framework.configs.simulation.common.resolution import RECTIFIED_FLOW_SHIFT
 from cosmos_framework.configs.simulation.common.transfer_distillation import (
     _TF_DCM_TEACHER_NEGATIVE_PROMPT,
@@ -187,8 +187,8 @@ def make_transfer_sf_dmd_experiment(
             # Quantized KV storage is not supported for exact interleaved
             # Transfer control/RGB history.
             "kv_cache_dtype": None,
-            "vlm_config_teacher": Cosmos3NanoReasoner_VLM_GCP_Config_0517,
-            "vlm_config_fake_score": Cosmos3NanoReasoner_VLM_GCP_Config_0517,
+            "vlm_config_teacher": Cosmos3NanoReasoner_VLM_GCP_Config,
+            "vlm_config_fake_score": Cosmos3NanoReasoner_VLM_GCP_Config,
         }
     )
     model_config["compile"]["enabled"] = False

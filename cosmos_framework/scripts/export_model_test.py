@@ -26,7 +26,7 @@ from cosmos_framework.inference.common.public_model_config import (
 from cosmos_framework.scripts import _export_model_helpers as helpers
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig, sanitize_uri
 
-_EDGE_BACKBONE_URI = "s3://bucket0/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0/"
+_EDGE_BACKBONE_URI = "s3://bucket0/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge/"
 
 _VISION_CONFIG = {"hidden_size": 1152, "num_hidden_layers": 27, "patch_size": 16}
 _PROJECTOR_CONFIG_TOP = {
@@ -105,7 +105,7 @@ def test_local_training_tokenizer_export_requires_files(tmp_path: Path) -> None:
     assert not helpers.prepare_local_bundle_tokenizer(model, tmp_path, config_only=False)
 
 
-def _model_dict(*, model_name="nvidia/Cosmos3-Edge-Reasoner", target="X.Nemotron3DenseVLTextForCausalLM"):
+def _model_dict(*, model_name="nvidia/Cosmos3-Edge", target="X.Nemotron3DenseVLTextForCausalLM"):
     return {
         "_target_": "X.OmniMoTModel",
         "config": {
@@ -159,9 +159,9 @@ class TestIsEdgeModel:
         assert helpers.is_edge_model(model_dict)
 
     def test_qwen_is_not_edge(self):
-        model_dict = _model_dict(model_name="nvidia/Cosmos3-Nano-Reasoner", target="X.Qwen3VLTextForCausalLM")
+        model_dict = _model_dict(model_name="nvidia/Cosmos3-Nano", target="X.Qwen3VLTextForCausalLM")
         model_dict["config"]["vlm_config"]["pretrained_weights"]["backbone_path"] = (
-            "s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Nano-Reasoner-bb9c6f5/"
+            "s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Nano/"
         )
         assert not helpers.is_edge_model(model_dict)
 
@@ -171,7 +171,7 @@ class TestReasonerVisionCapable:
 
     @staticmethod
     def _qwen_dict(include_visual=None):
-        model_dict = _model_dict(model_name="nvidia/Cosmos3-Nano-Reasoner", target="X.Qwen3VLTextForCausalLM")
+        model_dict = _model_dict(model_name="nvidia/Cosmos3-Nano", target="X.Qwen3VLTextForCausalLM")
         model_dict["config"]["vlm_config"]["pretrained_weights"]["backbone_path"] = ""
         if include_visual is not None:
             model_dict["config"]["vlm_config"]["model_instance"]["config"]["include_visual"] = include_visual

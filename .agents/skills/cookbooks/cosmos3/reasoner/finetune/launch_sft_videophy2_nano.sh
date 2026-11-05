@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VIDEOPHYSICS_ROOT="$PWD/data/videophysics"
-REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Nano-Reasoner"
+REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Nano"
 
 # 1. Materialize the VideoPhy-2 dataset (skipped if present).
 if [[ ! -d "$VIDEOPHYSICS_ROOT/videophy2_train" ]]; then

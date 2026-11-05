@@ -111,7 +111,7 @@ def _make_experiment(
             {"override /optimizer": "fusedadamw"},
             {"override /scheduler": "lambdalinear"},
             {"override /tokenizer": "wan2pt2_tokenizer"},
-            {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp_0517"},
+            {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp"},
             {"override /checkpoint": "local"},
             {"override /callbacks": ["basic", "optimization", "job_monitor"]},
             "_self_",

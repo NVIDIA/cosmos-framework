@@ -9,7 +9,6 @@ from uuid import uuid4
 
 import pydantic
 
-from cosmos_framework.inference.common.config import CONFIG_DIR
 from cosmos_framework.utils.checkpoint_db import (
     CheckpointConfig,
     CheckpointDirHf,
@@ -149,64 +148,6 @@ def register_checkpoints():
                 ),
             )
 
-    register_checkpoint(
-        CheckpointConfig(
-            uuid=uuid4().hex,
-            name="Cosmos3-Reasoner-8B-Private",
-            s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Reasoner-8B-Private",
-            ),
-            hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Nano-Reasoner",
-                revision="6406357cdc32fbf8db5f51ff7992343803b06961",
-            ),
-        ),
-    )
-
-    register_checkpoint(
-        CheckpointConfig(
-            uuid=uuid4().hex,
-            name="Cosmos3-Reasoner-32B-Private",
-            s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Reasoner-32B-Private",
-            ),
-            hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Super-Reasoner",
-                revision="b9b716f3508dfa442e0c8ba32fb5d0c9adf2a32c",
-            ),
-        ),
-    )
-
-    register_checkpoint(
-        CheckpointConfig(
-            uuid="c5236e3a-e846-49e3-a40c-67dfceefff5d",
-            name="Cosmos3-Nano-Reasoner-bb9c6f5",
-            s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Nano-Reasoner-bb9c6f5",
-            ),
-            hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Experimental",
-                subdirectory="c5236e3a-e846-49e3-a40c-67dfceefff5d",
-                revision="6ca42c5d0b96cb133e811c1bcced048d4acfaa12",
-            ),
-        ),
-    )
-
-    register_checkpoint(
-        CheckpointConfig(
-            uuid="4cb0c125-49a8-4e66-aebb-06e100affdb0",
-            name="Cosmos3-Super-Reasoner-b6df0d1",
-            s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Super-Reasoner-b6df0d1",
-            ),
-            hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Experimental",
-                subdirectory="4cb0c125-49a8-4e66-aebb-06e100affdb0",
-                revision="6ca42c5d0b96cb133e811c1bcced048d4acfaa12",
-            ),
-        )
-    )
-
     # The backbone URI Edge SFT recipes pin (edge_model_config), mapped to the
     # public nvidia/Cosmos3-Edge repo. Deliberately NO 'include' filter:
     # training's backbone seeding needs the full repo (the root safetensors
@@ -215,9 +156,9 @@ def register_checkpoints():
     register_checkpoint(
         CheckpointConfig(
             uuid=uuid4().hex,
-            name="Cosmos3-Edge-Reasoner-590c1c0",
+            name="Cosmos3-Edge",
             s3=CheckpointDirS3(
-                uri="s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0",
+                uri="s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge",
             ),
             hf=CheckpointDirHf(
                 repository="nvidia/Cosmos3-Edge",
@@ -291,37 +232,7 @@ def register_checkpoints():
     )
 
 
-CHECKPOINTS: dict[str, CheckpointConfig] = {
-    # Created using 'convert_model_to_dcp'
-    "Cosmos3-Nano-Train": CheckpointConfig(
-        name="Cosmos3-Nano-Train",
-        uuid=uuid4().hex,
-        config_file=str(CONFIG_DIR / "model/Cosmos3-Nano.yaml"),
-        experiment="cosmos3_ga_16bm8b_v1_midtrain",
-        s3=CheckpointDirS3(
-            uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_16bm8b_v1_midtrain/checkpoints/iter_000012000/",
-        ),
-        hf=CheckpointDirHf(
-            repository="nvidia/Cosmos3-Experimental",
-            revision="a3743aa1092fbefc9c6f6ae8c8c17e56a78aea4b",
-            subdirectory="e77a607f-af13-4321-bbf5-92f3e90f05e1-train",
-        ),
-    ),
-    "Cosmos3-Super-Train": CheckpointConfig(
-        name="Cosmos3-Super-Train",
-        uuid=uuid4().hex,
-        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        experiment="cosmos3_ga_64bm32b_v1_midtrain",
-        s3=CheckpointDirS3(
-            uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_64bm32b_v1_midtrain/checkpoints/iter_000005000/",
-        ),
-        hf=CheckpointDirHf(
-            repository="nvidia/Cosmos3-Experimental",
-            revision="a3743aa1092fbefc9c6f6ae8c8c17e56a78aea4b",
-            subdirectory="d92be19a-42ab-4a96-bdf2-98d1c9724cd9-train",
-        ),
-    ),
-}
+CHECKPOINTS: dict[str, CheckpointConfig] = {}
 """Checkpoints used by tests."""
 
 

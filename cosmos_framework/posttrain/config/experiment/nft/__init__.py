@@ -96,7 +96,7 @@ class NFTT2IRecipeContract:
     qk_norm_for_text: bool = True
     joint_attn_implementation: str = "two_way"
     backbone_path: str = (
-        "s3://<checkpoint-bucket>/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Reasoner-32B-Private/"
+        "s3://<checkpoint-bucket>/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Super/"
     )
 
 

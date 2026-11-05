@@ -14,7 +14,7 @@ the Nano baseline except the Cosmos3-Edge deltas sourced verbatim from
 ``inference/configs/model/Cosmos3-Edge.yaml``:
   * ``vlm_config`` swapped from the Qwen3-VL backbone to the Nemotron-3 Dense VL
     backbone (``Nemotron3DenseVLTextForCausalLM`` / ``Nemotron3DenseVLMoTConfig``,
-    ``Nemotron-2B-Dense-VL.json``, ``nvidia/Cosmos3-Edge-Reasoner``,
+    ``Nemotron-2B-Dense-VL.json``, ``nvidia/Cosmos3-Edge``,
     ``build_processor_lazy(repository="nvidia/Cosmos3-Edge")`` tokenizer,
     ``qk_norm_for_text=False``, ``include_visual=None``, ``layer_module=None``).
   * ``resolution`` ``"720"`` -> ``"480"`` (Edge native inference res).
@@ -138,7 +138,7 @@ EDGE_MODEL_CONFIG = dict(
     vlm_config=dict(
         # Top-level VLMConfig fields (Cosmos3-Edge.yaml vlm_config.*):
         layer_module=None,  # Edge.yaml vlm_config.layer_module: null (nano="Qwen2MoTDecoderLayer")
-        model_name="nvidia/Cosmos3-Edge-Reasoner",
+        model_name="nvidia/Cosmos3-Edge",
         tie_word_embeddings=False,
         use_system_prompt=False,
         # Edge.yaml sets vlm_config.qk_norm=False; VLMConfig.qk_norm already defaults
@@ -146,7 +146,7 @@ EDGE_MODEL_CONFIG = dict(
         pretrained_weights=dict(
             enabled=False,  # SFT loads from the DCP, not the HF backbone
             backbone_path=(
-                "s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0/"
+                "s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge/"
             ),  # kept for parity, unused while enabled=False
             credentials_path="",
             enable_gcs_patch_in_boto3=True,

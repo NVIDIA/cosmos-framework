@@ -158,9 +158,7 @@ def build_processor(
     elif (
         "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type
         or "Qwen3-2B-ViT" in tokenizer_type
-        or "nvidia/Cosmos3-Reasoner-2B-Private" in tokenizer_type
-        # nvidia/Cosmos3-Edge ships the same Nemotron bridge processor; the
-        # substring also covers nvidia/Cosmos3-Edge-Reasoner.
+        # nvidia/Cosmos3-Edge ships the same Nemotron bridge processor.
         or "nvidia/Cosmos3-Edge" in tokenizer_type
     ):
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)

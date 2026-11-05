@@ -2056,15 +2056,15 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-32B-Instruct": "32B",
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
-        "nvidia/Cosmos3-Edge-Reasoner": "2B",
-        "nvidia/Cosmos3-Nano-Reasoner": "8B",
+        "nvidia/Cosmos3-Edge": "2B",
+        "nvidia/Cosmos3-Nano": "8B",
     }
 
     _NUM_FRAMES_DEFAULTS: ClassVar[dict[str, int]] = {
         # Cosmos3-Edge defaults to a shorter 121-frame clip for video
         # generation; every other model keeps the per-modality JSON default
         # (189). Keyed by ``vlm_config.model_name`` so only Edge is affected.
-        "nvidia/Cosmos3-Edge-Reasoner": 121,
+        "nvidia/Cosmos3-Edge": 121,
     }
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {

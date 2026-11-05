@@ -16,7 +16,7 @@ from importlib.resources import files
 from cosmos_framework.callbacks.compile_tokenizer import CompileTokenizer
 from cosmos_framework.callbacks.sim_auto_phase_metrics import PhaseMetrics
 from cosmos_framework.callbacks.wall_clock_checkpoint import WallClockCheckpoint
-from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config_0517
+from cosmos_framework.configs.base.defaults.reasoner import Cosmos3NanoReasoner_VLM_GCP_Config
 from cosmos_framework.configs.simulation.common.auto_rigs import RIG_CATALOGS
 from cosmos_framework.data.generator.local_simulation.dataloader import (
     LocalSimulationDataLoader,
@@ -168,7 +168,7 @@ def make_auto_experiment(stage: int) -> LazyDict:
         {"override /optimizer": "dmd2" if stage == 3 else "fusedadamw"},
         {"override /scheduler": "constant" if stage == 3 else "lambdalinear"},
         {"override /tokenizer": "wan2pt2_tokenizer"},
-        {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp_0517"},
+        {"override /vlm_config": "cosmos3_nano_reasoner_vlm_gcp"},
         {"override /checkpoint": "local"},
         {"override /callbacks": callbacks},
     ]
@@ -317,8 +317,8 @@ def make_auto_experiment(stage: int) -> LazyDict:
             loss_scale_fake_score=1.0,
             student_update_freq=6,
             fake_score_compile=dict(enabled=True, mark_unbacked=False),
-            vlm_config_teacher=copy.deepcopy(Cosmos3NanoReasoner_VLM_GCP_Config_0517),
-            vlm_config_fake_score=copy.deepcopy(Cosmos3NanoReasoner_VLM_GCP_Config_0517),
+            vlm_config_teacher=copy.deepcopy(Cosmos3NanoReasoner_VLM_GCP_Config),
+            vlm_config_fake_score=copy.deepcopy(Cosmos3NanoReasoner_VLM_GCP_Config),
         )
         for name in ("vlm_config_teacher", "vlm_config_fake_score"):
             model[name].pretrained_weights.enabled = False

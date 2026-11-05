@@ -96,7 +96,7 @@ def test_reasoner_vision_capable_edge_lazy_tower():
     # Edge: include_visual=None BY DESIGN; SigLIP2 tower loads lazily -> capable.
     config = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Nemotron3DenseVLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Edge-Reasoner",
+        model_name="nvidia/Cosmos3-Edge",
         include_visual=None,
     )
     assert _reasoner_vision_capable(config)
@@ -105,7 +105,7 @@ def test_reasoner_vision_capable_edge_lazy_tower():
 def test_reasoner_vision_capable_qwen_with_visual():
     config = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano-Reasoner",
+        model_name="nvidia/Cosmos3-Nano",
         include_visual=True,
     )
     assert _reasoner_vision_capable(config)
@@ -114,7 +114,7 @@ def test_reasoner_vision_capable_qwen_with_visual():
 def test_reasoner_vision_capable_qwen_without_visual():
     config = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano-Reasoner",
+        model_name="nvidia/Cosmos3-Nano",
         include_visual=False,
     )
     assert not _reasoner_vision_capable(config)
@@ -138,7 +138,7 @@ def test_build_reasoner_data_fails_fast_for_visionless_qwen(tmp_path: Path):
 
     visionless = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Nano-Reasoner",
+        model_name="nvidia/Cosmos3-Nano",
         include_visual=False,
     )
     with pytest.raises(ValueError, match="visual tower"):
@@ -151,7 +151,7 @@ def test_build_reasoner_data_fails_fast_for_visionless_qwen(tmp_path: Path):
     # Edge reasoner vision samples must not be blocked (lazy tower).
     edge = _vlm_model_config(
         target="cosmos3._src.vfm.models.mot.unified_mot.Nemotron3DenseVLTextForCausalLM",
-        model_name="nvidia/Cosmos3-Edge-Reasoner",
+        model_name="nvidia/Cosmos3-Edge",
         include_visual=None,
     )
     overrides._build_reasoner_data(model_config=edge, sample_meta=sample_meta)
@@ -200,7 +200,7 @@ def test_checkpoint_has_processor_files(tmp_path: Path):
 
 
 def test_vlm_model_size_covers_edge():
-    assert OmniSampleOverrides._VLM_MODEL_SIZE["nvidia/Cosmos3-Edge-Reasoner"] == "2B"
+    assert OmniSampleOverrides._VLM_MODEL_SIZE["nvidia/Cosmos3-Edge"] == "2B"
     # Edge training shift (Cosmos3-Edge.yaml): 256->3, 480->5, 720->10.
     assert OmniSampleOverrides._RESOLUTION_SHIFT_DEFAULTS[("2B", "480")] == 5.0
 

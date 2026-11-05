@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Nano-Reasoner"
+REASONER_CHECKPOINT="$PWD/checkpoints/Cosmos3-Nano"
 
 # 1. Build the Cosmos3-Nano Reasoner checkpoint (skipped if present).
 if [[ ! -d "$REASONER_CHECKPOINT" ]]; then
