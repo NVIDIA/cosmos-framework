@@ -49,6 +49,15 @@ def test_staging_check_is_skipped_where_statvfs_does_not_exist(monkeypatch: pyte
     checkpoint._check_staging_shared_memory({"model": (torch.empty(4), "model")})
 
 
+def test_storage_writer_stages_serially_on_windows(tmp_path) -> None:
+    handler = object.__new__(checkpoint.DistributedCheckpointer)
+    handler.save_to_object_store = None
+    with patch.object(checkpoint.sys, "platform", "win32"):
+        assert handler.get_storage_writer(str(tmp_path)).per_thread_copy_ahead == 0
+    with patch.object(checkpoint.sys, "platform", "linux"):
+        assert handler.get_storage_writer(str(tmp_path)).per_thread_copy_ahead > 0
+
+
 def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path: str) -> None:
     dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=2, timeout=timedelta(seconds=30))
     try:
