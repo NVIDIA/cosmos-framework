@@ -136,6 +136,18 @@ def test_build_sft_row_drops_clip_longer_than_max_duration() -> None:
 
 
 @pytest.mark.L0
+def test_build_sft_row_can_disable_max_duration_filter() -> None:
+    # Short-task configs can disable the metadata duration cap without
+    # changing the default behavior for long-video SFT datasets.
+    record = _make_record(num_frames=120, framerate=1.0)
+    kwargs = _default_kwargs() | {"max_duration_s": None}
+    row, reason = _build_sft_row(record, **kwargs)
+    assert reason is None
+    assert row is not None
+    assert row["duration"] == pytest.approx(120.0)
+
+
+@pytest.mark.L0
 def test_build_sft_row_keeps_clip_at_exactly_max_duration() -> None:
     # 61 frames at 1 fps = 61.0 s, must pass because loader uses strict >.
     record = _make_record(
@@ -178,6 +190,24 @@ def test_build_sft_row_drops_when_all_windows_too_short() -> None:
     row, reason = _build_sft_row(record, **_default_kwargs())
     assert row is None
     assert reason == "no_valid_window"
+
+
+@pytest.mark.L0
+def test_build_sft_row_can_disable_min_window_frames_filter() -> None:
+    record = _make_record(
+        windows=[
+            {
+                "start_frame": _SHORT_WINDOW[0],
+                "end_frame": _SHORT_WINDOW[1],
+                "qwen_caption": "short window",
+            }
+        ],
+    )
+    kwargs = _default_kwargs() | {"min_window_frames": None}
+    row, reason = _build_sft_row(record, **kwargs)
+    assert reason is None
+    assert row is not None
+    assert row["t2w_windows"][0]["caption"] == "short window"
 
 
 @pytest.mark.L0
