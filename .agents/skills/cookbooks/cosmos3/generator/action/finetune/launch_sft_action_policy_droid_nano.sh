@@ -9,6 +9,7 @@
 # Run from this folder with the cosmos-framework venv active (see README):
 #   bash launch_sft_action_policy_droid_nano.sh
 # It prepares the small dependencies, checks for the staged DROID dataset, and trains.
+# For URI-keyed filters, set DROID_FILTER_SOURCE_PREFIX to the prefix before the complete episode ID.
 # Paths are fixed under this (git-ignored) folder, matching the reasoner finetune
 # wrappers, while the TOML and tail-overrides match the cosmos-framework example.
 
@@ -62,6 +63,9 @@ TAIL_OVERRIDES=(
     "dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=True"
     "dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_PATH"
 )
+if [[ -n "${DROID_FILTER_SOURCE_PREFIX:-}" ]]; then
+    TAIL_OVERRIDES+=("dataloader_train.dataloader.datasets.droid.dataset.filter_dict_source_prefix=$DROID_FILTER_SOURCE_PREFIX")
+fi
 if [[ -n "${EXTRA_TAIL_OVERRIDES:-}" ]]; then
     # EXTRA_TAIL_OVERRIDES is intentionally word-split to match the framework launcher UX.
     # shellcheck disable=SC2206

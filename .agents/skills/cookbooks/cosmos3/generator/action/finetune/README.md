@@ -50,7 +50,7 @@ which is the single source of truth. Larger splits need a longer schedule — se
 
 1. **Install cosmos-framework.** This recipe drives `cosmos_framework.scripts.train`, so install a cosmos-framework checkout first — follow the shared [cosmos-framework setup](../../../README.md#cosmos-framework) (clone into `packages/cosmos3`, then `uv sync --all-extras --group=cu130-train`; use `cu128-train` on a CUDA 12.x driver).
 2. **Recommended container.** For a curated CUDA + PyTorch base, NVIDIA recommends starting from the NGC PyTorch container **`nvcr.io/nvidia/pytorch:25.09-py3`** (CUDA 13; use **`:25.06-py3`** for a CUDA 12.8 driver). See the cosmos-framework [setup guide](https://github.com/NVIDIA/cosmos-framework/blob/main/docs/setup.md#recommended-base-image).
-3. **Activate** the cosmos-framework venv so `cosmos_framework` is importable: `source <path-to>/packages/cosmos3/.venv/bin/activate`.
+3. **Activate** the cosmos-framework venv so `cosmos_framework` is importable: `source <framework-root>/.venv/bin/activate`.
 4. **Hugging Face access.** The base model, Wan2.2 VAE, Cosmos3-DROID dataset, and `keep_ranges_1_0_1.json` filter are hosted on Hugging Face — authenticate once with `uvx hf@latest auth login` (or export `HF_TOKEN`) and accept any model/dataset terms first.
 5. **Weights & Biases.** The TOML follows the canonical cosmos-framework example and defaults to `wandb_mode="online"`. Export `WANDB_API_KEY` for online logging, or add `job.wandb_mode=disabled` to `EXTRA_TAIL_OVERRIDES` for a local/no-W&B run.
 6. **Prepare the Cosmos3-DROID dataset.** The full Cosmos3-DROID dataset is large, so this cookbook expects you to stage it explicitly. By default the launcher looks for `data/Cosmos3-DROID/success/meta/info.json` under this folder. Set `DATASET_PATH=/path/to/Cosmos3-DROID/success` to use another filesystem.
@@ -58,7 +58,12 @@ which is the single source of truth. Larger splits need a longer schedule — se
 
 ## Quick start
 
-Stage the dataset, then run the launcher:
+Stage the dataset and filter, configure the filter's source prefix, then run the launcher.
+For URI-keyed filters, `DROID_FILTER_SOURCE_PREFIX` is the prefix before the **complete** episode ID,
+including any date or directory components in that ID. For example, a recording URI
+`s3://example-bucket/data/day-1/episode-1/recordings/MP4` with episode ID `day-1/episode-1`
+needs prefix `s3://example-bucket/data`. Use the prefix in your own filter JSON, not this example.
+Relative episode-ID keys need no prefix.
 
 ```shell
 # One possible layout. The dataset is large; put it on a filesystem with enough space.
@@ -67,6 +72,9 @@ uvx hf@latest download \
     --repo-type dataset \
     --local-dir data/Cosmos3-DROID
 
+uvx hf@latest download KarlP/droid keep_ranges_1_0_1.json --local-dir data/droid_filters
+# Export the prefix from your filter metadata before continuing. Omit this check for relative-ID keys.
+: "${DROID_FILTER_SOURCE_PREFIX:?set the filter URI prefix before the complete episode ID}"
 bash launch_sft_action_policy_droid_nano.sh
 ```
 
@@ -91,6 +99,7 @@ export DATASET_PATH=/scratch/Cosmos3-DROID/success
 export BASE_CHECKPOINT_PATH=/scratch/checkpoints/Cosmos3-Nano
 export WAN_VAE_PATH=/scratch/checkpoints/wan22_vae/Wan2.2_VAE.pth
 export FILTER_PATH=/scratch/droid/keep_ranges_1_0_1.json
+export DROID_FILTER_SOURCE_PREFIX=s3://example-bucket/dataset-prefix  # replace with your filter's prefix
 bash launch_sft_action_policy_droid_nano.sh
 ```
 

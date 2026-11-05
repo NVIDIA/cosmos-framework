@@ -14,10 +14,17 @@ def normalize_episode_filter_keys(filters: dict[str, Any], *, source_prefix: str
         episode = recording
         if "://" in recording:
             if not source_prefix:
-                raise ValueError("source_prefix is required for URI-based episode filter keys")
+                raise ValueError(
+                    "filter_dict_source_prefix is required for URI-based episode filter keys. "
+                    "Set DROID_FILTER_SOURCE_PREFIX when using a DROID launcher, or pass "
+                    "filter_dict_source_prefix to the dataset. Use the URI prefix before the complete episode ID."
+                )
             prefix = source_prefix.rstrip("/") + "/"
             if not recording.startswith(prefix):
-                raise ValueError("Episode filter URI does not match source_prefix")
+                raise ValueError(
+                    "Episode filter URI does not match filter_dict_source_prefix. "
+                    "Check DROID_FILTER_SOURCE_PREFIX against the keys in your filter JSON."
+                )
             episode = recording.removeprefix(prefix)
         if not episode:
             raise ValueError("Filter entries must identify an episode")
