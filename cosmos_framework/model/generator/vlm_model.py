@@ -1051,7 +1051,7 @@ class VLMModel(ImaginaireModel):
         forward_loss_kwargs = (
             {"labels": labels} if getattr(self.config.policy, "enable_fused_weighted_ce", False) else {}
         )
-        logits = self.model(_probe_step=iteration, _probe_tag="i4", **forward_loss_kwargs, **data)
+        logits = self.model(_probe_step=iteration, _probe_tag="native", **forward_loss_kwargs, **data)
         loss_kwargs: dict[str, Any] = {}
         if self.config.policy.use_weighted_ce:
             loss_kwargs = {
@@ -1118,7 +1118,7 @@ class VLMModel(ImaginaireModel):
                 self._weighted_ce_window_metrics.add_(metrics)
         if not isinstance(logits, Qwen35CaptionLoss):
             # The fused path deliberately never creates vocabulary logits for a probe.
-            maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
+            maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="native")
 
         # Callbacks accumulate these primitives on every microbatch and reduce over WORLD only at
         # logging cadence. With explicit window normalization they are the local ratio-of-sums
