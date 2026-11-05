@@ -59,7 +59,11 @@ def download_tokenizer_files(model_name: str, config_variant: str) -> str:
         ckpt_bucket = "bucket4"
         credentials = "credentials/s3_checkpoint.secret"
     elif config_variant == "s3_east2":
-        ckpt_bucket = "nv-cosmos-checkpoint-us-east-2"
+        ckpt_bucket = os.environ.get("COSMOS_TOKENIZER_S3_BUCKET", "")
+        if INTERNAL and not ckpt_bucket:
+            raise ValueError("Set COSMOS_TOKENIZER_S3_BUCKET for this tokenizer storage variant")
+        # OSS lookup uses a bucket-independent registry alias, never an internal bucket default.
+        ckpt_bucket = ckpt_bucket or "bucket"
         credentials = "credentials/s3_east2_checkpoint.secret"
     elif config_variant == "gcp":
         ckpt_bucket = "bucket0"

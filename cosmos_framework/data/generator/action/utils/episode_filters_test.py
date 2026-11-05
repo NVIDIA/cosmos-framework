@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import os
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -53,11 +54,18 @@ def test_matching_duplicate_episode_ranges_are_preserved_once() -> None:
 
 @pytest.mark.parametrize("cookbook", [False, True])
 @pytest.mark.parametrize("with_prefix", [False, True])
-def test_droid_launchers_forward_filter_configuration(tmp_path: Path, cookbook: bool, with_prefix: bool) -> None:
+@pytest.mark.parametrize("success_as_root", [False, True])
+def test_droid_launchers_forward_filter_configuration(
+    tmp_path: Path, cookbook: bool, with_prefix: bool, success_as_root: bool
+) -> None:
     """Exercise the real shells with staged inputs and a recording-only torchrun."""
     root = Path(__file__).resolve().parents[5]
-    dataset = tmp_path / "dataset"
-    for folder in (dataset / "meta", dataset / "success" / "meta"):
+    dataset = tmp_path / "droid_plus_lerobot_640x360_20260412"
+    schema = runpy.run_path(
+        str(root / "cosmos_framework/data/generator/action/datasets/droid_lerobot_dataset_config.py")
+    )
+    assert dataset.name in schema["LEROBOT_ROOTS"]
+    for folder in (dataset / "success" / "meta",):
         folder.mkdir(parents=True)
         (folder / "info.json").write_text("{}")
     checkpoint = tmp_path / "checkpoint"
@@ -92,16 +100,24 @@ def test_droid_launchers_forward_filter_configuration(tmp_path: Path, cookbook: 
     )
     if with_prefix:
         env["DROID_FILTER_SOURCE_PREFIX"] = "s3://example-bucket/data"
+    if success_as_root:
+        env["DATASET_PATH"] = env["DROID_ROOT"] = str(dataset / "success")
     directory = ".agents/skills/cookbooks/cosmos3/generator/action/finetune" if cookbook else "examples"
-    subprocess.run(
+    result = subprocess.run(
         ["bash", str(root / directory / "launch_sft_action_policy_droid_nano.sh")],
         cwd=root,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=15,
     )
+    if success_as_root:
+        assert result.returncode != 0
+        assert "success/meta/info.json" in result.stdout + result.stderr
+        assert not capture.exists()
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
     args = capture.read_text().splitlines()
     assert args[0] == str(tmp_path / "outputs")
     forwarded = [arg for arg in args if arg.startswith(key + "=")]

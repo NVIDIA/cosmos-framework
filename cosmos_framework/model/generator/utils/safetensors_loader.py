@@ -98,7 +98,15 @@ def _download_hf_checkpoint(checkpoint_path: str) -> str:
     """Download safetensors from Hugging Face Hub and return the local snapshot path."""
     from huggingface_hub import snapshot_download
 
+    from cosmos_framework.utils.checkpoint_db import CheckpointConfig
+
     repo_id = checkpoint_path.removeprefix(_HF_URI_PREFIX)
+    registered = CheckpointConfig.maybe_from_uri(f"s3://bucket/cosmos3/pretrained/huggingface/{repo_id}")
+    # Changing the address form must not move a registered public backbone to
+    # a different revision. Keep the weight-specific download patterns below.
+    revision_kwargs = (
+        {"revision": registered.hf.revision} if registered is not None and registered.hf.repository == repo_id else {}
+    )
     hf_home = os.environ.get("HF_HOME")
     cache_dir = os.path.join(hf_home, "hub") if hf_home else None
     token = os.environ.get("HF_TOKEN")
@@ -108,6 +116,7 @@ def _download_hf_checkpoint(checkpoint_path: str) -> str:
         token=token,
         cache_dir=cache_dir,
         allow_patterns=["*.safetensors", "*.safetensors.index.json"],
+        **revision_kwargs,
     )
     log.info(f"Resolved Hugging Face checkpoint {repo_id} to {local_path}", rank0_only=False)
     return local_path
@@ -1064,7 +1073,13 @@ def load_language_model(
     Returns:
         Set of model state-dict keys successfully loaded from the checkpoint.
     """
-    if not INTERNAL:
+    # Repository directories go to the snapshot loader below; preserve the existing
+    # registry/local/single-file URI resolver for other checkpoint sources.
+    hub_directory = (
+        _is_hf_checkpoint_candidate(checkpoint_path)
+        and checkpoint_path.removeprefix(_HF_URI_PREFIX).strip("/").count("/") == 1
+    )
+    if not INTERNAL and not hub_directory:
         from cosmos_framework.utils.checkpoint_db import download_checkpoint, sanitize_uri
 
         checkpoint_path = download_checkpoint(sanitize_uri(checkpoint_path))

@@ -10,7 +10,7 @@ action heads from the public ``nvidia/Cosmos3-Nano`` base.
 
 Usage (1 node, 8 GPU)::
 
-    DROID_ROOT=/path/to/droid_lerobot_640x360/success \\
+    DROID_ROOT=/path/to/droid_plus_lerobot_640x360_20260412 \\
     BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir> \\
     WAN_VAE_PATH=<Wan2.2_VAE.pth> \\
     torchrun --nproc_per_node=8 -m cosmos_framework.scripts.train \\

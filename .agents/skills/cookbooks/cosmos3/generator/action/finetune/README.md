@@ -53,7 +53,7 @@ which is the single source of truth. Larger splits need a longer schedule — se
 3. **Activate** the cosmos-framework venv so `cosmos_framework` is importable: `source <framework-root>/.venv/bin/activate`.
 4. **Hugging Face access.** The base model, Wan2.2 VAE, Cosmos3-DROID dataset, and `keep_ranges_1_0_1.json` filter are hosted on Hugging Face — authenticate once with `uvx hf@latest auth login` (or export `HF_TOKEN`) and accept any model/dataset terms first.
 5. **Weights & Biases.** The TOML follows the canonical cosmos-framework example and defaults to `wandb_mode="online"`. Export `WANDB_API_KEY` for online logging, or add `job.wandb_mode=disabled` to `EXTRA_TAIL_OVERRIDES` for a local/no-W&B run.
-6. **Prepare the Cosmos3-DROID dataset.** The full Cosmos3-DROID dataset is large, so this cookbook expects you to stage it explicitly. By default the launcher looks for `data/Cosmos3-DROID/success/meta/info.json` under this folder. Set `DATASET_PATH=/path/to/Cosmos3-DROID/success` to use another filesystem.
+6. **Prepare the Cosmos3-DROID dataset.** Stage it in a directory named `droid_plus_lerobot_640x360_20260412` (the loader selects its schema by this name). By default the launcher checks `data/droid_plus_lerobot_640x360_20260412/success/meta/info.json`. Set `DATASET_PATH` to that dataset parent on another filesystem, not to its `success/` subdirectory. Keep `DROID_ROOT` unset or set it to the same parent.
 7. **Run from this directory** (`.agents/skills/cookbooks/cosmos3/generator/action/finetune/`). Converted checkpoints, the Wan2.2 VAE, the `keep_ranges_1_0_1.json` filter, and run outputs default to `checkpoints/`, `data/`, and `outputs/` here (all git-ignored).
 
 ## Quick start
@@ -70,7 +70,7 @@ Relative episode-ID keys need no prefix.
 uvx hf@latest download \
     nvidia/Cosmos3-DROID \
     --repo-type dataset \
-    --local-dir data/Cosmos3-DROID
+    --local-dir data/droid_plus_lerobot_640x360_20260412
 
 uvx hf@latest download KarlP/droid keep_ranges_1_0_1.json --local-dir data/droid_filters
 # Export the prefix from your filter metadata before continuing. Omit this check for relative-ID keys.
@@ -95,7 +95,7 @@ reasoner-style local prep above and enabling the released `keep_ranges_1_0_1.jso
 Paths are fixed at the top of the script (under this git-ignored folder) — edit them there or export env vars to relocate data and checkpoints:
 
 ```shell
-export DATASET_PATH=/scratch/Cosmos3-DROID/success
+export DATASET_PATH=/scratch/droid_plus_lerobot_640x360_20260412
 export BASE_CHECKPOINT_PATH=/scratch/checkpoints/Cosmos3-Nano
 export WAN_VAE_PATH=/scratch/checkpoints/wan22_vae/Wan2.2_VAE.pth
 export FILTER_PATH=/scratch/droid/keep_ranges_1_0_1.json
