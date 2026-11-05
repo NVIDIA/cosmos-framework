@@ -200,6 +200,7 @@ def test_portable_factor_ownership_and_inference_only_guards(tmp_path, monkeypat
     from cosmos_framework.posttrain.tests import test_adapters_native as fixtures
     from cosmos_framework.posttrain.tests.test_adapter_merged_weight import configuration
     from cosmos_framework.posttrain.tests.test_adapters_native import tiny_snapshot
+    from cosmos_framework.posttrain.tests.test_model_qwen3_5 import _batch
     from cosmos_framework.utils.generator.bf16_cache import _inference_only
 
     cfg = fixtures._dense_config()
@@ -227,6 +228,7 @@ def test_portable_factor_ownership_and_inference_only_guards(tmp_path, monkeypat
         if isinstance(adapter, PosttrainAdapterLinear)
         for module in (adapter.lora_A, adapter.lora_B)
     ]
+    training_forward = net.model.forward
     changed = install_adapter_inference_profile(net, PROFILE)
     assert changed == install_adapter_inference_profile(net, PROFILE)
     assert not any("lora_A" in name or "lora_B" in name for name in changed)
@@ -237,6 +239,39 @@ def test_portable_factor_ownership_and_inference_only_guards(tmp_path, monkeypat
     )
     assert net.lm_head.weight is net.model.language_model.embed_tokens.weight
     assert_trainability(net, optimizer)
+    # The explicit inference override removes only dummy modality executions;
+    # real text/image/video/both batches still equal the ordered reference.
+    inference_forward = net.model.forward
+    calls = []
+    hook = net.model.visual.register_forward_pre_hook(lambda _module, _args: calls.append(1))
+    with torch.no_grad():
+        for modality, count in [("text", 0), ("image", 1), ("video", 1), ("both", 2)]:
+            data = {k: v.cuda() for k, v in _batch(net.config, modality, torch.bfloat16).items()}
+            calls.clear()
+            actual = net(**data, use_cache=False).logits
+            assert len(calls) == count
+            net.model.forward = training_forward
+            calls.clear()
+            expected = net(**data, use_cache=False).logits
+            assert len(calls) == 2
+            assert torch.equal(actual, expected)
+            net.model.forward = inference_forward
+            settings = dict(
+                max_new_tokens=4,
+                min_new_tokens=4,
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_logits=True,
+            )
+            calls.clear()
+            cached = net.generate(**data, **settings, use_cache=True)
+            assert len(calls) == count  # No dummy or repeated vision during decode.
+            calls.clear()
+            full = net.generate(**data, **settings, use_cache=False)
+            assert len(calls) == 4 * count
+            assert torch.equal(cached.sequences, full.sequences)
+            assert all(torch.equal(a, b) for a, b in zip(cached.logits, full.logits, strict=True))
+    hook.remove()
     with pytest.raises(RuntimeError, match="no_grad"):
         _inference_only(net, (), {})
     with torch.no_grad():

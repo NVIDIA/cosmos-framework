@@ -124,9 +124,28 @@ def install_adapter_inference_profile(net, profile, *, cache_effective_weights=F
     if cache_effective_weights:
         for _, module in targets:
             validate_cache_sources(module)
+    stock_modality_forward = None
+    if profile != QWEN3_5_PROFILE:
+        from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModel
+
+        if type(net.model) is not Qwen3VLModel:
+            raise ValueError("canonical portable inference requires the stock Qwen3VLModel inner class")
+        stock_modality_forward = MethodType(Qwen3VLModel.forward, net.model)
     # All checks precede mutation. Reuse the adapter's existing effective-weight
     # implementation, including DoRA magnitude and PiSSA initial-factor semantics.
     changed = install(net, adapter_type=PosttrainAdapterLinear)
+    if stock_modality_forward is not None:
+        # The ordered training forward executes dummy vision for absent media
+        # to coordinate cross-rank collectives/replay. The validated single-GPU,
+        # inference-only profile needs no such graph. Reuse the pinned stock
+        # modality assembly, as the merged loader does; retain real media batches,
+        # deepstack features, masks and cache/position handling without any copy.
+        if hasattr(net.model, "_hf_hook"):
+            net.model._old_forward = stock_modality_forward
+        else:
+            net.model.forward = stock_modality_forward
+        if "model" not in changed:
+            changed.append("model")
     if not cache_effective_weights:
         unbind_adapter_inference_cache_optimizers(net)
     for name, module in targets:

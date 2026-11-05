@@ -45,6 +45,13 @@ updates followed by an exception. Unbound fused/custom writes are not detected
 automatically. Do not mutate weights concurrently with inference. Derived tensors
 are neither Parameters nor buffers and are never exported or checkpointed.
 
+The explicit single-GPU Qwen3-VL canonical inference profile also uses the pinned
+stock modality forward, matching the merged loader. It skips the training
+forward's dummy vision executions for absent media, including incremental decode.
+Real per-modality batches, deepstack features and cache/position handling stay
+stock. The training builder and ordered cross-rank forward are unchanged;
+Qwen3.5 is unchanged. Installing the inference profile still forbids training.
+
 ## Canonical attention optimization
 
 The original fixed-tile kernel remains the correctness reference. Long Qwen3-VL
