@@ -19,14 +19,43 @@ pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 POSTTRAIN = Path(__file__).resolve().parents[1]
 
 
-def test_profile_is_self_contained_and_cli_overrides_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def launch_profile(tmp_path: Path) -> Path:
+    profile = tmp_path / "launch.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "run": "-m application",
+                "mode": "torchrun",
+                "nodes": 2,
+                "gpus_per_node": 4,
+                "account": "test-account",
+                "partition": "test-partition",
+                "submit_only": True,
+                "qos": "normal",
+                "cpus_per_task": 32,
+                "output_root": "outputs/test",
+                "env": {"SFT_MODEL_PATH": "/shared/model", "OMP_NUM_THREADS": "1"},
+                "container_image": "/<runtime-image>",
+                "container_mounts": "/shared:/shared",
+                "venv": "/opt/venv/test/bin/activate",
+                "no_pip": True,
+            }
+        )
+    )
+    return profile
+
+
+def test_profile_is_self_contained_and_cli_overrides_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch_profile: Path
+) -> None:
     submit = Mock()
     monkeypatch.setattr(launcher, "submit_multinode", submit)
     monkeypatch.setenv("OMP_NUM_THREADS", "99")
     launcher.main(
         [
             "--launch-config",
-            str(POSTTRAIN / "configs/sft_qwen3p8_27b_obj1k_gcp.json"),
+            str(launch_profile),
             "--repo-root",
             str(tmp_path),
             "--job-name",
@@ -44,25 +73,27 @@ def test_profile_is_self_contained_and_cli_overrides_it(tmp_path: Path, monkeypa
     assert arguments["repo_root"] == str(tmp_path)
     assert arguments["env"]["OMP_NUM_THREADS"] == "2"
     assert arguments["env"]["SFT_S3_CREDENTIALS"] == "/shared/my credentials.json"
-    assert arguments["env"]["SFT_MODEL_PATH"].endswith("/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0")
-    assert arguments["env"]["IMAGINAIRE_OUTPUT_ROOT"] == str(tmp_path / "outputs/sft_obj1k")
-    assert arguments["log_dir"] == str(tmp_path / "outputs/sft_obj1k/logs/new_experiment")
+    assert arguments["env"]["SFT_MODEL_PATH"] == "/shared/model"
+    assert arguments["env"]["IMAGINAIRE_OUTPUT_ROOT"] == str(tmp_path / "outputs/test")
+    assert arguments["log_dir"] == str(tmp_path / "outputs/test/logs/new_experiment")
     assert arguments["job_name"] == "new_experiment"
     assert arguments["qos"] == "normal" and arguments["cpus_per_task"] == 32
-    assert arguments["venv"] == "/opt/venv/posttrain/bin/activate"
+    assert arguments["venv"] == "/opt/venv/test/bin/activate"
     assert arguments["submit_only"] and not arguments["pip_install"]
     tokens = shlex.split(submit.call_args.args[0])
     assert tokens[-3:] == ["--", "rl.optimizer.lr=5e-6", "job.name=new_experiment"]
     assert ".ene/scratch" not in str(submit.call_args)
 
 
-def test_wait_overrides_profile_submit_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wait_overrides_profile_submit_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch_profile: Path
+) -> None:
     submit = Mock()
     monkeypatch.setattr(launcher, "submit_multinode", submit)
     launcher.main(
         [
             "--launch-config",
-            str(POSTTRAIN / "configs/sft_qwen3p8_27b_obj1k_gcp.json"),
+            str(launch_profile),
             "--wait",
             "--dry-run",
             "--output-root",
@@ -134,14 +165,14 @@ def test_submit_only_records_acceptance_without_polling(tmp_path: Path, monkeypa
     assert "#SBATCH --qos=normal" in script and "#SBATCH --cpus-per-task=32" in script
 
 
-def test_dry_run_by_file_needs_only_stdlib(tmp_path: Path) -> None:
+def test_dry_run_by_file_needs_only_stdlib(tmp_path: Path, launch_profile: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
             "-S",
             str(POSTTRAIN / "utils/launch_multinode.py"),
             "--launch-config",
-            str(POSTTRAIN / "configs/sft_qwen3p8_27b_obj1k_gcp.json"),
+            str(launch_profile),
             "--output-root",
             str(tmp_path),
             "--job-name",
@@ -157,6 +188,9 @@ def test_dry_run_by_file_needs_only_stdlib(tmp_path: Path) -> None:
     syntax = subprocess.run(["bash", "-n"], input=result.stdout, text=True, capture_output=True, timeout=30)
     assert syntax.returncode == 0, syntax.stderr
     assert "#SBATCH --job-name=dry-run" in result.stdout
+    assert "launch_multinode_torchrun.sh" in result.stdout
+    assert "VENV_ACTIVATE=/opt/venv/test/bin/activate" in result.stdout
+    assert "pip install" not in result.stdout and "uv sync" not in result.stdout
     assert not (tmp_path / "logs/dry-run/submission.json").exists()
 
 
