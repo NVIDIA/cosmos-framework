@@ -76,13 +76,14 @@ can be compared with a full baseline. The expected metric, model revision,
 scope and protocol are displayed before a full run; paper values are labeled
 separately from measured launchable values.
 
-**Is my setup working?** For MMSI-Video-Bench, expect **27.94%** official
-accuracy. A full run is in the expected range when all 1,106 questions are
-scored and accuracy is within **±1.0 point** (26.94–28.94%, about 298–320
-correct). The result card reports whether the run is inside that range. Outside
-it means check the setup against the pinned model, serving image and protocol;
-it is not proof the setup is broken. The paper's 27.2% is a reference, not the
-target.
+**Is my setup working?** For MMSI-Video-Bench with the pinned
+`nvidia/Cosmos3-Nano`, expect **27.94%** official accuracy. A full run is in the
+expected range when all 1,106 questions are scored and accuracy is within
+**±1.0 point** (26.94–28.94%, about 298–320 correct). The result card reports
+whether the run is inside that range. Outside it means check the setup against
+the pinned model, serving image and protocol; it is not proof the setup is
+broken. The paper's 27.2% is a reference, not the target. Other models (BYOM)
+have no expected range, so their result cards show none.
 
 Run all cells in the selected benchmark notebook. It downloads pinned public
 inputs, checks coverage **before model requests**, streams real progress, scores

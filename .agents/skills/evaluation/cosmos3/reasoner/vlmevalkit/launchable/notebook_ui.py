@@ -103,12 +103,17 @@ def expected_range(benchmark):
     return baseline["value"] - points, baseline["value"] + points
 
 
-def in_expected_range(benchmark, value, coverage):
-    """True/False against the approved band; None when no band applies."""
+def in_expected_range(benchmark, value, coverage, model):
+    """True/False against the approved band; None when no band applies.
+
+    The band describes the pinned baseline model only. Other models (BYOM) have
+    no expected range and must not be reported as outside it.
+    """
     band = expected_range(benchmark)
-    if band is None or value is None:
+    record = _baselines()
+    if band is None or value is None or model != record["model"]:
         return None
-    complete = coverage["scored"] == coverage["expected"] == _baselines()["benchmarks"][benchmark]["examples"]
+    complete = coverage["scored"] == coverage["expected"] == record["benchmarks"][benchmark]["examples"]
     return complete and band[0] <= value <= band[1]
 
 
@@ -246,7 +251,8 @@ def _show_results(summary, benchmark, scope, work, item, log_path=None):
         banner += "Smoke run only: this checks the pipeline, not full-benchmark performance."
     if scope == "custom":
         banner += "Customer-defined labeled data: not an official benchmark or leaderboard result."
-    in_range = in_expected_range(benchmark, value, coverage) if scope == "full" else None
+    in_range = (in_expected_range(benchmark, value, coverage, summary.get("model"))
+                if scope == "full" else None)
     if in_range is False:
         low, high = expected_range(benchmark)
         banner += (f"Outside the expected range ({low:.2f}–{high:.2f}%): check the setup "

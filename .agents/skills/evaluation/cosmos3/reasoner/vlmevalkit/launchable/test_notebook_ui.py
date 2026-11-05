@@ -34,18 +34,22 @@ class ResultIdentityTests(unittest.TestCase):
 
 class ExpectedRangeTests(unittest.TestCase):
     FULL = {'expected': 1106, 'scored': 1106}
+    NANO = 'nvidia/Cosmos3-Nano'
 
     def test_band_is_one_point_either_side_inclusive(self):
-        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 298 / 1106, self.FULL))
-        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 320 / 1106, self.FULL))
-        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 297 / 1106, self.FULL))
-        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 321 / 1106, self.FULL))
+        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 298 / 1106, self.FULL, self.NANO))
+        self.assertTrue(in_expected_range('mmsivideo-bench', 100 * 320 / 1106, self.FULL, self.NANO))
+        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 297 / 1106, self.FULL, self.NANO))
+        self.assertFalse(in_expected_range('mmsivideo-bench', 100 * 321 / 1106, self.FULL, self.NANO))
 
     def test_partial_or_resized_run_is_never_in_range(self):
-        self.assertFalse(in_expected_range('mmsivideo-bench', 27.94, {'expected': 1000, 'scored': 1000}))
+        self.assertFalse(in_expected_range('mmsivideo-bench', 27.94, {'expected': 1000, 'scored': 1000}, self.NANO))
+
+    def test_other_models_have_no_expected_range(self):
+        self.assertIsNone(in_expected_range('mmsivideo-bench', 31.0, self.FULL, 'nvidia/Cosmos3.5-Ultra-Reasoner'))
 
     def test_benchmarks_without_an_approved_band_report_none(self):
-        self.assertIsNone(in_expected_range('videophy2', 48.13, {'expected': 3397, 'scored': 3397}))
+        self.assertIsNone(in_expected_range('videophy2', 48.13, {'expected': 3397, 'scored': 3397}, self.NANO))
 
 
 if __name__ == '__main__':
