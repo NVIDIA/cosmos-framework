@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import accumulate
 
 import torch
 
 from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
+
+# The native generation packer supplies these delimiters after each text stream.
+_NATIVE_CAPTION_SUFFIX_TOKEN_KEYS: tuple[str, ...] = ("eos_token_id", "start_of_generation")
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,9 @@ class RollingPromptDocument:
     # expands when neighboring caption context is requested.
     visible_start_frame: int | None = None
     visible_end_frame: int | None = None
+    # Static compilation reserves a fixed document capacity. Only this prefix
+    # contains real caption tokens; trailing slots must never become media keys.
+    valid_token_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,19 @@ class RollingPromptLayout:
             offset = stop
         return starts, ends  # 2*[KV]
 
+    def mask_padding(self, roles: torch.Tensor, padding_role: int) -> torch.Tensor:  # [KV] -> [KV]
+        """Hide reserved caption slots from media attention without moving real tokens."""
+        if all(doc.valid_token_count is None for doc in self.documents):
+            return roles
+        roles = roles.clone()  # [KV]
+        offset = 0
+        for doc in self.documents:
+            stop = offset + len(doc.token_ids)
+            if doc.valid_token_count is not None:
+                roles[offset + doc.valid_token_count : stop] = padding_role  # [N_padding]
+            offset = stop
+        return roles
+
 
 @dataclass(frozen=True)
 class RollingPromptPack:
@@ -93,6 +112,55 @@ class RollingPromptPack:
     sink_tokens: int
     num_views: int
     fixed_text_extent: int
+
+    def pad_captions(
+        self, document_slots: int, special_tokens: dict[str, int], *, max_caption_tokens: int
+    ) -> RollingPromptPack:
+        """Reserve fixed per-camera caption slots for static layer compilation.
+
+        Each slot has ``max_caption_tokens + len(_NATIVE_CAPTION_SUFFIX_TOKEN_KEYS)``
+        tokens, reserving space for the native packer's EOS and start-of-generation
+        suffix. Real tokens keep their
+        original positions and causal document; padding follows them, so real
+        text queries cannot read padding. Media attention excludes padding via
+        its token role. Missing documents occupy fully invisible slots. Sinks
+        remain separate, unchanged documents. No caption is truncated. This
+        storage capacity does not change ``fixed_text_extent``: media and real
+        caption position IDs remain identical to the unpadded eager pack.
+        """
+        documents: list[RollingPromptDocument] = []
+        text_tokens: list[list[int]] = []
+        native_suffix = tuple(special_tokens[key] for key in _NATIVE_CAPTION_SUFFIX_TOKEN_KEYS)
+        suffix_length = len(native_suffix)
+        for view in range(self.num_views):
+            sinks = [doc for doc in self.documents if doc.view_id == view and doc.is_sink]
+            captions = [doc for doc in self.documents if doc.view_id == view and not doc.is_sink]
+            if len(captions) > document_slots:
+                raise ValueError("Current captions exceed the reserved static caption slots.")
+            view_documents = list(sinks)
+            for index in range(document_slots):
+                doc = captions[index] if index < len(captions) else RollingPromptDocument(view, 0, 0, ())
+                # for_times() already framed populated documents with BOS (if
+                # configured), EOS and start-of-generation. Keep all of those
+                # valid; only the padding and extra suffix appended below are
+                # hidden. An empty slot has no valid tokens.
+                count = len(doc.token_ids)
+                if count > max_caption_tokens:
+                    raise ValueError(
+                        "Caption exceeds the static text capacity; increase rolling_static_caption_max_tokens."
+                    )
+                tokens = (
+                    doc.token_ids + (special_tokens["eos_token_id"],) * (max_caption_tokens - count) + native_suffix
+                )
+                view_documents.append(replace(doc, token_ids=tokens, valid_token_count=count))
+            # Native packing supplies the outer framing tokens. When the last
+            # slot ends in padding, these delimiters are padding too.
+            tokens = [token for doc in view_documents for token in doc.token_ids]
+            prefix_count = int("bos_token_id" in special_tokens)
+            tokens[-suffix_length:] = native_suffix
+            documents.extend(view_documents)
+            text_tokens.append(tokens[prefix_count:-suffix_length])
+        return replace(self, documents=tuple(documents), text_tokens=text_tokens)
 
     def prepare(
         self,
@@ -305,11 +373,9 @@ class RollingTextSinkLayer:
     """One layer's original RoPE K, normalized K and V; never overwritten."""
 
     cached: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None  # each [V*K,H_KV_local,D]
-    reads: int
 
     def __init__(self) -> None:
         self.cached = None
-        self.reads = 0
 
     def apply(
         self,
@@ -339,5 +405,4 @@ class RollingTextSinkLayer:
                 0, layout.sink_read_indexes, saved.index_select(0, layout.sink_cache_indexes)
             )  # [UND,H_KV_local,D]
             result.append(restored)
-        self.reads += 1
         return result[0], result[1], result[2]

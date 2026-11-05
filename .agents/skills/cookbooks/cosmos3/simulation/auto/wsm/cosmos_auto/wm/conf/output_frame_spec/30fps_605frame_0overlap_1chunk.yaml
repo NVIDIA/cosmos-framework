@@ -1,0 +1,4 @@
+target_render_fps: 30
+target_chunk_frame: 605
+overlap_frame: 0
+max_chunk: 1

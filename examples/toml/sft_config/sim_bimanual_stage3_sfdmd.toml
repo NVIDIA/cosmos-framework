@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Required: COSMOS_SIM_BIMANUAL_LOCAL_BUNDLE, COSMOS_SIM_BIMANUAL_STAGE0_CHECKPOINT,
+# and COSMOS_SIM_BIMANUAL_STAGE2_CHECKPOINT. Stage 2 student; Stage 0 teacher/critic.
+# Four-step SDE student, student_update_freq=6; no fresh-EMA reset on stage handoff.
+[job]
+task = "simulation"
+experiment = "sim_local_bimanual_stage3_sfdmd"
+name = "sim_bimanual_stage3_sfdmd"
+wandb_mode = "disabled"

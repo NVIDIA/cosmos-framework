@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="160" viewBox="0 0 960 160" role="img" aria-labelledby="title description">
+  <title id="title">Transfer-Auto end-to-end workflow</title>
+  <desc id="description">Prepare raw scene data in RDS-HQ format and render eleven WSM control videos with captions. Run Transfer-Auto using Cosmos Framework or vLLM-Omni. Generate eleven synchronized RGB videos, optionally together with LiDAR.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8 Z" fill="#64748B"/>
+    </marker>
+  </defs>
+
+  <g fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M 296 80 H 334"/>
+    <path d="M 624 80 H 662"/>
+  </g>
+
+  <g stroke-width="1.5">
+    <rect x="8" y="12" width="288" height="136" rx="12" fill="#EFF6FF" stroke="#60A5FA"/>
+    <rect x="336" y="12" width="288" height="136" rx="12" fill="#F5F3FF" stroke="#A78BFA"/>
+    <rect x="664" y="12" width="288" height="136" rx="12" fill="#F0FDF4" stroke="#65A30D"/>
+  </g>
+
+  <g font-family="Arial, Helvetica, sans-serif" font-size="16" text-anchor="middle">
+    <g fill="#172554">
+      <text x="152" y="44" font-weight="700">01 · PREPARE DATA</text>
+      <text x="152" y="74">Raw scene → RDS-HQ</text>
+      <text x="152" y="98">WSM rendering</text>
+      <text x="152" y="122">11 control videos + captions</text>
+    </g>
+    <g fill="#3B0764">
+      <text x="480" y="44" font-weight="700">02 · RUN INFERENCE</text>
+      <text x="480" y="74">Transfer-Auto model</text>
+      <text x="480" y="98">Cosmos Framework</text>
+      <text x="480" y="122">or vLLM-Omni</text>
+    </g>
+    <g fill="#1A2E05">
+      <text x="808" y="44" font-weight="700">03 · RESULTS</text>
+      <text x="808" y="74">11 synchronized RGB videos</text>
+      <text x="808" y="98">Optional joint output:</text>
+      <text x="808" y="122">RGB + LiDAR</text>
+    </g>
+  </g>
+</svg>

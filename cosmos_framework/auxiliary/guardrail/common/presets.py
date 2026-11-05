@@ -9,12 +9,15 @@ from cosmos_framework.auxiliary.guardrail.qwen3guard.qwen3guard import Qwen3Guar
 from cosmos_framework.utils import log
 
 
-def create_text_guardrail_runner(offload_model_to_cpu: bool = False) -> GuardrailRunner:
+def create_text_guardrail_runner(
+    offload_model_to_cpu: bool = False, *, raise_on_error: bool = False
+) -> GuardrailRunner:
     """Create the text guardrail runner."""
+    strict_options: dict[str, bool] = {"raise_on_error": True} if raise_on_error else {}
     return GuardrailRunner(
         safety_models=[
             Blocklist(),
-            Qwen3Guard(offload_model_to_cpu=offload_model_to_cpu),
+            Qwen3Guard(offload_model_to_cpu=offload_model_to_cpu, **strict_options),
         ]
     )
 

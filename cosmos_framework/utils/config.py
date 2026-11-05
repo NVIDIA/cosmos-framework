@@ -177,7 +177,7 @@ class ObjectStoreConfig:
 class HFExportConfig:
     # Whether to enable HuggingFace safetensors export after each DCP checkpoint.
     enabled: bool = False
-    # HuggingFace Hub repo ID to push exported weights to (e.g. "nvidia/cosmos3-qwen3-8b").
+    # Hugging Face repository selected by the operator for exported weights.
     # None means local/S3 only.
     hf_repo_id: Optional[str] = None
     # Object store for uploading exports. If not enabled, upload is skipped.
@@ -196,8 +196,8 @@ class JobConfig:
     group: str = ""
     # Run/job name.
     name: str = ""
-    # W&B mode, can be "online", or "disabled".
-    wandb_mode: str = "online"
+    # W&B is opt-in; use "online" or "offline" to enable logging.
+    wandb_mode: str = "disabled"
     # Cluster configuration (optional, for cluster-specific settings).
     cluster: Optional[Any] = None
 
@@ -207,7 +207,7 @@ class JobConfig:
 
     @property
     def path_local(self) -> str:
-        local_root = os.environ.get("IMAGINAIRE_OUTPUT_ROOT", "/tmp/imaginaire4-output")
+        local_root = os.environ.get("IMAGINAIRE_OUTPUT_ROOT", "/tmp/cosmos-framework-output")
         return f"{local_root}/{self.path}"
 
 
@@ -487,6 +487,8 @@ class TrainerConfig:
     memory_format: torch.memory_format = torch.preserve_format
     # Gradient accumulation (update step every N iteration).
     grad_accum_iter: int = 1
+    # Debug dataloading without training forward/backward or optimizer/scheduler updates.
+    skip_model_update: bool = False
     # Straggler Detection config
     straggler_detection: StragglerDetectionConfig = attrs.field(factory=StragglerDetectionConfig)
     # Profiling config
@@ -500,7 +502,7 @@ class TrainerConfig:
 @make_freezable
 @attrs.define(slots=False)
 class Config:
-    """Config for an imaginaire4 job.
+    """Config for a job.
 
     See /README.md/Configuration System for more info.
     """

@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# v1alpha1 services schema used by the tested deployment.
+# Worker health probes and DYN_SYSTEM_PORT are supplied by the operator.
+# See dynamo_deployment.md for profile, scheduling, and guardrail choices.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: cosmos3-reasoner
+spec:
+  backendFramework: vllm
+  pvcs:
+    - name: nim-model-cache
+      create: false
+  services:
+    Frontend:
+      componentType: frontend
+      runtimeVersionOverride: 1.5.0
+      replicas: 1
+      extraPodSpec:
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: kubernetes.io/arch
+            operator: Equal
+            value: arm64
+            effect: NoSchedule
+        imagePullSecrets:
+          - name: ngc-registry-secret
+        securityContext:
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-frontend-nightly:20260906-c70f1c7
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -lc
+          args:
+            - |
+              set -euo pipefail
+              exec python3 -m dynamo.frontend \
+                --http-host 0.0.0.0 \
+                --http-port 8000 \
+                --discovery-backend kubernetes \
+                --dyn-chat-processor dynamo \
+                --router-mode round-robin \
+                --router-session-affinity-ttl-secs 300
+          env:
+            - name: DYN_REQUEST_PLANE
+              value: tcp
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      resources:
+        requests:
+          cpu: '4'
+          memory: 8Gi
+        limits:
+          cpu: '8'
+          memory: 16Gi
+    ReasonerWorker:
+      componentType: worker
+      subComponentType: decode
+      runtimeVersionOverride: 1.5.0
+      replicas: 2
+      envFromSecret: ngc-api-secret
+      sharedMemory:
+        size: 64Gi
+      volumeMounts:
+        - name: nim-model-cache
+          mountPoint: /opt/nim/.cache
+      extraPodSpec:
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: kubernetes.io/arch
+            operator: Equal
+            value: arm64
+            effect: NoSchedule
+        imagePullSecrets:
+          - name: ngc-registry-secret
+        securityContext:
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+        mainContainer:
+          image: nvcr.io/nim/nvidia/cosmos3:2.1.0
+          imagePullPolicy: IfNotPresent
+          workingDir: /opt/nim
+          command:
+            - /bin/bash
+            - -lc
+          args:
+            - |
+              set -euo pipefail
+              exec /opt/nim/start_server.sh
+          env:
+            - name: NIM_MODEL_TYPE
+              value: reasoner
+            - name: NIM_DYNAMO_WORKER
+              value: 'true'
+            - name: NIM_MODEL_VARIANT
+              value: nano
+            - name: NIM_PRECISION
+              value: fp8
+            - name: NIM_DISCOVERY_BACKEND
+              value: '{"discovery_backend":"kubernetes","async_scheduling":true,"enable_multimodal":true}'
+            - name: DYN_REQUEST_PLANE
+              value: tcp
+            - name: DYN_SELF_HOST_METADATA
+              value: 'true'
+            - name: TQDM_DISABLE
+              value: '1'
+            - name: NIM_ENABLE_WARMUP
+              value: '0'
+            - name: NIM_ENABLE_TEXT_GUARDRAILS
+              value: '0'
+            - name: NIM_ENABLE_VIDEO_GUARDRAILS
+              value: '0'
+            - name: NIM_ENABLE_SIGLIP_GUARDRAILS
+              value: '0'
+            - name: NIM_CACHE_PATH
+              value: /opt/nim/.cache
+            - name: NIM_ENABLE_STREAMING
+              value: '0'
+            - name: NIM_TAGS_SELECTOR
+              value: n_gpus=1,nim_tp=1,nim_dp=1
+            - name: DYN_NAMESPACE_PREFIX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['nvidia.com/dynamo-namespace']
+      resources:
+        requests:
+          cpu: '32'
+          memory: 96Gi
+          gpu: '1'
+        limits:
+          cpu: '32'
+          memory: 128Gi
+          gpu: '1'

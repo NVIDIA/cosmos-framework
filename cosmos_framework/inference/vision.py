@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from typing import Literal
 
+import av
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
@@ -12,6 +13,34 @@ from PIL import Image
 
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.utils.generator.host_threads import host_threads_per_local_rank, torch_host_threads
+
+VideoDecoderBackend = Literal["torchcodec", "pyav"]
+
+
+def crop_media_to_content(
+    frames: torch.Tensor,
+    crop_box: tuple[int, int, int, int] | None,
+) -> torch.Tensor:
+    """Crop ``[C,T,H,W]`` media to an explicitly declared content rectangle.
+
+    The box follows the PIL convention ``(left, top, right, bottom)`` with an
+    exclusive right/bottom edge. Inference cannot reliably distinguish a real
+    full-resolution image from a pre-padded canvas, so callers must declare the
+    content rectangle when their transport asset includes padding.
+    """
+    if crop_box is None:
+        return frames
+    if frames.ndim != 4:
+        raise ValueError(f"Expected media with shape [C,T,H,W], got {tuple(frames.shape)}")
+    left, top, right, bottom = map(int, crop_box)
+    height, width = frames.shape[-2:]
+    if left < 0 or top < 0 or right <= left or bottom <= top or right > width or bottom > height:
+        raise ValueError(
+            "content_crop_box must be a non-empty (left, top, right, bottom) rectangle "
+            f"inside the decoded {width}x{height} media, got {tuple(crop_box)}"
+        )
+    return frames[..., top:bottom, left:right].contiguous()
 
 
 def resize_pil_image(image: Image.Image, max_size: int, padding_constant: int) -> Image.Image:
@@ -41,13 +70,19 @@ def resize_pil_image(image: Image.Image, max_size: int, padding_constant: int) -
     )
 
 
-def _resize_and_center_crop(frames: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+def _resize_and_center_crop(
+    frames: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    *,
+    interpolation: TF.InterpolationMode = TF.InterpolationMode.BILINEAR,
+) -> torch.Tensor:
     """Aspect-ratio-preserving resize followed by center crop."""
     orig_h, orig_w = frames.shape[2], frames.shape[3]
     scaling_ratio = max(target_w / orig_w, target_h / orig_h)
     resize_h = int(math.ceil(scaling_ratio * orig_h))
     resize_w = int(math.ceil(scaling_ratio * orig_w))
-    frames = TF.resize(frames, [resize_h, resize_w])  # [...,resize_h,resize_w]
+    frames = TF.resize(frames, [resize_h, resize_w], interpolation=interpolation)  # [...,resize_h,resize_w]
     frames = TF.center_crop(frames, [target_h, target_w])  # [...,target_h,target_w]
     return frames
 
@@ -95,6 +130,31 @@ def decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
     return torch.from_numpy(frames_nhwc), float(meta.average_fps)
 
 
+def decode_video_pyav_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
+    """Match native Transfer's TorchVision/PyAV RGB conversion without legacy APIs.
+
+    TorchCodec's RGB conversion can differ by integer rounding from PyAV. Causal
+    Transfer requires the same decoded controls as native inference, including
+    presentation-timestamp ordering and PyAV's default ``to_rgb`` conversion.
+    """
+    with av.open(str(path), metadata_errors="ignore") as container:
+        if not container.streams.video:
+            raise ValueError(f"No video stream found in {path}")
+        stream = container.streams.video[0]
+        fps = float(stream.average_rate) if stream.average_rate is not None else 24.0
+        # Convert while decoding so per-frame PyAV reformatters do not retain
+        # hundreds of conversion contexts until the entire clip has been read.
+        pixels_by_pts = {
+            frame.pts: frame.to_rgb().to_ndarray()  # [H,W,3]
+            for frame in container.decode(video=0)
+            if frame.pts is not None and frame.pts >= 0
+        }
+        if not pixels_by_pts:
+            raise ValueError(f"Decoded zero video frames from {path}")
+        pixels = np.stack([pixels_by_pts[pts] for pts in sorted(pixels_by_pts)])  # [T,H,W,3]
+    return torch.from_numpy(pixels), fps  # [T,H,W,3]
+
+
 def load_conditioning_video(
     video_path: Path,
     target_h: int,
@@ -105,14 +165,41 @@ def load_conditioning_video(
 ) -> torch.Tensor:
     """Load video frames for conditioning; returns (3, T, H, W) in [-1, 1].
 
-    ``keep`` selects which ``max_frames`` to take when the input is longer.
+    ``keep`` selects which ``max_frames`` to take when the input is longer, with Python slice
+    semantics: ``frames[-max_frames:]`` for ``"last"``, otherwise ``frames[:max_frames]``.
+
+    Only the kept frames are decoded, and the decode and the resize run on this rank's share of
+    the host's CPUs. A WSM control clip is ~650 frames of which a 297-frame rollout keeps the
+    first 297, and an i2v camera keeps only frame 0, so decoding every frame and slicing
+    afterwards spent most of the media preparation on frames nobody reads. The pixels are
+    unchanged: H.264 decoding is exact under threading and with a range decode, and the resize
+    computes each output element independently of how its work is split across threads.
     """
-    frames, _ = decode_video_thwc_uint8(video_path)
-    frames = frames[-max_frames:] if keep == "last" else frames[:max_frames]  # [T,H,W,3]
-    frames_tchw = frames.permute(0, 3, 1, 2).float()  # [T,3,H,W]
-    frames_resized = _resize_and_center_crop(frames_tchw, target_h, target_w)  # [T,3,target_h,target_w]
-    frames_normalized = frames_resized / 127.5 - 1.0  # [T,3,target_h,target_w]
-    return frames_normalized.permute(1, 0, 2, 3)  # [3,T,target_h,target_w]
+    # Imported here rather than at module scope: every inference module imports this one, and
+    # importing torchcodec loads FFmpeg's shared libraries.
+    from cosmos_framework.utils.generator.torchcodec_dependencies import load_torchcodec
+
+    load_torchcodec()
+    from torchcodec.decoders import VideoDecoder
+
+    # torchcodec's core ops are CPU-only, and this runs under generation's default-CUDA device
+    # context; keep every tensor created here (the empty selection included) on the host.
+    with torch.device("cpu"):
+        num_threads = host_threads_per_local_rank()
+        decoder = VideoDecoder(video_path, device="cpu", dimension_order="NHWC", num_ffmpeg_threads=num_threads)
+        frame_indices = range(len(decoder))
+        kept = frame_indices[-max_frames:] if keep == "last" else frame_indices[:max_frames]
+        if len(kept) > 0:
+            frames = decoder.get_frames_in_range(kept.start, kept.stop).data  # [T,H,W,3]
+        else:
+            frames = torch.empty(
+                (0, decoder.metadata.height, decoder.metadata.width, 3), dtype=torch.uint8
+            )  # [0,H,W,3]
+        with torch_host_threads(num_threads):
+            frames_tchw = frames.permute(0, 3, 1, 2).float()  # [T,3,H,W]
+            frames_resized = _resize_and_center_crop(frames_tchw, target_h, target_w)  # [T,3,target_h,target_w]
+            frames_normalized = frames_resized / 127.5 - 1.0  # [T,3,target_h,target_w]
+        return frames_normalized.permute(1, 0, 2, 3)  # [3,T,target_h,target_w]
 
 
 def pil_to_conditioning_frames(pil_img: Image.Image) -> tuple[torch.Tensor, int, int]:
@@ -194,7 +281,9 @@ def detect_aspect_ratio(width: int, height: int) -> str:
     return aspect_ratio_keys[int(np.argmin((aspect_ratios - current) ** 2))]
 
 
-def read_media_frames(path: Path, max_frames: int) -> tuple[torch.Tensor, float]:
+def read_media_frames(
+    path: Path, max_frames: int, *, video_decoder: VideoDecoderBackend = "torchcodec"
+) -> tuple[torch.Tensor, float]:
     """Read an image or video into a uint8 tensor of shape (C, T, H, W)."""
     ext = path.suffix.lower()
     if ext in _IMAGE_EXTENSIONS:
@@ -204,9 +293,49 @@ def read_media_frames(path: Path, max_frames: int) -> tuple[torch.Tensor, float]
         return frames, 1.0
     if ext not in _VIDEO_EXTENSIONS:
         raise ValueError(f"Unsupported media extension: {ext}")
-    frames, fps = decode_video_thwc_uint8(path)
+    if video_decoder == "pyav":
+        frames, fps = decode_video_pyav_thwc_uint8(path)  # [T,H,W,C]
+    else:
+        frames, fps = decode_video_thwc_uint8(path)  # [T,H,W,C]
     frames = frames[:max_frames].permute(0, 3, 1, 2).permute(1, 0, 2, 3)
     return frames, fps
+
+
+def probe_media_hw_fps(
+    path: Path, *, video_decoder: VideoDecoderBackend = "torchcodec"
+) -> tuple[tuple[int, int], float]:
+    """Return decoded ``(height, width)`` and video FPS without resizing pixels.
+
+    Images return zero FPS so callers retain their requested clock. The PyAV
+    probe decodes only the first presentable frame and uses the same FPS fallback
+    as the full reader. The TorchCodec path retains its existing decode behavior.
+    """
+    ext = path.suffix.lower()
+    if ext in _IMAGE_EXTENSIONS:
+        with path.open("rb") as f:
+            width, height = Image.open(f).size
+        return (height, width), 0.0
+    if ext not in _VIDEO_EXTENSIONS:
+        raise ValueError(f"Unsupported media extension: {ext}")
+    if video_decoder == "pyav":
+        with av.open(str(path), metadata_errors="ignore") as container:
+            if not container.streams.video:
+                raise ValueError(f"No video stream found in {path}")
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate) if stream.average_rate is not None else 24.0
+            for frame in container.decode(video=0):
+                if frame.pts is not None and frame.pts >= 0:
+                    height, width, _ = frame.to_rgb().to_ndarray().shape  # [H,W,3]
+                    return (height, width), fps
+        raise ValueError(f"Decoded zero video frames from {path}")
+    frames, fps = decode_video_thwc_uint8(path)  # [T,H,W,C]
+    return (frames.shape[1], frames.shape[2]), fps
+
+
+def probe_media_hw(path: Path, *, video_decoder: VideoDecoderBackend = "torchcodec") -> tuple[int, int]:
+    """Return ``(height, width)`` using the decoder's first presentable frame."""
+    hw, _ = probe_media_hw_fps(path, video_decoder=video_decoder)
+    return hw
 
 
 def read_and_resize_media(
@@ -215,14 +344,16 @@ def read_and_resize_media(
     resolution: str,
     aspect_ratio: str | None,
     max_frames: int,
+    video_decoder: VideoDecoderBackend = "torchcodec",
+    interpolation: TF.InterpolationMode = TF.InterpolationMode.BILINEAR,
 ) -> tuple[torch.Tensor, float, str, tuple[int, int]]:
     """Read an image/video and resize it to the requested resolution bucket."""
-    raw_frames, fps = read_media_frames(path, max_frames=max_frames)
+    raw_frames, fps = read_media_frames(path, max_frames=max_frames, video_decoder=video_decoder)  # [C,T,H,W]
     original_hw = (raw_frames.shape[2], raw_frames.shape[3])
     detected_aspect_ratio = detect_aspect_ratio(raw_frames.shape[3], raw_frames.shape[2])
     final_aspect_ratio = aspect_ratio or detected_aspect_ratio
     width, height = VIDEO_RES_SIZE_INFO[resolution][final_aspect_ratio]
-    resized = _resize_and_center_crop(raw_frames.permute(1, 0, 2, 3), height, width)
+    resized = _resize_and_center_crop(raw_frames.permute(1, 0, 2, 3), height, width, interpolation=interpolation)
     return resized.permute(1, 0, 2, 3), fps, final_aspect_ratio, original_hw
 
 

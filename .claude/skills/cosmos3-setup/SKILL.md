@@ -40,7 +40,7 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 
 1. **Clone** the repository and `cd` into the project root (the directory containing `pyproject.toml`)
 2. **System deps**: `sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libx11-dev tree wget`
-3. **Install uv**: `curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env`
+3. **Install uv**: `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh && source $HOME/.local/bin/env`. Verify `uv --version` reports `0.11.29`; update an existing installation with `uv self update 0.11.29`.
 4. **Install package**: `uv sync --all-extras --group=cu130-train && source .venv/bin/activate && export LD_LIBRARY_PATH=` (use `cu128-train` on older drivers; the inference-only `cu130` / `cu128` groups omit the training extras)
 5. **Checkpoints**: auto-downloaded during inference; requires HuggingFace auth (see docs)
 6. **Verify**: `uv run --all-extras --group=cu130-train python -c "import cosmos_framework; print('ok')"`
@@ -51,6 +51,11 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 - **CUDA version alignment**: the major CUDA version from `nvidia-smi` must match `torch.version.cuda`. Mismatches cause cryptic shared-library errors.
 - **`HF_HOME`**: controls where checkpoints are cached (default: `~/.cache/huggingface`). Set this if disk space is tight or you want a shared cache.
 - **Conflicting env vars**: stale `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` env vars can silently override CLI auth. Check with `printenv | grep HF_`.
+- **AutoML is a separate source install**: `uv sync --all-extras` does not install
+  the core engine. For AutoML setup, follow `docs/automl.md#installation-from-source`
+  and the `cosmos-automl` skill: ask whether to use `NVIDIA-TAO/tao-automl`'s `main`
+  branch or a user-selected development branch before a new installation. Keep
+  the recorded source revision for existing experiments; do not upgrade on resume.
 
 ## Related skills
 

@@ -312,11 +312,10 @@ def _collate_true_packing(batch: list[dict[str, Any]]) -> dict[str, Any]:
     over_budget: int | None = None
     for item in batch:
         item.pop("true_packing", None)
-        # attention_mask is unused on the true-packing forward: varlen attention is driven by
-        # cu_seqlens, packed position_ids are built from seq_lens, and the pad tail is kept inert by
-        # labels=ignore_index + token_mask=False. vlm_model pops it before the forward, so emitting a
-        # per-step [1, S_pad] mask would only add a wasted H2D copy (true packing). Drop it here so
-        # the variable-length per-sample masks also never reach the generic key handling below.
+        # Varlen attention is driven by cu_seqlens and packed positions by seq_lens.
+        # Drop the variable-length per-sample masks before generic key handling.
+        # Qwen's CPU preparation rebuilds one real-token mask for CP slicing and
+        # MoE routing; labels=ignore_index + token_mask=False mask the pad-tail loss.
         item.pop("attention_mask", None)
         v = item.pop("predicted_runtime_ms", None)
         sc = item.pop("singleton_cause", None)

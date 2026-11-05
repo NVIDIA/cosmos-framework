@@ -25,10 +25,12 @@ from cosmos_framework.inference.args import OmniSetupOverrides
 from cosmos_framework.inference.common.args import CheckpointOverrides, ResolvedPath
 from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.config import deserialize_config_dict, serialize_config_dict
+from cosmos_framework.inference.common.multiview_captions import PER_VIEW_CAPTION_TASK_KEY, PER_VIEW_CAPTIONS_KEY
 from cosmos_framework.inference.common.public_model_config import (
     build_public_model_config,
     load_model_config_from_hf_config,
 )
+from cosmos_framework.scripts._export_model_helpers import LIDAR_VAE_BUNDLE_DIR, bind_bundled_lidar_vae
 from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig, CheckpointDirHf
 
@@ -44,6 +46,9 @@ class Args(pydantic.BaseModel):
 
     skip_vision_encoder: bool = False
     """Do not save the vision encoder sidecar in the Diffusers checkpoint."""
+
+    carry_lidar_vae: bool = False
+    """Copy the source checkpoint's bundled 'lidar_vae/' into the output and point the config at it."""
 
     distilled_scheduler: Literal["auto", "on", "off"] = "auto"
     """Scheduler export mode for distilled (few-step) checkpoints.
@@ -114,6 +119,62 @@ class SafetensorsIndex(pydantic.BaseModel):
             self.update(safetensors_path, f"{rel_path}/{safetensors_path.name}")
 
 
+_BIMANUAL_METADATA_KEY = "cosmos3_nano_sim_bimanual"
+
+
+def _write_bimanual_transformer_metadata(source_config: dict[str, Any], output_path: Path) -> None:
+    """Carry the training export's action contract into the consumer config."""
+    metadata = source_config.get(_BIMANUAL_METADATA_KEY)
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("conditioning"), dict):
+        raise ValueError("Invalid Bimanual action metadata in the source checkpoint config.")
+
+    transformer_config_path = output_path / "transformer/config.json"
+    if not transformer_config_path.is_file():
+        raise FileNotFoundError(
+            "Bimanual conversion did not produce transformer/config.json; "
+            "the action contract cannot be published without it."
+        )
+    transformer_config = deserialize_config_dict(transformer_config_path)
+    existing = transformer_config.get(_BIMANUAL_METADATA_KEY)
+    if existing is not None and existing != metadata:
+        raise ValueError("The generated transformer config contains conflicting Bimanual action metadata.")
+    transformer_config[_BIMANUAL_METADATA_KEY] = copy.deepcopy(metadata)
+    serialize_config_dict(transformer_config, transformer_config_path)
+
+
+# Top-level keys of the source export's config.json that inference reads off the
+# checkpoint's own config.json; carried verbatim into the Diffusers config.
+_CARRIED_EXPORT_METADATA_KEYS = (PER_VIEW_CAPTIONS_KEY, PER_VIEW_CAPTION_TASK_KEY)
+
+
+def _carry_export_metadata(source_config: dict[str, Any], config_dict: dict[str, Any]) -> None:
+    """Copy the multiview caption layout recorded by 'export_model' into the Diffusers config."""
+    for key in _CARRIED_EXPORT_METADATA_KEYS:
+        if key in source_config:
+            config_dict[key] = copy.deepcopy(source_config[key])
+
+
+def _refuse_existing_weights(output_path: Path) -> None:
+    """Refuse an output directory that already holds checkpoint weights.
+
+    Converting into it would mix this conversion's components with a previous
+    one's shards (e.g. a stale transformer shard a smaller model does not overwrite).
+    """
+    if next(output_path.rglob("*.safetensors*"), None) is not None:
+        raise FileExistsError(f"Checkpoint weights already exist in {output_path}; use a new output directory.")
+
+
+def _copy_bundled_lidar_vae(checkpoint_path: Path, output_path: Path) -> bool:
+    """Copy the source export's 'lidar_vae/' bundle into the Diffusers output; True when copied."""
+    source = checkpoint_path / LIDAR_VAE_BUNDLE_DIR
+    if not source.is_dir():
+        return False
+    shutil.copytree(source, output_path / LIDAR_VAE_BUNDLE_DIR, dirs_exist_ok=True)
+    return True
+
+
 def _write_diffusers_weight_index(output_path: Path) -> None:
     """Write the root index over Diffusers component shards."""
     index = SafetensorsIndex()
@@ -147,8 +208,7 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
         inert_keys = {"fp8_granularity", "mixed_precision_reasoner_policy", "mixed_precision_w8a16_cache"}
         comparable = {key: value for key, value in quantization_values.items() if key not in inert_keys}
         if any(
-            key not in disabled_quantization or value != disabled_quantization[key]
-            for key, value in comparable.items()
+            key not in disabled_quantization or value != disabled_quantization[key] for key, value in comparable.items()
         ):
             raise ValueError(
                 "Cannot export an enabled or non-default internal quantization config to the public Cosmos3 schema: "
@@ -279,6 +339,8 @@ def _write_modular_model_index(output_path: Path, repo_id: str) -> None:
 
 
 def convert_model_to_diffusers(args: Args) -> None:
+    # Refuse before writing any configs or components into an existing checkpoint.
+    _refuse_existing_weights(args.output_path)
     register_checkpoints()
     checkpoint_config = args.checkpoint.build_checkpoint(checkpoints=OmniSetupOverrides.CHECKPOINTS)
     checkpoint_path = checkpoint_config.download_checkpoint()
@@ -355,7 +417,8 @@ def convert_model_to_diffusers(args: Args) -> None:
         print(f"Saved diffusers checkpoint to {args.output_path}")
         return
 
-    model_dict = load_model_config_from_hf_config(deserialize_config_dict(checkpoint_path / "config.json"))
+    source_config = deserialize_config_dict(checkpoint_path / "config.json")
+    model_dict = load_model_config_from_hf_config(source_config)
     args.output_path.mkdir(parents=True, exist_ok=True)
 
     supports_action = model_dict["config"]["action_gen"]
@@ -412,6 +475,11 @@ def convert_model_to_diffusers(args: Args) -> None:
             distilled_scheduler=args.distilled_scheduler,
         )
         _convert_model_to_diffusers.convert_model_to_diffusers(_args)
+        _write_bimanual_transformer_metadata(source_config, args.output_path)
+        # Published snapshots ship the LiDAR VAE next to the transformer; the
+        # loader binds it in place of the training-time VAE location.
+        if args.carry_lidar_vae and _copy_bundled_lidar_vae(Path(checkpoint_path), args.output_path):
+            log.info(f"Copied {LIDAR_VAE_BUNDLE_DIR}/ from the source checkpoint.")
 
     # Add vlm files
     vlm_repository = model_dict["config"]["vlm_config"]["model_name"]
@@ -436,6 +504,11 @@ def convert_model_to_diffusers(args: Args) -> None:
     # `model.safetensors.index.json` written below dedupes the consolidated shard.
     config_dict["allow_patterns_overrides"] = ["*/*.safetensors"]
     config_dict["model"] = _build_public_export_model_config(model_dict)
+    if _BIMANUAL_METADATA_KEY in source_config:
+        config_dict[_BIMANUAL_METADATA_KEY] = copy.deepcopy(source_config[_BIMANUAL_METADATA_KEY])
+    _carry_export_metadata(source_config, config_dict)
+    if args.carry_lidar_vae:
+        bind_bundled_lidar_vae(config_dict, args.output_path)
     serialize_config_dict(config_dict, args.output_path / "config.json")
 
     if not args.config_only:

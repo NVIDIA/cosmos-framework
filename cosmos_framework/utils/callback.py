@@ -15,8 +15,8 @@ import torch.utils.data
 import tqdm
 import wandb
 
-from cosmos_framework.utils import distributed, log, misc, wandb_util
 from cosmos_framework.utils.lazy_config import LazyCall, instantiate
+from cosmos_framework.utils import distributed, log, misc, wandb_util
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 
 try:
@@ -26,9 +26,9 @@ except ImportError:
 
 
 if TYPE_CHECKING:
+    from cosmos_framework.utils.config import Config
     from cosmos_framework.model._base import ImaginaireModel
     from cosmos_framework.trainer import ImaginaireTrainer
-    from cosmos_framework.utils.config import Config
 
 
 class CallBackGroup:
@@ -94,6 +94,8 @@ class CallBackGroup:
 
         def multi_callback_wrapper(*args, **kwargs) -> None:
             for callback in self._callbacks:
+                if method_name in _OPTIONAL_CALLBACK_HOOKS and not callable(getattr(callback, method_name, None)):
+                    continue
                 assert hasattr(callback, method_name)
                 method = getattr(callback, method_name)
                 assert callable(method)
@@ -316,12 +318,20 @@ class Callback:
         pass
 
 
+# Hooks added after the callback interface was established. Callbacks that do not subclass
+# Callback may omit them; CallBackGroup then skips them for that callback.
+_OPTIONAL_CALLBACK_HOOKS = frozenset({"on_exception"})
+
+
 def _missing_callback_hooks(callback: object) -> list[str]:
     """Return required callback hooks that are absent or non-callable."""
     return sorted(
         name
         for name, member in vars(Callback).items()
-        if name.startswith("on_") and callable(member) and not callable(getattr(callback, name, None))
+        if name.startswith("on_")
+        and name not in _OPTIONAL_CALLBACK_HOOKS
+        and callable(member)
+        and not callable(getattr(callback, name, None))
     )
 
 

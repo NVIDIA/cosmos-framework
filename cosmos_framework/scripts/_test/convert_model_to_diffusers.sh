@@ -6,7 +6,7 @@
 # Use temporary directory, since output is large.
 CUDA_VISIBLE_DEVICES= python -m cosmos_framework.scripts.convert_model_to_diffusers \
     -o $TMP_DIR/model \
-    --checkpoint-path Cosmos3-Nano-GA
+    --checkpoint-path Cosmos3-Nano
 
 
 # Inference

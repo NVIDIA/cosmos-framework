@@ -134,7 +134,7 @@ _AUDIO_FORWARD_ARGUMENTS = (
     "audio_token_lengths",
     "audio_sample_token_lengths",
 )
-_SUPPORTED_AUDIO_REASONER_TYPES = frozenset({"nemotron_siglip2", "qwen3_vl"})
+_SUPPORTED_AUDIO_REASONER_TYPES = frozenset({"nemotron_siglip2", "qwen3_vl", "qwen3_vl_moe"})
 _PATCH_MARKER = "_cosmos_reasoner_audio_forward_patch"
 _TIED_OUTPUT_PATCH_MARKER = "_cosmos_reasoner_boundary_only_output_patch"
 
@@ -237,6 +237,22 @@ def _projector_dummy_zero(model: torch.nn.Module) -> torch.Tensor | None:
     return model.sound_und_model.projector(dummy_input).sum() * 0
 
 
+def _encoder_dummy_zero(model: Any) -> torch.Tensor | None:  # returns scalar or None
+    """Exercise a trainable audio tower before the vision/LLM forward on non-audio batches."""
+    # Raw HF models and registered audio backends expose these attributes dynamically.
+    encoder = model.sound_und_model.encoder
+    if not model.training or not torch.is_grad_enabled() or not any(p.requires_grad for p in encoder.parameters()):
+        return None
+    reference = next(encoder.parameters())  # [...]
+    lengths = torch.tensor([100], device=reference.device, dtype=torch.long)  # [1]
+    features = torch.zeros(
+        1, 100, encoder.config.num_mel_bins, device=reference.device, dtype=reference.dtype
+    )  # [1,100,M]
+    token_lengths = encoder.get_output_lengths(lengths)  # [1]
+    projected, _ = model.sound_und_model(features, lengths, token_lengths)  # [1,T,D], [1]
+    return projected.sum() * 0  # scalar
+
+
 def _connect_projector_zero_to_logits(output: Any, projector_zero: torch.Tensor, labels: Any) -> Any:
     """Connect a no-op projector graph to logits for mixed-modality FSDP ranks."""
 
@@ -272,7 +288,8 @@ def patch_reasoner_audio_forward(
     The patch deliberately wraps the raw conditional-generation model rather
     than its text tower. This keeps the audio projector owned by (and executed
     inside) the same FSDP root as the native vision merger. With audio absent,
-    the original forward receives the exact original arguments. With audio
+    the original forward receives the original arguments, with a zero-valued
+    audio dependency during training when the audio encoder is trainable. With audio
     present, native multimodal positions are computed from the untouched token
     IDs before only audio placeholder embeddings are replaced; the original
     forward then performs its normal image/video encoding and masked scatter.
@@ -336,6 +353,23 @@ def patch_reasoner_audio_forward(
                 raise ValueError("Reasoner input contains audio placeholders, but audio inputs were not provided")
             if normalized_trainable_token_ids and self.training and torch.is_grad_enabled():
                 raise ValueError("Boundary-token-only training requires audio inputs on every training batch")
+            encoder_zero = _encoder_dummy_zero(self)  # scalar or None
+            if encoder_zero is not None:
+                # Keep the audio graph ahead of vision/LLM backward, without changing
+                # native token IDs, multimodal positions, or another model instance.
+                def connect(_module: torch.nn.Module, _inputs: Any, embeddings: torch.Tensor) -> torch.Tensor:
+                    # embeddings: [B,N,D], returns [B,N,D]
+                    return embeddings + encoder_zero.to(device=embeddings.device, dtype=embeddings.dtype)  # [B,N,D]
+
+                if inputs_embeds is not None:
+                    connected = connect(self, (), inputs_embeds)  # [B,N,D]
+                    _set_bound_argument(bound_arguments, original_signature, "inputs_embeds", connected)
+                    return original_forward(*bound_arguments.args, **bound_arguments.kwargs)
+                hook = getattr(self, "get_input_embeddings")().register_forward_hook(connect)
+                try:
+                    return original_forward(*args, **kwargs)
+                finally:
+                    hook.remove()
             output = original_forward(*args, **kwargs)
             projector_zero = _projector_dummy_zero(self)
             if projector_zero is None:

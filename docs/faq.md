@@ -23,13 +23,10 @@ To add a new entry, append it under the most relevant section — or under [Misc
 
 ### Q: I get `ImportError: cannot import name '_functionalization' from 'torch._C'` inside an NGC container
 
-Clear the library path before running anything:
-
-```shell
-export LD_LIBRARY_PATH=''
-```
-
-This is needed because the NGC PyTorch container ships its own libraries that conflict with the venv-installed versions. See [setup.md#pytorch-import-issue](./setup.md#pytorch-import-issue).
+Inherited container libraries may conflict with the venv-installed versions.
+Remove conflicting entries, but preserve required CUDA compatibility libraries.
+Follow the conditional checks in [setup.md#pytorch-import-issue](./setup.md#pytorch-import-issue)
+instead of clearing `LD_LIBRARY_PATH` automatically.
 
 ### Q: `ModuleNotFoundError: No module named 'cosmos_framework'`
 
@@ -44,22 +41,27 @@ If already installed, try `--reinstall` to force a clean state.
 
 ### Q: Which CUDA version should I use?
 
-CUDA 13.0 is recommended. CUDA 12.8 is also supported. The major version must match between your system CUDA and the installed PyTorch wheels. Check with:
+CUDA 13.0 is recommended on a compatible driver. CUDA 12.8 is also supported.
+Check driver compatibility rather than requiring the displayed CUDA versions to
+match; see [CUDA Variants](./setup.md#cuda-variants).
 
 ```shell
-nvidia-smi                                    # system CUDA
+nvidia-smi                                    # driver version and CUDA capability
 python -c "import torch; print(torch.version.cuda)"  # PyTorch CUDA
 ```
 
 ### Q: I get a CUDA / NVIDIA driver mismatch error (e.g. `CUDA error: no kernel image is available for execution on the device`, `libcudart.so.* cannot open`, `The NVIDIA driver on your system is too old`)
 
-The installed PyTorch CUDA wheels do not match your system's NVIDIA driver. Check the driver's reported CUDA version with `nvidia-smi`, then delete `.venv/` and `uv sync` against the matching group (`cu130-train` if the driver supports CUDA 13.x; `cu128-train` if it supports CUDA 12.8):
+Check the [GPU and media runtime](./setup.md#verify-the-gpu-and-media-runtime)
+and identify the missing library or unsupported GPU architecture first. For an
+older driver without a supported CUDA 13 compatibility setup, use `cu128-train`.
+To change dependency groups, recreate the environment:
 
 ```shell
-nvidia-smi                                    # check the "CUDA Version" field (top right)
+nvidia-smi                                    # check the host driver and GPU model
 rm -rf .venv
 uv sync --all-extras --group=cu130-train --reinstall   # or --group=cu128-train
-source .venv/bin/activate && export LD_LIBRARY_PATH=
+source .venv/bin/activate
 ```
 
 Use the inference-only groups (`cu130` / `cu128`) instead if you don't need the training-only dependencies.
@@ -79,7 +81,7 @@ Control the download location with `HF_HOME` (default: `~/.cache/huggingface`). 
 Reinstall uv and the venv from scratch:
 
 ```shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh
 uv python install --reinstall
 rm -rf .venv
 uv sync --all-extras --group=cu130 --reinstall

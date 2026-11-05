@@ -40,13 +40,16 @@ from cosmos_framework.configs.base.defaults.activation_checkpointing import Acti
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import (
     _PACK_DYNAMIC_LEN_KEYS,
+    ContextParallelDispatch,
     _mark_pack_unbacked,
     _wrap_forward_with_unbacked_pack,
     apply_compile,
+    apply_cp,
     apply_fsdp,
     materialize_non_offloaded_state,
     parallelize_unified_mot,
 )
+from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
@@ -225,8 +228,8 @@ class TestMarkUnbackedFlag:
 
     The flag exists so a run that hits a ``Could not guard on data-dependent expression`` the
     stated invariants do not cover can fall back to recompiling instead of failing. That is only
-    an escape hatch if turning it off actually leaves the compiled block unwrapped, so both
-    directions are pinned here.
+    an escape hatch if turning it off avoids marking input dimensions, so both directions
+    are pinned here independently of the request-routing wrapper.
     """
 
     @staticmethod
@@ -249,23 +252,64 @@ class TestMarkUnbackedFlag:
             block.forward = compiled_forward
             return block
 
-        with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
+        with (
+            patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile),
+            patch(
+                "cosmos_framework.model.generator.mot.parallelize_unified_mot._wrap_forward_with_unbacked_pack"
+            ) as wrap,
+        ):
             apply_compile(model, CompileConfig(enabled=True, mark_unbacked=mark_unbacked))
 
         forward = model.model.layers.get_submodule("0").forward
         if mark_unbacked:
-            # Wrapped: the marking frame sits between the caller and the compiled forward.
-            assert forward is not compiled_forward
-            assert callable(forward)
+            wrap.assert_called_once()
+            assert forward is wrap.return_value
         else:
-            # Unwrapped: the compiled forward is called directly, as it was before the marking.
-            assert forward is compiled_forward
+            wrap.assert_not_called()
+            assert callable(forward)
 
     def test_defaults_to_not_marking(self) -> None:
         # Off by default: the marking is incompatible with the DTensor all-to-all every
         # context-parallel config goes through, so it is opted into per configuration after
         # verifying that configuration compiles under it. See CompileConfig.mark_unbacked.
         assert CompileConfig().mark_unbacked is False
+
+
+class TestContextParallelHeads:
+    @staticmethod
+    def _model_with_query_heads(num_heads: int) -> torch.nn.Module:
+        attention = torch.nn.Module()
+        attention.num_attention_heads = num_heads
+        attention.dispatch_attention_fn = torch.nn.Identity()
+        block = torch.nn.Module()
+        block.self_attn = attention
+        inner = torch.nn.Module()
+        inner.layers = torch.nn.ModuleList([block])
+        model = torch.nn.Module()
+        model.model = inner
+        return model
+
+    @pytest.mark.parametrize("cp", [32, 64])
+    def test_accepts_cp_dividing_query_heads(self, cp: int) -> None:
+        model = self._model_with_query_heads(64)
+        parallel_dims = ParallelDims(world_size=128, dp_shard=128, cp=cp)
+        parallel_dims._meshes["cp"] = object()
+        original_dispatch = model.model.layers[0].self_attn.dispatch_attention_fn
+
+        assert apply_cp(model, parallel_dims) is model
+
+        dispatch = model.model.layers[0].self_attn.dispatch_attention_fn
+        assert isinstance(dispatch, ContextParallelDispatch)
+        assert dispatch.cp_mesh is parallel_dims.cp_mesh
+        assert dispatch.wrapped_dispatch is original_dispatch
+
+    @pytest.mark.parametrize(("num_heads", "cp"), [(32, 64), (48, 32)])
+    def test_rejects_cp_not_dividing_query_heads(self, num_heads: int, cp: int) -> None:
+        model = self._model_with_query_heads(num_heads)
+        parallel_dims = ParallelDims(world_size=128, dp_shard=128, cp=cp)
+
+        with pytest.raises(ValueError, match="Query heads .* must be divisible by CP"):
+            apply_cp(model, parallel_dims)
 
 
 class TestFSDPCPUOffload:
@@ -396,7 +440,7 @@ class TestCudaGraphScope:
     """``cuda_graph_scope`` decides whether inductor's CUDA-graph trees wrap each block.
 
     With scope "forward" the AR loop captures one explicit graph around the whole forward, and a
-    capture cannot nest the per-block graph trees, so the blocks must compile with ``mode=None``.
+    capture cannot nest the per-block graph trees, so only block scope enables their compile options.
     """
 
     @staticmethod
@@ -411,21 +455,28 @@ class TestCudaGraphScope:
         return model
 
     @pytest.mark.parametrize(
-        ("use_cuda_graphs", "scope", "expected_mode"),
-        [(True, "block", "reduce-overhead"), (True, "forward", None), (False, "block", None), (False, "forward", None)],
+        ("use_cuda_graphs", "scope", "expected_graph_trees"),
+        [(True, "block", True), (True, "forward", False), (False, "block", False), (False, "forward", False)],
     )
-    def test_block_scope_alone_uses_reduce_overhead(self, use_cuda_graphs: bool, scope: str, expected_mode) -> None:
+    def test_block_scope_alone_uses_reduce_overhead(
+        self, use_cuda_graphs: bool, scope: str, expected_graph_trees: bool
+    ) -> None:
         model = self._model_with_one_layer()
-        seen_modes: list[object] = []
+        seen_options: list[dict[str, object]] = []
 
-        def fake_compile(block, **kwargs):
-            seen_modes.append(kwargs["mode"])
+        def fake_compile(block: torch.nn.Module, **kwargs: object) -> torch.nn.Module:
+            assert kwargs["mode"] == ("reduce-overhead" if expected_graph_trees else None)
+            options = kwargs["options"] or {}
+            assert isinstance(options, dict)
+            seen_options.append(options)
             return block
 
         with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
             apply_compile(model, CompileConfig(enabled=True, use_cuda_graphs=use_cuda_graphs, cuda_graph_scope=scope))
 
-        assert seen_modes == [expected_mode]
+        assert len(seen_options) == 1
+        assert "triton.cudagraphs" not in seen_options[0]
+        assert "emulate_precision_casts" not in seen_options[0]
 
     @pytest.mark.parametrize("scope", ["block", "forward"])
     def test_forward_scope_forces_static_shapes(self, scope: str) -> None:

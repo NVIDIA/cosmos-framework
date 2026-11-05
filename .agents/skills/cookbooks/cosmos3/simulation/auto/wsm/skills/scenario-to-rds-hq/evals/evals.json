@@ -1,0 +1,30 @@
+{
+  "skill_name": "scenario-to-rds-hq",
+  "evals": [
+    {
+      "id": 2,
+      "prompt": "Use the scenario-to-rds-hq skill to convert the attached coordinate-scene.json into RDS-HQ. Its geometry uses centimetres, timestamps use milliseconds, quaternions are wxyz, and camera extrinsics use forward-left-up axes. Motion flags, signal thickness, and several map layers are absent. Preserve supplied semantics and infer only what the available evidence supports. Save the adapter, data, and conversion report in a new output directory. Validate on CPU. Keep the source rig; skip Hyperion retargeting.",
+      "expected_output": "Correct unit, pose, axis, box-center, semantic, and timeline conversion with explicit defaults and empty layers where appropriate.",
+      "files": ["evals/files/coordinate-scene.json"],
+      "assertions": [
+        "Forward projections and transformed box centers agree with analytically known source geometry.",
+        "Motion is inferred in the fixed world frame rather than relative to the moving camera.",
+        "Missing map components are empty and inferred thickness is disclosed.",
+        "Observed amber is represented as a yellow signal without inventing an arrow direction."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use the scenario-to-rds-hq skill to convert the attached coordinate-scene.json into RDS-HQ under a new output directory. The vehicle origin is the rear-axle ground projection. Validate on CPU, including loading the camera models. Save the adapter, class mapping report, native conversion, and final dataset. Do not render videos or use a GPU.",
+      "expected_output": "A validated native conversion followed by default Hyperion retargeting to seven cameras at 1924x1084 and four fisheyes at 1720x1080, with unchanged scene annotations and timing.",
+      "files": ["evals/files/coordinate-scene.json"],
+      "assertions": [
+        "The agent uses the bundled prepared rig without fetching, resizing, or fitting calibration during conversion.",
+        "The final dataset has eleven F-theta cameras: seven at 1924x1084 and four fisheyes at 1720x1080, excluding front-tele-satellite.",
+        "Camera poses combine the vehicle trajectory and Hyperion extrinsics, without carrying over the original camera mounting offset.",
+        "All scene annotation archives are byte-identical between the native and retargeted datasets; both retain the three-frame 2 Hz timeline.",
+        "The saved report identifies native and final outputs, rig checksum, camera names, and validation results; it does not claim RGB alignment or rendered-video validation."
+      ]
+    }
+  ]
+}

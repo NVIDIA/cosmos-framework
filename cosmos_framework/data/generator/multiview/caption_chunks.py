@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cosmos_framework.data.generator.multiview.camera_attributes import MADS_CAMERA_ATTRIBUTES
+from cosmos_framework.data.generator.multiview.camera_attributes import CAMERA_ATTRIBUTES
 from cosmos_framework.data.generator.multiview.caption_format import (
     DEFAULT_CAPTION_PREFIXES,
     first_caption_paragraph,
@@ -33,12 +33,12 @@ class MultiviewCaptionChunk:
 
 
 # Style-keyed caption files predate the single-caption schema. They are still read, in this fixed
-# order, so older MADS bundles keep working; no argument selects a style any more.
+# order, so older bundles keep working; no argument selects a style any more.
 LEGACY_CAPTION_KEYS: tuple[str, ...] = ("long", "av_long", "medium", "av_medium", "short", "av_short")
 
 
 def chunks_from_structured_captions(payload: Mapping[str, Any]) -> list[MultiviewCaptionChunk]:
-    """Read the ``caption_structured`` chunk map that MADS Tier-1 bundles and Lance rows carry.
+    """Read the ``caption_structured`` chunk map that structured caption bundles and Lance rows carry.
 
     Shape is ``{"chunk_<start>_<end>": {"caption": str, "start_frame": int, "end_frame": int}}``
     with ``end_frame`` exclusive. Chunks are sorted by frame span rather than trusted in key
@@ -138,7 +138,7 @@ def chunks_from_style_keyed_captions(payload: list[Any]) -> list[MultiviewCaptio
 
 
 def parse_multiview_caption_chunks(payload: Any, *, source: str = "caption payload") -> list[MultiviewCaptionChunk]:
-    """Parse a MADS caption payload in either the structured or legacy style-keyed schema."""
+    """Parse a multiview caption payload in either the structured or legacy style-keyed schema."""
     if isinstance(payload, Mapping):
         chunks = chunks_from_structured_captions(payload)
     elif isinstance(payload, list):
@@ -155,7 +155,7 @@ def parse_multiview_caption_chunks(payload: Any, *, source: str = "caption paylo
 
 
 def load_multiview_caption_chunks(caption_path: Path) -> list[MultiviewCaptionChunk]:
-    """Read a local MADS caption file in either supported schema."""
+    """Read a local multiview caption file in either supported schema."""
     return parse_multiview_caption_chunks(json.loads(caption_path.read_text()), source=str(caption_path))
 
 
@@ -264,24 +264,24 @@ def load_multiview_caption_chunks_per_view(
                 f"{ {key: (chunk.frame_start, chunk.frame_end) for key, chunk in zip(camera_keys, view_chunks, strict=True)} }."
             )
         frame_start, frame_end = spans.pop()
-        # Preserve the legacy one-camera prefixes for a MADS rig. Other datasets can use opaque
+        # Preserve the legacy one-camera prefixes for the multiview rig. Other datasets can use opaque
         # camera identifiers (for example PAIBench's ``dev1``), so retain their captions verbatim
-        # rather than requiring a MADS-specific prefix. A model trained with
+        # rather than requiring a rig-specific prefix. A model trained with
         # separate_view_text_tokenization receives the same selected-rig and current-camera
-        # headers as the training dataloader when the rig is MADS. Which form is packed is decided
+        # headers as the training dataloader when the rig is the default multiview rig. Which form is packed is decided
         # at generation time from the checkpoint's own training config.
         view_captions = [chunk.prompt for chunk in view_chunks]
         if first_caption_paragraph_only:
             view_captions = [first_caption_paragraph(caption) for caption in view_captions]
-        use_mads_camera_rig_prefix = all(camera_key in MADS_CAMERA_ATTRIBUTES for camera_key in camera_keys)
+        use_camera_rig_prefix = all(camera_key in CAMERA_ATTRIBUTES for camera_key in camera_keys)
         labeled = (
-            label_view_captions(view_captions, camera_keys=camera_keys) if use_mads_camera_rig_prefix else view_captions
+            label_view_captions(view_captions, camera_keys=camera_keys) if use_camera_rig_prefix else view_captions
         )
         separate_view_captions = format_separate_view_captions(
             view_captions,
             camera_names=camera_keys,
-            add_camera_rig_prefix=use_mads_camera_rig_prefix,
-            camera_attributes=MADS_CAMERA_ATTRIBUTES if use_mads_camera_rig_prefix else None,
+            add_camera_rig_prefix=use_camera_rig_prefix,
+            camera_attributes=CAMERA_ATTRIBUTES if use_camera_rig_prefix else None,
         )
         merged = format_multiview_caption(labeled, use_explicit_view_format=False, use_two_pass_format=False)
         chunks.append(

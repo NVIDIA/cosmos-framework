@@ -22,7 +22,7 @@ EXTRA_DATASET_CHECK='[[ -f "$DATASET_PATH/train/video_dataset_file.jsonl" ]] || 
 
 TAIL_OVERRIDES=(
     "trainer.logging_iter=1" "trainer.max_iter=500"
-    "job.project=cosmos_oss_alignment" "job.wandb_mode=online" "job.name=${RUN_NAME}"
+    "job.project=cosmos_oss_alignment" "job.name=${RUN_NAME}"
 )
 
 source "$(dirname "${BASH_SOURCE[0]}")/_sft_launcher_common.sh"

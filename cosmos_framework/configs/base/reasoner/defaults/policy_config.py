@@ -50,9 +50,22 @@ class PolicyConfig:
     # must use the explicit fields above so PEFT equivalence can be validated.
     lora: Union[str, None] = None
     enable_liger_kernel: bool = False
-    # Dense Qwen3.5 caption opt-ins; other recipes retain the standard logits loss.
+    # Fused loss supports dense Qwen3.5 and dense/MoE Qwen3-VL; default recipes retain logits loss.
     enable_fused_weighted_ce: bool = False
+    # Recompute scalar CE during backward instead of retaining one dense head gradient per conversation.
+    recompute_fused_weighted_ce: bool = False
+    # Packed Qwen3-VL: sum native per-conversation head gradients in FP32, then cast once.
+    qwen3_vl_accumulate_head_grad_fp32: bool = True
+    # The recurrent precision option is specific to dense Qwen3.5 caption models.
     qwen35_fp32_recurrent_a_log: bool = False
+    # Experimental numerical stabilization; preserves expert parameter/checkpoint layouts.
+    qwen3_vl_moe_fixed_sum: bool = False
+    # Experimental CP: replicate vision encoding, then shard merged decoder inputs.
+    qwen3_vl_cp_multimodal: bool = False
+    # Bound vision varlen backward workspaces; zero preserves one attention call.
+    qwen3_vl_vision_attention_max_padded_tokens: int = 0
+    # Group complete packed conversations to bound decoder varlen backward workspaces.
+    qwen3_vl_decoder_attention_max_padded_tokens: int = 0
     trainable_map: Union[str, None] = None
     monkey_patch_for_text_only_data: bool = False
 

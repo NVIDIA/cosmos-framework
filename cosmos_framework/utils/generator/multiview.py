@@ -13,6 +13,13 @@ from cosmos_framework.model.generator.mot.replica_partition import ReplicaPartit
 from cosmos_framework.utils.generator.host_threads import host_threads_per_local_rank, torch_host_threads
 
 
+def is_causal_multiview_config(config: Any) -> bool:
+    """Select multiview replay, leaving single-view Sim runtimes untouched."""
+    return bool(getattr(config, "video_temporal_causal", False)) and getattr(
+        config, "teacher_forcing_kv_implementation", None
+    ) in {"multiview_flex_kv", "multiview_maskless_kv"}
+
+
 def safe_multiview_camera_name(camera_key: str, view_index: int) -> str:
     safe_camera_key = "".join(ch if ch.isalnum() else "_" for ch in camera_key).strip("_")
     return f"view{view_index:02d}_{safe_camera_key or 'camera'}"

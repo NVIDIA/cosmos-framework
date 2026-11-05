@@ -18,12 +18,14 @@ Bugs patched:
       uninitialized.
 """
 
+from contextlib import nullcontext
 from types import MethodType, SimpleNamespace
 from typing import Literal, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TEACHER_FORCING_KV_IMPLEMENTATIONS,
@@ -532,7 +534,8 @@ def test_multiview_replay_selection_rejects_non_replay_strategy(implementation: 
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("causal_training_strategy", ["teacher_forcing", "teacher_forcing_dcm"])
-def test_maskless_replay_requires_backend_before_network_build(causal_training_strategy: str) -> None:
+@pytest.mark.parametrize("device", ["cpu", "cuda:3"])
+def test_maskless_replay_requires_backend_before_network_build(causal_training_strategy: str, device: str) -> None:
     """Reject a missing replay backend before allocating the network or changing its config."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
     from cosmos_framework.model.generator import omni_mot_causal_model as causal_model_module
@@ -541,7 +544,7 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
 
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
-    model.tensor_kwargs = {"device": "cuda:3"}
+    model.tensor_kwargs = {"device": device}
     model.config = SimpleNamespace(
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation="multiview_maskless_kv",
@@ -550,7 +553,7 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
         joint_attn_implementation="three_way",
         multiview_attention=SimpleNamespace(
             backend="flex_flash",
-            mask=SimpleNamespace(attention_scope="all_views", decomposed_temporal_window_seconds=None),
+            mask=SimpleNamespace(attention_scope="all_views", cross_view_temporal_window=SimpleNamespace(bounds=None)),
         ),
     )
 
@@ -563,7 +566,7 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
     ):
         model.build_net(torch.bfloat16)
 
-    require_replay.assert_called_once_with(torch.device("cuda:3"))
+    require_replay.assert_called_once_with(torch.device(device))
     base_build.assert_not_called()
     assert model.config.video_temporal_causal is True
     assert model.config.joint_attn_implementation == "three_way"
@@ -576,8 +579,9 @@ def test_maskless_replay_requires_backend_before_network_build(causal_training_s
 @pytest.mark.parametrize("implementation", ["multiview_flex_kv", "multiview_maskless_kv"])
 @pytest.mark.parametrize("video_temporal_causal", [False, True])
 @pytest.mark.parametrize("causal_training_strategy", ["teacher_forcing", "teacher_forcing_dcm"])
+@pytest.mark.parametrize("architecture_only", [False, True])
 def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
-    implementation: str, video_temporal_causal: bool, causal_training_strategy: str
+    implementation: str, video_temporal_causal: bool, causal_training_strategy: str, architecture_only: bool
 ) -> None:
     """Construct the selected student network while preserving bidirectional teacher settings."""
     from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
@@ -585,6 +589,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import InteractiveCosmos3VFMNetwork
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+    from cosmos_framework.model.generator.utils.model_construction import architecture_only_model_construction
 
     replay_policy = TeacherForcingReplayPolicyConfig(
         control_visibility="causal",
@@ -593,7 +598,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     )
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
-    model.tensor_kwargs = {"device": "cuda:3"}
+    model.tensor_kwargs = {"device": "cpu" if architecture_only else "cuda:3"}
     model.config = SimpleNamespace(
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation=implementation,
@@ -607,7 +612,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
             mask=SimpleNamespace(
                 attention_scope="all_views",
                 control_attends_sensor=False,
-                decomposed_temporal_window_seconds=None,
+                cross_view_temporal_window=SimpleNamespace(bounds=None),
             ),
         ),
     )
@@ -627,7 +632,7 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
         assert model.config.joint_attn_implementation == "multiview"
         assert model.config.multiview_attention.backend == ("maskless" if use_maskless else "flex_flash")
         assert model.config.multiview_attention.mask.control_attends_sensor is False
-        assert model.config.multiview_attention.mask.decomposed_temporal_window_seconds == (
+        assert model.config.multiview_attention.mask.cross_view_temporal_window.bounds == (
             None if replay_policy.decomposed_temporal_window_seconds is None else (-0.5, 0.0)
         )
         network.config.multiview_attention_config = model.config.multiview_attention
@@ -636,10 +641,11 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     with (
         patch.object(OmniMoTModel, "build_net", side_effect=_fake_base_build),
         patch.object(causal_model_module, "require_gapped_replay") as require_replay,
+        architecture_only_model_construction() if architecture_only else nullcontext(),
     ):
         result = model.build_net(torch.bfloat16)
 
-    if use_maskless:
+    if use_maskless and not architecture_only:
         require_replay.assert_called_once_with(torch.device("cuda:3"))
     else:
         require_replay.assert_not_called()
@@ -652,14 +658,14 @@ def test_teacher_forcing_build_keeps_student_and_teacher_backends_separate(
     assert model.config.joint_attn_implementation == "three_way"
     assert model.config.joint_attn_implementation != "multiview"
     assert model.config.multiview_attention.mask.attention_scope == "all_views"
-    assert model.config.multiview_attention.mask.decomposed_temporal_window_seconds is None
+    assert model.config.multiview_attention.mask.cross_view_temporal_window.bounds is None
     assert model.config.multiview_attention.backend == "flex_flash"
     assert model.config.multiview_attention.mask.control_attends_sensor is False
     if use_maskless:
         assert network.config.multiview_attention_config is not model.config.multiview_attention
         assert network.config.multiview_attention_config.backend == "maskless"
         assert network.config.multiview_attention_config.mask.control_attends_sensor is False
-        assert network.config.multiview_attention_config.mask.decomposed_temporal_window_seconds is None
+        assert network.config.multiview_attention_config.mask.cross_view_temporal_window.bounds is None
         assert network.teacher_forcing_replay_policy.decomposed_temporal_window_seconds is None
 
 
@@ -2031,7 +2037,8 @@ def test_shared_ar_cfg_disabled_preserves_arithmetic_bitwise(dtype: torch.dtype)
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_generic_ar_cfg_uses_branch_specific_dual_kv_caches() -> None:
+@pytest.mark.parametrize("preserve_transfer_numerics", [False, True])
+def test_generic_ar_cfg_uses_branch_specific_dual_kv_caches(preserve_transfer_numerics: bool) -> None:
     """Sequential generic AR keeps conditional and unconditional caches separate."""
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
@@ -2051,6 +2058,7 @@ def test_generic_ar_cfg_uses_branch_specific_dual_kv_caches() -> None:
 
     def build_memory_state(_pack: object, memory_info: dict[str, object]) -> MagicMock:
         observed_caches.append(memory_info["dual_kv_cache"])
+        assert memory_info["preserve_transfer_numerics"] is preserve_transfer_numerics
         return MagicMock()
 
     def denoise(*, data_batch_packed: object, memory: object) -> dict[str, list[torch.Tensor]]:
@@ -2091,6 +2099,7 @@ def test_generic_ar_cfg_uses_branch_specific_dual_kv_caches() -> None:
             seed=7,
             fps_vision_list=[24.0],
             fps_action_list=[],
+            preserve_transfer_numerics=preserve_transfer_numerics,
         )
 
     torch.testing.assert_close(denoised, torch.full((1, 1, 1, 1, 1), 5.0))
@@ -2369,6 +2378,74 @@ class TestARGenerationLoopLogic:
             )
         result = {"vision": torch.cat([out["vision"] for out in outputs], dim=2)}  # [B,C,T,H,W]
         return result, mock_pack
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("mode", ["text2video", "image2video", "video_transfer"])
+    @pytest.mark.parametrize("view_id", [-1, 8])
+    @pytest.mark.parametrize("guidance", [1.0, 3.0])
+    def test_ar_preserves_view_ids_for_denoising_prefill_and_refresh(
+        self, mode: str, view_id: int, guidance: float
+    ) -> None:
+        model = self._make_model_mock()
+        data = self._make_gen_data(mode)
+        target_ids = torch.tensor([view_id])  # [V]
+        control_ids = torch.tensor([2])  # [V]
+        data.vision_view_ids = [control_ids, target_ids] if mode == "video_transfer" else [target_ids]
+
+        _, build_pack = self._run(model, mode, gen_data=data, guidance=guidance)
+
+        assert build_pack.call_count > 0
+        for call in build_pack.call_args_list:
+            torch.testing.assert_close(call.kwargs["vision_view_ids"], target_ids)
+        assert model._seed_frame_into_kv_cache.call_count > 0
+        for call in model._seed_frame_into_kv_cache.call_args_list:
+            is_control = mode == "video_transfer" and bool(call.kwargs["frame_latent"].eq(1).all())
+            torch.testing.assert_close(call.kwargs["vision_view_ids"], control_ids if is_control else target_ids)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("mode", ["video_transfer", "text2video", "image2video", "forward_dynamics"])
+    @pytest.mark.parametrize("request_marker", [False, True])
+    def test_transfer_numerics_are_scoped_to_each_rgb_transfer_request(self, mode: str, request_marker: bool) -> None:
+        model = self._make_model_mock()
+        self._run(model, mode, data_batch={"_preserve_transfer_numerics": request_marker})
+        expected = mode == "video_transfer" and request_marker
+        calls = model._seed_frame_into_kv_cache.call_args_list + model.generate_next_frame.call_args_list
+        assert calls
+        assert all(call.kwargs["preserve_transfer_numerics"] is expected for call in calls)
+        if expected:
+            # Reusing this model for ordinary inference must not retain the request policy.
+            model._seed_frame_into_kv_cache.reset_mock()
+            model.generate_next_frame.reset_mock()
+            self._run(model, "text2video")
+            later = model._seed_frame_into_kv_cache.call_args_list + model.generate_next_frame.call_args_list
+            assert all(call.kwargs["preserve_transfer_numerics"] is False for call in later)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("request_marker", [False, True])
+    def test_streaming_transfer_propagates_numerics_to_control_target_and_refresh(self, request_marker: bool) -> None:
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+        model = self._make_model_mock()
+        model.input_caption_key = "caption"
+        model._get_inference_text_tokens.return_value = ([[1, 2, 3]], [[]])
+        control = torch.zeros(1, self.C, 1, self.H, self.W)
+        with patch("cosmos_framework.model.generator.omni_mot_causal_model.pack_input_sequence_autoregressive_batch"):
+            outputs = list(
+                OmniMoTCausalModel.iter_samples_from_batch_autoregressive_streaming_transfer(
+                    model,
+                    data_batch={"caption": ["prompt"], "_preserve_transfer_numerics": request_marker},
+                    control_latent_chunks=[control, control],
+                    num_frames=2,
+                    seeds=[42],
+                )
+            )
+        assert len(outputs) == 2
+        assert model._seed_frame_into_kv_cache.call_count == 3
+        calls = model._seed_frame_into_kv_cache.call_args_list + model.generate_next_frame.call_args_list
+        assert all(call.kwargs["preserve_transfer_numerics"] is request_marker for call in calls)
 
     @pytest.mark.L0
     def test_t2i_generates_single_frame_without_prefill(self):
@@ -2679,6 +2756,86 @@ class TestARGenerationLoopLogic:
                 )
             )
         assert dual_cache_cls_2.call_args_list[0].kwargs["buffer_pool"] is model._ar_kv_buffer_pool
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize("window", [None, 3])
+    @pytest.mark.parametrize("guidance", [1.0, 7.0])
+    @pytest.mark.parametrize("finish", ["exhaust", "close", "error", "overlap"])
+    def test_ar_request_releases_retained_cache_owners(
+        self, streaming: bool, window: int | None, guidance: float, finish: str
+    ) -> None:
+        """Completed/cancelled/failed requests must not wait for cache garbage collection."""
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.model.generator.utils.kv_cache import KVBufferPool
+
+        model = self._make_model_mock()
+        pool = KVBufferPool()
+        model._ar_kv_buffer_pool_for_generation.return_value = pool
+        model.config.kv_cache_inference_size = window
+        model.config.attention_sink_size = 0 if window is None else 1
+        model.config.compile.enabled = True
+        model.config.compile.use_cuda_graphs = True
+        model.config.compile.ar_post_saturation_mode = "default"
+        model.input_caption_key = "caption"
+        model._get_inference_text_tokens.return_value = ([[1, 2, 3]], [[7, 8]])
+        model.get_data_and_condition.return_value = self._make_gen_data("video_transfer")
+        retained = []
+        entry = torch.ones(1, 2, 1, 1)  # [B,S,H,D]
+
+        def seed_cache(**kwargs):
+            for caches in (kwargs["dual_kv_cache"], kwargs["dual_kv_cache_uncond"] or []):
+                for cache in caches:
+                    retained.append(cache)  # Model/compiler hooks and tracebacks may retain old caches.
+                    cache.gen_cache.store_kv(entry, entry, kwargs["frame_idx"])
+
+        model._seed_frame_into_kv_cache.side_effect = seed_cache
+
+        def request():
+            if streaming:
+                control = torch.zeros(1, self.C, 1, self.H, self.W)
+                return OmniMoTCausalModel.iter_samples_from_batch_autoregressive_streaming_transfer(
+                    model,
+                    data_batch={"caption": ["prompt"]},
+                    control_latent_chunks=[control] * self.T,
+                    num_frames=self.T,
+                    seeds=[42],
+                    guidance=guidance,
+                )
+            return OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
+                model, {}, mode="video_transfer", guidance=guidance
+            )
+
+        with (
+            patch(_PATCH_PACK, MagicMock()),
+            patch("cosmos_framework.model.generator.omni_mot_causal_model.pack_input_sequence_autoregressive_batch"),
+        ):
+            addresses = None
+            for _ in range(4):
+                iterator = request()
+                next(iterator)
+                assert any(ref() is not None for ref in pool._owners.values())
+                current = {key: tensor.data_ptr() for key, tensor in pool._buffers.items()}
+                if addresses is None:
+                    addresses = current
+                assert current == addresses
+                if finish == "exhaust":
+                    list(iterator)
+                elif finish == "close":
+                    iterator.close()
+                elif finish == "overlap":
+                    owners = dict(pool._owners)
+                    with pytest.raises(RuntimeError, match="still owned"):
+                        next(request())
+                    # The rejected request must not release another request's slots.
+                    assert pool._owners == owners
+                    list(iterator)
+                else:
+                    with pytest.raises(RuntimeError, match="request failed"):
+                        iterator.throw(RuntimeError("request failed"))
+                assert not pool._owners, "Finished requests must release their slots even with live references"
+                assert all(cache.gen_cache._ring_k is None for cache in retained)
 
     @pytest.mark.L0
     @pytest.mark.CPU
@@ -3053,33 +3210,74 @@ class TestARGenerationLoopLogic:
         assert prefill_indexes[: len(condition_frame_indexes)] == condition_frame_indexes
 
     @pytest.mark.L0
-    def test_fd_streaming_uses_sent_action_without_preloaded_actions(self):
+    @pytest.mark.parametrize("chunk_size", [1, 2])
+    def test_fd_streaming_uses_sent_action_without_preloaded_actions(self, chunk_size):
         """Streaming forward_dynamics consumes sent actions past the seed clip length."""
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.model.generator.utils.action_stream import StreamedActionChunk
+        from cosmos_framework.model.generator.utils.kv_cache import DualKVCache, KVBufferPool
 
         model = self._make_model_mock()
+        model.config.video_temporal_causal = True
+        model.config.teacher_forcing_frames_per_chunk = chunk_size
+        model.config.num_embodiment_domains = 32
+        model.generate_next_frame.side_effect = lambda **kwargs: torch.zeros_like(kwargs["curr_vision_latent"])
         gen_data = self._make_gen_data("forward_dynamics")
         gen_data.x0_tokens_action = None
         model.get_data_and_condition.return_value = gen_data
         model._get_inference_text_tokens.return_value = ([[1, 2, 3]], None)
-        action = torch.ones(self.TCF, 8)  # [tcf,D]
-        action_2 = torch.full((self.TCF, 8), 2.0)  # [tcf,D]
-        action_3 = torch.full((self.TCF, 8), 3.0)  # [tcf,D]
+        action = torch.arange(chunk_size * self.TCF * 8, dtype=torch.float32).reshape(-1, 8)
+        action_2 = action + 100
+        action_3 = action + 200
+        domains = torch.tensor([2, 22] * (chunk_size * self.TCF // 2), dtype=torch.long)
+        model._ar_kv_buffer_pool_for_generation.return_value = KVBufferPool()
+        snapshots = []
 
-        with patch(_PATCH_PACK, MagicMock()), patch(_PATCH_KV):
+        def seed_clean_frame(**kwargs):
+            key = torch.ones(1, 2, 1, 2)
+            for cache in kwargs["dual_kv_cache"] + (kwargs["dual_kv_cache_uncond"] or []):
+                cache.gen_cache.store_kv(key, key, frame_idx=kwargs["frame_idx"])
+
+        model._seed_frame_into_kv_cache.side_effect = seed_clean_frame
+
+        with patch(_PATCH_PACK, MagicMock()) as mock_pack, patch(_PATCH_KV, DualKVCache):
             ar_iterator = OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
                 model,
                 {},
                 mode="forward_dynamics",
+                on_kv_cache_update=snapshots.append,
             )
             initial_payload = next(ar_iterator)
             generated_payload = ar_iterator.send(action)
-            ar_iterator.send(action_2)
-            generated_payload_past_clip = ar_iterator.send(action_3)
+            ar_iterator.send(StreamedActionChunk(action_2, domains))
+            generated_payload_past_clip = ar_iterator.send(StreamedActionChunk(action_3, torch.tensor(3)))
+            with pytest.raises(ValueError, match="Expected streamed action tensor shape"):
+                ar_iterator.send(torch.ones(chunk_size * self.TCF + 1, 8))
 
         assert initial_payload["vision"].shape == (1, self.C, 1, self.H, self.W)
+        assert generated_payload["vision"].shape == (1, self.C, chunk_size, self.H, self.W)
+        assert generated_payload_past_clip["vision"].shape == generated_payload["vision"].shape
         assert torch.equal(generated_payload["action"], action)
         assert torch.equal(generated_payload_past_clip["action"], action_3)
+        assert [call.kwargs["frame_idx"] for call in model.generate_next_frame.call_args_list] == [
+            1 + i * chunk_size for i in range(3)
+        ]
+        seed_calls = model._seed_frame_into_kv_cache.call_args_list[1:]  # omit conditioned prefix
+        assert len(seed_calls) == 3 * chunk_size
+        for index, call in enumerate(seed_calls):
+            sent = (action, action_2, action_3)[index // chunk_size]
+            offset = index % chunk_size * self.TCF
+            torch.testing.assert_close(call.kwargs["curr_action_latent"], sent[offset : offset + self.TCF])
+            domain = (torch.tensor(2), domains, torch.tensor(3))[index // chunk_size]
+            expected_domain = domain.reshape(1) if domain.ndim == 0 else domain[offset : offset + self.TCF]
+            torch.testing.assert_close(call.kwargs["action_domain_id"], expected_domain)
+        for call in mock_pack.call_args_list[2:4]:
+            torch.testing.assert_close(call.kwargs["action_domain_id"], domains)
+        expected_history = tuple(range(1 + 3 * chunk_size))
+        assert snapshots[-1].conditional == snapshots[-1].unconditional == (expected_history,) * 2
+        assert snapshots[-1].next_frame_idx == 1 + 3 * chunk_size
+        for cache in seed_calls[0].kwargs["dual_kv_cache"]:
+            assert cache.gen_cache.retained_frame_indices(1 + 3 * chunk_size) == ()
         assert model.generate_next_frame.call_args_list[0].kwargs["num_steps"] == 35
         assert model.generate_next_frame.call_args_list[0].kwargs["guidance"] == 1.5
         assert model.generate_next_frame.call_args_list[1].kwargs["num_steps"] == 35
@@ -3828,6 +4026,44 @@ def test_teacher_forcing_replay_policy_resolves_a_serialized_config_dict() -> No
     assert resolved.controls_read_strict_past_clean_rgb is True
     assert resolved.clean_pass_causality == "chunk"
 
+    # Public config loading wraps the same serialized mapping in an
+    # unstructured DictConfig.  OmegaConf.to_object() leaves that value as a
+    # DictConfig, so cover the exact export/inference boundary here.
+    resolved_from_omegaconf = _resolve_teacher_forcing_replay_policy(OmegaConf.create(serialized))
+    assert resolved_from_omegaconf == resolved
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_teacher_forcing_replay_policy_resolves_lazycall_dictconfig() -> None:
+    """A LazyCall-style DictConfig (``_target_`` plus fields), as composed configs hold it.
+
+    ``OmegaConf.to_object`` returned this node unchanged, so it reached the typed check as a
+    DictConfig and was rejected. Converting to plain containers takes the typed path.
+    """
+    from cosmos_framework.configs.base.defaults.replay_attention import (
+        TeacherForcingReplayPolicyConfig,
+    )
+    from cosmos_framework.model.generator.omni_mot_causal_model import (
+        _resolve_teacher_forcing_replay_policy,
+    )
+
+    policy = OmegaConf.create(
+        {
+            "_target_": "cosmos_framework.configs.base.defaults.replay_attention.TeacherForcingReplayPolicyConfig",
+            "control_visibility": "current",
+            "controls_read_strict_past_clean_rgb": True,
+            "clean_pass_causality": "chunk",
+        }
+    )
+
+    resolved = _resolve_teacher_forcing_replay_policy(policy)
+
+    assert isinstance(resolved, TeacherForcingReplayPolicyConfig)
+    assert resolved.control_visibility == "current"
+    assert resolved.controls_read_strict_past_clean_rgb is True
+    assert resolved.clean_pass_causality == "chunk"
+
 
 @pytest.mark.L0
 @pytest.mark.CPU
@@ -3862,19 +4098,25 @@ def _forward_graph_model_mock() -> MagicMock:
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("frame_idx", [0, 2])
-def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int) -> None:
+@pytest.mark.parametrize("view_id", [None, -1, 8])
+@pytest.mark.parametrize("preserve_transfer_numerics", [False, True])
+def test_seed_routes_static_frames_to_the_forward_cuda_graph(
+    frame_idx: int, view_id: int | None, preserve_transfer_numerics: bool
+) -> None:
     """cuda_graph_scope="forward": cache idx >= 1 seeds replay a whole-forward graph, idx 0 stays eager."""
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
     model = _forward_graph_model_mock()
     cond_pack = MagicMock(name="cond_pack")
+    ids = torch.tensor([view_id]) if view_id is not None else None  # [V] or None
     with (
-        patch(_PATCH_PACK, MagicMock(return_value=cond_pack)),
+        patch(_PATCH_PACK, MagicMock(return_value=cond_pack)) as build_pack,
         patch("cosmos_framework.model.generator.omni_mot_causal_model.run_ar_forward_cuda_graph") as run_graph,
     ):
         OmniMoTCausalModel._seed_frame_into_kv_cache(
             model,
             frame_latent=torch.zeros(1, 4, 1, 2, 2),  # [B,C,T,H,W]
+            vision_view_ids=ids,
             frame_idx=frame_idx,
             dual_kv_cache=[MagicMock()],
             dual_kv_cache_uncond=None,
@@ -3898,12 +4140,15 @@ def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int) -> 
             base_fps=24.0,
             modality_margin=0,
             use_ar_rolling_path=True,
+            preserve_transfer_numerics=preserve_transfer_numerics,
             transfer_history_sink_tokens=8,
             transfer_history_max_tokens=12,
         )
+    assert build_pack.call_args.kwargs["vision_view_ids"] is ids
     if frame_idx == 0:
         run_graph.assert_not_called()
         model.denoise.assert_called_once()
+        assert model.build_memory_state.call_args.args[1]["preserve_transfer_numerics"] is preserve_transfer_numerics
     else:
         model.denoise.assert_not_called()
         run_graph.assert_called_once()
@@ -3911,6 +4156,7 @@ def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int) -> 
         assert kwargs["kind"] == "refresh:12"
         assert kwargs["branch"] == "conditional"
         assert kwargs["packed_seq"] is cond_pack
+        assert kwargs["memory_info"]["preserve_transfer_numerics"] is preserve_transfer_numerics
         assert kwargs["memory_info"]["use_ar_rolling"] is True
         assert kwargs["memory_info"]["write_gen_cache"] is True
         assert kwargs["memory_info"]["transfer_history_max_tokens"] == 12
@@ -3998,3 +4244,45 @@ def test_forward_cuda_graph_scope_requires_the_static_path() -> None:
     model.parallel_dims = MagicMock(cfgp_enabled=True)
     with pytest.raises(ValueError, match="requires cfgp_size=1"):
         list(OmniMoTCausalModel.iter_samples_from_batch_autoregressive(model, {}, mode="text2video"))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("preserve_transfer_numerics", [False, True])
+@pytest.mark.parametrize("static", [False, True])
+def test_ar_memory_values_carry_request_numerics_in_frame_zero_and_static_frames(
+    preserve_transfer_numerics: bool, static: bool
+) -> None:
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+    from cosmos_framework.model.generator.utils.kv_cache import ARMemoryState, DualKVCache
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(attention_io_layout="sharded", ar_static_und_cache_max_len=4),
+        parallel_dims=None,
+        net=SimpleNamespace(num_kv_heads=1, head_dim=2),
+    )
+    packed = SimpleNamespace(
+        vision=SimpleNamespace(token_shapes=[(1, 1, 2)]),
+        num_action_tokens_per_supertoken=0,
+        null_action_supertokens=False,
+    )
+    cache = DualKVCache(gen_cache_size=4)
+    if static:
+        cache.und_cache.store(torch.ones(1, 3, 1, 2), torch.ones(1, 3, 1, 2))
+        cache.gen_cache.store_kv(torch.ones(1, 2, 1, 2), torch.ones(1, 2, 1, 2), frame_idx=0)
+    state = OmniMoTCausalModel.build_memory_state(
+        model,
+        packed,
+        {
+            "dual_kv_cache": [cache],
+            "frame_idx": int(static),
+            "use_ar_rolling": static,
+            "preserve_transfer_numerics": preserve_transfer_numerics,
+        },
+    )
+    assert isinstance(state, ARMemoryState)
+    state.init({"_num_full_tokens": 2}, torch.device("cpu"))
+    value = state.read_for_layer(0)
+    assert state.preserve_transfer_numerics is preserve_transfer_numerics
+    assert value.preserve_transfer_numerics is preserve_transfer_numerics
+    assert value.for_cuda_graphs is static

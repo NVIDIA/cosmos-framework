@@ -1,0 +1,19 @@
+{
+  "source": "Cosmos Auto LiDAR component",
+  "note": "Source snapshot; standalone integration and physical control export are local adaptations.",
+  "files": {
+    "cosmos_auto/lidar/__init__.py": "bc429822823ab707404d710c10076995b3df61895b69a4a82aa491568da1cee7",
+    "cosmos_auto/lidar/assets/row_offset_spinning_lidar_model_parameters.json": "818bfae216730de611eff15f5806ece5b0eca8c28de5fb9c672291c605f9dda0",
+    "cosmos_auto/lidar/cli.py": "4a7144c9adedd8685ed139dbf82eeff9d4d2c22429d654103c6ef6ec54e04b84",
+    "cosmos_auto/lidar/hdmap_points.py": "c2adf03131220c05f1fc9f7271606c71b69077c6d0fa93aa6fba4bac682b89f9",
+    "cosmos_auto/lidar/lidar_raw.py": "35416473ebdad6f53367910b9acf27852eb5761172e90f906797be65d0f5233c",
+    "cosmos_auto/lidar/pose_source.py": "9a8b3366ed9c6f5e5cee69846ea7057f8992e3d748c21c091839ad3ccab6031c",
+    "cosmos_auto/lidar/rangemap.py": "31dc86b948df5ea07aba5a61ebd389394e6e8c2e7c95a4215a51c342cb66aa8f",
+    "cosmos_auto/lidar/render.py": "c0a132cb846413cdf6cfa055f78d86ee3a5cc9d666341409b4227a21e1288dea",
+    "cosmos_auto/lidar/road_surface.py": "0a3208ee426b8e862d46ebf31d6ede8f3af7b7ca1db0d04f2d2e7ddd1ef30b3f",
+    "cosmos_auto/lidar/sensor_model.py": "9a525507090f373638f81b5300ccefa3c7c87fea58f3f1320247c9a5a20e76d1",
+    "cosmos_auto/lidar/shutter.py": "616553e7a605832ca8dc9e49cce87e6cc9e56ce1b081b33c9c36f2bb0e718200",
+    "cosmos_auto/lidar/visualize.py": "1c8d9089dfd63572c58c4d543e2911afdd97cc3f1b7cb44cdb3009f73621a3c8"
+  },
+  "source_commit": "118f2e6ecd8b8da317bab0b7eebbd343ed2ffad6"
+}

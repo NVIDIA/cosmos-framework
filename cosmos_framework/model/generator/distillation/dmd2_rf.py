@@ -3,12 +3,15 @@
 
 """DMD2 model using Rectified Flow parameterization for Cosmos3.
 
-Supports two student simulation modes (``simulation_mode`` config field):
+Supports three student simulation modes (``simulation_mode`` config field):
 
 - ``"forward"`` (default): single-denoising simulation. Clean data examples are noised to a
-  randomly sampled level, and the student predicts the clean example (via RF velocity) from this
-  noised example in one denoising operation. The VSD / fake-score losses are computed on re-noised
-  student outputs.
+  level sampled from ``fixed_step_sampler_config.t_list``, and the student predicts the clean
+  example (via RF velocity) from this noised example in one denoising operation. The VSD /
+  fake-score losses are computed on re-noised student outputs.
+
+- ``"forward_random"``: single-denoising simulation from continuously sampled random noise.
+  The VSD / fake-score losses are computed on re-noised student outputs.
 
 - ``"backward"``: multi-step rollout. The student always denoises from a pure-noise start
   (``t_list[0]`` must be 1.0) toward 0, over an iteration-cycled number of ``t_list`` steps (schedule
@@ -21,6 +24,7 @@ Reference: https://arxiv.org/abs/2405.14867
 from __future__ import annotations
 
 import collections
+import json
 import time
 from typing import Any, Mapping, Optional, cast
 
@@ -30,43 +34,53 @@ from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
 from torch.distributed.checkpoint.filesystem import FileSystemReader  # noqa: F401 - used after OSS release transform
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, set_model_state_dict
 from torch.nn.modules.module import _IncompatibleKeys
-from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader  # noqa: F401 - used after OSS release transform
-from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
+from cosmos_framework.model.generator.distillation.common_loss import (
+    variational_score_distillation_loss,
+    variational_score_distillation_loss_from_gradient,
+)
+from cosmos_framework.configs.base.defaults.model_config import FixedStepSamplerConfig
+from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2RFConfig
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
+from cosmos_framework.model.generator.distillation.dmd_common import (
+    DMDTrainingBase,
+    get_data_resolutions,
+    vision_token_count,
+)
+from cosmos_framework.model.generator.distillation.dmd_common import (
+    generated_vision_item_indices as _generated_vision_item_indices,
+)
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
+    _expand_per_sample_to_per_vision_item,
+)
+from cosmos_framework.model.generator.utils.safetensors_loader import (
+    load_language_model as load_language_model_safetensors,
 )
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     SequencePlan,
     build_sequence_plans_from_data_batch,
 )
-from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
-from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2OptimizerConfig, DMD2RFConfig
-from cosmos_framework.model.generator.distillation.common_loss import (
-    variational_score_distillation_loss,
-    variational_score_distillation_loss_from_gradient,
-)
-from cosmos_framework.model.generator.distillation.optimizer import (
-    OptimizerModelView,
-    PhaseOptimizer,
-    PhaseScheduler,
-    iter_torch_optimizers,
-)
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
 
 __all__: tuple[str, ...] = ("DMD2RFModel",)
 
+_MAX_NUM_TEXT_TOKENS = 4096
 
-class DMD2RFModel(OmniMoTModel):
+
+def _select_items_by_indices(items: list[Any], indices: list[int]) -> list[Any]:
+    return [items[idx] for idx in indices]
+
+
+class DMD2RFModel(DMDTrainingBase, OmniMoTModel):
     """
     DMD2 distillation model using Rectified Flow parameterization.
 
@@ -84,9 +98,36 @@ class DMD2RFModel(OmniMoTModel):
         # self-forcing DMD and keeps inference state dicts student-only.
         self._net_teacher_holder: list[torch.nn.Module] = []
         self._net_fake_score_holder: list[torch.nn.Module] = []
-        config.vlm_config.pretrained_weights.enabled = False
+        self._validate_asymmetric_initialization_config(config)
+        is_inference_mode = bool(getattr(config.parallelism, "enable_inference_mode", False))
+        if not is_inference_mode and not config.load_student_pretrained_weights:
+            config.vlm_config.pretrained_weights.enabled = False
         super().__init__(config)
         self.config: DMD2RFConfig = config
+
+    @staticmethod
+    def _validate_asymmetric_initialization_config(config: DMD2RFConfig) -> None:
+        """Validate copy/load combinations after Hydra experiment overrides."""
+        if config.copy_teacher_weights_to_student and config.load_student_pretrained_weights:
+            raise ValueError(
+                "copy_teacher_weights_to_student and load_student_pretrained_weights are mutually exclusive."
+            )
+        if config.copy_teacher_weights_to_ema and not config.copy_teacher_weights_to_student:
+            raise ValueError("copy_teacher_weights_to_ema requires copy_teacher_weights_to_student.")
+        if config.copy_teacher_weights_to_fake_score and config.load_fake_score_pretrained_weights:
+            raise ValueError(
+                "copy_teacher_weights_to_fake_score and load_fake_score_pretrained_weights are mutually exclusive."
+            )
+        if (
+            config.vlm_config_teacher.model_name != config.vlm_config.model_name
+            and not config.retokenize_text_for_teacher
+        ):
+            raise ValueError("retokenize_text_for_teacher must be True when teacher and student VLMs differ.")
+        if (
+            config.vlm_config_fake_score.model_name != config.vlm_config.model_name
+            and not config.retokenize_text_for_fake_score
+        ):
+            raise ValueError("retokenize_text_for_fake_score must be True when fake-score and student VLMs differ.")
 
     @property
     def net_teacher(self) -> torch.nn.Module:
@@ -114,17 +155,83 @@ class DMD2RFModel(OmniMoTModel):
             num_train_timesteps=float(self.config.rectified_flow_inference_config.num_train_timesteps),
         )
 
+    def _require_fixed_step_sampler_config(self) -> FixedStepSamplerConfig:
+        sampler_cfg = self.config.fixed_step_sampler_config
+        if sampler_cfg is None:
+            raise ValueError("fixed_step_sampler_config is required for fixed-step DMD2 training simulation.")
+        return sampler_cfg
+
     def _needs_fake_score(self) -> bool:
         """Whether this distillation variant builds and trains a fake-score net."""
         return True
 
+    def load_pretrained_model_if_needed(self, *, has_resumable_checkpoint: bool, has_load_path: bool) -> None:
+        """DMD2 manages student/fake-score pretraining inside set_up_model."""
+        if self.config.load_student_pretrained_weights or self.config.load_fake_score_pretrained_weights:
+            log.info("[DMD2RF] Skipping base pretrained callback; DMD2 initialization is handled in set_up_model.")
+            return
+        super().load_pretrained_model_if_needed(
+            has_resumable_checkpoint=has_resumable_checkpoint,
+            has_load_path=has_load_path,
+        )
+
+    def set_up_tokenizers(self) -> None:
+        """Set up student tokenizer plus optional teacher/fake-score tokenizers."""
+        super().set_up_tokenizers()
+        self._vlm_tokenizers_by_net: dict[str, Any] = {"student": self.vlm_tokenizer}
+        self._vlm_configs_by_net: dict[str, Any] = {"student": self.config.vlm_config}
+        self._llm_special_tokens_by_net: dict[str, dict[str, int]] = {"student": self.llm_special_tokens}
+        if self.config.retokenize_text_for_teacher:
+            self._set_up_text_tokenizer_for_net("teacher", self.config.vlm_config_teacher)
+        else:
+            self._vlm_tokenizers_by_net["teacher"] = self.vlm_tokenizer
+            self._vlm_configs_by_net["teacher"] = self.config.vlm_config
+            self._llm_special_tokens_by_net["teacher"] = self.llm_special_tokens
+        if self.config.retokenize_text_for_fake_score:
+            self._set_up_text_tokenizer_for_net("fake_score", self.config.vlm_config_fake_score)
+        else:
+            self._vlm_tokenizers_by_net["fake_score"] = self.vlm_tokenizer
+            self._vlm_configs_by_net["fake_score"] = self.config.vlm_config
+            self._llm_special_tokens_by_net["fake_score"] = self.llm_special_tokens
+
+    def _set_up_text_tokenizer_for_net(self, net_type: str, vlm_config: Any) -> None:
+        """Instantiate the tokenizer used for a non-student denoiser."""
+        processor = lazy_instantiate(vlm_config.tokenizer)
+        tokenizer, special_tokens = add_special_tokens(processor.tokenizer)
+        special_tokens["eos_token_id"] = tokenizer.eos_token_id
+        self._vlm_tokenizers_by_net[net_type] = tokenizer
+        self._vlm_configs_by_net[net_type] = vlm_config
+        self._llm_special_tokens_by_net[net_type] = special_tokens
+
+    def _load_pretrained_weights_for_net(self, net: torch.nn.Module, vlm_config: Any, target_name: str) -> None:
+        """Load VLM pretrained weights into one DMD2 denoiser network."""
+        pretrained_weights = vlm_config.pretrained_weights
+        if not pretrained_weights.enabled:
+            raise ValueError(f"{target_name} requested pretrained weights, but pretrained_weights.enabled is False.")
+        log.info(f"Loading {target_name} reasoner pathway weights from {pretrained_weights.backbone_path}")
+        load_language_model_safetensors(
+            model=net.language_model,
+            checkpoint_path=pretrained_weights.backbone_path,
+            credential_path=pretrained_weights.credentials_path,
+            parallel_dims=self.parallel_dims,
+            checkpoint_format=pretrained_weights.checkpoint_format,
+        )
+        if self.config.diffusion_expert_config.load_weights_from_pretrained:
+            log.info(f"Copying {target_name} understanding pathway weights to generation pathway.")
+            net.language_model.init_moe()
+        log.info(f"Successfully loaded {target_name} pretrained weights.")
+
     @misc.timer("DMD2RFModel: set_up_model")
     def set_up_model(self) -> None:
         t0 = time.time()
+        is_inference_mode = bool(getattr(self.config.parallelism, "enable_inference_mode", False))
         # Build the student net (self.net) and shared components (tokenizer, etc.).
         super().set_up_model()
+        if not is_inference_mode and self.config.load_student_pretrained_weights:
+            self._load_pretrained_weights_for_net(self.net, self.config.vlm_config, "student")
+            if self.config.ema.enabled:
+                self._load_pretrained_weights_for_net(self.net_ema, self.config.vlm_config, "student EMA")
 
-        is_inference_mode = bool(getattr(self.config.parallelism, "enable_inference_mode", False))
         if is_inference_mode:
             log.info("[DMD2RF] set_up_model: inference mode; skipping teacher and fake-score nets.")
             self.denoiser_nets = {"student": self.net}
@@ -151,7 +258,8 @@ class DMD2RFModel(OmniMoTModel):
         self._net_teacher_holder = [self.build_net(self.precision, lora_enabled=False)]
 
         if needs_fake_score:
-            self.config.vlm_config_fake_score.pretrained_weights.enabled = False
+            if not self.config.load_fake_score_pretrained_weights:
+                self.config.vlm_config_fake_score.pretrained_weights.enabled = False
             self.vlm_config = self.config.vlm_config_fake_score
             self._net_fake_score_holder = [self.build_net(self.precision)]
         else:
@@ -176,12 +284,16 @@ class DMD2RFModel(OmniMoTModel):
                 credential_path=self.config.teacher_load_from.credentials,
             )
 
-            self._copy_teacher_weights(target_net=self.net, target_name="student")
-            if needs_fake_score:
+            if self.config.copy_teacher_weights_to_student:
+                self._copy_teacher_weights(target_net=self.net, target_name="student")
+            if needs_fake_score and self.config.copy_teacher_weights_to_fake_score:
                 self._copy_teacher_weights(target_net=self.net_fake_score, target_name="fake score")
 
-            if self.config.ema.enabled:
+            if self.config.ema.enabled and self.config.copy_teacher_weights_to_ema:
                 self.net_ema_worker.copy_to(src_model=self.net_teacher, tgt_model=self.net_ema)
+
+        if needs_fake_score and self.config.load_fake_score_pretrained_weights:
+            self._load_pretrained_weights_for_net(self.net_fake_score, self.config.vlm_config_fake_score, "fake score")
 
         # Optionally override the student with a dedicated student checkpoint
         # (e.g. resuming a distillation run from a mid-training snapshot).
@@ -299,107 +411,13 @@ class DMD2RFModel(OmniMoTModel):
         log.info(set_model_state_dict(net, _state_dict, options=StateDictOptions(strict=False)))
         del _state_dict, _new_state_dict
 
-    # ------------------------ Optimizers & schedulers ------------------------
-
-    def init_optimizer_scheduler(
-        self, optimizer_config: DMD2OptimizerConfig, scheduler_config: LazyDict
-    ) -> tuple[PhaseOptimizer, PhaseScheduler]:
-        """Create optimizers/schedulers for student (net) and critic (fake_score)."""
-        opt_net = lazy_instantiate(optimizer_config.net, model=OptimizerModelView(self.net))
-        sched_net = lazy_instantiate(scheduler_config, optimizer=opt_net)
-        opt_fake = lazy_instantiate(optimizer_config.fake_score, model=OptimizerModelView(self.net_fake_score))
-        sched_fake = lazy_instantiate(scheduler_config, optimizer=opt_fake)
-        return (
-            PhaseOptimizer({"net": opt_net, "fake_score": opt_fake}),
-            PhaseScheduler({"net": sched_net, "fake_score": sched_fake}),
-        )
-
-    def get_phase(self, iteration: int) -> str:
-        """Return the current training phase: ``"student"`` or ``"critic"``."""
-        assert not (self.config.warmup_student_steps and self.config.warmup_critic_steps)
-        if iteration < self.config.warmup_critic_steps:
-            return "critic"
-        elif iteration < self.config.warmup_student_steps:
-            return "student"
-        else:
-            return "student" if iteration % self.config.student_update_freq == 0 else "critic"
-
-    def get_optimizer_key(self, iteration: int) -> str:
-        return "net" if self.get_phase(iteration) == "student" else "fake_score"
-
-    def get_student_iteration(self, iteration: int) -> int:
-        """Effective student iteration index used for EMA scheduling."""
-        if iteration < self.config.warmup_student_steps:
-            return iteration
-        else:
-            steps_after_warmup = (iteration - self.config.warmup_student_steps) // self.config.student_update_freq
-            return self.config.warmup_student_steps + steps_after_warmup
+    # ------------------------ Critic iteration ------------------------
 
     def get_critic_iteration(self, iteration: int) -> int:
         """Effective critic (fake-score) update index after removing student updates."""
         return iteration - self.get_student_iteration(iteration) - 1
 
-    # ------------------------ training hooks ------------------------
-
-    def on_before_zero_grad(self, optimizer: PhaseOptimizer, scheduler: PhaseScheduler, iteration: int) -> None:
-        del scheduler
-
-        if self.get_phase(iteration) == "critic":
-            # Critic phase: for BF16 optimizers that maintain FP32 master weights, copy the master params
-            # back into the model params before zeroing gradients. This keeps the low-precision model weights
-            # in sync with the authoritative FP32 copy.
-            opt = optimizer.get("fake_score")
-            if opt is not None:
-                params, master_params = [], []
-                for inner_opt in iter_torch_optimizers(opt):
-                    param_groups_master = getattr(inner_opt, "param_groups_master", None)
-                    if not getattr(inner_opt, "master_weights", False) or param_groups_master is None:
-                        continue
-                    for group, group_master in zip(inner_opt.param_groups, param_groups_master):
-                        for p, p_master in zip(group["params"], group_master["params"]):
-                            params.append(get_local_tensor_if_DTensor(p.data))
-                            master_params.append(get_local_tensor_if_DTensor(p_master.data))
-                if params:
-                    torch._foreach_copy_(params, master_params)
-        elif self.get_phase(iteration) == "student":
-            # Student phase: update the EMA model using the current student weights.
-            if self.config.ema.enabled:
-                ema_beta = self.ema_beta(self.get_student_iteration(iteration))
-                self.net_ema_worker.update_average(self.net, self.net_ema, beta=ema_beta)
-
-    def zero_grad_for_phase(self, iteration: int) -> None:
-        if self.get_phase(iteration) == "student":
-            self.net.zero_grad(set_to_none=True)
-        else:
-            self.net_fake_score.zero_grad(set_to_none=True)
-
     # ------------------------ Helper methods and utils for callbacks ------------------------
-
-    def clip_grad_norm_(
-        self,
-        max_norm: float,
-        norm_type: float = 2.0,
-        error_if_nonfinite: bool = False,
-        foreach: Optional[bool] = None,
-    ) -> torch.Tensor:
-        if not self.config.grad_clip:
-            max_norm = 1e12
-        # Clip each network separately so their individual grad norms are bounded.
-        # Return the student norm as the canonical value logged by the trainer.
-        clip_grad_norm_(
-            self.net_fake_score.parameters(),
-            max_norm,
-            norm_type=norm_type,
-            error_if_nonfinite=error_if_nonfinite,
-            foreach=foreach,
-        )
-        return clip_grad_norm_(
-            self.net.parameters(),
-            max_norm,
-            norm_type=norm_type,
-            error_if_nonfinite=error_if_nonfinite,
-            foreach=foreach,
-        )
 
 
     @staticmethod
@@ -430,20 +448,38 @@ class DMD2RFModel(OmniMoTModel):
         gen_data_clean: GenerationDataClean,
     ) -> tuple[list[str], list[int]]:
         """Return per-sample resolution and token count for RF noise sampling."""
-        data_resolutions: list[str] = []
-        if "image_size" in data_batch:
-            for i in range(gen_data_clean.batch_size):
-                img_size = data_batch["image_size"][i]  # [1,4] or [4]
-                if img_size.dim() == 2:
-                    img_size = img_size[0]  # [4]
-                target_h = int(img_size[0].item())
-                target_w = int(img_size[1].item())
-                data_resolutions.append(get_vision_data_resolution((target_h, target_w)))
-        else:
-            data_resolutions = [self.config.resolution] * gen_data_clean.batch_size
-
-        num_tokens_per_sample = [x.shape[2] * x.shape[3] * x.shape[4] for x in gen_data_clean.x0_tokens_vision]
+        data_resolutions = get_data_resolutions(data_batch, gen_data_clean.batch_size, self.config.resolution)
+        num_tokens_per_vision_item = [vision_token_count(x) for x in gen_data_clean.x0_tokens_vision]
+        generated_vision_item_indices = _generated_vision_item_indices(
+            gen_data_clean.num_vision_items_per_sample,
+            len(num_tokens_per_vision_item),
+        )
+        num_tokens_per_sample = [num_tokens_per_vision_item[idx] for idx in generated_vision_item_indices]
         return data_resolutions, num_tokens_per_sample
+
+    def _sample_critic_noise_level(
+        self,
+        gen_data_student: GenerationDataClean,
+        resolutions: list[str],
+        num_tokens_per_sample: list[int],
+        generated_item_indices: list[int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:  # [B,T_vis], [B,T_vis]
+        """Sample critic noise using rollout lengths and the caller's pre-rollout token counts."""
+        num_frames_per_item = [x.shape[2] for x in gen_data_student.x0_tokens_vision]
+        timesteps, sigmas = self._get_train_noise_level_vision(
+            batch_size=gen_data_student.batch_size,
+            is_image_batch=gen_data_student.is_image_batch,
+            num_vision_latent_frames=[num_frames_per_item[idx] for idx in generated_item_indices],
+            resolutions=resolutions,
+            num_tokens=num_tokens_per_sample,
+        )  # [B,T_vis], [B,T_vis]
+
+        # Broadcast timesteps/sigmas across CP group to ensure consistency.
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            timesteps = timesteps.contiguous()  # [B,T_vis]
+            sigmas = sigmas.contiguous()  # [B,T_vis]
+            context_parallel_broadcast_tensor_list([timesteps, sigmas], self.parallel_dims)
+        return timesteps, sigmas
 
     # ------------------------ Checkpointing helpers ------------------------
 
@@ -542,10 +578,17 @@ class DMD2RFModel(OmniMoTModel):
         Returns:
             Tensor of shape ``(batch_size, 1)`` with sigma values in ``[0, 1]``.
         """
-        t_list = self.config.fixed_step_sampler_config.t_list
+        t_list = DMD2RFModel._require_fixed_step_sampler_config(self).t_list
         t_tensor = torch.tensor(t_list, **self.tensor_kwargs_fp32)  # [len(t_list)]
         ids = torch.randint(0, len(t_list), (batch_size,), device=t_tensor.device)  # [B]
         return t_tensor[ids].unsqueeze(1)  # [B,1]
+
+    def _sample_random_student_sigma(
+        self,
+        batch_size: int,
+    ) -> torch.Tensor:
+        """Sample a continuous random student noise level for capacity-distillation DMD2."""
+        return torch.rand((batch_size, 1), **self.tensor_kwargs_fp32)  # [B,1]
 
     def _pack_and_denoise(
         self,
@@ -580,6 +623,7 @@ class DMD2RFModel(OmniMoTModel):
             raw_state_vision=gen_data_clean.raw_state_vision,
             x0_tokens_vision=[vt.cpu() for vt in gen_data_noised.xt_tokens_vision],
             fps_vision=gen_data_clean.fps_vision,
+            temporal_positions_vision=gen_data_clean.temporal_positions_vision,
             num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
             raw_state_sound=gen_data_clean.raw_state_sound,
             x0_tokens_sound=(
@@ -598,9 +642,14 @@ class DMD2RFModel(OmniMoTModel):
             action_domain_id=gen_data_clean.action_domain_id,
         )
 
-        packed_sequence = self._pack_input_sequence(
-            sequence_plans, input_text_indexes, gen_data_for_packing, timesteps.cpu()
-        )
+        saved_llm_special_tokens = self.llm_special_tokens
+        self.llm_special_tokens = self._llm_special_tokens_by_net[net_type]
+        try:
+            packed_sequence = self._pack_input_sequence(
+                sequence_plans, input_text_indexes, gen_data_for_packing, timesteps.cpu()
+            )
+        finally:
+            self.llm_special_tokens = saved_llm_special_tokens
 
         # Overwrite packed tokens with the actual noised values (already on CUDA)
         assert packed_sequence.vision is not None, "Packed vision data is required"
@@ -622,9 +671,9 @@ class DMD2RFModel(OmniMoTModel):
     ) -> tuple[GenerationDataClean, PackedSequence, torch.Tensor, dict]:
         """Generate x0 from the student network.
 
-        Dispatches to :meth:`_forward_simulation` or :meth:`_backward_simulation` based on
-        ``config.simulation_mode``. ``iteration`` drives the rollout-length cycle in
-        backward simulation (ignored by forward simulation).
+        Dispatches to :meth:`_forward_simulation` or :meth:`_backward_simulation`
+        based on ``config.simulation_mode``. ``iteration`` drives the rollout-length cycle
+        in backward simulation (ignored by forward simulation).
 
         Returns:
             Tuple of:
@@ -636,7 +685,7 @@ class DMD2RFModel(OmniMoTModel):
             - ``out_student``: Raw network output dict; kept for FSDP dummy terms when a
               modality has no data in the current batch.
         """
-        if self.config.simulation_mode == "forward":
+        if self.config.simulation_mode in ("forward", "forward_random"):
             return self._forward_simulation(input_text_indexes, sequence_plans, gen_data_clean)
         elif self.config.simulation_mode == "backward":
             return self._backward_simulation(input_text_indexes, sequence_plans, gen_data_clean, iteration)
@@ -649,18 +698,31 @@ class DMD2RFModel(OmniMoTModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
     ) -> tuple[GenerationDataClean, PackedSequence, torch.Tensor, dict]:
-        """Generate x0 via a single denoising operation from noised clean data.
+        """Generate x0 via a single student forward pass.
 
-        Samples one sigma from the fixed-step schedule, adds noise to clean data, runs the
-        student once, and converts the velocity prediction to x0. No gradient flows through
-        any re-noising step; all gradient signal is carried by this denoising operation.
+        ``simulation_mode="forward"`` samples sigma from the fixed-step schedule.
+        ``simulation_mode="forward_random"`` samples continuous random sigma. Both modes add
+        noise to clean data, run the student once, and convert the velocity prediction to x0.
+        No gradient flows through any re-noising step; all gradient signal is carried by this
+        single forward pass.
+
+        In ``forward`` mode, single-step distillation sees near-pure noise
+        (``sigma = t_list[0]``), while multi-step distillation samples sigma from ``t_list``.
+        In ``forward_random`` mode, the student sees real data noised to continuous random sigma.
         """
         B = gen_data_clean.batch_size
 
         # Sample student noise level
-        sigma_student = self._sample_student_sigma(B)  # [B,1], continuous in [0, 1]
+        if self.config.simulation_mode == "forward_random":
+            sigma_student = self._sample_random_student_sigma(B)  # [B,1]
+        else:
+            sigma_student = self._sample_student_sigma(B)  # [B,1]
+        context_parallel_broadcast_tensor_list([sigma_student], getattr(self, "parallel_dims", None))
         num_train_timesteps = self.config.rectified_flow_inference_config.num_train_timesteps
         timesteps_student = sigma_student * num_train_timesteps  # [B,1] discrete in [0, num_train_timesteps]
+        sigmas_student_vision = _expand_per_sample_to_per_vision_item(
+            sigma_student, gen_data_clean.num_vision_items_per_sample
+        )  # [B_items,1]
 
         # Pack sequence and add noise (following the standard MoT training pipeline)
         packed_sequence = self._pack_input_sequence(
@@ -671,7 +733,7 @@ class DMD2RFModel(OmniMoTModel):
         gen_data_noised = self._add_noise_to_input(
             gen_data_clean,
             packed_sequence,
-            sigma_student,
+            sigmas_student_vision,
             sigmas_action=sigmas_action_dense,
             sigmas_sound=sigmas_sound_dense,
         )
@@ -688,8 +750,9 @@ class DMD2RFModel(OmniMoTModel):
         # Vision x0: zero out conditioned frames so their x0 ≈ xt (clean)
         condition_mask_vision = packed_sequence.vision.condition_mask  # list of [T_i,1,1]
         assert isinstance(condition_mask_vision, list)
+        num_vision_items = len(condition_mask_vision)
         sigma_vision = [
-            sigma_student[i].view(1, 1, 1) * (1.0 - condition_mask_vision[i]) for i in range(B)
+            sigmas_student_vision[i].view(1, 1, 1) * (1.0 - condition_mask_vision[i]) for i in range(num_vision_items)
         ]  # list of [T_i,1,1]
         xt_vision = [xt.to(**self.tensor_kwargs) for xt in gen_data_noised.xt_tokens_vision]  # list of [C,T_i,H_i,W_i]
         gen_x0_vision = self._velocity_to_x0(
@@ -708,6 +771,7 @@ class DMD2RFModel(OmniMoTModel):
             raw_state_vision=gen_data_clean.raw_state_vision,
             x0_tokens_vision=gen_x0_vision,
             fps_vision=gen_data_clean.fps_vision,
+            temporal_positions_vision=gen_data_clean.temporal_positions_vision,
             num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
             raw_state_sound=gen_data_clean.raw_state_sound,
             x0_tokens_sound=gen_x0_sound,
@@ -732,6 +796,21 @@ class DMD2RFModel(OmniMoTModel):
         for xt_i, v_i, mask_i in zip(xt, v_pred, noisy_mask):
             xt_next_i = xt_i + delta_sigma * v_i * mask_i
             result.append(xt_next_i.to(**self.tensor_kwargs))
+        return result
+
+    def _ode_step_per_sample(
+        self,
+        xt: list[torch.Tensor],  # list of [C,...], current noised tokens
+        v_pred: list[torch.Tensor],  # list of [C,...], velocity predictions
+        noisy_mask: list[torch.Tensor],  # list of [...], broadcastable to xt; 0 for conditioned frames
+        delta_sigma: list[torch.Tensor],  # list of [...], broadcastable per sample
+    ) -> list[torch.Tensor]:  # list of [C,...]
+        """Euler ODE step with a different sigma delta per sample."""
+        result = []
+        for xt_i, v_i, mask_i, delta_i in zip(xt, v_pred, noisy_mask, delta_sigma):
+            delta_i = delta_i.to(device=xt_i.device, dtype=xt_i.dtype)  # [...]
+            xt_next_i = xt_i + delta_i * v_i * mask_i  # [C,...]
+            result.append(xt_next_i.to(**self.tensor_kwargs))  # [C,...]
         return result
 
     def _sde_step(
@@ -799,8 +878,9 @@ class DMD2RFModel(OmniMoTModel):
 
         B = gen_data_clean.batch_size
         num_train_timesteps = self.config.rectified_flow_inference_config.num_train_timesteps
-        sample_type = self.config.fixed_step_sampler_config.sample_type
-        t_list = list(self.config.fixed_step_sampler_config.t_list)
+        sampler_cfg = DMD2RFModel._require_fixed_step_sampler_config(self)
+        sample_type = sampler_cfg.sample_type
+        t_list = list(sampler_cfg.t_list)
         assert len(t_list) > 0, "fixed_step_sampler_config.t_list must not be empty"
         full_t_list = t_list if t_list[-1] == 0.0 else t_list + [0.0]
         assert len(full_t_list) > 1, "fixed_step_sampler_config.t_list must contain a nonzero sigma"
@@ -827,6 +907,9 @@ class DMD2RFModel(OmniMoTModel):
         # Pack once at sigma_max to obtain condition masks (fixed throughout the rollout)
         sigma_max = torch.full((B, 1), full_t_list[0], **self.tensor_kwargs_fp32)  # [B,1]
         timesteps_max = sigma_max * num_train_timesteps  # [B,1]
+        sigmas_max_vision = _expand_per_sample_to_per_vision_item(
+            sigma_max, gen_data_clean.num_vision_items_per_sample
+        )  # [B_items,1]
         packed_sequence = self._pack_input_sequence(
             sequence_plans, input_text_indexes, gen_data_clean, timesteps_max.cpu()
         )
@@ -836,7 +919,7 @@ class DMD2RFModel(OmniMoTModel):
         gen_data_noised = self._add_noise_to_input(
             gen_data_clean,
             packed_sequence,
-            sigma_max,
+            sigmas_max_vision,
             sigmas_action=sigmas_action_dense_init,
             sigmas_sound=sigmas_sound_dense_init,
         )
@@ -862,6 +945,9 @@ class DMD2RFModel(OmniMoTModel):
         for count, (sigma_cur_val, sigma_next_val) in enumerate(zip(full_t_list[:-1], full_t_list[1:])):
             sigma_cur = torch.full((B, 1), sigma_cur_val, **self.tensor_kwargs_fp32)  # [B,1]
             timesteps_cur = sigma_cur * num_train_timesteps  # [B,1]
+            sigmas_cur_vision = _expand_per_sample_to_per_vision_item(
+                sigma_cur, gen_data_clean.num_vision_items_per_sample
+            )  # [B_items,1]
 
             # Gradient enabled for the last `grad_steps` steps; all prior steps run under no_grad
             enable_grad = count >= n_steps - grad_steps
@@ -879,7 +965,10 @@ class DMD2RFModel(OmniMoTModel):
             xt_vision = [
                 xt.to(**self.tensor_kwargs) for xt in gen_data_noised.xt_tokens_vision
             ]  # list of [C,T_i,H_i,W_i]
-            sigma_vision = [sigma_cur[i].view(1, 1, 1) * noisy_mask_vision[i] for i in range(B)]  # list of [T_i,1,1]
+            num_vision_items = len(noisy_mask_vision)
+            sigma_vision = [
+                sigmas_cur_vision[i].view(1, 1, 1) * noisy_mask_vision[i] for i in range(num_vision_items)
+            ]  # list of [T_i,1,1]
             x0_pred_vision = self._velocity_to_x0(
                 xt_vision, out_student["preds_vision"], sigma_vision
             )  # list of [C,T_i,H_i,W_i]
@@ -916,8 +1005,11 @@ class DMD2RFModel(OmniMoTModel):
                 # Only xt_tokens_* fields are consumed by _pack_and_denoise; sigmas_vision is
                 # set for correctness but is not read by the packing logic.
                 sigma_next_tensor = torch.full((B, 1), sigma_next_val, **self.tensor_kwargs_fp32)  # [B,1]
+                sigmas_next_vision = _expand_per_sample_to_per_vision_item(
+                    sigma_next_tensor, gen_data_clean.num_vision_items_per_sample
+                )  # [B_items,1]
                 sigmas_vision_next = [
-                    sigma_next_tensor[i].view(1, 1, 1) * noisy_mask_vision[i] for i in range(B)
+                    sigmas_next_vision[i].view(1, 1, 1) * noisy_mask_vision[i] for i in range(num_vision_items)
                 ]  # list of [T_i,1,1]
                 sigmas_sound_next = None
                 gen_data_noised = GenerationDataNoised(
@@ -942,6 +1034,7 @@ class DMD2RFModel(OmniMoTModel):
             raw_state_vision=gen_data_clean.raw_state_vision,
             x0_tokens_vision=x0_pred_vision,
             fps_vision=gen_data_clean.fps_vision,
+            temporal_positions_vision=gen_data_clean.temporal_positions_vision,
             num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
             raw_state_sound=gen_data_clean.raw_state_sound,
             x0_tokens_sound=x0_pred_sound,
@@ -978,21 +1071,90 @@ class DMD2RFModel(OmniMoTModel):
         # may have recursively re-enabled train() on the parent module.
         self.net_teacher.eval().requires_grad_(False)
 
+    def _extract_raw_captions_for_retokenization(self, data_batch: dict[str, Any]) -> list[str]:
+        """Read raw captions from the batch for a denoiser-specific tokenizer."""
+        captions = data_batch.get(self.input_caption_key)
+        if captions is None and self.input_caption_key != "ai_caption":
+            captions = data_batch.get("ai_caption")
+        if captions is None:
+            raise KeyError(
+                f"Cannot retokenize text for asymmetric DMD2: missing '{self.input_caption_key}' in data batch."
+            )
+        if isinstance(captions, str):
+            caption_items = [captions]
+        elif isinstance(captions, tuple):
+            caption_items = list(captions)
+        elif isinstance(captions, list):
+            caption_items = []
+            for caption in captions:
+                if isinstance(caption, list):
+                    caption_items.extend(caption)
+                else:
+                    caption_items.append(caption)
+        else:
+            raise TypeError(f"Unsupported caption batch type for retokenization: {type(captions)}")
+        return [json.dumps(caption) if isinstance(caption, dict) else str(caption) for caption in caption_items]
+
+    def _tokenize_raw_captions_for_net(
+        self,
+        captions: list[str],
+        net_type: str,
+        *,
+        is_video: bool,
+    ) -> list[list[int]]:
+        """Tokenize raw captions with the tokenizer attached to ``net_type``."""
+        tokenizer = self._vlm_tokenizers_by_net[net_type]
+        vlm_config = self._vlm_configs_by_net[net_type]
+        return [
+            tokenize_caption(
+                caption,
+                tokenizer,
+                is_video=is_video,
+                use_system_prompt=vlm_config.use_system_prompt,
+            )[:_MAX_NUM_TEXT_TOKENS]
+            for caption in captions
+        ]
+
+    def _build_input_text_indexes_by_net(
+        self,
+        data_batch: dict[str, Any],
+        student_input_text_indexes: list[list[int]],
+    ) -> dict[str, list[list[int]]]:
+        """Return tokenized captions for student, teacher, and fake-score denoisers."""
+        input_text_indexes_by_net = {
+            "student": student_input_text_indexes,
+            "teacher": student_input_text_indexes,
+            "fake_score": student_input_text_indexes,
+        }
+        if self.config.retokenize_text_for_teacher or self.config.retokenize_text_for_fake_score:
+            captions = self._extract_raw_captions_for_retokenization(data_batch)
+            if self.config.retokenize_text_for_teacher:
+                input_text_indexes_by_net["teacher"] = self._tokenize_raw_captions_for_net(
+                    captions, "teacher", is_video=False
+                )
+            if self.config.retokenize_text_for_fake_score:
+                input_text_indexes_by_net["fake_score"] = self._tokenize_raw_captions_for_net(
+                    captions, "fake_score", is_video=False
+                )
+        return input_text_indexes_by_net
+
     def training_step(self, data_batch: dict[str, Any], iteration: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         """Perform a single training step for DMD2 distillation.
 
         Delegates to :meth:`training_step_generator` (student update) or :meth:`training_step_critic`
         (fake-score update) depending on the current iteration phase.
         """
-        # Update stats on how many videos the model has seen
-        if self.parallel_dims is None or self.parallel_dims.cp_rank == 0:
-            self._update_train_stats(data_batch)
+        phase = self.get_phase(iteration)
 
         # Freeze / unfreeze networks according to current phase
         self._setup_grad_requirements(iteration)
 
+        # Update stats on how many videos the model has seen
+        if self.parallel_dims is None or self.parallel_dims.cp_rank == 0:
+            self._update_train_stats(data_batch)
+
         # Load, apply dropout, and tokenize input captions
-        input_text_indexes = self._load_and_tokenize_text_data(data_batch, iteration)
+        student_input_text_indexes = self._load_and_tokenize_text_data(data_batch, iteration)
 
         # Build sequence plans if not present. SequencePlan has the conditioning information.
         sequence_plans = build_sequence_plans_from_data_batch(
@@ -1008,11 +1170,15 @@ class DMD2RFModel(OmniMoTModel):
         data_resolutions, num_vision_tokens_per_sample = self._get_vision_noise_sampling_metadata(
             data_batch, gen_data_clean
         )
+        input_text_indexes_by_net = self._build_input_text_indexes_by_net(
+            data_batch,
+            student_input_text_indexes,
+        )
 
         # The noise addition and denoising happens inside respective phases
-        if self.get_phase(iteration) == "student":
+        if phase == "student":
             output_batch, loss = self.training_step_generator(
-                input_text_indexes,
+                input_text_indexes_by_net,
                 sequence_plans,
                 gen_data_clean,
                 data_resolutions,
@@ -1021,7 +1187,7 @@ class DMD2RFModel(OmniMoTModel):
             )
         else:
             output_batch, loss = self.training_step_critic(
-                input_text_indexes,
+                input_text_indexes_by_net,
                 sequence_plans,
                 gen_data_clean,
                 data_resolutions,
@@ -1035,7 +1201,7 @@ class DMD2RFModel(OmniMoTModel):
 
     def training_step_generator(
         self,
-        input_text_indexes: list[list[int]],
+        input_text_indexes_by_net: Mapping[str, list[list[int]]],
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         data_resolutions: list[str],
@@ -1056,35 +1222,33 @@ class DMD2RFModel(OmniMoTModel):
 
         # 1. Student generates x0 (gradient flows through here)
         gen_data_student, packed_student, _, out_student = self._gen_data_from_student(
-            input_text_indexes, sequence_plans, gen_data_clean, iteration
+            input_text_indexes_by_net["student"],
+            sequence_plans,
+            gen_data_clean,
+            iteration,
         )
 
         # 2. Sample critic noise level and re-noise student output for all modalities
-        num_vision_latent_frames = [x.shape[2] for x in gen_data_student.x0_tokens_vision]
-        timesteps_critic, sigmas_critic = self._get_train_noise_level_vision(
-            batch_size=B,
-            is_image_batch=gen_data_student.is_image_batch,
-            num_vision_latent_frames=num_vision_latent_frames,
-            resolutions=data_resolutions,
-            num_tokens=num_vision_tokens_per_sample,
+        generated_vision_item_indices = _generated_vision_item_indices(
+            gen_data_student.num_vision_items_per_sample,
+            len(gen_data_student.x0_tokens_vision),
+        )
+        timesteps_critic, sigmas_critic = self._sample_critic_noise_level(
+            gen_data_student,
+            data_resolutions,
+            num_vision_tokens_per_sample,
+            generated_vision_item_indices,
         )  # [B,1], [B,1]
 
-        # Broadcast timesteps/sigmas across CP group to ensure consistency
-        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
-            src_rank = 0
-            cp_group = self.parallel_dims.cp_mesh.get_group()
-            global_src_rank = torch.distributed.get_global_rank(cp_group, src_rank)
-            timesteps_critic = timesteps_critic.contiguous()
-            sigmas_critic = sigmas_critic.contiguous()
-            torch.distributed.broadcast(timesteps_critic, src=global_src_rank, group=cp_group)
-            torch.distributed.broadcast(sigmas_critic, src=global_src_rank, group=cp_group)
-
+        sigmas_critic_vision = _expand_per_sample_to_per_vision_item(
+            sigmas_critic, gen_data_student.num_vision_items_per_sample
+        )  # [B_items,1]
         sigmas_action_critic = None
         sigmas_sound_critic = None
         gen_data_noised_critic = self._add_noise_to_input(
             gen_data_student,
             packed_student,
-            sigmas_critic,
+            sigmas_critic_vision,
             sigmas_action=sigmas_action_critic,
             sigmas_sound=sigmas_sound_critic,
         )
@@ -1095,7 +1259,7 @@ class DMD2RFModel(OmniMoTModel):
                 gen_data_student,
                 gen_data_noised_critic,
                 timesteps_critic,
-                input_text_indexes,
+                input_text_indexes_by_net["fake_score"],
                 sequence_plans,
                 net_type="fake_score",
             )
@@ -1112,7 +1276,7 @@ class DMD2RFModel(OmniMoTModel):
                 gen_data_student,
                 gen_data_noised_critic,
                 timesteps_critic,
-                input_text_indexes,
+                input_text_indexes_by_net["teacher"],
                 sequence_plans,
                 net_type="teacher",
             )
@@ -1126,6 +1290,7 @@ class DMD2RFModel(OmniMoTModel):
             log.debug(f"student phase, after pack_and_denoise teacher, teacher_x0: {teacher_x0[0].shape}")
             # Optional classifier-free guidance for teacher
             if self.config.teacher_guidance > 1.0:
+                num_vision_items = len(teacher_v)
                 # Tokenize the uncond prompt with the SAME modality formatting as the batch
                 # (image vs video). Hard-coding is_video=False corrupted the uncond prediction
                 # on video batches, biasing the CFG-combined teacher target.
@@ -1133,9 +1298,9 @@ class DMD2RFModel(OmniMoTModel):
                 uncond_text = [
                     tokenize_caption(
                         self.config.teacher_negative_prompt,
-                        self.vlm_tokenizer,
+                        self._vlm_tokenizers_by_net["teacher"],
                         is_video=uncond_is_video,
-                        use_system_prompt=self.vlm_config.use_system_prompt,
+                        use_system_prompt=self._vlm_configs_by_net["teacher"].use_system_prompt,
                     )
                     for _ in range(B)
                 ]
@@ -1157,34 +1322,47 @@ class DMD2RFModel(OmniMoTModel):
                 )
                 teacher_v_guided = [
                     teacher_v[i] + (self.config.teacher_guidance - 1.0) * (teacher_v[i] - teacher_v_uncond[i])
-                    for i in range(B)
+                    for i in range(num_vision_items)
                 ]  # list of [C,T_i,H_i,W_i]
                 teacher_x0 = [
                     teacher_x0[i] + (self.config.teacher_guidance - 1.0) * (teacher_x0[i] - teacher_x0_uncond[i])
-                    for i in range(B)
+                    for i in range(num_vision_items)
                 ]  # list of [C,T_i,H_i,W_i]
 
         # 5. VSD loss — vision (gradient flows into gen_data_student.x0_tokens_vision -> student)
         assert gen_data_student.x0_tokens_vision is not None
         assert packed_student.vision is not None
+        generated_x0_tokens_vision = _select_items_by_indices(
+            gen_data_student.x0_tokens_vision,
+            generated_vision_item_indices,
+        )  # list of [C,T_i,H_i,W_i]
+        generated_teacher_x0 = _select_items_by_indices(
+            teacher_x0, generated_vision_item_indices
+        )  # list of [C,T_i,H_i,W_i]
+        generated_fake_x0 = _select_items_by_indices(fake_x0, generated_vision_item_indices)  # list of [C,T_i,H_i,W_i]
         noisy_mask_vision = [
             (1.0 - cm).to(gen_data_student.x0_tokens_vision[0].dtype)
-            for cm in packed_student.vision.condition_mask  # type: ignore[union-attr]
+            for cm in _select_items_by_indices(
+                packed_student.vision.condition_mask,  # type: ignore[union-attr]
+                generated_vision_item_indices,
+            )
         ]  # list of [T_i,1,1]
         if self.config.vsd_gradient_space == "velocity":
-            vsd_grad_vision = [teacher_v_guided[i] - fake_v[i] for i in range(B)]  # list of [C,T_i,H_i,W_i]
+            vsd_grad_vision = [
+                teacher_v_guided[i] - fake_v[i] for i in generated_vision_item_indices
+            ]  # list of [C,T_i,H_i,W_i]
             vsd_loss = variational_score_distillation_loss_from_gradient(
-                gen_data_student.x0_tokens_vision,
+                generated_x0_tokens_vision,
                 vsd_grad_vision,
-                weight_reference=teacher_x0,
+                weight_reference=generated_teacher_x0,
                 loss_mask=noisy_mask_vision,
                 reduction=self.config.vsd_loss_reduction,
             )
         elif self.config.vsd_gradient_space == "x0":
             vsd_loss = variational_score_distillation_loss(
-                gen_data_student.x0_tokens_vision,
-                teacher_x0,
-                fake_x0,
+                generated_x0_tokens_vision,
+                generated_teacher_x0,
+                generated_fake_x0,
                 loss_mask=noisy_mask_vision,
                 reduction=self.config.vsd_loss_reduction,
             )
@@ -1212,7 +1390,7 @@ class DMD2RFModel(OmniMoTModel):
 
     def training_step_critic(
         self,
-        input_text_indexes: list[list[int]],
+        input_text_indexes_by_net: Mapping[str, list[list[int]]],
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         data_resolutions: list[str],
@@ -1233,36 +1411,37 @@ class DMD2RFModel(OmniMoTModel):
         # 1. Student generates x0 with no gradient for the critic update.
         with torch.no_grad():
             gen_data_student, packed_student, _, _ = self._gen_data_from_student(
-                input_text_indexes, sequence_plans, gen_data_clean, iteration
+                input_text_indexes_by_net["student"],
+                sequence_plans,
+                gen_data_clean,
+                iteration,
             )
 
         # 2. Sample critic noise level and re-noise student output for all modalities
-        num_vision_latent_frames = [x.shape[2] for x in gen_data_student.x0_tokens_vision]
-        timesteps_critic, sigmas_critic = self._get_train_noise_level_vision(
-            batch_size=B,
-            is_image_batch=gen_data_student.is_image_batch,
-            num_vision_latent_frames=num_vision_latent_frames,
-            resolutions=data_resolutions,
-            num_tokens=num_vision_tokens_per_sample,
+        generated_vision_item_indices = _generated_vision_item_indices(
+            gen_data_student.num_vision_items_per_sample,
+            len(gen_data_student.x0_tokens_vision),
+        )
+        timesteps_critic, sigmas_critic = self._sample_critic_noise_level(
+            gen_data_student,
+            data_resolutions,
+            num_vision_tokens_per_sample,
+            generated_vision_item_indices,
         )  # [B,1], [B,1]
 
-        # Broadcast timesteps/sigmas across CP group to ensure consistency
-        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
-            src_rank = 0
-            cp_group = self.parallel_dims.cp_mesh.get_group()
-            global_src_rank = torch.distributed.get_global_rank(cp_group, src_rank)
-            timesteps_critic = timesteps_critic.contiguous()
-            sigmas_critic = sigmas_critic.contiguous()
-            torch.distributed.broadcast(timesteps_critic, src=global_src_rank, group=cp_group)
-            torch.distributed.broadcast(sigmas_critic, src=global_src_rank, group=cp_group)
-
+        sigmas_critic_vision = _expand_per_sample_to_per_vision_item(
+            sigmas_critic, gen_data_student.num_vision_items_per_sample
+        )  # [B_items,1]
+        timesteps_critic_vision = _expand_per_sample_to_per_vision_item(
+            timesteps_critic, gen_data_student.num_vision_items_per_sample
+        )  # [B_items,1]
         with torch.no_grad():
             sigmas_action_critic = None
             sigmas_sound_critic = None
             gen_data_noised_critic = self._add_noise_to_input(
                 gen_data_student,
                 packed_student,
-                sigmas_critic,
+                sigmas_critic_vision,
                 sigmas_action=sigmas_action_critic,
                 sigmas_sound=sigmas_sound_critic,
             )
@@ -1272,7 +1451,7 @@ class DMD2RFModel(OmniMoTModel):
             gen_data_student,
             gen_data_noised_critic,
             timesteps_critic,
-            input_text_indexes,
+            input_text_indexes_by_net["fake_score"],
             sequence_plans,
             net_type="fake_score",
         )
@@ -1287,7 +1466,7 @@ class DMD2RFModel(OmniMoTModel):
                 pred=out_fake["preds_vision"],  # type: ignore[arg-type]
                 target=gen_data_noised_critic.vt_target_vision,  # type: ignore[arg-type]
                 condition_mask=packed_student.vision.condition_mask,  # type: ignore[union-attr]
-                timesteps=timesteps_critic,
+                timesteps=timesteps_critic_vision,
                 has_valid_tokens=True,
                 rectified_flow=rectified_flow,
                 normalize_by_active=True,
@@ -1301,7 +1480,13 @@ class DMD2RFModel(OmniMoTModel):
             )
         else:
             raise ValueError(f"Unknown fake-score loss reduction: {fake_score_loss_reduction}")
-        loss_fake_score = loss_per_instance.mean() * self.config.loss_scale_fake_score
+        if int(loss_per_instance.shape[0]) != len(gen_data_student.x0_tokens_vision):
+            raise ValueError(
+                "Vision per-instance loss must align with flat vision items, "
+                f"got {int(loss_per_instance.shape[0])} losses and {len(gen_data_student.x0_tokens_vision)} items."
+            )
+        generated_loss_per_instance = loss_per_instance[generated_vision_item_indices]  # [B_gen]
+        loss_fake_score = generated_loss_per_instance.mean() * self.config.loss_scale_fake_score
         total_loss = loss_fake_score
 
 
@@ -1315,7 +1500,7 @@ class DMD2RFModel(OmniMoTModel):
             "fake_score_loss": loss_fake_score.detach(),
             "total_critic_loss": total_loss.detach(),
             "sigma": sigmas_critic.detach(),
-            "flow_matching_loss_vision_per_instance": loss_per_instance.detach(),  # [B]
+            "flow_matching_loss_vision_per_instance": generated_loss_per_instance.detach(),  # [B_gen]
             "dmd_loss_critic": total_loss.detach(),
         }
         return output_batch, total_loss

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# User-local template for an approved always-on, shared-storage SLURM service host.
+# Replace ALL paths; install as a user service only after site/launch review.
+# Enabling user lingering or using a login node needs site approval separately.
+[Unit]
+Description=Bounded AutoML cross-node startup observer
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /shared/tools/slurm_controller_watch.py watch --state-dir /shared/run/observer
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=150
+UMask=0077
+
+[Install]
+WantedBy=default.target

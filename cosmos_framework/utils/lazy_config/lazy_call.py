@@ -55,7 +55,10 @@ class LazyCall:
         self._target = target
 
     def __call__(self, **kwargs):
-        if _CONVERT_TARGET_TO_STRING or is_dataclass(self._target) or attrs.has(self._target):
+        if isinstance(self._target, str):
+            # A dotted-path target is already in the form convert_target_to_string produces.
+            target = self._target
+        elif _CONVERT_TARGET_TO_STRING or is_dataclass(self._target) or attrs.has(self._target):
             # omegaconf object cannot hold dataclass type
             # https://github.com/omry/omegaconf/issues/784
             target = convert_target_to_string(self._target)

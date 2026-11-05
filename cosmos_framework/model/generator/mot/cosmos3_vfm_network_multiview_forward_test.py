@@ -4,7 +4,7 @@
 """``Cosmos3VFMNetwork.forward`` over a real multiview pack, down both attention routes.
 
 The branch this covers decides, per batch, whether the multiview GEN attention runs as the
-FlexAttention mask or as ``multiview_maskless_attention``'s three merged passes. Its two
+FlexAttention mask or as ``multiview_maskless_attention``'s disjoint merged passes. Its two
 halves are each unit-tested -- ``_multiview_maskless_geometry`` for the decision and
 ``dispatch_attention`` for the routing -- but nothing joined them: the geometry the network
 reads off a ``PackedSequence`` had never been handed to the attention function that folds by
@@ -72,34 +72,23 @@ SPECIAL_TOKENS = {"eos_token_id": 0, "start_of_generation": 1, "end_of_generatio
 
 @pytest.mark.L0
 @pytest.mark.CPU
-@pytest.mark.parametrize("window", [None, 0, 0.4, (-0.2, 0.2)])
-@pytest.mark.parametrize(
-    "backend,deduplicate_cross_view",
-    [("flex_triton", None), ("maskless", None), ("maskless", False), ("maskless", True)],
-)
-def test_network_config_migrates_saved_unstructured_window(
-    window: float | tuple[float, float] | None, backend: str, deduplicate_cross_view: bool | None
-) -> None:
+@pytest.mark.parametrize("window", [None, (0.0, 0.0), (-0.4, 0.0), (-0.2, 0.2)])
+@pytest.mark.parametrize("backend", ["auto", "flex_triton", "maskless"])
+def test_network_config_restores_saved_unstructured_window(window: tuple[float, float] | None, backend: str) -> None:
     from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetworkConfig
 
     # Exported checkpoint JSON need not carry the attrs object metadata.
     multiview = OmegaConf.create(attrs.asdict(MultiviewAttentionConfig()))
     multiview.backend = backend
     multiview.mask.attention_scope = "decomposed"
-    multiview.mask.decomposed_temporal_window_seconds = window
-    if deduplicate_cross_view is None:
-        del multiview.deduplicate_cross_view
-    else:
-        multiview.deduplicate_cross_view = deduplicate_cross_view
+    multiview.mask.cross_view_temporal_window.bounds = window
     config = Cosmos3VFMNetworkConfig(multiview_attention_config=multiview)
-    restored = config.multiview_attention_config.mask.decomposed_temporal_window_seconds
-    expected = (-window, 0.0) if isinstance(window, (int, float)) else window
-    assert (None if restored is None else tuple(restored)) == expected
-    assert config.multiview_attention_config.deduplicate_cross_view == (deduplicate_cross_view or False)
+    restored = config.multiview_attention_config.mask.cross_view_temporal_window.bounds
+    assert (None if restored is None else tuple(restored)) == window
     resolved_backend, _ = resolve_multiview_backend(
         torch.device("cpu"), backend, config=config.multiview_attention_config
     )
-    assert resolved_backend == backend
+    assert resolved_backend == ("maskless" if backend == "auto" else backend)
 
 
 class _StubLanguageModel(torch.nn.Module):
@@ -160,7 +149,7 @@ def _multiview_packed_sequence() -> PackedSequence:
 
     ``num_views_per_vision_item`` is what ``enable_per_camera_vae_encoding`` records, and it is
     the field the whole multiview attention path keys off: without it the network cannot say
-    where one camera's latent frames end, and both the mask and the decomposition refuse the
+    where one camera's latent frames end; a missing field defaults to a single camera for the
     pack. The item's latent axis is camera-major, ``num_views * frames_per_view``, which is the
     layout ``multiview_maskless_attention`` folds by.
 
@@ -202,10 +191,10 @@ def _multiview_packed_sequence() -> PackedSequence:
 
 def _multiview_network(
     *,
-    maskless_attention: bool,
+    backend: str,
     device: torch.device,
     temporal_window_seconds: tuple[float, float] | None = None,
-    deduplicate_cross_view: bool = False,
+    action_gen: bool = False,
     action_conditioning: bool = False,
     geometry_position_encoding: str = "baseline",
     materialize: bool = True,
@@ -215,9 +204,10 @@ def _multiview_network(
 
     ``materialize=False`` returns the network as built, so a caller can build it on meta.
     ``pre_geometry_export`` hands the attention config over as a checkpoint exported before
-    the geometry modes and bands saved it: plain JSON with only its three original keys.
+    the geometry modes and bands saved it: plain JSON with only its backend and mask keys.
     """
     from cosmos_framework.configs.base.defaults.multiview_attention import (
+        CrossViewTemporalWindowConfig,
         MultiviewAttentionConfig,
         MultiviewAttentionMaskConfig,
     )
@@ -228,26 +218,25 @@ def _multiview_network(
 
     attention_config = MultiviewAttentionConfig(
         geometry_position_encoding=geometry_position_encoding,
-        deduplicate_cross_view=deduplicate_cross_view,
-        # Pinned rather than "auto" so the stream padding and the mask's block size are the
-        # same on every host this runs on, FlashAttention-4 present or not.
-        backend="maskless" if maskless_attention else "flex_triton",
+        # Explicit Flex tests pin Triton so padding and block size do not depend on FA4.
+        # Auto tests exercise the production preference for the exact maskless route.
+        backend=backend,
         mask=MultiviewAttentionMaskConfig(
             # The scope the folds are the maskless alternative to, so the flex route this
             # harness compares against is the one a caller would be choosing between.
             attention_scope="decomposed",
-            decomposed_temporal_window_seconds=temporal_window_seconds,
-            # "maskless" requires it, and it is inert on a batch with no control item.
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=temporal_window_seconds),
+            # Keep the shared control rule explicit; this batch has no control item.
             control_attends_sensor=True,
         ),
     )
     exported = OmegaConf.create(attrs.asdict(attention_config))
-    pre_geometry = OmegaConf.create({key: exported[key] for key in ("backend", "mask", "deduplicate_cross_view")})
+    pre_geometry = OmegaConf.create({key: exported[key] for key in ("backend", "mask")})
     language_model = _StubLanguageModel()
     config = Cosmos3VFMNetworkConfig(
         vlm_config=language_model.config,
         vision_gen=True,
-        action_gen=action_conditioning,
+        action_gen=action_gen or action_conditioning,
         action_dim=64 if action_conditioning else 32,
         multiview_action_conditioning=action_conditioning,
         latent_channel_size=LATENT_CHANNELS,
@@ -263,19 +252,34 @@ def _multiview_network(
     return network.to(device=device, dtype=torch.float32) if materialize else network
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("action_conditioning", [False, True])
+@pytest.mark.parametrize("backend", ["auto", "maskless"])
+def test_network_supports_maskless_with_action_streams(
+    monkeypatch: pytest.MonkeyPatch, action_conditioning: bool, backend: str
+) -> None:
+    # Keep hardware-dependent FA4 selection out of this constructor wiring test.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    network = _multiview_network(
+        backend=backend, device=torch.device("cpu"), action_gen=True, action_conditioning=action_conditioning
+    )
+
+    assert network.multiview_backend == "maskless"
+    assert network.flex_backend is None
+
+
 def _run_forward(
     *,
-    maskless_attention: bool,
+    backend: str,
     device: torch.device,
     temporal_window_seconds: tuple[float, float] | None = None,
-    deduplicate_cross_view: bool = False,
 ) -> tuple[dict, SplitInfo]:
     """One inference forward, returning its outputs and the metadata the reasoner was handed."""
     network = _multiview_network(
-        maskless_attention=maskless_attention,
+        backend=backend,
         device=device,
         temporal_window_seconds=temporal_window_seconds,
-        deduplicate_cross_view=deduplicate_cross_view,
     )
     packed_seq = _multiview_packed_sequence()
     with torch.no_grad():
@@ -289,12 +293,12 @@ def _run_forward(
 @pytest.mark.GPU
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.parametrize("window", [None, (-0.4, 0.0), (-0.4, 0.2)])
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
+@pytest.mark.parametrize("backend", ["auto", "maskless"])
 def test_forward_routes_a_multiview_inference_pack_through_the_decomposition(
     window: tuple[float, float] | None,
-    deduplicate_cross_view: bool,
+    backend: str,
 ) -> None:
-    """The flag on, and a pack it accepts: the geometry travels and no mask is built.
+    """Auto or explicit maskless: the geometry travels and no mask is built.
 
     Both halves are asserted because either alone would pass a broken wiring. The geometry
     alone would not catch a forward that annotated it and built the mask anyway, and
@@ -303,15 +307,13 @@ def test_forward_routes_a_multiview_inference_pack_through_the_decomposition(
     """
     device = torch.device("cuda")
     output_dict, attention_mask = _run_forward(
-        maskless_attention=True,
+        backend=backend,
         device=device,
         temporal_window_seconds=window,
-        deduplicate_cross_view=deduplicate_cross_view,
     )
 
     assert attention_mask.multiview_maskless is not None
-    assert attention_mask.multiview_maskless.decomposed_temporal_window_seconds == window
-    assert attention_mask.multiview_maskless.deduplicate_cross_view == deduplicate_cross_view
+    assert attention_mask.multiview_maskless.cross_view_temporal_window.bounds == window
     # Per-sample tuples: this batch holds one sample.
     assert attention_mask.multiview_maskless.num_views == (NUM_VIEWS,)
     assert attention_mask.multiview_maskless.token_shapes == (
@@ -336,7 +338,7 @@ def test_forward_routes_a_multiview_inference_pack_through_the_decomposition(
 def test_forward_keeps_the_flex_mask_when_the_decomposition_is_off(window: tuple[float, float] | None) -> None:
     """The same pack with the flag off takes the mask, which is the fallback every other pack takes."""
     device = torch.device("cuda")
-    output_dict, attention_mask = _run_forward(maskless_attention=False, device=device, temporal_window_seconds=window)
+    output_dict, attention_mask = _run_forward(backend="flex_triton", device=device, temporal_window_seconds=window)
 
     assert attention_mask.multiview_maskless is None
     assert attention_mask.flex_block_mask is not None
@@ -347,33 +349,21 @@ def test_forward_keeps_the_flex_mask_when_the_decomposition_is_off(window: tuple
 @pytest.mark.L0
 @pytest.mark.GPU
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
-def test_the_two_routes_are_different_attention_over_the_same_pack() -> None:
-    """The decomposition is its own pattern, and the forward is where that becomes observable.
+def test_the_two_routes_match_over_the_same_pack() -> None:
+    """Disjoint maskless passes reproduce the same decomposed attention as the Flex mask.
 
-    Everything but the flag is held fixed -- same seed, same weights, same pack -- so the gap
-    is the attention and nothing else. Asserting that it is large is what makes the routing
-    tests above load-bearing: an annotation that reached no kernel, or a flex route that
-    quietly ran the same passes, would land the two outputs on top of each other.
-
-    The size of the gap is the ``(view, frame)`` cell both sensor passes take, which the merge
-    keeps twice and the mask counts once. On this 2x2 rig that cell is a large share of the key
-    set, so the two disagree by tens of percent rather than by rounding -- the same reason
-    ``multiview_maskless_attention`` documents itself as unable to serve a checkpoint trained
-    under the mask.
+    The same seed, weights, and pack isolate the backend change. Each allowed key must
+    contribute once, including same-view keys that also share the query's frame.
     """
     device = torch.device("cuda")
     torch.manual_seed(0)
-    maskless, _ = _run_forward(maskless_attention=True, device=device)
+    maskless, _ = _run_forward(backend="maskless", device=device)
     torch.manual_seed(0)
-    flex, _ = _run_forward(maskless_attention=False, device=device)
+    flex, _ = _run_forward(backend="flex_triton", device=device)
 
-    maskless_preds, flex_preds = maskless["preds_vision"][0], flex["preds_vision"][0]
-    assert maskless_preds.shape == flex_preds.shape
-    relative_gap = (maskless_preds - flex_preds).abs().mean() / flex_preds.abs().mean()
-    assert relative_gap > 0.05, (
-        f"The two routes came out {float(relative_gap):.1%} apart, which is close enough that the "
-        "the maskless annotation may not have reached a kernel at all."
-    )
+    maskless_preds = maskless["preds_vision"][0]  # [1,C,T,H,W]
+    flex_preds = flex["preds_vision"][0]  # [1,C,T,H,W]
+    torch.testing.assert_close(maskless_preds, flex_preds, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.L0
@@ -390,7 +380,7 @@ def test_forward_trains_through_the_decomposition() -> None:
     somewhere in the fold.
     """
     device = torch.device("cuda")
-    network = _multiview_network(maskless_attention=True, device=device)
+    network = _multiview_network(backend="maskless", device=device)
     packed_seq = _multiview_packed_sequence()
 
     with torch.enable_grad():
@@ -413,7 +403,7 @@ def test_forward_trains_through_the_decomposition() -> None:
 @pytest.mark.GPU
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 def test_opt_in_action_conditioning_train_all_ragged_views_and_action_encoder() -> None:
-    network = _multiview_network(maskless_attention=True, device=torch.device("cuda"), action_conditioning=True)
+    network = _multiview_network(backend="maskless", device=torch.device("cuda"), action_conditioning=True)
     views = [torch.randn(1, LATENT_CHANNELS, 3, h, w) for h, w in [(4, 6), (2, 2), (2, 4)]]
     data = GenerationDataClean(
         batch_size=1,
@@ -470,7 +460,7 @@ def test_init_weights_materializes_the_rigrope_frequency_table(cpu_offload: bool
     device = torch.device("cpu")
     with torch.device("meta"):
         network = _multiview_network(
-            maskless_attention=True,
+            backend="maskless",
             device=device,
             geometry_position_encoding="rigrope_cross_view",
             materialize=False,
@@ -493,17 +483,15 @@ def test_init_weights_materializes_the_rigrope_frequency_table(cpu_offload: bool
 
 @pytest.mark.L0
 @pytest.mark.CPU
-@pytest.mark.parametrize("maskless_attention", [True, False], ids=["maskless", "flex_triton"])
-def test_a_checkpoint_exported_before_the_geometry_modes_builds_with_them_off(maskless_attention: bool) -> None:
+@pytest.mark.parametrize("backend", ["maskless", "flex_triton"])
+def test_a_checkpoint_exported_before_the_geometry_modes_builds_with_them_off(backend: str) -> None:
     """Every field added since then is restored to its default, which leaves the baseline running."""
-    network = _multiview_network(
-        maskless_attention=maskless_attention, device=torch.device("cpu"), pre_geometry_export=True
-    )
+    network = _multiview_network(backend=backend, device=torch.device("cpu"), pre_geometry_export=True)
 
     restored = network.config.multiview_attention_config
     defaults = MultiviewAttentionConfig()
     for field in attrs.fields(MultiviewAttentionConfig):
         if field.name not in ("backend", "mask"):
             assert getattr(restored, field.name) == getattr(defaults, field.name), field.name
-    assert restored.backend == ("maskless" if maskless_attention else "flex_triton")
+    assert restored.backend == backend
     assert network.rigrope is None

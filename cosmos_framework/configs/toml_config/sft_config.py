@@ -40,6 +40,7 @@ class JobConfig(BaseModel):
             "META — chooses which make_config() to call: "
             "'vfm' → cosmos_framework/configs/base/config.py (video foundation model), "
             "'vlm' → cosmos_framework/configs/base/reasoner/config.py (vision-language model). "
+            "'simulation' → cosmos_framework/configs/simulation/config.py (simulation training). "
             "Also picks the path-remap rules in toml_config_helper.PATH_REMAPS."
         ),
     )
@@ -830,6 +831,7 @@ def load_experiment_from_toml(
 
     - ``task = "vfm"`` → ``cosmos_framework/configs/base/config.py``
     - ``task = "vlm"`` → ``cosmos_framework/configs/base/reasoner/config.py``
+    - ``task = "simulation"`` → ``cosmos_framework/configs/simulation/config.py``
 
     ``extra_overrides`` is appended after the TOML-derived Hydra overrides, so
     command-line entries take precedence over TOML values. Each entry must be
@@ -889,6 +891,13 @@ def load_experiment_from_toml(
 
     # Import lazily so this module stays cheap to import in non-training contexts.
     from cosmos_framework.utils.config import load_config
+
+    if task == "simulation":
+        # Match train_experiment's public VAE/reasoner asset resolution.
+        # Registration is lazy: this does not download model weights.
+        from cosmos_framework.inference.common.checkpoints import register_checkpoints
+
+        register_checkpoints()
 
     config = load_config(base_config_path, overrides)
 

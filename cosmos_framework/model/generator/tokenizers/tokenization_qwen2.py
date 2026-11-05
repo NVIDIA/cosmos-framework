@@ -185,6 +185,13 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
                 f"{self.__class__.__name} does not support `add_prefix_space`, setting it to True has no effect."
             )
 
+        # Older released tokenizer metadata serialized ``extra_special_tokens``
+        # as a list. Transformers 4.57 requires this field to be a mapping and
+        # raises before loading the vocabulary. The legacy list did not assign
+        # named attributes, so normalize it to the equivalent empty mapping.
+        if isinstance(kwargs.get("extra_special_tokens"), list):
+            kwargs["extra_special_tokens"] = {}
+
         super().__init__(
             errors=errors,
             bos_token=bos_token,

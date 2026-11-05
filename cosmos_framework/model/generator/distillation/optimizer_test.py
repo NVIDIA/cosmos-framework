@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, call
 import pytest
 import torch
 
-from cosmos_framework.utils.generator.optimizer import OptimizersContainer
-from cosmos_framework.model.generator.distillation import optimizer as optimizer_module
+import cosmos_framework.model.generator.distillation.optimizer as optimizer_module
 from cosmos_framework.model.generator.distillation.optimizer import OptimizerModelView, PhaseOptimizer, PhaseScheduler
+from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 
 
 def _make_optimizer() -> MagicMock:

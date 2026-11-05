@@ -15,12 +15,14 @@ from cosmos_framework.configs.base.defaults.replay_attention import TeacherForci
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_CLEAN_TARGET,
     _ROLE_CURRENT_TARGET,
+    _ROLE_PADDING,
     FlexQueryMetadata,
     TeacherForcingFlexMetadata,
     build_teacher_forcing_multiview_flex_metadata,
 )
 from cosmos_framework.model.generator.mot.flex_attention import CaptionMaskItem, SensorMaskItem
 from cosmos_framework.model.generator.utils.kv_cache import KVToStore, MultiviewARMemoryState
+from cosmos_framework.model.generator.utils.memory import ARTextLayerCache
 from cosmos_framework.model.generator.utils.rolling_kv.rolling_prompt import (
     RollingPromptLayout,
     RollingTextSinkLayer,
@@ -48,6 +50,7 @@ class RollingReplayRequest:
     history: FlexQueryMetadata | None = None
     current: FlexQueryMetadata | None = None
     prompt_layout: RollingPromptLayout | None = None
+    text_cache_layers: list[ARTextLayerCache] | None = None
 
 
 def build_rolling_replay_metadata(
@@ -119,7 +122,11 @@ def build_rolling_replay_metadata(
             **combined, num_und=num_und, query=query, teacher_forcing_replay_policy=policy
         )
     if request.prompt_layout is not None:
-        result = replace(result, caption_time_bounds=request.prompt_layout.time_bounds(result.seq_len))
+        result = replace(
+            result,
+            caption_time_bounds=request.prompt_layout.time_bounds(result.seq_len),
+            token_role_id=request.prompt_layout.mask_padding(result.token_role_id, _ROLE_PADDING),  # [UND+GEN+M]
+        )
     return result
 
 

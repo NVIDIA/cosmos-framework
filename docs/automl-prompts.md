@@ -6,15 +6,24 @@ weights and is not an SFT search algorithm. The reusable implementation lives
 in `automl_core`; Framework supplies native annotations, evaluation and metrics.
 Users need no TAO source checkout or SDK.
 
-Install the supplied core 1.0.0.dev0 wheel and Framework's `automl-prompts` extra:
+Follow [source installation](automl.md#installation-from-source), using `main` by
+default or an explicitly selected development branch. For a pip-managed,
+prepared Framework environment without a previous core installation:
 
 ```bash
-python -m pip install '/path/to/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl[prompts]'
-python -m pip install -e '.[automl-prompts,reasoner-eval]'
+AUTOML_CORE_REF=main  # Or your development branch in NVIDIA-TAO/tao-automl.
+AUTOML_CORE_SOURCE="nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core"
+python -m pip install "$AUTOML_CORE_SOURCE" -e '.[automl-prompts,reasoner-eval]'
+python -m pip check
 cosmos-automl prompts --help
 ```
 
-The controller extra pins `gepa==0.1.2`. The workload image needs the matching
+For a `uv`-managed environment, use the main guide's post-sync source install
+and `uv run --no-sync cosmos-automl prompts --help`; `--all-extras` includes
+Framework's GEPA dependency. Preserve the resolved source commit on resume.
+
+The Framework controller extra pins `gepa==0.1.2` directly; it does not depend on
+the selected core branch declaring a `prompts` extra. The workload image needs the matching
 Framework prompt evaluator and its normal GPU inference dependencies, not GEPA
 or an LLM credential. Existing training-only images are not implicitly upgraded.
 

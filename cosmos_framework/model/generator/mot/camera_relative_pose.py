@@ -43,11 +43,17 @@ class CameraPosePartition:
 
 
 @dataclass(frozen=True)
-class CameraRelativePosePlan:
+class CameraRelativePosePass:
     cameras: CameraPosePartition
-    other: CameraPosePartition | None
-    reference_to_camera: torch.Tensor  # [N_camera,4,4]
-    camera_to_reference: torch.Tensor  # [N_camera,4,4]
+    query_reference_to_camera: torch.Tensor  # [Nq,4,4]
+    query_camera_to_reference: torch.Tensor  # [Nq,4,4]
+    key_camera_to_reference: torch.Tensor  # [Nk,4,4]
+
+
+@dataclass(frozen=True)
+class CameraRelativePosePlan:
+    camera_passes: tuple[CameraRelativePosePass, ...]
+    other_passes: tuple[CameraPosePartition, ...]
 
 
 def _partition(
@@ -70,7 +76,7 @@ def _partition(
 def build_camera_relative_pose_plan(
     plan: MultiviewMasklessPlan, poses_per_item: list[torch.Tensor | None], *, projective: bool = False
 ) -> CameraRelativePosePlan | None:
-    """Split existing cross-instant groups without adding or removing edges.
+    """Split each exact cross-view pass without adding, removing, or repeating edges.
 
     Called once outside compiled layers. Single-camera samples retain the ordinary
     partition even in a mixed batch. Control items are absent from cross-instant
@@ -81,12 +87,8 @@ def build_camera_relative_pose_plan(
         raise ValueError("Camera poses must match the dense plan's sensor items")
     if plan.cross_view_empty:
         return None
-    gather, offsets = plan.cross_view_gather, plan.cross_view_offsets
-    assert gather is not None and offsets is not None
-    device = gather.device
-    # Transfer existing group metadata once. Selecting variable-length groups on
-    # the GPU here would synchronize once per instant; build their indices on CPU.
-    gather = gather.cpu()  # [N_cross]
+    assert plan.cross_view_partitions, "Nonempty cross-view attention must have exact partitions"
+    device = plan.cross_view_partitions[0].query_indices.device
     pose_ids = torch.full((plan.num_gen_tokens,), -1, dtype=torch.long, device="cpu")  # [N_gen]
     frame_poses: list[torch.Tensor] = []
     position = pose_offset = 0
@@ -109,35 +111,56 @@ def build_camera_relative_pose_plan(
         position += item_len
     if not frame_poses:
         return None
-    camera_groups: list[torch.Tensor] = []
-    other_queries: list[torch.Tensor] = []
-    other_keys: list[torch.Tensor] = []
-    bounds = offsets.cpu().tolist()
-    for start, end in zip(bounds[:-1], bounds[1:], strict=True):
-        indices = gather[start:end]  # [N_group]
-        camera_mask = pose_ids[indices] >= 0  # [N_group]
-        cameras = indices[camera_mask]  # [N_camera_group]
-        other = indices[~camera_mask]  # [N_other_group]
-        if cameras.numel():
-            camera_groups.append(cameras)
-            if other.numel():
-                other_queries.append(cameras)
-                other_keys.append(other)
-        if other.numel():
-            other_queries.append(other)
-            other_keys.append(indices)
-    cameras = _partition(camera_groups, camera_groups, device)
-    assert cameras is not None
-    camera_pose_ids = pose_ids[torch.cat(camera_groups)].to(device=device)  # [N_camera]
-    matrices = torch.cat(frame_poses)[camera_pose_ids]  # [N_camera,4,4]
-    return CameraRelativePosePlan(
-        cameras=cameras,
-        other=_partition(other_queries, other_keys, device),
-        reference_to_camera=matrices,
-        camera_to_reference=(invert_affine_transform if projective else invert_rigid_transform)(
-            matrices
-        ),  # [N_camera,4,4]
-    )
+    matrices = torch.cat(frame_poses)  # [N_camera_frame,4,4]
+    inverse = (invert_affine_transform if projective else invert_rigid_transform)(matrices)  # [N_camera_frame,4,4]
+    camera_passes: list[CameraRelativePosePass] = []
+    other_passes: list[CameraPosePartition] = []
+    for part in plan.cross_view_partitions:
+        # Transfer existing group metadata once. Selecting variable-length groups on
+        # the GPU here would synchronize once per instant; build their indices on CPU.
+        query = part.query_indices.cpu()  # [Nq]
+        key = part.key_indices.cpu()  # [Nk]
+        q_bounds = part.query_offsets.cpu().tolist()
+        k_bounds = part.key_offsets.cpu().tolist()
+        camera_queries: list[torch.Tensor] = []
+        camera_keys: list[torch.Tensor] = []
+        other_queries: list[torch.Tensor] = []
+        other_keys: list[torch.Tensor] = []
+        for qs, qe, ks, ke in zip(q_bounds[:-1], q_bounds[1:], k_bounds[:-1], k_bounds[1:], strict=True):
+            queries = query[qs:qe]  # [Nq_group]
+            keys = key[ks:ke]  # [Nk_group]
+            q_mask = pose_ids[queries] >= 0  # [Nq_group]
+            k_mask = pose_ids[keys] >= 0  # [Nk_group]
+            q_camera, q_other = queries[q_mask], queries[~q_mask]  # [Nq_camera], [Nq_other]
+            k_camera, k_other = keys[k_mask], keys[~k_mask]  # [Nk_camera], [Nk_other]
+            if q_camera.numel():
+                if k_camera.numel():
+                    camera_queries.append(q_camera)
+                    camera_keys.append(k_camera)
+                if k_other.numel():
+                    other_queries.append(q_camera)
+                    other_keys.append(k_other)
+            if q_other.numel():
+                other_queries.append(q_other)
+                other_keys.append(keys)
+        cameras = _partition(camera_queries, camera_keys, device)
+        if cameras is not None:
+            query_pose_ids = pose_ids[torch.cat(camera_queries)].to(device=device)  # [Nq_camera]
+            key_pose_ids = pose_ids[torch.cat(camera_keys)].to(device=device)  # [Nk_camera]
+            camera_passes.append(
+                CameraRelativePosePass(
+                    cameras=cameras,
+                    query_reference_to_camera=matrices[query_pose_ids],  # [Nq_camera,4,4]
+                    query_camera_to_reference=inverse[query_pose_ids],  # [Nq_camera,4,4]
+                    key_camera_to_reference=inverse[key_pose_ids],  # [Nk_camera,4,4]
+                )
+            )
+        other = _partition(other_queries, other_keys, device)
+        if other is not None:
+            other_passes.append(other)
+    if not camera_passes:
+        return None
+    return CameraRelativePosePlan(camera_passes=tuple(camera_passes), other_passes=tuple(other_passes))
 
 
 def prope_pair_channels(head_dim: int, device: torch.device) -> torch.Tensor:  # [D] bool

@@ -22,6 +22,28 @@ def install_ar_post_saturation_mode(model: Any) -> None:
     mode = model.config.compile.ar_post_saturation_mode
     if mode == "default":
         return
+    implementation = getattr(model.config, "teacher_forcing_kv_implementation", None)
+    # Reject multiview Flex explicitly rather than falling through to the single-view installer.
+    if implementation == "multiview_flex_kv":
+        raise ValueError(
+            "Multiview FlexAttention does not support post-saturation modes. "
+            "Use --ar-post-saturation-mode default or bounded multiview_maskless_kv inference."
+        )
+    if implementation == "multiview_maskless_kv":
+        if mode != "static-compile":
+            raise ValueError("Causal multiview post-saturation inference supports only static-compile.")
+        if model.config.rolling_kv_cache_chunks is None or not model.net.teacher_forcing_maskless:
+            raise ValueError("Multiview post-saturation static compile requires bounded rolling maskless inference.")
+        if model.config.compile.enabled or model.config.compile.use_cuda_graphs:
+            raise ValueError(
+                "Multiview post-saturation static compile requires --no-use-torch-compile and --no-use-cuda-graphs."
+            )
+        if model.parallel_dims is not None and model.parallel_dims.dp_enabled:
+            raise ValueError("Multiview post-saturation static compile requires dp_shard_size=1.")
+        # The rolling sampler installs precision-preserving layer routers once,
+        # and selects them only for saturated noisy reads. Do not install the
+        # single-view routers here: doing so would bypass the rolling options.
+        return
     if mode not in AR_POST_SATURATION_STATIC_COMPILE_MODES:
         raise ValueError(f"Unsupported ar_post_saturation_mode={mode!r}")
     if getattr(model, "_ar_post_saturation_static_compile_installed", False):

@@ -17,10 +17,12 @@ ______________________________________________________________________
 - [Models](#models)
 - [Modes](#modes)
 - [Parallelism Arguments](#parallelism-arguments)
+- [Model Arguments](#model-arguments)
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
     - [Resolution tiers](#resolution-tiers)
+  - [Multiview camera + LiDAR transfer](#multiview-camera--lidar-transfer)
   - [Action](#action)
   - [Reasoner](#reasoner)
   - [Custom Defaults](#custom-defaults)
@@ -30,6 +32,9 @@ ______________________________________________________________________
   - [Torch CUDA Out of Memory Error](#torch-cuda-out-of-memory-error)
   - [NCCL Issue](#nccl-issue)
     - [NCCL Plugin Issue](#nccl-plugin-issue)
+  - [Text K/V prefill](#text-kv-prefill)
+  - [Component CPU offloading](#component-cpu-offloading)
+  - [Layerwise CPU offloading](#layerwise-cpu-offloading)
 
 ______________________________________________________________________
 
@@ -40,6 +45,13 @@ Prerequisites:
 - [Setup](../README.md#setup)
 - [Environment Variables](./environment_variables.md)
 - [FAQ](./faq.md) — troubleshooting (OOM, NCCL hangs), defaults, common pitfalls.
+
+For caption-and-control generation with Cosmos3-Nano-Sim-Transfer, see the
+[Simulation Transfer recipe](inference_transfer.md).
+For multiview driving video and optional joint LiDAR generation, see the
+[Transfer Auto recipe](inference_auto.md).
+For its autoregressive Cosmos3-Nano-Sim-Auto student, see the
+[Sim Auto recipe](inference_sim_auto.md).
 
 Arguments:
 
@@ -102,7 +114,7 @@ python -m cosmos_framework.scripts.inference \
 
 ### Multi-GPU
 
-Use `torchrun --nproc-per-node=N` when launching across multiple GPUs (N > 1). By default the model weights are sharded (FSDP) across all N GPUs, so any model fits. The `throughput` preset runs that single sharded replica over a batch; the `latency` preset additionally needs `--dp-shard-size=1` on multiple GPUs so the ranks are free for context parallelism (see [Parallelism Arguments](#parallelism-arguments)).
+Use `torchrun --nproc-per-node=N` when launching across multiple GPUs (N > 1). By default the model weights are sharded (FSDP) across all N GPUs, reducing per-GPU weight storage. The full request must also fit activations, tokenizers and output buffers. The `throughput` preset runs that single sharded replica over a batch; the `latency` preset additionally needs `--dp-shard-size=1` on multiple GPUs so the ranks are free for context parallelism (see [Parallelism Arguments](#parallelism-arguments)).
 
 #### Cosmos3-Nano
 
@@ -177,13 +189,30 @@ Set `enable_sound: true` on a `text2video` sample (see [`inputs/omni/t2vs.json`]
 
 ## Parallelism Arguments
 
-By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp_shard_size = WORLD_SIZE`, `dp_replicate_size = 1`), so any model fits regardless of size. Override any axis with the `--dp-shard-size` / `--dp-replicate-size` / `--cp-size` / `--cfgp-size` flags.
+By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp_shard_size = WORLD_SIZE`, `dp_replicate_size = 1`). Sharding reduces per-GPU weight storage but does not guarantee that the complete workload fits. Override any axis with the `--dp-shard-size` / `--dp-replicate-size` / `--cp-size` / `--cfgp-size` flags.
+
+Increasing context parallelism can reduce per-GPU activation memory and speed up large requests, but communication overhead can offset the benefit. Compare latency on the same workload; more GPUs or a higher CP degree do not guarantee faster inference. For Transfer-Auto and Sim-Auto, follow the model-specific commands and [Auto memory guidance](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#gpu-memory-and-parallelism).
 
 - `--parallelism-preset`
   - `latency`: Minimize wall-clock per sample by splitting each sample across GPUs with **context parallelism**. On multiple GPUs, also pass `--dp-shard-size=1` so the ranks are used for context/CFG parallelism instead of weight sharding. Used for real-time jobs.
   - `throughput`: No context parallelism (`cp=cfgp=1`); the model is sharded across all GPUs and a single replica processes the batch. Used for batch jobs.
 - `--dp-shard-size`: Number of ranks the model is sharded over (FSDP). Defaults to all ranks (`WORLD_SIZE`).
 - `--max-num-seqs`: Maximum number of samples batched together per replica.
+- `--attention-io-layout {sequence_sharded,replicated}`: Tensor layout around attention under context parallelism. `sequence_sharded` (default) keeps hidden states sequence-sharded with Ulysses all-to-all around attention; `replicated` keeps them replicated and slices heads locally.
+- `--use-batched-cfg`: Run the conditional and unconditional CFG branches as one batched forward. Off by default because it raises peak activation memory; it is turned off automatically when `--cfgp-size 2` is used.
+- `--ar-post-saturation-mode {default,static-compile,cuda-graph}`: Autoregressive execution after the rolling KV window saturates. `default` keeps the global `--use-torch-compile` / `--use-cuda-graphs` behaviour.
+
+## Model Arguments
+
+For calibrated static FP8 checkpoint export and vLLM/vLLM-Omni serving examples,
+see the [Edge/Nano/Super quantization cookbook](../.agents/skills/cookbooks/cosmos3/quantization/README.md).
+Its exported weights, scales, and activation policy are distinct from the
+load-time quantization flags below. Native Framework FP8 checkpoint inference
+compatibility is outside that cookbook's serving validation.
+
+- `--quantization-method {mxfp8,nvfp4,fp8}`: Post-training quantization applied at load time (replicated weights only, `--dp-shard-size 1`). `mxfp8` / `nvfp4` need Blackwell; `fp8` also runs on Hopper and Ada.
+- `--quantization-fp8-granularity {per_row,per_tensor}`: Scale granularity for `fp8` (default `per_row`).
+- `--experiment-overrides`: Extra config overrides as dotlist entries. Both `--experiment-overrides model.config.a=1 model.config.b=2` and the bracketed form `--experiment-overrides "[model.config.a=1,model.config.b=2]"` are accepted.
 
 ## Sample Arguments
 
@@ -210,7 +239,18 @@ Common arguments:
 
 Common arguments:
 
-- `fps`: Condition and output frames per second.
+- `fps`: Model conditioning frames per second; also the default output rate.
+  Released Auto camera models default to and require 30. Other models retain
+  their existing FPS defaults and validation.
+- `output_fps` (CLI `--output-fps`): Saved video playback rate for Auto RGB-only
+  generation. For synchronized 10-FPS RGB/WSM inputs, keep the frames unchanged
+  and use `--output-fps 10`; omit `fps` or keep it at 30. This changes only video
+  saving, not frame selection, model conditioning, caption timing or frame count.
+  Omitted, output FPS follows `fps`. Joint RGB/LiDAR currently requires the same
+  model and output rate; this option is unsupported for other models and
+  LiDAR-only generation. See the
+  [Auto timing guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
+  for timestamped captions and synchronization constraints.
 - `resolution` (`"256"`, `"480"`, `"720"`, `"768"`): Condition and output resolution **tier**, not a
   pixel dimension. The output width and height are looked up from the tier *and* the
   aspect ratio — see [Resolution tiers](#resolution-tiers) below.
@@ -245,6 +285,56 @@ Generation arguments:
 
 Outputs `vision.jpg` or `vision.mp4` depending on `num_frames`.
 
+### Multiview camera + LiDAR transfer
+
+A joint `cosmos3_av_cam_lidar_transfer` checkpoint generates the camera views and the LiDAR range
+map together. Cameras go in `multiview.views`, one entry per camera with its own `control_path`;
+the HD map goes in `lidar.control_path`; `wsm` stays empty.
+
+Download and verify the [shared Auto example](inference_auto.md#download-the-shared-example)
+first. Its `input-transfer-auto.jsonl` uses seven cameras, 720p, 30 FPS and
+297 output frames, with `vision_path` per camera and
+`multiview.condition_video_as_image: true` for first-frame RGB conditioning.
+The sample also contains the corresponding Sim-Auto request; see
+[Sim-Auto inference](inference_sim_auto.md).
+
+```bash
+torchrun --standalone --nproc-per-node=4 -m cosmos_framework.scripts.inference \
+  -i "$AUTO_SAMPLE_ROOT/input-transfer-auto.jsonl" \
+  -o outputs/transfer_auto \
+  --checkpoint-path "$TRANSFER_AUTO_CHECKPOINT" \
+  --cp-size 4 --cfgp-size 1 \
+  --no-use-torch-compile --no-diffusion-cache
+```
+
+Both Auto requests set `multiview.load_caption_from_data: true` and give every
+camera a `caption_path`. That is not optional here: this checkpoint tokenizes
+one caption per camera, and generation is refused without one caption file per
+camera. Each camera's caption supplies its text conditioning; the top-level
+prompt is empty. Captions must cover the requested generation horizon.
+
+Set `multiview.first_caption_paragraph_only: true` for a checkpoint trained with
+`first_caption_paragraph_only` (the Transfer-Auto stage-3 and LiDAR-transfer recipes). Each loaded
+caption is then trimmed to its opening paragraph before the camera headers are added, so inference
+reads the same text the checkpoint was trained on. The default (`false`) keeps full captions.
+
+Outputs are `vision_viewXX_<camera_key>.mp4` per camera, plus a single `lidar.safetensors` holding
+`range_m`, `intensity` and `frame_ids`. LiDAR runs at 10 Hz against a 30 fps camera clock, so a
+297-frame generation produces 99 sweeps.
+
+To condition on measured LiDAR, set `lidar.condition_path` to a metric 3-channel `.pt` clip or a
+prepared `lidar_rangemap` `.tar` that starts at the same instant as the controls, and
+`lidar.num_conditional_sweeps` (default 1) to the number of its sweeps to keep as a clean prefix;
+the rest of the sweeps are generated. An archive prefix must carry the same source frame IDs as the
+start of a `.tar` control, and a `.pt` prefix is refused beside one. Prefix conditioning needs a
+temporally causal LiDAR tokenizer without temporal compression, and causal (rolling) checkpoints
+accept one prefix sweep only.
+
+The shared sample is published in the `nvidia/Cosmos3-Nano-Transfer-Auto` model
+repository. Download the whole pinned sample folder once; the requests then
+read its local relative paths. Authenticate with access to the repository if
+required.
+
 ### Action
 
 Common arguments:
@@ -261,6 +351,10 @@ Condition arguments:
 The action output is written to `sample_outputs.json`.
 
 See the [Modes](#modes) table above for the action mode inputs/outputs and example files.
+
+For the Bimanual checkpoint, see the [Bimanual inference guide](inference_bimanual.md),
+including the normalized 59D sidecars, per-row robot/camera domains, plain-text
+prompts, and fixed four-step sampling schedule.
 
 ### Reasoner
 
@@ -313,7 +407,7 @@ If that's not enough, see [FAQ § OOM during inference](./faq.md#q-i-get-torchcu
 
 Error:
 
-```shell
+```text
 [rank0]:[W415 18:57:09.249883195 ProcessGroupNCCL.cpp:5138] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
 
 Fatal Python error: Segmentation fault
@@ -342,3 +436,62 @@ Fix:
 ```shell
 export NCCL_NET_PLUGIN=none
 ```
+
+### Text K/V prefill
+
+`--prefill-text-kv --no-use-cuda-graphs` prepares all text K/V caches inside
+the first generation forward, including conditional and unconditional prompts.
+Later steps reuse the caches. This flag also works without offloading;
+`torch.compile` remains enabled. Results may differ slightly from the default joint path.
+
+Requires single-GPU, non-causal `two_way` inference eligible for text-KV reuse:
+one sample, no sound, multi-control input, velocity postprocessor or
+generation-specific text K normalization.
+
+### Component CPU offloading
+
+`--enable-cpu-offload` loads the reasoner, prepares text K/V in the first
+forward, then swaps to the generator. The generator stays resident for later
+steps. Both offload modes enable text prefill automatically.
+
+```bash
+python -m cosmos_framework.scripts.inference \
+  --checkpoint-path Cosmos3-Nano -i inputs/omni/t2i.json -o /path/to/outputs \
+  --enable-cpu-offload --no-use-cuda-graphs --seed 42
+```
+
+Both offload modes use pinned CPU weights and asynchronous transfers without
+copying unchanged weights back. They require the prefill restrictions above,
+a combined BF16 or ModelOpt FP8 checkpoint without LoRA, and `--no-use-cuda-graphs`.
+`torch.compile` stays enabled. CPU RAM must hold both decoder pathways;
+embeddings, heads, rotary buffers and the VAE remain on GPU. Run one request
+at a time per model instance. Unused CUDA allocator cache is released after
+each completed request; component offloading also releases it at phase swaps.
+
+For ModelOpt FP8 checkpoints, use their local path as `--checkpoint-path`
+without `--quantization-method`. To run the first and last three denoising
+steps with A16 activations and the middle steps with A8, add
+`--mixed-precision-first-steps 3 --mixed-precision-last-steps 3`.
+The reasoner uses A16 when this schedule is enabled. Set these flags explicitly;
+checkpoint precision-policy metadata is not read. Keep
+`--mixed-precision-w8a16-cache none` (the default) when offloading.
+
+Compiled FP8 outputs are not guaranteed to be bit-identical across fresh
+processes, including without offloading.
+
+### Layerwise CPU offloading
+
+Replace `--enable-cpu-offload` with `--enable-layerwise-offload` to hold only
+two decoder layers' active-pathway weights on GPU, prefetching the next layer
+while the current one computes. Both modes also need GPU memory for resident
+modules, caches and activations; the two flags cannot be combined.
+
+- Prefer **component offloading** for small images and lighter workloads when
+  the active decoder pathway fits. Keeping the generator resident avoids repeated
+  weight transfers that short compute intervals cannot fully hide.
+- Start with **layerwise offloading** for memory-heavy workloads such as larger
+  videos. It reduces weight residency, and longer layer computation gives
+  prefetching more opportunity to overlap transfers with compute.
+
+Actual latency depends on workload size and CPU–GPU bandwidth; layerwise
+offloading is not guaranteed to be faster.

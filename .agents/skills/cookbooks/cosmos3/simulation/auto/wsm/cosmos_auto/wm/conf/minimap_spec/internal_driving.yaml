@@ -1,0 +1,9 @@
+minimap_types:
+  - "lanelines"
+  - "road_boundaries"
+  - "crosswalks"
+  - "road_markings"
+  - "wait_lines"
+  - "poles"
+  - "traffic_signs"
+  - "traffic_lights"

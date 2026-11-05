@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Builds the documentation site for every pull request and for pushes to main that
+# change the docs, and uploads it as the docs-preview artifact. Deploys to GitHub
+# Pages only from NVIDIA/cosmos-framework main, on a push or a manual run, and only
+# when the repository variable DOCS_DEPLOY is 'true'. See docs/README.md.
+name: Docs
+on:
+  # Every pull request: a code change can break links from the docs to the code.
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.agents/skills/**'
+      - 'examples/integration/**'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+      - 'tools/docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+# One run at a time per branch, so main deploys in push order; a new push to a
+# pull request cancels its older run.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    name: Docs build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Silence the Material for MkDocs banner about MkDocs 2.0; it is not a build warning.
+      NO_MKDOCS_2_WARNING: 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # Keep in step with [tool.uv].constraint-dependencies in pyproject.toml.
+          version: "0.11.29"
+      - name: Test the staging script
+        run: uv run --locked --project tools/docs pytest -q -c tools/docs/pyproject.toml --confcutdir=tools/docs tools/docs/tests
+      # stage.py --list-lfs also checks the pages: a broken link fails this step.
+      - name: Check pages and fetch their Git LFS images
+        run: |
+          paths="$(uv run --locked --project tools/docs python tools/docs/stage.py --list-lfs)"
+          if [ -n "$paths" ]; then
+            git lfs pull --include="$paths"
+          fi
+      - name: Stage pages
+        run: uv run --locked --project tools/docs python tools/docs/stage.py
+      - name: Build site
+        run: uv run --locked --project tools/docs mkdocs build --strict -f build/mkdocs.yml
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-preview
+          path: build/site
+          retention-days: 14
+      - if: github.repository == 'NVIDIA/cosmos-framework' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_DEPLOY == 'true'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/site
+  deploy:
+    needs: build
+    if: github.repository == 'NVIDIA/cosmos-framework' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

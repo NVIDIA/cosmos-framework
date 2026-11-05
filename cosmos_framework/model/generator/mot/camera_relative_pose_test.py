@@ -29,6 +29,7 @@ def _poses(device: torch.device, dtype: torch.dtype, projective: bool = False) -
     poses[1, :, :3, :3] = poses.new_tensor([[0, -1, 0], [1, 0, 0], [0, 0, 1]])  # [F,3,3]
     poses[1, :, 0, 3] = 1.5  # [F]
     poses[2, :, 1, 3] = -0.75  # [F]
+    poses[:, 1, 2, 3] = 0.4  # [V], motion makes frame-specific query/key transforms observable
     if projective:
         lifted = torch.eye(4, device=device, dtype=dtype).repeat(3, 1, 1)  # [V,4,4]
         lifted[:, :3, :3] = poses.new_tensor(
@@ -43,7 +44,12 @@ def _poses(device: torch.device, dtype: torch.dtype, projective: bool = False) -
 
 
 def _batch(
-    device: torch.device, dtype: torch.dtype, head_dim: int, kv_heads: int = 2, projective: bool = False
+    device: torch.device,
+    dtype: torch.dtype,
+    head_dim: int,
+    kv_heads: int = 2,
+    projective: bool = False,
+    cross_window: tuple[float, float] | None = None,
 ) -> tuple[list[torch.Tensor], list[SequencePack], dense.MultiviewMasklessPlan]:
     # RGB control + target (3 views, 2 frames, 2 spatial tokens), then
     # LiDAR control + target (1 view, 2 frames, 1 spatial token), and 3 captions.
@@ -74,6 +80,7 @@ def _batch(
         seconds_per_frame=[0.133, 0.133, 0.1, 0.1],
         captions=[[(0, 2), (1, 3), (2, 1)]],
         padded_gen_tokens=get_full_only_seq(packs[0])[0].shape[0],
+        cross_view_temporal_window=dense.CrossViewTemporalWindowConfig(bounds=cross_window),
     )
     poses = _poses(device, dtype, projective)  # [V,F,4,4]
     pose_plan = build_camera_relative_pose_plan(plan, [poses, poses, None, None], projective=projective)
@@ -109,7 +116,10 @@ def _reference_merge(
 
 
 def _pairwise_reference(
-    packs: list[SequencePack], use_pose: bool, projective: bool = False
+    packs: list[SequencePack],
+    use_pose: bool,
+    projective: bool = False,
+    cross_window: tuple[float, float] | None = None,
 ) -> torch.Tensor:  # [28,H,D]
     q, k, v = [get_full_only_seq(pack)[0] for pack in packs]  # each [29,H,D]
     text_k, text_v = [get_causal_seq(pack)[0] for pack in packs[1:]]  # each [7,H,D]
@@ -135,8 +145,15 @@ def _pairwise_reference(
                 values.append(v[ki])  # [H,D]
         if not control:
             for ki, (ka, kv, kf, kc) in enumerate(layout):
-                if kc or kf != frame:
+                if kc or (axis == ka and view == kv):
                     continue
+                if cross_window is None:
+                    if kf != frame:
+                        continue
+                else:
+                    delta = kf * (0.133 if ka == 0 else 0.1) - frame * (0.133 if axis == 0 else 0.1)
+                    if not cross_window[0] <= delta <= cross_window[1]:
+                        continue
                 if use_pose and axis == 0 and ka == 0:
                     relative = poses[view, frame] @ torch.linalg.inv(poses[kv, kf])  # [4,4]
                     transform = torch.block_diag(
@@ -160,15 +177,16 @@ def _pairwise_reference(
 @pytest.mark.CPU
 @pytest.mark.parametrize("kv_heads", [1, 2])
 @pytest.mark.parametrize("projective", [False, True])
+@pytest.mark.parametrize("cross_window", [None, (-0.15, 0.0)])
 def test_enabled_joint_attention_matches_pairwise_forward_and_backward(
-    monkeypatch: pytest.MonkeyPatch, kv_heads: int, projective: bool
+    monkeypatch: pytest.MonkeyPatch, kv_heads: int, projective: bool, cross_window: tuple[float, float] | None
 ) -> None:
     torch.manual_seed(19)
     monkeypatch.setattr(dense, "attention", _reference_attention)
     monkeypatch.setattr(dense, "merge_attentions", _reference_merge)
-    tensors, packs, plan = _batch(torch.device("cpu"), torch.float64, 16, kv_heads, projective)
+    tensors, packs, plan = _batch(torch.device("cpu"), torch.float64, 16, kv_heads, projective, cross_window)
     actual = dense.multiview_maskless_gen_attention(*packs, plan=plan)[:28].reshape(28, 2, 16)  # [N,H,D]
-    expected = _pairwise_reference(packs, use_pose=True, projective=projective)  # [N,H,D]
+    expected = _pairwise_reference(packs, use_pose=True, projective=projective, cross_window=cross_window)  # [N,H,D]
     torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
     weight = torch.randn_like(actual)  # [N,H,D]
     actual_grads = torch.autograd.grad((actual * weight).sum(), tensors, retain_graph=True)  # tuple[[N,H,D]]
@@ -190,8 +208,11 @@ def test_projective_plan_takes_the_general_inverse() -> None:
     _, _, plan = _batch(torch.device("cpu"), torch.float64, 16, projective=True)
     pose = plan.camera_relative_pose
     assert pose is not None
-    identity = torch.eye(4, dtype=torch.float64).expand_as(pose.reference_to_camera)  # [N_camera,4,4]
-    torch.testing.assert_close(pose.camera_to_reference @ pose.reference_to_camera, identity, atol=1e-12, rtol=0)
+    for part in pose.camera_passes:
+        identity = torch.eye(4, dtype=torch.float64).expand_as(part.query_reference_to_camera)  # [Nq_camera,4,4]
+        torch.testing.assert_close(
+            part.query_camera_to_reference @ part.query_reference_to_camera, identity, atol=1e-12, rtol=0
+        )
 
 
 @pytest.mark.L0
@@ -199,11 +220,11 @@ def test_projective_plan_takes_the_general_inverse() -> None:
 def test_partition_preserves_all_edges_and_excludes_control() -> None:
     _, _, plan = _batch(torch.device("cpu"), torch.float64, 16)
     pose = plan.camera_relative_pose
-    assert pose is not None and pose.other is not None
-    assert sorted(pose.cameras.query_indices.tolist()) == list(range(12, 24))
-    assert sorted(pose.other.query_indices.tolist()) == list(range(12, 24)) + [26, 27]
-    assert not set(pose.cameras.key_indices.tolist()) & {24, 25, 26, 27}
-    assert set(pose.other.key_indices.tolist()) == set(range(12, 24)) | {26, 27}
+    assert pose is not None and pose.other_passes
+    assert {q for part in pose.camera_passes for q in part.cameras.query_indices.tolist()} == set(range(12, 24))
+    assert {q for part in pose.other_passes for q in part.query_indices.tolist()} == set(range(12, 24)) | {26, 27}
+    assert not {k for part in pose.camera_passes for k in part.cameras.key_indices.tolist()} & {24, 25, 26, 27}
+    assert {k for part in pose.other_passes for k in part.key_indices.tolist()} == set(range(12, 24)) | {26, 27}
 
 
 @pytest.mark.L0
@@ -220,8 +241,8 @@ def test_mixed_rigs_remain_sample_local_and_keep_single_camera_lidar_edges() -> 
     )
     poses = _poses(torch.device("cpu"), torch.float64)  # [V,F,4,4]
     pose_plan = build_camera_relative_pose_plan(plan, [poses, poses, None, None] + [None] * 4)
-    assert pose_plan is not None and pose_plan.other is not None
-    assert max(pose_plan.cameras.query_indices.tolist()) < 28
+    assert pose_plan is not None and pose_plan.other_passes
+    assert max(q for part in pose_plan.camera_passes for q in part.cameras.query_indices.tolist()) < 28
 
     def edges(
         query: torch.Tensor, key: torch.Tensor, q_offsets: torch.Tensor, k_offsets: torch.Tensor
@@ -233,15 +254,22 @@ def test_mixed_rigs_remain_sample_local_and_keep_single_camera_lidar_edges() -> 
             for k in key[ks:ke].tolist()
         }
 
-    assert plan.cross_view_gather is not None and plan.cross_view_offsets is not None
-    original = edges(plan.cross_view_gather, plan.cross_view_gather, plan.cross_view_offsets, plan.cross_view_offsets)
+    original = set().union(
+        *(
+            edges(part.query_indices, part.key_indices, part.query_offsets, part.key_offsets)
+            for part in plan.cross_view_partitions
+        )
+    )
     partitions = [
         edges(part.query_indices, part.key_indices, part.query_offsets, part.key_offsets)
-        for part in (pose_plan.cameras, pose_plan.other)
+        for part in (*[p.cameras for p in pose_plan.camera_passes], *pose_plan.other_passes)
     ]
-    assert partitions[0].isdisjoint(partitions[1])
-    assert partitions[0] | partitions[1] == original
-    assert (30, 34) in partitions[1]  # Single-camera target -> LiDAR target, same instant.
+    # Every original edge occurs exactly once, including when one query appears at multiple tree levels.
+    assert sum(len(part) for part in partitions) == len(original)
+    assert set().union(*partitions) == original
+    for part in (*[p.cameras for p in pose_plan.camera_passes], *pose_plan.other_passes):
+        assert len(part.query_indices.unique()) == len(part.query_indices)
+    assert any((30, 34) in part for part in partitions)  # Single-camera target -> LiDAR target, same instant.
     assert all((query < 28) == (key < 28) for query, key in original)
 
 

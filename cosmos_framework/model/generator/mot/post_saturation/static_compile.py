@@ -99,8 +99,10 @@ class ARPostSaturationStaticCompileRouter(nn.Module):
             eager_layer.forward,
             fullgraph=True,
             dynamic=False,
-            mode="max-autotune-no-cudagraphs",
-            options=compile_options or None,
+            options={
+                **torch._inductor.list_mode_options("max-autotune-no-cudagraphs"),
+                **compile_options,
+            },
         )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
@@ -113,9 +115,22 @@ class ARPostSaturationStaticCompileRouter(nn.Module):
         return self.default_layer.reasoner_forward(*args, **kwargs)
 
 
-def apply_ar_post_saturation_static_compile(model: nn.Module, config: CompileConfig) -> None:
-    """Install AR post-saturation static-compile routing on decoder layers."""
+def apply_ar_post_saturation_static_compile(
+    model: nn.Module, config: CompileConfig, *, emulate_precision_casts: bool = False
+) -> None:
+    """Install AR post-saturation static-compile routing on decoder layers.
+
+    ``emulate_precision_casts=True`` asks Inductor to preserve eager low-precision
+    rounding boundaries when fusing operations, reducing numerical differences
+    without guaranteeing bitwise parity. ``False`` leaves Inductor's default
+    behavior unchanged, allowing fused operations to keep intermediates in FP32
+    instead of rounding them to BF16/FP16 between operations.
+    """
     compile_options = _compile_options_from_config(config)
+    if emulate_precision_casts:
+        # Rolling BF16 inference compares against eager intermediates. Preserve
+        # their rounding boundaries when pointwise operations are fused.
+        compile_options["emulate_precision_casts"] = True
     for layer_id, block in model.model.layers.named_children():
         if isinstance(block, ARPostSaturationStaticCompileRouter):
             continue

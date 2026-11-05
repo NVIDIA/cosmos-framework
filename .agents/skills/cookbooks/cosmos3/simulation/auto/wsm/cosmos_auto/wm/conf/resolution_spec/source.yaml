@@ -1,0 +1,4 @@
+mode: "source"
+camera_model_resolution: []
+cosmos_resolution: []
+to_cosmos_resolution: "resize"

@@ -3,8 +3,8 @@
 
 import math
 import os
-from collections.abc import Callable
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, NamedTuple
@@ -30,6 +30,7 @@ from cosmos_framework.data.generator.augmentors.text_tokenizer import (
     TEXT_SYSTEM_PROMPT_KEY,
 )
 from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
+from cosmos_framework.model.generator.utils.moe_utils import preserve_moe_learning_accumulators
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
 from cosmos_framework.utils.generator.multiview import (
     decode_multiview_latent_per_view,
@@ -48,6 +49,17 @@ class WandbAnimation(NamedTuple):
 # frame, an animation of every frame, or direct interactive point-cloud media.
 WandbClipPreview = Literal["grid", "frames", "animation"]
 WandbMedia = str | WandbAnimation | list[wandb.Object3D] | dict[str, "WandbMedia"]
+
+
+@contextmanager
+def _sampling_observation_scope(model: Any) -> Iterator[None]:
+    """Keep diagnostic sampling from contributing to the next router update."""
+    net = getattr(model, "net", None)
+    if not isinstance(net, torch.nn.Module):
+        yield
+        return
+    with preserve_moe_learning_accumulators(net):
+        yield
 
 
 def resize_image(image: torch.Tensor, size: int = 1024) -> torch.Tensor:
@@ -947,7 +959,9 @@ class EveryNDrawSample(EveryN):
             )
 
         log.debug("entering, every_n_impl", rank0_only=False)
-        with context():
+        # Keep this scope outside ``ema_scope`` so its ``finally`` restores learning
+        # accumulators after EMA weights have been swapped back, including on exceptions.
+        with _sampling_observation_scope(model), context():
             if self.do_x0_prediction:
                 log.debug("entering, x0_pred", rank0_only=False)
                 x0_img_fp, mse_loss, sigmas = self.x0_pred(

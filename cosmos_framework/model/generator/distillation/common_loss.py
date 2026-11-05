@@ -14,12 +14,61 @@ import torch.nn.functional as F
 
 __all__: tuple[str, ...] = (
     "VSDLossReduction",
+    "make_vsd_pseudo_target",
     "variational_score_distillation_loss",
     "variational_score_distillation_loss_from_gradient",
 )
 
 VSDLossReduction = str
 _VSD_LOSS_REDUCTIONS: set[str] = {"mean", "sum", "per_instance_sum"}
+
+
+def make_vsd_pseudo_target(
+    g_i: torch.Tensor,  # [C,...]
+    grad_i: torch.Tensor,  # [C,...], unnormalized VSD direction
+    ref_i: torch.Tensor,  # [C,...], teacher-distance reference
+    loss_mask: torch.Tensor | None = None,  # broadcastable to [C,...]
+    additional_scale: torch.Tensor | None = None,  # scalar
+    reduction: VSDLossReduction = "mean",
+) -> torch.Tensor:  # [C,...], detached
+    """Normalize one VSD direction and construct its detached target.
+
+    Keep the legacy additive epsilon for mean/sum and the clamped normalizer
+    plus nonfinite-gradient handling for per_instance_sum. Loss reduction and
+    precision conversions outside this calculation belong to the caller.
+    """
+    with torch.no_grad():
+        # Weight calculation in fp32 for numerical stability
+        g_fp32 = g_i.float()  # [C,T_i,H_i,W_i]
+        ref_fp32 = ref_i.float()  # [C,T_i,H_i,W_i]
+
+        # Mean absolute difference over generated frames only (avoid inflation
+        # from conditioned frames where gen ≈ teacher ≈ clean data)
+        if loss_mask is not None:
+            mask_i = loss_mask.expand_as(g_fp32)  # [C,T_i,H_i,W_i]
+            diff_abs_mean = ((g_fp32 - ref_fp32).abs() * mask_i).sum() / mask_i.sum().clamp(min=1)  # scalar
+        else:
+            diff_abs_mean = (g_fp32 - ref_fp32).abs().mean()  # scalar
+        if reduction == "per_instance_sum":
+            w = 1.0 / diff_abs_mean.clamp(min=1e-5)  # scalar
+        else:
+            w = 1.0 / (diff_abs_mean + 1e-6)  # scalar
+
+        if additional_scale is not None:
+            w = w * additional_scale.float()  # scalar
+
+        w = w.to(dtype=g_i.dtype)  # scalar
+
+        weighted_grad = grad_i * w  # [C,T_i,H_i,W_i]
+        if reduction == "per_instance_sum":
+            has_nonfinite_weighted_grad = ~torch.isfinite(weighted_grad).all()  # scalar
+            weighted_grad = torch.where(
+                has_nonfinite_weighted_grad,
+                torch.zeros_like(weighted_grad),
+                weighted_grad,
+            )  # [C,T_i,H_i,W_i]
+        pseudo_target = g_i - weighted_grad  # [C,T_i,H_i,W_i]
+    return pseudo_target
 
 
 def variational_score_distillation_loss(
@@ -114,37 +163,14 @@ def variational_score_distillation_loss_from_gradient(
         grad_i = vsd_grad[i]  # [C,T_i,H_i,W_i]
         ref_i = weight_reference[i]  # [C,T_i,H_i,W_i]
 
-        with torch.no_grad():
-            # Weight calculation in fp32 for numerical stability
-            g_fp32 = g_i.float()  # [C,T_i,H_i,W_i]
-            ref_fp32 = ref_i.float()  # [C,T_i,H_i,W_i]
-
-            # Mean absolute difference over generated frames only (avoid inflation
-            # from conditioned frames where gen ≈ teacher ≈ clean data)
-            if loss_mask is not None:
-                mask_i = loss_mask[i].expand_as(g_fp32)  # [C,T_i,H_i,W_i]
-                diff_abs_mean = ((g_fp32 - ref_fp32).abs() * mask_i).sum() / mask_i.sum().clamp(min=1)  # scalar
-            else:
-                diff_abs_mean = (g_fp32 - ref_fp32).abs().mean()  # scalar
-            if reduction == "per_instance_sum":
-                w = 1.0 / diff_abs_mean.clamp(min=1e-5)  # scalar
-            else:
-                w = 1.0 / (diff_abs_mean + 1e-6)  # scalar
-
-            if additional_scale is not None:
-                w = w * additional_scale[i].float()  # scalar
-
-            w = w.to(dtype=g_i.dtype)  # scalar
-
-            weighted_grad = grad_i * w  # [C,T_i,H_i,W_i]
-            if reduction == "per_instance_sum":
-                has_nonfinite_weighted_grad = ~torch.isfinite(weighted_grad).all()  # scalar
-                weighted_grad = torch.where(
-                    has_nonfinite_weighted_grad,
-                    torch.zeros_like(weighted_grad),
-                    weighted_grad,
-                )  # [C,T_i,H_i,W_i]
-            pseudo_target = g_i - weighted_grad  # [C,T_i,H_i,W_i]
+        pseudo_target = make_vsd_pseudo_target(
+            g_i,
+            grad_i,
+            ref_i,
+            loss_mask=loss_mask[i] if loss_mask is not None else None,
+            additional_scale=additional_scale[i] if additional_scale is not None else None,
+            reduction=reduction,
+        )  # [C,T_i,H_i,W_i]
 
         if loss_mask is not None:
             mask_i = loss_mask[i].expand_as(g_i)  # [C,T_i,H_i,W_i]
@@ -168,3 +194,30 @@ def variational_score_distillation_loss_from_gradient(
         per_sample_losses.append(loss_i)
 
     return torch.stack(per_sample_losses).mean()  # scalar
+
+
+def compute_endpoint_consistency_loss(
+    endpoint: list[torch.Tensor],  # list of [C,T,H,W] or [1,C,T,H,W]
+    target: list[torch.Tensor],  # list of [C,T,H,W] or [1,C,T,H,W]
+    condition_mask: list[torch.Tensor],  # list of [T,1,1]
+    *,
+    detach_target: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute endpoint MSE: mean over C/H/W, sum over generated T."""
+    losses = []
+    for endpoint_i, target_i, condition_i in zip(endpoint, target, condition_mask):
+        endpoint_value = endpoint_i.float()  # [C,T,H,W] or [1,C,T,H,W]
+        target_value = target_i.detach().float() if detach_target else target_i.float()  # [C,T,H,W] or [1,C,T,H,W]
+        noisy_mask = 1.0 - condition_i.to(device=endpoint_i.device, dtype=torch.float32)  # [T,1,1]
+        if endpoint_value.ndim == 5:
+            noisy_mask = noisy_mask.unsqueeze(0).unsqueeze(1)  # [1,1,T,1,1]
+            channel_spatial_count = endpoint_value.shape[1] * endpoint_value.shape[3] * endpoint_value.shape[4]
+        elif endpoint_value.ndim == 4:
+            noisy_mask = noisy_mask.unsqueeze(0)  # [1,T,1,1]
+            channel_spatial_count = endpoint_value.shape[0] * endpoint_value.shape[2] * endpoint_value.shape[3]
+        else:
+            raise ValueError(f"dCM endpoint tensors must be 4D or 5D, got shape {tuple(endpoint_i.shape)}.")
+        sqerr = (endpoint_value - target_value) ** 2  # [C,T,H,W] or [1,C,T,H,W]
+        losses.append((sqerr * noisy_mask).sum() / channel_spatial_count)  # []
+    per_instance = torch.stack(losses)  # [B]
+    return per_instance.mean(), per_instance  # [], [B]

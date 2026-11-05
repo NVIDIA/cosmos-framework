@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Exact and overlapping maskless modes against independent dense edge counts and gradients."""
+"""Maskless attention against independent exact dense edge counts and gradients."""
 
 import math
 from typing import Any
@@ -10,10 +10,11 @@ import pytest
 import torch
 
 from cosmos_framework.configs.base.defaults.multiview_attention import (
+    CrossViewTemporalWindowConfig,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
+    SameViewTemporalWindowConfig,
     TemporalWindow,
-    temporal_window_bounds,
 )
 from cosmos_framework.model.generator.mot import multiview_maskless_attention as maskless
 from cosmos_framework.model.generator.mot.flex_attention import _multiview_pair_predicate, _StreamFields
@@ -56,6 +57,89 @@ def _reference_merge(
     return out, normalizers.logsumexp(0)  # [1,N,H,D], [1,N,H]
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+def test_neighborhood_shared_inputs_match_dense_outputs_and_gradients(
+    monkeypatch: pytest.MonkeyPatch, control_attends_sensor: bool
+) -> None:
+    """Sharing role inputs across window edges preserves their accumulated gradients."""
+
+    def full_neighborhood_attention(
+        q: torch.Tensor,  # [B,F,Y,X,H,D]
+        k: torch.Tensor,  # [B,F,Y,X,Hkv,D]
+        v: torch.Tensor,  # [B,F,Y,X,Hkv,D]
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:  # [B,F,Y,X,H,D], [B,F,Y,X,H]
+        # Full-sized centered windows are ordinary per-view attention. Reuse that
+        # reference without emulating NATTEN's unrelated boundary behavior on CPU.
+        assert kwargs["window_size"] == tuple(q.shape[1:4])
+        assert kwargs["is_causal"] == (False, False, False)
+        tokens = math.prod(q.shape[1:4])
+        offsets = torch.arange(q.shape[0] + 1, dtype=torch.int32) * tokens  # [B+1]
+        out, lse = _reference_attention(
+            q.reshape(1, -1, q.shape[-2], q.shape[-1]),  # [1,B*F*Y*X,H,D]
+            k.reshape(1, -1, k.shape[-2], k.shape[-1]),  # [1,B*F*Y*X,Hkv,D]
+            v.reshape(1, -1, v.shape[-2], v.shape[-1]),  # [1,B*F*Y*X,Hkv,D]
+            cumulative_seqlen_Q=offsets,
+            cumulative_seqlen_KV=offsets,
+        )  # [1,B*F*Y*X,H,D], [1,B*F*Y*X,H]
+        return out.reshape_as(q), lse.reshape(q.shape[:-1])  # [B,F,Y,X,H,D], [B,F,Y,X,H]
+
+    monkeypatch.setattr(maskless, "attention", _reference_attention)
+    monkeypatch.setattr(maskless, "multi_dimensional_attention", full_neighborhood_attention)
+    monkeypatch.setattr(maskless, "merge_attentions", _reference_merge)
+    torch.manual_seed(81)
+    views, frames, spatial, text_tokens = 2, 3, 2, 3
+    gen_tokens = 2 * views * frames * spatial
+    tensors = [
+        torch.randn(text_tokens + gen_tokens, heads, 8, dtype=torch.float64, requires_grad=True)  # [N,H,D]
+        for heads in (2, 1, 1)
+    ]
+    packs = [
+        sequence_pack_from_packed_sequence(
+            tensor,
+            attn_modes=["causal", "full"],
+            split_lens=[text_tokens, gen_tokens],
+            sample_lens=[text_tokens + gen_tokens],
+            packed_und_token_indexes=torch.arange(text_tokens),  # [N_text]
+            packed_gen_token_indexes=torch.arange(text_tokens, text_tokens + gen_tokens),  # [N_gen]
+        )
+        for tensor in tensors
+    ]
+    plan = maskless.build_multiview_maskless_plan(
+        [views, views],
+        [(views * frames, 1, spatial)] * 2,
+        device=torch.device("cpu"),
+        items_per_sample=[2],
+        is_control=[True, False],
+        control_attends_sensor=control_attends_sensor,
+        seconds_per_frame=[0.1, 0.1],
+        same_view_temporal_window=SameViewTemporalWindowConfig(sensor_to_control_bounds=(-0.4, 0.4)),
+        padded_gen_tokens=get_full_only_seq(packs[0])[0].shape[0],
+    )
+    layout: list[Token] = [
+        (0, 0, view, float(frame), control)
+        for control in (True, False)
+        for view in range(views)
+        for frame in range(frames)
+        for _ in range(spatial)
+    ]
+    run_attention = (
+        torch.compile(maskless.multiview_maskless_gen_attention, backend="eager", fullgraph=True)
+        if control_attends_sensor
+        else maskless.multiview_maskless_gen_attention
+    )
+    actual = run_attention(*packs, plan=plan)[:gen_tokens]  # [N_gen,H*D]
+    expected = _dense_reference(packs, layout, [(0, -1)] * text_tokens, control_attends_sensor)  # [N_gen,H*D]
+    torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
+    upstream = torch.randn_like(expected)  # [N_gen,H*D]
+    actual_grads = torch.autograd.grad(actual, tensors, upstream, retain_graph=True)  # each [N,H,D]
+    expected_grads = torch.autograd.grad(expected, tensors, upstream)  # each [N,H,D]
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        torch.testing.assert_close(actual_grad, expected_grad, atol=1e-9, rtol=1e-9)
+
+
 def _batch(
     case: str,
     device: torch.device,
@@ -64,27 +148,35 @@ def _batch(
     control_attends_sensor: bool,
     per_view_captions: bool,
     window: TemporalWindow | None = None,
-    deduplicate_cross_view: bool = True,
     include_first_frame: bool = False,
+    control_keys: bool = False,
+    control_queries: bool = False,
 ) -> tuple[list[torch.Tensor], list[SequencePack], maskless.MultiviewMasklessPlan, list[Token], list[tuple[int, int]]]:
-    # Item = (views, frames, spatial tokens, modality axis, control, seconds/frame).
-    rgb = (7, 5, 2, 0, False, 2 / 15)
+    # Item = (views, frames, spatial tokens, modality axis, control, seconds/frame, frame offset).
+    rgb = (7, 5, 2, 0, False, 2 / 15, 0)
     if case == "rgb":
         samples = [[rgb]]
     elif case == "rgb11":
-        samples = [[(11, 5, 2, 0, False, 2 / 15)]]
+        samples = [[(11, 5, 2, 0, False, 2 / 15, 0)]]
     elif case == "single":
-        samples = [[(1, 3, 2, 0, False, 2 / 15)]]
+        samples = [[(1, 3, 2, 0, False, 2 / 15, 0)]]
     elif case == "ragged_joint":
         samples = [
             [
-                (3, 3, 2, 0, True, 2 / 15),
-                (3, 3, 2, 0, False, 2 / 15),
-                (1, 4, 1, 1, True, 0.1),
-                (1, 4, 1, 1, False, 0.1),
+                (3, 3, 2, 0, True, 2 / 15, 0),
+                (3, 3, 2, 0, False, 2 / 15, 0),
+                (1, 4, 1, 1, True, 0.1, 0),
+                (1, 4, 1, 1, False, 0.1, 0),
             ],
-            [(1, 2, 3, 0, False, 2 / 15)],
-            [(2, 4, 1, 0, False, 2 / 15)],
+            [(1, 2, 3, 0, False, 2 / 15, 0)],
+            [(2, 4, 1, 0, False, 2 / 15, 0)],
+        ]
+    elif case == "rgb_action":
+        # A camera-pose action control after its camera target: frame-rate rows from video
+        # frame 1 on, against latent frames four video frames apart, and a single-camera sample.
+        samples = [
+            [(3, 3, 2, 0, False, 4 / 30, 0), (3, 8, 1, 0, True, 1 / 30, 1)],
+            [(1, 3, 2, 0, False, 4 / 30, 0), (1, 8, 1, 0, True, 1 / 30, 1)],
         ]
     else:
         raise ValueError(case)
@@ -101,20 +193,22 @@ def _batch(
         captions.append(caption)
         text_layout.extend((sample, view) for view, length in caption for _ in range(length))
         und_len = sum(length for _, length in caption)
-        gen_len = sum(views * frames * spatial for views, frames, spatial, _, _, _ in items)
+        gen_len = sum(views * frames * spatial for views, frames, spatial, *_ in items)
         split_lens.extend((und_len, gen_len))
         sample_lens.append(und_len + gen_len)
         und_indices.extend(range(cursor, cursor + und_len))
         gen_indices.extend(range(cursor + und_len, cursor + und_len + gen_len))
         cursor += und_len + gen_len
-        for views, frames, spatial, axis, control, period in items:
-            frame_times = (torch.arange(frames, dtype=torch.float32, device="cpu") * period).tolist()  # [F] -> list
+        for views, frames, spatial, axis, control, period, offset in items:
+            frame_times = (
+                (torch.arange(frames, dtype=torch.float32, device="cpu") + offset) * period
+            ).tolist()  # [F] -> list
             for view in range(views):
                 for frame in range(frames):
                     instant = (
                         frame_times[frame]
                         if window is not None
-                        else math.floor((frame + 0.5) * period / items[0][5] + 1e-6)
+                        else math.floor((frame + offset + 0.5) * period / items[0][5] + 1e-6)
                     )
                     layout.extend([(sample, axis, view, instant, control)] * spatial)
     tensors = [
@@ -138,18 +232,21 @@ def _batch(
     items = [item for sample_items in samples for item in sample_items]
     plan = maskless.build_multiview_maskless_plan(
         [item[0] for item in items],
-        [(views * frames, 1, spatial) for views, frames, spatial, _, _, _ in items],
+        [(views * frames, 1, spatial) for views, frames, spatial, *_ in items],
         device=device,
         items_per_sample=[len(sample_items) for sample_items in samples],
         is_control=[item[4] for item in items],
         control_attends_sensor=control_attends_sensor,
         view_axis=[item[3] for item in items],
         seconds_per_frame=[item[5] for item in items],
+        frame_offsets=[item[6] for item in items],
+        cross_view_key_only=[item[4] for item in items] if control_keys else None,
+        cross_view_control_queries=[item[4] for item in items] if control_queries else None,
         captions=captions if per_view_captions else None,
         padded_gen_tokens=get_full_only_seq(packs[0])[0].shape[0],
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=window,
-        decomposed_temporal_window_includes_first_frame=include_first_frame,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(
+            bounds=window, includes_first_frame=include_first_frame
+        ),
     )
     return tensors, packs, plan, layout, text_layout
 
@@ -159,8 +256,9 @@ def _pair_multiplicity(
     key: Token,
     control_attends_sensor: bool,
     window: TemporalWindow | None = None,
-    deduplicate_cross_view: bool = True,
     include_first_frame: bool = False,
+    control_keys: bool = False,
+    control_queries: bool = False,
 ) -> int:
     qs, qa, qv, qt, qc = query
     ks, ka, kv, kt, kc = key
@@ -172,8 +270,11 @@ def _pair_multiplicity(
         in_time = window[0] - 1e-4 <= kt - qt <= window[1] + 1e-4 or (include_first_frame and kt == 0.0)
     if qs != ks:
         return 0
-    count = int(same_view and (not qc or kc or control_attends_sensor)) + int(not qc and not kc and in_time)
-    return int(count > 0) if deduplicate_cross_view else count
+    # Control tokens query the cross-view pass only with ``control_queries``, and then key only
+    # other control tokens; with ``control_keys`` they key sensor queries.
+    cross_pair = (not qc and (not kc or control_keys)) or (qc and kc and control_queries)
+    count = int(same_view and (not qc or kc or control_attends_sensor)) + int(cross_pair and in_time)
+    return int(count > 0)
 
 
 def _dense_reference(
@@ -182,17 +283,14 @@ def _dense_reference(
     text_layout: list[tuple[int, int]],
     control_attends_sensor: bool,
     window: TemporalWindow | None = None,
-    deduplicate_cross_view: bool = True,
     include_first_frame: bool = False,
+    control_keys: bool = False,
+    control_queries: bool = False,
 ) -> torch.Tensor:  # [N_gen,H*D]
     q, k, v = [get_full_only_seq(pack)[0][: len(layout)].double() for pack in packs]  # each [N_gen,H,D]
     text_k, text_v = [get_causal_seq(pack)[0][: len(text_layout)].double() for pack in packs[1:]]  # each [N_text,Hkv,D]
     keys = torch.cat((k, text_k)).repeat_interleave(q.shape[1] // k.shape[1], dim=1)  # [N_keys,H,D]
     values = torch.cat((v, text_v)).repeat_interleave(q.shape[1] // v.shape[1], dim=1)  # [N_keys,H,D]
-    # Both modes bypass the temporal branch for single-view-only samples.
-    group_counts = {
-        sample: len({(axis, view) for s, axis, view, _, _ in layout if s == sample}) for sample, *_ in layout
-    }
     multiplicity = torch.tensor(
         [
             [
@@ -201,8 +299,9 @@ def _dense_reference(
                     key,
                     control_attends_sensor,
                     window,
-                    deduplicate_cross_view or group_counts[query[0]] == 1,
                     include_first_frame,
+                    control_keys,
+                    control_queries,
                 )
                 for key in layout
             ]
@@ -221,7 +320,6 @@ def _dense_reference(
 @pytest.mark.parametrize("case", ["rgb", "rgb11", "single", "ragged_joint"])
 @pytest.mark.parametrize("control_attends_sensor", [True, False])
 @pytest.mark.parametrize("per_view_captions", [True, False])
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
 @pytest.mark.parametrize(
     "window",
     [None, (0.0, 0.0), (-0.1, 0.0), (-0.4, 0.0), (-0.4, 0.4), (-0.2, 0.2), (-0.4, 0.1), (0.1, 0.3), (10.0, 11.0)],
@@ -233,11 +331,65 @@ def test_maskless_forward_and_backward(
     control_attends_sensor: bool,
     per_view_captions: bool,
     window: TemporalWindow | None,
-    deduplicate_cross_view: bool,
     include_first_frame: bool,
 ) -> None:
     if include_first_frame and window is None:
         pytest.skip("The first-frame rule widens a window; test_first_frame_rule_requires_a_window covers None.")
+    _check_forward_backward_and_edges(
+        monkeypatch,
+        case,
+        control_attends_sensor,
+        per_view_captions,
+        window,
+        include_first_frame,
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("control_keys", [True, False])
+@pytest.mark.parametrize("control_queries", [True, False])
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+@pytest.mark.parametrize("per_view_captions", [True, False])
+@pytest.mark.parametrize(
+    "window", [None, (0.0, 0.0), (-0.04, 0.04), (-0.1, 0.0), (-0.67, 0.67), (0.05, 0.2), (10.0, 11.0)]
+)
+@pytest.mark.parametrize("include_first_frame", [False, True])
+def test_cross_view_action_keys_forward_and_backward(
+    monkeypatch: pytest.MonkeyPatch,
+    control_keys: bool,
+    control_queries: bool,
+    control_attends_sensor: bool,
+    per_view_captions: bool,
+    window: TemporalWindow | None,
+    include_first_frame: bool,
+) -> None:
+    """Action rows reach other views by capture time: as camera queries' keys, and as queries of each other."""
+    if window is None and include_first_frame:
+        pytest.skip("The first-frame rule widens a window; test_first_frame_rule_requires_a_window covers None.")
+    _check_forward_backward_and_edges(
+        monkeypatch,
+        "rgb_action",
+        control_attends_sensor,
+        per_view_captions,
+        window,
+        include_first_frame,
+        control_keys=control_keys,
+        control_queries=control_queries,
+    )
+
+
+def _check_forward_backward_and_edges(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    control_attends_sensor: bool,
+    per_view_captions: bool,
+    window: TemporalWindow | None,
+    include_first_frame: bool,
+    *,
+    control_keys: bool = False,
+    control_queries: bool = False,
+) -> None:
     monkeypatch.setattr(maskless, "attention", _reference_attention)
     monkeypatch.setattr(maskless, "merge_attentions", _reference_merge)
     torch.manual_seed(51)
@@ -248,12 +400,13 @@ def test_maskless_forward_and_backward(
         control_attends_sensor=control_attends_sensor,
         per_view_captions=per_view_captions,
         window=window,
-        deduplicate_cross_view=deduplicate_cross_view,
         include_first_frame=include_first_frame,
+        control_keys=control_keys,
+        control_queries=control_queries,
     )
     actual = maskless.multiview_maskless_gen_attention(*packs, plan=plan)  # [N_padded,H*D]
     expected = _dense_reference(
-        packs, layout, text_layout, control_attends_sensor, window, deduplicate_cross_view, include_first_frame
+        packs, layout, text_layout, control_attends_sensor, window, include_first_frame, control_keys, control_queries
     )  # [N_gen,H*D]
     torch.testing.assert_close(actual[: len(layout)], expected, atol=1e-10, rtol=1e-10)
     assert torch.count_nonzero(actual[len(layout) :]) == 0
@@ -267,15 +420,15 @@ def test_maskless_forward_and_backward(
 
     # Check multiplicity separately from numerics, including odd view counts,
     # distinct sensor clocks and single-view samples within a mixed batch.
-    if not deduplicate_cross_view and window is None:
-        return  # Legacy grouping was already checked numerically above.
     group_counts = {
         sample: len({(axis, view) for s, axis, view, _, _ in layout if s == sample}) for sample, *_ in layout
     }
     edges: set[tuple[int, int]] = set()
     for partition in plan.cross_view_partitions:
         assert len(set(partition.query_indices.tolist())) == partition.query_indices.numel()
-        if window is None:
+        if window is None and not (control_keys and control_queries):
+            # Instants are disjoint, so a key repeats only when control rows key both an
+            # instant's camera queries and its control queries.
             assert len(set(partition.key_indices.tolist())) == partition.key_indices.numel()
         for qs, qe, ks, ke in zip(
             partition.query_offsets[:-1],
@@ -292,17 +445,17 @@ def test_maskless_forward_and_backward(
         (qi, ki)
         for qi, query in enumerate(layout)
         for ki, key in enumerate(layout)
-        if not query[4]
-        and not key[4]
+        if ((not query[4] and (not key[4] or control_keys)) or (query[4] and key[4] and control_queries))
         and group_counts[query[0]] > 1
-        and (not deduplicate_cross_view or query[1:3] != key[1:3])
-        # Subtract the same-view contribution to isolate this temporal pass.
-        and _pair_multiplicity(query, key, control_attends_sensor, window, False, include_first_frame)
-        > int(query[0] == key[0] and query[1:3] == key[1:3])
+        and query[1:3] != key[1:3]
+        # Exclude the same-view contribution to isolate this temporal pass.
+        and _pair_multiplicity(
+            query, key, control_attends_sensor, window, include_first_frame, control_keys, control_queries
+        )
     }
     assert edges == expected_edges
     max_depth = math.ceil(math.log2(max(group_counts.values())))
-    assert len(plan.cross_view_partitions) <= (max_depth if deduplicate_cross_view else 1)
+    assert len(plan.cross_view_partitions) <= max_depth
 
 
 @pytest.mark.L0
@@ -319,7 +472,7 @@ def test_hierarchy_covers_each_directed_view_pair_once(views: int) -> None:
         for start, end in cells[view]:
             labels.update({index: view for index in range(start, end)})
         cursor += view + 5
-    partitions = maskless._cross_view_partitions({(0, 0): cells}, torch.device("cpu"), deduplicate_cross_view=True)
+    partitions = maskless._cross_view_partitions({(0, 0): cells}, torch.device("cpu"), CrossViewTemporalWindowConfig())
     assert len(partitions) == math.ceil(math.log2(views))
     observed: set[tuple[int, int]] = set()
     for partition in partitions:
@@ -342,11 +495,9 @@ def test_hierarchy_covers_each_directed_view_pair_once(views: int) -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("window", [None, (-0.4, 0.0), (-0.4, 0.2)])
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
 def test_maskless_compiles_as_one_graph(
     monkeypatch: pytest.MonkeyPatch,
     window: TemporalWindow | None,
-    deduplicate_cross_view: bool,
 ) -> None:
     monkeypatch.setattr(maskless, "attention", _reference_attention)
     monkeypatch.setattr(maskless, "merge_attentions", _reference_merge)
@@ -357,7 +508,6 @@ def test_maskless_compiles_as_one_graph(
         control_attends_sensor=False,
         per_view_captions=True,
         window=window,
-        deduplicate_cross_view=deduplicate_cross_view,
     )
     compiled = torch.compile(maskless.multiview_maskless_gen_attention, backend="eager", fullgraph=True)
     actual = compiled(*packs, plan=plan)  # [N_padded,H*D]
@@ -367,49 +517,132 @@ def test_maskless_compiles_as_one_graph(
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_exact_mode_is_opt_in() -> None:
+def test_cross_view_action_flags_are_opt_in() -> None:
     config = MultiviewAttentionConfig(backend="maskless")
-    assert config.deduplicate_cross_view is False
-    assert config.mask.decomposed_temporal_window_seconds is None
-    assert config.mask.decomposed_temporal_window_includes_first_frame is False
+    assert config.maskless_cross_view_attends_action is False
+    assert config.maskless_cross_view_action_attends_action is False
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("name", ["cross_view_key_only", "cross_view_control_queries"])
+def test_cross_view_control_items_are_validated(name: str) -> None:
+    plan_args: dict[str, Any] = dict(
+        num_views=[2, 2],
+        token_shapes=[(4, 1, 1), (6, 1, 1)],
+        device=torch.device("cpu"),
+        seconds_per_frame=[0.1, 0.05],
+        items_per_sample=[2],
+        is_control=[False, True],
+        control_attends_sensor=True,
+    )
+    with pytest.raises(ValueError, match="marks a sensor item"):
+        maskless.build_multiview_maskless_plan(**plan_args, **{name: [True, True]})
+    for refused in ({"attention_scope": "same_view"}, {"cross_view_band_radius": 1}, {"include_frame_zero": True}):
+        with pytest.raises(ValueError, match=f"{name} adds control tokens"):
+            maskless.build_multiview_maskless_plan(**plan_args, **refused, **{name: [False, True]})
+    with pytest.raises(ValueError, match="describes 1"):
+        maskless.build_multiview_maskless_plan(**plan_args, **{name: [True]})
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("flag", ["maskless_cross_view_attends_action", "maskless_cross_view_action_attends_action"])
+def test_cross_view_action_flags_are_refused_where_unsupported(flag: str) -> None:
+    for window in (None, CrossViewTemporalWindowConfig(bounds=(-0.67, 0.67), includes_first_frame=True)):
+        supported = MultiviewAttentionConfig(
+            backend="maskless",
+            mask=MultiviewAttentionMaskConfig(
+                attention_scope="decomposed", cross_view_temporal_window=window or CrossViewTemporalWindowConfig()
+            ),
+            **{flag: True},
+        )
+        assert maskless.maskless_unavailable_reason(supported) is None
+    unsupported = [
+        MultiviewAttentionConfig(
+            backend="maskless",
+            mask=MultiviewAttentionMaskConfig(attention_scope="same_view"),
+            **{flag: True},
+        ),
+        MultiviewAttentionConfig(
+            backend="maskless",
+            geometry_position_encoding="rigrope_cross_view",
+            mask=MultiviewAttentionMaskConfig(attention_scope="decomposed"),
+            **{flag: True},
+        ),
+        MultiviewAttentionConfig(
+            backend="maskless",
+            maskless_cross_view_band_radius=1,
+            mask=MultiviewAttentionMaskConfig(attention_scope="decomposed"),
+            **{flag: True},
+        ),
+        MultiviewAttentionConfig(
+            backend="maskless",
+            maskless_cross_view_include_frame_zero=True,
+            mask=MultiviewAttentionMaskConfig(attention_scope="decomposed"),
+            **{flag: True},
+        ),
+        *(
+            MultiviewAttentionConfig(
+                backend="maskless",
+                mask=MultiviewAttentionMaskConfig(
+                    attention_scope="decomposed",
+                    same_view_temporal_window=SameViewTemporalWindowConfig(**{bounds: (-0.4, 0.4)}),
+                ),
+                **{flag: True},
+            )
+            for bounds in (
+                "sensor_to_sensor_bounds",
+                "sensor_to_control_bounds",
+                "control_to_control_bounds",
+                "control_to_sensor_bounds",
+            )
+        ),
+    ]
+    for config in unsupported:
+        reason = maskless.maskless_unavailable_reason(config)
+        assert reason is not None and flag in reason
+    for preference in ("auto", "flex_triton", "flex_flash"):
+        with pytest.raises(ValueError, match=f"{flag} requires backend='maskless'"):
+            resolve_multiview_backend(
+                torch.device("cpu"),
+                preference,
+                config=MultiviewAttentionConfig(backend=preference, **{flag: True}),
+            )
 
 
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_first_frame_rule_requires_a_window() -> None:
-    with pytest.raises(ValueError, match="needs decomposed_temporal_window_seconds"):
+    with pytest.raises(ValueError, match="needs cross_view_temporal_window.bounds"):
         maskless.build_multiview_maskless_plan(
             [2],
             [(6, 1, 1)],
             device=torch.device("cpu"),
             seconds_per_frame=[0.1],
-            deduplicate_cross_view=True,
-            decomposed_temporal_window_includes_first_frame=True,
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(includes_first_frame=True),
         )
     for scope, window in (("decomposed", None), ("same_view", (-0.4, 0.0))):
         config = MultiviewAttentionConfig(
             backend="maskless",
-            deduplicate_cross_view=True,
             mask=MultiviewAttentionMaskConfig(
                 attention_scope=scope,
-                decomposed_temporal_window_seconds=window,
-                decomposed_temporal_window_includes_first_frame=True,
+                cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=window, includes_first_frame=True),
             ),
         )
         reason = maskless.maskless_unavailable_reason(config)
-        assert reason is not None and "decomposed_temporal_window_includes_first_frame" in reason
+        assert reason is not None and "cross_view_temporal_window.includes_first_frame" in reason
 
 
 @pytest.mark.L0
 @pytest.mark.CPU
-@pytest.mark.parametrize("preference", ["auto", "flex_triton", "flex_flash"])
+@pytest.mark.parametrize("preference", ["flex_triton", "flex_flash"])
 def test_first_frame_rule_is_refused_by_the_mask_backends(preference: str) -> None:
     config = MultiviewAttentionConfig(
         backend=preference,
         mask=MultiviewAttentionMaskConfig(
             attention_scope="decomposed",
-            decomposed_temporal_window_seconds=(-0.4, 0.0),
-            decomposed_temporal_window_includes_first_frame=True,
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=(-0.4, 0.0), includes_first_frame=True),
         ),
     )
     with pytest.raises(ValueError, match="requires backend='maskless'"):
@@ -421,8 +654,7 @@ def test_first_frame_rule_is_refused_by_the_mask_backends(preference: str) -> No
 @pytest.mark.parametrize(
     "window", [(0.0, 0.0), (-0.1, 0.0), (-0.4, 0.0), (-1.7, 0.0), (-0.4, 0.4), (-0.2, 0.2), (-0.4, 0.1), (0.1, 0.3)]
 )
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
-def test_window_pair_counts_match_actual_flex_predicate(window: TemporalWindow, deduplicate_cross_view: bool) -> None:
+def test_window_pair_counts_match_actual_flex_predicate(window: TemporalWindow) -> None:
     # Camera and LiDAR clocks, plus boundary cases on both sides of the 1e-4
     # tolerance. Distinct axes keep each sensor's physical identity separate.
     rates = [2 / 15, 0.1, 0.39995, 0.40005, 0.40015]
@@ -438,8 +670,7 @@ def test_window_pair_counts_match_actual_flex_predicate(window: TemporalWindow, 
         items_per_sample=[len(frames)],
         view_axis=list(range(len(frames))),
         seconds_per_frame=rates,
-        deduplicate_cross_view=deduplicate_cross_view,
-        decomposed_temporal_window_seconds=window,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=window),
     )
     fields = _StreamFields(
         sample_id=torch.zeros_like(view_ids),  # [N]
@@ -468,45 +699,19 @@ def test_window_pair_counts_match_actual_flex_predicate(window: TemporalWindow, 
             key = partition.key_indices[ks:ke]  # [Nk]
             counts[query[:, None], key[None, :]] += 1  # [N,N]
     expected_counts = expected.int()  # [N,N]
-    if not deduplicate_cross_view:
-        bounds = temporal_window_bounds(window)
-        assert bounds is not None
-        start, end = torch.tensor(bounds, dtype=torch.float32).unbind()  # each []
-        offsets = times[None, :] - times[:, None]  # [N,N]
-        overlap = (
-            (view_ids[:, None] == view_ids[None, :]) & (offsets >= start - 1e-4) & (offsets <= end + 1e-4)
-        )  # [N,N]
-        expected_counts += overlap.int()  # [N,N]
     torch.testing.assert_close(counts, expected_counts, atol=0, rtol=0)
-    assert plan.decomposed_temporal_window_seconds == window
+    assert plan.cross_view_temporal_window.bounds == window
 
 
 @pytest.mark.L0
 @pytest.mark.CPU
-@pytest.mark.parametrize("window", [0, 0.4, -0.1, float("nan"), float("inf")])
-def test_window_rejects_scalar_duration(window: Any) -> None:
-    with pytest.raises(ValueError, match="requires two finite bounds"):
-        maskless.build_multiview_maskless_plan(
-            [2],
-            [(6, 1, 1)],
-            device=torch.device("cpu"),
-            seconds_per_frame=[0.1],
-            deduplicate_cross_view=True,
-            decomposed_temporal_window_seconds=window,
-        )
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
-def test_window_requires_explicit_clock(deduplicate_cross_view: bool) -> None:
+def test_window_requires_explicit_clock() -> None:
     with pytest.raises(ValueError, match="requires explicit seconds_per_frame"):
         maskless.build_multiview_maskless_plan(
             [2],
             [(6, 1, 1)],
             device=torch.device("cpu"),
-            deduplicate_cross_view=deduplicate_cross_view,
-            decomposed_temporal_window_seconds=(-0.4, 0.0),
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=(-0.4, 0.0)),
         )
 
 
@@ -516,12 +721,10 @@ def test_window_requires_explicit_clock(deduplicate_cross_view: bool) -> None:
 @pytest.mark.parametrize("case", ["rgb", "rgb11", "single", "ragged_joint"])
 @pytest.mark.parametrize("compile_graph", [False, True])
 @pytest.mark.parametrize("window", [None, (-0.4, 0.0), (-0.4, 0.2), (-0.2, 0.2)])
-@pytest.mark.parametrize("deduplicate_cross_view", [True, False])
 def test_maskless_real_kernel_gradients(
     case: str,
     compile_graph: bool,
     window: TemporalWindow | None,
-    deduplicate_cross_view: bool,
 ) -> None:
     torch.manual_seed(51)
     tensors, packs, plan, layout, text_layout = _batch(
@@ -531,7 +734,6 @@ def test_maskless_real_kernel_gradients(
         control_attends_sensor=False,
         per_view_captions=True,
         window=window,
-        deduplicate_cross_view=deduplicate_cross_view,
     )
     forward = maskless.multiview_maskless_gen_attention
     if compile_graph:
@@ -540,7 +742,7 @@ def test_maskless_real_kernel_gradients(
         torch.compiler.reset()
         forward = torch.compile(forward, fullgraph=True)
     actual = forward(*packs, plan=plan)[: len(layout)]  # [N_gen,H*D]
-    expected = _dense_reference(packs, layout, text_layout, False, window, deduplicate_cross_view)  # [N_gen,H*D]
+    expected = _dense_reference(packs, layout, text_layout, False, window)  # [N_gen,H*D]
     torch.testing.assert_close(actual.double(), expected, atol=2e-2, rtol=2e-2)
     upstream = torch.randn_like(actual)  # [N_gen,H*D]
     # Evaluate the reference gradients before the real merge patches saved storage.

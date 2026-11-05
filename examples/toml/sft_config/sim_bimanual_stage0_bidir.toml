@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Required: COSMOS_SIM_BIMANUAL_LOCAL_BUNDLE and COSMOS_SIM_BIMANUAL_GA_CHECKPOINT.
+# A completed bundle with one supported source is sufficient; configured source weights are retained.
+# Fresh weight-only warm start: strict regular weights, new action I/O, then EMA copy.
+[job]
+task = "simulation"
+experiment = "sim_local_bimanual_stage0_bidir"
+name = "sim_bimanual_stage0_bidir"
+wandb_mode = "disabled"

@@ -3,6 +3,7 @@
 
 """Preprocess dataset for inference."""
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast, get_args
 
@@ -25,6 +26,12 @@ from cosmos_framework.inference.dataset_samples import (
     DatasetSamples,
     IterableDatasetSamples,
     MapDatasetSamples,
+)
+from cosmos_framework.inference.sample_selection import (
+    DEFAULT_SAMPLE_SELECTION_SEED,
+    DEFAULT_SAMPLE_SELECTION_STRATEGY,
+    SampleSelectionStrategy,
+    select_limited_indices,
 )
 from cosmos_framework.scripts.dataset_utils import (
     DEFAULT_GCS_CREDENTIALS,
@@ -95,6 +102,18 @@ def _select_dataloader(
     return key, dl_cfg, ds_cfg, inner
 
 
+def _apply_dataset_kwargs(target: dict[str, Any], overrides: dict[str, Any], *, prefix: str = "") -> None:
+    """Apply dataset kwargs to a Hydra dataset config, merging nested dicts."""
+    for key, value in overrides.items():
+        display_key = f"{prefix}.{key}" if prefix else key
+        current = target.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            _apply_dataset_kwargs(current, value, prefix=display_key)
+            continue
+        logger.info(f"Overriding dataset {display_key}={current!r} -> {value!r}")
+        target[key] = value
+
+
 class DatasetArgs(pydantic.BaseModel):
     """Arguments controlling which dataset to load and how to prepare it.
 
@@ -121,7 +140,15 @@ class DatasetArgs(pydantic.BaseModel):
     score pre-generated videos against a GT directory (no inference)."""
 
     num_samples: int | None = None
-    """Maximum number of samples to load."""
+    """Maximum number of samples to load.
+
+    The subset is chosen by ``sample_selection_strategy``; by default it is a deterministic
+    pseudo-random subset (stable for a given dataset label and seed), not the first ``num_samples``
+    indices. Pass ``--dataset.sample-selection-strategy first`` for the leading samples."""
+    sample_selection_strategy: SampleSelectionStrategy = DEFAULT_SAMPLE_SELECTION_STRATEGY
+    """How to select ``num_samples`` from the candidate sample ids."""
+    sample_selection_seed: int = DEFAULT_SAMPLE_SELECTION_SEED
+    """Seed used when ``sample_selection_strategy`` is ``deterministic_random``."""
     sample_stride: int = 1
     """Stride between sample indices."""
 
@@ -142,7 +169,12 @@ class DatasetArgs(pydantic.BaseModel):
     """Override the inner dataset's name field after narrowing."""
     dataset_kwargs: dict[str, Any] = {}
     """Extra keyword arguments applied to the inner dataset config before instantiation.
-    Useful for overriding constructor parameters like ``snap_to_subtask`` or ``max_subtasks_per_episode``."""
+    Useful for overriding constructor parameters like ``snap_to_subtask`` or ``max_subtasks_per_episode``.
+    Nested dicts are merged into the existing config instead of replacing it. ``resolution`` is only
+    written when the dataset config already declares it."""
+    transform_kwargs: dict[str, Any] = {}
+    """Extra keyword arguments applied to the outer dataset config (e.g. its transform) before instantiation.
+    Nested dicts are merged into the existing config instead of replacing it."""
     cache_dir: Annotated[ResolvedPath | None, tyro.conf.arg(aliases=("-c",))] = None
     """Local cache directory for GCS downloads. Required when ``gcs_path_map`` triggers a download."""
 
@@ -153,6 +185,42 @@ class DatasetArgs(pydantic.BaseModel):
     def dataset_label(self) -> str:
         """Label used for sample output paths; falls back to the selector when unset."""
         return self.sample_name or self.dataset
+
+
+def disable_text_tokenizers(*transforms: Any) -> None:
+    """Turn off text tokenization on every transform that has it.
+
+    Bound sample transforms are followed back to their owner's transform pipeline.
+    The tokenizer produces ``text_token_ids`` for training only; during inference the
+    model re-tokenizes from the caption string (see
+    ``OmniMoTModel._get_inference_text_tokens``). Leaving it on emits variable-length
+    ``text_token_ids`` that fail to batch, and breaks in environments where
+    ``apply_chat_template`` returns a dict.
+    """
+    for transform in transforms:
+        owner = getattr(transform, "__self__", None)
+        tokenizer_transform = getattr(owner, "transform", None) or transform
+        if tokenizer_transform is not None and hasattr(tokenizer_transform, "text_tokenizer"):
+            tokenizer_transform.text_tokenizer = None
+
+
+def _fixed_resolution(declared: Any) -> str | None:
+    """Return a declared resolution only when it names a single tier.
+
+    A sequence is a multi-resolution policy, not a tier: a dataset may resolve one tier per
+    sample from it, so the clips in one dataset legitimately differ. Forcing the policy on every
+    sample is both wrong and unrepresentable -- ``OmniSampleOverrides.resolution`` is a
+    single-value ``Literal`` and rejects the sequence outright.
+
+    Returning ``None`` here hands the decision to ``DatasetSamples``, which already
+    derives each sample's resolution from its own video shape.
+    """
+    if declared is None or isinstance(declared, str):
+        return declared
+    if isinstance(declared, Sequence):
+        logger.info(f"Dataset declares a multi-resolution policy {tuple(declared)!r}; deriving it per sample.")
+        return None
+    return declared
 
 
 def create_dataset(
@@ -209,10 +277,6 @@ def create_dataset(
             inner_ds = inner_ds[0]
         else:
             raise ValueError("Use --dataset to select a single dataset entry by name.")
-    resolution: str | None = inner_ds.get("resolution") if isinstance(inner_ds, dict) else None
-    # wrap_dataset also accepts a global resolution that individual entries can override
-    if resolution is None:
-        resolution: str | None = dataset_config.get("resolution")
 
     # --- resolve the inner dataset target -------------------------------------
     # Dataset config fields may be nested inside inner_ds["dataset"] when the
@@ -308,11 +372,26 @@ def create_dataset(
         _inner["shuffle"] = False
         logger.info("Overriding dataset shuffle to False for val export")
 
-    # --- apply dataset_kwargs overrides --------------------------------------
-    if args.dataset_kwargs and isinstance(_inner, dict):
-        for key, value in args.dataset_kwargs.items():
-            logger.info(f"Overriding dataset {key}={_inner.get(key)!r} -> {value!r}")
-            _inner[key] = value
+    # --- apply transform_kwargs overrides -------------------------------------
+    if args.transform_kwargs:
+        _apply_dataset_kwargs(dataset_config, args.transform_kwargs)
+
+    # --- apply dataset_kwargs overrides (resolution handled separately) ------
+    # resolution is only written to _inner when the Hydra config already declares it,
+    # so constructors that don't accept it are left untouched.
+    resolution_override: str | None = args.dataset_kwargs.get("resolution")
+    other_kwargs = {k: v for k, v in args.dataset_kwargs.items() if k != "resolution"}
+    if other_kwargs and isinstance(_inner, dict):
+        _apply_dataset_kwargs(_inner, other_kwargs)
+    if resolution_override is not None and isinstance(_inner, dict) and "resolution" in _inner:
+        _inner["resolution"] = resolution_override
+
+    # resolution for the outer transform: kwargs -> inner Hydra config -> outer Hydra config
+    resolution: str | None = resolution_override
+    if resolution is None and isinstance(inner_ds, dict):
+        resolution = _fixed_resolution(inner_ds.get("resolution"))
+    if resolution is None:
+        resolution = _fixed_resolution(dataset_config.get("resolution"))
 
     # --- apply gcs credentials override (internal-only)--------------------
     if isinstance(_inner, dict) and "credential_path" in _inner:
@@ -343,17 +422,17 @@ def create_dataset(
 
     # --- compute sample indices -----------------------------------------------
     sample_ids = list(range(0, dataset_size, args.sample_stride))
-    if args.num_samples:
-        sample_ids = sample_ids[: args.num_samples]
+    sample_ids = select_limited_indices(
+        sample_ids,
+        limit=args.num_samples,
+        strategy=args.sample_selection_strategy,
+        seed=args.sample_selection_seed,
+        namespace=args.sample_name or args.dataset,
+    )
 
     modes = list(ALL_MODEL_MODES) if args.model_mode == "joint" else [args.model_mode]
 
-    # The transform's text tokenizer produces text_token_ids for training only;
-    # during inference the model re-tokenizes from the caption string (see
-    # OmniMoTModel._get_inference_text_tokens).  Disable it to avoid tokenizer
-    # compatibility issues in environments where apply_chat_template returns a dict.
-    if transform is not None and hasattr(transform, "text_tokenizer"):
-        transform.text_tokenizer = None
+    disable_text_tokenizers(transform)
 
     logger.info(f"Created lazy iterator for {len(modes) * len(sample_ids)} samples across modes {modes}")
     return _create_dataset_samples(dataset, modes, sample_ids)

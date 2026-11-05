@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Interactive 2D and 3D visualization of calibrated camera positions and fields of view.">
+  <title>Camera rig explorer</title>
+  <link rel="stylesheet" href="styles.css?v=002bc4804d19">
+  <script src="geometry.js?v=1d3b4855e7ba" defer></script>
+  <script src="example-rigs.js?v=87dfcedae895" defer></script>
+  <script src="layouts.js?v=bf1d66fc83ef" defer></script>
+  <script src="app.js?v=78f3935d73c6" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Camera rig explorer<span class="accent">.</span></h1>
+    <div class="header-actions"><button id="import-button">Open rig JSON</button>
+      <input id="import-file" type="file" accept=".json,application/json" hidden></div>
+  </header>
+  <noscript>This interactive guide requires JavaScript. Enable it and reopen this page.</noscript>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <section class="toolbar" aria-label="Rig controls">
+    <label class="field">Calibration<select id="rig-select"></select></label>
+    <label class="field">Trained and tested layouts<select id="layout-select"></select></label>
+  </section>
+  <main>
+    <aside class="panel cameras-panel">
+      <div class="panel-heading"><h2>Cameras</h2><span id="camera-count" class="tag"></span></div>
+      <p class="hint">Click a name for color. Check a box for its outline.</p>
+      <div class="selection-tools"><button id="select-all" class="small">Select all</button><button id="deselect-all" class="small">Deselect all</button></div>
+      <div id="camera-list"></div>
+      <p class="hint">Numbers identify cameras in this calibration. The views share the same colors and camera labels.</p>
+      <button id="export-rig" class="wide">Download rig JSON</button>
+    </aside>
+    <div class="workspace">
+      <div class="view-grid">
+        <section class="panel">
+          <div class="panel-heading"><h2><span class="view-number">01</span> 2D · Horizontal section</h2><button id="export-svg" class="small">Save SVG</button></div>
+          <svg id="plan-view" viewBox="0 0 600 500" role="img" aria-label="Top view of the selected camera and checked camera outlines" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="view-caption"><span class="dot selected"></span> Selected color <span class="outline-key"></span> Checked outline</div>
+          <p class="hint caption" id="plan-caption"></p>
+        </section>
+        <section class="panel spatial-panel">
+          <div class="panel-heading"><h2><span class="view-number">02</span> 3D · Camera coverage</h2></div>
+          <canvas id="spatial-view" tabindex="0" role="img" aria-label="Rotatable camera rig with a labeled origin at (0, 0, 0). Drag or use arrow keys to orbit; use plus and minus to zoom."></canvas>
+          <div class="orbit-tools"><div class="segmented" role="group" aria-label="3D view presets"><button data-view="orbit">Orbit</button><button data-view="top">Top</button><button data-view="side">Side</button></div><button id="auto-rotate" aria-pressed="false">Auto rotate</button></div>
+          <div class="range-row"><label for="ray-length">View distance</label><input id="ray-length" type="range" min="2" max="20" step="1" value="5"><output id="ray-value" for="ray-length">5 m</output></div>
+          <p class="hint caption">Drag / arrows to orbit · scroll / + − to zoom. The car is a schematic reference.</p>
+        </section>
+      </div>
+      <section class="panel inspector" aria-label="Camera geometry inspector">
+        <div><p class="eyebrow">SELECTED CAMERA</p><h2 id="selected-title"></h2></div>
+        <dl class="geometry-details"><div><dt>Position · X / Y / Z</dt><dd id="camera-position">—</dd></div><div><dt>Heading</dt><dd id="camera-heading">—</dd></div></dl>
+        <details class="calibration-details" id="calibration-details">
+          <summary>Intrinsic and extrinsic parameters</summary>
+          <div class="calibration-grid">
+            <section><h3>Intrinsics · radial polynomial</h3>
+              <p id="intrinsics-empty" class="hint" hidden>This rig does not include intrinsic parameters.</p>
+              <dl id="intrinsic-fields" class="parameter-list">
+                <div><dt>Image size</dt><dd id="intrinsic-size"></dd></div>
+                <div><dt>Principal point · X / Y</dt><dd id="intrinsic-center"></dd></div>
+                <div><dt>Affine matrix</dt><dd><pre id="intrinsic-affine"></pre></dd></div>
+                <div><dt>Radial projection · r in pixels, θ in radians</dt><dd id="intrinsic-polynomial"></dd></div>
+                <div><dt>Polynomial coefficients</dt><dd><pre id="intrinsic-coefficients"></pre></dd></div>
+              </dl>
+            </section>
+            <section><h3>Extrinsics · camera to rig</h3>
+              <p class="coordinate-note">p<sub>rig</sub> = R · p<sub>camera</sub> + t</p>
+              <dl class="parameter-list">
+                <div><dt>Rotation · R</dt><dd><pre id="camera-rotation"></pre></dd></div>
+                <div><dt>Translation · t (X / Y / Z)</dt><dd id="camera-translation"></dd></div>
+              </dl>
+              <p class="coordinate-note">Camera: +X right, +Y down, +Z forward.<br>Rig: +X forward, +Y left, +Z up. Distances are in meters.<br>For Calibration settings A/B, the rig origin (0, 0, 0) is at the center of the rear axle.</p>
+            </section>
+          </div>
+        </details>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

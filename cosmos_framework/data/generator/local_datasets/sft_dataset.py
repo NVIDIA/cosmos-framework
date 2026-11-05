@@ -25,7 +25,7 @@ from cosmos_framework.data.generator.local_datasets.helper import (
     parse_s3_url,
 )
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
-from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
 from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY, caption_json_to_prompt
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
@@ -575,7 +575,7 @@ def _load_sft_metadata_from_s3(
 
 
 def get_sft_dataset(
-    jsonl_paths: str | list[str] = "s3://bucket3/cosmos3_video_sft/human_1k/captions_full.jsonl",
+    jsonl_paths: str | list[str],
     resolution: str = "720",
     num_video_frames: int = 93,
     temporal_interval_mode: str = "entire_chunk",

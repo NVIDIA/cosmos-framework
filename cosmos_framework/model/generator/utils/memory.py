@@ -20,13 +20,37 @@ the caller can write them back into the cache outside the compile boundary.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
 # (gen_k, gen_v, und_k, und_v) returned by each compiled layer for the caller
 # to write back into the cache outside the torch.compile boundary.
 KVToStore = tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+
+
+@dataclass
+class ARTextLayerCache:
+    """Invariant caption results for one noisy chunk, CFG branch and decoder layer.
+
+    The owning rolling request is discarded at the chunk boundary. Clean forwards
+    have no text cache. Sequence-sharded projections retain native RoPE and norms;
+    exchanged tensors retain native CP KV-head replication and text-sink behavior.
+    No media activations or historical media K/V are stored here.
+    The first noisy forward populates this state; subsequent steps read it.
+    """
+
+    projected: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = (
+        None  # Q: [S_text_local,H,D]; K,V: [S_text_local,H_kv,D]
+    )
+    projected_normalized_k: torch.Tensor | None = None  # [S_text_local,H_kv,D]
+    exchanged: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = (
+        None  # Q: [S_text,H_local,D]; K,V: [S_text,H_kv_local,D]
+    )
+    exchanged_normalized_k: torch.Tensor | None = None  # [S_text,H_kv_local,D]
+    attention_output: torch.Tensor | None = None  # [S_text,H_local*D]
+    scattered_output: torch.Tensor | None = None  # [S_text_local,H,D]
+    hidden_output: torch.Tensor | None = None  # [S_text_local,hidden_size]
 
 
 @dataclass
@@ -37,6 +61,10 @@ class MemoryValue(ABC):
     are plain dataclasses of tensors.  No methods on this class should
     mutate state or perform non-trivial computation.
     """
+
+    # Inference may attach request-owned caption state. Layers populate it once
+    # per chunk, including under compile; media-memory tensors remain read-only.
+    text_cache: ARTextLayerCache | None = field(default=None, kw_only=True)
 
     @property
     def supports_context_parallel_attention(self) -> bool:

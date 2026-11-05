@@ -1,0 +1,5 @@
+# Allow binary assets bundled with cosmos-wm
+!*.png
+!*.jpeg
+!*.jpg
+!*.tar

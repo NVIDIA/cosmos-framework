@@ -67,7 +67,7 @@ def register_callbacks():
         sampled_media=L(SampledMediaRecorder)(
             enabled=False,
             output_uri=(
-                "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/imaginaire4-output}/"
+                "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/cosmos-framework-output}/"
                 "${job.project}/${job.group}/${job.name}/sampled_media.lance"
             ),
             creds_path=None,

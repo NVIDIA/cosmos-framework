@@ -216,6 +216,9 @@ class ExtractMultiReferenceConversation(Augmentor):
 
     Returns ``None`` when required fields are missing.
 
+    ``truncate_excess_references=False`` skips samples above the limit instead of
+    keeping the first references (prompts that tag every image need all of them).
+
     When ``read_reference_bboxes`` is enabled, also preserve logical input keys
     and validated target-normalized boxes. Scene and abstract-control references
     without boxes, including samples with an empty bbox list, remain valid.
@@ -231,6 +234,7 @@ class ExtractMultiReferenceConversation(Augmentor):
         prompt_variant_keys: tuple[str, ...] | list[str] = _PROMPT_VARIANT_KEYS,
         args: Optional[dict] = None,
         read_reference_bboxes: bool = False,
+        truncate_excess_references: bool = True,
     ) -> None:
         super().__init__(input_keys or [], args=args)
         if max_reference_images <= 0:
@@ -241,6 +245,7 @@ class ExtractMultiReferenceConversation(Augmentor):
         self.instruction_key = instruction_key
         self.prompt_variant_keys = tuple(prompt_variant_keys)
         self.read_reference_bboxes: bool = read_reference_bboxes
+        self.truncate_excess_references: bool = truncate_excess_references
 
     def _resolve_instruction(self, annotation: dict) -> str | None:
         """Resolve the instruction string, sampling a variant when given a dict.
@@ -321,6 +326,14 @@ class ExtractMultiReferenceConversation(Augmentor):
             return None
 
         if len(ordered_input_keys) > self.max_reference_images:
+            if not self.truncate_excess_references:
+                log.warning(
+                    f"Skipping sample {data_dict.get('__key__', 'unknown')!r}: "
+                    f"{len(ordered_input_keys)} references exceed the limit {self.max_reference_images}; "
+                    "truncating would invalidate the prompt's image references.",
+                    rank0_only=False,
+                )
+                return None
             if self.read_reference_bboxes:
                 log.warning(
                     f"Skipping bbox sample {data_dict.get('__key__', 'unknown')!r}: "
@@ -431,11 +444,12 @@ class RandomResizeReferenceImages(Augmentor):
         return data_dict
 
 
-_MARKER_RE: re.Pattern[str] = re.compile(r"<img-(\d+)>")
+# Legacy prompts tag references as ``<img-N>``; the unified annotation format uses ``<image N>``.
+_MARKER_RE: re.Pattern[str] = re.compile(r"<(img-|image )(\d+)>")
 
 
 class ReorderReferenceImages(Augmentor):
-    """Shuffle the reference list and rewrite ``<img-N>`` markers in the instruction.
+    """Shuffle the reference list and rewrite ``<img-N>`` / ``<image N>`` markers in the instruction.
 
     Operates on the ``source_image`` list and ``editing_instruction`` string produced by
     :class:`ExtractMultiReferenceConversation`. With probability ``shuffle_prob`` (one
@@ -507,9 +521,9 @@ class ReorderReferenceImages(Augmentor):
             inv[old_idx] = new_idx
 
         def _remap(match: re.Match) -> str:
-            old_idx = int(match.group(1)) - 1
+            old_idx = int(match.group(2)) - 1
             if 0 <= old_idx < n:
-                return f"<img-{inv[old_idx] + 1}>"
+                return f"<{match.group(1)}{inv[old_idx] + 1}>"
             return match.group(0)
 
         data_dict[self.source_key] = [source_image[perm[i]] for i in range(n)]

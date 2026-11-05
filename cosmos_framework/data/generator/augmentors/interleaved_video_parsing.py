@@ -932,8 +932,15 @@ class VideoTransferAlignedSelectedControlParsing(VideoTransferAlignedChunkedFram
             raise ValueError("Depth video contains non-finite values.")
         min_value = frames.min().item()
         max_value = frames.max().item()
-        if min_value < 0.0 or max_value > 1.0:
+        # Float32 resizing can introduce small overshoots at the endpoints.
+        if min_value < -1e-6 or max_value > 1.0 + 1e-6:
             raise ValueError(f"Depth video values must be in [0, 1], got [{min_value}, {max_value}].")
+        if min_value < 0.0 or max_value > 1.0:
+            log.warning(
+                f"Clamping depth roundoff [{min_value}, {max_value}] to [0, 1] (tolerance=1e-6); keeping the sample.",
+                rank0_only=False,
+            )
+            frames = frames.clamp(0.0, 1.0)  # [C,T,H,W]
         if frames.shape[0] == 1:
             frames = frames.expand(3, -1, -1, -1)  # [3,T,H,W]
         return frames.mul(255.0)  # [3,T,H,W]

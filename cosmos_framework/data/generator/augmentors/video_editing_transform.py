@@ -229,7 +229,9 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
     Source and target frames are sampled on the same ``target_fps`` timeline and
     resized to the source aspect ratio. Their encoded durations may differ by at
     most one target-frame interval plus ``duration_ratio_tolerance`` of the longer
-    clip. Reference images are emitted between source and target as independent
+    clip. Explicit ``bernini_77f_source_sampling`` reproduces the generator input
+    timeline for native-rate 77-80f sources paired with a 77f target. Reference
+    images are emitted between source and target as independent
     one-frame vision items.
     """
 
@@ -244,10 +246,12 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
         max_pixels: int = 512 * 512,
         padding_divisor: int = 16,
         duration_ratio_tolerance: float = 0.0,
+        bernini_77f_source_sampling: bool = False,
         aspect_ratio_tolerance: float = 0.05,
         mean: float = 0.5,
         std: float = 0.5,
         num_decode_threads: int = 1,
+        target_first_frame_probability: float = 0.0,
         max_reference_images: int = 4,
         min_reference_image_side: int = 128,
         args: dict | None = None,
@@ -261,6 +265,12 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
             raise ValueError("min_reference_image_side must be positive")
         if not 0 <= duration_ratio_tolerance < 1 or not 0 <= aspect_ratio_tolerance < 1:
             raise ValueError("alignment tolerances must be in [0, 1)")
+        if not 0 <= target_first_frame_probability <= 1:
+            raise ValueError("target_first_frame_probability must be in [0, 1]")
+        self.target_first_frame_probability = target_first_frame_probability
+        self.bernini_77f_source_sampling = bernini_77f_source_sampling
+        if bernini_77f_source_sampling and (max_num_frames != 77 or target_fps != 16.0):
+            raise ValueError("Bernini source sampling requires 77 target frames at 16 FPS")
         self.media_key = media_key
         self.conversation_key = conversation_key
         self.target_fps = target_fps
@@ -327,7 +337,14 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
         # Editing pairs should be temporally aligned. Permit one target-frame interval
         # for container/FPS metadata rounding, plus an explicitly configured ratio.
         duration_tolerance = 1.0 / self.target_fps + self.duration_ratio_tolerance * longer_duration
-        if duration_difference > duration_tolerance:
+        # Bernini 77f generation samples the native-rate source using 4N+1
+        # linspace indices before truncation. Opt in only for its known 77-80f
+        # cohort; longer targets and arbitrary FPS/duration mismatches stay invalid.
+        # The source-only tail is bounded; neither clip is stretched in time.
+        bernini_pair = self.bernini_77f_source_sampling and self._is_bernini_77f_pair(source, target)
+        if self.bernini_77f_source_sampling and not bernini_pair:
+            raise ValueError("bernini_77f_pair_requires_77_80_source_77_target_at_16fps")
+        if duration_difference > duration_tolerance and not bernini_pair:
             raise ValueError(f"duration_mismatch:{source_duration:.3f}:{target_duration:.3f}")
 
         source_aspect = source.width / source.height
@@ -349,6 +366,23 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
         )
         return common_duration, width, height
 
+    @staticmethod
+    def _is_bernini_77f_pair(source: VideoMetadata, target: VideoMetadata) -> bool:
+        return (
+            77 <= source.num_frames <= 80
+            and target.num_frames == 77
+            and math.isclose(source.average_fps, 16.0, rel_tol=0.0, abs_tol=1e-6)
+            and math.isclose(target.average_fps, 16.0, rel_tol=0.0, abs_tol=1e-6)
+        )
+
+    @staticmethod
+    def _bernini_source_frame_indices(source_frames: int) -> list[int]:
+        # Match e6c2cf11 smart_video_nframes(fps=16, frame_factor=4,
+        # max_frames=77, add_one=True): round the complete 4N+1 linspace FIRST,
+        # then truncate to 77. For 80f this repeats one middle source frame.
+        sampled_frames = 1 + 4 * (source_frames // 4)
+        return [int(index) for index in torch.linspace(0, source_frames - 1, sampled_frames).round().tolist()][:77]
+
     def _decode_pair(
         self, source_bytes: bytes, target_bytes: bytes
     ) -> tuple[torch.Tensor, torch.Tensor, VideoMetadata, int, int]:
@@ -356,9 +390,21 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
         target_metadata = probe_video(target_bytes, include_dimensions=True, num_threads=self.num_decode_threads)
         common_duration, width, height = self._validate_pair(source_metadata, target_metadata)
         available_frames = max(1, math.floor(common_duration * self.target_fps))
-        num_frames = valid_video_frame_count(available_frames, self.max_num_frames)
-        source_indices = aligned_frame_indices(source_metadata, self.target_fps, num_frames)
-        target_indices = aligned_frame_indices(target_metadata, self.target_fps, num_frames)
+        # The validated Bernini cohort always contains exactly 77 target frames.
+        # Near-16 FPS metadata must not floor its duration down to 76 (then 73).
+        num_frames = (
+            77 if self.bernini_77f_source_sampling else valid_video_frame_count(available_frames, self.max_num_frames)
+        )
+        source_indices = (
+            self._bernini_source_frame_indices(source_metadata.num_frames)
+            if self.bernini_77f_source_sampling
+            else aligned_frame_indices(source_metadata, self.target_fps, num_frames)
+        )
+        target_indices = (
+            list(range(77))
+            if self.bernini_77f_source_sampling
+            else aligned_frame_indices(target_metadata, self.target_fps, num_frames)
+        )
         source_tchw, _ = decode_frames_tchw_uint8(  # [T,C,Hs,Ws]
             source_bytes, source_indices, num_threads=self.num_decode_threads
         )
@@ -398,6 +444,11 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
             references = [self._decode_reference_image(media[key]) for key in reference_keys]
             reference_tensors = [tensor for tensor, _, _ in references]
             num_frames = source_cthw.shape[1]
+            if self.target_first_frame_probability and num_frames < 5:
+                raise ValueError("target first-frame conditioning requires generated frames after the prefix")
+            condition_target_first_frame = (
+                self.target_first_frame_probability > 0 and random.random() < self.target_first_frame_probability
+            )
             data_dict["video"] = [source_cthw, *reference_tensors, target_cthw]
             data_dict["ai_caption"] = instruction
             data_dict["selected_caption_type"] = "editing_instruction"
@@ -415,7 +466,9 @@ class PairedVideoEditingToTrainingFormat(Augmentor):
             data_dict["sequence_plan"] = SequencePlan(
                 has_text=True,
                 has_vision=True,
-                condition_frame_indexes_vision=[],
+                # In multi-item packing this applies to the final target only.
+                # The causal VAE encodes its first frame independently of future frames.
+                condition_frame_indexes_vision=[0] if condition_target_first_frame else [],
                 # Source and target videos are frame-aligned. Reference images remain
                 # independent because their one-frame temporal grid differs from the videos.
                 share_vision_temporal_positions=not reference_tensors,

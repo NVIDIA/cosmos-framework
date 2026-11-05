@@ -61,7 +61,7 @@ import torch
 import triton
 
 from cosmos_framework.model.attention.utils.environment import is_torch_compiling
-from cosmos_framework.configs.base.defaults.multiview_attention import DECOMPOSED_TEMPORAL_WINDOW_EPS
+from cosmos_framework.configs.base.defaults.multiview_attention import temporal_window_bounds
 from cosmos_framework.model.generator.mot import maskless_kernels as kernels
 from cosmos_framework.model.generator.mot.causal_flex_attention import (
     _ROLE_PADDING,
@@ -368,9 +368,8 @@ def build_replay_maskless_plan(
             # Physical-time windows may cross replay chunks. The shared role
             # predicate still enforces clean/noisy ownership and hides future chunks.
             gap = q.timestamp[:, None] - kv.timestamp[None, :]  # [R_Q,R_KV]
-            cross_time = (gap >= -DECOMPOSED_TEMPORAL_WINDOW_EPS) & (
-                gap <= window + DECOMPOSED_TEMPORAL_WINDOW_EPS
-            )  # [R_Q,R_KV]
+            lower, upper = temporal_window_bounds((0.0, window))
+            cross_time = (gap >= lower) & (gap <= upper)  # [R_Q,R_KV]
         cross = (
             allowed
             & ~caption

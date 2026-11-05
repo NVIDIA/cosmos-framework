@@ -35,6 +35,14 @@ DEFAULT_CAPTION_PREFIXES: Final[dict[str, str]] = {
 _TIMESTAMP: re.Pattern[str] = re.compile(r"\[\s*\d+(?:\.\d+)?\s*s?\s*[-–—]\s*\d+(?:\.\d+)?\s*s?\s*\]", re.IGNORECASE)
 
 
+def format_short_task_caption(caption: str) -> str:
+    """Express a short task instruction as a goal before adding view metadata."""
+    caption = caption.strip()
+    if not caption or caption.startswith("The goal is "):
+        return caption
+    return f"The goal is {caption[0].lower()}{caption[1:]}"
+
+
 def first_caption_paragraph(caption: str) -> str:
     """Keep the opening timestamped paragraph, or the first blank-line paragraph."""
     caption = caption.strip()
@@ -77,14 +85,23 @@ def format_separate_view_captions(
     camera_names: Sequence[str],
     add_camera_rig_prefix: bool = False,
     camera_attributes: Mapping[str, Mapping[str, str | int]] | None = None,
+    append_camera_role_to_caption: bool = False,
+    camera_prefixes: Mapping[str, str] | None = None,
 ) -> list[Caption]:
-    """Preserve per-view captions, optionally adding the sampled rig in natural language."""
+    """Preserve per-view captions, optionally adding physical camera roles and the sampled rig."""
     if not captions:
         raise ValueError("Separate-view captions must not be empty")
     if len(captions) != len(camera_names):
         raise ValueError(
             f"Separate captions must match sampled cameras: captions={len(captions)}, cameras={len(camera_names)}"
         )
+    if append_camera_role_to_caption:
+        captions = [
+            f"{camera_prefixes[camera_name]}\n\n{caption if isinstance(caption, str) else json.dumps(caption)}"
+            if camera_prefixes and camera_name in camera_prefixes
+            else caption
+            for camera_name, caption in zip(camera_names, captions)
+        ]
     if not add_camera_rig_prefix:
         return list(captions)
     if camera_attributes is None:

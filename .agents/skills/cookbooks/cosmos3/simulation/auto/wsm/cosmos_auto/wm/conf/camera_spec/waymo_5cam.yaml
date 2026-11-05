@@ -1,0 +1,13 @@
+camera_list:
+  - front
+  - front_left
+  - front_right
+  - side_left
+  - side_right
+
+camera_to_rds_hq:
+  front: camera_front_wide_120fov
+  front_left: camera_cross_left_120fov
+  front_right: camera_cross_right_120fov
+  side_left: camera_rear_left_120fov
+  side_right: camera_rear_right_120fov

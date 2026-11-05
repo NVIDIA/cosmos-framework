@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Attention Subpackage:
+Attention Subpackage:
 Unified implementation for all Attention implementations.
 
 torch.compile-safe functools wrappers (specifically lru_cache).

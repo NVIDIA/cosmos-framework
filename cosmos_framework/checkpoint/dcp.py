@@ -41,6 +41,7 @@ The sharded format enables efficient distributed saving/loading by:
 
 import dataclasses
 import enum
+import gc
 import multiprocessing
 import os
 import queue
@@ -55,6 +56,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch import nn
+from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed.checkpoint.default_planner import create_default_local_load_plan
 from torch.distributed.checkpoint.filesystem import FileSystemReader, FileSystemWriter
 from torch.distributed.checkpoint.metadata import (
@@ -78,9 +80,9 @@ from cosmos_framework.checkpoint.background_store import (
 )
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
@@ -180,6 +182,62 @@ BACKGROUND_SAVE_TIMEOUT = timedelta(minutes=60)
 SAVE_RESULT_TIMEOUT = timedelta(minutes=70)
 
 
+def _staging_shared_memory_bytes(value: Any, page_size: int) -> int:
+    """Count local tensor allocations, rounded to shared-memory pages.
+
+    CPU staging creates a separate contiguous tensor for every leaf, even when
+    source leaves alias. Count local shards rather than a DTensor's global shape.
+    Scalar tensors also enter shared memory when sent to the background writer.
+    """
+    if isinstance(value, DTensor):
+        return _staging_shared_memory_bytes(value.to_local(), page_size)
+    if isinstance(value, ShardedTensor):
+        return sum(_staging_shared_memory_bytes(shard.tensor, page_size) for shard in value.local_shards())
+    if isinstance(value, torch.Tensor):
+        size = value.numel() * value.element_size()
+        return ((size + page_size - 1) // page_size) * page_size
+    if isinstance(value, dict):
+        return sum(_staging_shared_memory_bytes(item, page_size) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_staging_shared_memory_bytes(item, page_size) for item in value)
+    return 0
+
+
+def _check_staging_shared_memory(state_dict: dict[str, Any]) -> None:
+    """Reject an async staging allocation that exceeds its shared-memory mount.
+
+    All training ranks participate before allocating. Aggregate ranks sharing
+    a host and mount, then raise on every rank if any mount is too small.
+    """
+    if dist.is_initialized():
+        # Distillation releases its previous staging tree before each save.
+        # Wait for every rank to release it before sampling shared free space;
+        # otherwise an early rank can count a peer's old buffers as still live.
+        dist.barrier()
+    shm = os.statvfs("/dev/shm")
+    required = _staging_shared_memory_bytes(state_dict, os.sysconf("SC_PAGE_SIZE"))
+    local = (socket.gethostname(), os.stat("/dev/shm").st_dev, required, shm.f_bavail * shm.f_frsize)
+    records: list[Any] = [local]
+    if dist.is_initialized():
+        records = [None] * dist.get_world_size()
+        dist.all_gather_object(records, local)
+
+    per_mount: dict[tuple[str, int], tuple[int, int]] = {}
+    for hostname, device, needed, available in records:
+        key = (hostname, device)
+        total, free = per_mount.get(key, (0, available))
+        per_mount[key] = (total + needed, min(free, available))
+    for (hostname, _), (needed, available) in per_mount.items():
+        if needed > available:
+            raise RuntimeError(
+                f"Insufficient /dev/shm for asynchronous checkpoint staging on {hostname}: "
+                f"local training ranks need {needed / 1024**3:.2f} GiB, "
+                f"but {available / 1024**3:.2f} GiB is available. "
+                "Increase the container shared-memory allocation (--shm-size or --ipc=host), "
+                "or use checkpoint.dcp_async_mode_enabled=false for synchronous saves."
+            )
+
+
 class Terminate:
     pass
 
@@ -276,6 +334,12 @@ def save_checkpoint_in_background(
             log.error(f"Error saving checkpoint to {checkpoint_path}: {e}", rank0_only=False)
             # continue because if the thread exits, the main thread keeps on adding to the queue
         finally:
+            # torch.save's local pickler/closure cycles can retain shared storages in GC
+            # generation 2 even after the tensors die. Drop both queue-payload references
+            # and collect in this background process before allowing the next staging
+            # allocation; automatic GC is driven by object count, not storage bytes.
+            del state_dict, received_data
+            gc.collect(2)
             elapsed_time = time.monotonic() - start_time
             log.info(
                 f"Checkpoint save completed in background process. "
@@ -1005,6 +1069,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         from torch.distributed._state_dict_utils import _copy_state_dict, _create_cpu_state_dict
 
         if self.cpu_offload_state_dict is None:
+            _check_staging_shared_memory(state_dict)
             log.info(f"Preparing the CPU memory for staging")
             self.cpu_offload_state_dict = _create_cpu_state_dict(state_dict, pin_memory=True, share_memory=True)
 
@@ -1054,7 +1119,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         *next* save to drain this one, or for :meth:`finalize` on a graceful exit. A job
         killed abnormally in between -- preemption, cancellation, timeout, node failure --
         therefore threw away credit for a checkpoint that had been durable on disk for as
-        long as the gap between saves. Job 1881483 wrote iteration 58500 successfully at
+        long as the gap between saves. One job wrote iteration 58500 successfully at
         10:52:04 and was preempted at 11:32:56 having reached 58856, yet still reported
         58000 as its last productive iteration.
 

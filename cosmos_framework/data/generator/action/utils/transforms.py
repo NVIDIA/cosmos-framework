@@ -32,16 +32,22 @@ from cosmos_framework.data.generator.action.utils.action_processing import (
     ActionProcessor,
 )
 from cosmos_framework.data.generator.action.utils.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.utils.multiview import (
+    camera_action_caption_subjects,
+    split_action_by_camera,
+)
 from cosmos_framework.data.generator.action.utils.viewpoint_utils import ViewpointTextInfo
 from cosmos_framework.data.generator.augmentors.duration_fps_text_timestamps import DurationFPSTextTimeStamps
 from cosmos_framework.data.generator.augmentors.idle_frames_text_info import IdleFramesTextInfo
 from cosmos_framework.data.generator.augmentors.resolution_text_info import ResolutionTextInfo
 from cosmos_framework.data.generator.augmentors.text_tokenizer import TextTokenizerTransform
+from cosmos_framework.data.generator.multiview.caption_format import format_separate_view_captions
 from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 ACTION_MODE_DESCRIPTIONS: dict[str, str] = {
+    "policy": "Predict future action given the image.",
     "forward_dynamics": "Predict the future video given the image and action.",
     "inverse_dynamics": "Predict the underlying action given the video.",
     "wam": "Predict the future video and action given the image.",
@@ -521,6 +527,11 @@ class ActionTransformPipeline:
             Requires an ``action_caption_attributes`` mapping on every sample;
             missing metadata raises before resizing or tokenization, including JSON prompts.
             Defaults to ``False``.
+        append_camera_role_to_caption: Repeat the formatted task prompt per
+            separate camera clip, prepend its physical role when known, and
+            tokenize each caption separately. With plain-caption semantics,
+            describe only that view's allocated action targets. Raw dataset
+            camera names are never added to the prompt. Defaults to ``False``.
         append_duration_fps_timestamps: Whether to append duration and FPS metadata to the
             caption (matching VFM's ``DurationFPSTextTimeStamps`` augmentor).
             Defaults to ``True``.
@@ -575,6 +586,7 @@ class ActionTransformPipeline:
         format_prompt_as_json: bool = False,
         enable_mode_specific_prompt: bool = False,
         format_prompt_float_seconds: bool = False,
+        append_camera_role_to_caption: bool = False,
     ) -> None:
         self.caption_key: str = caption_key
         self.video_temporal_downsample: int = video_temporal_downsample
@@ -582,6 +594,7 @@ class ActionTransformPipeline:
         self.action_channel_masking: bool = action_channel_masking
         self.enable_mode_specific_prompt: bool = enable_mode_specific_prompt
         self.append_action_caption_semantics: bool = append_action_caption_semantics
+        self.append_camera_role_to_caption: bool = append_camera_role_to_caption
         self.action_processor: ActionProcessor = ActionProcessor(
             max_action_dim=max_action_dim,
             action_channel_masking=action_channel_masking,
@@ -658,10 +671,13 @@ class ActionTransformPipeline:
         if tokenizer_config is not None:
             self.text_tokenizer = TextTokenizerTransform(
                 input_keys=[caption_key],
-                output_keys=[text_token_key],
+                output_keys=[text_token_key, "text_token_lengths"]
+                if append_camera_role_to_caption
+                else [text_token_key],
                 args={
                     "tokenizer_config": tokenizer_config,
                     "cfg_dropout_rate": cfg_dropout_rate,
+                    "tokenize_separately": append_camera_role_to_caption,
                 },
             )
 
@@ -697,6 +713,59 @@ class ActionTransformPipeline:
 
         return data_dict
 
+    def _prepare_video(self, data_dict: dict, resolution: str | None) -> tuple[dict, int | None]:
+        """Resize camera clips onto one canvas while preserving the full prompt horizon."""
+        camera_videos = data_dict.pop("camera_videos", None)
+        if camera_videos is None:
+            return self.video_resize(data_dict, resolution), None
+
+        if not camera_videos or any(view.ndim != 4 for view in camera_videos):
+            raise ValueError("camera_videos must contain nonempty [C,T,H,W] camera clips")
+        num_views = len(camera_videos)
+        frames_per_view = camera_videos[0].shape[1]
+        if any(view.shape[:2] != camera_videos[0].shape[:2] for view in camera_videos):
+            raise ValueError("All camera clips must have the same channels and synchronized frame count")
+        first = self.video_resize({"video": camera_videos[0]}, resolution)
+        target_h, target_w = first["video"].shape[-2:]
+        resized_views = [first["video"]]
+        for view in camera_videos[1:]:
+            resized = reflection_pad_to_target({"video": view}, ["video"], self.keep_aspect_ratio, target_w, target_h)
+            resized_views.append(resized["video"])
+        data_dict["video"] = torch.cat(resized_views, dim=1).contiguous()  # [C,V*T,H,W]
+        # One shared canvas contains each independently padded camera. Do not
+        # crop every camera according to the first camera's original aspect.
+        data_dict["image_size"] = torch.tensor([target_h, target_w, target_h, target_w], dtype=torch.float)
+        data_dict["video_num_frames"] = frames_per_view
+        return data_dict, num_views
+
+    def _finalize_video_layout(self, data_dict: dict, mode: object, num_views: int | None) -> int:
+        """Select Policy observations after prompt formatting and attach the camera layout."""
+        video = data_dict.get("video")
+        assert video is not None, "video is required"
+        video_length = int(data_dict.pop("video_num_frames", video.shape[1]))  # logical T before decode compaction
+        if mode == "policy":
+            # Prompt formatting already describes the full action horizon. The model
+            # conditions only on the observation image, with no future RGB targets.
+            if num_views is None:
+                data_dict["video"] = video[:, :1].contiguous()
+            else:
+                data_dict["video"] = (
+                    video.reshape(video.shape[0], num_views, video_length, *video.shape[-2:])[:, :, :1]
+                    .reshape(video.shape[0], num_views, *video.shape[-2:])
+                    .contiguous()
+                )
+            video_length = 1
+        if num_views is not None:
+            data_dict["sample_n_views"] = torch.tensor(num_views, dtype=torch.int64)
+            data_dict["num_video_frames_per_view"] = torch.tensor(video_length, dtype=torch.int64)
+            data_dict["enable_per_camera_vae_encoding"] = True
+            data_dict["view_indices_selection"] = torch.arange(num_views, dtype=torch.int64)
+            data_dict["view_indices"] = torch.arange(num_views, dtype=torch.int64).repeat_interleave(video_length)
+            # Single-view targets keep their native layout. The wrist-slot
+            # projection below replaces this count for multi-camera samples.
+            data_dict["num_views_per_action_item"] = torch.tensor(1, dtype=torch.int64)
+        return video_length
+
     def __call__(
         self,
         data_dict: dict,
@@ -728,7 +797,8 @@ class ActionTransformPipeline:
         7. Append idle-frame metadata (Pi0.7-style) to plain prompts unless the
            sample is in inverse dynamics mode (if enabled).
         8. Tokenize caption text (if enabled).
-        9. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
+        9. Keep only the observation image for Policy, retaining the action
+           horizon and prompt duration, and build a ``SequencePlan``.
         10. Preserve the canonical unnormalized and unpadded action as
            ``"action_raw"``, normalize native actions or consume an explicitly
            encoded normalized action, pad ``"action"`` to ``max_action_dim``, and
@@ -767,7 +837,7 @@ class ActionTransformPipeline:
                 raise TypeError("action_caption_attributes must be a mapping.")
 
         # 1. Resize + reflection-pad spatial dimensions to the closest predefined target from ``VIDEO_RES_SIZE_INFO[resolution]``.
-        data_dict = self.video_resize(data_dict, resolution)
+        data_dict, num_views = self._prepare_video(data_dict, resolution)
 
         # 2. Format the caption as structured JSON when requested; otherwise run the legacy string appenders.
         if self.prompt_json_formatter is not None:
@@ -787,21 +857,46 @@ class ActionTransformPipeline:
                 data_dict[self.caption_key] = add_action_mode_metadata(data_dict.get(self.caption_key), mode)
 
             # 4-7. Append plain-caption metadata in canonical order.
-            data_dict = self._apply_plain_caption_postfixes(data_dict, mode)
+            if self.append_camera_role_to_caption and self.append_action_caption_semantics and (num_views or 0) > 1:
+                attributes = data_dict["action_caption_attributes"]
+                captions = []
+                for subject in camera_action_caption_subjects(data_dict, action_valid_mask):
+                    view_data = {
+                        **data_dict,
+                        "action_caption_attributes": {**attributes, "subject_postfix": subject},
+                    }
+                    captions.append(self._apply_plain_caption_postfixes(view_data, mode)[self.caption_key])
+                data_dict[self.caption_key] = captions
+            else:
+                data_dict = self._apply_plain_caption_postfixes(data_dict, mode)
 
         # This nested dictionary cannot be consumed by the training collator.
         # Its semantic fields have already been rendered into the caption.
         data_dict.pop("action_caption_attributes", None)
 
         # 8. Tokenize caption text (if enabled).
+        camera_prefixes = data_dict.pop("camera_caption_prefixes", None)
+        if self.append_camera_role_to_caption:
+            camera_names = data_dict.get("camera_view_names")
+            if num_views is None or not camera_names or len(camera_names) != num_views:
+                raise ValueError("Per-view captions require separate camera clips and matching camera_view_names")
+            # Native Action shares the task caption, with each camera's own
+            # action subject, preserving the camera-major video/action order.
+            captions = data_dict[self.caption_key]
+            data_dict[self.caption_key] = format_separate_view_captions(
+                captions if isinstance(captions, list) else [captions] * num_views,
+                camera_names=camera_names,
+                append_camera_role_to_caption=True,
+                camera_prefixes=camera_prefixes,
+            )
+            # The per-view tokenizer validates this before video finalization.
+            data_dict["sample_n_views"] = torch.tensor(num_views, dtype=torch.int64)
         if self.text_tokenizer is not None:
             data_dict = self.text_tokenizer(data_dict)
 
         # 9. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
-        video = data_dict.get("video")
+        video_length = self._finalize_video_layout(data_dict, mode, num_views)
         action = data_dict.get("action")
-        assert video is not None, "video is required"
-        video_length = int(data_dict.pop("video_num_frames", video.shape[1]))  # logical T before decode compaction
         action_length = action.shape[0] if isinstance(action, torch.Tensor) else max(video_length - 1, 0)
 
         # Prepend history action frames (ground-truth conditioning) if present.
@@ -842,5 +937,7 @@ class ActionTransformPipeline:
             normalized_action=normalized_action,
             action_codec=action_codec,
         )
+        if num_views is not None:
+            data_dict = split_action_by_camera(data_dict)
 
         return data_dict

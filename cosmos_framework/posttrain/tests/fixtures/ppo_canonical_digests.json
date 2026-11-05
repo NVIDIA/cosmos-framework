@@ -1,0 +1,26 @@
+{
+    "oracle": "pre-streaming algorithm/ppo/wire.py encoder",
+    "oracle_sha256": "b16acfa5ce2990bb4948bf9399b8c14f4b58751899791a672fbd5f027d951978",
+    "digests": {
+        "scalars": "sha256:fc25eaa7a8f87b94116996b94d4ee6017969874ef308b32cb9d8d74270920a4c",
+        "mutable_bytes": "sha256:222cda190296020380860b957b9e261c5e970edb53547e7f9c168f4d1937395c",
+        "multidimensional_memoryview": "sha256:a7bfffea88f435229699965f8cad8e0931c0b638760dfc599da5232081dd27cf",
+        "mixed_mapping_keys": "sha256:03633003fc07b5ee18f74b3c16382eb8b9ca9ceee55451f91204dce9974c6cbd",
+        "torch_strided": "sha256:5b22b817de126d9a94a2c2bdc39b0d5bdfacd2b68f656ed4a784e9199e753e27",
+        "torch_bfloat16": "sha256:b39a2266cff93a99f8c9b2d7afe412cc9b51982f689097df4e36e9199ca0926d",
+        "torch_float16": "sha256:84f6e743f9af54fa2f34274f2c984fb9b720d8b21e010f743fdf5a7eaa905dd0",
+        "torch_complex": "sha256:1923d32b438b91800dc3aa7d6d12f54af0baf6907e9d8e0cd51329f97818a61e",
+        "torch_nonfinite": "sha256:19e8dada585d8ea61bfb4527ad928d1f07d8f57df96607ffda6e93fe74c15e4b",
+        "torch_scalar": "sha256:cc9c99d10a6c5f3a62e61faaaa9cd3de5ca769b3c9b1caf062220d4702870b59",
+        "torch_empty": "sha256:3b3afe4373d364b900d3968914c59dac79e20813716bc829cc99211f04bc8c50",
+        "numpy_strided": "sha256:ad8be9cdf3d9e09096b9263f735f36ca8537228a0e24ec59073b5bd870298893",
+        "numpy_fortran": "sha256:fc23a27b9d092e148309974ff353e4a60ce83ab080122c921aca3d8eb2cbc99a",
+        "numpy_big_endian": "sha256:2558de1869c0d60e179a5fe04866f99196f87d8553d69af8c9c25dd1c52f1310",
+        "numpy_datetime": "sha256:cd3f3370e94956b27ab118bdbd1d6b93e50ca51ad64cfdbb2b3d6206558d2bc1",
+        "numpy_scalar": "sha256:61a81fd0a9a46d8e03ebb15c7cbaabee19a72b4bfbdb9b6f20164439ca2041c4",
+        "numpy_empty": "sha256:c95adcd1bcbbb0c8d971135f42e1cfaa6c4011a6667c0538644a58350a55c357",
+        "pil": "sha256:a58650834fbe2ba8510376f8b6d528be96143afca32d426ddfaedbb6e7e9f34f",
+        "nested_records": "sha256:58482e0859dd7ba3e907bc51a8fd76e027869e6c42c6bd7e444ab20de6c0f976",
+        "large_tensor": "sha256:62bd35f5c2829e8c94a526be5bdba9f64622faa0fc28f644c2bdc12fbc4d581c"
+    }
+}

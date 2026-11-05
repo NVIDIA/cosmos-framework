@@ -1,6 +1,6 @@
 # AutoML on SLURM
 
-The local core wheel provides a single-node SLURM executor. The controller
+The core package provides a single-node SLURM executor. The controller
 runs on a CPU node **on the cluster**, with `sbatch`, `squeue`, `sacct`,
 `scontrol`, `scancel`, `srun`, a compatible Python environment, and shared
 storage. It submits one GPU allocation per candidate, waits, collects the
@@ -51,17 +51,23 @@ allocation identity and GPU visibility belong to the scheduler. Forward
 `NVIDIA_DRIVER_CAPABILITIES` by name after exporting `compute,utility,video`
 for CUDA video decoding; credentials, if needed, are names only as well.
 
-The CPU controller needs the Framework and core wheels plus their planning
+The CPU controller needs the Framework and core packages plus their planning
 dependencies, not GPU training packages. Verify its Python version/imports,
 native scheduler CLIs, and shared interpreter path on compute nodes. Do not
 assume the system Python or the interpreter inside the training image is a
 suitable host-side controller environment.
 
-For an isolated planning-only controller, install the core wheel with its
-dependencies, then the Framework wheel with `--no-deps`:
+For an isolated planning-only controller, install the core from the selected
+source revision with its dependencies, then the Framework wheel with `--no-deps`.
+Use `main` by default or the user's explicit development branch, as described in
+[source installation](automl.md#installation-from-source). Resolve and record the
+commit during preparation, never reinstall from a moving branch at job startup:
 
 ```bash
-python -m pip install /shared/wheels/nvidia_automl_core-1.0.0.dev0-py3-none-any.whl
+AUTOML_CORE_REF=main  # Or the selected development branch / recorded commit SHA.
+python -m pip install \
+  "nvidia-automl-core @ git+https://github.com/NVIDIA-TAO/tao-automl.git@${AUTOML_CORE_REF}#subdirectory=packages/automl-core" \
+  'nvidia-automl-core==0.1.0'
 python -m pip install --no-deps /shared/wheels/cosmos_framework-1.2.2-py3-none-any.whl
 python -m cosmos_framework.scripts.automl --help
 ```
@@ -73,6 +79,9 @@ dependencies before installing Framework and exercise the installed adapter's
 `plan` command outside both source checkouts. Never use this limited environment
 for training; the prepared image supplies that stack. Point Python installer
 caches at shared storage when the login home has a small quota.
+For GEPA controllers, also install `gepa==0.1.2` before verifying imports; the
+planning-only `--no-deps` Framework install does not install its extras. A wheel
+built from the recorded core revision remains an alternative for offline nodes.
 
 ## Private node history and exclusions
 
@@ -119,7 +128,7 @@ native termination/retry-budget safeguards. GPU exclusions do not change the
 separately submitted CPU controller's placement. `SBATCH_EXCLUDE` is not a
 substitute: the executor filters scheduler environment overrides.
 
-This requires a new core controller build, still `1.0.0.dev0`; the training
+This requires a core controller build with node-exclusion support; the training
 image need not change. Do not upgrade a live controller or mutate its sealed
 manifest. Existing searches keep their original placement policy; select the
 new build and exclusions when preparing a fresh experiment.
@@ -170,6 +179,40 @@ other workloads instead of claiming these checks cover them.
 ## Time, review boundaries and failure handling
 
 ### Before the search controller starts
+
+Cross-node startup probing is **opt-in** in
+[slurm_controller.sbatch](../examples/automl/slurm_controller.sbatch): leave
+`AUTOML_STARTUP_HELPER` unset for the original direct-CLI launch path. It needs
+only `AUTOML_CONTROLLER_PYTHON`, `AUTOML_MANIFEST`, `AUTOML_WORKSPACE`, and
+`AUTOML_CONTROLLER_MAX_ALLOCATIONS`; no startup observer, base directory, or
+separate deadline variable is required. The search/controller limits still apply,
+but this mode does not provide cross-node bootstrap validation or automatic
+recovery for failures before the controller starts. Monitor native CPU state
+through the site's existing submission service.
+
+The allocation cap **includes the initial allocation**. Native restart generation
+is zero-based: cap `3` allows generations `0`, `1`, and `2`; generation `3` or
+higher exits `2` before a probe or controller runs. Both values must be decimal
+integers (cap positive, generation nonnegative); zero padding such as `003` and
+`0002` is accepted without octal interpretation. Missing `SLURM_RESTART_COUNT`
+means generation `0`. Malformed values now fail early rather than reaching the
+CLI. The shell compares normalized copies but passes the original cap argument
+unchanged. With the helper unset and `AUTOML_ACTION` unset, valid launches keep
+the original CLI argv and direct `exec` signal delivery.
+
+This is the same count/generation boundary as the core's `controller.Session.run`
+check, not a replacement for it: the shell reads `SLURM_RESTART_COUNT`, while the
+core independently reads native `scontrol` `Restarts` and checks ownership,
+resource shape, ledger continuity, and remaining time. Passing the shell check
+does not guarantee core acceptance. A stale or inconsistent scheduler environment
+must be reconciled, not used to bypass either guard.
+
+To enable the supervised path below, additionally set `AUTOML_STARTUP_HELPER`
+to the sealed shared helper path, `AUTOML_STARTUP_BASE` to the registered shared
+attempt base, and `AUTOML_DEADLINE` to the original absolute Unix deadline.
+Once opted in, missing settings or an absent observer fail closed; there is no
+fallback to an unprobed launch. Use this path when startup recovery is part of
+the reviewed launch policy.
 
 Trial recovery and CPU handoff run inside Python. They cannot recover a failed
 batch prolog, missing interpreter, failed environment import or bootstrap that
@@ -224,6 +267,56 @@ and `USR1` to exit while bootstrap is running; never ignore an early signal.
 Use a fresh attempt directory for each native job ID and `SLURM_RESTART_COUNT`
 generation. Validate the generation against the approved allocation cap before
 probing. The external observer must watch each generation automatically.
+The batch template diagnoses invalid restart/allocation values and exhausted
+caps before installing signal traps or running helpers. Bootstrap signals and
+helper failures exit with a diagnostic and status 2, not `EX_TEMPFAIL` (75).
+They do not request native requeue; the external supervisor still owns terminal
+reconciliation and approved startup retries. Site-enforced restarts can still
+occur, but an out-of-budget generation cannot probe or start the controller.
+
+#### Persistent observer service
+
+Use [slurm_controller_watch.py](../tools/cosmos_workflows/scripts/slurm_controller_watch.py)
+on an approved always-on host with the same shared storage and native SLURM
+commands, **outside the CPU allocations it observes**. It automatically selects
+`<attempt-base>/<job-id>-g<Restarts>` for each owned running job. Scheduler outages
+retry read-only; the registry, deadline and observations survive process restarts.
+The watcher never submits, requeues, cancels, or authorizes replacement jobs.
+
+Before submitting CPU controllers:
+
+```bash
+python3 /shared/tools/slurm_controller_watch.py init \
+  --state-dir /shared/run/observer --deadline <original-unix-deadline>
+# Review/install slurm_observer.service on the approved service host first.
+systemctl --user start slurm_observer.service
+python3 /shared/tools/slurm_controller_watch.py ready --state-dir /shared/run/observer
+```
+
+Replace paths in the [user-service template](../examples/automl/slurm_observer.service).
+It restarts the watcher after unexpected exits; the watcher exits normally at the
+original deadline. The user manager must survive logout and the whole run. User
+lingering, login-node residency and service-host availability are site prerequisites,
+not settings to enable implicitly. Occasional `tick` calls or `nohup` alone are not
+a supervised service. `ready` requires a fresh heartbeat **and** a held observer
+lock. Stage the watcher and its sibling startup helper together; both are stdlib-only.
+
+After an acknowledged CPU submission, register its exact ID:
+
+```bash
+python3 /shared/tools/slurm_controller_watch.py register \
+  --state-dir /shared/run/observer --job-id <native-id> \
+  --attempt-base /shared/run/startup --max-allocations <remaining-approved-cap>
+```
+
+Use that attempt base and original deadline in the reviewed
+[CPU batch template](../examples/automl/slurm_controller.sbatch). Register every
+acknowledged controller, including cold continuations; native requeues need no
+manual registration. A lost submission reply still needs the submitter's native-ID
+reconciliation, not a guessed ID or replacement. Registered entries and the deadline
+are immutable. The submitting service still owns terminal monitoring and startup
+retry policy; this watcher supplies the cross-node handshake, not another search
+controller. Restart it on the same host; moving hosts mid-handshake fails closed.
 
 Probe success only means the storage check passed; it does not prove that the
 brain started. Preserve `fanout` before exec and use the native CLI's
@@ -257,7 +350,7 @@ The controller's own allocation must leave time for shutdown before its hard
 wall limit; configure its terminal signals and timeout in the launch envelope.
 Keep the original engine wheel for existing experiments: changing the engine
 build changes its identity even while the development version stays fixed.
-See [development version and build identity](automl.md#development-version-and-build-identity).
+See [source revision, package version and build identity](automl.md#source-revision-package-version-and-build-identity).
 
 ### Explicit cold recovery migration
 
@@ -297,8 +390,13 @@ resource shape, wall time and grace, but set `--controller-max-allocations` to n
 more than the migration's **remaining** allocation count. Prior allocations are
 deducted, and bypassing the CPU session is rejected. The original absolute deadline
 still applies, including controller downtime. Ordinary identity checks are not
-disabled. This narrow operation does not support GEPA, other executors, arbitrary
-engine upgrades or chained migrations.
+disabled. A previously migrated, stopped SFT search requires explicit
+`--continue-migration` with its **current exact wheel**. Each transaction retains
+its predecessor in `migrations/recovery-v<N>.json`, validates CPU history against
+the preceding remaining envelope, and deducts allocations again; it never restores
+the initial cap. Unacknowledged native handoffs still require reconciliation,
+including CPU generations that failed before entering Python. This narrow operation
+does not support GEPA, other executors or arbitrary engine upgrades.
 
 ### Bounded CPU-controller handoff
 
@@ -328,6 +426,10 @@ in-flight LLM request plus at least 60 seconds.
 
 Prepare [slurm_controller.sbatch](../examples/automl/slurm_controller.sbatch),
 replace its site placeholders, and set the documented environment variables.
+`AUTOML_WORKFLOW` is `sft` (default) or `prompts`; `AUTOML_ACTION` is `run`
+(default) or `resume` for a reviewed continuation. Other actions are rejected
+before any probe or approved CLI invocation. Startup probing remains optional
+as described [above](#before-the-search-controller-starts).
 The example starts one experiment per CPU job, using `exec` so the Python
 process receives `--signal=B:USR1@300`. Review before `sbatch`; the example is
 not a ready-to-launch site configuration. It is not a supervisor for an
@@ -396,6 +498,27 @@ Inspect native status before resuming with the same engine/identity; never erase
 cancellation markers or automatically submit a replacement.
 
 ### Submission reconciliation
+
+Timed-out read-only preparation checks are separate from uncertain submissions.
+The controller retries cluster/node/partition checks, batch syntax checks and
+`sbatch --test-only`, backing off up to 300 seconds within the original deadline
+and CPU handoff envelope. `_scheduler_check.json` identifies the operation,
+timeout and `WAITING`/`COMPLETE` state without saving argv, stderr or credentials.
+Nonzero exits, invalid configuration, ownership conflicts and record-hook errors
+are not silently classified as transient scheduler timeouts.
+
+Before submission, the core seals the complete staged attempt's files. A handoff
+during these checks resumes **that reserved candidate** after checking the seal,
+open launch fence, owner, absence of worker/stop receipts and unchanged deadline.
+It does not repeat a proposal or consume a training retry. Older or incomplete
+staging cannot be replayed automatically. The preflight clock is durable even
+before the first ledger is created. The CPU session also retries timed-out native
+identity reads before search startup; unverified ownership still stops safely
+when its bounded preparation time expires.
+
+Once `submission_attempted` is recorded, only the uncertain-submission protocol
+below applies. Failures after the ledger opens now persist an explicit terminal
+error and cleanup observation instead of leaving a stale `RUNNING` ledger.
 
 `execution.slurm.submission_reconcile_seconds` defaults to **120** (1–900).
 A timeout, transport/exit error or invalid `sbatch` acknowledgement keeps the
@@ -541,9 +664,9 @@ retries, count conservatively toward `max_evaluated_examples`. Reflection API ca
 are never retried by this mechanism. Automatic infrastructure retries currently
 require SLURM; local venv/Docker failure classification is not inferred.
 
-These changes require new exact local controller wheels, still core
-`1.0.0.dev0`; they do not upgrade already-running controllers or old experiment
-identities automatically. Do not edit a live manifest/ledger or replace its installed wheel to
+These changes require a controller build with bounded recovery support; selecting
+a new source revision does not upgrade already-running controllers or old experiment
+identities automatically. Do not edit a live manifest/ledger or replace its installed package to
 enable recovery. The worker is staged from the controller; the Framework changes
 declare existing native status files, not new training-image entrypoints.
 CPU fault-injection checks are not live cluster recovery validation.

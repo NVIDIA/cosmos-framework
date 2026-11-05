@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from cosmos_framework.auxiliary.guardrail.common.core import GuardrailRunner
 
 
+PreparedBatch = tuple[list[SampleArgs], dict[str, Any]] | SampleOutputs
+
+
 def _download_on_rank0(download: Callable[[], str | Path]) -> Path:
     """Download once and share the resulting path across distributed ranks."""
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
@@ -122,10 +125,8 @@ class Inference(ABC):
         """Create instance."""
 
     @abstractmethod
-    def create_batches(
-        self, sample_args_list: Sequence[SampleArgs]
-    ) -> Iterator[tuple[list[SampleArgs], dict[str, Any]]]:
-        """Create batches of sample data."""
+    def create_batches(self, sample_args_list: Sequence[SampleArgs]) -> Iterator[PreparedBatch]:
+        """Yield prepared batches or receipts for individual input failures."""
 
     @abstractmethod
     def generate_batch(
@@ -162,7 +163,11 @@ class Inference(ABC):
 
         # Generate batches
         sample_outputs: list[SampleOutputs] = []
-        for i_batch, (sample_args_batch, data_batch) in enumerate(batches):
+        for i_batch, batch in enumerate(batches):
+            if isinstance(batch, SampleOutputs):
+                sample_outputs.append(batch)
+                continue
+            sample_args_batch, data_batch = batch
             log.debug(f"[{i_batch + 1}] Processing batch", rank0_only=False)
 
             if self.setup_args.profile:

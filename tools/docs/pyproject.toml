@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Documentation site toolchain. Standalone project, not part of the root project.
+# See tools/docs/README.md.
+[project]
+name = "cosmos-framework-docs"
+version = "0.0.0"
+description = "Build tooling for the Cosmos-Framework documentation site"
+requires-python = ">=3.13"
+dependencies = [
+  "mkdocs==1.6.1",
+  "mkdocs-material==9.7.7",
+  "pymdown-extensions==11.0.2",
+  "pyyaml==6.0.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+]
+
+[tool.uv]
+package = false

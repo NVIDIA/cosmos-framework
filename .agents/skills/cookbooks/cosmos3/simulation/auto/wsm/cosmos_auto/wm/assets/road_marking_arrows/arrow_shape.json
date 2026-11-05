@@ -1,0 +1,49 @@
+{
+  "_comment": "Canonical WMv4 road-marking arrow glyphs in a template frame where x = vehicle-right and y = forward (direction of travel). 'straight_arrow' is used for forward arrows, single diagonal merge arrows, and the shaft of the combined (fork) classes; 'turn_arrow' is used for fork branches; 'turn_L' is a rounded L-shaped turn arrow used for pure left/right turns (left = turn_L mirrored via scale [-1,1]). Each entry in 'directions' is a list of parts; each part places a transformed copy of a named base shape as scale * R(rotate_deg) * (p - pivot) + pivot + translate (R is CCW; scale is a scalar or [sx,sy]; pivot/translate default to [0,0]). The renderer assembles each direction, centers and independently normalizes its x/y span, then fits it to the individual marking's exported footprint width and length. 'size_scale' is a uniform multiplier after footprint fitting; 1.0 fills the footprint.",
+  "units": "template_units_normalized_at_load",
+  "template_frame": "x_right_y_forward",
+  "straight_arrow": [
+    [-0.22, -1.25],
+    [ 0.22, -1.25],
+    [ 0.22,  0.19],
+    [ 0.55,  0.19],
+    [ 0.00,  1.25],
+    [-0.55,  0.19],
+    [-0.22,  0.19]
+  ],
+  "turn_arrow": [
+    [-0.22, -0.80],
+    [ 0.22, -0.80],
+    [ 0.22, -0.26],
+    [ 0.55, -0.26],
+    [ 0.00,  0.80],
+    [-0.55, -0.26],
+    [-0.22, -0.26]
+  ],
+  "turn_L": [
+    [-0.874,  0.895], [-0.864,  0.897], [ 0.030,  0.897], [ 0.080,  0.911],
+    [ 0.117,  0.947], [ 0.130,  0.997], [ 0.130,  1.214], [ 0.133,  1.223],
+    [ 0.141,  1.219], [ 0.871,  0.684], [ 0.877,  0.677], [ 0.871,  0.671],
+    [ 0.141,  0.136], [ 0.133,  0.132], [ 0.130,  0.141], [ 0.130,  0.357],
+    [ 0.117,  0.407], [ 0.080,  0.444], [ 0.030,  0.457], [-0.337,  0.457],
+    [-0.387,  0.444], [-0.423,  0.407], [-0.437,  0.357], [-0.437, -1.209],
+    [-0.439, -1.220], [-0.450, -1.223], [-0.864, -1.223], [-0.874, -1.220],
+    [-0.877, -1.209], [-0.877,  0.884]
+  ],
+  "directions": {
+    "forward":       [{"shape": "straight", "rotate_deg": 0.0}],
+    "left":          [{"shape": "turn_L", "scale": [-1.0, 1.0]}],
+    "right":         [{"shape": "turn_L"}],
+    "left_forward":  [
+      {"shape": "straight", "rotate_deg": 0.0},
+      {"shape": "turn", "rotate_deg": 90.0, "scale": 0.8, "pivot": [0.0, -0.8], "translate": [0.0, 0.4]}
+    ],
+    "right_forward": [
+      {"shape": "straight", "rotate_deg": 0.0},
+      {"shape": "turn", "rotate_deg": -90.0, "scale": 0.8, "pivot": [0.0, -0.8], "translate": [0.0, 0.4]}
+    ],
+    "merge_left":  [{"shape": "straight", "rotate_deg": 45.0}],
+    "merge_right": [{"shape": "straight", "rotate_deg": -45.0}]
+  },
+  "size_scale": 1.0
+}

@@ -1,0 +1,57 @@
+{
+  "name": "daytime_scene",
+  "prompt_from_camera": "camera_front_wide_120fov",
+  "resolution": "480",
+  "aspect_ratio": "16,9",
+  "num_frames": 297,
+  "fps": 30,
+  "seed": 0,
+  "wsm": {},
+  "multiview": {
+    "condition_video_as_image": true,
+    "views": [
+      {
+        "camera_key": "camera_front_wide_120fov",
+        "control_path": "daytime_scene/wsm/camera_front_wide_120fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_front_wide_120fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_front_wide_120fov.json"
+      },
+      {
+        "camera_key": "camera_cross_right_120fov",
+        "control_path": "daytime_scene/wsm/camera_cross_right_120fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_cross_right_120fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_cross_right_120fov.json"
+      },
+      {
+        "camera_key": "camera_rear_right_70fov",
+        "control_path": "daytime_scene/wsm/camera_rear_right_70fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_rear_right_70fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_rear_right_70fov.json"
+      },
+      {
+        "camera_key": "camera_rear_tele_30fov",
+        "control_path": "daytime_scene/wsm/camera_rear_tele_30fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_rear_tele_30fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_rear_tele_30fov.json"
+      },
+      {
+        "camera_key": "camera_rear_left_70fov",
+        "control_path": "daytime_scene/wsm/camera_rear_left_70fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_rear_left_70fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_rear_left_70fov.json"
+      },
+      {
+        "camera_key": "camera_cross_left_120fov",
+        "control_path": "daytime_scene/wsm/camera_cross_left_120fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_cross_left_120fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_cross_left_120fov.json"
+      },
+      {
+        "camera_key": "camera_front_tele_30fov",
+        "control_path": "daytime_scene/wsm/camera_front_tele_30fov.mp4",
+        "vision_path": "daytime_scene/rgb/camera_front_tele_30fov.mp4",
+        "caption_path": "daytime_scene/captions/camera_front_tele_30fov.json"
+      }
+    ]
+  }
+}

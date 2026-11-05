@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Base MkDocs configuration. Do not build from this file directly:
+# tools/docs/stage.py stages the pages into build/docs-site/ and writes
+# build/mkdocs.yml = this file + docs_dir, site_dir, nav, not_in_nav and hooks.
+# See docs/README.md.
+
+site_name: Cosmos-Framework
+site_description: One Python package to train, post-train, evaluate and serve Cosmos3 omnimodal world models.
+site_url: https://nvidia.github.io/cosmos-framework/
+repo_url: https://github.com/NVIDIA/cosmos-framework
+repo_name: NVIDIA/cosmos-framework
+edit_uri: ""
+copyright: >-
+  © 2026 NVIDIA Corporation &middot; Content licensed under
+  <a href="https://github.com/NVIDIA/cosmos-framework/blob/main/LICENSE">OpenMDW-1.1</a><br>
+  <a href="https://www.nvidia.com/en-us/about-nvidia/privacy-policy/">Privacy Policy</a> &middot;
+  <a href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Your Privacy Choices</a> &middot;
+  <a href="https://www.nvidia.com/en-us/about-nvidia/terms-of-service/">Terms of Service</a> &middot;
+  <a href="https://www.nvidia.com/en-us/about-nvidia/accessibility/">Accessibility</a> &middot;
+  <a href="https://www.nvidia.com/en-us/about-nvidia/company-policies/">Corporate Policies</a> &middot;
+  <a href="https://www.nvidia.com/en-us/product-security/">Product Security</a> &middot;
+  <a href="https://www.nvidia.com/en-us/contact/">Contact</a>
+
+theme:
+  name: material
+  # Cosmos logo from the nvidia-cosmos GitHub organization avatar, with its transparent margin cropped.
+  logo: images/cosmos-logo.png
+  favicon: images/cosmos-logo.png
+  # No Google Fonts: system fonts only, so visitors' IPs are not sent to a third party.
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    # navigation.indexes stays off: it turns the first README/index page of a
+    # section into the section link and hides it from the section's children.
+    - navigation.tabs
+    - navigation.sections
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search:
+      # Split on code punctuation and camelCase so identifiers such as
+      # torch._functionalization or DataPacker match partial queries.
+      separator: '[\s\u200b\-_,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      # GitHub-compatible heading anchors, so links work on GitHub and on the site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - tables
+  - attr_list
+  - md_in_html
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: false
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn

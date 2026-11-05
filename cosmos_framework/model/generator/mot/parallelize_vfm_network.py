@@ -97,12 +97,14 @@ def _validate_multiview_window_activation_checkpointing(
         return
 
     window_names = (
-        "sensor_to_sensor_window",
-        "sensor_to_control_window",
-        "control_to_control_window",
-        "control_to_sensor_window",
+        "sensor_to_sensor_bounds",
+        "sensor_to_control_bounds",
+        "control_to_control_bounds",
+        "control_to_sensor_bounds",
     )
-    configured_windows = [name for name in window_names if getattr(mask_config, name, None) is not None]
+    configured_windows = [
+        name for name in window_names if getattr(mask_config.same_view_temporal_window, name, None) is not None
+    ]
     if configured_windows:
         raise NotImplementedError(
             "Selective activation checkpointing with save_only_marked_ops=True is not yet implemented for "

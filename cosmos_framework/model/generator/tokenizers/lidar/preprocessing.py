@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
 from pathlib import Path
 from typing import IO, Any, TypeAlias
@@ -13,6 +14,7 @@ from typing import IO, Any, TypeAlias
 import numpy as np
 import torch
 import torch.nn.functional as F
+from attrs import evolve
 
 from cosmos_framework.model.generator.tokenizers.lidar.paths import is_remote_uri, s3_backend_args
 from cosmos_framework.model.generator.tokenizers.lidar.range_projection import (
@@ -463,8 +465,10 @@ def rasterize_sparse_range_frame(
     rows: np.ndarray,
     cols: np.ndarray,
     ranges: np.ndarray,
+    *,
+    width: int = RANGE_RAW_WIDTH,
 ) -> np.ndarray:
-    """Rasterize sparse LiDAR returns into a dense ``[128,3600]`` range map."""
+    """Rasterize sparse LiDAR returns at their source lattice width."""
     if rows.shape != cols.shape or rows.shape != ranges.shape:
         raise ValueError(
             f"Sparse range-map arrays must share one length: rows={rows.shape}, cols={cols.shape}, ranges={ranges.shape}"
@@ -473,9 +477,9 @@ def rasterize_sparse_range_frame(
     col_index = cols.astype(np.int64)
     if row_index.size and (row_index.min() < 0 or row_index.max() >= RANGE_HEIGHT):
         raise ValueError(f"Range-map rows must lie in [0, {RANGE_HEIGHT}), got max {row_index.max()}")
-    if col_index.size and (col_index.min() < 0 or col_index.max() >= RANGE_RAW_WIDTH):
-        raise ValueError(f"Range-map columns must lie in [0, {RANGE_RAW_WIDTH}), got max {col_index.max()}")
-    dense = np.zeros((RANGE_HEIGHT, RANGE_RAW_WIDTH), dtype=np.float32)  # [H,W]
+    if col_index.size and (col_index.min() < 0 or col_index.max() >= width):
+        raise ValueError(f"Range-map columns must lie in [0, {width}), got max {col_index.max()}")
+    dense = np.zeros((RANGE_HEIGHT, width), dtype=np.float32)  # [H,W]
     dense[row_index, col_index] = ranges.astype(np.float32)  # [H,W]
     return dense
 
@@ -530,6 +534,35 @@ def _sparse_frame_members(archive: tarfile.TarFile) -> dict[int, tuple[str, dict
     return frames
 
 
+def _tar_width(archive: tarfile.TarFile, clip_keys: set[str]) -> int:
+    """Read v2 lattice metadata; unversioned archives use the legacy 3600 grid."""
+    suffix = ".lidar_metadata.json"
+    members = [member for member in archive.getmembers() if member.name.endswith(suffix)]
+    if not members:
+        return RANGE_RAW_WIDTH
+    if len(members) != 1:
+        raise ValueError("Expected one LiDAR metadata file per archive")
+    member = members[0]
+    if not member.isfile() or clip_keys != {member.name.removesuffix(suffix)}:
+        raise ValueError("LiDAR metadata does not match the archive's clip")
+    stream = archive.extractfile(member)
+    if stream is None:
+        raise ValueError("Cannot read LiDAR metadata")
+    with stream:
+        metadata = json.load(stream)
+    if not isinstance(metadata, dict):
+        raise ValueError("LiDAR metadata must be a JSON object")
+    width = metadata.get("n_columns")
+    if (
+        metadata.get("format_version") != 2
+        or metadata.get("n_rows") != RANGE_HEIGHT
+        or type(width) is not int
+        or width not in (1800, 3600)
+    ):
+        raise ValueError(f"Unsupported LiDAR metadata: {metadata}")
+    return width
+
+
 def _expected_clip_key_set(expected_clip_key: ExpectedClipKey | None) -> set[str] | None:
     """Return the accepted rangemap clip keys, or None when validation is disabled."""
     if expected_clip_key is None:
@@ -539,20 +572,28 @@ def _expected_clip_key_set(expected_clip_key: ExpectedClipKey | None) -> set[str
     return set(expected_clip_key)
 
 
-def _rasterize_tar_frame(archive: tarfile.TarFile, source_frame_id: int, members: dict[str, str]) -> np.ndarray:
+def _rasterize_tar_frame(
+    archive: tarfile.TarFile,
+    source_frame_id: int,
+    members: dict[str, str],
+    *,
+    width: int = RANGE_RAW_WIDTH,
+) -> np.ndarray:
     missing = {"row", "col", "range"} - members.keys()
     if missing:
         raise ValueError(f"Incomplete sparse LiDAR frame {source_frame_id}: missing {sorted(missing)}")
     rows = _load_tar_npz_array(archive, members["row"])
     cols = _load_tar_npz_array(archive, members["col"])
     ranges = _load_tar_npz_array(archive, members["range"])
-    return rasterize_sparse_range_frame(rows, cols, ranges)
+    return rasterize_sparse_range_frame(rows, cols, ranges, width=width)
 
 
 def _rasterize_tar_frame_with_intensity(
     archive: tarfile.TarFile,
     source_frame_id: int,
     members: dict[str, str],
+    *,
+    width: int = RANGE_RAW_WIDTH,
 ) -> tuple[np.ndarray, np.ndarray]:
     missing = {"row", "col", "range", "intensity"} - members.keys()
     if missing:
@@ -567,8 +608,8 @@ def _rasterize_tar_frame_with_intensity(
             f"intensity={intensities.shape}, range={ranges.shape}"
         )
     return (
-        rasterize_sparse_range_frame(rows, cols, ranges),
-        rasterize_sparse_range_frame(rows, cols, intensities),
+        rasterize_sparse_range_frame(rows, cols, ranges, width=width),
+        rasterize_sparse_range_frame(rows, cols, intensities, width=width),
     )
 
 
@@ -581,6 +622,8 @@ def load_lidar_frames(
     """Load selected positional sweeps from one LidarGEN tar as ``[T,128,3600]``."""
     with _open_tar_archive(tar_path, backend_args=backend_args) as archive:
         frame_members = _sparse_frame_members(archive)
+        if _tar_width(archive, {key for key, _ in frame_members.values()}) != RANGE_RAW_WIDTH:
+            raise ValueError("This legacy reader requires 3600 columns; use load_prepared_lidar_video_3ch")
         source_frame_ids = sorted(frame_members)
         selected = frame_indices if frame_indices is not None else list(range(len(source_frame_ids)))
         frames: list[np.ndarray] = []
@@ -621,6 +664,8 @@ def load_prepared_range_video(
         raise ValueError(f"max_frames_per_chunk must be positive, got {max_frames_per_chunk}")
     with _open_tar_archive(tar_source, backend_args=backend_args) as archive:
         frame_members = _sparse_frame_members(archive)
+        if _tar_width(archive, {key for key, _ in frame_members.values()}) != RANGE_RAW_WIDTH:
+            raise ValueError("This legacy reader requires 3600 columns; use load_prepared_lidar_video_3ch")
         expected_clip_keys = _expected_clip_key_set(expected_clip_key)
         if expected_clip_keys is not None:
             mismatched_clip_keys = sorted(
@@ -756,6 +801,10 @@ def load_prepared_lidar_video_3ch(
     HD-map rangemaps do not carry return intensity. For those controls,
     ``with_intensity=False`` gives every occupied ray unit intensity while
     preserving range-derived validity.
+
+    Format-v2 archives declare their source width (1800 or 3600). The requested
+    semantic/model widths stay unchanged; incompatible projections fail rather
+    than upsampling missing rays. Unversioned archives retain the 3600 contract.
     """
     if min_source_frame_id > max_source_frame_id:
         raise ValueError(
@@ -766,6 +815,8 @@ def load_prepared_lidar_video_3ch(
         raise ValueError(f"max_frames_per_chunk must be positive, got {max_frames_per_chunk}")
     with _open_tar_archive(tar_source, backend_args=backend_args) as archive:
         frame_members = _sparse_frame_members(archive)
+        width = _tar_width(archive, {key for key, _ in frame_members.values()})
+        source_projection = evolve(range_projection, native_width=width)
         expected_clip_keys = _expected_clip_key_set(expected_clip_key)
         if expected_clip_keys is not None:
             mismatched_clip_keys = sorted(
@@ -793,10 +844,12 @@ def load_prepared_lidar_video_3ch(
             for source_frame_id in chunk_ids:
                 _, members = frame_members[source_frame_id]
                 if with_intensity:
-                    metric, intensity = _rasterize_tar_frame_with_intensity(archive, source_frame_id, members)
+                    metric, intensity = _rasterize_tar_frame_with_intensity(
+                        archive, source_frame_id, members, width=width
+                    )
                     intensity_frames.append(intensity)
                 else:
-                    metric = _rasterize_tar_frame(archive, source_frame_id, members)
+                    metric = _rasterize_tar_frame(archive, source_frame_id, members, width=width)
                 metric_frames.append(metric)
             # Only prepend on the first chunk when requested, to avoid duplicating
             # frame 0 at every chunk boundary.
@@ -806,7 +859,7 @@ def load_prepared_lidar_video_3ch(
                     np.stack(metric_frames),
                     np.stack(intensity_frames) if with_intensity else None,
                     prepend_first_frame=chunk_prepend,
-                    range_projection=range_projection,
+                    range_projection=source_projection,
                 )
             )
     return torch.cat(prepared_chunks, dim=1), selected_ids

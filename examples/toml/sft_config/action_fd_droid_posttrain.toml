@@ -20,7 +20,7 @@ experiment = "action_fd_droid_posttrain"
 project    = "cosmos3_action_fd"
 group      = "action_sft"
 name       = "action_fd_droid_posttrain"
-wandb_mode = "online"
+wandb_mode = "disabled"
 
 [model]
 precision = "bfloat16"

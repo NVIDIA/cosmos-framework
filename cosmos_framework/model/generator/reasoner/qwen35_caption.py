@@ -145,7 +145,7 @@ def configure_qwen35_caption_model(
     fused_weighted_ce: bool = False,
     weighted_ce_exponent: float = 0.5,
 ) -> None:
-    """Install the MR !11447 options on the unified dense Qwen3.5 HF model.
+    """Install the caption training options on the unified dense Qwen3.5 HF model.
 
     The conditional vision tower stays in the root FSDP unit (parallelize_vlm),
     so text, image and video ranks execute the same collective schedule. The

@@ -75,8 +75,10 @@ class FileClient:
     if TRAINING:
         try:
             from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
-        except ImportError:
-            pass
+        except ModuleNotFoundError as error:
+            # Only a missing optional S3 client is tolerated; any other import failure surfaces here.
+            if (error.name or "").split(".")[0] not in {"boto3", "botocore", "multistorageclient"}:
+                raise
         else:
             _backends["s3"] = MSCBackend
             _backends["msc"] = MSCBackend

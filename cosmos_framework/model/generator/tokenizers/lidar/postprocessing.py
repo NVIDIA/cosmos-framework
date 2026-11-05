@@ -19,9 +19,12 @@ it is unprojected to XYZ, and the single switch that turns it on; see
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import attrs
 import torch
 
+from cosmos_framework.utils.generator.host_threads import torch_host_threads
 from cosmos_framework.model.generator.tokenizers.lidar.preprocessing import (
     INVALID_NORMALIZED_VALUE,
     MAX_RANGE_METERS,
@@ -61,7 +64,7 @@ class RangeSmoothing:
     column each sample is a different beam at a different elevation, and on the
     ground plane -- most of a sweep -- that is a steep true range gradient, so
     those neighbours disagree because the surface really is at another distance.
-    Averaging them in trades noise for distortion. Measured over 15 MADS sweeps,
+    Averaging them in trades noise for distortion. Measured over 15 recorded sweeps,
     filtering ground truth with the 5x5 window this shipped with moves a
     surviving ray 0.098 m, against 0.067 m for one row; a 5x1 column-only
     control accounts for 0.079 m of that, which is where it comes from. On truth
@@ -185,7 +188,13 @@ def _smooth_range_sweeps(
     window_keep = neighbourhood(keep.to(ranges.dtype))
 
     sigma = (smoothing.range_sigma_m + smoothing.range_sigma_ratio * ranges.abs()).unsqueeze(-1)
-    similarity = torch.exp(-0.5 * ((windows - ranges.unsqueeze(-1)) / sigma) ** 2)
+    exponent = -0.5 * ((windows - ranges.unsqueeze(-1)) / sigma) ** 2  # [N,1,H,W,K]
+    # MKL 2021 can crash inside parallel CPU exp. Serialize this call and restore
+    # the caller's thread budget for the remaining smoothing operations.
+    exp_context = torch_host_threads(1) if ranges.device.type == "cpu" else nullcontext()
+    with exp_context:
+        similarity = torch.exp(exponent)  # [N,1,H,W,K]
+    del exponent
     spatial = _spatial_weights(elevation, azimuth, smoothing.spatial_sigma, dtype=ranges.dtype, device=ranges.device)
     weights = window_keep * spatial * similarity
 

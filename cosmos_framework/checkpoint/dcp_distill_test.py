@@ -3,12 +3,15 @@
 
 """CPU tests for the distillation checkpointer ModelWrapper fake-score handling."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import torch.distributed.checkpoint as dcp
 import torch.nn as nn
+from torch.distributed.checkpoint.filesystem import FileSystemReader
 
 import cosmos_framework.checkpoint.dcp_distill as dcp_distill_module
 from cosmos_framework.checkpoint.dcp import AsyncMode
@@ -191,6 +194,41 @@ def test_strict_resume_rejects_missing_fake_score_tensor() -> None:
     destination = _ListWrappedFakeScoreModel()
     with pytest.raises(ValueError, match="Strict resume failed"):
         ModelWrapper(destination, strict_resume=True).load_state_dict(state_dict)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("checkpoint_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("resume_optimizer", [False, True])
+@pytest.mark.parametrize("strict_resume", [False, True])
+def test_full_resume_checks_saved_precision_before_dcp_casts(
+    checkpoint_dtype: torch.dtype, resume_optimizer: bool, strict_resume: bool, tmp_path: Path
+) -> None:
+    source = _SaveContractModel()
+    source.net_fake_score.to(dtype=checkpoint_dtype)
+    dcp.save(ModelWrapper(source).state_dict(), checkpoint_id=tmp_path / "model")
+    destination = _SaveContractModel()
+    before = destination.net_fake_score.weight.detach().clone()  # [2,2]
+    checkpoint_source = SimpleNamespace(path=str(tmp_path), warm_start=True)
+    checkpointer = object.__new__(DistributedCheckpointer)
+    checkpointer.callbacks = None
+    checkpointer.config_checkpoint = SimpleNamespace(strict_resume=strict_resume, keys_to_skip_loading=[])
+    checkpointer.keys_to_resume_during_load = MagicMock(
+        return_value=(["model", "optim"] if resume_optimizer else ["model"], checkpoint_source)
+    )
+    checkpointer._check_checkpoint_exists = MagicMock()
+    checkpointer.get_storage_reader = MagicMock(side_effect=lambda path, source: FileSystemReader(path))
+
+    with patch.object(dcp_distill_module.dist, "barrier"):
+        if strict_resume and resume_optimizer and checkpoint_dtype != torch.float32:
+            with pytest.raises(ValueError, match="Strict resume cannot recover FP32 accumulators"):
+                checkpointer.load(destination, optimizer={})
+            torch.testing.assert_close(destination.net_fake_score.weight, before, rtol=0, atol=0)
+        else:
+            assert checkpointer.load(destination, optimizer={}) == 0
+            torch.testing.assert_close(
+                destination.net_fake_score.weight, source.net_fake_score.weight.float(), rtol=0, atol=0
+            )
 
 
 @pytest.mark.L0

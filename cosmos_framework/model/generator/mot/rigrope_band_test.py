@@ -48,7 +48,7 @@ def _packs(tensors: list[torch.Tensor]) -> list[SequencePack]:
 
 
 def _plan(
-    radius: int, frame_zero: bool, packs: list[SequencePack], *, band_keys: str = "all_views"
+    radius: int, frame_zero: bool, packs: list[SequencePack], *, band_keys: str = "other_views"
 ) -> dense.MultiviewMasklessPlan:
     return dense.build_multiview_maskless_plan(
         [_VIEWS] * _SAMPLES,
@@ -105,7 +105,7 @@ def _reference(
     *,
     radius: int,
     frame_zero: bool,
-    band_keys: str = "all_views",
+    band_keys: str = "other_views",
 ) -> torch.Tensor:  # [N_gen,H*D]
     """Every pass's keys concatenated under one softmax per (query, head), from the layout alone."""
     raw_q, raw_k, v = [get_full_only_seq(pack)[0] for pack in packs]  # [N_gen,H,D], [N_gen,H_kv,D]x2
@@ -158,7 +158,7 @@ def _reference(
 @pytest.mark.parametrize(("radius", "frame_zero"), [(1, True), (0, True), (2, False)])
 @pytest.mark.parametrize(("heads", "kv_heads"), [(2, 2), (4, 2)])
 @pytest.mark.parametrize("missing_geometry", ["time_only", "mrope"])
-@pytest.mark.parametrize("band_keys", ["all_views", "own_view", "other_views"])
+@pytest.mark.parametrize("band_keys", ["other_views"])
 def test_band_rotates_each_key_by_its_own_token(
     monkeypatch: pytest.MonkeyPatch,
     radius: int,
@@ -175,7 +175,7 @@ def test_band_rotates_each_key_by_its_own_token(
     tensors = [torch.randn(lengths, count, _HEAD_DIM) for count in (heads, kv_heads, kv_heads)]  # each [N,H,D]
     packs = _packs(tensors)
     plan = _plan(radius, frame_zero, packs, band_keys=band_keys)
-    assert plan.cross_view_kv_gather is not None
+    assert plan.cross_view_partitions
     valid = None
     if missing_geometry == "mrope":
         valid = torch.zeros(plan.padded_gen_tokens, dtype=torch.bool)  # [N_gen]
@@ -193,23 +193,11 @@ def test_band_rotates_each_key_by_its_own_token(
     torch.testing.assert_close(actual[: expected.shape[0]], expected, atol=2e-5, rtol=2e-5)
 
 
-def test_own_view_band_keys_only_the_query_view_outside_its_instant() -> None:
+@pytest.mark.parametrize("band_keys", ["all_views", "own_view"])
+def test_overlapping_band_modes_are_rejected(band_keys: str) -> None:
     packs = _packs([torch.zeros(_SAMPLES * (_TEXT + _TOKENS), 1, _HEAD_DIM) for _ in range(3)])
-    shared = _plan(1, True, packs)
-    split = _plan(1, True, packs, band_keys="own_view")
-    assert shared.cross_view_offsets is not None and split.cross_view_offsets is not None
-    assert split.cross_view_gather is not None and split.cross_view_kv_gather is not None
-    # One query run per (sample, instant, view) rather than per (sample, instant).
-    assert torch.diff(shared.cross_view_offsets).tolist() == [_VIEWS * _SPATIAL] * (_SAMPLES * _FRAMES)
-    assert torch.diff(split.cross_view_offsets).tolist() == [_SPATIAL] * (_SAMPLES * _FRAMES * _VIEWS)
-    assert sorted(split.cross_view_gather.tolist()) == list(range(_SAMPLES * _TOKENS))
-    # Sample 0, instant 2, view 0 (tokens 4..5): every view at instant 2, and only view 0 at
-    # instants 0, 1 and 3 -- the band and frame 0.
-    assert split.cross_view_kv_offsets is not None
-    run = split.cross_view_gather.tolist().index(4) // _SPATIAL
-    start, end = split.cross_view_kv_offsets[run : run + 2].tolist()
-    view_1 = _FRAMES * _SPATIAL
-    assert sorted(split.cross_view_kv_gather[start:end].tolist()) == [0, 1, 2, 3, 4, 5, 6, 7, view_1 + 4, view_1 + 5]
+    with pytest.raises(ValueError, match="every allowed key is counted once"):
+        _plan(1, True, packs, band_keys=band_keys)
 
 
 def test_band_keys_rejects_an_unknown_mode() -> None:

@@ -111,7 +111,11 @@ class OmniModelWorker:
 
         # Generate batches
         sample_outputs_list: list[SampleOutputs] = []
-        for sample_args_list, data_batch in batches:
+        for batch in batches:
+            if isinstance(batch, SampleOutputs):
+                sample_outputs_list.append(batch)
+                continue
+            sample_args_list, data_batch = batch
             sample_outputs_list.extend(self.pipe.generate_batch(sample_args_list, data_batch))
         return sample_outputs_list
 

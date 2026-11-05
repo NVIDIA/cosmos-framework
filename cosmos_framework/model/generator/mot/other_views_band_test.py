@@ -11,6 +11,7 @@ import pytest
 import torch
 from torch._dynamo.testing import CompileCounter
 
+from cosmos_framework.configs.base.defaults.multiview_attention import CrossViewTemporalWindowConfig
 from cosmos_framework.model.generator.mot import multiview_maskless_attention as dense
 from cosmos_framework.model.generator.mot.camera_relative_pose import prope_pair_channels
 from cosmos_framework.model.generator.mot.camera_relative_pose_test import _reference_attention, _reference_merge
@@ -80,7 +81,7 @@ def _build_deduplicated_plan(
     radius: int,
     padded_gen_tokens: int | None = None,
 ) -> dense.MultiviewMasklessPlan:
-    """The exact partition of ``deduplicate_cross_view``, windowed to ``radius`` frames of one second."""
+    """The default exact partition, windowed to ``radius`` frames of one second."""
     items = [item for sample_items in samples for item in sample_items]
     return dense.build_multiview_maskless_plan(
         [views for views, _, _ in items],
@@ -91,8 +92,9 @@ def _build_deduplicated_plan(
         is_control=[control for _, _, control in items],
         control_attends_sensor=True,
         view_axis=[axis for _, axis, _ in items],
-        deduplicate_cross_view=True,
-        decomposed_temporal_window_seconds=(-float(radius), float(radius)) if radius else None,
+        cross_view_temporal_window=CrossViewTemporalWindowConfig(
+            bounds=(-float(radius), float(radius)) if radius else None
+        ),
         padded_gen_tokens=padded_gen_tokens,
     )
 
@@ -169,43 +171,37 @@ def test_partition_keys_each_other_view_in_the_band_exactly_once(
 )
 @pytest.mark.parametrize("radius", [0, 1, 2])
 def test_deduplicated_partition_keys_what_the_other_views_band_keys(samples: list[list[_Item]], radius: int) -> None:
-    """``deduplicate_cross_view`` (windowed to ``radius`` frames) is the ``"other_views"`` band's key set."""
+    """The default exact partition (windowed to ``radius`` frames) is the ``"other_views"`` band's key set."""
     plan = _build_deduplicated_plan(samples, radius=radius)
     assert plan.cross_view_partitions
     assert _cross_pairs(plan) == _expected_pairs(_layout(samples), radius, False)
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"deduplicate_cross_view": True},
-        {"decomposed_temporal_window_seconds": (-1.0, 1.0), "seconds_per_frame": [1.0]},
-    ],
-)
-@pytest.mark.parametrize("band", [{"cross_view_band_radius": 1}, {"cross_view_band_keys": "other_views"}])
-def test_band_refuses_the_deduplicated_and_windowed_cross_view(
-    overrides: dict[str, object], band: dict[str, object]
-) -> None:
+@pytest.mark.parametrize("band", [{"cross_view_band_radius": 1}, {"include_frame_zero": True}])
+def test_band_refuses_the_capture_time_window(band: dict[str, object]) -> None:
     with pytest.raises(ValueError, match="set one or the other"):
         dense.build_multiview_maskless_plan(
-            [2], [(2 * _FRAMES, 1, _SPATIAL)], device=torch.device("cpu"), **overrides, **band
+            [2],
+            [(2 * _FRAMES, 1, _SPATIAL)],
+            device=torch.device("cpu"),
+            cross_view_temporal_window=CrossViewTemporalWindowConfig(bounds=(-1.0, 1.0)),
+            seconds_per_frame=[1.0],
+            **band,
         )
 
 
 def test_tree_passes_gather_each_key_once_per_level_not_per_query_view() -> None:
     plan = _build_plan([[(7, 0, False)]], radius=1, frame_zero=False)
-    aligned = _build_plan([[(7, 0, False)]], radius=1, frame_zero=False, band_keys="all_views")
-    assert aligned.cross_view_kv_gather is not None
     keys = sum(cross_pass.kv_gather.numel() for cross_pass in dense.cross_view_passes(plan))
     # Three levels over seven views, each gathering every key at most once per band instant.
-    assert keys <= 3 * aligned.cross_view_kv_gather.numel()
+    aligned_keys = sum(len(_band(frame, 1, False) & set(range(_FRAMES))) for frame in range(_FRAMES)) * 7 * _SPATIAL
+    assert keys <= 3 * aligned_keys
 
 
 def test_all_single_view_batch_skips_the_cross_pass() -> None:
     plan = _build_plan([[(1, 0, False)], [(1, 0, True), (1, 0, False)]], radius=5, frame_zero=True)
     assert plan.cross_view_empty
-    assert plan.cross_view_gather is None and plan.cross_view_kv_gather is None
-    assert plan.cross_view_extra_passes == ()
+    assert plan.cross_view_partitions == ()
     assert dense.cross_view_passes(plan) == []
 
 
@@ -222,19 +218,18 @@ def test_two_groups_that_never_share_a_band_skip_the_cross_pass(band_keys: str) 
         view_axis=[0, 1],
         cross_view_band_keys=band_keys,
     )
-    # The aligned partition still runs each instant against itself, which only re-keys the
-    # query's own view; the exact band has nothing to key.
-    assert plan.cross_view_empty == (band_keys == "other_views")
+    # Neither mode re-keys the query's own view when no other view shares its instant.
+    assert plan.cross_view_empty
 
 
-def test_same_view_scope_refuses_other_views() -> None:
+def test_same_view_scope_refuses_cross_view_expansion() -> None:
     with pytest.raises(ValueError, match="decomposed"):
         dense.build_multiview_maskless_plan(
             [2],
             [(2 * _FRAMES, 1, _SPATIAL)],
             device=torch.device("cpu"),
             attention_scope="same_view",
-            cross_view_band_keys="other_views",
+            cross_view_band_radius=1,
         )
 
 
@@ -420,7 +415,7 @@ def test_tree_passes_match_one_softmax_forward_and_backward(
 def test_deduplicated_partitions_match_one_softmax_forward_and_backward(
     monkeypatch: pytest.MonkeyPatch, encoding: str, radius: int
 ) -> None:
-    """The cross-view geometry encodings run over ``deduplicate_cross_view``'s partitions too."""
+    """The cross-view geometry encodings run over the exact cross-view partitions."""
     monkeypatch.setattr(dense, "attention", _reference_attention)
     monkeypatch.setattr(dense, "merge_attentions", _reference_merge)
     torch.manual_seed(35)
@@ -469,7 +464,7 @@ def _pretrained(
 
 
 @pytest.mark.parametrize("encoding", ["rigrope", "rigrope_pairs", "prope"])
-@pytest.mark.parametrize("band_keys", ["other_views", "all_views"])
+@pytest.mark.parametrize("band_keys", ["other_views"])
 def test_single_view_sample_in_a_mixed_batch_is_pretrained_mrope_attention(
     monkeypatch: pytest.MonkeyPatch, encoding: str, band_keys: str
 ) -> None:

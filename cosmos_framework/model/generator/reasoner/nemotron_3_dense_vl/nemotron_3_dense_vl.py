@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Nemotron-H style text modules for Nemotron 3 Dense VL (ReLU^2 MLP, partial RoPE helper, mRoPE)."""
+"""Nemotron-H style text modules for dense vision-language backbone (ReLU^2 MLP, partial RoPE helper, mRoPE)."""
 
 from __future__ import annotations
 
@@ -145,7 +145,8 @@ class Nemotron3DenseVLPreTrainedModel(PreTrainedModel):
     _supports_sdpa = True
 
     def _init_weights(self, module: nn.Module, buffer_device: torch.device | None) -> None:
-        super()._init_weights(module)
+        if getattr(module, "_modelopt_high_precision_dtype", None) is None:
+            super()._init_weights(module)
         if isinstance(module, MultiModalRotaryEmbedding):
             module.init_weights(buffer_device=buffer_device)
 

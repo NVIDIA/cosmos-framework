@@ -231,6 +231,12 @@ class FusedAdam(torch.optim.Optimizer):
                     # Exponential moving average of squared gradient values
                     state["exp_avg_sq"] = torch.zeros_like(p).float()
 
+                # Keep empty local shards in optimizer state for checkpoint resharding,
+                # but omit them from TE's kernel lists. Mixing empty and nonempty
+                # tensors in the fused kernel can cause a CUDA memory access error.
+                if get_local_tensor_if_DTensor(p).numel() == 0:
+                    continue
+
                 if p.dtype == torch.float16:
                     if self.master_weights:
                         p_16_master.append(get_local_tensor_if_DTensor(p_master))

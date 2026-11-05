@@ -1,0 +1,118 @@
+<!--
+ SPDX-FileCopyrightText: Copyright (c) 2025 i2rt robotics
+ SPDX-License-Identifier: MIT
+
+ MIT License
+
+ Copyright (c) 2025 i2rt robotics
+
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+-->
+
+<mujoco model="yam_v0">
+  <!-- Kinematics-only FK asset derived from MuJoCo Menagerie i2rt_yam/yam.xml. -->
+  <compiler angle="radian" />
+  <option integrator="implicitfast" />
+  <default>
+    <default class="yam">
+      <position inheritrange="1" />
+      <joint frictionloss="0.1" axis="0 0 1" />
+      <default class="dm4340">
+        <joint armature="0.032" />
+        <position kp="40" kv="2.5" forcerange="-28 28" />
+      </default>
+      <default class="dm4310">
+        <joint armature="0.0018" />
+        <position kp="10" kv="1" forcerange="-10 10" />
+      </default>
+      <default class="visual">
+        </default>
+      <default class="collision">
+        <default class="sphere_collision">
+          </default>
+      </default>
+      <default class="finger">
+        <joint type="slide" armature="0.1" frictionloss="0.1" />
+        <position ctrlrange="0.0 0.041" kp="100" kv="10" inheritrange="0" />
+      </default>
+    </default>
+  </default>
+  <worldbody>
+    <light name="spotlight" mode="targetbodycom" target="link_6" pos="0 0 1" />
+    <body name="arm" childclass="yam">
+      <body name="link_1" pos="0 0 0.0631" quat="1 0 0 1">
+        <inertial pos="-0.00192861 -0.00795735 0.0208176" quat="0.297851 0.642634 0.360045 0.607185" mass="0.12415" diaginertia="0.000180751 0.000145532 5.89179e-05" />
+        <joint name="joint1" range="-2.61799 3.05433" class="dm4340" />
+        <body name="link_2" pos="2.5e-05 -0.02 0.0409" quat="1 1 1 1" gravcomp="1">
+          <inertial pos="0.132008 2.10599e-06 0.000293073" quat="1 1 1 1" mass="1.24434" diaginertia="0.0121902 0.0121318 0.000683304" />
+          <joint name="joint2" range="0 3.66519" class="dm4340" />
+          <body name="link_3" pos="0.264 0 0" quat="0 1 0 0" gravcomp="1">
+            <inertial pos="-0.121816 -0.054846 -0.000111108" quat="1 1 1 1" mass="0.853698" diaginertia="0.00699732 0.00696112 0.000788244" />
+            <joint name="joint3" range="0 3.66519" class="dm4340" />
+            <body name="link_4" pos="-0.245 -0.06 0" quat="1 0 0 0" gravcomp="1">
+              <inertial pos="-0.0769778 -0.0527104 0.000154878" quat="0.667 0.667 -0.236 -0.236" mass="0.463511" diaginertia="0.000791532 0.000744733 0.000282116" />
+              <joint name="joint4" range="-1.5708 1.5708" class="dm4310" />
+              <body name="link_5" pos="-0.074 -0.0395 2.5e-05" quat="1 -1 1 1" gravcomp="1">
+                <inertial pos="3.64861e-05 0.00025665 0.0353526" quat="1 0 0 0" mass="0.350962" diaginertia="0.000197802 0.0001775 0.000147402" />
+                <joint name="joint5" range="-1.5708 1.5708" class="dm4310" />
+                <body name="link_6" pos="0 0.0353 0.0395" quat="1 -1 0 0" gravcomp="1">
+                  <inertial pos="-0.000217767 7.37059e-05 0.0270545" quat="1 1 0 0" mass="0.367476" diaginertia="0.000265958 0.000242686 0.000227409" />
+                  <joint name="joint6" range="-2.0944 2.0944" class="dm4310" />
+                  <site name="tcp_site" pos="0 0 0" quat="1 0 0 -1" size="0.005" rgba="1 0 0 1" group="4" />
+                  <site name="grasp_site" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1" group="4" />
+                  <body name="link_left_finger" pos="-0.037 0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                    <inertial pos="-0.0192995 -0.0365902 0.039774" quat="0.757351 0.568898 -0.3199 0.0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                    <joint class="finger" name="left_finger" range="-0.00205 0.037524" />
+                    <body name="lf_rot" quat="1 -1 -1 1" pos="0.0 -0.0392 0.037" gravcomp="1">
+                      <body name="lf_down" quat="1 0 0 0" pos="-0.044 0.0 0.0" gravcomp="1">
+                        </body>
+                    </body>
+                  </body>
+                  <body name="link_right_finger" pos="0.037 -0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                    <inertial pos="-0.0192995 0.0365902 -0.039774" quat="-0.757351 0.568898 -0.3199 0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                    <joint class="finger" name="right_finger" range="-0.037524 0.00205" />
+                    <body name="rf_rot" quat="1 1 -1 -1" pos="0.0 0.0392 -0.037" gravcomp="1">
+                      <body name="rf_down" quat="1 0 0 0" pos="0.044 0.0 0.0" gravcomp="1">
+                        </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <joint joint1="left_finger" joint2="right_finger" polycoef="0 -1 0 0 0" />
+  </equality>
+  <actuator>
+    <position name="joint1" joint="joint1" class="dm4340" />
+    <position name="joint2" joint="joint2" class="dm4340" />
+    <position name="joint3" joint="joint3" class="dm4340" />
+    <position name="joint4" joint="joint4" class="dm4310" kp="20" kv=".5" />
+    <position name="joint5" joint="joint5" class="dm4310" />
+    <position name="joint6" joint="joint6" class="dm4310" />
+    <position class="finger" name="gripper" joint="left_finger" />
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0 1.047 1.047 0 0 0 0 0" ctrl="0 1.047 1.047 0 0 0 0" />
+  </keyframe>
+</mujoco>

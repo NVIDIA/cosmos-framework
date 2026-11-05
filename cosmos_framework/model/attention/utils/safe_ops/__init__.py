@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Attention Subpackage:
+Attention Subpackage:
 Unified implementation for all Attention implementations.
 
 Safe operations for torch.compile: operations that should be disabled or modified

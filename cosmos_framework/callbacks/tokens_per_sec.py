@@ -114,6 +114,7 @@ class VLMTokensPerSec(EveryN):
         self._fwd_bwd_flop_coeff: float | None = fwd_bwd_flop_coeff
         self._flop_coeff_resolved: float | None = None  # cached auto-resolved coeff
         self._num_params: int | None = None  # lazily filled from model.parameters() (global/DTensor)
+        self._context_parallel_size: int = 1
         self._hit_counter: int = 0
         self._tokens_in_window: int = 0
         self._useful_tokens_in_window: int = 0
@@ -179,6 +180,7 @@ class VLMTokensPerSec(EveryN):
         if self._hit_counter < self.hit_thres:
             return
 
+        self._context_parallel_size = int(data_batch.get("context_parallel_size", 1))
         ids = data_batch.get(self.length_key)
         if ids is not None:
             # numel() is the physical token count. shape[0] counts rows, while a true-packed
@@ -338,7 +340,8 @@ class VLMTokensPerSec(EveryN):
             if dist.is_available() and dist.is_initialized() and dist.get_backend() == "nccl"
             else torch.device("cpu")
         )
-        local_useful_tps = self._useful_tokens_in_window / elapsed if elapsed > 0 else 0.0
+        cp_size = self._context_parallel_size
+        local_useful_tps = self._useful_tokens_in_window / cp_size / elapsed if elapsed > 0 else 0.0
         local_predicted_microbatch_ms = (
             self._predicted_runtime_ms_in_window / self._predicted_steps_in_window
             if self._predicted_steps_in_window
@@ -371,6 +374,10 @@ class VLMTokensPerSec(EveryN):
             dtype=torch.float64,
             device=reduce_device,
         )
+        # The callback sees complete inputs replicated across CP ranks. Deduplicate
+        # token/sample/work totals, retaining physical-rank timing and step counts.
+        # Divide in FP64 before the global sum so small supervised counts stay exact.
+        sums[[0, 1, 2, 6, 7, 8, 14, 15]] /= cp_size
         peak_allocated_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
         peak_reserved_gb = torch.cuda.max_memory_reserved() / 1e9 if torch.cuda.is_available() else 0.0
         maxima = torch.tensor(  # [N_MAX]
