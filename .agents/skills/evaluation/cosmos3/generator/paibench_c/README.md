@@ -106,7 +106,7 @@ physical-ai-bench-conditional-generation/
 The primary metric for each modality is **bold**. All other metrics are cross-modality diagnostics.
 SI-RMSE is lower-is-better; all others are higher-is-better.
 
-> All scores were computed using [`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3), which includes fixes from [SHI-Labs/physical-ai-bench PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8) for depth SI-RMSE outlier blow-up and DOVER score bias. The script auto-clones this repo. Once PR #8 merges into `SHI-Labs/physical-ai-bench:main`, that will become the default.
+> All scores were computed with upstream [`SHI-Labs/physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) at commit `2f3b687` (which includes [PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8) for depth SI-RMSE outlier blow-up and DOVER score bias) plus the bundled patch `patches/physical-ai-bench-metric-alignment.patch`, which applies the remaining fixes listed under "Changes to PAI-Bench-C" below. The script clones, pins and patches the library automatically.
 >
 > GT segmentation masks and GT depth maps are recomputed on the fly from the raw GT videos (`--force_recompute_gt_seg --force_recompute_gt_depth`) rather than using the pre-cached pkl/npz files bundled with the dataset. Predicted segmentation is always computed from the original pred video bytes (no lossy re-encode).
 
@@ -133,14 +133,17 @@ SI-RMSE is lower-is-better; all others are higher-is-better.
 
 
 ## Notes
-The reference scores above may differ slightly from those reported in the Cosmos3 paper. The paper scores were computed with the internal evaluation pipeline; the scores here use the public [`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3) library. Minor numerical differences can also arise from library version changes (PyTorch, Transformers, SAM2).
+The reference scores above may differ slightly from those reported in the Cosmos3 paper. The paper scores were computed with the internal evaluation pipeline; the scores here use the public [`physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) library, pinned and patched as described under "Changes to PAI-Bench-C" below. Minor numerical differences can also arise from library version changes (PyTorch, Transformers, SAM2).
 
 ## Changes to PAI-Bench-C
 
-The reference scores above were produced with the fork
-[`trungtpham/pai-bench-c-cosmos3`](https://github.com/trungtpham/pai-bench-c-cosmos3)
-rather than upstream `SHI-Labs/physical-ai-bench:main`.
-The fork applies nine bug fixes:
+The reference scores above were produced with upstream
+[`SHI-Labs/physical-ai-bench`](https://github.com/SHI-Labs/physical-ai-bench) at commit `2f3b687`
+plus the bundled patch `patches/physical-ai-bench-metric-alignment.patch`.
+Together they apply nine bug fixes. The outlier cap and the two DOVER fixes landed upstream in
+[PR #8](https://github.com/SHI-Labs/physical-ai-bench/pull/8); the patch carries the other six,
+pins the `transformers` / `sam2` versions, adds a `decord` compatibility shim for aarch64 hosts,
+and evaluates tasks in fixed-size batches (`PAIBENCH_C_EVAL_BATCH_SIZE`, default 30) to bound CPU memory:
 
 | Area | Root cause | Fix |
 | ---- | ---------- | --- |

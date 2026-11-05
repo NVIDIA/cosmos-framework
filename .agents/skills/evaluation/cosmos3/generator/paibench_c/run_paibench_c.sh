@@ -56,8 +56,13 @@
 #   PAIBENCH_EVAL_ROOT          physical-ai-bench/conditional_generation path
 #                               (default: physical-ai-bench/ next to script; auto-cloned)
 #   PAIBENCH_EVAL_GIT_URL       Eval library git URL
-#                               (default: https://github.com/trungtpham/pai-bench-c-cosmos3)
+#                               (default: https://github.com/SHI-Labs/physical-ai-bench)
 #   PAIBENCH_EVAL_GIT_BRANCH    branch to clone (default: main)
+#   PAIBENCH_EVAL_GIT_COMMIT    commit checked out after cloning (default: the merge
+#                               of SHI-Labs/physical-ai-bench PR #8; "" = branch head)
+#   PAIBENCH_EVAL_PATCH         metric-alignment patch applied after cloning
+#                               (default: patches/physical-ai-bench-metric-alignment.patch
+#                               next to script; "" = skip)
 #   SKIP_INSTALL                Set to 1 to force-skip uv sync (use existing venvs as-is)
 #   FORCE_INSTALL               Set to 1 to wipe + rebuild both venvs from scratch
 #   UV_HTTP_TIMEOUT             uv download timeout in seconds (default: 300)
@@ -126,12 +131,13 @@ export TORCH_HOME="${TRITON_CACHE_DIR%/triton}"
 : "${PAIBENCH_C_OUTPUT_ROOT:=$PAIBENCH_C_ROOT/outputs}"
 : "${PAIBENCH_EVAL_ROOT:=$PAIBENCH_C_ROOT/physical-ai-bench/conditional_generation}"
 
-# physical-ai-bench with depth SI-RMSE + DOVER fixes from
-# https://github.com/SHI-Labs/physical-ai-bench/pull/8
-# hosted publicly at https://github.com/trungtpham/pai-bench-c-cosmos3
-# until PR #8 merges into SHI-Labs:main.
-: "${PAIBENCH_EVAL_GIT_URL:=https://github.com/trungtpham/pai-bench-c-cosmos3.git}"
+# Upstream physical-ai-bench, pinned to the merge of PR #8 (depth SI-RMSE outlier
+# cap + DOVER fixes). The remaining metric-alignment fixes and batched evaluation
+# (README "Changes to PAI-Bench-C") come from the bundled patch.
+: "${PAIBENCH_EVAL_GIT_URL:=https://github.com/SHI-Labs/physical-ai-bench.git}"
 : "${PAIBENCH_EVAL_GIT_BRANCH:=main}"
+: "${PAIBENCH_EVAL_GIT_COMMIT=2f3b687410029b98397fbc51fa4de36bfd45627d}"
+: "${PAIBENCH_EVAL_PATCH=$PAIBENCH_C_ROOT/patches/physical-ai-bench-metric-alignment.patch}"
 
 # Venvs default to a node-local temp directory so that rm -rf during reinstall never
 # hits Lustre "Stale file handle" errors (files written on a different node).
@@ -163,6 +169,8 @@ log "  PAIBENCH_UV_ENV     = $PAIBENCH_UV_ENV"
 log "  DATASET_ROOT        = $PAIBENCH_C_DATASET_ROOT"
 log "  OUTPUT_ROOT         = $PAIBENCH_C_OUTPUT_ROOT"
 log "  PAIBENCH_EVAL_ROOT  = $PAIBENCH_EVAL_ROOT"
+log "  PAIBENCH_EVAL_GIT_COMMIT = ${PAIBENCH_EVAL_GIT_COMMIT:-<branch head>}"
+log "  PAIBENCH_EVAL_PATCH = ${PAIBENCH_EVAL_PATCH:-<none>}"
 log "  UV_CACHE_DIR        = $UV_CACHE_DIR"
 log "  HF_HOME             = $HF_HOME"
 log "  CUDA_VISIBLE_DEVICES= $CUDA_VISIBLE_DEVICES  (NGPU=$COSMOS3_NUM_GPUS)"
@@ -302,9 +310,25 @@ if [[ "$SKIP_EVAL" != "1" ]]; then
             "$PAIBENCH_EVAL_GIT_URL" "$_paibench_repo" \
             || die "Could not clone physical-ai-bench from $PAIBENCH_EVAL_GIT_URL
 Set PAIBENCH_EVAL_ROOT to an existing checkout or override PAIBENCH_EVAL_GIT_URL."
+        if [[ -n "$PAIBENCH_EVAL_GIT_COMMIT" ]]; then
+            git -C "$_paibench_repo" checkout --quiet --detach "$PAIBENCH_EVAL_GIT_COMMIT" \
+                || die "Could not check out $PAIBENCH_EVAL_GIT_COMMIT in $_paibench_repo"
+        fi
         pushd "$_paibench_repo" >/dev/null
         GIT_TERMINAL_PROMPT=0 git -c credential.helper="" submodule update --init --recursive
         popd >/dev/null
+        if [[ -n "$PAIBENCH_EVAL_PATCH" ]]; then
+            [[ -f "$PAIBENCH_EVAL_PATCH" ]] || die "Missing eval library patch: $PAIBENCH_EVAL_PATCH"
+            if git -C "$_paibench_repo" apply --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
+                git -C "$_paibench_repo" apply "$PAIBENCH_EVAL_PATCH"
+                log "Applied $(basename "$PAIBENCH_EVAL_PATCH")"
+            elif git -C "$_paibench_repo" apply --reverse --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
+                log "Eval library patch already applied"
+            else
+                die "Eval library patch does not match the checkout: $PAIBENCH_EVAL_PATCH
+Set PAIBENCH_EVAL_PATCH to a matching patch (or \"\" to skip) when overriding PAIBENCH_EVAL_GIT_URL / PAIBENCH_EVAL_GIT_COMMIT."
+            fi
+        fi
     else
         log "Using existing physical-ai-bench checkout: $PAIBENCH_EVAL_ROOT"
     fi
