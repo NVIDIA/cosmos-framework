@@ -244,7 +244,7 @@ to `false` (the helper sends `true`; § 1 names the per-request switch), posted 
 ## Variant 4 — SGLang (Docker server)
 
 Reference: [`references/sglang.md`](references/sglang.md) — read it before the
-first command (§ 2 Start the Server, § 6.2 SGLang request helpers, use-case table).
+first command (§ 2 Start the Server — also FP8 checkpoints, § 6.2 SGLang request helpers, use-case table).
 
 The notebook's "Set up HF Cache" and "Docker Image: Cosmos3-Edge" blocks ("Run
 the SGLang server before running the request cells"), plus two `-e` lines that are not in
