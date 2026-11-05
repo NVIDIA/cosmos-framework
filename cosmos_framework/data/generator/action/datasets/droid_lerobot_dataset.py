@@ -91,8 +91,8 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         tolerance_s=2e-4,
         viewpoint: Viewpoint = "concat_view",
         use_success_only: bool = False,
-        video_mode: str | None = None,  # TODO (ychao): remove
-        action_space: str = "midtrain",  # TODO (ychao): remove
+        video_mode: str | None = None,  # TODO: remove
+        action_space: str = "midtrain",  # TODO: remove
         use_state: bool = False,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
