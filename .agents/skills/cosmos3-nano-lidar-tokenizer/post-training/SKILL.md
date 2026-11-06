@@ -51,9 +51,10 @@ COSMOS_INTERNAL=0 COSMOS_TRAINING=1 \
 
 The help must list `train`, `export` and `evaluate`. Resolve missing imports
 using the setup guide before continuing. On the allocated GPU host, also perform
-the setup guide's CUDA runtime check. Full-size GPU memory, throughput and
-multi-rank numerical behavior remain unverified by the CPU checks in this change;
-qualify the bounded run below on the selected hardware.
+the setup guide's CUDA runtime check. The [validation record](../../../../examples/lidar_tokenizer/VALIDATION.md)
+covers CPU checks and a bounded full-size four-GPU run. Qualify the bounded run
+below on the selected hardware; throughput and long-run convergence need
+separate validation.
 
 The native [recipe](../../../../cosmos_framework/configs/tokenizer/lidar_post_training.py)
 uses 128×1800 semantic rays, circular padding to width 1808,

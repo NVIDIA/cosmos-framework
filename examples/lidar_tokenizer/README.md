@@ -20,8 +20,8 @@ The skill provides manifest preflight, a 20-step train/save check, continuation
 to step 40, and live/EMA export and evaluation. It requires a caller-supplied,
 compatible initializer and measured recordings; it does not download training
 data or select a checkpoint on the caller's behalf. The
-[validation record](VALIDATION.md) distinguishes CPU checks from unverified GPU
-behavior.
+[validation record](VALIDATION.md) records CPU coverage, the bounded four-GPU
+workflow check and remaining validation limits.
 
 After exporting and evaluating both weight variants, set `LIDAR_SELECTED_EXPORT`
 to the measured winner's export directory. Load its explicit metadata with the

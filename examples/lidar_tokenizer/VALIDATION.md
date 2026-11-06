@@ -1,7 +1,7 @@
 # Validation record
 
-Verified on 2026-11-05 against the public Framework base `98c35edad864` plus
-this change: **55 CPU tests passed**. Run the same focused suite from this
+Verified on 2026-11-06 against public code `0756428810fd`, based on
+Framework `98c35edad864`: **55 CPU tests passed**. Run the same focused suite from this
 checkout using a configured training environment:
 
 ```bash
@@ -37,8 +37,32 @@ Ruff lint and format checks passed for the added Python files. Pyrefly reported
 zero errors under the repository's current configuration. Skill frontmatter
 validation, relative Markdown link checks and Bash syntax checks passed.
 
-These checks do not qualify full-size fused NATTEN GPU numerics, multi-rank DDP,
-rank-local RNG replay after a GPU restart, training-corpus coverage, or new
-reconstruction quality. No full-resolution GPU qualification was performed.
-Follow the bounded train/save/resume/evaluate instructions before accepting a
-production run.
+A separate full-size **four-GPU CUDA workflow check passed** on the same public
+code, with `COSMOS_INTERNAL=0` and imports verified against this checkout:
+
+- Four NVIDIA GB200 GPUs, PyTorch 2.10.0+cu128 and NATTEN 0.21.6+torch2100cu128.
+- FP32 NATTEN forward/backward passed before training. The fixed recipe used
+  128×1808 inputs, nine model frames, two clips per GPU and global batch eight.
+- Eight measured-LiDAR clips supplied training inputs, with two separate clips
+  reserved for the short reconstruction check. A compatible, checksum-pinned
+  initializer loaded the complete network.
+- A four-rank NCCL process group trained to step 20 and saved full state. A new
+  four-rank launch restored that checkpoint and continued to absolute step 40.
+  Both launches completed successfully, with finite losses and gradients.
+- Independent checkpoint inspection found all 258 Adam states at the expected
+  step, finite optimizer moments, finite model/EMA tensors, initialized latent
+  statistics and four nonempty CPU/CUDA RNG state pairs. Saved learning rates
+  were `2.1e-7` at step 20 and `4.1e-7` at step 40, retaining the 30k schedule.
+- Live and EMA exports from the final checkpoint both loaded through the serving
+  interface and completed FP32 posterior-mean GPU evaluation on both clips.
+  Range MAE was finite and validity IoU was within `[0,1]` for both variants.
+  Export hashes were distinct; both recorded the same source checkpoint.
+
+DDP emitted a gradient-stride performance warning; both training launches
+completed without errors. Throughput was not profiled.
+
+The run establishes this bounded single-node workflow. Multi-node operation,
+replay equivalence to uninterrupted training, full-schedule stability,
+training-corpus coverage, convergence and reconstruction quality improvements
+require separate validation. Follow the bounded train/save/resume/evaluate
+instructions when changing hardware, precision, topology or recipe settings.

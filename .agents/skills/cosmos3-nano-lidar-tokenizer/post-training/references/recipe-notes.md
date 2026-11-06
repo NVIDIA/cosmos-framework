@@ -44,8 +44,8 @@ candidate on held-out measured recordings. Any hardware, precision, topology,
 batch, objective or learning-rate change needs corresponding validation.
 
 See the [public validation record](../../../../../examples/lidar_tokenizer/VALIDATION.md)
-for the executed checks and their limits. A CPU test of a smaller consistent
-network does not qualify the full GPU training command.
+for CPU coverage, the bounded full-size four-GPU workflow check and remaining
+validation limits.
 
 Keep network, projection, compression and latent-statistics metadata together
 when loading an export. A tokenizer change alters a generator's latent space;
