@@ -760,7 +760,6 @@ api_models = {
         model="Qwen/Qwen3-VL-8B-Instruct",
         retry=10,
         timeout=300,
-        api_base="http://100.97.203.103:40001/v1/chat/completions",
         key="EMPTY",
         temperature=0.0,
         max_tokens=4096,
