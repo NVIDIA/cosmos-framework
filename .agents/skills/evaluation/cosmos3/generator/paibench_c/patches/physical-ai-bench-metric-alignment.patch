@@ -24,7 +24,7 @@ diff --git a/conditional_generation/benchmark_pipelines/scores/transfer_bench/se
      max_frames: int | None = None,
  ) -> tuple[float, float]:
      gt_phrase_index_dic = {}
-@@ -123,9 +124,25 @@ def calculate_mask_iou_and_recall(
+@@ -123,9 +124,34 @@ def calculate_mask_iou_and_recall(
              union_res_mask[res_inst_masks == (id + 1)] = 255
          updated_res_masks.append(union_res_mask)
  
@@ -50,6 +50,15 @@ diff --git a/conditional_generation/benchmark_pipelines/scores/transfer_bench/se
 +    updated_res_masks = [m for m in updated_res_masks if is_mostly_inside(m)]
 +
 +    print(f"Calculating iou on {len(updated_gt_masks)} gt masks and {len(updated_res_masks)} pred masks")
++
++    if not updated_gt_masks or not updated_res_masks:
++        # Nothing left to match on at least one side (no phrase tracked in any frame):
++        # report an explicit no-match result instead of stacking an empty tensor list.
++        logger.warning(
++            f"No masks left after filtering (gt={len(updated_gt_masks)}, pred={len(updated_res_masks)}); "
++            "reporting mIoU 0.0 and recall 0.0"
++        )
++        return 0.0, 0.0
  
      iou_matrix = get_iou_matrix(updated_gt_masks, updated_res_masks, foreground)
  
