@@ -54,13 +54,14 @@
 #   PAIBENCH_C_OUTPUT_ROOT      Generation + metrics     (default: outputs/ next to script)
 #   PAIBENCH_C_HF_URL           HF dataset URL
 #   PAIBENCH_EVAL_ROOT          physical-ai-bench/conditional_generation path
-#                               (default: physical-ai-bench/ next to script; auto-cloned)
+#                               (default: physical-ai-bench/ next to script; auto-cloned.
+#                               A checkout you provide keeps its commit; only the patch is checked)
 #   PAIBENCH_EVAL_GIT_URL       Eval library git URL
 #                               (default: https://github.com/SHI-Labs/physical-ai-bench)
 #   PAIBENCH_EVAL_GIT_BRANCH    branch to clone (default: main)
-#   PAIBENCH_EVAL_GIT_COMMIT    commit checked out after cloning (default: the merge
-#                               of SHI-Labs/physical-ai-bench PR #8; "" = branch head)
-#   PAIBENCH_EVAL_PATCH         metric-alignment patch applied after cloning
+#   PAIBENCH_EVAL_GIT_COMMIT    commit the auto-created checkout is kept at (default: the
+#                               merge of SHI-Labs/physical-ai-bench PR #8; "" = branch head)
+#   PAIBENCH_EVAL_PATCH         metric-alignment patch, verified/applied on every run
 #                               (default: patches/physical-ai-bench-metric-alignment.patch
 #                               next to script; "" = skip)
 #   SKIP_INSTALL                Set to 1 to force-skip uv sync (use existing venvs as-is)
@@ -300,6 +301,10 @@ log "cosmos3 python: $COSMOS3_UV_ENV/bin/python"
 if [[ "$SKIP_EVAL" != "1" ]]; then
     log "=== Step 4: Evaluation library (physical-ai-bench) ==="
     _paibench_repo="$(dirname "$PAIBENCH_EVAL_ROOT")"
+    # Checkouts this script created are marked, kept at PAIBENCH_EVAL_GIT_COMMIT and
+    # patched on every run; a caller-provided checkout keeps its commit and is only
+    # checked for the patch.
+    _paibench_auto_marker="$_paibench_repo/.git/paibench-auto-created"
     if [[ ! -d "$PAIBENCH_EVAL_ROOT" ]]; then
         log "Cloning physical-ai-bench → $_paibench_repo ..."
         mkdir -p "$(dirname "$_paibench_repo")"
@@ -310,27 +315,52 @@ if [[ "$SKIP_EVAL" != "1" ]]; then
             "$PAIBENCH_EVAL_GIT_URL" "$_paibench_repo" \
             || die "Could not clone physical-ai-bench from $PAIBENCH_EVAL_GIT_URL
 Set PAIBENCH_EVAL_ROOT to an existing checkout or override PAIBENCH_EVAL_GIT_URL."
-        if [[ -n "$PAIBENCH_EVAL_GIT_COMMIT" ]]; then
-            git -C "$_paibench_repo" checkout --quiet --detach "$PAIBENCH_EVAL_GIT_COMMIT" \
-                || die "Could not check out $PAIBENCH_EVAL_GIT_COMMIT in $_paibench_repo"
-        fi
+        : > "$_paibench_auto_marker"
         pushd "$_paibench_repo" >/dev/null
         GIT_TERMINAL_PROMPT=0 git -c credential.helper="" submodule update --init --recursive
         popd >/dev/null
-        if [[ -n "$PAIBENCH_EVAL_PATCH" ]]; then
-            [[ -f "$PAIBENCH_EVAL_PATCH" ]] || die "Missing eval library patch: $PAIBENCH_EVAL_PATCH"
-            if git -C "$_paibench_repo" apply --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
-                git -C "$_paibench_repo" apply "$PAIBENCH_EVAL_PATCH"
-                log "Applied $(basename "$PAIBENCH_EVAL_PATCH")"
-            elif git -C "$_paibench_repo" apply --reverse --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
-                log "Eval library patch already applied"
-            else
-                die "Eval library patch does not match the checkout: $PAIBENCH_EVAL_PATCH
-Set PAIBENCH_EVAL_PATCH to a matching patch (or \"\" to skip) when overriding PAIBENCH_EVAL_GIT_URL / PAIBENCH_EVAL_GIT_COMMIT."
-            fi
-        fi
     else
         log "Using existing physical-ai-bench checkout: $PAIBENCH_EVAL_ROOT"
+    fi
+    # The pin and the patch are verified on every run, not only after a fresh clone, so
+    # a setup that failed half-way is repaired on retry instead of silently running an
+    # unpatched evaluator.
+    if [[ -n "$PAIBENCH_EVAL_GIT_COMMIT" && -e "$_paibench_auto_marker" ]]; then
+        _paibench_want="$(git -C "$_paibench_repo" rev-parse --verify --quiet "$PAIBENCH_EVAL_GIT_COMMIT^{commit}" || true)"
+        if [[ -z "$_paibench_want" ]]; then
+            GIT_TERMINAL_PROMPT=0 git -C "$_paibench_repo" -c credential.helper="" fetch --quiet origin "$PAIBENCH_EVAL_GIT_COMMIT" \
+                || die "Could not fetch $PAIBENCH_EVAL_GIT_COMMIT from $PAIBENCH_EVAL_GIT_URL"
+            _paibench_want="$(git -C "$_paibench_repo" rev-parse --verify "$PAIBENCH_EVAL_GIT_COMMIT^{commit}")"
+        fi
+        if [[ "$(git -C "$_paibench_repo" rev-parse HEAD)" != "$_paibench_want" ]]; then
+            # Moving the pin: lift the bundled patch first when it is the only local change;
+            # the patch step below applies it again on the new commit.
+            if [[ -n "$PAIBENCH_EVAL_PATCH" && -f "$PAIBENCH_EVAL_PATCH" ]] \
+                && git -C "$_paibench_repo" apply --reverse --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
+                git -C "$_paibench_repo" apply --reverse "$PAIBENCH_EVAL_PATCH"
+            fi
+            [[ -z "$(git -C "$_paibench_repo" status --porcelain --untracked-files=no)" ]] \
+                || die "$_paibench_repo is not at $PAIBENCH_EVAL_GIT_COMMIT and has local changes.
+Move them away, delete the directory to let the script clone it again, or set PAIBENCH_EVAL_ROOT to a checkout to use as-is."
+            git -C "$_paibench_repo" checkout --quiet --detach "$_paibench_want" \
+                || die "Could not check out $PAIBENCH_EVAL_GIT_COMMIT in $_paibench_repo"
+            pushd "$_paibench_repo" >/dev/null
+            GIT_TERMINAL_PROMPT=0 git -c credential.helper="" submodule update --init --recursive
+            popd >/dev/null
+        fi
+    fi
+    if [[ -n "$PAIBENCH_EVAL_PATCH" ]]; then
+        [[ -f "$PAIBENCH_EVAL_PATCH" ]] || die "Missing eval library patch: $PAIBENCH_EVAL_PATCH"
+        if git -C "$_paibench_repo" apply --reverse --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
+            log "Eval library patch already applied"
+        elif git -C "$_paibench_repo" apply --check "$PAIBENCH_EVAL_PATCH" 2>/dev/null; then
+            git -C "$_paibench_repo" apply "$PAIBENCH_EVAL_PATCH"
+            log "Applied $(basename "$PAIBENCH_EVAL_PATCH")"
+        else
+            die "Eval library patch does not match the checkout: $PAIBENCH_EVAL_PATCH
+If this is the checkout the script created, delete $_paibench_repo and re-run. Otherwise set PAIBENCH_EVAL_PATCH
+to a matching patch (or \"\" to skip) or point PAIBENCH_EVAL_ROOT at a clean checkout."
+        fi
     fi
 
     # Healthy = torchrun exists AND the key runtime packages are importable.
