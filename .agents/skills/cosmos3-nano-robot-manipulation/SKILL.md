@@ -104,16 +104,16 @@ prints `1.4.1 2.3.7`. Inside an NGC container also `export LD_LIBRARY_PATH=''` b
 
 ```bash
 source recipe.env
-hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include 'libero_10/**' \
+.venv/bin/hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include 'libero_10/**' \
   --revision e5907374380b8f96511957e6ba5582be52a1e179 --local-dir data/LIBERO_LeRobot_v3                        # 0.6 GB
-hf download nvidia/Cosmos3-Nano --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --local-dir hf/Cosmos3-Nano   # 35 GB
-hf download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth --revision 921dbaf3f1674a56f47e83fb80a34bac8a8f203e \
+.venv/bin/hf download nvidia/Cosmos3-Nano --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --local-dir hf/Cosmos3-Nano   # 35 GB
+.venv/bin/hf download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth --revision 921dbaf3f1674a56f47e83fb80a34bac8a8f203e \
   --local-dir examples/checkpoints/wan22_vae                                                                       # 2.7 GB
 python3 <skill>/scripts/inspect_libero10.py --root $LIBERO_ROOT
 ```
 
 Expected last line: `episodes 379  frames 101469  tasks 10  fps 20`. Model, dataset and tokenizer are public and
-ungated; `hf auth login` avoids download limits.
+ungated; `.venv/bin/hf auth login` avoids download limits.
 
 ### 3. Base checkpoint to the training format (CPU, under 10 minutes, once)
 
