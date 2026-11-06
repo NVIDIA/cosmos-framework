@@ -91,6 +91,7 @@ export IMAGINAIRE_OUTPUT_ROOT=$PWD/outputs/train
 export CUDA_HOME=$PWD/.venv/lib/python3.13/site-packages/nvidia/cu13
 export RUN=$IMAGINAIRE_OUTPUT_ROOT/cosmos3_action_libero/action_sft/action_policy_libero_10_nano
 export MUJOCO_GL=egl
+export PATH=$PWD/.venv/bin:$PATH   # the launch script calls bare `torchrun`
 EOF
 .venv/bin/python -c "import torch, natten, lerobot; print(torch.__version__)"
 ```
