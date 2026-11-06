@@ -105,3 +105,18 @@ benchmark's `data` section in the composed config.
 
 `build_judge` uses plain OpenAI model ids. Set `VLMEVAL_JUDGE_API_STYLE=gateway`
 when the judge endpoint expects provider-prefixed ids (`azure/openai/...`).
+
+## Brev benchmark launchable
+
+The [Brev launchable](launchable/README.md) runs public MMSI-Video-Bench (the
+default full reference run), Perception Test and VideoPhy2 from Jupyter
+notebooks against the pinned public `nvidia/Cosmos3-Nano` checkpoint, with
+pinned public downloads and local scoring only. It needs no private dataset,
+dataset credentials, bucket variables or judge endpoint. Another compatible
+model is configured with `COSMOS_API_BASE`, `COSMOS_MODEL`,
+`COSMOS_MODEL_REVISION` and, for its input evidence, `COSMOS_PROCESSOR_PROFILE`.
+
+To evaluate your own labeled video multiple-choice data, follow the
+[customer-data recipe](launchable/CUSTOM_DATA_RECIPE.md) and
+[Customer_Data.ipynb](launchable/Customer_Data.ipynb). Questions, answer options
+and the correct answers are required; footage alone cannot produce a score.

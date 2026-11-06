@@ -126,6 +126,7 @@ from .moat import MOAT
 from .moviechat1k import MovieChat1k
 from .mssbench import MSSBenchDataset
 from .mvbench import MVBench, MVBench_MP4
+from .perception_test import PerceptionTestLocal
 from .mvpbench import MVPBench
 from .mvu_eval import MVUEval
 from .NPMM import NPMM
@@ -363,7 +364,7 @@ IMAGE_DATASET += [
 ]
 
 VIDEO_DATASET = [
-    MMBenchVideo, VideoMME, MVBench, MVBench_MP4, MVTamperBench,
+    MMBenchVideo, VideoMME, MVBench, MVBench_MP4, PerceptionTestLocal, MVTamperBench,
     LongVideoBench, WorldSense, VDC, MovieChat1k, MEGABench,
     MLVU, MLVU_MCQ, MLVU_OpenEnded,
     TempCompass, TempCompass_MCQ, TempCompass_Captioning, TempCompass_YorN,
