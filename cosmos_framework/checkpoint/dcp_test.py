@@ -35,7 +35,7 @@ def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type
     handler.cpu_offload_state_dict = None
     state = {"model": (torch.empty(4), "model")}  # model tensor: [4]
     with (
-        patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)),
+        patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=0, f_frsize=4096), create=True),
         patch("torch.distributed._state_dict_utils._create_cpu_state_dict") as allocate,
         pytest.raises(RuntimeError, match="checkpoint.dcp_async_mode_enabled=false"),
     ):
@@ -70,7 +70,9 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
         # Both ranks fit together in two pages; one page per rank independently
         # fits, but the aggregate does not fit in a one-page shared mount.
         for pages in (2, 1):
-            with patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096)):
+            with patch.object(
+                checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096), create=True
+            ):
                 if pages == 2:
                     checkpoint._check_staging_shared_memory(state)
                 else:
@@ -83,7 +85,10 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
             for remote_shortage in (False, True):
                 pages = 0 if remote_shortage and rank == 1 else 1
                 with patch.object(
-                    checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096)
+                    checkpoint.os,
+                    "statvfs",
+                    return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096),
+                    create=True,
                 ):
                     if remote_shortage:
                         with pytest.raises(RuntimeError, match="on host-1"):
@@ -116,7 +121,7 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
             store.set("old_pages", "0")
         with (
             patch.object(checkpoint.dist, "barrier", side_effect=enter_capacity_check),
-            patch.object(checkpoint.os, "statvfs", side_effect=available_capacity),
+            patch.object(checkpoint.os, "statvfs", side_effect=available_capacity, create=True),
         ):
             checkpoint._check_staging_shared_memory(state)
     finally:
