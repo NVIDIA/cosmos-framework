@@ -2730,7 +2730,7 @@ requires-dist = [
     { name = "ipyevents", marker = "extra == 'train'" },
     { name = "jupyterlab", marker = "extra == 'train'" },
     { name = "kornia", marker = "extra == 'train'" },
-    { name = "lerobot", marker = "extra == 'train'", git = "https://github.com/mli0603/lerobot.git" },
+    { name = "lerobot", marker = "extra == 'train'", git = "https://github.com/huggingface/lerobot.git?rev=1a4316c6845330bc552fb982dbc44bdb4f66f2f1" },
     { name = "librosa", marker = "extra == 'train'" },
     { name = "liger-kernel", marker = "extra == 'train'", specifier = ">=0.8.3,<0.9" },
     { name = "loguru" },
@@ -6723,7 +6723,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.4.4"
-source = { git = "https://github.com/mli0603/lerobot.git#1a4316c6845330bc552fb982dbc44bdb4f66f2f1" }
+source = { git = "https://github.com/huggingface/lerobot.git?rev=1a4316c6845330bc552fb982dbc44bdb4f66f2f1#1a4316c6845330bc552fb982dbc44bdb4f66f2f1" }
 dependencies = [
     { name = "cmake" },
     { name = "deepdiff" },

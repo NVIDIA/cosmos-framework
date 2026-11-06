@@ -404,7 +404,7 @@ cu130-torch213-train = {requires-python = "==3.13.*"}
 [tool.uv.sources]
 flash-attn = { index = "cosmos"}
 flash-attn-3-nv = { index = "cosmos" }
-lerobot = { git = "https://github.com/mli0603/lerobot.git" }
+lerobot = { git = "https://github.com/huggingface/lerobot.git", rev = "1a4316c6845330bc552fb982dbc44bdb4f66f2f1" }
 megatron-core = { git = "https://github.com/NVIDIA/Megatron-LM.git", rev = "de56227" }
 natten = { index = "cosmos"}
 torch = { index = "pytorch"}

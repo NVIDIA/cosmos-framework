@@ -251,13 +251,10 @@ class MSCBackend(BaseStorageBackend):
                     # Merge with the existing profile, replacing `storage_provider` and `credentials_provider` completely.
                     msc_config_dict["profiles"][profile] = msc_config_dict["profiles"].get(profile, {})
 
-                    storage_provider_type: str = "s3"
+                    storage_provider_type: str = legacy_boto3_config.get("storage_provider_type", "s3")
                     parsed_endpoint_url = urlparse(legacy_boto3_config["endpoint_url"])
-                    # Handle regional S3-compatible endpoints.
-                    if parsed_endpoint_url.hostname.endswith(".s8k.io"):
-                        storage_provider_type = "s8k"
                     # Handle global and regional GCS endpoints.
-                    elif parsed_endpoint_url.hostname.startswith("storage.") and parsed_endpoint_url.hostname.endswith(
+                    if parsed_endpoint_url.hostname.startswith("storage.") and parsed_endpoint_url.hostname.endswith(
                         ".googleapis.com"
                     ):
                         storage_provider_type = "gcs_s3"

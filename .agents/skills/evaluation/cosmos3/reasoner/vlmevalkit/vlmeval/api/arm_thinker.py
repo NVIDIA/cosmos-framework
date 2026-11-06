@@ -33,13 +33,12 @@ class LMDeployWrapper(BaseAPI):
         use_role_tool: bool = True,
         **kwargs,
     ):
-        # get key and api_base from environment variables
+        # An explicit api_base wins; LMDEPLOY_API_BASE fills it in otherwise.
+        # LMDEPLOY_API_KEY, when set, replaces the placeholder key from the config.
         key = os.environ.get("LMDEPLOY_API_KEY", key)
-        api_base = os.environ.get("LMDEPLOY_API_BASE", api_base)
+        api_base = api_base or os.environ.get("LMDEPLOY_API_BASE")
         assert key is not None, "Please set the environment variable LMDEPLOY_API_KEY."
-        assert (
-            api_base is not None
-        ), "Please set the environment variable LMDEPLOY_API_BASE."
+        assert api_base, "Pass api_base=... or set the environment variable LMDEPLOY_API_BASE."
         self.key = key
         self.api_base = api_base
         model_url = "".join([api_base.split("v1")[0], "v1/models"])

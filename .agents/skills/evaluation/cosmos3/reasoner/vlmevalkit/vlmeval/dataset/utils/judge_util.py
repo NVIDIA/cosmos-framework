@@ -119,8 +119,8 @@ def build_judge(**kwargs):
     load_env()
     LOCAL_LLM = os.environ.get('LOCAL_LLM', None)
     if LOCAL_LLM is None:
-        # Check if using NVIDIA API
-        using_nvidia_api = 'inference-api.nvidia.com' in os.environ.get('OPENAI_API_BASE', '')
+        # Provider-prefixed judge ids are opt-in (VLMEVAL_JUDGE_API_STYLE=gateway)
+        using_nvidia_api = os.environ.get('VLMEVAL_JUDGE_API_STYLE', '').lower() == 'gateway'
 
         if using_nvidia_api:
             # NVIDIA API requires azure/openai/ prefix for GPT models

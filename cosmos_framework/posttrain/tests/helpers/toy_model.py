@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Toy flow-matching model — a TEST FIXTURE implementing `FlowMatchingPolicy` (DESIGN §6).
+"""Toy flow-matching model — a TEST FIXTURE implementing `FlowMatchingPolicy`.
 
 Not a production backend and not registered in `model.registry` — production selects the
 real `FlowMatchingPolicy` (the OmniMoT `model/cosmos3.py`) via the experiment config tree. This

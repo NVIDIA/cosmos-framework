@@ -33,6 +33,7 @@ docker run --runtime nvidia --gpus all \
   -v "$PWD:$PWD" \
   -w /workspace \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
@@ -44,6 +45,8 @@ docker run --runtime nvidia --gpus all \
   --port 8000 \
   --init-timeout 1800
 ```
+
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` raises the synchronous video endpoint's timeout from its 600 second default. The first video request after a server start includes a one-time warm-up that can exceed 600 seconds (about 9 minutes measured with the Nano FP8 checkpoint on one B200 GPU); without the larger timeout that request returns `504 Gateway Timeout`. Later requests are faster.
 
 ### Docker Image: Cosmos3-Edge
 
@@ -77,6 +80,7 @@ docker run --runtime nvidia --gpus all \
   -v "$PWD:$PWD" \
   -w /workspace \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   -v "${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface" \
   -p 8000:8000 \
   --ipc=host \
@@ -90,6 +94,8 @@ docker run --runtime nvidia --gpus all \
   --port 8000 \
   --init-timeout 1800
 ```
+
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` raises the synchronous video endpoint's timeout from its 600 second default. The first video request after a server start includes a one-time warm-up that can exceed 600 seconds on `Cosmos3-Super` (about 28 minutes measured with the FP8 checkpoint on one B200 GPU); without the larger timeout that request returns `504 Gateway Timeout`. Later requests are faster.
 
 ### Docker Image: Cosmos3-Super-Text2Image-4Step, Cosmos3-Super-Image2Video-4Step
 
@@ -159,7 +165,8 @@ For Cosmos3, set CFG strength with the request-level `guidance_scale` field. Do 
 
 ### Quantized Checkpoints
 
-Published [Nano FP8](https://huggingface.co/nvidia/Cosmos3-Nano-FP8) and
+Published [Edge FP8](https://huggingface.co/nvidia/Cosmos3-Edge-FP8),
+[Nano FP8](https://huggingface.co/nvidia/Cosmos3-Nano-FP8) and
 [Super FP8](https://huggingface.co/nvidia/Cosmos3-Super-FP8) checkpoints can be
 downloaded to a local directory. Or use an output from the
 [quantization walkthrough](../../cookbooks/cosmos3/quantization/README.md).
@@ -187,6 +194,7 @@ absolute path too. Keep `HF_HOME` consistent with the quantization run.
 
 | Local output under `OUTPUT_ROOT` | `SERVED_MODEL`                           | Matching example                   |
 | -------------------------------- | ---------------------------------------- | ---------------------------------- |
+| `edge-fp8`                       | `nvidia/Cosmos3-Edge`                    | Edge image/video (no audio)        |
 | `nano-fp8`                       | `nvidia/Cosmos3-Nano`                    | Nano image/video                   |
 | `super-fp8`                      | `nvidia/Cosmos3-Super`                   | Super video                        |
 | `super-t2i-fp8`                  | `nvidia/Cosmos3-Super-Text2Image`        | Super text-to-image, base sampler  |
@@ -204,6 +212,27 @@ to 1.0 (CFG off). Verify this behavior in the selected image; do not infer the
 student's effective sampler from those generic request fields.
 No published `fp8` revision is assumed for the four specialized Super models.
 
+Choose one download block, then use the shared launch command below. For a
+locally generated checkpoint, skip both downloads and set `FP8_MODEL_DIR` and
+`SERVED_MODEL` using the table above.
+
+#### Cosmos3-Edge FP8
+
+```bash
+export FP8_MODEL_DIR="$PWD/models/cosmos3-edge-fp8"
+export SERVED_MODEL="nvidia/Cosmos3-Edge"
+python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("nvidia/Cosmos3-Edge-FP8", local_dir=os.environ["FP8_MODEL_DIR"])
+PY
+```
+
+Use the [Edge image-to-video example](#cosmos3-edge-example) with audio disabled
+against `COSMOS3_VLLM_EDGE_BASE_URL` (default `http://localhost:8000`).
+
+#### Cosmos3-Nano FP8
+
 ```bash
 # Download published Nano FP8; use Cosmos3-Super-FP8 and its served ID for Super.
 export FP8_MODEL_DIR="${FP8_MODEL_DIR:-$PWD/models/cosmos3-nano-fp8}"
@@ -215,6 +244,8 @@ from huggingface_hub import snapshot_download
 snapshot_download("nvidia/Cosmos3-Nano-FP8", local_dir=os.environ["FP8_MODEL_DIR"])
 PY
 ```
+
+#### Serve the selected checkpoint
 
 ```bash
 export HF_HOME="$(realpath -m "${HF_HOME:-$HOME/.cache/huggingface}")"
@@ -241,6 +272,7 @@ if [ -n "${FP8_SOURCE_DIR:-}" ]; then
 fi
 docker run --runtime nvidia --gpus all \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   "${MOUNTS[@]}" \
   -w /workspace \
   -p 8000:8000 --ipc=host \
@@ -252,7 +284,9 @@ docker run --runtime nvidia --gpus all \
 ```
 
 For Super, add the upstream `--tensor-parallel-size 4` and
-`--enable-layerwise-offload` options if needed. Poll
+`--enable-layerwise-offload` options if needed. The command sets
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` for the reason given under the Nano and
+Super launch commands above. Poll
 `curl http://localhost:8000/v1/models` until ready and verify the ID equals
 `SERVED_MODEL`, then run the matching request and visualization cells below.
 The image and activation policy require runtime validation on your GPU setup.

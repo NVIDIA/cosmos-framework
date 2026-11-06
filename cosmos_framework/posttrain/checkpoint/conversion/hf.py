@@ -87,7 +87,7 @@ CHAT_TEMPLATE_KEY = "chat_template"
 UNIFIED_SERVE_ASSUMPTION = (
     "the serve sets no enable_thinking: under the unified (processor) template a request with enable_thinking=true is "
     "prefilled with the opener token <think> itself (no newline after it) while the rows supervise the opener as the "
-    "student's first token (review R151-05)"
+    "student's first token (serving contract)"
 )
 # Row rule R1 of record (the lab's brain program, 2026-10-02): the unified template is the processor
 # template with ONE change in its reasoning branch, the replayed ``reasoning_content`` rendered trimmed, so a replay string
@@ -913,7 +913,9 @@ def overlay_consolidated_onto_hf(
 
     _log(f"writing HF-format directory: {staging_dir}")
     os.makedirs(staging_dir, exist_ok=True)
-    model.save_pretrained(staging_dir, safe_serialization=True)
+    # 5 GB shards (the Transformers 4 default): Transformers 5 defaults to 50 GB and writes a smaller model as one file
+    # without the INDEX_FILE that verify_index requires, so an 8B export failed its own verification.
+    model.save_pretrained(staging_dir, safe_serialization=True, max_shard_size="5GB")
     AutoProcessor.from_pretrained(model_id).save_pretrained(staging_dir)
     if expert_orig:
         rewritten = rewrite_expert_shards(staging_dir, expert_orig)

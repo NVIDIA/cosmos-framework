@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""control.placement — logical actor grouping and physical device placement (DESIGN §4)."""
+"""control.placement — logical actor grouping and physical device placement."""
 
 from cosmos_framework.posttrain.config.placement import GpuPlacement, normalize_gpu_placement
 from cosmos_framework.posttrain.control.placement.colocate import (

@@ -531,7 +531,7 @@ def test_peer_pull_collective_thread_fallback_for_non_ray_peers():
 @pytest.mark.CPU
 def test_weight_sync_accepts_asymmetric_shapes_and_drains():
     # Topology validation moved to bind-time pairing (comm/weight_pairing.py). Runtime accepts any
-    # (R_p,K_p)×(R_r,K_r) topology. Under the producer-driven flip (design 2026-07-27 §2), weight_sync
+    # (R_p,K_p)×(R_r,K_r) topology. Under the producer-driven flip, weight_sync
     # drives policy.push_weights(rollout) and drains the POLICY's returned handle (the drive role, and
     # thus the drained handle, flipped from the rollout to the policy).
     from cosmos_framework.posttrain.control.loop.weight_sync import weight_sync

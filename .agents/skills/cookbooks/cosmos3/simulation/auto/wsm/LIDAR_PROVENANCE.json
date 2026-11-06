@@ -14,6 +14,5 @@
     "cosmos_auto/lidar/sensor_model.py": "9a525507090f373638f81b5300ccefa3c7c87fea58f3f1320247c9a5a20e76d1",
     "cosmos_auto/lidar/shutter.py": "616553e7a605832ca8dc9e49cce87e6cc9e56ce1b081b33c9c36f2bb0e718200",
     "cosmos_auto/lidar/visualize.py": "1c8d9089dfd63572c58c4d543e2911afdd97cc3f1b7cb44cdb3009f73621a3c8"
-  },
-  "source_commit": "118f2e6ecd8b8da317bab0b7eebbd343ed2ffad6"
+  }
 }

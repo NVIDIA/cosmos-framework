@@ -64,7 +64,7 @@ def test_i4_policy_parallelism_uses_native_model_config() -> None:
         cfg_parallel_shard_degree=1,
     )
     cfg = SimpleNamespace(
-        model_backend="i4",
+        model_backend="native",
         model=SimpleNamespace(config=SimpleNamespace(parallelism=parallelism)),
     )
     assert resolve_policy_parallelism(cfg, 8) == (4, 2)
@@ -90,7 +90,7 @@ def test_native_policy_build_spec_owns_generic_i4_parallelism() -> None:
         model_config=SimpleNamespace(name_or_path="native/model"),
         parallelism=NativePolicyParallelismConfig(dp_replicate=2, dp_shard=-1),
     )
-    cfg = SimpleNamespace(model_backend="i4", model=spec)
+    cfg = SimpleNamespace(model_backend="native", model=spec)
 
     assert resolve_policy_parallelism(cfg, 8) == (2, 4)
     # Inference is repeatable and does not rewrite the public spec's sentinel.
@@ -107,7 +107,7 @@ def test_native_policy_spec_rejects_a_split_policy_identity() -> None:
     )
 
     with pytest.raises(ValueError, match="must identify the same policy artifact"):
-        native_policy_build_spec(SimpleNamespace(model_backend="i4", model=spec))
+        native_policy_build_spec(SimpleNamespace(model_backend="native", model=spec))
 
 
 @pytest.mark.L0
@@ -117,7 +117,7 @@ def test_legacy_qwen_backend_normalizes_to_generic_i4_spec() -> None:
     cfg = SimpleNamespace(model_backend="qwen3_vl", model_qwen3_vl=model_config)
 
     spec = native_policy_build_spec(cfg)
-    assert normalize_model_backend(cfg.model_backend) == "i4"
+    assert normalize_model_backend(cfg.model_backend) == "native"
     assert spec.model_config is model_config
     assert spec.requires_collated_policy_forward is True
     assert resolve_policy_parallelism(cfg, 8) == (1, 8)
@@ -139,7 +139,7 @@ def test_build_backbone_dispatches_native_spec_without_a_family_branch(monkeypat
     # NativePolicyBuildSpec.model_id.
     model_config = SimpleNamespace(native_width=7)
     config = SimpleNamespace(
-        model_backend="i4",
+        model_backend="native",
         model=NativePolicyBuildSpec(
             builder=f"{fixture.__name__}.build",
             model_id="native/model",

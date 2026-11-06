@@ -178,7 +178,7 @@ def test_hf_model_llm_fsdp_setup_shards_and_loads():
 
 
 # ---------------------------------------------------------------------------
-# VLM parity (Task 9): ported helpers + AutoClass selection / plan construction.
+# VLM parity: ported helpers + AutoClass selection / plan construction.
 # ---------------------------------------------------------------------------
 
 
