@@ -37,13 +37,17 @@ CANVAS_W, CANVAS_H = 320, 192  # "256" tier, 16:9 bucket for the 256x512 concat 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--checkpoint-path", required=True, help="DCP checkpoint iter dir, e.g. .../checkpoints/iter_000000250")
+    ap.add_argument(
+        "--checkpoint-path", required=True, help="DCP checkpoint iter dir, e.g. .../checkpoints/iter_000000250"
+    )
     ap.add_argument("--config-file", required=True, help="the training run's config.yaml")
     ap.add_argument("--root", required=True, help="libero_10 LeRobot dir")
     ap.add_argument("--holdout", required=True, help="holdout episode id list")
     ap.add_argument("--out", required=True, help="output dir")
     ap.add_argument("--episodes", default="", help="comma-separated subset of held-out episode ids (default all)")
-    ap.add_argument("--max-chunks", type=int, default=0, help="debug: stop after N chunks per episode (0 = full episode)")
+    ap.add_argument(
+        "--max-chunks", type=int, default=0, help="debug: stop after N chunks per episode (0 = full episode)"
+    )
     ap.add_argument("--chunk", type=int, default=16)
     ap.add_argument("--num-steps", type=int, default=30, help="denoising steps (forward_dynamics default 30)")
     ap.add_argument("--guidance", type=float, default=1.0, help="CFG scale (forward_dynamics default 1.0)")
@@ -80,7 +84,10 @@ def load_model(ckpt: str, config_file: str, output_dir: Path, use_ema: bool):
 
 def to_canvas_u8(video_u8_cthw: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """[3,T,256,512] uint8 -> ([3,T,160,320] uint8 content, image_size[4]) via the training resize/pad path."""
-    from cosmos_framework.data.generator.action.utils.transforms import reflection_pad_to_target, remove_reflection_padding
+    from cosmos_framework.data.generator.action.utils.transforms import (
+        reflection_pad_to_target,
+        remove_reflection_padding,
+    )
 
     d: dict = {"video": video_u8_cthw}
     reflection_pad_to_target(d, ["video"], True, CANVAS_W, CANVAS_H)
@@ -112,24 +119,40 @@ def main() -> None:
     t_load = time.time() - t_load0
     device = torch.device("cuda")
 
-    from skimage.metrics import structural_similarity
     import lpips
+    from skimage.metrics import structural_similarity
 
     lpips_fn = lpips.LPIPS(net=args.lpips_net, verbose=False).to(device).eval()
 
     from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
     from cosmos_framework.data.generator.action.utils.action_processing import make_batched_action_processing_fields
-    from cosmos_framework.data.generator.action.utils.transforms import ActionTransformPipeline, remove_reflection_padding
+    from cosmos_framework.data.generator.action.utils.transforms import (
+        ActionTransformPipeline,
+        remove_reflection_padding,
+    )
 
     ds = LIBEROLeRobotDataset(
-        root=args.root, fps=20, chunk_length=args.chunk, mode="forward_dynamics", camera_mode="concat_view",
-        image_size=256, action_space="frame_wise_relative", rotation_space="6d", pose_coordinate_frame="native",
-        action_normalization="quantile_rot", split="val", holdout_episodes_path=args.holdout,
+        root=args.root,
+        fps=20,
+        chunk_length=args.chunk,
+        mode="forward_dynamics",
+        camera_mode="concat_view",
+        image_size=256,
+        action_space="frame_wise_relative",
+        rotation_space="6d",
+        pose_coordinate_frame="native",
+        action_normalization="quantile_rot",
+        split="val",
+        holdout_episodes_path=args.holdout,
     )
     max_action_dim = int(model.config.max_action_dim)
     transform = ActionTransformPipeline(
-        tokenizer_config=None, cfg_dropout_rate=0.0, max_action_dim=max_action_dim,
-        append_idle_frames=True, idle_frames_dropout=0.0, format_prompt_as_json=True,
+        tokenizer_config=None,
+        cfg_dropout_rate=0.0,
+        max_action_dim=max_action_dim,
+        append_idle_frames=True,
+        idle_frames_dropout=0.0,
+        format_prompt_as_json=True,
     )
 
     ep_ids = [int(e) for e in ds._ep_vals.tolist()]
@@ -139,9 +162,18 @@ def main() -> None:
     print(f"[eval] episodes: {ep_ids}", flush=True)
 
     run_cfg = dict(
-        checkpoint_path=str(args.checkpoint_path), config_file=str(args.config_file), use_ema_weights=not args.no_ema,
-        num_steps=args.num_steps, guidance=args.guidance, shift=args.shift, seed=args.seed, chunk=args.chunk,
-        lpips_net=args.lpips_net, canvas=[CANVAS_H, CANVAS_W], content=[160, 320], model_load_s=round(t_load, 1),
+        checkpoint_path=str(args.checkpoint_path),
+        config_file=str(args.config_file),
+        use_ema_weights=not args.no_ema,
+        num_steps=args.num_steps,
+        guidance=args.guidance,
+        shift=args.shift,
+        seed=args.seed,
+        chunk=args.chunk,
+        lpips_net=args.lpips_net,
+        canvas=[CANVAS_H, CANVAS_W],
+        content=[160, 320],
+        model_load_s=round(t_load, 1),
     )
     (out / "run_config.json").write_text(json.dumps(run_cfg, indent=2))
 
@@ -179,7 +211,10 @@ def main() -> None:
                 a = torch.cat([a, a[-1:].repeat(args.chunk - a.shape[0], 1)], dim=0)
             video_in = cond01.unsqueeze(0).repeat(args.chunk + 1, 1, 1, 1)  # [17,3,H,W]; frames 1..16 are noised anyway
             item = ds._build_result(
-                mode="forward_dynamics", video=video_in, action=a, ai_caption=task,
+                mode="forward_dynamics",
+                video=video_in,
+                action=a,
+                ai_caption=task,
                 additional_view_description=VIEW_DESC,
             )
             item = transform(item, resolution=None)
@@ -201,7 +236,11 @@ def main() -> None:
             tc0 = time.time()
             with torch.inference_mode():
                 samples = model.generate_samples_from_batch(
-                    batch, guidance=args.guidance, seed=[seed_k], num_steps=args.num_steps, shift=args.shift,
+                    batch,
+                    guidance=args.guidance,
+                    seed=[seed_k],
+                    num_steps=args.num_steps,
+                    shift=args.shift,
                     has_negative_prompt=False,
                 )
                 vid = model.decode(samples["vision"][0]).squeeze(0)  # [3,17,192,320] in [-1,1]
@@ -227,7 +266,11 @@ def main() -> None:
             r_hwc = real_e[t].transpose(1, 2, 0)
             g_hwc = gen[t].transpose(1, 2, 0)
             row = dict(
-                episode=ep, task=task, frame=t, chunk=(t - 1) // args.chunk, pos_in_chunk=(t - 1) % args.chunk + 1,
+                episode=ep,
+                task=task,
+                frame=t,
+                chunk=(t - 1) // args.chunk,
+                pos_in_chunk=(t - 1) % args.chunk + 1,
                 psnr=psnr_u8(real_e[t], gen[t]),
                 ssim=float(structural_similarity(r_hwc, g_hwc, channel_axis=2, data_range=255)),
                 lpips=float(lp[t]),
@@ -235,7 +278,8 @@ def main() -> None:
                 psnr_right=psnr_u8(real_e[t][..., 160:], gen[t][..., 160:]),
                 ssim_left=float(structural_similarity(r_hwc[:, :160], g_hwc[:, :160], channel_axis=2, data_range=255)),
                 ssim_right=float(structural_similarity(r_hwc[:, 160:], g_hwc[:, 160:], channel_axis=2, data_range=255)),
-                lpips_left=float(lp_l[t]), lpips_right=float(lp_r[t]),
+                lpips_left=float(lp_l[t]),
+                lpips_right=float(lp_r[t]),
                 gripper_cmd=float(act10[t - 1, 9].item()),
             )
             ep_rows.append(row)
@@ -243,51 +287,109 @@ def main() -> None:
 
         ed = out / "episodes" / f"ep{ep:03d}"
         ed.mkdir(exist_ok=True)
-        np.savez_compressed(ed / "frames.npz", gen=gen, real=real_e, actions10=act10[:T_eval].numpy(),
-                            gripper_state=ds._row_action[rows][:T_eval, 6])
+        np.savez_compressed(
+            ed / "frames.npz",
+            gen=gen,
+            real=real_e,
+            actions10=act10[:T_eval].numpy(),
+            gripper_state=ds._row_action[rows][:T_eval, 6],
+        )
         write_mp4(ed / "gen.mp4", gen.transpose(0, 2, 3, 1))
         write_mp4(ed / "real.mp4", real_e.transpose(0, 2, 3, 1))
         divider = np.full((T_eval, 160, 4, 3), 255, dtype=np.uint8)
-        sbs = np.concatenate([real_e.transpose(0, 2, 3, 1), divider, gen.transpose(0, 2, 3, 1)], axis=2)  # [T,160,644,3]
+        sbs = np.concatenate(
+            [real_e.transpose(0, 2, 3, 1), divider, gen.transpose(0, 2, 3, 1)], axis=2
+        )  # [T,160,644,3]
         write_mp4(ed / "side_by_side.mp4", sbs)
         with (ed / "metrics.csv").open("w", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=list(ep_rows[0].keys()))
-            w.writeheader(); w.writerows(ep_rows)
-        m = {k: float(np.mean([r[k] for r in ep_rows])) for k in ("psnr", "ssim", "lpips", "psnr_left", "psnr_right", "ssim_left", "ssim_right", "lpips_left", "lpips_right")}
-        ep_sum = dict(episode=ep, task=task, frames_total=T, frames_evaluated=T_eval - 1, chunks=n_chunks,
-                      gen_s_per_chunk=float(np.mean(chunk_times)), gen_s_total=float(np.sum(chunk_times)),
-                      decode_s=round(t_decode, 2), **m)
+            w.writeheader()
+            w.writerows(ep_rows)
+        m = {
+            k: float(np.mean([r[k] for r in ep_rows]))
+            for k in (
+                "psnr",
+                "ssim",
+                "lpips",
+                "psnr_left",
+                "psnr_right",
+                "ssim_left",
+                "ssim_right",
+                "lpips_left",
+                "lpips_right",
+            )
+        }
+        ep_sum = dict(
+            episode=ep,
+            task=task,
+            frames_total=T,
+            frames_evaluated=T_eval - 1,
+            chunks=n_chunks,
+            gen_s_per_chunk=float(np.mean(chunk_times)),
+            gen_s_total=float(np.sum(chunk_times)),
+            decode_s=round(t_decode, 2),
+            **m,
+        )
         (ed / "meta.json").write_text(json.dumps(ep_sum, indent=2))
         per_episode.append(ep_sum)
-        print(f"[eval] ep {ep} done: PSNR {m['psnr']:.2f} SSIM {m['ssim']:.3f} LPIPS {m['lpips']:.3f} "
-              f"({T_eval - 1} frames, {np.sum(chunk_times):.0f}s)", flush=True)
+        print(
+            f"[eval] ep {ep} done: PSNR {m['psnr']:.2f} SSIM {m['ssim']:.3f} LPIPS {m['lpips']:.3f} "
+            f"({T_eval - 1} frames, {np.sum(chunk_times):.0f}s)",
+            flush=True,
+        )
 
     # ---- aggregate ----
     with (out / "per_frame_all.csv").open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(all_rows[0].keys()))
-        w.writeheader(); w.writerows(all_rows)
+        w.writeheader()
+        w.writerows(all_rows)
     keys = ("psnr", "ssim", "lpips", "psnr_left", "psnr_right", "ssim_left", "ssim_right", "lpips_left", "lpips_right")
     overall = {k: float(np.mean([r[k] for r in all_rows])) for k in keys}
     overall_median = {k: float(np.median([r[k] for r in all_rows])) for k in keys}
     by_chunk = {}
     for c in sorted({r["chunk"] for r in all_rows}):
         rs = [r for r in all_rows if r["chunk"] == c]
-        by_chunk[str(c)] = {"n_frames": len(rs), "n_episodes": len({r["episode"] for r in rs}),
-                            **{k: float(np.mean([r[k] for r in rs])) for k in ("psnr", "ssim", "lpips")}}
+        by_chunk[str(c)] = {
+            "n_frames": len(rs),
+            "n_episodes": len({r["episode"] for r in rs}),
+            **{k: float(np.mean([r[k] for r in rs])) for k in ("psnr", "ssim", "lpips")},
+        }
     by_pos = {}
     for p in range(1, args.chunk + 1):
         rs = [r for r in all_rows if r["pos_in_chunk"] == p]
         if rs:
             by_pos[str(p)] = {k: float(np.mean([r[k] for r in rs])) for k in ("psnr", "ssim", "lpips")}
     summary = dict(
-        run_config=run_cfg, n_episodes=len(per_episode), n_frames_evaluated=len(all_rows),
-        overall_mean=overall, overall_median=overall_median, by_chunk_index=by_chunk, by_position_in_chunk=by_pos,
-        per_episode=per_episode, wall_s_total=round(time.time() - t_eval0, 1),
+        run_config=run_cfg,
+        n_episodes=len(per_episode),
+        n_frames_evaluated=len(all_rows),
+        overall_mean=overall,
+        overall_median=overall_median,
+        by_chunk_index=by_chunk,
+        by_position_in_chunk=by_pos,
+        per_episode=per_episode,
+        wall_s_total=round(time.time() - t_eval0, 1),
         gen_s_per_chunk_mean=float(np.mean([e["gen_s_per_chunk"] for e in per_episode])),
         peak_gpu_mem_gb=round(torch.cuda.max_memory_allocated() / 1024**3, 2),
     )
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(json.dumps({k: summary[k] for k in ("n_episodes", "n_frames_evaluated", "overall_mean", "wall_s_total", "gen_s_per_chunk_mean", "peak_gpu_mem_gb")}, indent=1), flush=True)
+    print(
+        json.dumps(
+            {
+                k: summary[k]
+                for k in (
+                    "n_episodes",
+                    "n_frames_evaluated",
+                    "overall_mean",
+                    "wall_s_total",
+                    "gen_s_per_chunk_mean",
+                    "peak_gpu_mem_gb",
+                )
+            },
+            indent=1,
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
