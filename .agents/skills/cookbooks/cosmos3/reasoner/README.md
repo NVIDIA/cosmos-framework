@@ -129,6 +129,37 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+For video requests, the accompanying `run_with_vllm.ipynb` notebook samples
+video frames through vLLM's media loader. If `messages` contains the video
+content for your request, pass the same options via `extra_body` when using
+the OpenAI client:
+
+```python
+response = client.chat.completions.create(
+    model=client.models.list().data[0].id,
+    messages=messages,
+    extra_body={"media_io_kwargs": {"video": {"num_frames": -1, "fps": 4}}},
+)
+```
+
+For direct `/v1/chat/completions` HTTP requests, put the equivalent
+`media_io_kwargs` object in the JSON body:
+
+```python
+payload = {
+    "model": "nvidia/Cosmos3-Super",
+    "messages": messages,
+    "media_io_kwargs": {"video": {"num_frames": -1, "fps": 4}},
+}
+```
+
+The model ID above matches the `vllm serve nvidia/Cosmos3-Super` launch
+in the environment setup guide when no `--served-model-name` override is
+specified. Use the model ID returned by `client.models.list()` when in doubt.
+These examples follow the notebook's frame-sampling mechanism; avoid combining
+it with a separate processor-side sampling option without validating how the
+server handles both.
+
 ### Notebook walkthrough
 
 [`run_with_vllm.ipynb`](./run_with_vllm.ipynb) uses the **Cosmos3-Super** launch

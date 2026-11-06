@@ -26,11 +26,14 @@ presence_penalty=0.0
 temperature=0.6
 ```
 
-For video inputs, the notebook uses frame sampling through `extra_body`:
+For video inputs, `run_with_vllm.ipynb` uses the media loader's frame
+sampling options through `extra_body`:
 
 ```python
-extra_body={"mm_processor_kwargs": {"fps": 4, "do_sample_frames": True}}
+extra_body={"media_io_kwargs": {"video": {"num_frames": -1, "fps": 4}}}
 ```
+
+This is the same sampling configuration shown in the Reasoner vLLM quickstart.
 
 ### System Prompt
 
