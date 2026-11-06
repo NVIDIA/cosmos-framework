@@ -16,6 +16,7 @@
 #   WAN_VAE_PATH          Wan2.2 VAE .pth (Wan-AI/Wan2.2-TI2V-5B)
 #   WANDB_API_KEY         for online logging (TOML wandb_mode="online")
 #   NPROC_PER_NODE        torchrun --nproc_per_node (default 8)
+#   DROID_FILTER_SOURCE_PREFIX  URI prefix before the complete episode ID in a URI-keyed filter file
 #   EXTRA_TAIL_OVERRIDES  space-separated Hydra overrides (e.g. the keep-ranges filter)
 #
 # Single-node smoke (config/data sanity, a few iters):
@@ -41,7 +42,11 @@ EXTRA_DATASET_CHECK='[[ -f "$DROID_ROOT/success/meta/info.json" ]] || { echo "ER
 # the TAIL_OVERRIDES array. An exported string survives `bash <wrapper>` (a child
 # process), unlike a TAIL_OVERRIDES array set in your shell. Use it e.g. to enable the
 # keep-ranges window filter (see docs/action_policy_droid_posttrain.md).
-TAIL_OVERRIDES=(
+TAIL_OVERRIDES=()
+if [[ -n "${DROID_FILTER_SOURCE_PREFIX:-}" ]]; then
+    TAIL_OVERRIDES+=("dataloader_train.dataloader.datasets.droid.dataset.filter_dict_source_prefix=$DROID_FILTER_SOURCE_PREFIX")
+fi
+TAIL_OVERRIDES+=(
     ${EXTRA_TAIL_OVERRIDES:-}
 )
 

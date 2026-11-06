@@ -41,7 +41,7 @@ class LVSWrapper(BaseAPI):
         if api_base is None:
             self.logger.info(f'API Base not provided. Using default API Base: {API_BASE}')
         else:
-            self.logger.info(f'Using API Base: {self.api_base}; API Key: {self.key}')
+            self.logger.info(f'Using API Base: {self.api_base}; API Key: {"set" if self.key else "not set"}')
 
         import requests
         try:

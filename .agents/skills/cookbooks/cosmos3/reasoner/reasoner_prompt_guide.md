@@ -103,7 +103,7 @@ Points and trajectories use `point_2d`:
 
 ## Examples
 
-The examples below mirror the notebook prompts. Media references point to the local assets used by `run_with_vllm.ipynb`. The following examples are tested with `Cosmos3-Super-Reasoner`
+The examples below mirror the notebook prompts. Media references point to the local assets used by `run_with_vllm.ipynb`. The following examples are tested with `Cosmos3-Super`
 
 ### Image Caption
 

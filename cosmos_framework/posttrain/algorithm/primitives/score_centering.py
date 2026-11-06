@@ -18,7 +18,7 @@ COEFFICIENTS are detached and whose ``log p`` factors are live:
 
     correction_t = Σ_{v∈H} sg[q_v w_v − α p_v] · log p_v ;   loss_t = −A (sg[w_{y_t}] log p_{y_t} − correction_t)
 
-Reference: the ``score_centering_loss`` snippet quoted in the design note (README form). Rules that
+Reference form: the ``score_centering_loss`` snippet. Rules that
 travel with it and are load-bearing (each breaks the zero-drift identity when violated, measured):
 float32 logprobs on both sides; the head is NOT renormalised; the sampled token's logprob is kept
 even when it falls outside the head. With ``q == p`` exactly, ``ρ == 1`` and every residual is

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""The two-process example in ``docs/howto/sim-integration.md`` §4.2, run for real.
+"""The two-process example in ``docs/posttrain/howto/sim-integration.md`` §4.2, run for real.
 
 A guide that tells a simulation team to run two commands is a claim about those two commands.
 Every other gate here proves one half: ``test_embodied_example`` runs the loop in ONE process,

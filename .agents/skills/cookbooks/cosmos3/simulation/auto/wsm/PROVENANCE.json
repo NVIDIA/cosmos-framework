@@ -1,6 +1,5 @@
 {
   "component": "WSM4 reference renderer",
-  "source_commit": "add7252561b68af9e0de6d3876d8b6181aab25f5",
   "files": {
     ".gitignore": {
       "source_sha256": "89a9c4505e11a740c9dabd1ece37411a358e451552f5ce72dec63d25cf387b72",
@@ -506,7 +505,6 @@
   ],
   "incremental_sources": [
     {
-      "source_commit": "747fc083e75502a61369558349de3aa9488ec151",
       "files": [
         "docs/scenario-to-rds-hq.md",
         "skills/scenario-to-rds-hq/SKILL.md",
@@ -521,7 +519,6 @@
       ]
     },
     {
-      "source_commit": "9d2bdc8cb06235a0becaf6396c3371cf430e5a28",
       "files": [
         "README.md",
         "docs/camera-rig/app.js",

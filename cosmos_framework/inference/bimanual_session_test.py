@@ -106,7 +106,7 @@ def test_public_session_feedback_history_reset_and_exclusive_decoder(runtime):
         assert session.observation.shape == (1, 3, 1, 2, 2)
         original_id = session.inspect()["session_id"]
         with pytest.raises(RuntimeError, match="active Bimanual session"):
-            OmniInference.generate_batch(pipe, [], {})
+            OmniInference._generate_batch(pipe, [], {})
         with pytest.raises(RuntimeError, match="active Bimanual session"):
             OmniInference.open_bimanual_session(pipe, vision_path=image, prompt="test task")
         for index in range(5):

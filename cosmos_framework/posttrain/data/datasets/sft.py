@@ -135,7 +135,7 @@ def normalize_row(row: Any, media_root: Path | None, *, label: str) -> dict[str,
         if bare:
             raise ValueError(
                 f"{label}: opener=prefilled requires a non-empty reasoning_content on every supervised assistant turn (all "
-                f"of them under all_assistant, the last under last_assistant); message(s) {bare} carry none (review R149-01)"
+                f"of them under all_assistant, the last under last_assistant); message(s) {bare} carry none (serving contract)"
             )
     return result
 

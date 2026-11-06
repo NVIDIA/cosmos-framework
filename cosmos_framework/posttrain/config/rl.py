@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Typed posttrain RL config schema (DESIGN: config system).
+"""Typed posttrain RL config schema.
 
 The **authoring + agent-facing schema** for the RL half of a posttrain experiment.
 Dependency-light (no torch / no model imports) so it can be read, type-checked, and
@@ -549,7 +549,7 @@ class RolloutConfig:
     max_model_len: int = 1024
     dtype: str = "bfloat16"
     # vLLM weight loader, auto|dummy. dummy skips the checkpoint read, and the rollout then refuses to
-    # sample until a weight publication commits (docs/howto/qwen-scaleout.md, "Startup weight I/O").
+    # sample until a weight publication commits.
     load_format: str = "auto"
     enforce_eager: bool = True
     # vLLM sleep level for the colocated hand-off cycle. Level 1 keeps a host copy of the
@@ -614,7 +614,7 @@ class RolloutConfig:
     # `from_pretrained` would silently adopt the checkpoint's generation_config.json instead). Passing
     # both explicitly makes the sampled distribution a property of this config alone.
     # Both mappings live together in `config/build.py` (`sampling_params` / `hf_sampling_params`) so
-    # the backends cannot drift; docs/design/grpo-cosmos-rl-parity.md §2.3 records what this measured.
+    # the backends share the same sampling convention.
     top_k: int = -1  # <= 0 disables top-k filtering (HF spells that None, vLLM -1)
     repetition_penalty: float = 1.0  # 1.0 == no penalty
 
@@ -720,14 +720,14 @@ class GridConfig:
     #     "ray": bodies live in a mesh of Ray worker processes (K=`ranks` per group);
     #       single-node, or joined to a multinode cluster via RAY_ADDRESS.
     #   grouping — HOW roles pack into those hosts (process-level; NOT the GPU-level
-    #     colocated/disaggregated placement — see DESIGN "GPU-level placement"):
+    #     colocated/disaggregated placement):
     #     "single" (default): all roles of a cell share one process (one setup builds all).
     #     "per_role": each role gets its own process per cell (ray only — local+per_role
     #       is rejected at run()).
     backend: str = "local"
     # GPU placement is independent of transport. ``colocated`` puts compatible ActorGroups in one
     # GPU DeviceGroup; ``disaggregated`` assigns them disjoint GPU DeviceGroups. Entry points build
-    # that structure first, then select a compatible weight mover (DESIGN §4.0).
+    # that structure first, then select a compatible weight mover.
     # Keep ``str`` for OmegaConf structured-config compatibility; __post_init__ narrows the value.
     gpu_placement: str = "colocated"
     # Fallback rollout execution-replica count. The fallback policy shape is `(1, ranks)` while the
@@ -745,9 +745,9 @@ class GridConfig:
     ranks: int = 1  # K: worker processes per group for the ray backend (ignored for local)
     grouping: str = "single"  # "single" | "per_role"
     gpus_per_role: dict = field(default_factory=dict)
-    # PER-ROLE shapes (spec §8.2), `{role: [R, K]}`. Only `policy` and `rollout` are user-set; the
+    # PER-ROLE shapes, `{role: [R, K]}`. Only `policy` and `rollout` are user-set; the
     # experience roles (data/rm/replay) are DERIVED at `R = R_rollout, K = 1` (that keeps `data →
-    # rollout` at op="one" and leaves `replay → policy` the single asymmetric edge — §8.2). Empty
+    # rollout` at op="one" and leaves `replay → policy` the single asymmetric edge). Empty
     # (the default) means NO per-role override: policy falls back to `(1, ranks)` and rollout to
     # `(num_replicas, ranks)`. When set, both roles are required and policy R must remain one.
     # Equal products remain required for same-GPU IPC; unequal products are admitted here and fail
@@ -1413,7 +1413,7 @@ class HFRunConfig(RunConfig):
     `fsdp_reduce_dtype`/`transfer_dtype`, and its `[policy]` model config carries no dtype at all
     (`policy/model/base.py` reads `config.train.master_dtype` at construction time).
 
-    NOT ON `RunConfig`, deliberately. DPO's backend is `i4` (`config_dpo.py`), whose model comes from
+    NOT ON `RunConfig`, deliberately. DPO's backend is `native` (`config_dpo.py`), whose model comes from
     the inherited LazyConfig tree and carries its own dtype — these fields would be silently ignored
     there, and "a knob the layers below refuse to honor is worse than no knob". Declaring them one
     level down makes `rl.master_dtype=...` on a DPO run an unknown-key error at config load, which
@@ -2081,7 +2081,7 @@ class GRPOConfig(HFRunConfig):
     # reason as ``weight_sync_r2r_broadcast``.
     colocated_offload: bool = field(default=True, kw_only=True)
 
-    # Replica-global batching (spec §5). These describe the sole policy execution replica's step and are
+    # Replica-global batching. These describe the sole policy execution replica's step and are
     # independent of how many DP ranks that replica has — a user sizing a run should not have to
     # restate the batch when the mesh changes shape.
     #
@@ -2317,7 +2317,7 @@ class GRPOConfig(HFRunConfig):
 
     @property
     def n_micro(self) -> int:
-        """Forward/backward chunks per optimizer step. Also the trainer's `grad_accum` (§5.2).
+        """Forward/backward chunks per optimizer step. Also the trainer's `grad_accum`.
 
         Returns:
             `mini // micro_batch_per_replica` (where `mini` is `mini_batch_per_replica` or, if
@@ -2656,7 +2656,7 @@ class GRPOConfig(HFRunConfig):
             raise ValueError(
                 "GRPO retires rl.grad_accum: it meant 'that many FRESH rollouts per step', which "
                 "disappears once the batch is drawn once. Set rl.micro_batch_per_replica instead — "
-                "the trainer's accumulation count is derived from it (spec §5.2)."
+                "the trainer's accumulation count is derived from it."
             )
         if self.batch_per_replica < self.group_size or self.batch_per_replica % self.group_size:
             # The sole policy batch contains `batch_per_replica // group_size` total prompts. Runtime
