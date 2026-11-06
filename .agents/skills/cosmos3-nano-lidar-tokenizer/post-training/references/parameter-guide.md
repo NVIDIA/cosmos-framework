@@ -1,7 +1,7 @@
-# V1.2 continuation parameters
+# LiDAR tokenizer continuation parameters
 
 The executable source of truth is
-`cosmos_framework/configs/tokenizer/lidar_v1p2.py`. This is a fixed recipe;
+`cosmos_framework/configs/tokenizer/lidar_post_training.py`. This is a fixed recipe;
 `--stop-after` bounds execution while retaining the schedule. Scientific changes
 should be explicit recipe edits on a new branch/run and must be requalified.
 

@@ -14,7 +14,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from cosmos_framework.configs.tokenizer.lidar_v1p2 import LidarV1P2Recipe
+from cosmos_framework.configs.tokenizer.lidar_post_training import LidarPostTrainingRecipe
 from cosmos_framework.data.tokenizer.lidar import LidarTarDataset
 from cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1 import infer_lidar_compression
 from cosmos_framework.model.tokenizer.lidar.model import LidarTokenizerModel
@@ -78,7 +78,7 @@ def restore_training_state(
 
 
 def train(
-    recipe: LidarV1P2Recipe,
+    recipe: LidarPostTrainingRecipe,
     samples: list[Path],
     output: Path,
     *,
@@ -89,7 +89,7 @@ def train(
     workers: int,
 ) -> None:
     if not torch.cuda.is_available():
-        raise RuntimeError("LiDAR V1.2 training requires a CUDA allocation; use --dryrun on CPU")
+        raise RuntimeError("LiDAR tokenizer training requires a CUDA allocation; use --dryrun on CPU")
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl")

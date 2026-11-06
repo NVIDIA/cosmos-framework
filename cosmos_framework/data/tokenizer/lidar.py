@@ -13,10 +13,7 @@ from cosmos_framework.model.generator.tokenizers.lidar.preprocessing import (
     enforce_tokenizer_clip_length,
     load_prepared_lidar_video_3ch,
 )
-from cosmos_framework.model.generator.tokenizers.lidar.range_projection import (
-    V1P2_TRANSFER_RANGE_PROJECTION,
-    LidarRangeProjectionConfig,
-)
+from cosmos_framework.model.generator.tokenizers.lidar.range_projection import LidarRangeProjectionConfig
 
 
 def read_manifest(path: Path) -> list[Path]:
@@ -39,7 +36,7 @@ class LidarTarDataset(Dataset):
         self,
         samples: list[Path],
         num_source_frames: int = 8,
-        projection: LidarRangeProjectionConfig = V1P2_TRANSFER_RANGE_PROJECTION,
+        projection: LidarRangeProjectionConfig = LidarRangeProjectionConfig(semantic_width=1800, model_width=1808),
     ) -> None:
         self.samples = samples
         self.num_source_frames = num_source_frames

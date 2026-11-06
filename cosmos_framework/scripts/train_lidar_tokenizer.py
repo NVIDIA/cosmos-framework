@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Native LiDAR tokenizer V1.2 continuation and serving export entry point."""
+"""Native LiDAR tokenizer continuation and serving export entry point."""
 
 import argparse
 import json
 from pathlib import Path
 
-from cosmos_framework.configs.tokenizer.lidar_v1p2 import LidarV1P2Recipe
+from cosmos_framework.configs.tokenizer.lidar_post_training import LidarPostTrainingRecipe
 from cosmos_framework.data.tokenizer.lidar import read_manifest
 from cosmos_framework.trainer.tokenizer.lidar import export_checkpoint, sha256, train
 from cosmos_framework.trainer.tokenizer.lidar_evaluation import evaluate
@@ -43,7 +43,7 @@ def main() -> None:
     if args.command == "evaluate":
         evaluate(args.artifact, args.manifest, args.output, args.device)
         return
-    recipe = LidarV1P2Recipe()
+    recipe = LidarPostTrainingRecipe()
     samples, heldout = read_manifest(args.train_manifest), read_manifest(args.eval_manifest)
     if set(samples) & set(heldout):
         parser.error("Train and evaluation manifests must be disjoint; split by recording/session")

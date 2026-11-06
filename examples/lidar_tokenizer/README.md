@@ -1,9 +1,9 @@
-# LiDAR tokenizer V1.2 continuation
+# LiDAR tokenizer continuation
 
 Follow the [post-training skill](../../.agents/skills/cosmos3-nano-lidar-tokenizer/post-training/SKILL.md)
 for asset selection, local tar manifests, bounded training/resume, evaluation and
 publication. The native recipe is
-[`lidar_v1p2.py`](../../cosmos_framework/configs/tokenizer/lidar_v1p2.py).
+[`lidar_post_training.py`](../../cosmos_framework/configs/tokenizer/lidar_post_training.py).
 
 This tokenizer objective has its own entry point:
 
@@ -18,7 +18,7 @@ COSMOS_INTERNAL=0 COSMOS_TRAINING=1 \
 Use an existing training environment or follow the [setup guide](../../docs/setup.md).
 The skill provides manifest preflight, a 20-step train/save check, continuation
 to step 40, and live/EMA export and evaluation. It requires a caller-supplied,
-compatible V1.2 initializer and measured recordings; it does not download training
+compatible initializer and measured recordings; it does not download training
 data or select a checkpoint on the caller's behalf. The
 [validation record](VALIDATION.md) distinguishes CPU checks from unverified GPU
 behavior.
@@ -55,4 +55,4 @@ tokenizer = LidarTokenizerV1Interface(
 
 The serialized checkpoint includes its learned latent moments and metric range
 bounds. Keep the accompanying configuration and statistics together. The
-ordinary V1 default network configuration is not the V1.2 architecture.
+ordinary inference default network configuration differs from this recipe's architecture.

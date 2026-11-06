@@ -13,7 +13,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
-from cosmos_framework.configs.tokenizer.lidar_v1p2 import LidarV1P2Recipe
+from cosmos_framework.configs.tokenizer.lidar_post_training import LidarPostTrainingRecipe
 from cosmos_framework.data.tokenizer.lidar import LidarTarDataset, read_manifest
 from cosmos_framework.model.generator.tokenizers.lidar.checkpoint import (
     load_model_checkpoint,
@@ -54,12 +54,12 @@ def tiny_model() -> LidarTokenizerModel:
         precision="float32",
         ema=PowerEMAConfig(enabled=True, s=0.1),
     )
-    config.range_projection = LidarV1P2Recipe().model_config().range_projection
+    config.range_projection = LidarPostTrainingRecipe().model_config().range_projection
     return LidarTokenizerModel(config)
 
 
 def test_recipe_contract_and_linear_schedule() -> None:
-    recipe = LidarV1P2Recipe()
+    recipe = LidarPostTrainingRecipe()
     config = recipe.model_config()
     assert infer_lidar_compression(config.network) == ((16, 16), 1)
     assert config.range_projection.semantic_width == 1800
@@ -86,7 +86,7 @@ def cpu_process_group(tmp_path: Path) -> Iterator[None]:
 def test_backward_resume_and_serving_export(tmp_path: Path, cpu_process_group: None) -> None:
     torch.manual_seed(7)
     model = tiny_model()
-    recipe = LidarV1P2Recipe()
+    recipe = LidarPostTrainingRecipe()
     optimizer, scheduler = model.init_optimizer_scheduler(recipe.optimizer_config(), recipe.scheduler_config())
     # Exercise normalization, geometric loss and the actual VAE through forward.
     video = torch.ones(1, 3, 2, 128, 1808)  # [B,C,T,H,W]

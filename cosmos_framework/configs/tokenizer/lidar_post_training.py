@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""LiDAR V1.2 continuation recipe; paths are supplied by the caller."""
+"""LiDAR tokenizer continuation recipe; paths are supplied by the caller."""
 
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1 import DEFAULT_NETWORK_CONFIG
-from cosmos_framework.model.generator.tokenizers.lidar.range_projection import V1P2_TRANSFER_RANGE_PROJECTION
+from cosmos_framework.model.generator.tokenizers.lidar.range_projection import LidarRangeProjectionConfig
 from cosmos_framework.model.tokenizer.lidar.loss import LidarVAELoss
 from cosmos_framework.model.tokenizer.lidar.model import LidarTokenizerModelConfig
 from cosmos_framework.utils.config import PowerEMAConfig
 
 
 @dataclass(frozen=True)
-class LidarV1P2Recipe:
+class LidarPostTrainingRecipe:
     batch_size: int = 2
     num_source_frames: int = 8
     max_steps: int = 30_000
@@ -39,7 +39,7 @@ class LidarV1P2Recipe:
             gradient_checkpointing=True,
         )
         return LidarTokenizerModelConfig(
-            range_projection=V1P2_TRANSFER_RANGE_PROJECTION,
+            range_projection=LidarRangeProjectionConfig(semantic_width=1800, model_width=1808),
             network=network,
             loss=LidarVAELoss(
                 recon_weight=2.0,
@@ -65,7 +65,7 @@ class LidarV1P2Recipe:
     def manifest(self) -> dict[str, Any]:
         config = self.model_config()
         return {
-            "recipe": "lidar_v1p2",
+            "recipe": "lidar_post_training",
             "training": asdict(self),
             "network": config.network,
             "range_projection": config.range_projection.to_dict(),
