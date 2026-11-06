@@ -1,0 +1,61 @@
+{
+  "description": "Media of the Cosmos Policy recipe. Every file is a frame or clip of a closed-loop LIBERO-10 evaluation episode; see captions.md.",
+  "hero": {
+    "files": [
+      "hero_iter2000_task5_success_vs_failure.gif",
+      "hero_iter2000_task5_success_vs_failure.mp4"
+    ],
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "iteration": 2000,
+    "evaluation_seed": 0,
+    "success_initial_state": 0,
+    "success_steps": 176,
+    "failure_initial_state": 3,
+    "failure_steps": 520
+  },
+  "frames": [
+    {
+      "file": "frame_iter2000_task1_success.png",
+      "task_id": 1,
+      "task": "put both the cream cheese box and the butter in the basket",
+      "iteration": 2000,
+      "evaluation_seed": 0,
+      "initial_state": 0,
+      "outcome": "success",
+      "steps": 259
+    },
+    {
+      "file": "frame_iter2000_task7_success.png",
+      "task_id": 7,
+      "task": "put both the alphabet soup and the cream cheese box in the basket",
+      "iteration": 2000,
+      "evaluation_seed": 0,
+      "initial_state": 0,
+      "outcome": "success",
+      "steps": 260
+    },
+    {
+      "file": "frame_iter2000_task8_failure.png",
+      "task_id": 8,
+      "task": "put both moka pots on the stove",
+      "iteration": 2000,
+      "evaluation_seed": 0,
+      "initial_state": 13,
+      "outcome": "failure",
+      "steps": 520
+    },
+    {
+      "file": "frame_perturbed_iter1250_task0_success.png",
+      "task_id": 0,
+      "task": "put both the alphabet soup and the tomato sauce in the basket",
+      "iteration": 1250,
+      "training": "separate restyle study, not part of this recipe: iteration-1000 checkpoint plus 250 iterations on 379 demonstrations and 187 restyled ones, training seed 42",
+      "scene": "perturbed",
+      "evaluation_seed": 0,
+      "initial_state": 1,
+      "outcome": "success",
+      "steps": 312
+    }
+  ]
+}
