@@ -507,7 +507,7 @@ class SparseMultiHeadAttention(nn.Module):
             "layer_idx": self.layer_idx,
             "q_seqlen": list(q_seqlen),
             "kv_seqlen": list(kv_seqlen),
-            "i4_attn_backends": os.environ.get("I4_ATTN_BACKENDS"),
+            "i4_attn_backends": os.environ.get("COSMOS_ATTN_BACKENDS"),
             "sparse_backend": os.environ.get("SPARSE_BACKEND"),
         }
         if self._debug_capture_store_qkv:

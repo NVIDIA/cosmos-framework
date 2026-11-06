@@ -22,13 +22,13 @@ from cosmos_framework.posttrain.utils.entry import (
 )
 from cosmos_framework.posttrain.utils.log import info0
 
-# Which i4-native families seat SFT is declared by the family beside its builder (``model/sft_source.py``,
-# review thread 9c125ba124): today ``model/qwen3_vl.py`` registers Qwen3-VL / Qwen3-VL-MoE, built through the same
+# Which native families seat SFT is declared by the family beside its builder (``model/sft_source.py``):
+# today ``model/qwen3_vl.py`` registers Qwen3-VL / Qwen3-VL-MoE, built through the same
 # policy adapter the online algorithms train. The HF backend keeps refusing MoE VLMs (``model/hf.py::_is_moe_vlm``), so
 # a Qwen3-VL-MoE base reaches the SFT objective only through a registered native builder.
 
 
-# SFT console headline columns (review R121B-01). The trainer computes train/grad_norm, train/learning_rate and the
+# SFT console headline columns. The trainer computes train/grad_norm, train/learning_rate and the
 # DP-summed train/valid_token_count every step and the loop adds timer/e2e_step_s, but the default headline keys
 # (utils/report.py::_CONSOLE_KEYS, the GRPO/DPO set) drop them, and with W&B off the step-size regime of a run was
 # unobservable from its log. The console reporter prints |value| < 1e-3 in scientific notation, so lr 1e-5 is legible.
@@ -43,7 +43,7 @@ SFT_CONSOLE_KEYS: tuple[str, ...] = (
 )
 
 # The run directory's per-step record (utils/report.py::JsonlReporter): every public key of every committed frame,
-# one JSON line per step; bounded, rank 0 only (review R125-B-03 / R125-D-07).
+# one JSON line per step; bounded, rank 0 only.
 SFT_METRICS_FILE = "metrics.jsonl"
 
 
@@ -58,7 +58,7 @@ def sft_policy_source(config: Any) -> tuple[str, bool]:
     """Resolve the one model/tokenizer artifact the SFT packer and the backbone share.
 
     ``model_backend='hf'``: ``model_hf.name_or_path`` (Qwen text models and dense Qwen3.5/3.8 through
-    the HF backend). ``model_backend='i4'``: ``config.model`` must be a ``NativePolicyBuildSpec`` whose
+    the HF backend). ``model_backend='native'``: ``config.model`` must be a ``NativePolicyBuildSpec`` whose
     builder's model family has registered an SFT source (``model/sft_source.py``; the Qwen3-VL family
     checks ``model_type`` ``qwen3_vl`` / ``qwen3_vl_moe`` there); an undeclared builder is refused by
     name. No model or processor is constructed.
@@ -77,8 +77,8 @@ def sft_policy_source(config: Any) -> tuple[str, bool]:
     spec = selection.native_spec
     if spec is None:
         raise ValueError(
-            "SFT with model_backend='i4' requires config.model=NativePolicyBuildSpec for the Qwen3-VL native "
-            "seat; legacy i4 model trees are not supported"
+            "SFT with model_backend='native' requires config.model=NativePolicyBuildSpec for the Qwen3-VL native "
+            "seat; legacy native model trees are not supported"
         )
     return resolve_native_sft_source(spec)
 
@@ -105,7 +105,7 @@ def validate_config_structure(config: Any) -> SFTConfig:
     sft_policy_source(config)
     rl = instantiate(config.rl)
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
-    # of the value (the recipe variant, a YAML, a ``--`` override; review round 142b, review threads b196e5e99f / 12f2ce563b).
+    # of the value (the recipe variant, a YAML, a ``--`` override).
     rl.__post_init__()
     if rl.lr_schedule.kind == "cosine" and (rl.lr_schedule.cycle_steps or rl.max_steps) <= rl.optimizer.warmup_steps:
         # Legal (a short canary of a long warmup) but worth one line: the run never leaves the warmup ramp.
@@ -142,7 +142,6 @@ def validate_config(config: Any) -> SFTConfig:
 
 
 def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None, checkpoint: Any) -> Any:
-    from cosmos_framework.utils import misc
     from cosmos_framework.posttrain.algorithm.sft import make_objective
     from cosmos_framework.posttrain.config.build import (
         build_backbone,
@@ -155,6 +154,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     from cosmos_framework.posttrain.roles.trainer.validation.sft import evaluate_sft_batch
     from cosmos_framework.posttrain.roles.trainer.validation.state import ValidationState
     from cosmos_framework.posttrain.utils.dist import run_rank_converged, world_size_or_1
+    from cosmos_framework.utils import misc
 
     name_or_path, trust_remote_code = sft_policy_source(config)
     packer = run_rank_converged(
@@ -262,10 +262,10 @@ def held_out_census(data: Any, validation: Any) -> dict[str, Any]:
 
 def make_setup(config_path: str, opts: list[str]) -> Any:
     def setup() -> dict[str, Any]:
-        from cosmos_framework.utils.config import load_config
         from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
         from cosmos_framework.posttrain.roles.env.sft import build_sft_env
         from cosmos_framework.posttrain.utils.dist import rank_identical, rank_or_0, run_rank_converged, world_size_or_1
+        from cosmos_framework.utils.config import load_config
 
         config = load_config(config_path, ["--", *opts])
         rl = validate_config(config)
@@ -315,7 +315,7 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
             )
         reports.append(metrics)
     # The clip record (``train/grad_clipped``, ``train/grad_clip_coef``) arrives in the applying microbatch's metrics
-    # from ``LLMTrainer``, computed from the norm the clip measured (review thread b9037df15d); the loop adds the run's
+    # from ``LLMTrainer``, computed from the norm the clip measured; the loop adds the run's
     # ``train/grad_clip_fraction``.
     return merge_training_metric_window(
         reports,
@@ -392,7 +392,6 @@ def _evaluate(
 
 
 def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]:
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
     from cosmos_framework.posttrain.control.termination import TerminationWatch
     from cosmos_framework.posttrain.control.validation import ValidationSchedule
@@ -406,6 +405,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data, policy = units["data"], units["policy"]
@@ -423,7 +423,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
         jsonl_path=os.path.join(run_out_dir, SFT_METRICS_FILE),
         # A relaunch resumes at `start`, which can be older than the last committed row (a crash past the last save):
         # the file keeps the rows through `start` and drops the ones this attempt re-emits; a fresh attempt starts it
-        # empty (review R134-05: an append-only file held step 3 twice after such a relaunch).
+        # empty (an append-only file held step 3 twice after such a relaunch).
         jsonl_keep_through=start if resumed else -1,
     )
     failures: set[int] = set()
@@ -440,7 +440,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
     )
     final_step, final_loss = start, None
     # The clip counters continue from the kept rows of the metrics file (rank 0, the rank that writes it), so the
-    # fraction below is the share of the RUN's updates, not of this attempt's (review R134-05).
+    # fraction below is the share of the RUN's updates, not of this attempt's.
     clipped_steps, counted_steps = prior_clip_counts(reporters)
     try:
         initial = boundary.resume_or_initial(start, resumed_from_checkpoint=resumed)
@@ -457,7 +457,7 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
                 raise RuntimeError("SFT applied a non-finite update")
             metrics["timer/e2e_step_s"] = time.monotonic() - began
             if "train/grad_clipped" in metrics:
-                # The share of this run's updates the clip has set the step size of, so far, across attempts (R125-D-07).
+                # The share of this run's updates the clip has set the step size of, so far, across attempts.
                 counted_steps += 1
                 clipped_steps += int(metrics["train/grad_clipped"] > 0)
                 metrics["train/grad_clip_fraction"] = clipped_steps / counted_steps

@@ -3,7 +3,7 @@
 """NIXL weight transport: availability probing, lazy imports, and the mover surface.
 
 Everything here must pass on a machine with NO ray / nixl / cuda-python / cupy — that is
-the i4 container, and it is the whole point of the lazy-import discipline.
+the training container, and it is the whole point of the lazy-import discipline.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _RAY_PY = pathlib.Path(__file__).resolve().parents[1] / "workers" / "ray.py"
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_module_imports_without_ray_or_nixl():
-    # The i4 container has NO ray, nixl, cuda-python or cupy. Importing this module must
+    # The training container has NO ray, nixl, cuda-python or cupy. Importing this module must
     # still succeed, or every posttrain run breaks the moment workers/ touches it.
     mod = importlib.import_module("cosmos_framework.posttrain.workers.nixl")
     assert hasattr(mod, "nixl_available")
@@ -33,7 +33,7 @@ def test_module_imports_without_ray_or_nixl():
 def test_no_module_scope_imports_of_optional_deps():
     """The lazy-import discipline, enforced structurally rather than by convention.
 
-    A module-scope `import ray` here would make posttrain unimportable in the i4
+    A module-scope `import ray` here would make posttrain unimportable in the training
     container, and the failure would surface far from its cause."""
     tree = ast.parse(_NIXL_PY.read_text())
     optional = {"ray", "nixl", "cupy", "cuda"}
@@ -88,7 +88,7 @@ def test_transport_state_does_not_live_in_the_cloudpickled_actor_module():
 
     NixlTransport's singleton must therefore live in workers/nixl.py, which the actor
     reaches through a normal import resolved via sys.modules. Checked textually because
-    importing workers/ray.py requires `ray`, which the i4 container lacks."""
+    importing workers/ray.py requires `ray`, which the training container lacks."""
     # AST rather than substrings: `"_singleton" not in src` would fire on any unrelated future
     # use of that name in ray.py and report it as a NIXL architecture violation.
     tree = ast.parse(_RAY_PY.read_text())
@@ -118,7 +118,7 @@ def test_mover_surface_matches_the_staged_contract():
     from cosmos_framework.posttrain.comm.transfer.mover import STAGED
 
     # STAGED, not COLLECTIVE: NIXL is one-sided, so pull_stream_from_peer takes the
-    # synchronous per-bucket branch and never enters the broadcast path (design §1).
+    # synchronous per-bucket branch and never enters the broadcast path.
     assert N.NixlWeightMover.lifetime == STAGED
     assert N.NixlWeightMover.tensors_only is True
 
@@ -371,7 +371,7 @@ def test_nixl_preflight_requires_a_cuda_ucx_plugin(tmp_path: pathlib.Path) -> No
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_stage_waits_before_reassigning_views():
-    """The §4 ordering invariant, checked structurally so it runs in CI where the GPU e2e
+    """The ordering invariant, checked structurally so it runs in CI where the GPU e2e
     cannot.
 
     `pack` returns a FRESH view each call and `wait_tensor_freed` keys on `id(tensor)`, so

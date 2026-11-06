@@ -4,7 +4,7 @@
 
 OPD is GRPO plus a teacher, so it inherits the same model and rollout sections. This typed root
 changes the algorithm identity and concrete RL schema while preserving OPD's established HF
-default; native OPD recipes select ``model_backend="i4"`` explicitly.
+default; native OPD recipes select ``model_backend="native"`` explicitly.
 
 The teacher lives at `rl.teacher`, NOT as a top-level section beside `rollout`. That asymmetry is
 deliberate: `config.rollout` is top-level because the student's engine is shared machinery — the
@@ -25,7 +25,7 @@ from cosmos_framework.posttrain.config.rl import OPDConfig
 @attrs.define(slots=False)
 class PosttrainOPDConfig(PosttrainGRPOConfig):
     algorithm: str = "opd"
-    # Preserve the established text-only OPD demo/default. Native OPD recipes select i4 explicitly.
+    # Preserve the established text-only OPD demo/default. Native OPD recipes select the native backend explicitly.
     model_backend: str = "hf"
     rl: OPDConfig = attrs.field(factory=OPDConfig)
 

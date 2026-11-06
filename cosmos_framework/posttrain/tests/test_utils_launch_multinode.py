@@ -101,16 +101,20 @@ def test_invalid_launch_file_rejects_before_submission(tmp_path, monkeypatch):
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_resolve_config_precedence(monkeypatch):
+    monkeypatch.delenv("POSTTRAIN_CONTAINER_MOUNTS", raising=False)
     monkeypatch.setenv("POSTTRAIN_CONTAINER_IMAGE", "/<runtime-image>")
     monkeypatch.setenv("POSTTRAIN_SLURM_ACCOUNT", "envacct")
     c = resolve_config()  # env
     assert c.container_image == "/<runtime-image>"
     assert c.account == "envacct"
     assert c.partition == "interactive"  # default
-    assert c.container_mounts == "/lustre:/lustre"  # default
+    assert c.container_mounts == ""  # default
     c2 = resolve_config(container_image="/<runtime-image>", account="argacct")  # arg wins over env
     assert c2.container_image == "/<runtime-image>"
     assert c2.account == "argacct"
+    monkeypatch.setenv("POSTTRAIN_CONTAINER_MOUNTS", "/shared:/shared")
+    assert resolve_config().container_mounts == "/shared:/shared"
+    assert resolve_config(container_mounts="/data:/data").container_mounts == "/data:/data"
 
 
 @pytest.mark.L0

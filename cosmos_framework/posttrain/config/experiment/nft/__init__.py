@@ -14,17 +14,12 @@ NFT_T2I_PUBLIC_HPSV3_LORA_720P_PROFILE = "t2i_hpsv3_lora_720p_public_v1"
 NFT_T2I_PUBLIC_TOY_4GPU_PROFILE = "t2i_toy_4gpu_public_v1"
 
 
-
-
 @dataclass(frozen=True)
 class NFTT2IRecipeContract:
     """Qualified source, model, execution, and continuation coordinates for T2I NFT."""
 
     profile: str = NFT_T2I_HPSV3_LORA_720P_PROFILE
-    base_checkpoint: str = (
-        "s3://<checkpoint-bucket>/cosmos3_vfm/cosmos3_ga_image_only/"
-        "cosmos3_ga_64bm32b_from_v2_image_only_v1p5_hq_distill/checkpoints/iter_000108000"
-    )
+    base_checkpoint: str = ""
     source_only_keys: tuple[str, ...] = (
         "llm2sound.weight",
         "llm2sound.bias",
@@ -95,9 +90,7 @@ class NFTT2IRecipeContract:
     vlm_json_file: str = "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
     qk_norm_for_text: bool = True
     joint_attn_implementation: str = "two_way"
-    backbone_path: str = (
-        "s3://<checkpoint-bucket>/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Reasoner-32B-Private/"
-    )
+    backbone_path: str = ""
 
 
 NFT_T2I_HPSV3_CONTRACT = NFTT2IRecipeContract()

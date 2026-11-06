@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""GRPO policy-gradient objectives (DESIGN §8.2 #2).
+"""GRPO policy-gradient objectives.
 
 ``make_objective`` is the ``legacy_pg`` surrogate: group-relative advantage plus a plain
 policy-gradient loss, with no importance ratio, clip, or KL. ``make_clipped_objective`` is the
@@ -301,7 +301,7 @@ class OldLogprobCache:
 
     KEYED BY CALL ORDER, like cosmos-rl's `old_per_token_logps[local_mini_step]`, because the
     dispatch ingress CONSUMES `(mini, micro)` and the trainer body only ever sees `train(batch)`
-    (`roles/core/dispatch.py`, spec 2026-08-12 §3.4). The record pass and the train pass iterate the
+    (`roles/core/dispatch.py`). The record pass and the train pass iterate the
     same `(mini, micro)` product in the same order on the same rank, so chunk N of one is chunk N of
     the other. An empty shard returns before reaching π_old in BOTH passes — `select_chunk` is
     deterministic — so the two stay aligned without special-casing.
@@ -685,7 +685,7 @@ def make_clipped_objective(
     # `needs_old_logprobs()` answer True. That matters beyond tidiness: the trainer derives "was an
     # ahead pass expected?" from (n_mini > 1, cache is not None), and BOTH must be rank-invariant --
     # config and objective identity are, mutable cache MODE is not. Deriving the expectation from
-    # mode is what let a restarted rank skip a collective its peers entered (Codex round 7).
+    # mode is what let a restarted rank skip a collective its peers entered.
     _uses_rollout_lp = bool(getattr(algo_cfg, "use_rollout_logprobs_for_loss", False))
     old_logp_cache = None if _uses_rollout_lp else OldLogprobCache()
     # The KL anchor's scorer slot exists iff the loss will consult it. `build_trainer` attaches the

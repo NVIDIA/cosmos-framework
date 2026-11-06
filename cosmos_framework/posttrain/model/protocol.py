@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Model capability protocols (DESIGN §1.4 / §6 — model ↔ algorithm decoupling).
+"""Model capability protocols.
 
 A model exposes a small, modality-typed capability protocol; algorithms
 (`algorithm/`) are written against the protocol, never against a concrete model.
 So a new model needs only an adapter implementing the protocol — no new trainer,
 no new objective — and a new objective works with every model that satisfies the
-protocol. This is the decoupling that removes cosmos-rl's "one trainer .py per
+protocol. This is the decoupling that removes cosmos-rl's "one trainer.py per
 model" coupling (where `compute_dpo_loss` was a method *on* the model).
 
 `FlowMatchingPolicy` is the general staged-denoising contract for diffusion/flow
 objectives. `PreferenceFlowPolicy` adds only the pair-context validation required by
 DPO, while `OnlineFlowPolicy` adds the final-sample operations required by NFT.
-Production implementations live in `model/` (`cosmos3` for the i4-internal OmniMoT,
+Production implementations live in `model/` (`cosmos3` for the built-in OmniMoT,
 `hf` later); a toy fixture for tests lives in `tests/helpers/toy_model.py`.
 
 `SupervisedFlowMatchingPolicy` is the sibling contract for a model that owns its supervised flow-matching
@@ -283,7 +283,7 @@ class SupervisedFlowMatchingPolicy(Protocol):
 
 @runtime_checkable
 class FlowMatchingPolicy(Protocol):
-    """Capability contract for a rectified-flow / diffusion policy (DESIGN §1.4).
+    """Capability contract for a rectified-flow / diffusion policy.
 
     The policy owns its network(s), private conditioning representation, stochastic
     inputs, and staged denoiser mechanics; algorithms only drive these primitives.

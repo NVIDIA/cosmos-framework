@@ -41,7 +41,7 @@ def _tiny():
     from cosmos_framework.posttrain.data.packer import init_data_packer
 
     model = GPT2LMHeadModel(GPT2Config(n_layer=2, n_head=2, n_embd=32, vocab_size=50257, n_positions=64)).eval()
-    packer = init_data_packer("gpt2")  # shaping seam; owns the tokenizer (design 2026-07-28)
+    packer = init_data_packer("gpt2")  # shaping seam; owns the tokenizer
     return model, packer
 
 

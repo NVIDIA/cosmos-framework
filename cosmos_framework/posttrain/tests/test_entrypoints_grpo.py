@@ -6,7 +6,7 @@ Every test pins a behavior whose failure is SILENT or first surfaces as an expen
 the BATCH boundary (not the optimizer step) driving generate/weight_sync, and resume
 converting between the two clocks; a NaN step never streams weights into
 the running engine; a resumed loop runs only the remaining steps; `build_trainer` resumes from the latest
-checkpoint (dinghaoy's requeue-restarts-from-base bug); preemption saves before exit; run_ts pinned into
+checkpoint (a requeue once restarted from the base); preemption saves before exit; run_ts pinned into
 worker opts. The real vLLM rollout + FSDP trainer are GPU-tested; these use stub roles / fakes.
 """
 
@@ -207,12 +207,12 @@ def test_reward_packer_uses_student_factory_only_for_prefix_filtering(monkeypatc
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_online_i4_rejects_legacy_model_before_instantiate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A legacy i4 tree must fail on the driver instead of constructing a large model there."""
+    """A legacy native tree must fail on the driver instead of constructing a large model there."""
     from cosmos_framework.posttrain.config import build as build_module
     from cosmos_framework.posttrain.entrypoints import grpo
 
     legacy = SimpleNamespace(
-        model_backend="i4",
+        model_backend="native",
         model=SimpleNamespace(config=SimpleNamespace(parallelism=object())),
     )
     monkeypatch.setattr(
@@ -237,7 +237,7 @@ def test_native_spec_declares_whether_grpo_requires_collated_forward() -> None:
 
     def _config(*, requires_collated: bool) -> SimpleNamespace:
         return SimpleNamespace(
-            model_backend="i4",
+            model_backend="native",
             model=NativePolicyBuildSpec(
                 builder="cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy",
                 model_id=model_id,
@@ -443,7 +443,7 @@ def test_grpo_loop_batch_boundary_not_optimizer_step_drives_generate_and_sync(mo
         def train(self, batch, *, mini=0, micro=0, n_mini=1, n_micro=1):
             # The driver passes INDICES ONLY. In production the dispatch layer CONSUMES these and
             # the body is invoked as `train(batch)`; this fake stands in for the whole WorkerGroup,
-            # so it receives them and records the order (spec §3.4).
+            # so it receives them and records the order.
             del batch, n_mini, n_micro
             self.calls.append((mini, micro))
             n["train"] += 1
@@ -862,7 +862,7 @@ def test_grpo_loop_nan_step_aborts_before_weight_sync(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": float("nan") if n["train"] == 2 else 0.5}  # NaN on the 2nd step
@@ -903,7 +903,7 @@ def test_grpo_loop_rejected_update_aborts_before_weight_sync_or_checkpoint(monke
         def iteration(self) -> int:
             return self._iteration
 
-        def train(self, batch: list[Any], **_control: Any) -> dict[str, Any]:  # **_control: mini/micro (§3.4)
+        def train(self, batch: list[Any], **_control: Any) -> dict[str, Any]:  # **_control: mini/micro
             del batch
             n["train"] += 1
             if n["train"] == 2:
@@ -959,7 +959,7 @@ def test_grpo_loop_resumes_from_iteration(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1908,7 +1908,7 @@ def test_grpo_loop_preemption_emergency_saves(monkeypatch):
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1947,7 +1947,7 @@ def test_grpo_loop_preemption_no_double_save_when_already_checkpointed(monkeypat
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -1985,7 +1985,7 @@ def _preemption_plan_saves(monkeypatch, **rl_overrides) -> list[tuple[str, tuple
             """Ahead-pass capability probe; see the note on the other policy fakes."""
             return False
 
-        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices (§3.4)
+        def train(self, batch, **_control):  # **_control: the driver's mini/micro indices
             n["train"] += 1
             self._iteration += 1
             return {"train/loss_avg": 0.5}
@@ -2201,7 +2201,7 @@ def test_injected_i4_builder_resolves_transfer_precision(monkeypatch, tmp_path) 
     loaded: dict[str, Any] = {}
     _mock_build_trainer_deps(monkeypatch, tmp_path, loaded)
     config = _resume_config(model_name="")
-    config.model_backend = "i4"
+    config.model_backend = "native"
     model_config = Qwen3VLModelConfig(name_or_path="native/model", dtype="bfloat16")
     config.model = NativePolicyBuildSpec(
         builder="tests.fake.build_policy",
@@ -3046,7 +3046,7 @@ def test_build_env_hf_branch_works_without_an_items_fn(monkeypatch):
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grid_build_rejects_micro_batches_that_do_not_divide_by_dp_world() -> None:
-    """The `select_chunk` precondition (§5.1: `chunk_len % dp_world == 0`) must be checked at
+    """The `select_chunk` precondition (`chunk_len % dp_world == 0`) must be checked at
     grid-build time, not discovered by a rank whose share silently rounds to zero.
 
     Cannot live in `GRPOConfig.__post_init__` -- `dp_world` is `ParallelDims`-derived and
@@ -3250,7 +3250,7 @@ def test_grpo_loop_resume_rejects_a_mid_batch_checkpoint(monkeypatch):
         )
 
 
-# --------------------------------------------------------------------------- §8.3 generalized sizing
+# --------------------------------------------------------------------------- generalized sizing
 
 
 @pytest.mark.L0
@@ -3310,7 +3310,7 @@ def test_grpo_final_drain_joins_publishers_once_after_the_final_save(monkeypatch
     """The in-loop drain runs exactly once, at the last step, between that step's save and the trailing
     offload, and this controller loop takes no host-memory reading of its own.
 
-    canM7 (job 461919) lost its four policy actors to the cgroup OOM killer inside this drain. The
+    One run lost its four policy actors to the cgroup OOM killer inside this drain. The
     readings that explain the next incident are the worker's (CheckpointManager samples at every save
     and at its finalize); a reading from this process would be a different RSS and, under a multi-node
     or disaggregated placement, a different cgroup from the one the kernel enforced."""

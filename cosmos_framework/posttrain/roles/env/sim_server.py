@@ -16,7 +16,7 @@ process boundary is a unix socket and a shared buffer, which is what the design 
 the envs can be isolated"*.
 
 **Import discipline is load-bearing here, not stylistic.** Everything this module reaches must be
-importable without Ray, torch, or the i4 policy stack -- that set is declared in
+importable without Ray, torch, or the native policy stack -- that set is declared in
 ``embodied/plugin_surface.py`` and enforced by ``tests/test_import_discipline.py``. A stray
 framework import would still WORK on a single-image deployment and would only fail once the
 images actually diverge, which is exactly the coupling being removed.
@@ -366,7 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[sim] fault injector: disarmed (armed check, not silence)", flush=True)
 
     # THE EXECUTION-ENVIRONMENT RECEIPT. This process is the SLOW SIDE of the ~1.8x attach
-    # regression (SPEC 0.43), and 94-99% of the extra wall clock is inside its own stepping
+    # regression, and 94-99% of the extra wall clock is inside its own stepping
     # loop -- not boot, not bind, not scene load, and not the policy, whose diffusion sampler
     # matches across arms to 0.1-0.3%. The per-step code path is byte-identical in both modes
     # (`self._attach` is read at eight sites in `sim_gateway.py`, none of them in the hot loop),

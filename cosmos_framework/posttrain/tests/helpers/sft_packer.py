@@ -90,7 +90,7 @@ def official_qwen3_vl_chat_template() -> str:
 def official_qwen3_vl_tokenizer_chat_template() -> str:
     """The Qwen3-VL TOKENIZER template (``tokenizer_config.json``'s ``chat_template`` of the base of record, 5,292 chars,
     saved verbatim beside the processor template): what a tokenizer-only loader renders -- vLLM's chat path for a request
-    that carries a tools array (the lab's dsh format record, review rounds 146 / 147). It renders no ``reasoning_content``
+    that carries a tools array (the lab's dsh format record). It renders no ``reasoning_content``
     on any assistant turn and keeps a ``<think></think>`` content prefix the processor template strips; content lists and
     tool calls render as the processor template renders them. The served prefix of a model call is this template's
     rendering of the history with ``add_generation_prompt=True``."""

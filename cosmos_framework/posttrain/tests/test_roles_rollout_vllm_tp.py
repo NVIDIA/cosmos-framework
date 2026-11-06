@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""vLLM TP=2 via external_launcher SPMD (Task #3 route C): end-to-end through the grid mesh.
+"""vLLM TP=2 via external_launcher SPMD: end-to-end through the grid mesh.
 
 Needs 2 GPUs + the vLLM venv, so it is RunIf/importorskip-guarded and L1/GPU (TP engine init
 is slow). Verifies the TP>1 generate slice still yields group integrity + per-token logprob.
@@ -97,11 +97,11 @@ def test_vllm_tp2_generate_group_integrity_and_logprob():
         replay.put_samples(rm.score(trajs))
         batch = replay.get_samples(P * G).result()
 
-        assert len(batch) == P * G  # group integrity (§2.3)
+        assert len(batch) == P * G  # group integrity
         assert len({t.group_id for t in batch}) == P  # P complete groups
         for t in batch:
             assert t.status == Status.COMPLETED
-            lp = t.transitions[0].policy_info["rollout_logprobs"]  # π_old per token (§2.4)
+            lp = t.transitions[0].policy_info["rollout_logprobs"]  # π_old per token
             assert isinstance(lp, list) and len(lp) > 0
     finally:
         ray.shutdown()

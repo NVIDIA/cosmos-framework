@@ -12,8 +12,8 @@ SFT opts into Transformers 5.8.1; existing RL/GR00T defaults stay on 4.57.6. The
 supports Qwen text models, dense Qwen3.5/3.8 multimodal models and the Qwen3-VL / Qwen3-VL-MoE
 families (all three ship `Qwen3VLProcessor`). A "seat" is the model construction path the SFT
 objective sits on. Qwen3.5/3.8 sits on the HF backend (`model_backend='hf'`,
-`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the i4-native policy builder
-(`model_backend='i4'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
+`model/hf.py::HFModel`). Qwen3-VL and Qwen3-VL-MoE sit on the native policy builder
+(`model_backend='native'` with `config.model = NativePolicyBuildSpec(builder=model/qwen3_vl.py::
 build_qwen3_vl_native_policy, ...)`, see [the native recipe](../../../cosmos_framework/posttrain/configs/sft_qwen3_vl_moe_native.py)):
 the HF backend refuses MoE VLMs because the general weight loader has no fused-expert handling and
 Transformers 5 stores the MoE expert tensors transposed relative to a Transformers 4 checkpoint.
@@ -59,7 +59,9 @@ export SFT_DATA_ROOT="$PWD/.ene/scratch/sft-example"
 
 The generator creates 32 training and 8 validation conversations with local PNG/MP4 media;
 it refuses to overwrite a nonempty directory. Video decoding requires TorchCodec 0.11.0
-and compatible FFmpeg shared libraries. This is a functional example, not a quality benchmark.
+and compatible FFmpeg shared libraries. This is a functional example, not a quality benchmark; for a
+worked example on real data with a measured before and after on one GPU, see the
+[`cosmos3-qwen3-vl-robovqa-sft` skill](../../../.agents/skills/cosmos3-qwen3-vl-robovqa-sft/SKILL.md).
 Preflight checks configuration, local file availability and role wiring, not GPU memory or
 remote access. `--validate-rows` then runs every row through the real packer on CPU and refuses
 over-long rows, masks that disagree with the assistant turns, and mislabelled tool turns before any

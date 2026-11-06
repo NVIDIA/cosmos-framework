@@ -62,6 +62,7 @@ def test_hf_model_construction_applies_public_streaming_cache_settings(
                     }
                 },
                 "per_view_captions": True,
+                "per_view_caption_task": "av_joint_camera_lidar_transfer",
             }
         )
     )
@@ -117,6 +118,7 @@ def test_hf_model_construction_applies_public_streaming_cache_settings(
     assert pipe.model_config.kv_cache_inference_size == expected_window
     assert pipe.model_config.attention_sink_size == expected_sink
     assert pipe.per_view_captions is True
+    assert pipe.model_config._auto_camera_fps == 30
     assert config_path.read_text() == saved_config
 
 
@@ -795,7 +797,7 @@ def _prompt_sample_args(**overrides: Any) -> SimpleNamespace:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_native_upsampled_prompt_is_not_stripped() -> None:
-    """imaginaire4 returns this branch's prompt verbatim; stripping it here diverged the token ids.
+    """The upstream codebase returns this branch's prompt verbatim; stripping it here diverged the token ids.
 
     Latent at the defaults -- native_prompt_upsampling is False -- and only visible for a non-JSON
     prompt carrying leading or trailing whitespace. Where it is not latent, the two runtimes
@@ -883,11 +885,11 @@ def test_per_view_captions_use_whole_second_durations() -> None:
 
     297 frames at 30 fps is 9.9 seconds. The JSON branch already truncates
     (``int(num_frames / fps)`` in _format_json_prompt_with_template), so before this the two
-    branches disagreed with each other as well as with imaginaire4: a JSON caption read "9s" and a
+    branches disagreed with each other as well as with the upstream codebase: a JSON caption read "9s" and a
     plain-text one "9.9s" for the same clip.
 
     Measured rather than theoretical: this one character moved every decoded pixel of an 11-camera
-    run -- 0/11 views identical, mean 5.05/255 against imaginaire4 -- while leaving a video that
+    run -- 0/11 views identical, mean 5.05/255 against the upstream codebase -- while leaving a video that
     looks entirely correct.
     """
     from cosmos_framework.inference.inference import _get_per_view_prompt_sample_data
@@ -1173,3 +1175,39 @@ def test_parallelism_config_sizes_the_vae_sharing_group_to_one_replica(
     assert config.context_parallel_shard_degree == cp_size
     assert config.cfg_parallel_shard_degree == cfgp_size
     assert config.vae_load_balance_group_size == expected_group
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("fixed_step", "sampler", "warns"),
+    [(True, "edm", True), (True, "unipc", False), (False, "edm", False), (False, "unipc", False)],
+)
+def test_loading_warns_when_a_fixed_step_checkpoint_ignores_the_sampler(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixed_step: bool, sampler: str, warns: bool
+) -> None:
+    from cosmos_framework.inference import inference
+    from cosmos_framework.inference.args import DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
+    from cosmos_framework.inference.common.args import ConfigFileType
+
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME, output_dir=tmp_path / "outputs", guardrails=False, sampler=sampler
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=80 * 1024**3)
+    setup_args.config_file_type = ConfigFileType.MODULE
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            rectified_flow_inference_config=SimpleNamespace(scheduler_type=sampler),
+            fixed_step_sampler_config=SimpleNamespace(t_list=[1.0]) if fixed_step else None,
+        ),
+        tokenizer_vision_gen=None,
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(inference, "_download_on_rank0", lambda _download: tmp_path)
+    monkeypatch.setattr(
+        inference.Cosmos3OmniModel, "from_pretrained_dcp", Mock(return_value=SimpleNamespace(model=model))
+    )
+    monkeypatch.setattr(inference.log, "warning", lambda message, *_args, **_kwargs: warnings.append(message))
+
+    inference.OmniInference._create(setup_args, guardrails=None, _timer=None)
+
+    assert any(f"--sampler {sampler} is ignored" in w for w in warnings) is warns

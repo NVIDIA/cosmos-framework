@@ -1231,7 +1231,7 @@ def test_two_rank_model_dp_uses_one_global_batch_and_disjoint_local_shards(tmp_p
 
 
 def test_validate_ppo_config_refuses_an_emergency_plan_its_boundary_cannot_honour() -> None:
-    """Review of c2af017642d (thread 0069d0e0): `rl.emergency_checkpoint_components` is a shared `RunConfig` field, but
+    """`rl.emergency_checkpoint_components` is a shared `RunConfig` field, but
     the multi-role boundary writes every role with the full plan at the cadence and at a termination trigger alike,
     so "run" would be ignored; the validator refuses it instead."""
     from cosmos_framework.posttrain.config.config_ppo import PosttrainPPOConfig, validate_ppo_config

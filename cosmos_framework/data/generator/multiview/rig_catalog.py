@@ -3,7 +3,7 @@
 
 """RGB/LiDAR data contracts and transforms; no dataset locations or remote catalog.
 
-Adapted from the corresponding i4 implementation.
+Adapted from the corresponding upstream implementation.
 """
 
 MADS_AML_ALT_RIG: list[str] = [

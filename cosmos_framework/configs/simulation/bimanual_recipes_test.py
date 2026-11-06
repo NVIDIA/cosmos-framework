@@ -20,7 +20,7 @@ from cosmos_framework.utils.lazy_config import LazyConfig
 pytestmark = [pytest.mark.level(0), pytest.mark.gpus(0)]
 
 _INPUTS = {
-    "COSMOS_SIM_BIMANUAL_GA_CHECKPOINT": "/ckpt/ga",
+    "COSMOS_SIM_BIMANUAL_GA_CHECKPOINT": "/ckpt/base",
     "COSMOS_SIM_BIMANUAL_STAGE0_CHECKPOINT": "/ckpt/stage0",
     "COSMOS_SIM_BIMANUAL_STAGE1_CHECKPOINT": "/ckpt/stage1",
     "COSMOS_SIM_BIMANUAL_STAGE2_CHECKPOINT": "/ckpt/stage2",
@@ -68,14 +68,14 @@ def test_stage_model_and_warm_start_contract(monkeypatch: pytest.MonkeyPatch, st
     assert model.action_metric_gripper is True
     assert model.sound_tokenizer is None
     if stage < 3:
-        assert config.checkpoint.load_path == ("/ckpt/ga", "/ckpt/stage0", "/ckpt/stage1")[stage]
+        assert config.checkpoint.load_path == ("/ckpt/base", "/ckpt/stage0", "/ckpt/stage1")[stage]
         assert config.checkpoint.load_ema_to_reg is False
         assert list(config.checkpoint.keys_not_to_resume) == []
         assert list(config.checkpoint.keys_to_skip_loading) == (
             ["net_ema.", "action2llm", "llm2action", "action_modality_embed"] if stage == 0 else []
         )
     if stage == 0:
-        assert config.trainer.callbacks.initialize_ema_from_regular.source_checkpoint == "/ckpt/ga"
+        assert config.trainer.callbacks.initialize_ema_from_regular.source_checkpoint == "/ckpt/base"
         assert config.optimizer.lr == 1e-5
         assert config.optimizer.lr_multipliers.action2llm == 5.0
         assert "llm2action" not in config.optimizer.keys_to_select

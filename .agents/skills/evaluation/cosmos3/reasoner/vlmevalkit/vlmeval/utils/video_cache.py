@@ -26,10 +26,10 @@ class VideoCache:
     """
 
     # S3 configuration for cache bucket
-    S3_PFOFILE = 'team-cosmos'
-    S3_BUCKET = 'cosmos_understanding'
+    S3_PROFILE = os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE')  # unset = standard AWS credential chain
+    S3_BUCKET = os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET')  # unset = local cache only
     S3_PREFIX = 'video_cache'
-    S3_ENDPOINT = 'https://pdx.s8k.io'
+    S3_ENDPOINT = os.environ.get('AWS_ENDPOINT_URL')
 
     def __init__(self, cache_dir=None, enable_s3=True):
         if cache_dir is None:
@@ -37,7 +37,7 @@ class VideoCache:
             cache_dir = os.path.join(LMUDataRoot(), 'video_cache')
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.enable_s3 = enable_s3
+        self.enable_s3 = enable_s3 and bool(self.S3_BUCKET)
         self._s3 = None  # Lazy initialization
         logger.info(f"Video cache directory: {self.cache_dir}")
         if self.enable_s3:
@@ -94,12 +94,12 @@ class VideoCache:
             try:
                 from s3fs import S3FileSystem
 
-                # Try using environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-                # Fallback to profile if env vars not available.
+                # Standard AWS credential chain (environment variables, AWS_PROFILE, shared files),
+                # or the named profile in VLMEVAL_BENCHMARK_S3_PROFILE when set.
                 # Bounded timeouts so a hung TCP connection can't block the worker forever.
                 self._s3 = S3FileSystem(
                     anon=False,
-                    profile=self.S3_PFOFILE,
+                    profile=self.S3_PROFILE,
                     client_kwargs={'endpoint_url': self.S3_ENDPOINT},
                     config_kwargs={
                         'connect_timeout': 10,
@@ -107,7 +107,7 @@ class VideoCache:
                         'retries': {'max_attempts': 3},
                     },
                 )
-                logger.info("Connected to S3 using profile: team-cosmos")
+                logger.info(f"Connected to S3 (profile: {self.S3_PROFILE or 'default credential chain'})")
             except ImportError:
                 logger.warning("s3fs not installed, S3 cache disabled. Install with: pip install s3fs")
                 self.enable_s3 = False

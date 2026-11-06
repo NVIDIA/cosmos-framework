@@ -63,7 +63,7 @@ class MetropolisTemporal(VideoBaseDataset):
 
     This dataset supports loading from AWS S3 with the following configuration:
     - AWS credentials configured via environment variables or ~/.aws/credentials
-    - S3 path: s3://metropolis-benchmark-datasets/nv-temporal-06-Aug-25/
+    - S3 stage: $VLMEVAL_METROPOLIS_S3_BUCKET/nv-temporal-06-Aug-25/ (see EXTERNAL_CONFIGURATION.md)
 
     Category Filtering:
     -------------------
@@ -98,19 +98,18 @@ class MetropolisTemporal(VideoBaseDataset):
     MD5 = ''  # To be determined based on actual data file
     TYPE = 'Video-Temporal-Localization'
 
-    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Cosmos row hits
-    # nv-temporal-06-Aug-25 via team-tao-fabric-metrics; VANTAGE row hits the
-    # HF-release stage via team-cosmos.
+    # Per-dataset-name S3 dispatch: (bucket, prefix, profile). Buckets and the optional
+    # AWS profile come from env; an unset profile uses the standard AWS credential chain.
     _S3_PATHS = {
         'MetropolisTemporal': (
-            'metropolis-benchmark-datasets',
+            os.environ.get('VLMEVAL_METROPOLIS_S3_BUCKET'),
             'nv-temporal-06-Aug-25',
-            'team-tao-fabric-metrics',
+            os.environ.get('VLMEVAL_METROPOLIS_S3_PROFILE'),
         ),
         'VANTAGE_Temporal': (
-            'cosmos_understanding',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_BUCKET'),
             'benchmark/vantage_benchmark_hf_release_annotations/Temporal',
-            'team-cosmos',
+            os.environ.get('VLMEVAL_BENCHMARK_S3_PROFILE'),
         ),
     }
     S3_BUCKET = _S3_PATHS['MetropolisTemporal'][0]
@@ -252,6 +251,12 @@ class MetropolisTemporal(VideoBaseDataset):
         VANTAGE branch: recursive s3.get of the structured HF-release stage.
         Cosmos branch: existing selective per-file download logic preserved.
         """
+        if not self.S3_BUCKET:
+            var = 'VLMEVAL_BENCHMARK_S3_BUCKET' if dataset_name.startswith('VANTAGE_') else 'VLMEVAL_METROPOLIS_S3_BUCKET'
+            raise FileNotFoundError(
+                f"{dataset_name} not found under {osp.join(LMUDataRoot(), 'datasets', dataset_name)}; "
+                f"place the dataset there, or set {var} (and AWS credentials / AWS_ENDPOINT_URL) for an authorized S3 stage."
+            )
         try:
             from s3fs import S3FileSystem
         except ImportError:
@@ -260,7 +265,7 @@ class MetropolisTemporal(VideoBaseDataset):
         s3 = S3FileSystem(
             anon=False,
             profile=self.S3_PROFILE,
-            client_kwargs={'endpoint_url': 'https://pdx.s8k.io'}
+            client_kwargs={'endpoint_url': os.environ.get('AWS_ENDPOINT_URL')}
         )
 
         local_dir = osp.join(LMUDataRoot(), 'datasets', dataset_name)

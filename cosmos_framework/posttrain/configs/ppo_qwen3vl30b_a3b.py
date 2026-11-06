@@ -32,7 +32,7 @@ def make_config() -> PosttrainPPOConfig:
         for entry in config.defaults
         if not (isinstance(entry, dict) and model_owned_default_groups.intersection(entry))
     ]
-    config.model_backend = "i4"
+    config.model_backend = "native"
     config.model = NativePolicyBuildSpec(
         builder=_NATIVE_POLICY_BUILDER,
         value_builder=_NATIVE_VALUE_BUILDER,

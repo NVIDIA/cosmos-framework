@@ -1,16 +1,18 @@
 # Deployment and dataset configuration
 
-The evaluation toolkit accepts caller-provided model endpoints and local dataset
-inputs. Existing private model paths, dataset locations, and storage defaults
-are retained, so established internal commands continue to work.
+This page covers the model endpoints and the VANTAGE / Metropolis benchmarks
+that NVIDIA added to the toolkit; datasets inherited from upstream VLMEvalKit keep
+their own download behavior. For these, model endpoints and remote dataset stages
+are opt-in: they come from the environment variables below, and without them the
+benchmarks read from the local `LMUData` tree only.
 Configuration does not grant access to a dataset or service.
 
 ## Model endpoints and local installations
 
-The following optional environment variables override existing private defaults.
+The following environment variables supply the endpoint for each model entry.
 Set these variables before loading the model configuration (normally before
-launching `run.py`). Models are still constructed lazily. An explicit constructor
-argument has priority over the resolved configuration.
+launching `run.py`). Models are still constructed lazily. An `api_base` passed
+explicitly to the model constructor has priority over the environment variable.
 The Qwen, Cosmos Reason1, and ARM Thinker values are complete chat-completions
 URLs; `LVS_service` expects its service base URL.
 
@@ -22,6 +24,12 @@ URLs; `LVS_service` expects its service base URL.
 | `cosmos_reason1_7b` | `VLMEVAL_COSMOS_REASON1_API_BASE` |
 | `LVS_service` | `VLMEVAL_LVS_API_BASE` |
 | `Qwen3-VL-8B--crop--arm_thinker_prompt--sglang` | `VLMEVAL_ARM_THINKER_SGLANG_API_BASE` |
+| `Qwen3-VL-8B--crop--official_prompt--vllm` | `LMDEPLOY_API_BASE` (read by the ARM Thinker wrapper; required unless an `api_base` is passed) |
+
+API keys are resolved separately from endpoints. The Qwen and Cosmos Reason1
+entries read `COSMOS_API_KEY` (a `key` argument is ignored). Both ARM Thinker
+entries use `LMDEPLOY_API_KEY` when it is set, otherwise their configured
+placeholder key `EMPTY`. `LVS_service` uses its `key` argument.
 
 `INTERN_S1_MINI_MODEL_PATH` optionally overrides the existing Intern-S1-mini
 model directory. `MINIGPT4_ROOT` optionally overrides the existing MiniGPT-4
@@ -32,88 +40,83 @@ Other model entries keep their existing settings.
 
 The DSS route reuses an existing local cache without importing `nvdataset` or
 requiring credentials.
-For an uncached DSS dataset, `NVDATASET_TENANTID` overrides the existing tenant;
-`NGC_API_KEY` is still required for the download.
+For an uncached DSS dataset, set both `NVDATASET_TENANTID` and `NGC_API_KEY`;
+there is no default tenant, and the download stops with a `ValueError` when
+either is missing.
 
-Metropolis2D adapters accept `data_root` and `annotation_file` through their
-constructor or dataset configuration. Original private dataset YAML defaults
-remain available. Missing or nonexistent grounding annotation files produce a
-clear `ValueError`. Omni3D retains its existing private configuration and can be
-pointed at another authorized dataset through `raw_image_path` and `json_path`.
+Metropolis2D adapters accept `data_root` (and, for grounding, `annotation_file`)
+through their constructor or dataset configuration (`datasets.yaml` ships
+placeholders only).
+Without either, the VANTAGE rows resolve to the hydrated local cache under
+`LMUData`. Missing or nonexistent grounding annotation files produce a clear
+`ValueError`.
 
-## Brev Nano and public Perception Test validation
+## Dataset storage
 
-The [Brev launchable](launchable/README.md) uses the Framework-native kit,
-the pinned public Nano checkpoint, and Google DeepMind's public Perception Test
-validation MCQ data: 19,140 questions over 5,260 videos. Default smoke selects
-`video_8241`, official question IDs 0–4 (stable indices 13404–13408).
-Full validation is explicit opt-in, never the held-out test split.
-Dataset source revision is `3938d2f1ba3a6b502025741cea4cd73c7b3bdfaf`;
-official annotations, cut mapping, README and public archives are SHA-256 pinned
-in `vlmeval/perception_test_local.py`. No private dataset or dataset credentials
-are required. The Perception Test authors' non-code materials are
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); retain attribution to
-the [authors/source](https://github.com/google-deepmind/perception_test).
-Code is Apache 2.0. Public access is not an additional clearance determination.
+The VANTAGE and Metropolis loaders look for their data under `LMUData` first
+(paths in the table below). A remote fetch is attempted only when the local copy
+is absent **and** the matching bucket variable is set. Without the bucket, the
+VQA, Temporal, DVC, event-verification, pointing and SOT loaders raise
+`FileNotFoundError` naming the expected directory; the Metropolis2D adapters
+(Astro2D and 2D grounding) raise `ValueError` instead. `MetropolisDVC` uses the
+DSS route above rather than a bucket. Set the storage variables before starting
+the run.
 
-Set `LAUNCHABLE_STATE_DIR` to an absolute writable host directory outside the
-checkout. `PERCEPTION_TEST_DATA_DIR` defaults to its `perception-test` child,
-mounted read-write at `/perception-test`; cache and results use separate mounts.
-Compose project is `cosmos3-perception-test`, evaluator service `perception-eval`.
-Authenticated Jupyter binds only to a private or loopback address. The local
-model has no host port; no Docker socket or cloud credentials are mounted.
+`VANTAGE_2DGrounding` does not read the bucket variables. It needs either the
+hydrated local cache (see the table below) or both `data_root` and
+`annotation_file`, passed to the constructor or set in `datasets.yaml`. Both may
+be local paths or `s3://` URIs; `s3://` URIs are fetched through
+`AWS_ENDPOINT_URL` with the `VLMEVAL_BENCHMARK_S3_PROFILE` profile when it is set.
+With neither the cache nor both paths, it raises a
+`ValueError`.
 
-Native `run.py` configuration uses the local dataset class directly:
+| Variable | Used for |
+| --- | --- |
+| `VLMEVAL_BENCHMARK_S3_BUCKET` | VANTAGE stages, `MetropolisEventVerification`, and the optional video frame cache (`VideoCache`; off when unset) |
+| `VLMEVAL_METROPOLIS_S3_BUCKET` | `MetropolisVQA` and `MetropolisTemporal` |
+| `AWS_ENDPOINT_URL` | S3-compatible endpoint for the buckets above (standard AWS variable; unset = AWS default) |
+| `VLMEVAL_BENCHMARK_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_BENCHMARK_S3_BUCKET` and for `s3://` paths passed to the Metropolis2D adapters |
+| `VLMEVAL_METROPOLIS_S3_PROFILE` | Optional AWS named profile for `VLMEVAL_METROPOLIS_S3_BUCKET` |
 
-```json
-{
-  "data": {
-    "PerceptionTest": {
-      "class": "PerceptionTestLocal",
-      "dataset": "PerceptionTest",
-      "data_root": "/perception-test",
-      "nframe": 16,
-      "smoke": false
-    }
-  }
-}
-```
+Without a `*_S3_PROFILE` variable, AWS credentials come from the standard AWS
+credential chain: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment,
+`AWS_PROFILE`, or the shared AWS config and credentials files. Set a
+`*_S3_PROFILE` variable only when a bucket needs a different named profile.
 
-The controller composes this with `CosmosReason2` and the existing generation
-recipe, defaulting to one API worker. The launchable prototype samples 16 frames
-uniformly inside official source cutpoints: `-1` means all frames, positive cuts
-are exclusive stops and invalid cuts fail. Aspect-preserving downscale only to
-maximum side 768, without cropping, precedes direct sampled-image input. This
-protocol and text-to-option parser are adaptations, not official parser parity
-or a published-model/reference-score reproduction.
+### Where each VANTAGE benchmark expects its local data
 
-`launchable.py download --scope metadata|smoke|full` stages public inputs.
-`prepare --smoke` and `prepare` require complete smoke/full media respectively.
-`run --mode infer|all` generates predictions and optionally scores them; the
-notebook defaults to `all`, not a manual Docker benchmark command.
-`score --scope smoke|full` accepts either an existing successful inference
-`--work-dir` or native `--predictions` plus a fresh `--score-dir`. Score-only
-downloads metadata only and prepares with `require_media=False`: no video files,
-endpoint, GPU, or model construction. Canonical annotation/cut/scope fingerprints
-are independent of media presence; media hashes are recorded separately.
+`LMUData` (environment variable; default `~/LMUData`) is the dataset root. Place
+the downloaded data at the paths below, or pass `data_root` / `annotation_file`
+(2D adapters) or `prepared_data_dir` (SOT) through `datasets.yaml` or the
+benchmark's `data` section in the composed config.
 
-Exact selected identities are mandatory. Missing/blank/transport-failure rows
-reject incomplete runs; nonempty malformed/ambiguous answers count wrong and
-invalid. Trusted labels come only from pinned annotations. Primary metric is
-local top1 (`correct / total selected questions`), with per-area, per-reasoning
-and per-tag diagnostics, never an API judge. Fresh outputs, failed-run artifacts,
-streamed progress, source/model revisions and UTC elapsed timings are retained.
-The notebook shows concise metrics/coverage and artifact links.
+| Benchmark | Expected path under `LMUData` |
+| --- | --- |
+| `VANTAGE_2DGrounding` | `vantage_2d_grounding/annotations/refdrone_test_llava.json` plus the image tree it references |
+| `VANTAGE_Astro2D` (3 sequences) | `vantage_astro2d/<sequence>/images/` and `.../labels/` for `C0065-QA.m4v`, `IVA-0009-KPI-05_190916_10ft-60-deg.mp4`, `IVA-0009-KPI-11_220320_NVR_ch2_main_20220201180404_20220201190000_4_cut_4.mp4` |
+| `VANTAGE_2DPointing` | `datasets/VANTAGE_2DPointing/Metropolis2DPointing.tsv` plus `images_annotated/` |
+| `VANTAGE_DVC` | `datasets/VANTAGE_DVC/events/` and `videos/` |
+| `VANTAGE_EventVerification` | `videos/VANTAGE_EventVerification/` (per-corpus `test_annotation.json` trees) |
+| `VANTAGE_Temporal` | `datasets/VANTAGE_Temporal/VANTAGE_Temporal.tsv` plus `videos/` |
+| `VANTAGE_VQA` | `datasets/VANTAGE_VQA/VANTAGE_VQA.tsv` plus `videos/` |
+| `VANTAGE_SOT` | `datasets/VANTAGE_SOT/<sequence>/gt.json` plus the prepared 8-frame images |
 
-BYOM uses complete `COSMOS_API_BASE`, exact `COSMOS_MODEL`, optional
-environment-only `COSMOS_API_KEY`, and explicit `COSMOS_MODEL_REVISION`;
-setup then skips local serving. Score-only setup uses `bash setup.sh --score-only`.
-For your own labeled video MCQ data, follow the
+## Judge
+
+`build_judge` uses plain OpenAI model ids. Set `VLMEVAL_JUDGE_API_STYLE=gateway`
+when the judge endpoint expects provider-prefixed ids (`azure/openai/...`).
+
+## Brev benchmark launchable
+
+The [Brev launchable](launchable/README.md) runs public MMSI-Video-Bench (the
+default full reference run), Perception Test and VideoPhy2 from Jupyter
+notebooks against the pinned public `nvidia/Cosmos3-Nano` checkpoint, with
+pinned public downloads and local scoring only. It needs no private dataset,
+dataset credentials, bucket variables or judge endpoint. Another compatible
+model is configured with `COSMOS_API_BASE`, `COSMOS_MODEL`,
+`COSMOS_MODEL_REVISION` and, for its input evidence, `COSMOS_PROCESSOR_PROFILE`.
+
+To evaluate your own labeled video multiple-choice data, follow the
 [customer-data recipe](launchable/CUSTOM_DATA_RECIPE.md) and
-[Customer_Data.ipynb](launchable/Customer_Data.ipynb). This is a separate
-canonical JSONL path: official benchmark identity/checksum gates remain intact.
-Questions, answer options and actual ground-truth labels are required before
-GPU use; footage alone cannot produce an accuracy score. Existing agents can
-perform the one-off conversion described by the recipe. No customer-ingestion
-agent, benchmark builder, automatic converter or other model deployment track
-is added.
+[Customer_Data.ipynb](launchable/Customer_Data.ipynb). Questions, answer options
+and the correct answers are required; footage alone cannot produce a score.

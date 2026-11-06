@@ -1,5 +1,5 @@
 # All 11 ftheta cameras present in the rig EXCEPT camera_front_tele_sat_30fov.
-# Used to simulate the MADS-1M render camera set.
+# Used to simulate the 11-camera render set.
 camera_list:
   - "camera_front_wide_120fov"
   - "camera_front_tele_30fov"

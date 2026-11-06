@@ -77,7 +77,7 @@ regime, not a packing-only A/B. For a packing-only comparison, hold logical samp
 update, update count, and schedule fixed. For the larger-batch exposure-matched regime, retune LR and do
 not attribute quality changes solely to packing.
 
-Run inside the imaginaire4 container (imports torch via the packer)::
+Run inside the training container (imports torch via the packer)::
 
     python -m cosmos_framework.utils.generator.reasoner.packing_mbs_advisor --synthetic --max-tokens 16000
     python -m cosmos_framework.utils.generator.reasoner.packing_mbs_advisor --lengths-file lens.txt \

@@ -125,10 +125,12 @@ RGB sequences through chunkwise continuation. Read the
 [duration guide](references/input-and-execution.md#generation-length-and-long-rollouts)
 before extending a request, especially for joint RGB/LiDAR.
 
-Check [source timing, model FPS and playback FPS](references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
-separately. The reference camera rate is 30 FPS; changing `--fps` does not
-resample controls, and declaring 10-FPS frames as 30 FPS is only a diagnostic
-experiment, not a quality fix.
+For 10-FPS RGB-only inputs, follow the
+[recommended inference configuration](references/input-and-execution.md#recommended-inference-configuration-for-10-fps-inputs):
+keep the input frames unchanged and pass `--output-fps 10`. Model conditioning
+defaults to 30 FPS; an explicit different `fps` is rejected. Generated RGB and
+WSM previews are saved at 10 FPS without resampling. Joint RGB/LiDAR retiming is
+unsupported; keep its output FPS at 30.
 
 For separate per-view captions, route the supplied
 [negative text](assets/negative-prompt.txt) through `per_view_negative_prompt`,

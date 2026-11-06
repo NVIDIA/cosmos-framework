@@ -110,7 +110,7 @@ def _now() -> str:
 
 
 # Path/URI-typed fields get URI-safe redaction (a legit path segment like
-# /lustre/exp/token=v1/run must NOT be mangled); all other strings (esp. the
+# /data/exp/token=v1/run must NOT be mangled); all other strings (esp. the
 # free-text `message`) get whole-value field redaction.
 _URI_FIELDS = frozenset({"results_dir", "image", "backend_ref"})
 

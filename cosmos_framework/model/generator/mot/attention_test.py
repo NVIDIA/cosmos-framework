@@ -16,28 +16,10 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask
 
 import cosmos_framework.model.generator.mot.attention as attention
-from cosmos_framework.model.attention import attention as imaginaire_attention
-from cosmos_framework.model.attention import merge_attentions, multi_dimensional_attention_varlen
-from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
-from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
-from cosmos_framework.utils.misc import set_torch_compile_options
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     CrossViewTemporalWindowConfig,
     SameViewTemporalWindowConfig,
 )
-from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
-from cosmos_framework.model.generator.mot import multiview_maskless_attention
-from cosmos_framework.model.generator.mot.attention import (
-    build_packed_sequence,
-)
-from cosmos_framework.model.generator.mot.flex_attention import (
-    FlexBackend,
-    SensorMaskItem,
-    build_multiview_block_mask,
-    resolve_flex_backend,
-)
-from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
-from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_all_seq,
@@ -56,6 +38,24 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     zeros_like,
 )
 from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
+from cosmos_framework.model.attention import attention as imaginaire_attention
+from cosmos_framework.model.attention import merge_attentions, multi_dimensional_attention_varlen
+from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
+from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
+from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
+from cosmos_framework.model.generator.mot import multiview_maskless_attention
+from cosmos_framework.model.generator.mot.attention import (
+    build_packed_sequence,
+)
+from cosmos_framework.model.generator.mot.flex_attention import (
+    FlexBackend,
+    SensorMaskItem,
+    build_multiview_block_mask,
+    resolve_flex_backend,
+)
+from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
+from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
+from cosmos_framework.utils.misc import set_torch_compile_options
 
 MAX_SEQ_LEN = 24
 SEQS_PER_BATCH = 4
@@ -286,7 +286,7 @@ def _test_attention_impls(
 
     # NOTE: we should try and maintain only one copy of QKV offsets if they're identical
     # between queries and key/values, since this enables the "don't care" mask, which enables
-    # more attention backends in I4 attention.
+    # more attention backends in native attention.
     if query_factored_1["_causal_seq_offsets"].equal(key_factored_1["_causal_seq_offsets"]) and query_factored_1[
         "_causal_seq_offsets"
     ].equal(value_factored_1["_causal_seq_offsets"]):
@@ -909,7 +909,7 @@ class _MultiviewShape:
 # camera is 26 latent frames (``1 + (101 - 1) // 4`` at the VAE's temporal factor of 4, the way
 # ``lance_sft_video`` computes it) of 23x40 patches (720x1280 under 16x VAE and 2x patchify, the
 # height rounded up), so 23,920 tokens per camera. The first packs 2- and 3-camera samples (130
-# latent frames, ~120k tokens); the second is the full 11-camera MADS rig beside an 8-camera
+# latent frames, ~120k tokens); the second is the full 11-camera rig beside an 8-camera
 # sample (286 and 208 latent frames, ~455k tokens between them), which is where
 # ``av_wsm_transfer_16b``'s 11-view variant lives: it packs ~1.01M tokens per sample and shards
 # them to ~253k per rank at CP=4, the same order as the 263k-token sample here. The sample is
@@ -946,7 +946,7 @@ _MULTIVIEW_SHAPES = (
     _MultiviewShape(und_lens=(340, 240), token_shapes=((40, 4, 4), (35, 4, 4)), num_views=(5, 5)),
     # 101-frame 720p: 2 and 3 cameras, 26 latent frames each, on the 23x40 patch grid.
     _MultiviewShape(und_lens=(400, 320), token_shapes=((52, 23, 40), (78, 23, 40)), num_views=(2, 3)),
-    # The same clips over the full 11-camera MADS rig, and over 8 cameras.
+    # The same clips over the full 11-camera rig, and over 8 cameras.
     _MultiviewShape(und_lens=(500, 380), token_shapes=((286, 23, 40), (208, 23, 40)), num_views=(11, 8)),
 )
 

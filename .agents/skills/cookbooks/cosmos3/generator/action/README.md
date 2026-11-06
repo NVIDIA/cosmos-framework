@@ -1,5 +1,8 @@
 # Cosmos3 Generator Action
 
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
+
 Cosmos3-Nano action-generation supports three distinct tasks:
 
 - **Forward dynamics (`fd`)** — predict future observations from a start image plus an action trajectory.
@@ -62,7 +65,32 @@ fingers.
 | UMI | End-effector pose (9D) + gripper grasp state (1D) | 10D | Meter | Normalization | 16 frames @ 20FPS |
 | Human hand pose | Ego pose (9D) + right wrist (9D) + right fingertips (15D) + left wrist (9D) + left fingertips (15D) | 57D | Meter | Wrist-frame alignment, normalization | 16 frames @ 15FPS |
 
+Action dimensions are tied to the selected embodiment. `domain_name` chooses a registered
+action domain, and Cosmos Framework validates forward-dynamics input width against that
+domain's canonical raw action dimension. Changing a 10D DROID vector to 12D or 18D, for
+example, is not supported by the released checkpoints simply by changing the input shape.
+A custom action layout requires a compatible registered embodiment/domain and model weights
+trained for that action representation. Some dataset-defined domains, such as hand pose and
+LIBERO, can resolve their width from dataset configuration for forward dynamics; this does
+not make arbitrary widths interchangeable within a trained domain. See the
+[Cosmos Framework action-domain registry](https://github.com/NVIDIA/cosmos-framework/blob/main/cosmos_framework/data/generator/action/utils/domain_utils.py)
+for the currently registered canonical widths.
+
 Action data samples across different embodiments can be inspected interactively in the [Cosmos3 Action Viewer](https://huggingface.co/spaces/nvidia/Cosmos3-Action-Viewer) Hugging Face Space.
+
+### AgiBotWorld robot description
+
+The public Cosmos Framework AgiBotWorld forward-kinematics path currently uses the
+committed [`G1_omnipicker_calibrated.urdf`](https://github.com/NVIDIA/cosmos-framework/blob/main/cosmos_framework/data/generator/action/robot_assets/G1_omnipicker_calibrated.urdf)
+as its calibrated kinematics reference. The URDF contains `package://` references to
+visual meshes, but those mesh files are not bundled in the framework's `robot_assets`
+directory. They are not required by the action FK path: the loader removes `<visual>`
+and `<collision>` elements before constructing its MuJoCo kinematics model.
+
+Accordingly, the committed file should be treated as the kinematics reference for the
+registered omnipicker-based AgiBotWorld action path, not as a complete renderable robot
+asset package or a generic description for every AgiBotWorld gripper variant. The public
+framework does not currently include a separate CTEK URDF or the referenced mesh package.
 
 ## Run with Cosmos Framework
 
@@ -176,16 +204,14 @@ have available.
 ### Quickstart
 
 Set up and launch the VisualGen server with the one-GPU Nano config:
-[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator), including the
-[server-side NLTK data setup](../../README.md#server-side-nltk-data-setup).
-Keep `NLTK_DATA` exported in the server's shell. Action requests
+[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator). Action requests
 upload a conditioning image as multipart `image_reference` or a video as
 `video_reference`, and put the mode-specific fields under `extra_params`.
 Use the same trained AV prompt as the Cosmos Framework reference; the legacy
 `view_point` field is ignored by current TensorRT-LLM.
 
 Both notebooks' current multipart fields were exercised against TensorRT-LLM
-source revision `bca6761ab84fbcd58fc7f914eade7de48b32e35e`. Follow the source
+source revision `cc63e66daf52644f1441e117bb7ba67d20566016`. Follow the source
 pin in the shared setup.
 
 ```python

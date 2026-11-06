@@ -30,7 +30,7 @@ dependencies = [
   # PyAV 18 preserves causal Transfer decode parity and requires Python >=3.11.
   # Python 3.10 remains available for other runtimes; causal Transfer rejects it.
   # hr_lr_degradation/codec.py calls VideoFrame.reformat(threads=...), added in PyAV 17;
-  # PyAV 18 (Python >=3.11) matches the imaginaire4 images the shared code is developed on.
+  # PyAV 18 (Python >=3.11) matches the container images the shared code is developed on.
   "av>=17,<18; python_version < '3.11'",
   "av>=18,<19; python_version >= '3.11'",
   "cattrs",
@@ -61,6 +61,7 @@ dependencies = [
 [project.optional-dependencies]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
+quantization = ["datasets", "nvidia-modelopt==0.44.0"]
 reasoner-eval = [
   "attrs",
   "evaluate",
@@ -229,7 +230,7 @@ cu128-train = [
 ]
 # Match nvcr.io/nvidia/pytorch:25.11-py3: https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-11.html
 cu130 = [
-  # Match imaginaire4's FA4 installation on both x86_64 and aarch64.
+  # Match the upstream FA4 installation on both x86_64 and aarch64.
   "flash-attn-4[cu13]==4.0.0b24",
   "flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'",
   "flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'",
@@ -403,7 +404,7 @@ cu130-torch213-train = {requires-python = "==3.13.*"}
 [tool.uv.sources]
 flash-attn = { index = "cosmos"}
 flash-attn-3-nv = { index = "cosmos" }
-lerobot = { git = "https://github.com/mli0603/lerobot.git" }
+lerobot = { git = "https://github.com/huggingface/lerobot.git", rev = "1a4316c6845330bc552fb982dbc44bdb4f66f2f1" }
 megatron-core = { git = "https://github.com/NVIDIA/Megatron-LM.git", rev = "de56227" }
 natten = { index = "cosmos"}
 torch = { index = "pytorch"}

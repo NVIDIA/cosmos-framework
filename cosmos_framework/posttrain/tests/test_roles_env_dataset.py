@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Tests for ArithmeticEnv (DESIGN §1.3 degenerate 1-step Env), the JSONL prompt source, and the
-split_prompts dispatch adaptation (Task C2, DESIGN §2.3)."""
+"""Tests for ArithmeticEnv, the JSONL prompt source, and the
+split_prompts dispatch adaptation (Task C2)."""
 
 from __future__ import annotations
 
@@ -377,7 +377,7 @@ def test_split_prompts_uneven_last_shard_absorbs_remainder() -> None:
 @pytest.mark.CPU
 def test_split_prompts_deterministic_per_index_across_calls() -> None:
     # Every SPMD rank of one consumer replica calls with the SAME (i, n) and MUST get the identical
-    # slice (spec §2.2: divergent per-rank prompts would desync the replica's collectives).
+    # slice (divergent per-rank prompts would desync the replica's collectives).
     prompts = [f"p{k}" for k in range(10)]
     assert split_prompts(prompts, 1, 5) == split_prompts(list(prompts), 1, 5) == ["p2", "p3"]
 
@@ -1183,8 +1183,8 @@ def test_jsonl_reader_reads_a_whitespace_separated_object_stream(tmp_path: Path)
     read_both(compressed, list(CONVERSATION_ROWS))
     assert positions(compressed) == opens_on
 
-    # (2) the two shapes the reader refused before this change while the Hugging Face reader read them as 2 rows
-    # (the lab's review round 3, cases D7 and D8), and two objects on one line, which share the line they open on.
+    # (2) the two shapes the reader refused before this change while the Hugging Face reader read them as 2 rows,
+    # and two objects on one line, which share the line they open on.
     rows_ab = [{"messages": "a", "reward_spec": "x"}, {"messages": "b", "reward_spec": "y"}]
     two_documents = tmp_path / "two_documents.json"
     two_documents.write_text(

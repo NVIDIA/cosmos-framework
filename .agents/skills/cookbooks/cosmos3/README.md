@@ -5,6 +5,10 @@ Simulation).
 Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
+For static checkpoint FP8 export of Edge/Nano/Super video and Super base/distilled
+T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
+local Framework environment below with ModelOpt, datasets, and notebook tooling.
+
 | Backend | Use it for | Used by |
 | --- | --- | --- |
 | [Cosmos Framework](#cosmos-framework) | Native PyTorch inference, launched with `torchrun` | Reasoner, Generator (Audiovisual, Action, **Transfer**), Simulation (Bimanual, Auto, Sim-Auto, Sim-Transfer) |
@@ -63,6 +67,10 @@ Native PyTorch inference through the Cosmos Framework checkout. Used by the
 quickstarts.
 
 From the cookbook root (`.agents/skills`), clone (or reuse) the framework checkout:
+
+If you are already inside this Framework repository, reuse its root (the
+directory containing `pyproject.toml` and `cosmos_framework/`) and run the
+installation commands there. A second clone is unnecessary.
 
 ```bash
 mkdir -p packages
@@ -191,7 +199,7 @@ git lfs install
 
 git clone https://github.com/NVIDIA/TensorRT-LLM.git
 cd TensorRT-LLM
-git checkout bca6761ab84fbcd58fc7f914eade7de48b32e35e
+git checkout cc63e66daf52644f1441e117bb7ba67d20566016
 git submodule update --init --recursive
 git lfs pull
 
@@ -219,58 +227,18 @@ Then install the Cosmos3 guardrail package in the same environment unless you
 explicitly disable guardrails before starting the server:
 
 ```bash
-pip install cosmos_guardrail==0.3.0
+pip install cosmos_guardrail==0.3.2
 # On headless servers without libGL.so.1, replace the OpenCV wheel pulled in by
 # cosmos_guardrail with the matching headless build:
 pip uninstall -y opencv-python
 pip install opencv-python-headless==5.0.0.93
 ```
 
-#### Server-side NLTK data setup
-
-With `cosmos_guardrail==0.3.0`, NLTK's path checks can reject tokenizer or
-dictionary files that are symlinks from a Hugging Face snapshot into its
-`blobs/` directory. Prepare a separate copy of the NLTK data as regular files
-**on the server, in the same container and shell used to launch TensorRT-LLM**:
-
-```bash
-export NLTK_DATA="$(mktemp -d "${TMPDIR:-/tmp}/cosmos3-nltk.XXXXXX")"
-python3 - <<'PY'
-import os
-import shutil
-from pathlib import Path
-
-import nltk
-from huggingface_hub import snapshot_download
-
-snapshot = snapshot_download(
-    "nvidia/Cosmos-1.0-Guardrail",
-    revision="cf03c0395fac8c4de386c0bdab12cc4fc8d66362",
-    allow_patterns=["blocklist/**"],
-)
-source = Path(snapshot) / "blocklist" / "nltk_data"
-destination = Path(os.environ["NLTK_DATA"]).resolve()
-shutil.copytree(source, destination, symlinks=False, dirs_exist_ok=True)
-assert not any(path.is_symlink() for path in destination.rglob("*"))
-
-# Check both resource lookups used by the text blocklist before starting a GPU server.
-nltk.data.path[:] = [str(destination)]
-tokens = nltk.word_tokenize("You are an autonomous vehicle planning system.")
-assert nltk.WordNetLemmatizer().lemmatize("vehicles") == "vehicle"
-print("Guardrail NLTK data ready:", destination, tokens)
-PY
-```
-
-Keep `NLTK_DATA` exported when starting the server below. Repeat this setup
-after recreating the container or removing the temporary directory. Running it
-only in the client notebook's environment does not configure a remote server.
-This workaround does not rewrite cached files or symlinks, and keeps NLTK
-path security and `use_guardrails=True` enabled.
-
-The separate `No safety models found, returning safe` warning in guardrail
-0.3.0 refers to its intentionally empty video-content classifier list. Text
-checks and face blurring remain configured; the NLTK workaround does not enable
-video-content classification or suppress that warning.
+`cosmos_guardrail` 0.3.2 copies its NLTK data out of the Hugging Face cache
+on first use, so the server needs no separate NLTK data setup. Its
+`No safety models found, returning safe` warning refers to the intentionally
+empty video-content classifier list; text checks and face blurring remain
+configured.
 
 Set the TensorRT-LLM source root for the shared VisualGen config YAMLs. Run this
 from inside the TensorRT-LLM checkout — the directory the `git clone` above
@@ -346,7 +314,7 @@ both out of the request. `Cosmos3-Super-Image2Video-4Step` also declares
 `use_system_prompt` unset. The text-to-image student deploys at 1024x1024, the
 shape `cosmos3-t2i-1gpu.yaml` warms; the image-to-video student deploys at the
 default 720p x 189-frame omni shape and needs no config file. The
-[distilled 4-step notebook](generator/audiovisual/run_distilled_with_trt_llm.ipynb)
+[distilled 4-step reference](../../cosmos3-generate-media/references/distilled-trt-llm.md)
 runs both against a running server. These students cover text-to-image and
 image-to-video only; use the base checkpoints for text-to-video, video-to-video,
 and synchronized audio.
@@ -389,16 +357,31 @@ supports this payload: poll `GET /v1/videos/{id}`, then download it from
 
 ## TensorRT-LLM Reasoner
 
-OpenAI-compatible **reasoning** server for image and video understanding. Run
-TensorRT-LLM in the prebuilt
-[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
-container, or follow the
-[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator) to
-install TensorRT-LLM from source.
+OpenAI-compatible **reasoning** server for image and video understanding.
 Authenticate with Hugging Face before loading gated checkpoints.
 
-Install headless OpenCV in the environment that runs the server. Cosmos3
-Reasoner uses it to process vision inputs:
+**Cosmos3-Nano** and **Cosmos3-Super** run in the prebuilt
+[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
+container.
+
+**Cosmos3-Edge** requires TensorRT-LLM >=
+[`v1.4.0rc2`](https://github.com/NVIDIA/TensorRT-LLM/releases/tag/v1.4.0rc2).
+That release includes `Cosmos3EdgeForConditionalGeneration`. `v1.4.0rc1` and
+`release:1.3.0rc22` do not. Run Edge in
+[`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release/1.4.0rc2/tags).
+
+If that image is not available, build from the
+[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator)
+and run this checkout instead of the `git checkout` line in that block. A newer
+`main` commit also includes Edge:
+
+```bash
+git checkout 39a44fab74f4cfc0d4d498be385e746fdd182872
+```
+
+Install headless OpenCV with the same `python` that provides `trtllm-serve`.
+Inside a release container, that is the container's `python`. Cosmos3 Reasoner
+uses OpenCV to process vision inputs:
 
 ```bash
 python -m pip install opencv-python-headless
@@ -406,8 +389,7 @@ python -m pip install opencv-python-headless
 
 ### Start the server
 
-Run one of these commands inside the release container or activated local
-environment.
+**Cosmos3-Nano** and **Cosmos3-Super** — run inside the release container above.
 
 **Cosmos3-Nano** (single GPU, port 8001):
 
@@ -430,11 +412,20 @@ trtllm-serve nvidia/Cosmos3-Super \
   --max_num_tokens 32768
 ```
 
+**Cosmos3-Edge** (single GPU, port 8001) — run inside `release:1.4.0rc2`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+trtllm-serve nvidia/Cosmos3-Edge \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --max_num_tokens 32768
+```
+
 The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
 [Reasoner TensorRT-LLM notebook](reasoner/run_with_tensorrt_llm.ipynb) for image
 and video requests.
-
 
 ## TensorRT-Edge-LLM
 

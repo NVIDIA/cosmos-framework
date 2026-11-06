@@ -707,11 +707,11 @@ def test_dp_coords_reports_the_full_policy_dp_extent():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_build_objective_ignores_pdims_for_both_flavors():
-    """Task 9 deleted `dp_group_sharded`: a NON-TRIVIAL pdims must NOT change what `build_objective`
+    """With `dp_group_sharded` deleted, a NON-TRIVIAL pdims must NOT change what `build_objective`
     returns — for BOTH flavors. Partitioning the dp axis is the ingress predicate's job now
     (`workers/dispatch.py::select_chunk`, applied by the WorkerGroup `train` edge); wrapping the
     objective on `pdims` here too would divide the same axis twice, training on `1/dp_world**2` of
-    the batch while every metric reported the full count — the exact silent bug Task 9 closes.
+    the batch while every metric reported the full count — the exact silent bug its deletion closes.
     """
     from types import SimpleNamespace
 
@@ -800,7 +800,7 @@ def test_ppo_engine_kwargs_refuse_custom_all_reduce() -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_limit_mm_per_prompt_key_policy_refuses_mistyped_and_unknown_modalities():
-    """Reviewer thread (rl.py:549): vLLM converts an unknown or mistyped key into a generic dummy option and the
+    """vLLM converts an unknown or mistyped key into a generic dummy option and the
     model's `allowed_mm_limits` iterates only its supported modalities, so `{'images': 40}` or `{' image': 40}`
     would be silently ignored. FAIL-ON-OLD: the first revision accepted both."""
     from cosmos_framework.posttrain.config.rl import VLLM_MODALITIES, RolloutConfig

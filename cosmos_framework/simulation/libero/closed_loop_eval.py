@@ -511,7 +511,7 @@ def _remap_gripper(action: list[float], mode: str) -> list[float]:
     was trained on (the server denormalizes back to that raw convention):
 
     * ``zero_one`` (NVIDIA LIBERO_LeRobot_v3): raw gripper in [0, 1]; the env wants
-      [-1, 1] with negative=open. The i4/cosmos-rl reference BINARIZES this to hard
+      [-1, 1] with negative=open. The upstream/cosmos-rl reference BINARIZES this to hard
       {-1, +1} via ``-sign(2g - 1)`` (not the continuous ``1 - 2g`` from issue #50).
       For a confident policy the two agree (g~0/1), but an undertrained policy emits
       g~0.5 where continuous ``1-2g``~0 never actuates the gripper -> grasps fail.
