@@ -4,7 +4,6 @@
 """Shared utilities for Action dataset export and evaluation workflows."""
 
 import base64
-import fcntl
 import json
 import os
 import subprocess
@@ -14,6 +13,10 @@ from urllib.parse import urlparse
 
 from loguru import logger
 from tqdm import tqdm
+
+# fcntl is POSIX-only; win_compat.flock is a passthrough on Linux and an
+# msvcrt-based equivalent on Windows.
+from cosmos_framework.utils import win_compat as fcntl
 
 DEFAULT_GCS_CREDENTIALS = "credentials/gcp_checkpoint.secret"
 GCS_CREDS_ENV_VAR = "COSMOS_GCP_CHECKPOINT_CREDS"

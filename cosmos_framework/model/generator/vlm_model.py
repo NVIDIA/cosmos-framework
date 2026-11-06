@@ -51,7 +51,7 @@ from cosmos_framework.model.generator.reasoner.qwen35_caption import (
 )
 from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
-from cosmos_framework.utils import log
+from cosmos_framework.utils import log, win_compat
 from cosmos_framework.utils.generator.attention_chunks import plan_varlen_attention_chunks
 from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_forward_result,
@@ -936,7 +936,7 @@ class VLMModel(ImaginaireModel):
             raise NotImplementedError(
                 "True packing is not validated for audio understanding inputs; use padded batching."
             )
-        if self.config.policy.attn_implementation != "cosmos":
+        if win_compat.attention_implementation(self.config.policy.attn_implementation) != "cosmos":
             raise NotImplementedError(
                 "True packing requires policy.attn_implementation='cosmos'; other backends may "
                 "ignore varlen metadata and permit cross-sample attention"

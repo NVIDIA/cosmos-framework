@@ -4,8 +4,39 @@
 from typing import Literal
 
 import torch
-import triton
-import triton.language as tl
+
+try:
+    import triton
+    import triton.language as tl
+except ImportError:  # pragma: no cover - platform dependent
+    # The upstream ``triton`` package ships Linux wheels only; on Windows, Triton comes from
+    # the separately installed ``triton-windows`` package (maintained under the triton-lang
+    # org, with win_amd64 and win_arm64 wheels), which not every environment has. The fused
+    # MoE kernels below are the only consumers here, but this module is imported
+    # *transitively* by the config graph (qwen3_vl_moe/moe_kernels.py -> here) even for
+    # dense, non-MoE models. Stub the symbols so import succeeds; any attempt to actually
+    # launch a kernel then fails loudly instead of silently degrading.
+    class _TritonUnavailable:
+        """Placeholder for triton / triton.language when triton is absent."""
+
+        def __getattr__(self, _name: str) -> "_TritonUnavailable":
+            return _TritonUnavailable()
+
+        def __call__(self, *args, **kwargs):
+            # Support bare-decorator use: @triton.jit
+            if len(args) == 1 and callable(args[0]) and not kwargs:
+
+                def _kernel_unavailable(*_a, **_k):
+                    raise RuntimeError(
+                        "Triton is unavailable on this platform, so the fused MoE kernels cannot run. "
+                        "Use a dense (non-MoE) backbone or install a Triton build for this platform."
+                    )
+
+                return _kernel_unavailable
+            return _TritonUnavailable()
+
+    triton = _TritonUnavailable()  # type: ignore[assignment]
+    tl = _TritonUnavailable()  # type: ignore[assignment]
 
 # Set the token group alignment size for experts in MoE. This is implemented by
 # padding each expert size to the next multiple of TOKEN_GROUP_ALIGN_SIZE_M.

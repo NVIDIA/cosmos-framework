@@ -47,6 +47,7 @@ import os
 import queue
 import re
 import socket
+import sys
 import time
 from datetime import timedelta
 from multiprocessing import get_context
@@ -209,6 +210,11 @@ def _check_staging_shared_memory(state_dict: dict[str, Any]) -> None:
     All training ranks participate before allocating. Aggregate ranks sharing
     a host and mount, then raise on every rank if any mount is too small.
     """
+    if not hasattr(os, "statvfs"):
+        # POSIX-only check: Windows has neither statvfs nor a /dev/shm mount, and pinned
+        # staging there is ordinary pageable host memory with nothing to budget against.
+        log.warning("Skipping the /dev/shm staging check: os.statvfs is unavailable on this platform.")
+        return
     if dist.is_initialized():
         # Distillation releases its previous staging tree before each save.
         # Wait for every rank to release it before sampling shared free space;
@@ -779,6 +785,14 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 "inconsistent checkpoint: the optimizer moments would track the original "
                 "reg-weight trajectory, not the EMA weights just copied in."
             )
+        if config_checkpoint.dcp_async_mode_enabled and not disable_async and sys.platform == "win32":
+            # The async path stages the whole state dict through pinned host memory. On a
+            # unified-memory Windows device (RTX Spark) that copy competes with the resident
+            # model and the save dies with CUDA out of memory, so save synchronously there.
+            log.warning(
+                "checkpoint.dcp_async_mode_enabled=true is not supported on Windows; saving synchronously instead."
+            )
+            disable_async = True
         if config_checkpoint.dcp_async_mode_enabled and not disable_async:
             self.async_mode = AsyncMode.ASYNC_WITH_PINNED_MEM
         else:
@@ -1215,6 +1229,13 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 path=checkpoint_path,
                 enable_gcs_patch_in_boto3=self.config_checkpoint.enable_gcs_patch_in_boto3,
             )
+        if sys.platform == "win32":
+            # torch's default writer stages every tensor through pinned host memory
+            # (per_thread_copy_ahead) and the pinned-memory cache never shrinks. On a
+            # unified-memory Windows device that cache competes with the resident model and
+            # the save dies with CUDA out of memory part way through; per_thread_copy_ahead=0
+            # selects the serial, pageable loader instead.
+            return FileSystemWriter(path=checkpoint_path, per_thread_copy_ahead=0)
         return FileSystemWriter(path=checkpoint_path)
 
     def get_storage_reader(
