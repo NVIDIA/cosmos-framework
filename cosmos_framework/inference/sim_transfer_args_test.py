@@ -9,6 +9,7 @@ import pydantic
 import pytest
 
 import cosmos_framework.inference.args as args_module
+import cosmos_framework.inference.common.args as common_args
 from cosmos_framework.inference.args import OmniSampleOverrides, OmniSetupOverrides
 
 _GB200_MEMORY_BYTES = 192 * 1024**3
@@ -681,16 +682,39 @@ def test_unused_negative_prompt_file_is_not_opened(tmp_path: Path) -> None:
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.parametrize("autoregressive", [True, False])
-def test_missing_negative_prompt_file_is_rejected(tmp_path: Path, autoregressive: bool) -> None:
-    # Before, a typo here passed silently whenever a default negative_prompt won, which is almost always.
+def test_missing_negative_prompt_file_fails_only_its_sample(tmp_path: Path, autoregressive: bool) -> None:
+    # Parsing accepts the spec, so one bad path does not abort the whole file; building the sample that
+    # would read the file raises a ValueError, which --skip-invalid-samples turns into a skipped sample.
     control = tmp_path / "depth.mp4"
     control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=autoregressive,
+        negative_prompt_file="missing_negative.json",
+    )
     with pytest.raises(ValueError, match="negative_prompt_file not found: missing_negative.json"):
-        OmniSampleOverrides(
-            depth={"control_path": str(control)},
-            autoregressive=autoregressive,
-            negative_prompt_file="missing_negative.json",
-        )
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_missing_negative_prompt_file_warns_when_another_caption_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before, a typo here passed silently whenever a default negative_prompt won, which is almost always.
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        negative_prompt="grainy",
+        negative_prompt_file="missing_negative.json",
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert sample.negative_prompt == "grainy"
+    assert any("negative_prompt_file not found: missing_negative.json" in w and "not used" in w for w in warnings)
 
 
 @pytest.mark.L0
@@ -725,11 +749,33 @@ def test_negative_prompt_file_still_resolves_from_the_launch_folder_first(
     specs.mkdir()
     (specs / "neg.json").write_text(json.dumps({"caption": "spec"}))
     (specs / "depth.mp4").touch()
-    monkeypatch.setattr(args_module, "_LAUNCH_DIR", launch)
-    monkeypatch.chdir(specs)
-    sample = OmniSampleOverrides(depth={"control_path": "depth.mp4"}, negative_prompt_file="neg.json")
+    spec = specs / "sample.json"
+    spec.write_text(json.dumps({"depth": {"control_path": "depth.mp4"}, "negative_prompt_file": "neg.json"}))
+    monkeypatch.chdir(launch)  # the folder the run is launched from, chosen after the module was imported
+    (sample,) = common_args._from_file(OmniSampleOverrides, spec, {})
 
     assert Path(sample.negative_prompt_file).resolve() == (launch / "neg.json").resolve()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_launch_folder_is_read_when_the_spec_is_loaded_not_at_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server or test that changes folder after import must resolve against the folder it loads the spec from.
+    first, second, specs = tmp_path / "first", tmp_path / "second", tmp_path / "specs"
+    for folder in (first, second, specs):
+        folder.mkdir()
+    (second / "neg.json").write_text(json.dumps({"caption": "second"}))
+    (specs / "depth.mp4").touch()
+    spec = specs / "sample.json"
+    spec.write_text(json.dumps({"depth": {"control_path": "depth.mp4"}, "negative_prompt_file": "neg.json"}))
+    monkeypatch.chdir(first)
+    monkeypatch.chdir(second)
+    (sample,) = common_args._from_file(OmniSampleOverrides, spec, {})
+
+    assert Path(sample.negative_prompt_file).resolve() == (second / "neg.json").resolve()
+    assert common_args.current_launch_dir() == second  # reset after loading
 
 
 @pytest.mark.L0
@@ -737,8 +783,9 @@ def test_negative_prompt_file_still_resolves_from_the_launch_folder_first(
 def test_defaults_name_fallback_applies_only_to_a_bare_filename(tmp_path: Path) -> None:
     control = tmp_path / "depth.mp4"
     control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="typo_dir/neg_prompts.json")
     with pytest.raises(ValueError, match="negative_prompt_file not found: typo_dir/neg_prompts.json"):
-        OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="typo_dir/neg_prompts.json")
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
 
 
 @pytest.mark.L0
@@ -774,6 +821,9 @@ def test_defaults_negative_prompt_file_name_is_still_accepted(tmp_path: Path) ->
     sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="neg_prompts.json")
 
     assert sample.negative_prompt_file == "neg_prompts.json"
+    # Building reads it from defaults/ and is not reported as missing.
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+    assert sample.negative_prompt
 
 
 @pytest.mark.L0
@@ -914,16 +964,3 @@ def test_show_input_without_vision_path_is_flagged_as_ignored(
     assert any("'show_input' has no effect without 'vision_path'" in w for w in warnings) is warns
 
 
-@pytest.mark.L0
-@pytest.mark.CPU
-@pytest.mark.parametrize("value,expected", [(480, "480"), ("480", "480"), (720, "720")])
-def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: str) -> None:
-    assert OmniSampleOverrides(resolution=value).resolution == expected
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-@pytest.mark.parametrize("value", [1080, "4k", True])
-def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
-    with pytest.raises(pydantic.ValidationError):
-        OmniSampleOverrides(resolution=value)

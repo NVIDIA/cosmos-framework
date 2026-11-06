@@ -77,34 +77,39 @@ def _load_transfer_negative_prompt_file(path: str | Path) -> str:
     return json.dumps(json.loads(candidate.read_text()))
 
 
-# The folder the run was launched from. Spec files are validated inside a chdir to the spec's folder, and
-# negative_prompt_file used to be read later from the launch folder, so that folder is still tried first.
-_LAUNCH_DIR = Path.cwd()
+def _negative_prompt_file_candidates(v: str) -> list[Path]:
+    """Where a ``negative_prompt_file`` is looked for, in order.
+
+    The launch folder (where the file used to be read from, so existing setups keep working), the current
+    folder (the spec's folder while a spec file is validated) and, for a bare filename only, ``defaults/``.
+    The launch folder is read when the sample is parsed, not when this module is imported, so a process that
+    changes folder after import still resolves against the folder it ran the spec from.
+    """
+    from cosmos_framework.inference.common.args import current_launch_dir
+
+    path = Path(v).expanduser()
+    candidates = [path] if path.is_absolute() else [current_launch_dir() / path, Path.cwd() / path]
+    if path.name == v:
+        candidates.append(PACKAGE_DIR / "defaults" / v)
+    return list(dict.fromkeys(candidates))
 
 
 def _resolve_negative_prompt_file(v: str | None) -> str | None:
-    """Fail fast on a ``negative_prompt_file`` that does not exist.
+    """Pin a found ``negative_prompt_file`` to an absolute path while the spec's folder is known.
 
-    Tried in order: the launch folder (where the file used to be read from), the current folder (the spec's
-    folder while a spec file is validated), and, for a bare filename only, ``defaults/``. Previously a missing
-    file was only noticed if the loader ever read it, and in most setups a default ``negative_prompt`` wins
-    first, so a typo passed silently.
+    A file that is not found is kept as written and is not an error here: whether it matters depends on
+    whether the sample ends up reading it, which is decided when the sample is built
+    (``_build_transfer_data``). There it fails only that sample, so ``--skip-invalid-samples``
+    can skip it, or it is reported as a warning when another negative caption wins.
     """
     if v is None:
         return None
-    path = Path(v).expanduser()
-    tried = []
-    for candidate in [path] if path.is_absolute() else [_LAUNCH_DIR / path, Path.cwd() / path]:
-        if candidate not in tried:
-            tried.append(candidate)
+    defaults_path = PACKAGE_DIR / "defaults" / v
+    for candidate in _negative_prompt_file_candidates(v):
         if candidate.is_file():
-            return str(candidate.absolute())
-    if path.name == v:
-        defaults_path = PACKAGE_DIR / "defaults" / v
-        tried.append(defaults_path)
-        if defaults_path.is_file():
-            return v
-    raise ValueError(f"negative_prompt_file not found: {v} (tried {', '.join(str(t) for t in tried)})")
+            # A defaults/ name stays a bare name, as the defaults loader and shipped specs expect.
+            return v if candidate == defaults_path else str(candidate.absolute())
+    return v
 
 
 NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
@@ -649,15 +654,6 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     preview_preset: Training[str | None] = None
     """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
     Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
-
-    @pydantic.field_validator("resolution", mode="before")
-    @classmethod
-    def _resolution_tier_from_int(cls, value: object) -> object:
-        # JSON specs often write the tier as a number (``"resolution": 480``); the tier is the same
-        # string, so accept the integer instead of failing the Literal check.
-        if isinstance(value, int) and not isinstance(value, bool):
-            return str(value)
-        return value
 
     @override
     def download(self, output_dir: Path):
@@ -1587,7 +1583,26 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             return
 
         user_set = user_fields if user_fields is not None else frozenset()
-        if self.negative_prompt is None and self.negative_prompt_file is not None:
+        # Found means: a resolved path, or a bare filename under defaults/ (never a defaults/ match by the
+        # last component of a longer path, which would hide a typo in its folder).
+        neg_file_missing = self.negative_prompt_file is not None and not any(
+            c.is_file() for c in _negative_prompt_file_candidates(self.negative_prompt_file)
+        )
+        if neg_file_missing:
+            # The spec's own folder was already tried when the spec was parsed (a match there is stored as an
+            # absolute path), so name it alongside the folders tried here.
+            tried = "the spec file's folder, " + ", ".join(
+                str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file))
+            )
+            if self.negative_prompt is None:
+                # The file would be read and is not there: fail this sample only. A ValueError here is
+                # per-sample, so --skip-invalid-samples skips it instead of stopping the batch.
+                raise ValueError(f"negative_prompt_file not found: {self.negative_prompt_file} (tried {tried})")
+            log.warning(
+                f"[transfer] negative_prompt_file not found: {self.negative_prompt_file} (tried {tried}). "
+                "It is not used, because a negative_prompt is already set; fix or remove the path."
+            )
+        elif self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
         elif (
             self.negative_prompt_file is not None
