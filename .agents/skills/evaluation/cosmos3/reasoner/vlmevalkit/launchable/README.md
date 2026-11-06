@@ -361,7 +361,8 @@ npm ci
 ```
 
 The root `package.json` pins `@nvidia/foundations-react-core` as a development-only
-dependency. Its `prepare` script runs `kui-sync-skills --dir .agents`, keeping
-`.agents/skills/kaizen-ui` in sync; `kui.disablePostInstall` suppresses the hint.
-Keep the lockfile in source control; `node_modules` is excluded from Git and Docker.
+dependency. Its `prepare` script runs `kui-sync-skills --dir .agents`, generating
+`.agents/skills/kaizen-ui` locally; that generated folder is not committed.
+`kui.disablePostInstall` suppresses the install hint. Keep the lockfile in source
+control; `node_modules` is excluded from Git and Docker.
 
