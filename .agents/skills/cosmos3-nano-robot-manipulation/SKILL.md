@@ -98,7 +98,8 @@ EOF
 Expected: the last line prints a torch version (2.10.x). Then build the simulator environment `.libenv` as
 [docs/action_policy_libero_posttrain.md §3](https://github.com/NVIDIA/cosmos-framework/blob/c23e51f2f157ae3e51cfcd86ebfb5464850894f2/docs/action_policy_libero_posttrain.md)
 describes, with `export UV_NO_CONFIG=1` set for its `uv` commands (the checkout's `[tool.uv]` forces `numpy>=2`, which
-breaks the `opencv-python 4.6` that LIBERO pins), and check it: `.libenv/bin/python -c "import robosuite, mujoco; print(robosuite.__version__, mujoco.__version__)"`
+breaks the `opencv-python 4.6` that LIBERO pins) and with `PYTHONPATH=$PWD/LIBERO` on its `set_libero_default_path()`
+line (LIBERO's editable install maps no packages, so `import libero` fails without it), and check it: `.libenv/bin/python -c "import robosuite, mujoco; print(robosuite.__version__, mujoco.__version__)"`
 prints `1.4.1 2.3.7`. Inside an NGC container also `export LD_LIBRARY_PATH=''` before any Python.
 
 ### 2. Data, base weights and video tokenizer (about 10 minutes, 38 GB)
