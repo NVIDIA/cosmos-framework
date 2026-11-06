@@ -1,3 +1,5 @@
+# Sim-Bimanual held-out fidelity tables (run08, run09)
+
 Matched-action rollouts and frozen-first-frame control on the 20 held-out AgiBotWorld-Beta episodes (run08, scored 2026-10-01), all 20 and per task. The rows labelled "early four-episode probe (run09)" are the first action-swap control on only four rollouts (815362 <-> 810449 and 824031 <-> 813610, run09); they were superseded by the twenty-episode swap control of run10, which is the one in the README's headline tables and in `results_tables_swap20.md`. Mean ± std across episodes, ddof = 1. Real video cropped to its top 352 rows.
 
 ## Checkpoint frames (mean ± std across episodes, ddof=1)

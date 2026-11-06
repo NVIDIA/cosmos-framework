@@ -1,3 +1,5 @@
+# Sim-Bimanual action-swap control tables (run10)
+
 ## Cross-task action swap on all 20 held-out episodes (run10, 2026-10-07): checkpoint frames (mean ± std across episodes, ddof=1)
 
 | comparison                                      | metric    | f30           | f60           | f120          | f240          | f480          | f900          |

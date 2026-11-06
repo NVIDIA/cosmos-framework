@@ -176,9 +176,9 @@ Measured on 1× GB300, 4 denoising steps, guidance 1.0, autoregressive rollouts 
 
 ### What the numbers look like
 
-| ![](assets/sim-bimanual/stills_task600_ep815362_f30_f900.png)                             | ![](assets/sim-bimanual/stills_task596_ep810449_f30_f900.png)                                                           |
-| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| task 600, episode 815362: real, matched rollout, frozen control at frame 30 and frame 900 | task 596, episode 810449 (place the inner pot with rice into the rice cooker): the same three at frame 30 and frame 900 |
+| ![Task 600, episode 815362: real, matched rollout and frozen control at frames 30 and 900](assets/sim-bimanual/stills_task600_ep815362_f30_f900.png) | ![Task 596, episode 810449: real, matched rollout and frozen control at frames 30 and 900](assets/sim-bimanual/stills_task596_ep810449_f30_f900.png) |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| task 600, episode 815362: real, matched rollout, frozen control at frame 30 and frame 900                                                            | task 596, episode 810449 (place the inner pot with rice into the rice cooker): the same three at frame 30 and frame 900                              |
 
 The two tasks differ by 3.6 dB overall; episode ids in `assets/sim-bimanual/captions.md`. The "top 352 rows" crop keeps
 rows 0 to 351 of the 360-row real frame, because the generator outputs 352 rows and keeps the top of the input: frame 0
