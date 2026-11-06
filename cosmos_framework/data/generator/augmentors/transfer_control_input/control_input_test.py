@@ -36,7 +36,14 @@ def test_none_preset_returns_input_unchanged() -> None:
     assert _blur_error(frames, "none") == 0.0
 
 
-def test_low_presets_blur_in_named_order() -> None:
+def test_presets_blur_in_named_order() -> None:
+    """The full chain very_low < low < medium < high < very_high, pinned at the test clip's size.
+
+    The order depends on resolution (see the comment on blur_downup_preset_values), so this
+    checks it at one fixed size rather than claiming it for every input.
+    """
     frames = _test_frames()
-    very_low, low, medium = (_blur_error(frames, preset) for preset in ("very_low", "low", "medium"))
-    assert very_low < low < medium, f"very_low={very_low:.3f} low={low:.3f} medium={medium:.3f}"
+    names = ("very_low", "low", "medium", "high", "very_high")
+    errors = [_blur_error(frames, preset) for preset in names]
+    report = " ".join(f"{name}={error:.3f}" for name, error in zip(names, errors, strict=True))
+    assert all(a < b for a, b in zip(errors, errors[1:])), report
