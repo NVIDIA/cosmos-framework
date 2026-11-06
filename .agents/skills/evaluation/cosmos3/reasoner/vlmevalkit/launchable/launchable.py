@@ -182,9 +182,9 @@ def run(work, mode, smoke, dry_run, data_root, api_nproc=1, nframe=16):
     model = {"class": recipe["class"], **recipe["defaults"]}
     model.update(api_base=os.environ.get("COSMOS_API_BASE", "http://cosmos-endpoint:8080/v1/chat/completions"),
                  model=os.environ.get("COSMOS_MODEL", "nvidia/Cosmos3-Nano"))
-    from vlmeval.execution_evidence import nano_processor_profile, PINNED_SERVING_COMPATIBILITY
+    from vlmeval.execution_evidence import processor_profile_for, PINNED_SERVING_COMPATIBILITY
     model.update(execution_evidence_dir=str(work / "execution-responses"),
-                 execution_processor_profile=nano_processor_profile(
+                 execution_processor_profile=processor_profile_for(
                      model["model"], os.environ.get("COSMOS_MODEL_REVISION", "unknown")))
     config = {"model": {"cosmos": model}, "data": {"PerceptionTest": {
         "class": "PerceptionTestLocal", "dataset": "PerceptionTest", "data_root": str(data_root),

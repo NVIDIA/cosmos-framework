@@ -64,6 +64,7 @@ services:
       COSMOS_API_BASE: ${COSMOS_API_BASE:-http://cosmos-endpoint:8080/v1/chat/completions}
       COSMOS_MODEL: ${COSMOS_MODEL:-nvidia/Cosmos3-Nano}
       COSMOS_MODEL_REVISION: ${COSMOS_MODEL_REVISION:-unknown}
+      COSMOS_PROCESSOR_PROFILE: ${COSMOS_PROCESSOR_PROFILE:-}
       VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:cosmos3@sha256:db0bb920b0b54e82ea96a98659bbd21921f87d0dcfc86feffdafa2db3f08be55}
       COSMOS_API_KEY: ${COSMOS_API_KEY:-EMPTY}
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?Run bash setup.sh to generate a Jupyter token}

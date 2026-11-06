@@ -316,9 +316,9 @@ def _redact(value, secrets):
 
 def _predict(pair, root, work, api, key, settings):
     import requests
-    from vlmeval.execution_evidence import build_execution_record, nano_processor_profile
+    from vlmeval.execution_evidence import build_execution_record, processor_profile_for
 
-    profile = nano_processor_profile(settings['model'], settings['model_revision'])
+    profile = processor_profile_for(settings['model'], settings['model_revision'])
 
     index, row = pair
     started = time.monotonic()
@@ -366,7 +366,8 @@ def _predict(pair, root, work, api, key, settings):
                 if not isinstance(raw, dict):
                     raise ValueError("Non-object endpoint response")
                 if profile is None:
-                    raise ValueError('VideoPhy2 geometry audit requires an explicit supported processor profile')
+                    raise ValueError('VideoPhy2 geometry audit requires a processor profile: the pinned Nano '
+                                     'profile or COSMOS_PROCESSOR_PROFILE for another model')
                 output, finish, count = audit_response(raw, processor_profile=profile)
                 rating, fallback = official_parse(output)
                 issues = []

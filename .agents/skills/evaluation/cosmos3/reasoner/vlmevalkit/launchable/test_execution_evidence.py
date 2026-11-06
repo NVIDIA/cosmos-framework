@@ -3,8 +3,10 @@
 """Consumer-boundary evidence tests: no endpoint, model imports or media downloads."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     'execution_evidence', Path(__file__).resolve().parents[1] / 'vlmeval/execution_evidence.py')
@@ -125,6 +127,43 @@ class ExecutionEvidenceTests(unittest.TestCase):
         self.assertEqual(summary['usage_totals']['total_tokens'], 1702)
         self.assertIsNone(summary['effective_model_revision'])
         json.dumps(summary, allow_nan=False)
+
+
+class OperatorProfileTests(unittest.TestCase):
+    OTHER = 'example/OtherVL'
+    PROFILE = {'patch_size': 16, 'spatial_merge_size': 2, 'temporal_patch_size': 2,
+               'image_token_id': 151655, 'video_token_id': 151656,
+               'vision_start_token_id': 151652, 'vision_end_token_id': 151653,
+               'profile_model': OTHER, 'profile_revision': 'abc123'}
+
+    def resolve(self, model, profile):
+        env = {'COSMOS_PROCESSOR_PROFILE': json.dumps(profile)} if profile is not None else {}
+        with mock.patch.dict(os.environ, env, clear=False):
+            if profile is None:
+                os.environ.pop('COSMOS_PROCESSOR_PROFILE', None)
+            return evidence.processor_profile_for(model, 'rev')
+
+    def test_other_model_without_profile_stays_unverified(self):
+        self.assertIsNone(self.resolve(self.OTHER, None))
+
+    def test_supplied_profile_verifies_that_models_geometry(self):
+        profile = self.resolve(self.OTHER, self.PROFILE)
+        result = evidence.build_execution_record(request(), video_response(), processor_profile=profile,
+            media={'sampled_frames': 32, 'expected_group_tokens': 49})
+        self.assertEqual(result['verification']['status'], 'verified_under_explicit_profile')
+        self.assertEqual(result['processor_profile']['profile_model'], self.OTHER)
+
+    def test_profile_written_for_another_model_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.resolve('example/DifferentVL', self.PROFILE)
+
+    def test_incomplete_profile_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.resolve(self.OTHER, {'profile_model': self.OTHER, 'patch_size': 16})
+
+    def test_nano_keeps_its_pinned_profile_even_when_one_is_supplied(self):
+        profile = self.resolve('nvidia/Cosmos3-Nano', self.PROFILE)
+        self.assertEqual(profile['provenance'], 'pinned-public-nano-config')
 
 
 if __name__ == '__main__':

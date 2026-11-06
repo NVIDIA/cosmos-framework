@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import os
 import math
 import re
 
@@ -47,6 +48,29 @@ def nano_processor_profile(model, revision='unknown'):
             'provenance': 'pinned-public-nano-config'}
 
 
+def processor_profile_for(model, revision='unknown'):
+    """Pinned Nano profile, or the operator's explicit profile for another model.
+
+    ``COSMOS_PROCESSOR_PROFILE`` holds a JSON object copied from the deployed
+    checkpoint's processor configuration. Its ``profile_model`` must equal the
+    served model name so a profile is never reused for a different model. Absent a
+    profile, other models stay unverified rather than inheriting Nano's values.
+    """
+    profile = nano_processor_profile(model, revision)
+    if profile is not None:
+        return profile
+    text = os.environ.get('COSMOS_PROCESSOR_PROFILE', '').strip()
+    if not text:
+        return None
+    value = json.loads(text)
+    if not isinstance(value, dict) or _profile(value) is None:
+        raise ValueError('COSMOS_PROCESSOR_PROFILE must define patch_size, spatial_merge_size, '
+                         'temporal_patch_size, image_token_id and video_token_id')
+    if value.get('profile_model') != model:
+        raise ValueError('COSMOS_PROCESSOR_PROFILE profile_model does not match the served model')
+    return dict(value, requested_model_revision=revision)
+
+
 def _profile(value):
     if not isinstance(value, dict):
         return None
@@ -64,6 +88,10 @@ def _profile(value):
         result.update(profile_model='nvidia/Cosmos3-Nano', profile_revision=NANO_REVISION,
                       sources=[f'https://huggingface.co/nvidia/Cosmos3-Nano/resolve/{NANO_REVISION}/{name}'
                                for name in ('config.json', 'preprocessor_config.json')])
+    else:
+        for key in ('profile_model', 'profile_revision'):
+            if _identity(value.get(key)):
+                result[key] = value[key]
     return result
 
 

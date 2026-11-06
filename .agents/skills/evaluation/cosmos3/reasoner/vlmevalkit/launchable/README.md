@@ -127,6 +127,16 @@ endpoint, export complete `COSMOS_API_BASE` (`.../v1/chat/completions`), exact
 GPU serving for BYOM; do not write keys into the notebook or source. An endpoint's
 model display name does not prove its checkpoint revision.
 
+For a model other than the pinned Nano, also export `COSMOS_PROCESSOR_PROFILE`:
+a JSON object copied from that checkpoint's processor configuration, with
+`patch_size`, `spatial_merge_size`, `temporal_patch_size`, `image_token_id`,
+`video_token_id`, `vision_start_token_id`, `vision_end_token_id`, and
+`profile_model` set to the exact served model name (optionally
+`profile_revision`). VideoPhy2's input audit requires it; without it, other
+benchmarks run but report input geometry as unknown. A profile whose
+`profile_model` differs from the served model is rejected. Do not copy Nano's
+values to another model unless its own configuration matches them.
+
 The serving configuration disables FlashInfer sampling with
 `VLLM_USE_FLASHINFER_SAMPLER=0`. This exact pinned vLLM build
 (`0.23.1rc1.dev1306+gbfee6a802`) does **not** expose

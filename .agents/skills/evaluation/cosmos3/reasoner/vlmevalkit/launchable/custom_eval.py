@@ -244,9 +244,9 @@ def run(config_path, work, api_nproc=1) -> dict:
     try:
         import requests
         from vlmeval.api.cosmos_reason import process_video_info_to_video_url
-        from vlmeval.execution_evidence import build_execution_record, nano_processor_profile
+        from vlmeval.execution_evidence import build_execution_record, processor_profile_for
 
-        profile = config.get("processor_profile") or nano_processor_profile(validated["model"]["name"], validated["model"]["revision"])
+        profile = config.get("processor_profile") or processor_profile_for(validated["model"]["name"], validated["model"]["revision"])
         _json(work / "requested-execution.json", {"model": validated["model"], "generation": validated["generation"],
                                                  "sampling": validated["sampling"], "processor_profile": profile})
 

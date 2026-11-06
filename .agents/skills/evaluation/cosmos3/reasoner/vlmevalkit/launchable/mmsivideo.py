@@ -346,7 +346,7 @@ def run(data_root: Path, scope: str, work: Path, api_nproc: int = 4):
     work.mkdir(parents=True, exist_ok=False, mode=0o700)
     started = time.monotonic()
     records = []
-    from vlmeval.execution_evidence import aggregate_execution_records, nano_processor_profile, PINNED_SERVING_COMPATIBILITY
+    from vlmeval.execution_evidence import aggregate_execution_records, processor_profile_for, PINNED_SERVING_COMPATIBILITY
     expected = 5 if scope == 'smoke' else 1106
     def progress(message):
         print(message, flush=True)
@@ -388,7 +388,7 @@ def run(data_root: Path, scope: str, work: Path, api_nproc: int = 4):
                         max_tokens=2048, seed=1, timeout=600, retry=1, wait=0,
                         img_size=-1, img_detail='low',
                         execution_evidence_dir=str(work / 'execution-responses'),
-                        execution_processor_profile=nano_processor_profile(
+                        execution_processor_profile=processor_profile_for(
                             model_name, os.environ.get('COSMOS_MODEL_REVISION', 'unknown')),
                         extra_body={'mm_processor_kwargs': {'max_pixels': 151200}})
                 if local.model.model != model_name:
