@@ -40,7 +40,7 @@ nav:
       - Notebooks:
           - Generation: skills/cosmos3-generate-media/SKILL.md
           - Action: skills/cookbooks/cosmos3/generator/action/README.md
-          - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
+          - Control-to-video transfer: skills/cosmos3-inference-transfer/SKILL.md
           - Reasoner: skills/cookbooks/cosmos3/reasoner/README.md
           - Simulation: skills/cookbooks/cosmos3/simulation/README.md
   - Post-Training:
