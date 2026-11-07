@@ -115,9 +115,10 @@ vendored copies (`../assets/`) and, for the three clips that are not vendored, a
 | `.agents/skills/cosmos3-inference-reasoning/references/vllm.md`             | `../quantization/README.md`                              | `../../cookbooks/cosmos3/quantization/README.md`                              |
 
 Inbound links to the retired files, re-pointed (link text unchanged; `tools/docs/nav.yml` entries "Prompting the
-Reasoner" and "Reasoner" included). Links from files that sibling rows of this migration retire
-(`cookbooks/cosmos3/quantization/README.md`, `cookbooks/cosmos3/generator/action/README.md` and
-`cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb`) are left as they are: those files leave with their rows.
+Reasoner" and "Reasoner" included). Three of the files below (`cookbooks/cosmos3/quantization/README.md`,
+`cookbooks/cosmos3/generator/action/README.md`, `cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb`) are
+themselves retired by the Quantization and Action rows of this migration; their links are re-pointed anyway so that this change
+leaves no dead link in a page the docs build stages (the sibling rows' deletions supersede these edits).
 
 | File                                                                                   | Old target                                                                 | New target                                                                              |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -130,6 +131,9 @@ Reasoner" and "Reasoner" included). Links from files that sibling rows of this m
 | `docs/models/README.md`                                                                | `../../.agents/skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md` | `../../.agents/skills/cosmos3-inference-reasoning/references/prompt-guide.md`           |
 | `.agents/skills/cookbooks/cosmos3/nim/reasoning.md`                                    | `../reasoner/run_with_vllm.ipynb`                                          | `../../../cosmos3-inference-reasoning/references/vllm.md`                               |
 | `.agents/skills/cookbooks/cosmos3/nim/reasoning.md`                                    | `../reasoner/reasoner_prompt_guide.md`                                     | `../../../cosmos3-inference-reasoning/references/prompt-guide.md`                       |
+| `.agents/skills/cookbooks/cosmos3/generator/action/README.md`                          | `../../reasoner/run_with_trt_edge_llm.ipynb`                               | `../../../../cosmos3-inference-reasoning/references/trt-edge-llm.md`                    |
+| `.agents/skills/cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb` | `../../reasoner/run_with_trt_edge_llm.ipynb`                               | `../../../../cosmos3-inference-reasoning/references/trt-edge-llm.md` (x2)               |
+| `.agents/skills/cookbooks/cosmos3/quantization/README.md`                              | `../reasoner/run_with_vllm.ipynb`                                          | `../../../cosmos3-inference-reasoning/references/vllm.md`                               |
 | `.agents/skills/cookbooks/cosmos3/nim/examples/reasoner_cases.yaml`                    | `path: cookbooks/cosmos3/reasoner/run_with_vllm.ipynb`                     | `path: cosmos3-inference-reasoning/references/vllm.md`                                  |
 | `tools/docs/nav.yml`                                                                   | `skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md`               | `skills/cosmos3-inference-reasoning/references/prompt-guide.md`                         |
 | `tools/docs/nav.yml`                                                                   | `skills/cookbooks/cosmos3/reasoner/README.md`                              | `skills/cosmos3-inference-reasoning/SKILL.md`                                           |
