@@ -61,10 +61,11 @@ first cell (title and introduction). Link targets re-pointed inside `references/
 Inbound links re-pointed to `.agents/skills/cosmos3-inference-quantization/SKILL.md` (link text unchanged):
 `.agents/skills/cookbooks/cosmos3/README.md` (`quantization/README.md`), `docs/inference.md`
 (`../.agents/skills/cookbooks/cosmos3/quantization/README.md`), `.agents/skills/cosmos3-generate-media/references/payloads.md`,
-`references/sglang.md` and `references/vllm-omni.md` (`../../cookbooks/cosmos3/quantization/README.md`). The cookbook pages
-`.agents/skills/cookbooks/cosmos3/generator/action/README.md`, `generator/transfer/README.md` and `reasoner/README.md` and seven
-notebooks also link the retired README; all of them are retired by the Action, Transfer and Visual Reasoning rows of this
-migration and are left unchanged here — `generator/action/run_fd_with_sglang.ipynb`,
+`references/sglang.md` and `references/vllm-omni.md` (`../../cookbooks/cosmos3/quantization/README.md`), and the cookbook pages
+`.agents/skills/cookbooks/cosmos3/generator/action/README.md`, `generator/transfer/README.md` (`../../quantization/README.md`) and
+`reasoner/README.md` (`../quantization/README.md`) — the docs build stages those three pages, so their links are re-pointed although the
+Action, Transfer and Visual Reasoning rows retire the pages themselves (their deletions supersede these edits). Seven notebooks also
+link the retired README and are left unchanged here (notebooks are not pages) — `generator/action/run_fd_with_sglang.ipynb`,
 `run_fd_with_vllm_omni.ipynb`, `run_id_with_sglang.ipynb`, `run_id_with_vllm_omni.ipynb`,
 `generator/transfer/run_video_transfer_with_sglang.ipynb`, `run_video_transfer_with_vllm_omni.ipynb`
 (`../../quantization/README.md`) and `reasoner/run_with_vllm.ipynb` (`../quantization/README.md`). Their migrated copies in the
