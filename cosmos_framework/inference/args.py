@@ -77,6 +77,44 @@ def _load_transfer_negative_prompt_file(path: str | Path) -> str:
     return json.dumps(json.loads(candidate.read_text()))
 
 
+def _negative_prompt_file_candidates(v: str) -> list[Path]:
+    """Where a ``negative_prompt_file`` is looked for, in order.
+
+    The launch folder (where the file used to be read from, so existing setups keep working), the current
+    folder (the spec's folder while a spec file is validated) and, for a bare filename only, ``defaults/``.
+    The launch folder is read when the sample is parsed, not when this module is imported, so a process that
+    changes folder after import still resolves against the folder it ran the spec from.
+    """
+    from cosmos_framework.inference.common.args import current_launch_dir
+
+    path = Path(v).expanduser()
+    candidates = [path] if path.is_absolute() else [current_launch_dir() / path, Path.cwd() / path]
+    if path.name == v:
+        candidates.append(PACKAGE_DIR / "defaults" / v)
+    return list(dict.fromkeys(candidates))
+
+
+def _resolve_negative_prompt_file(v: str | None) -> str | None:
+    """Pin a found ``negative_prompt_file`` to an absolute path while the spec's folder is known.
+
+    A file that is not found is kept as written and is not an error here: whether it matters depends on
+    whether the sample ends up reading it, which is decided when the sample is built
+    (``_build_transfer_data``). There it fails only that sample, so ``--skip-invalid-samples``
+    can skip it, or it is reported as a warning when another negative caption wins.
+    """
+    if v is None:
+        return None
+    defaults_path = PACKAGE_DIR / "defaults" / v
+    for candidate in _negative_prompt_file_candidates(v):
+        if candidate.is_file():
+            # A defaults/ name stays a bare name, as the defaults loader and shipped specs expect.
+            return v if candidate == defaults_path else str(candidate.absolute())
+    return v
+
+
+NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
+
+
 @cache
 def _load_modality_defaults(model_mode: str) -> dict[str, Any]:
     default_file = PACKAGE_DIR / f"defaults/{model_mode}/sample_args.json"
@@ -415,6 +453,8 @@ class TextDataArgs(ArgsBase):
 
 
 class TextDataOverrides(OverridesBase):
+    _negative_metadata_mode_promoted: bool = pydantic.PrivateAttr(default=False)
+
     prompt_path: ResolvedFilePath | None = None
     """Path to a .txt file containing the prompt. Only one of 'prompt' or 'prompt_path' should be provided."""
     prompt: str | None = None
@@ -464,6 +504,8 @@ class TextDataOverrides(OverridesBase):
             return
 
         if self.negative_prompt_keep_metadata and self.negative_metadata_mode == NegativeMetadataMode.NONE:
+            # Remember that this was promoted, so a requested 'none' is not reported as an ignored 'same'.
+            self._negative_metadata_mode_promoted = True
             self.negative_metadata_mode = NegativeMetadataMode.SAME
 
 
@@ -1355,8 +1397,8 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     seg: TransferArgs | None = None
     wsm: TransferArgs | None = None
     lidar: LidarTransferArgs | None = None
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     num_conditional_frames: pydantic.NonNegativeInt | None = None
     max_frames: pydantic.PositiveInt | None = None
@@ -1396,8 +1438,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     unset. Joint camera+LiDAR: pair it with ``wsm: {}`` and one or more multiview views, each
     carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
     supply measured target sweeps as a clean conditioning prefix."""
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
@@ -1525,6 +1567,11 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "num_conditional_frames": (0, "generation starts from noise with no RGB history prefix"),
         "control_guidance_interval": (None, "control guidance is fixed at 1.0, so there is no control-guidance window"),
         "guidance_interval": (None, "guidance is fixed at 1.0, so there is no guidance window"),
+        "negative_metadata_mode": (
+            NegativeMetadataMode.NONE,
+            "the distilled schedule has no negative-caption branch to add metadata to",
+        ),
+        "negative_prompt_keep_metadata": (False, "the distilled schedule has no negative-caption branch"),
     }
 
     def _build_transfer_data(
@@ -1545,7 +1592,26 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             return
 
         user_set = user_fields if user_fields is not None else frozenset()
-        if self.negative_prompt is None and self.negative_prompt_file is not None:
+        # Found means: a resolved path, or a bare filename under defaults/ (never a defaults/ match by the
+        # last component of a longer path, which would hide a typo in its folder).
+        neg_file_missing = self.negative_prompt_file is not None and not any(
+            c.is_file() for c in _negative_prompt_file_candidates(self.negative_prompt_file)
+        )
+        if neg_file_missing:
+            # The spec's own folder was already tried when the spec was parsed (a match there is stored as an
+            # absolute path), so name it alongside the folders tried here.
+            tried = "the spec file's folder, " + ", ".join(
+                str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file))
+            )
+            if self.negative_prompt is None:
+                # The file would be read and is not there: fail this sample only. A ValueError here is
+                # per-sample, so --skip-invalid-samples skips it instead of stopping the batch.
+                raise ValueError(f"negative_prompt_file not found: {self.negative_prompt_file} (tried {tried})")
+            log.warning(
+                f"[transfer] negative_prompt_file not found: {self.negative_prompt_file} (tried {tried}). "
+                "It is not used, because a negative_prompt is already set; fix or remove the path."
+            )
+        elif self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
         elif (
             self.negative_prompt_file is not None
@@ -1713,6 +1779,32 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                     f"[transfer] '{hint_key}.weight'={weight} has no effect with a single control; "
                     "weights only set the relative mix between multiple controls."
                 )
+        # load_transfer_control_frames reads a control_path as-is and computes edge/blur only when it is
+        # missing, so the preset of a control that comes from a file is never read. The default preset
+        # (medium, as in the shipped cookbook specs) stays silent.
+        preset_fields = {TransferHintKey.EDGE: "preset_edge_threshold", TransferHintKey.BLUR: "preset_blur_strength"}
+        for hint_key, config in hints.items():
+            preset_field = preset_fields.get(hint_key)
+            preset = getattr(config, preset_field, None) if preset_field else None
+            if hint_key in user_set and config.control_path is not None and preset is not None and preset != "medium":
+                log.warning(
+                    f"[transfer] '{hint_key}.{preset_field}'='{preset}' is ignored: '{hint_key}.control_path' is set, "
+                    "so that control video is used as-is and the preset only applies when the control is computed "
+                    "from 'vision_path'. Remove control_path and set 'vision_path' to apply the preset."
+                )
+        # show_input pastes the source RGB next to the output, so without vision_path there is nothing
+        # to show: single-view Transfer writes the output alone, and streaming Transfer rejects it.
+        if (
+            self.show_input is True
+            and "show_input" in user_set
+            and self.vision_path is None
+            and self.multiview is None
+            and all(config.control_path is not None for config in hints.values())
+        ):
+            log.warning(
+                "[transfer] 'show_input' has no effect without 'vision_path': there is no input video to show next "
+                "to the output (streaming Transfer rejects this request). Set 'vision_path' to the source video."
+            )
         # Single-view Transfer returns through _generate_transfer_batch before the native upsampler,
         # but native_prompt_upsampling still skips the duration/resolution text added to plain prompts.
         if (
@@ -1735,6 +1827,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         ):
             for field, (neutral, reason) in self._DISTILLED_TRANSFER_IGNORED_FIELDS.items():
                 value = getattr(self, field)
+                if field == "negative_metadata_mode" and self._negative_metadata_mode_promoted:
+                    value = NegativeMetadataMode.NONE  # the request said 'none'; keep_metadata promoted it
                 if field in user_set and value is not None and value != neutral:
                     log.warning(f"[transfer] '{field}' is ignored by distilled causal Transfer: {reason}.")
             # The recipe keeps the chunk equal to num_frames (601 for the long rollout), so a fixed
@@ -2167,6 +2261,12 @@ class OmniSampleOverrides(
         # User-provided values take precedence over JSON defaults.
         if self.defaults_file is not None:
             defaults = json.loads(self.defaults_file.read_text())
+            # A defaults file is validated outside any chdir, so resolve its relative caption file here.
+            neg_file = defaults.get("negative_prompt_file")
+            if isinstance(neg_file, str) and not Path(neg_file).expanduser().is_absolute():
+                beside = self.defaults_file.parent / neg_file
+                if beside.is_file():
+                    defaults["negative_prompt_file"] = str(beside.absolute())
         else:
             defaults_key = sample_meta.model_mode
             if self.multiview is not None:
