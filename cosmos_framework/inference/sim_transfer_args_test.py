@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pydantic
 import pytest
 
 import cosmos_framework.inference.args as args_module
@@ -733,3 +734,18 @@ def test_reversed_control_guidance_interval_warns_only_where_control_guidance_ru
     sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"control_guidance"}))
 
     assert any("is reversed" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value,expected", [(480, "480"), ("480", "480"), (720, "720")])
+def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: str) -> None:
+    assert OmniSampleOverrides(resolution=value).resolution == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", [1080, "4k", True])
+def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(resolution=value)

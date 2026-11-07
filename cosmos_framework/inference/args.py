@@ -613,6 +613,15 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
     Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
 
+    @pydantic.field_validator("resolution", mode="before")
+    @classmethod
+    def _resolution_tier_from_int(cls, value: object) -> object:
+        # JSON specs often write the tier as a number (``"resolution": 480``); the tier is the same
+        # string, so accept the integer instead of failing the Literal check.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
     @override
     def download(self, output_dir: Path):
         super().download(output_dir)
