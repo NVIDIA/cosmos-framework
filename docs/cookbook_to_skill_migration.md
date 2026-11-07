@@ -43,9 +43,10 @@ nothing in the migrated text was corrected or reworded (fixes are a later round)
 | `.gitignore`                                                                                                                                                                          | `.gitignore` (copy)                                                                          | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 Links into the retired files: `tools/docs/nav.yml` ("Control-to-video transfer") and
-`cookbooks/cosmos3/simulation/README.md` ("Generator Transfer") point at `SKILL.md` (link text unchanged). The Generator ·
-Transfer row of the inference table in `cookbooks/cosmos3/quantization/README.md` is left as it is: the Quantization row of this
-migration retires that README, and its skill's copy links `references/vllm-omni.md` here. The three quantization-README links inside the
+`cookbooks/cosmos3/simulation/README.md` ("Generator Transfer") point at `SKILL.md` and the Generator · Transfer row of the
+inference table in `cookbooks/cosmos3/quantization/README.md` at `references/vllm-omni.md#quantized-checkpoints` (link text unchanged
+in all three). That README is itself retired by the Quantization row of this migration; its link is re-pointed anyway so that this
+change leaves no dead link behind (the sibling row's deletion supersedes the edit). The three quantization-README links inside the
 migrated copies point at the README's current location, so every link resolves at this change's head; they go dead when the
 Quantization row merges and are re-pointed at `.agents/skills/cosmos3-inference-quantization/SKILL.md` in the follow-up round (a
 merge-order dependency between the rows). The `../cosmos3-inference-quantization/SKILL.md` pointers in `SKILL.md` resolve once that

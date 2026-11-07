@@ -219,7 +219,7 @@ weights and serves them from a local directory:
 | --- | --- |
 | Generator · Audiovisual | [`cosmos3-generate-media` · vLLM-Omni](../../../cosmos3-generate-media/references/vllm-omni.md#quantized-checkpoints) |
 | Generator · Action | [`run_fd_with_vllm_omni.ipynb`](../generator/action/run_fd_with_vllm_omni.ipynb), [`run_id_with_vllm_omni.ipynb`](../generator/action/run_id_with_vllm_omni.ipynb) |
-| Generator · Transfer | [`run_video_transfer_with_vllm_omni.ipynb`](../generator/transfer/run_video_transfer_with_vllm_omni.ipynb) |
+| Generator · Transfer | [`run_video_transfer_with_vllm_omni.ipynb`](../../../cosmos3-inference-transfer/references/vllm-omni.md#quantized-checkpoints) |
 | Reasoner | [`run_with_vllm.ipynb`](../reasoner/run_with_vllm.ipynb) |
 
 See the shared [Cosmos3 cookbooks environment setup](../README.md) for server install and
