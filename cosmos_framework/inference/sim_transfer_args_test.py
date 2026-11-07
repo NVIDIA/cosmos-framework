@@ -957,10 +957,25 @@ def test_show_input_without_vision_path_is_flagged_as_ignored(
         rgb = tmp_path / "rgb.mp4"
         rgb.touch()
         extra["vision_path"] = str(rgb)
-    sample = OmniSampleOverrides(depth={"control_path": str(control)}, show_input=show_input, autoregressive=True, **extra)
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, show_input=show_input, autoregressive=True, **extra
+    )
     fields = {"depth", "show_input"} if user_set else {"depth"}
     sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset(fields))
 
     assert any("'show_input' has no effect without 'vision_path'" in w for w in warnings) is warns
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value,expected", [(480, "480"), ("480", "480"), (720, "720")])
+def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: str) -> None:
+    assert OmniSampleOverrides(resolution=value).resolution == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", [1080, "4k", True])
+def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(resolution=value)
