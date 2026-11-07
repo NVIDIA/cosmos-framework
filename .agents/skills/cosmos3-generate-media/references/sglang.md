@@ -125,7 +125,7 @@ docker run --runtime nvidia --gpus all \
 FP8 checkpoints are available for Cosmos3-Nano, Cosmos3-Super, and Cosmos3-Edge. You can either:
 
 - Download a prebuilt FP8 checkpoint from Hugging Face: `nvidia/Cosmos3-Nano-FP8`, `nvidia/Cosmos3-Super-FP8`, or `nvidia/Cosmos3-Edge-FP8`.
-- Quantize a checkpoint yourself by following the [quantization guide](../../cookbooks/cosmos3/quantization/README.md).
+- Quantize a checkpoint yourself by following the [quantization guide](../../cosmos3-inference-quantization/SKILL.md).
 
 To serve a prebuilt checkpoint, pass its Hugging Face ID to `--model-path`:
 

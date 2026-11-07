@@ -6,7 +6,7 @@ Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
 For static checkpoint FP8 export of Edge/Nano/Super video and Super base/distilled
-T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
+T2I/I2V, see the [quantization walkthroughs](../../cosmos3-inference-quantization/SKILL.md). They use the
 local Framework environment below with ModelOpt, datasets, and notebook tooling.
 
 | Backend | Use it for | Used by |
