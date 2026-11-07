@@ -115,6 +115,10 @@ re-pointed inbound link):
 | `.agents/skills/cookbooks/cosmos3/nim/action.md`                                   | `../generator/action/run_policy_with_vllm_omni.ipynb`               | `../../../cosmos3-inference-action-policy/references/vllm-omni.md`               |     1 |
 | `docs/models/README.md`                                                            | `../../.agents/skills/cookbooks/cosmos3/generator/action/README.md` | `../../.agents/skills/cosmos3-inference-action/SKILL.md`                         |     1 |
 | `.agents/skills/cookbooks/cosmos3/generator/action/finetune/README.md`             | `../run_policy_with_cosmos_framework.md`                            | `../../../../../cosmos3-inference-action-policy/references/cosmos-framework.md`  |     1 |
+| `.agents/skills/cookbooks/cosmos3/reasoner/README.md`                              | `../generator/action/run_policy_with_trt_edge_llm.ipynb`            | `../../../cosmos3-inference-action-policy/references/trt-edge-llm.md`            |     1 |
+| `.agents/skills/cookbooks/cosmos3/reasoner/run_with_trt_edge_llm.ipynb`            | `../generator/action/run_policy_with_trt_edge_llm.ipynb`            | `../../../cosmos3-inference-action-policy/references/trt-edge-llm.md`            |     1 |
+| `.agents/skills/cookbooks/cosmos3/quantization/README.md`                          | `../generator/action/run_fd_with_vllm_omni.ipynb`                   | `../../../cosmos3-inference-action-forward-dynamics/references/vllm-omni.md`     |     1 |
+| `.agents/skills/cookbooks/cosmos3/quantization/README.md`                          | `../generator/action/run_id_with_vllm_omni.ipynb`                   | `../../../cosmos3-inference-action-inverse-dynamics/references/vllm-omni.md`     |     1 |
 | `tools/docs/nav.yml`                                                               | `skills/cookbooks/cosmos3/generator/action/README.md`               | `skills/cosmos3-inference-action/SKILL.md`                                       |     1 |
 
 The repository's Markdown formatter (`rumdl`, run by pre-commit) also touched the migrated files. Accepted as formatting
@@ -133,9 +137,10 @@ link-target rewrite from the table above or a whitespace change listed here; fen
 
 Links into the retired files were re-pointed (link targets only): `tools/docs/nav.yml` ("Action" now opens the entry `SKILL.md`),
 `docs/models/README.md`, the shared setup guide `.agents/skills/cookbooks/cosmos3/README.md` (TensorRT-Edge-LLM section), the NIM
-page `.agents/skills/cookbooks/cosmos3/nim/action.md` and the post-training cookbook `generator/action/finetune/README.md`. Links
-from files that sibling rows of this migration retire (`reasoner/README.md`, `reasoner/run_with_trt_edge_llm.ipynb`,
-`quantization/README.md`) are left as they are: those files leave with their rows. Links from the migrated copies to pages that
+page `.agents/skills/cookbooks/cosmos3/nim/action.md`, the post-training cookbook `generator/action/finetune/README.md`, the
+Reasoner cookbook (`reasoner/README.md`, `reasoner/run_with_trt_edge_llm.ipynb`) and the quantization cookbook README. The last
+three are themselves retired by the Visual Reasoning and Quantization rows of this migration; their links are re-pointed anyway so
+that this change leaves no dead link in a page the docs build stages (the sibling rows' deletions supersede these edits). Links from the migrated copies to pages that
 sibling rows retire — the Reasoner TensorRT-Edge-LLM notebook (`action-readme.md`, the policy `trt-edge-llm.md`) and the
 quantization README (`action-readme.md`, the forward- and inverse-dynamics `sglang.md` and `vllm-omni.md`) — point at those
 pages' current location, so every link resolves at this change's head; they go dead when the sibling row merges and are
