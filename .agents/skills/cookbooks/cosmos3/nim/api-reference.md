@@ -51,6 +51,9 @@ chooses the task per request.
 | `inverse_dynamics` | Inverse dynamics | Required video |
 
 The task guides define the remaining required inputs and invalid combinations.
+The `multiview` variant accepts only `text2video` and `image2video` with a
+`multiview` object; multiview I2V rejects `input_reference` and takes per-camera
+RGB inputs in `multiview.views[].vision`. Refer to [Multiview](multiview.md).
 
 ### Common Generator Request Fields
 
@@ -60,7 +63,7 @@ on their pages.
 | Field | Type | Video / T2I Default | Applies To |
 | --- | --- | --- | --- |
 | `model_mode` | required enum | None | Selects one of the seven modes above |
-| `prompt` | string or null; maximum 20,000 characters | None | Required and non-empty for T2I/T2V; task-dependent otherwise |
+| `prompt` | string or null; maximum 20,000 characters | None | Required and non-empty for T2I/T2V; task-dependent otherwise; rejected by [multiview](multiview.md), which takes per-camera captions |
 | `negative_prompt` | string or null; maximum 20,000 characters | Built-in / empty | Tasks and models that permit negative prompting |
 | `input_reference` | encoded image/video string or null | None | I2V, V2V, Action, and derived Transfer; media type follows `model_mode` |
 | `seed` | non-negative integer or null | Service-generated | Reproducibility |
@@ -69,13 +72,16 @@ on their pages.
 | `flow_shift` | finite number greater than 0 | `10.0` / `3.0` | Sampling when not owned by a specialist model |
 | `resolution` | enum | `720` / `720_1_1` | Generation and Transfer; refer to [Resolution Keys](generation.md#resolution-keys) |
 | `num_frames` | integer | `189` / `1` | Generation and Transfer; Action derives it and rejects the field |
-| `fps` | finite number in `[1.0,60.0]` | `24.0` | Video tasks; retained but not encoded for T2I |
+| `fps` | finite number in `[1.0,60.0]` | `24.0` | Video tasks; retained but not encoded for T2I; rejected by [multiview](multiview.md), which always runs at 30 FPS |
 | `condition_frame_indexes_vision` | integer array or null | `[0, 1]` | V2V only |
 | `condition_video_keep` | `first`, `last`, or null | `first` | V2V only |
 | `action_params` | object | None | Action modes only; [Action](action.md#action-parameter-reference) |
 | `transfer` | object | None | `video2video` only; [Transfer](transfer.md) |
 
 Empty or whitespace-only media strings are treated as absent.
+
+Multiview has its own defaults and accepted ranges for these fields. Refer to
+[Multiview Generation Defaults and Limits](multiview.md#generation-defaults-and-limits).
 
 ### Strict JSON Types
 
@@ -158,6 +164,11 @@ In that case both `b64_image` and `b64_video` are absent or null. Clients must
 branch on the fields actually present rather than assuming every non-T2I
 request has `b64_video`. Refer to [Edge-/Nano-DROID
 Policy](action.md#edge-droid-and-nano-droid-policy).
+
+The `multiview` variant returns a `multiview` object instead of `b64_video`:
+one raw base64 MP4 per requested camera in `multiview.videos[]`, their
+`camera_order`, the shared output geometry, and, for joint requests, a numeric
+`lidar` tensor. Refer to [Multiview Output](multiview.md#output).
 
 ## Errors and Live Schema
 
