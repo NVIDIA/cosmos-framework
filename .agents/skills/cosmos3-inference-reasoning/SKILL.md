@@ -18,9 +18,8 @@ description: >
 
 # Cosmos3 Visual Reasoning (Reasoner inference)
 
-One skill for Reasoner inference over images and video: six backend variants (the six cookbook notebooks) sharing one
-model family, one prompt format (the prompt guide) and the bundled sample media. README: "Run the Cosmos3 Reasoner
-(vision-language reasoning over images and video) across multiple inference backends."
+Six backend variants (the six cookbook notebooks) sharing one model family, one prompt format (the prompt guide) and the
+bundled sample media. README: "Run the Cosmos3 Reasoner (vision-language reasoning over images and video) across multiple inference backends."
 
 ## Read this first
 
@@ -47,7 +46,7 @@ Before the first command of any variant — including a single image-caption smo
    and "uv applies that pin from any cwd under the checkout" (`../cosmos3-generate-media/SKILL.md`, Read this first item 3), so
    Variant 1 (`uv sync`) and Variant 5 (`uv venv` / `uv pip` from this directory inside a checkout) need exactly that version
    — transformers.md § 1: "use `uv 0.11.29`, matching the version pinned by Cosmos Framework". Before the first `uv` command,
-   install it as `../cosmos3-setup/SKILL.md` step 3 does, `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh && source $HOME/.local/bin/env`;
+   install it as `../cosmos3-setup/SKILL.md` step 3 does, `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"`;
    every later shell call that runs `uv` starts with `export PATH="$HOME/.local/bin:$PATH"` (item 4), and `uv --version` must print 0.11.29.
 6. Hugging Face access: the notebooks authenticate with `hf auth login` / `uvx hf@latest auth login` or
    `export HF_TOKEN=<your_token>`; "The Cosmos3-Super Reasoner checkpoint is gated on Hugging Face." Skill note (not in
@@ -63,9 +62,8 @@ Before the first command of any variant — including a single image-caption smo
   situation understanding (prompts and expected answer shapes: `references/prompt-guide.md`)
 - Use to choose a Reasoner backend (in-process vs server; Docker vs venv) and a tier (Edge / Nano / Super) for the GPU
 - For image, video or audio generation this is the wrong skill: `../cosmos3-generate-media/SKILL.md`
-- For the Cosmos3 NIM container: the README's "Run with NIM" quickstart is kept in `references/reasoner-readme.md`; the
-  full guide is [`../cookbooks/cosmos3/nim/reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md) and its skill
-  `../cosmos3-inference-nim/SKILL.md`
+- For the Cosmos3 NIM container: `../cosmos3-inference-nim/SKILL.md`; the README's "Run with NIM" quickstart is kept in
+  `references/reasoner-readme.md`, the full guide is [`../cookbooks/cosmos3/nim/reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md)
 - For environment problems (CUDA / import / Docker failures), hand off to `../cosmos3-env-troubleshoot/SKILL.md`
 
 ## Bundled assets
@@ -217,9 +215,10 @@ Readiness: run the § 2 "Wait for the server to be ready" block verbatim — it 
 `http://127.0.0.1:${VLLM_PORT:-8001}/health` every 2 s for up to 1800 polls ("allowing up to 30 minutes on the first run while the weights download and CUDA graphs compile"), exits 0 on "vLLM server is ready." and 1 on "Container exited
 early". Super (§ 2): `nvidia/Cosmos3-Super --tensor-parallel-size 4 --mm-encoder-tp-mode data` on `--gpus all`.
 
-Request — the README's OpenAI-client quickstart, verbatim in its port-**8001** form (`references/reasoner-readme.md` "Run
-with TensorRT-LLM"; its "Run with vLLM" form is the same code at port 8000 for the setup guide's host launch, and says of
-the notebook launch: "point the client at `http://localhost:8001/v1`"); every notebook query cell uses that `base_url`:
+Request — the README's OpenAI-client quickstart (`references/reasoner-readme.md` "Run with TensorRT-LLM"), verbatim in its
+port-**8001** form; the "Run with vLLM" form is the same code at port 8000 and says "point the client at `http://localhost:8001/v1`"
+for the notebook launch. Skill note (not in the source): first run `docker exec "$CONTAINER" test -r "$COSMOS_REASONER_ASSETS/robot_153.jpg" || docker cp "$COSMOS_REASONER_ASSETS" "$CONTAINER:$COSMOS_ROOT/"`
+(`CONTAINER` = cosmos3-reasoner-vllm / -sglang / -trtllm): a daemon that does not share this filesystem (socket-shared or remote) mounts `COSMOS_ROOT` empty, and the `file://` request then fails 500/400 "No such file or directory":
 
 ```python
 from pathlib import Path
@@ -420,7 +419,8 @@ The § 1 cell's defaults as exports (skill note), from this skill directory: `ex
 `EDGELLM_ROOT="${EDGELLM_ROOT:-$HOME/TensorRT-Edge-LLM}"`, `ONNX_DIR="${ONNX_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/onnx}"`,
 `ENGINE_DIR="${ENGINE_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/engines}"`, `REASONING_CHECKPOINT="${REASONING_CHECKPOINT:-nvidia/Cosmos3-Edge}"`,
 `WORK_DIR="$ENGINE_DIR/reasoning/cookbook_work"` (`mkdir -p "$WORK_DIR"`). Export (§ 2, verbatim; "Run this on the export
-host (after `pip install -e .` in the TensorRT-Edge-LLM checkout). It downloads `nvidia/Cosmos3-Edge` on first use."):
+host (after `pip install -e .` in the TensorRT-Edge-LLM checkout). It downloads `nvidia/Cosmos3-Edge` on first use." —
+Skill note (not in the source): at v0.11.0 that install must be `pip install -e ".[tools]"` in a venv of the v0.11.0 checkout (plain `-e .` lacks torch, `[export]` lacks `nvidia-modelopt`); § 2 gives the clone + venv line):
 
 ```bash
 set -euo pipefail
