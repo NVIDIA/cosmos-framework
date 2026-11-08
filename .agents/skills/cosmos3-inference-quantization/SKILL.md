@@ -54,8 +54,8 @@ Before the first command of any variant — including a `DEMO=1` run:
    notebook's default `OUTPUT_ROOT`, `QUANTIZE_ROOT / "outputs"`, is the `outputs/` subfolder of the retired cookbook
    directory, which the configure cell would re-create inside the checkout.
 5. uv: `uv sync` in this checkout requires the uv version pinned by `pyproject.toml` (`[tool.uv]`
-   `required-version = "==0.11.29"`); any other uv aborts the Setup (once) block. `../cosmos3-setup/SKILL.md` step 3
-   installs it: `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh && source $HOME/.local/bin/env`.
+   `required-version = "==0.11.29"`); any other uv aborts the Setup (once) block. Skill note (not in the source): that
+   block's first line installs 0.11.29 unless `uv --version` already reports it and puts `~/.local/bin` first on `PATH`.
 6. After a failure, go back to the reference section that covers the failing step before improvising a fix. Verify
    what you produced (Verify the output below) and record the facts in `result_summary.md`.
 
@@ -84,8 +84,6 @@ Before the first command of any variant — including a `DEMO=1` run:
 
 ## Model sizes vs GPU
 
-Only figures the sources state; no run of this skill has measured a footprint, so every row is unverified for this recipe:
-
 | Checkpoint (notebook default; local override variable)                                                           | Size, as the sources state it                                                                                                                                                                                                                 | GPU, as the sources state it                                                                                                                                                                                   |
 | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `nvidia/Cosmos3-Edge` (`C3_EDGE_DIR`)                                                                            | "Edge (4B)" — "the 4B base checkpoint, the fastest to quantize and a good first run"                                                                                                                                                          | "Edge (4B) uses the same recipe with a smaller checkpoint; allow room for those components too" (§ 1)                                                                                                          |
@@ -107,13 +105,14 @@ blocker, never fabricate an output.
 ## Setup (once) — the README block
 
 Run once per checkout, as ONE shell call, with `/path/to/cosmos-framework` replaced by your framework checkout root
-(skill note: `uv` must be the pinned 0.11.29, Read this first item 5; the notebooks' § 3 install cell repeats this
-block without the `cd`, the exports and `RUN_ARTIFACTS`). README: "Use a Linux machine with an NVIDIA GPU and Hugging
+(skill note: its first line installs the pinned uv 0.11.29 if needed, item 5; the notebooks' § 3 install cell repeats the
+rest without the `cd`, the exports and `RUN_ARTIFACTS`). README: "Use a Linux machine with an NVIDIA GPU and Hugging
 Face model access (`uvx hf@latest auth login` or `HF_TOKEN`). Follow the
 [Framework environment setup](../cookbooks/cosmos3/README.md#cosmos-framework), including system libraries. Use the
 local checkout, not a separate PyPI or Git installation:"
 
 ```bash
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the pinned uv, Read this first item 5 — the installer writes no ~/.local/bin/env when that directory is already on PATH, so PATH is exported instead of sourcing it; the README block starts on the next line
 cd /path/to/cosmos-framework
 export FRAMEWORK_ROOT="$PWD"
 export COSMOS3_QUANTIZE_VENV="${COSMOS3_QUANTIZE_VENV:-$FRAMEWORK_ROOT/.venv}"
@@ -404,10 +403,10 @@ prints `FP8 checkpoint: <dir>`, `quant_algo   : <algo>  (method=<method>)` (read
   checkpoint (relative links; `cosmos_framework/quantization/export.py` `assemble_output_dir`). `du -sh "$OUTPUT_ROOT/edge-fp8/transformer"` is the
   output's own size ("roughly the size of the bf16 source").
 - Peak GPU memory: the notebooks print none — sample it beside the run,
-  `nvidia-smi --query-gpu=memory.used --format=csv,noheader -l 10 > "$RUN_ARTIFACTS/gpu.log" &` before the block and
+  `nvidia-smi --query-gpu=memory.used --format=csv,noheader -l 1 > "$RUN_ARTIFACTS/gpu.log" &` before the block and
   kill the sampler afterwards; record checkpoint, `DEMO`, shape, `NUM_SAMPLES`, wall-clock time, the peak reading and
-  the inspect summary in `result_summary.md`. Treat a `[calib]` line that names the wrong prompt count or shape as a
-  configuration error, not a result.
+  the inspect summary in `result_summary.md`. `[calib]` prints prompts x steps, no shape; the shape is `recipe.shape` in
+  `quantization_metadata.json` — a wrong prompt count or shape is a configuration error, not a result.
 - Where the inspect lines are: the run blocks `tee` everything into `$RUN_ARTIFACTS/<name>.log`, so the inspect summary is
   that log's tail (`grep -A 6 'FP8 checkpoint:' "$RUN_ARTIFACTS/quantize_cosmos3_edge.log"`); copy those lines into the file
   a task asks for (for example `outputs/edge-fp8-inspect.txt`) rather than re-running the section.
@@ -493,7 +492,7 @@ Skill notes (not in the source) unless a sentence is quoted:
 
 | Skill                                  | When to use                                                                                                          |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`            | Framework checkout and the pinned uv (step 3) that Setup (once) needs                                                |
+| `../cosmos3-setup/SKILL.md`            | Framework checkout; the pinned uv is installed by the first line of Setup (once)                                     |
 | `../cosmos3-env-troubleshoot/SKILL.md` | CUDA / import / library failures during `uv sync` or the GPU check                                                   |
 | `../cosmos3-generate-media/SKILL.md`   | Serve the FP8 output or a published FP8 checkpoint (Variant 1 diffusers, Variant 3 vLLM-Omni, Variant 4 SGLang)      |
 | `../cosmos3-inference/SKILL.md`        | Framework-native inference, including the load-time `--quantization-method` flags that are distinct from this export |
