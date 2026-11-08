@@ -20,16 +20,15 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 # Cosmos3 NIM customer workflow
 
-Skill note (not in the source): this skill is the promoted copy of the NIM cookbook's own agent skill,
-[`cosmos3-nim-user`](../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md), which sits in a hidden folder inside
-the cookbook that agents started at the repository root do not discover (the repository's skill roots are `.agents/skills/`
-and `.claude/skills/`). The paragraph below and sections 1–6 are that skill's text, unchanged except for link targets, which
+Skill note (not in the source): this skill replaces the NIM cookbook's own agent skill `cosmos3-nim-user`, which sat in a
+hidden `.agents/skills/` folder inside the cookbook that agents started at the repository root do not discover (the
+repository's skill roots are `.agents/skills/` and `.claude/skills/`); that nested copy is retired with this change. The
+paragraph below and sections 1–6 are that skill's text, unchanged except for link targets, which
 now point into [`../cookbooks/cosmos3/nim/`](../cookbooks/cosmos3/nim/README.md), and bare page / example names, which became
 links to the same files there; the Quickstart quotes the README and the
 four deployment sections quote deployment.md's blocks. The pages, `../cookbooks/cosmos3/nim/AGENTS.md`, the example clients in
 `../cookbooks/cosmos3/nim/examples/`, the pinned client environment (`../cookbooks/cosmos3/nim/pyproject.toml`,
-`../cookbooks/cosmos3/nim/uv.lock`) and the nested skill itself stay where they are as the source of truth; nothing is converted
-or bundled here. Every other section is skill text in which each quotation names its page; longer notes: [`references/skill-notes.md`](references/skill-notes.md).
+`../cookbooks/cosmos3/nim/uv.lock`) stay where they are as the source of truth; nothing is converted or bundled here. Every other section is skill text in which each quotation names its page; longer notes: [`references/skill-notes.md`](references/skill-notes.md).
 
 Work from `.agents/skills/cookbooks/cosmos3/nim` and follow [`AGENTS.md`](../cookbooks/cosmos3/nim/AGENTS.md). The public pages here
 are the source of truth; the rules below say which page owns each decision.
@@ -484,7 +483,7 @@ matching page before the first command (Read this first, item 1); `references/sk
 | [`reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md), [`streaming.md`](../cookbooks/cosmos3/nim/streaming.md)                                                                                                                                                         | Chat Completions and Responses API, the task catalog, structured output, prompting patterns, errors; stateful video-frame sessions over WebSocket and REST ([`examples/streaming.py`](../cookbooks/cosmos3/nim/examples/streaming.py))                                                                                             |
 | [`operations.md`](../cookbooks/cosmos3/nim/operations.md), [`monitoring.md`](../cookbooks/cosmos3/nim/monitoring.md)                                                                                                                                                     | Health and startup, inspecting the running service, logging, long-running requests, guardrails, errors, troubleshooting tables; Prometheus and Grafana                                                                                                                                                                             |
 | [`release-notes.md`](../cookbooks/cosmos3/nim/release-notes.md), [`license.md`](../cookbooks/cosmos3/nim/license.md), [`acknowledgements/README.md`](../cookbooks/cosmos3/nim/acknowledgements/README.md)                                                                | 2.1.0 / 2.0.0 changes and known issues; license terms and notices; package licenses                                                                                                                                                                                                                                                |
-| `../cookbooks/cosmos3/nim/examples/`, [`cosmos3-nim-user`](../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md)                                                                                                                                            | The example clients ([`common.py`](../cookbooks/cosmos3/nim/examples/common.py) holds the runtime and profile checks every client runs before a request) and [`reasoner_cases.yaml`](../cookbooks/cosmos3/nim/examples/reasoner_cases.yaml); the nested original of sections 1–6, kept in place for the cookbook's own `AGENTS.md` |
+| `../cookbooks/cosmos3/nim/examples/` | The example clients ([`common.py`](../cookbooks/cosmos3/nim/examples/common.py) holds the runtime and profile checks every client runs before a request) and [`reasoner_cases.yaml`](../cookbooks/cosmos3/nim/examples/reasoner_cases.yaml) |
 | [`references/skill-notes.md`](references/skill-notes.md)                                                                                                                                                                                                                 | This skill's notes (not from the pages): LFS inputs, headless additions, output checks, uv, the remaining floors rows                                                                                                                                                                                                              |
 
 ## Related skills
