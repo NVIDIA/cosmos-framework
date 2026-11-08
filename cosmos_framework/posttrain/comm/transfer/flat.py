@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Bucket ↔ flat-buffer layout for single-descriptor publishing (design §3.2).
+"""Bucket ↔ flat-buffer layout for single-descriptor publishing.
 
 `ray.put` cost is per-DESCRIPTOR, not per-byte (~0.31 ms/tensor measured), and a real
 512 MiB transformer bucket holds 100-200 tensors. Publishing one flat tensor instead of one

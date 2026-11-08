@@ -26,9 +26,9 @@
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with at least 4
 #     GPUs, NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
-#     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
-#     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
-#     (they do not fail) when it cannot.
+#     streamed LLaVA-OneVision-Data dataset). Optional Nano ModelOpt FP8 cases
+#     use the COSMOS_FP8_CHECKPOINT_* repository variables. When configured,
+#     missing checkpoint access fails the job; without configuration those cases skip.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -68,18 +68,29 @@ jobs:
         shell: bash
         run: |
           changed_files="$RUNNER_TEMP/gpu-changed-files"
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+          # A force push can leave the previous tip outside the fetched history.
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            if [[ "$sha" != "0000000000000000000000000000000000000000" ]] &&
+               ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$sha" || true
+            fi
+          done
 
-          run_gpu=false
-          while IFS= read -r path; do
-            case "$path" in
-              .agents/*|*.md) ;;
-              *)
-                run_gpu=true
-                break
-                ;;
-            esac
-          done < "$changed_files"
+          run_gpu=true
+          if git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_files"; then
+            run_gpu=false
+            while IFS= read -r path; do
+              case "$path" in
+                .agents/*|*.md) ;;
+                *)
+                  run_gpu=true
+                  break
+                  ;;
+              esac
+            done < "$changed_files"
+          else
+            echo "::warning::Unable to compare revisions; running GPU tests conservatively."
+          fi
 
           echo "run_gpu=$run_gpu" >> "$GITHUB_OUTPUT"
           echo "Run GPU tests: \`$run_gpu\`" >> "$GITHUB_STEP_SUMMARY"
@@ -194,12 +205,12 @@ jobs:
       # Both steps use the `throughput` preset, whose layout is derived from
       # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
       TEST_MAX_GPUS: "4"
-      # This is the job whose stated purpose includes FP8 coverage: promote the
-      # cannot-reach-nvidia/Cosmos3-Experimental skip to a hard failure, so a
-      # token rotation or a permissions change turns the job red instead of
-      # silently dropping all three FP8 cases. Forks and local runs (which do
-      # not set this) keep the skip behaviour.
-      REQUIRE_FP8: "1"
+      # A configured FP8 artifact must be exercised. Access failures are not
+      # silently converted to skips; unconfigured runs retain optional coverage.
+      COSMOS_FP8_CHECKPOINT_REPOSITORY: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY }}
+      COSMOS_FP8_CHECKPOINT_REVISION: ${{ vars.COSMOS_FP8_CHECKPOINT_REVISION || 'main' }}
+      COSMOS_FP8_CHECKPOINT_SUBDIRECTORY: ${{ vars.COSMOS_FP8_CHECKPOINT_SUBDIRECTORY }}
+      REQUIRE_FP8: ${{ vars.COSMOS_FP8_CHECKPOINT_REPOSITORY != '' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -218,10 +229,8 @@ jobs:
       # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
       # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
       # diffusion steps (W8A16 edge steps; exact schedule asserted from the
-      # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo; elsewhere those three
-      # cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
-      # skip a hard failure here, so a green run is guaranteed to have covered FP8.
+      # MIXED_PRECISION_TRACE log). FP8 coverage runs when a checkpoint repository
+      # is configured above, with REQUIRE_FP8 enforcing access in that case.
       # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 4 GPU)
@@ -463,8 +472,8 @@ jobs:
       # Cache downloaded input assets in a persistent dir (outside the repo tree,
       # so the cleanup step keeps it) and reuse it across runs.
       #
-      # ``-m L0`` mirrors upstream: this suite arrives from i4 through
-      # .file_mapping.json, its level markers are i4's, and i4's own CI runs it with
+      # ``-m L0`` mirrors upstream: this suite arrives from upstream through
+      # .file_mapping.json, its level markers are upstream's, and upstream's own CI runs it with
       # ``--L0``. Level 1 is where it puts the cases sized to production geometry --
       # hundreds of thousands of tokens, tens of GB of activations, minutes apiece --
       # which are written against that runner (whole GPUs per xdist worker, its NATTEN
@@ -475,9 +484,9 @@ jobs:
       # and inference2/, are intentionally omitted to keep this single-runner job within
       # its time budget. Add an L0 marker when one of those tests should join this gate.
       # L1, L2, and unmarked cases remain available for explicit or scheduled runs.
-      # Non-GPU tests generated from i4 are already covered by i4 CI and are deselected here;
+      # Non-GPU tests generated upstream are already covered by upstream CI and are deselected here;
       # CF-owned tests plus mapped tests explicitly marked GPU or gpus(N>0) remain in this job.
-      # The independently mapped Posttrain suite is covered by i4 CI and is not collected here.
+      # The independently mapped Posttrain suite is covered by upstream CI and is not collected here.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
@@ -523,6 +532,12 @@ jobs:
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             "$test_file::$test_name" -o addopts= -m L0
 
+      - name: Distributed unit tests - HF LoRA export (torchrun, 2 ranks)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
+            cosmos_framework/callbacks/hf_export_test.py -o addopts= -m L0 -k fsdp
+
       # The cfgp_ar / context_parallel tests call dist.init_process_group and
       # skip under plain pytest (world_size 1); they must be launched with
       # torchrun. They hardcode their world size via ParallelDims, so each file
@@ -540,7 +555,7 @@ jobs:
       - name: Distributed unit tests - context_parallel (torchrun, 4 ranks)
         run: |
           export LD_LIBRARY_PATH=
-          # The dynamic-shape DTensor compile case is not exercised by i4's single-process L0 CI
+          # The dynamic-shape DTensor compile case is not exercised by upstream's single-process L0 CI
           # and currently fails in this public 4-rank environment. Keep the other CP L0 coverage.
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
             cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts= -m L0 \

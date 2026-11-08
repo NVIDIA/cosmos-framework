@@ -533,7 +533,7 @@ def summarize(
         "dp_remainder": (rows % dp_world) if dp_world else 0,
         "load_error": load_error,
         # The setup's held-out census of this (validation) split against the training split (``held_out_census_entry``:
-        # the setup's ``source_overlap`` then ``refuse_source_overlap``; review threads b9b8f14577 and 7bb34b5b76): the
+        # the setup's ``source_overlap`` then ``refuse_source_overlap``): the
         # census dict when it passed, the refusal text when the setup would refuse the pair or the census could not read
         # a source row; both ``None`` for the training split and when the training split was not loaded in the same run.
         "held_out_census": census,
@@ -740,7 +740,7 @@ def held_out_census_entry(training: Any, validation: Any) -> tuple[dict[str, Any
         # ``source refused the row``; a narrower tuple here made the verdict depend on that class. The source at fault
         # is the one the census asked for LAST, whatever the call: ``source_overlap`` reads both sides' ``media_hashes``
         # first, walks the training rows, then the validation rows, and counts both at the end, so the walk order alone
-        # named the wrong side or a row that had read fine (finding R4-01).
+        # named the wrong side or a row that had read fine.
         failed = max(sides, key=lambda side: side.stamp)
         if failed.call is None:
             raise  # neither source was asked for anything yet: the census's own failure, not a source's
@@ -769,8 +769,8 @@ def validate_sources(
     FAIL line and a summary line with ``load_error`` set. The validation split is then put through the SAME held-out
     contract the setup enforces (``data/datasets/sft.py::source_overlap`` then ``refuse_source_overlap``, as
     ``entrypoints/sft.py::held_out_census`` runs them: no shared row by content hash with media by file bytes, no shared
-    item id, and item ids on the validation rows when the training rows carry them; review thread b9b8f14577): a
-    refusal, or a census that could not read a source row (``held_out_census_entry``; review thread 7bb34b5b76), is a
+    item id, and item ids on the validation rows when the training rows carry them): a
+    refusal, or a census that could not read a source row (``held_out_census_entry``), is a
     FAIL line and ``census_error`` in the summary and the split's rows are still inspected; a pass puts the census in
     the summary as ``held_out_census``. The census needs the training split loaded in the same run (``--split all``).
     """
@@ -895,7 +895,7 @@ def validate_from_config(
         return 1
     # The same artifact the trainer's packer is built from, through the trainer's own resolver
     # (``entrypoints.sft.sft_policy_source``: model_hf.name_or_path on the HF seat, the registered native source on the
-    # i4 seat; review thread 037abda8b0), with the same knobs ``build_trainer`` passes (processor_kwargs,
+    # native seat), with the same knobs ``build_trainer`` passes (processor_kwargs,
     # trust_remote_code, the run-level mask_think_opener, which ``SFTConfig`` has already judged by ``rl.serve_contract``);
     # only the length cap differs.
     name_or_path, trust_remote_code = sft_policy_source(config)

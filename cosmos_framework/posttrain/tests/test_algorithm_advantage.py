@@ -78,7 +78,7 @@ def test_group_advantage_normalizes_within_group():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_advantage_isolated_per_prompt_across_replicas():
-    """Reviewer probe: >1 rollout replica must keep each prompt's mean/std ISOLATED after fan-in.
+    """Probe: >1 rollout replica must keep each prompt's mean/std ISOLATED after fan-in.
     Two replicas each emit their prompt-index-0 prompt; the group_id is the prompt's own id
     (obs.id), not the batch-local index, so the two groups never merge. Replica 1's completions are
     all-equal (std 0 -> advantage 0); under the old batch-local `f"g0"` group_id the two groups

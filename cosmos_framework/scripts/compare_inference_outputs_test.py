@@ -34,7 +34,7 @@ def _write_sample(
     save_file({name: tensor}, str(path), metadata=metadata)
 
 
-def _runs(tmp_path: Path, *, legs: tuple[str, ...] = ("native-i4", "framework")) -> dict[str, list[Path]]:
+def _runs(tmp_path: Path, *, legs: tuple[str, ...] = ("native", "framework")) -> dict[str, list[Path]]:
     runs = {leg: [tmp_path / f"{leg}-{repeat}" for repeat in range(2)] for leg in legs}
     for paths in runs.values():
         for path in paths:
@@ -43,7 +43,7 @@ def _runs(tmp_path: Path, *, legs: tuple[str, ...] = ("native-i4", "framework"))
 
 
 def test_compares_six_runs_and_tensor_payloads_independent_of_headers(tmp_path: Path) -> None:
-    runs = _runs(tmp_path, legs=("native-i4", "hf-i4", "framework"))
+    runs = _runs(tmp_path, legs=("native", "hf", "framework"))
     _write_sample(runs["framework"][1], metadata={"runtime": "framework", "repeat": "2"})
     for paths in runs.values():
         for path in paths:
@@ -60,7 +60,7 @@ def test_compares_six_runs_and_tensor_payloads_independent_of_headers(tmp_path: 
     assert report["mp4"]["checked"] is False
 
 
-@pytest.mark.parametrize("leg,repeat", [("native-i4", 1), ("framework", 0)])
+@pytest.mark.parametrize("leg,repeat", [("native", 1), ("framework", 0)])
 def test_rejects_repeatability_or_cross_leg_difference(tmp_path: Path, leg: str, repeat: int) -> None:
     runs = _runs(tmp_path)
     _write_sample(runs[leg][repeat], values=(0.0, 1.0000001))
@@ -72,7 +72,7 @@ def test_rejects_repeatability_or_cross_leg_difference(tmp_path: Path, leg: str,
 
 def test_rejects_signed_zero_even_when_numerically_equal(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
-    _write_sample(runs["native-i4"][1], values=(-0.0, 1.0))
+    _write_sample(runs["native"][1], values=(-0.0, 1.0))
     with pytest.raises(ValueError, match="tensor bytes differ"):
         compare_inference_outputs(runs)
 
@@ -108,7 +108,7 @@ def test_checks_bfloat16_without_torch(tmp_path: Path, bits: int, valid: bool) -
 @pytest.mark.parametrize("change", ["dtype", "shape", "tensor_names", "sample_names"])
 def test_rejects_changed_output_schema(tmp_path: Path, change: str) -> None:
     runs = _runs(tmp_path)
-    path = runs["native-i4"][1]
+    path = runs["native"][1]
     if change == "dtype":
         _write_sample(path, dtype="float64")
     elif change == "shape":
@@ -124,7 +124,7 @@ def test_rejects_changed_output_schema(tmp_path: Path, change: str) -> None:
 @pytest.mark.parametrize("empty", ["samples", "tensor_names", "tensor_values"])
 def test_rejects_vacuous_comparison(tmp_path: Path, empty: str) -> None:
     runs = _runs(tmp_path)
-    path = runs["native-i4"][0]
+    path = runs["native"][0]
     if empty == "samples":
         (path / "sample.safetensors").unlink()
         (path / "sample.mp4").write_bytes(b"video alone is not evidence")
@@ -146,7 +146,7 @@ def test_required_inventory_detects_output_missing_from_every_run(tmp_path: Path
 
 def test_rejects_reusing_a_directory_as_an_independent_repeat(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
-    runs["native-i4"][1] = runs["native-i4"][0]
+    runs["native"][1] = runs["native"][0]
     with pytest.raises(ValueError, match="distinct directory"):
         compare_inference_outputs(runs)
 
@@ -154,8 +154,8 @@ def test_rejects_reusing_a_directory_as_an_independent_repeat(tmp_path: Path) ->
 def test_rejects_missing_repeat_or_missing_runtime(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
     with pytest.raises(ValueError, match="two named inference legs"):
-        compare_inference_outputs({"only-runtime": runs["native-i4"]})
-    runs["native-i4"].pop()
+        compare_inference_outputs({"only-runtime": runs["native"]})
+    runs["native"].pop()
     with pytest.raises(ValueError, match="two independent runs"):
         compare_inference_outputs(runs)
 
@@ -176,7 +176,7 @@ def test_optional_mp4_comparison_cannot_replace_tensor_evidence(tmp_path: Path) 
 
 def test_cli_writes_failure_report_for_corrupt_safetensors(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
-    (runs["native-i4"][0] / "sample.safetensors").write_bytes(b"not safetensors")
+    (runs["native"][0] / "sample.safetensors").write_bytes(b"not safetensors")
     report_path = tmp_path / "reports" / "parity.json"
     argv = [argument for leg, paths in runs.items() for path in paths for argument in ("--run", f"{leg}={path}")]
     assert main([*argv, "--report", str(report_path)]) == 1

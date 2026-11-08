@@ -19,7 +19,7 @@ writing a new backend touches only the third row, and only the parts of it under
 ## Why a simulator fills the Env role without implementing `Env`
 
 **Two things are called `Env` here, and keeping them apart is the whole of this section.**
-DESIGN §1.3's *Env-as-source* is a ROLE — the thing a rollout draws observations from.
+the contract's *Env-as-source* is a ROLE — the thing a rollout draws observations from.
 `roles/env/base.py::Env` is a Python Protocol with a Gym signature. A simulator fills the
 first and does not implement the second; what it implements is `SimSession`.
 
@@ -43,20 +43,20 @@ arrive later in this series. `sim_manifest()` is declare-only for the same reaso
 
 ## Where it sits in the framework
 
-| DESIGN element               | how `embodied/` relates                                                                                                                                                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §1.3 Env-as-source           | **Adopted, in the role sense.** `SimSession` is the runtime protocol that fills it — lane-batched and caller-driven rather than Gym `reset()/step()`, so it does not implement `roles/env/base.py::Env`.                  |
-| §1.4 Trajectory / Transition | **Adopted.** `Transition` gains `truncated` and `info`, both additive with defaults: a time-limit cut is not a terminal state, and bootstrapping `V(s')` through the two differently is what `done` alone cannot express. |
-| §4.0 naming (normative)      | `Rollout` is the generation seam; `policy` stays reserved for the trainer/learner role.                                                                                                                                   |
-| §4.2 colocation tiers / §7   | sim↔policy colocation is a placement instance, not a mechanism here: `bind_colocated_groups(..., colocate="host_affinity")`, unchanged.                                                                                   |
-| §9 Shared library bucket     | `embodied/` imports `schema` and nothing else outside stdlib+numpy — enforced by gate G4.                                                                                                                                 |
-| roles taxonomy               | No new role kind. `sim_manifest()` declares `env` and `policy`, matching `eval_system.md` §8.                                                                                                                             |
+| Contract element        | how `embodied/` relates                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Env-as-source           | **Adopted, in the role sense.** `SimSession` is the runtime protocol that fills it — lane-batched and caller-driven rather than Gym `reset()/step()`, so it does not implement `roles/env/base.py::Env`.                  |
+| Trajectory / Transition | **Adopted.** `Transition` gains `truncated` and `info`, both additive with defaults: a time-limit cut is not a terminal state, and bootstrapping `V(s')` through the two differently is what `done` alone cannot express. |
+| naming (normative)      | `Rollout` is the generation seam; `policy` stays reserved for the trainer/learner role.                                                                                                                                   |
+| colocation tiers /      | sim↔policy colocation is a placement instance, not a mechanism here: `bind_colocated_groups(..., colocate="host_affinity")`, unchanged.                                                                                   |
+| Shared library bucket   | `embodied/` imports `schema` and nothing else outside stdlib+numpy — enforced by gate G4.                                                                                                                                 |
+| roles taxonomy          | No new role kind. `sim_manifest()` declares `env` and `policy`, matching `eval_system.md`                                                                                                                                 |
 
 ## The import discipline (gate G4)
 
 Every module directly under `embodied/` imports **stdlib, numpy and `schema` only**. That is
-what lets one core load in the Isaac venv (py3.11 + Isaac 5.1, no torch, no i4), the policy
-venv (torch + i4, no omnigibson) and the trainer venv alike.
+what lets one core load in the Isaac venv (py3.11 + Isaac 5.1, no torch, no native policy stack), the policy
+venv (torch + the native policy stack, no omnigibson) and the trainer venv alike.
 
 **It is also why this is a top-level package rather than a subtree of `roles/`.**
 `roles/` is the framework's role taxonomy; this is a library that two different venvs load.
@@ -150,7 +150,7 @@ already booted its engine. `the external simulator backend` does this; the cost 
 ## Two containers, one loop
 
 OmniGibson pins python 3.11 and needs `SimulationApp` on the process main thread. The framework
-venv has torch and i4 and pins its own python. Neither constraint bends, so the simulator runs
+venv has torch and the native policy stack and pins its own python. Neither constraint bends, so the simulator runs
 in its own image — and the loop has to reach across.
 
 **The split is at `SimRole`, not at `Simulator`.** That choice is the whole design:

@@ -483,7 +483,7 @@ def test_policy_side_hands_hf_the_rollout_frames_with_the_exif_orientation_appli
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The rollout request carries every frame decoded, EXIF-transposed and RGB; the policy side must hand the HF
-    processor those same frames, not the row's originals (review thread: on transformers 4.57.6 the two paths gave
+    processor those same frames, not the row's originals (on transformers 4.57.6 the two paths gave
     different pixel tensors under identical grids). Orientation 3 (rotate 180) keeps the size, so only the pixels tell."""
     frames = _patterned_frames(4)
     for frame in frames:
@@ -516,7 +516,7 @@ def test_policy_side_hands_hf_the_rollout_frames_with_the_exif_orientation_appli
 @pytest.mark.CPU
 def test_video_frames_alias_rows_shape_like_video_rows_and_never_rewrite_the_bundle() -> None:
     """A ``video_frames`` block is collected as a video by the base extraction but the HF metadata reader knows only
-    ``video``; the packer's copy of the messages carries the alias as ``video`` on both sides (review thread: the
+    ``video``; the packer's copy of the messages carries the alias as ``video`` on both sides (before the fix, the
     alias row was refused with "derived no video metadata")."""
     frames = _frames(4)
     plain = _messages(_video_block(frames))

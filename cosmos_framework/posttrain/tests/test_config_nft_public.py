@@ -11,6 +11,7 @@ from cosmos_framework.posttrain.config.experiment.nft import (
     NFT_T2I_PROFILES,
     NFT_T2I_PUBLIC_HPSV3_CONTRACT,
     NFT_T2I_PUBLIC_HPSV3_LORA_720P_PROFILE,
+    NFTT2IRecipeContract,
 )
 from cosmos_framework.posttrain.config.experiment.nft.cosmos3_nft_t2i_public import cosmos3_nft_t2i_public
 
@@ -18,8 +19,8 @@ pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 
 def _build_public_config() -> PosttrainNFTConfig:
-    from cosmos_framework.utils.config_helper import import_module, override
     from cosmos_framework.posttrain.config.config import build_root
+    from cosmos_framework.utils.config_helper import import_module, override
 
     import_module(
         "cosmos_framework.posttrain.config.experiment.nft.cosmos3_nft_t2i_public",
@@ -39,6 +40,8 @@ def test_public_t2i_recipe_has_no_internal_experiment_parent() -> None:
 
 
 def test_public_t2i_profile_is_registered_without_the_private_backbone() -> None:
+    defaults = NFTT2IRecipeContract()
+    assert all(getattr(defaults, field) == "" for field in ("base_checkpoint", "backbone_path"))
     contract = NFT_T2I_PUBLIC_HPSV3_CONTRACT
 
     assert contract.profile == NFT_T2I_PUBLIC_HPSV3_LORA_720P_PROFILE
@@ -50,8 +53,8 @@ def test_public_t2i_profile_is_registered_without_the_private_backbone() -> None
 def test_public_t2i_recipe_resolves_external_artifacts_and_passes_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.entrypoints.nft import validate_nft_runtime_config
+    from cosmos_framework.utils.lazy_config import instantiate
 
     monkeypatch.setenv("NFT_BASE_CHECKPOINT", "/models/cosmos3-nft-base")
     monkeypatch.setenv("NFT_TOKENIZER_PATH", "/models/Wan2.2_VAE.pth")
@@ -73,4 +76,16 @@ def test_public_t2i_recipe_resolves_external_artifacts_and_passes_preflight(
     assert config.model.config.vlm_config.pretrained_weights.backbone_path == ""
     assert config.dataloader_train.path == "/data/prompts.jsonl"
     assert rl.reward.provider_revision == "hpsv3@git:0123456789abcdef"
+    assert validate_nft_runtime_config(config, rl, environ=environment) == []
+    weights = config.model.config.vlm_config.pretrained_weights
+    weights.enabled = True
+    weights.backbone_path = "/models/caller-backbone"
+    assert validate_nft_runtime_config(config, rl, environ=environment) == []
+    for invalid_path in ("", "   "):
+        weights.backbone_path = invalid_path
+        assert any(
+            "T2I backbone_path" in error for error in validate_nft_runtime_config(config, rl, environ=environment)
+        )
+    weights.enabled = False
+    weights.backbone_path = ""
     assert validate_nft_runtime_config(config, rl, environ=environment) == []

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Shared construction primitives (DESIGN: config system).
+"""Shared construction primitives.
 
 `config/rl.py` is the typed *schema*; this module holds the **shared, algorithm-agnostic**
 building blocks that entries compose:
 
-  - `build_backbone(config, world)` — backend dispatch (legacy i4 LazyConfig tree | generic native
+  - `build_backbone(config, world)` — backend dispatch (legacy LazyConfig tree | generic native
     policy build spec | HF from_pretrained) → the model/capability.
   - `build_optimizer(model, opt_cfg)` — RL-owned optimizer (freeze backbone, train the subset);
     `opt_cfg.name` picks the class and `opt_cfg.impl` the torch kernel.
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from cosmos_framework.posttrain.config.model import (
     HF,
-    I4,
+    NATIVE,
     QWEN3_VL,
     DataPackerConfig,
     HFModelConfig,
@@ -105,7 +105,7 @@ def _resolve_hf_config_with_local_retry(name_or_path: str, *, trust_remote_code:
 
 
 def normalize_model_backend(backend: str) -> str:
-    """Normalize a public backend name to the generic ``i4 | hf`` online split.
+    """Normalize a public backend name to the generic ``native | hf`` online split.
 
     ``qwen3_vl`` is retained only as a compatibility alias for existing OPD configs. Concrete
     model-family selection belongs to ``config.model``'s native build spec, never to an entrypoint.
@@ -114,15 +114,15 @@ def normalize_model_backend(backend: str) -> str:
         backend: Raw root ``model_backend`` value.
 
     Returns:
-        ``"i4"`` or ``"hf"``.
+        ``"native"`` or ``"hf"``.
 
     Raises:
         ValueError: The backend is unknown.
     """
-    normalized = I4 if backend == QWEN3_VL else backend
-    if normalized not in (I4, HF):
+    normalized = NATIVE if backend == QWEN3_VL else backend
+    if normalized not in (NATIVE, HF):
         raise ValueError(
-            f"unknown model_backend {backend!r} (expected {I4!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
+            f"unknown model_backend {backend!r} (expected {NATIVE!r} or {HF!r}; {QWEN3_VL!r} is a compatibility alias)"
         )
     return normalized
 
@@ -181,9 +181,9 @@ def native_policy_build_spec(config: Any) -> Any | None:
     """Return the generic native-policy spec selected by ``config``, if one is present.
 
     The legacy ``model_backend='qwen3_vl'`` + ``model_qwen3_vl`` pair is projected onto the generic
-    seam here. This is the only compatibility boundary; callers and entrypoints see ``i4``.
+    seam here. This is the only compatibility boundary; callers and entrypoints see ``native``.
     """
-    raw_backend = str(getattr(config, "model_backend", I4))
+    raw_backend = str(getattr(config, "model_backend", NATIVE))
     if raw_backend == QWEN3_VL:
         model_config = getattr(config, "model_qwen3_vl", None)
         if model_config is None:
@@ -196,7 +196,7 @@ def native_policy_build_spec(config: Any) -> Any | None:
             parallelism=NativePolicyParallelismConfig(dp_replicate=1, dp_shard=-1),
             requires_collated_policy_forward=True,
         )
-    if normalize_model_backend(raw_backend) != I4:
+    if normalize_model_backend(raw_backend) != NATIVE:
         return None
     model = getattr(config, "model", None)
     if model is None:
@@ -226,7 +226,7 @@ def native_policy_build_spec(config: Any) -> Any | None:
 
 def select_policy_backend(config: Any) -> PolicyBackendSelection:
     """Resolve backend, identity, model config, and native spec exactly once."""
-    backend = normalize_model_backend(str(getattr(config, "model_backend", I4)))
+    backend = normalize_model_backend(str(getattr(config, "model_backend", NATIVE)))
     if backend == HF:
         model_config = getattr(config, "model_hf", None)
         model_id = getattr(model_config, "name_or_path", "") or getattr(
@@ -264,9 +264,9 @@ def build_lr_scheduler(optimizer: Any, opt_cfg: OptimizerConfig):
     defaults to 0.0 — so cosmos-rl DOES burn a zero-LR first step, and its ramp sits below this one
     at every step but the last.
 
-    The two ARE reconcilable, which the parity doc previously denied: setting cosmos-rl's
+    The two ARE reconcilable: setting cosmos-rl's
     `optm_warmup_start_factor = 1/optm_warmup_steps` makes its factor `1/w + k/w == (k+1)/w`,
-    identical to this one at every step. Verified for w=20. See docs/design/grpo-cosmos-rl-parity.md.
+    identical to this one at every step.
 
     Args:
         optimizer: the optimizer whose param-group LRs are scaled.
@@ -451,8 +451,8 @@ def _explicit_parameter_groups(
 
 QWEN_MOE_NO_DECAY_PATTERNS: tuple[str, ...] = (r"(?:^|\.)embed_tokens\.", r"(?:^|\.)lm_head\.", r"\.mlp\.gate\.weight$")
 """Name rules of ``decay_groups="qwen_moe"`` beside the shape rule (every 1-D parameter): the token embedding, the
-output head and the MoE router gate of every sparse layer stay undecayed. The seat's own choice, not a convention
-(review R134-03): the backbone's recipe (``cosmos3/utils/optimizer.py::_build_params_with_metadata``) decays all 882
+output head and the MoE router gate of every sparse layer stay undecayed. The seat's own choice, not a convention:
+the backbone's recipe (``cosmos3/utils/optimizer.py::_build_params_with_metadata``) decays all 882
 tensors and transformers' ``Trainer.get_decay_parameter_names`` decays these three classes; the native recipe's
 docstring (knob 4) states what the exemption protects and costs."""
 
@@ -497,7 +497,7 @@ def _group_by_decay_and_lr(net: Any, params: list, opt_cfg: OptimizerConfig) -> 
         key = (lr_multiplier_for(name, opt_cfg.lr_multipliers), bool(decay_rule(name, parameter)))
         classes.setdefault(key, []).append(parameter)
     # Each distinct factor once, in first-seen order: a factor two patterns share names ONE class; iterating it twice
-    # would append its groups twice and trip the count check below (review round 142, P2).
+    # would append its groups twice and trip the count check below.
     order = [1.0]
     for value in opt_cfg.lr_multipliers.values():
         factor = float(value)
@@ -531,7 +531,7 @@ def build_optimizer(
 ) -> Any:
     """RL owns the optimizer: freeze everything except params whose name contains a
     `train_keys` substring, then the optimizer `opt_cfg.name` selects (`OPTIMIZER_NAMES`) over the
-    trainable subset. `train_keys=[]` ⇒ train all `requires_grad` params. Operates on `model.net` (i4 policy) or the module itself (hf).
+    trainable subset. `train_keys=[]` ⇒ train all `requires_grad` params. Operates on `model.net` (native policy) or the module itself (hf).
     Explicit ``parameter_groups`` must partition every trainable parameter exactly once and
     cannot be combined with train-key filtering or automatic decay grouping.
     """
@@ -553,7 +553,7 @@ def build_optimizer(
                 p.requires_grad_(False)
         # train_keys was set but matched nothing → we just froze everything; the all-params
         # fallback below would also be empty and AdamW([]) errors opaquely. Fail loud instead
-        # (a model rename / wrong keys is the usual cause). (Greptile #17)
+        # (a model rename / wrong keys is the usual cause).
         if not params:
             raise ValueError(
                 f"OptimizerConfig.train_keys={list(opt_cfg.train_keys)} matched no parameter in "
@@ -904,7 +904,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
     """Normalize the configured policy DeviceMesh to ``(dp_replicate, dp_shard)``.
 
     The model backend owns the factorization. The HF adapter reads its typed ``model_hf.parallelism``
-    section. A generic native-policy spec reads ``model.parallelism``; the legacy i4 model tree
+    section. A generic native-policy spec reads ``model.parallelism``; the legacy native model tree
     retains its ``model.config.parallelism`` source. Placement supplies only ``policy_ranks`` for
     validation and never invents a configurable dimension.
 
@@ -937,7 +937,7 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
     else:
         model = getattr(config, "model")
         if model is None:
-            raise AttributeError("model_backend='i4' requires config.model before resolving policy parallelism")
+            raise AttributeError("model_backend='native' requires config.model before resolving policy parallelism")
         parallelism = getattr(getattr(model, "config"), "parallelism")
         for field_name in ("context_parallel_shard_degree", "cfg_parallel_shard_degree"):
             degree = int(getattr(parallelism, field_name, 1))
@@ -956,10 +956,10 @@ def resolve_policy_parallelism(config: Any, policy_ranks: int) -> tuple[int, int
         field_name="policy DeviceMesh",
         ranks_field_name="POLICY_RANKS",
     )
-    # A legacy native i4 tree must consume the same normalized factorization the trainer WG carries.
+    # A legacy native tree must consume the same normalized factorization the trainer WG carries.
     # Generic native and HF specs retain their inference sentinel so this helper remains repeatable
     # when a caller validates the same config against another policy width.
-    if backend == I4 and native_spec is None:
+    if backend == NATIVE and native_spec is None:
         parallelism.data_parallel_replicate_degree = replicate
         parallelism.data_parallel_shard_degree = shard
     return replicate, shard
@@ -1053,7 +1053,7 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
     spec = select_policy_backend(config).native_spec
     if spec is None:
         raise TypeError(
-            "online model_backend='i4' requires config.model=NativePolicyBuildSpec; "
+            "online model_backend='native' requires config.model=NativePolicyBuildSpec; "
             "legacy config.model trees remain supported by build_backbone for non-online callers"
         )
     builder_path = str(getattr(spec, builder_field, "") or "")
@@ -1065,11 +1065,11 @@ def _build_native_from_spec(config: Any, pdims: Any, *, builder_field: str) -> t
 
 
 def build_native_policy(config: Any, pdims: Any = None) -> tuple[Any, Any]:
-    """Build the generic i4-native online policy and return the exact builder config used."""
+    """Build the generic native online policy and return the exact builder config used."""
     spec = select_policy_backend(config).native_spec
     if spec is None:
         raise TypeError(
-            "online model_backend='i4' requires config.model=NativePolicyBuildSpec; "
+            "online model_backend='native' requires config.model=NativePolicyBuildSpec; "
             "legacy config.model trees remain supported by build_backbone for non-online callers"
         )
     policy_world = int(pdims.world_size) if pdims is not None else world_size_or_1()
@@ -1095,9 +1095,9 @@ def build_native_value_model(config: Any, pdims: Any = None) -> tuple[Any, Any]:
 
 
 def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
-    """Backend dispatch to a legacy i4 model, generic native policy, or HF model.
+    """Backend dispatch to a legacy native model, generic native policy, or HF model.
 
-    A legacy ``model_backend='i4'`` config still instantiates ``config.model`` and moves it to CUDA.
+    A legacy ``model_backend='native'`` config still instantiates ``config.model`` and moves it to CUDA.
     When ``config.model`` is a :class:`NativePolicyBuildSpec`, its dotted builder owns construction
     and receives the resolved policy mesh. ``qwen3_vl`` is normalized to that same generic seam.
 
@@ -1113,7 +1113,7 @@ def build_backbone(config: Any, world_size: int = 1, pdims: Any = None) -> Any:
 
     selection = select_policy_backend(config)
     backend = selection.backend
-    if backend == I4:
+    if backend == NATIVE:
         if selection.native_spec is None:
             return instantiate(config.model).cuda()
         # Native construction owns its mesh resolution. Keeping that in one place avoids validating
@@ -1517,11 +1517,11 @@ def build_objective(
     config, so the algorithm is usable without the config system at all. Keeping the config→primitive
     mapping here preserves that and keeps both surrogate mappings readable together.
 
-    `pdims` no longer changes what this function returns (Task 9 deleted `dp_group_sharded`, the
+    `pdims` no longer changes what this function returns (`dp_group_sharded`, the
     objective wrapper that used to divide the dp axis here when `_dp_coords(pdims)` reported an
-    extent > 1). Partitioning the dp axis is now the ingress predicate's job alone
+    extent > 1, was deleted). Partitioning the dp axis is now the ingress predicate's job alone
     (`workers/dispatch.py::select_chunk`, applied by the WorkerGroup `train` edge when its
-    `mini`/`micro`/`n_mini`/`n_micro` control kwargs are passed — spec 2026-08-12 §3.4); wrapping the
+    `mini`/`micro`/`n_mini`/`n_micro` control kwargs are passed — the implementation); wrapping the
     objective here too would divide the same axis twice, training on `1/dp_world**2` of the batch
     while every metric reported the full count. `pdims` is kept as a parameter (rather than dropped)
     so existing callers that resolve and pass it need no signature change, and because a future
@@ -1623,7 +1623,7 @@ def build_objective(
             }
     obj.identity = identity
 
-    # No dp-axis wrapping here any more (Task 9) — see the docstring above. `obj` scores exactly the
+    # No dp-axis wrapping here any more — see the docstring above. `obj` scores exactly the
     # batch its caller hands it; partitioning that batch across dp ranks is the ingress predicate's
     # job (`workers/dispatch.py::select_chunk`), applied before the objective ever runs.
     return obj
@@ -1839,7 +1839,7 @@ def _validate_native_policy_precision(rl: Any, model_config: Any) -> None:
     from types import SimpleNamespace
 
     precision = resolve_precision(
-        SimpleNamespace(rl=rl, model_config=model_config, model_backend=I4),
+        SimpleNamespace(rl=rl, model_config=model_config, model_backend=NATIVE),
     )
     mismatches: list[str] = []
     if native_dtype is not None:
@@ -1855,7 +1855,7 @@ def _validate_native_policy_precision(rl: Any, model_config: Any) -> None:
         )
     if mismatches:
         raise ValueError(
-            "model_backend='i4' cannot apply the resolved precision: "
+            "model_backend='native' cannot apply the resolved precision: "
             + "; ".join(mismatches)
             + ". Align rl.*_dtype with config.model.model_config, or use model_backend='hf' when a "
             "storage/compute precision split is required."
@@ -1886,15 +1886,15 @@ def _validate_online_policy_identity(
         if policy_model_id is not None
         else ("" if model_config is None else getattr(model_config, "name_or_path", ""))
     )
-    if backend == I4 and not configured_policy_id:
-        raise ValueError("model_backend='i4' requires config.model.model_id for online training")
+    if backend == NATIVE and not configured_policy_id:
+        raise ValueError("model_backend='native' requires config.model.model_id for online training")
     policy_model_id = configured_policy_id or str(rollout.name_or_path)
     if policy_model_id != str(rollout.name_or_path):
         raise ValueError(
             f"{backend} policy and rollout must start from the same model/tokenizer artifact before weight sync, "
             f"got policy={policy_model_id!r} rollout={rollout.name_or_path!r}"
         )
-    if backend == I4:
+    if backend == NATIVE:
         if model_config is not None:
             _validate_native_policy_precision(rl, model_config)
     else:
@@ -1950,10 +1950,9 @@ def validate_opd_policy_backend(
         policy_model_id=policy_model_id,
     )
     normalized_backend = None if model_backend is None else normalize_model_backend(str(model_backend))
-    if rl.teacher.signal_mode == "dpca" and normalized_backend is not None and normalized_backend != I4:
+    if rl.teacher.signal_mode == "dpca" and normalized_backend == HF:
         raise ValueError(
-            f"DPCA requires model_backend={I4!r}, got {normalized_backend!r}; the generic HF path "
-            "does not provide the native multimodal policy capability"
+            "DPCA requires a native multimodal policy; the generic HF path does not provide this capability"
         )
 
 
@@ -1974,7 +1973,7 @@ def validate_opd_runtime(
     Args:
         rl: The resolved OPD algorithm config.
         rollout: The resolved student rollout config.
-        model_backend: Optional root backend. DPCA requires a native i4 policy capability.
+        model_backend: Optional root backend. DPCA requires a native policy capability.
         model_config: Optional selected policy config used to prove policy/rollout artifact identity.
         policy_model_id: Explicit generic native policy/tokenizer identity, when selected by a
             :class:`NativePolicyBuildSpec`.
@@ -2293,8 +2292,8 @@ def build_opd_objective(rl: OPDConfig, packer: DataPacker, pdims: Any = None) ->
         rl: the OPD run config.
         packer: the shaping seam, shared with the objective's GRPO siblings.
         pdims: this actor's `ParallelDims`, or None for single-device. As in `build_objective`, it no
-            longer changes what this returns — Task 9 deleted `dp_group_sharded` and moved dp-axis
-            partitioning to the ingress predicate (`workers/dispatch.py::select_chunk`), applied by
+            longer changes what this returns — `dp_group_sharded` was deleted and dp-axis
+            partitioning moved to the ingress predicate (`workers/dispatch.py::select_chunk`), applied by
             the WorkerGroup `train` edge before the objective ever runs. Kept so the two builders
             stay signature-compatible behind `build_trainer`'s seam.
 

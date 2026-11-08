@@ -64,6 +64,6 @@ def test_observer_exception_does_not_break_training():
     model = ToyFlowModel(dim=8, seed=0)
     opt = torch.optim.AdamW(model.net.parameters(), lr=1e-2)
     trainer = DiffusionTrainer(model, make_objective(beta=100.0), opt, callbacks=[Boom()])
-    # A throwing observer must not crash the loop (best-effort observability, §2.6).
+    # A throwing observer must not crash the loop (best-effort observability).
     trainer.train(env.get_samples(2))
     assert trainer._iter == 1

@@ -16,7 +16,7 @@
 **Cosmos-Framework** is an end-to-end framework for training and serving world models, including the **Cosmos3** model family. Everything lives in a single top-level [`cosmos_framework/`](./cosmos_framework) Python package:
 
 - **Training** — distributed FSDP / TP / CP / PP trainer, native DCP checkpoints with HuggingFace `safetensors` import/export, JSONL / WebDataset / LeRobot dataset adapters. Entry point: `cosmos_framework.scripts.train`. See [`docs/training.md`](./docs/training.md).
-- **Inference** — Diffusers / Transformers / vLLM backends with offline batch generation and online serving (Ray + Gradio). Entry point: `cosmos_framework.scripts.inference`. Ecosystem-facing shim libraries (lightweight standalone wrappers for downstream projects) live under [`packages/`](./packages).
+- **Inference** — Diffusers / Transformers / vLLM backends with offline batch generation and online serving (Ray + Gradio). Entry point: `cosmos_framework.scripts.inference`. Ecosystem-facing shim libraries (lightweight standalone wrappers for downstream projects) live under [`packages/`](./packages). For Cosmos3-Nano generation on GPUs with limited VRAM, see the standalone [Diffusers CPU-GPU offloading adapter](./packages/diffusers-cpu-offloading/README.md).
 - **Policy serving** — a server-client pipeline for deploying Cosmos3 policies. See [`docs/action_policy_droid_server.md`](./docs/action_policy_droid_server.md).
 - **Post-training and RL** — supervised, preference-based, reinforcement-learning, distillation, diffusion, and embodied-policy optimization under `cosmos_framework.posttrain`. See [`docs/posttrain/`](./docs/posttrain/index.md).
 

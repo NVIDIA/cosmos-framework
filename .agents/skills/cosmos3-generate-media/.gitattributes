@@ -1,0 +1,3 @@
+# The skill is self-contained: the eval CI and the agents' task containers check this tree out without git-lfs, so the
+# three sample JPEGs (1.9 MB) are stored as plain blobs, exempt from the repository's *.jpg LFS rule.
+assets/images/** -filter -diff -merge -text

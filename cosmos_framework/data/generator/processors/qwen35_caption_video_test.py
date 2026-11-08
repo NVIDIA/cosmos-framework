@@ -29,7 +29,7 @@ from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_imag
 pytestmark = [pytest.mark.L1, pytest.mark.CPU]
 
 _DEFAULT_MODEL_PATH = Path(
-    "/lustre/fsw/portfolios/cosmos/users/ypang/.cache/huggingface/hub/"
+    "/data/.cache/huggingface/hub/"
     "models--Qwen--Qwen3.5-27B/snapshots/fc05daec18b0a78c049392ed2e771dde82bdf654"
 )
 

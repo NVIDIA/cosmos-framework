@@ -10,7 +10,7 @@ sites need:
   - ``tp`` / ``ep`` / ``pp`` factorization stubs, plus a guard that EVERY non-dp axis
     (``tp``/``ep``/``pp``/``cp``/``cfgp``) is ``1`` — the RL FSDP path (``model/parallelize.py``)
     implements only ``dp_replicate × dp_shard``, so any other axis must fail loud until that
-    parallelism is actually wired (additive drop-in, spec §5). ``cp``/``cfgp`` are cosmos3-native
+    parallelism is actually wired (additive drop-in). ``cp``/``cfgp`` are cosmos3-native
     axes (context / CFG parallel) the RL path doesn't use yet, hence pinned to 1 here too.
 """
 

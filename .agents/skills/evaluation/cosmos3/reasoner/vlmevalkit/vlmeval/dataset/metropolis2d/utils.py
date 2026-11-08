@@ -333,7 +333,7 @@ _ANGLEBOX_4TUP = re.compile(
 def _parse_anglebox_tuples(text: str, coord_scale: str = 'normalized') -> _ParserResult:
     """Salvage 4-tuples wrapped in `[...]` or `<...>` or mismatched `[...>` / `<...]`.
 
-    Cosmos3-Edge-Reasoner-0521 emits multi-box predictions where the first
+    Some reasoner checkpoints emit multi-box predictions where the first
     box uses `[...]` and subsequent boxes use `<...>`. Both delimiters land
     in the same character class. xyxy assumed (no yxyx swap) — Gemini-family
     models emit clean `box_2d` JSON and never reach this branch.

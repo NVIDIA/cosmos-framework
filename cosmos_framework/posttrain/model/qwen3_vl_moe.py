@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""i4-native Qwen3-VL-MoE policy differences.
+"""Native Qwen3-VL-MoE policy differences.
 
 Shared Qwen3-VL construction, forward compatibility, and weight semantics live in
 ``model/qwen3_vl.py``. This module owns the sparse-MoE batch adaptation, the routing-replay

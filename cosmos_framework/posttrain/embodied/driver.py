@@ -8,7 +8,7 @@ with N-fold blast radius, which is a real cost -- gate G1 (a differential run ag
 then-existing ``run_tasks`` path) is what bought it back. **G1 RAN AND PASSED, 2026-08-29**:
 correctness equivalent at 400/400 (gap -2.37 pp) and throughput +2.87 ms/step measured with
 both arms on one card. The ``run_tasks`` path was deleted the same day, so the differential
-cannot be taken again. SPEC §0.16-§0.17.
+cannot be taken again.
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ def run_unit(
             lanes = list(range(sess.n_lanes))
             # Emit liveness at TURN START, not only every _PROGRESS_EVERY steps.
             #
-            # Round 3's lease takeovers fired on LIVE processes because the holder's only
+            # Earlier lease takeovers fired on LIVE processes because the holder's only
             # heartbeat was the work it was not currently doing: it heartbeat on journal
             # appends, then spent ~110 s in ffprobe under the lease and aged out at 91.4 s
             # against a 90 s threshold. The same shape is here -- a scene build is 1.5-6

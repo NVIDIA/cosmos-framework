@@ -9,6 +9,7 @@
 # Run from this folder with the cosmos-framework venv active (see README):
 #   bash launch_sft_action_policy_droid_nano.sh
 # It prepares the small dependencies, checks for the staged DROID dataset, and trains.
+# For URI-keyed filters, set DROID_FILTER_SOURCE_PREFIX to the prefix before the complete episode ID.
 # Paths are fixed under this (git-ignored) folder, matching the reasoner finetune
 # wrappers, while the TOML and tail-overrides match the cosmos-framework example.
 
@@ -16,21 +17,22 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 TOML_FILE="$PWD/toml/sft_config/action_policy_droid_nano.toml"
-: "${DATASET_PATH:=$PWD/data/Cosmos3-DROID/success}"
+: "${DATASET_PATH:=$PWD/data/droid_plus_lerobot_640x360_20260412}"
 : "${BASE_CHECKPOINT_PATH:=$PWD/checkpoints/Cosmos3-Nano}"
 : "${WAN_VAE_PATH:=$PWD/checkpoints/wan22_vae/Wan2.2_VAE.pth}"
 : "${FILTER_PATH:=$PWD/data/droid_filters/keep_ranges_1_0_1.json}"
 
 # 1. The full DROID dataset is large, so require users to stage it explicitly.
-if [[ ! -f "$DATASET_PATH/meta/info.json" ]]; then
+if [[ ! -f "$DATASET_PATH/success/meta/info.json" ]]; then
     cat >&2 <<EOF
 ERROR: missing DROID dataset at:
   $DATASET_PATH
 
-Expected a LeRobotDataset success split containing meta/info.json.
-Stage nvidia/Cosmos3-DROID first, or export DATASET_PATH=/path/to/Cosmos3-DROID/success.
+Expected the dataset parent containing success/meta/info.json.
+Stage nvidia/Cosmos3-DROID in a directory named droid_plus_lerobot_640x360_20260412,
+or set DATASET_PATH and DROID_ROOT to your existing dataset parent (not its success/ subdirectory).
 For example:
-  uvx hf@latest download --repo-type dataset nvidia/Cosmos3-DROID --local-dir data/Cosmos3-DROID
+  uvx hf@latest download --repo-type dataset nvidia/Cosmos3-DROID --local-dir data/droid_plus_lerobot_640x360_20260412
 EOF
     exit 1
 fi
@@ -62,6 +64,9 @@ TAIL_OVERRIDES=(
     "dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=True"
     "dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_PATH"
 )
+if [[ -n "${DROID_FILTER_SOURCE_PREFIX:-}" ]]; then
+    TAIL_OVERRIDES+=("dataloader_train.dataloader.datasets.droid.dataset.filter_dict_source_prefix=$DROID_FILTER_SOURCE_PREFIX")
+fi
 if [[ -n "${EXTRA_TAIL_OVERRIDES:-}" ]]; then
     # EXTRA_TAIL_OVERRIDES is intentionally word-split to match the framework launcher UX.
     # shellcheck disable=SC2206

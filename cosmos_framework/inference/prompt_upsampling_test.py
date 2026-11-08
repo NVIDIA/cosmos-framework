@@ -327,7 +327,7 @@ def test_client_keeps_sampling_params_for_openai_compatible_claude(monkeypatch: 
     session = _FakeSession([{"choices": [{"message": {"content": '```json\n{"subjects":[]}\n```'}}]}])
     client = PromptUpsamplerClient(
         PromptUpsamplerConfig(
-            endpoint_url="https://inference-api.nvidia.com/v1",
+            endpoint_url="https://llm.example.com/v1",
             model="claude-opus-4-7",
             max_retries=1,
         ),

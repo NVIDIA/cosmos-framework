@@ -25,7 +25,7 @@ RUN_CMD="${RUN_CMD:?set RUN_CMD to the torchrun payload, e.g. -m ...entrypoints.
 # NODE-LOCAL compile caches. Both inductor AND triton default to shared paths ($TMPDIR on $HOME,
 # ~/.triton/cache on $HOME): concurrent jobs then race/replace each other's kernels — truncated
 # .so ("ImportError: ....main.so: file too short") or, when a sibling job is cancelled mid-read,
-# "InductorError: OSError: [Errno 116] Stale file handle" (observed 2026-07-06, job 1568874).
+# "InductorError: OSError: [Errno 116] Stale file handle" (observed 2026-07-06).
 VENV_ACTIVATE="${VENV_ACTIVATE:-}"
 
 nnodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l)
@@ -39,7 +39,7 @@ rdzv_id="${SLURM_JOB_ID:-torchrun}"  # captured before the unset below; must mat
 # command runs on every node (no --node-rank). torchrun sets MASTER_ADDR/RANK/WORLD_SIZE/LOCAL_RANK
 # for the entry (e.g. entrypoints/dpo.py _run_single, which reads them via init_process_group).
 srun --overlap --ntasks-per-node=1 --container-name "$CONTAINER_NAME" bash -c "
-  export POSTTRAIN_SLURM_JOB_ID=\"\${SLURM_JOB_ID:-}\"  # the entry's provenance stamp reads it after the unset (R125-D-04)
+  export POSTTRAIN_SLURM_JOB_ID=\"\${SLURM_JOB_ID:-}\"  # the entry's provenance stamp reads it after the unset
   unset SLURM_JOB_ID SLURM_NODELIST SLURM_JOBID
   ${VENV_ACTIVATE:+source '$VENV_ACTIVATE' && }cd '$CONTAINER_WORKDIR' || exit 1
   export PYTHONPATH='$CONTAINER_WORKDIR' HF_HOME=\"\${HF_HOME:-\$HOME/.cache}\" \

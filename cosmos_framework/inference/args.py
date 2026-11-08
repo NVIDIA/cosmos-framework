@@ -77,6 +77,44 @@ def _load_transfer_negative_prompt_file(path: str | Path) -> str:
     return json.dumps(json.loads(candidate.read_text()))
 
 
+def _negative_prompt_file_candidates(v: str) -> list[Path]:
+    """Where a ``negative_prompt_file`` is looked for, in order.
+
+    The launch folder (where the file used to be read from, so existing setups keep working), the current
+    folder (the spec's folder while a spec file is validated) and, for a bare filename only, ``defaults/``.
+    The launch folder is read when the sample is parsed, not when this module is imported, so a process that
+    changes folder after import still resolves against the folder it ran the spec from.
+    """
+    from cosmos_framework.inference.common.args import current_launch_dir
+
+    path = Path(v).expanduser()
+    candidates = [path] if path.is_absolute() else [current_launch_dir() / path, Path.cwd() / path]
+    if path.name == v:
+        candidates.append(PACKAGE_DIR / "defaults" / v)
+    return list(dict.fromkeys(candidates))
+
+
+def _resolve_negative_prompt_file(v: str | None) -> str | None:
+    """Pin a found ``negative_prompt_file`` to an absolute path while the spec's folder is known.
+
+    A file that is not found is kept as written and is not an error here: whether it matters depends on
+    whether the sample ends up reading it, which is decided when the sample is built
+    (``_build_transfer_data``). There it fails only that sample, so ``--skip-invalid-samples``
+    can skip it, or it is reported as a warning when another negative caption wins.
+    """
+    if v is None:
+        return None
+    defaults_path = PACKAGE_DIR / "defaults" / v
+    for candidate in _negative_prompt_file_candidates(v):
+        if candidate.is_file():
+            # A defaults/ name stays a bare name, as the defaults loader and shipped specs expect.
+            return v if candidate == defaults_path else str(candidate.absolute())
+    return v
+
+
+NegativePromptFile = Annotated[str, pydantic.AfterValidator(_resolve_negative_prompt_file)]
+
+
 @cache
 def _load_modality_defaults(model_mode: str) -> dict[str, Any]:
     default_file = PACKAGE_DIR / f"defaults/{model_mode}/sample_args.json"
@@ -140,6 +178,14 @@ class SamplingOverrides(OverridesBase):
             if self.sigma_max is None:
                 self.sigma_max = 0.0
             return
+        interval = self.guidance_interval
+        guided = getattr(model_config, "fixed_step_sampler_config", None) is None and self.guidance not in (None, 1.0)
+        if guided and interval is not None and len(interval) == 2 and interval[0] >= interval[1]:
+            # The sampler tests lo < t < hi, so a reversed window silently never applies text guidance.
+            log.warning(
+                f"'guidance_interval'={list(interval)} is reversed (lo >= hi): text guidance runs only on steps "
+                "with lo < t < hi, so it never runs. Use [lo, hi] with lo < hi."
+            )
         fixed_sampler = getattr(model_config, "fixed_step_sampler_config", None)
         if fixed_sampler is not None:
             schedule = fixed_sampler.t_list
@@ -407,6 +453,8 @@ class TextDataArgs(ArgsBase):
 
 
 class TextDataOverrides(OverridesBase):
+    _negative_metadata_mode_promoted: bool = pydantic.PrivateAttr(default=False)
+
     prompt_path: ResolvedFilePath | None = None
     """Path to a .txt file containing the prompt. Only one of 'prompt' or 'prompt_path' should be provided."""
     prompt: str | None = None
@@ -456,6 +504,8 @@ class TextDataOverrides(OverridesBase):
             return
 
         if self.negative_prompt_keep_metadata and self.negative_metadata_mode == NegativeMetadataMode.NONE:
+            # Remember that this was promoted, so a requested 'none' is not reported as an ignored 'same'.
+            self._negative_metadata_mode_promoted = True
             self.negative_metadata_mode = NegativeMetadataMode.SAME
 
 
@@ -497,6 +547,7 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
     resolution: Resolution | None
     aspect_ratio: AspectRatio | None
     fps: pydantic.PositiveInt
+    output_fps: pydantic.PositiveInt | None = None
     num_frames: pydantic.PositiveInt
     video_save_quality: VideoSaveQuality
     image_save_quality: ImageSaveQuality
@@ -507,6 +558,11 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
     @property
     def duration(self) -> float:
         return self.num_frames / self.fps
+
+    @property
+    def video_output_fps(self) -> int:
+        """Playback clock only; ``fps`` and ``duration`` retain their model-clock meanings."""
+        return self.output_fps if self.output_fps is not None else self.fps
 
     @property
     def vision_size(self) -> tuple[int, int]:
@@ -569,7 +625,12 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """Vision aspect ratio. When None, image_edit preserves the input image's native
     aspect ratio; all other modes default to 16:9."""
     fps: Fps | None = None
-    """Vision frames per second. Recommended range [10, 30]; quality may be degraded outside of this range."""
+    """Model conditioning frames per second. Recommended range [10, 30]; quality may be degraded outside
+    of this range. Released Auto camera models require 30 (also their default); use output_fps for playback."""
+    output_fps: pydantic.PositiveInt | None = None
+    """Saved video playback FPS for Auto RGB-only generation; defaults to fps. Does not resample frames
+    or change model conditioning. Joint RGB/LiDAR currently requires output_fps == fps. Unsupported
+    for other models and LiDAR-only generation."""
     num_frames: pydantic.PositiveInt | None = None
     """Number of vision frames.
 
@@ -593,6 +654,15 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     preview_preset: Training[str | None] = None
     """x264 speed/efficiency preset for ``vision_preview.mp4`` (e.g. 'fast', 'medium', 'slow').
     Slower presets give smaller files at the same CRF. Defaults to 'medium'."""
+
+    @pydantic.field_validator("resolution", mode="before")
+    @classmethod
+    def _resolution_tier_from_int(cls, value: object) -> object:
+        # JSON specs often write the tier as a number (``"resolution": 480``); the tier is the same
+        # string, so accept the integer instead of failing the Literal check.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
 
     @override
     def download(self, output_dir: Path):
@@ -966,7 +1036,7 @@ def _infer_multiview_caption_path(
             return f"{caption_root.rstrip('/')}/{match.group('sample_id')}_c{match.group('camera_index')}.json"
         clip_match = _MADS_CLIP_MEDIA_RE.match(filename)
         if clip_match is not None:
-            # Clip-level MADS assets (hdmap/lidar rangemap tars) have no _cN suffix.
+            # Clip-level assets (hdmap/lidar rangemap tars) have no _cN suffix.
             # Front-wide captions are the lidar-transfer training text source.
             return f"{caption_root.rstrip('/')}/{clip_match.group('sample_id')}_c0.json"
         raise ValueError(
@@ -1327,8 +1397,8 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     seg: TransferArgs | None = None
     wsm: TransferArgs | None = None
     lidar: LidarTransferArgs | None = None
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     num_conditional_frames: pydantic.NonNegativeInt | None = None
     max_frames: pydantic.PositiveInt | None = None
@@ -1368,8 +1438,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     unset. Joint camera+LiDAR: pair it with ``wsm: {}`` and one or more multiview views, each
     carrying its own ``control_path``. ``lidar.condition_path`` and ``lidar.num_conditional_sweeps``
     supply measured target sweeps as a clean conditioning prefix."""
-    negative_prompt_file: str | None = None
-    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    negative_prompt_file: NegativePromptFile | None = None
+    """JSON negative caption file for transfer specs (path relative to the spec, absolute, or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
     """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
@@ -1485,6 +1555,25 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "control_guidance": 1.0,
     }
 
+    # Fields the distilled causal Transfer path accepts but never reads: field -> (neutral value, reason).
+    # A warning fires only when the sample or CLI sets a field to something other than its neutral value.
+    _DISTILLED_TRANSFER_IGNORED_FIELDS: ClassVar[dict[str, tuple[Any, str]]] = {
+        "negative_prompt": ("", "the distilled schedule has no negative-caption branch"),
+        "negative_prompt_file": (None, "the distilled schedule has no negative-caption branch"),
+        "guidance": (1.0, "the distilled sampler always runs at guidance 1.0"),
+        "sigma_max": (80.0, "the distilled sampler uses its fixed timestep list"),
+        "shift": (5.0, "the distilled sampler's fixed timestep list is already shifted"),
+        "normalize_cfg": (False, "guidance is fixed at 1.0, so there is no CFG output to normalize"),
+        "num_conditional_frames": (0, "generation starts from noise with no RGB history prefix"),
+        "control_guidance_interval": (None, "control guidance is fixed at 1.0, so there is no control-guidance window"),
+        "guidance_interval": (None, "guidance is fixed at 1.0, so there is no guidance window"),
+        "negative_metadata_mode": (
+            NegativeMetadataMode.NONE,
+            "the distilled schedule has no negative-caption branch to add metadata to",
+        ),
+        "negative_prompt_keep_metadata": (False, "the distilled schedule has no negative-caption branch"),
+    }
+
     def _build_transfer_data(
         self,
         model_config: "OmniMoTModelConfig",
@@ -1502,8 +1591,39 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         if not hints:
             return
 
-        if self.negative_prompt is None and self.negative_prompt_file is not None:
+        user_set = user_fields if user_fields is not None else frozenset()
+        # Found means: a resolved path, or a bare filename under defaults/ (never a defaults/ match by the
+        # last component of a longer path, which would hide a typo in its folder).
+        neg_file_missing = self.negative_prompt_file is not None and not any(
+            c.is_file() for c in _negative_prompt_file_candidates(self.negative_prompt_file)
+        )
+        if neg_file_missing:
+            # The spec's own folder was already tried when the spec was parsed (a match there is stored as an
+            # absolute path), so name it alongside the folders tried here.
+            tried = "the spec file's folder, " + ", ".join(
+                str(c) for c in _negative_prompt_file_candidates(cast(str, self.negative_prompt_file))
+            )
+            if self.negative_prompt is None:
+                # The file would be read and is not there: fail this sample only. A ValueError here is
+                # per-sample, so --skip-invalid-samples skips it instead of stopping the batch.
+                raise ValueError(f"negative_prompt_file not found: {self.negative_prompt_file} (tried {tried})")
+            log.warning(
+                f"[transfer] negative_prompt_file not found: {self.negative_prompt_file} (tried {tried}). "
+                "It is not used, because a negative_prompt is already set; fix or remove the path."
+            )
+        elif self.negative_prompt is None and self.negative_prompt_file is not None:
             self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
+        elif (
+            self.negative_prompt_file is not None
+            and "negative_prompt" in user_set
+            and "negative_prompt_file" in user_set
+        ):
+            log.warning(
+                f"[transfer] both 'negative_prompt' and 'negative_prompt_file' are set; "
+                f"'negative_prompt_file' ({self.negative_prompt_file}) is ignored."
+            )
+
+        self._warn_ignored_transfer_fields(model_config, hints, user_set)
 
         # A multiview caption run takes its chunk length from the span each caption describes, so
         # the generic 93-frame transfer chunk must not stand in for it: a 300-frame caption would
@@ -1548,16 +1668,26 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                         "checkpoint with a fixed sampler or Stage 3 SF-DMD checkpoint with a fixed sampler, "
                         "with one latent frame per chunk"
                     )
-                if (
-                    len(hints) != 1
-                    or self.num_first_chunk_conditional_frames != 0
-                    or getattr(self, "control_guidance", None) != 1.0
-                    or not self.share_vision_temporal_positions
-                ):
+                # Name only the requirements this request breaks, with the values it passed.
+                culprits = []
+                if len(hints) != 1:
+                    culprits.append(f"{len(hints)} control hints {sorted(hints)} (must be exactly 1)")
+                if self.num_first_chunk_conditional_frames != 0:
+                    culprits.append(
+                        f"num_first_chunk_conditional_frames={self.num_first_chunk_conditional_frames} (must be 0)"
+                    )
+                control_guidance = getattr(self, "control_guidance", None)
+                if control_guidance != 1.0:
+                    culprits.append(
+                        f"control_guidance={control_guidance} (must be 1.0: the causal sampler has no "
+                        "control-guidance pass)"
+                    )
+                if not self.share_vision_temporal_positions:
+                    culprits.append("share_vision_temporal_positions=false (must be true to match training)")
+                if culprits:
                     raise ValueError(
-                        "Direct causal Transfer requires exactly one control hint, "
-                        "num_first_chunk_conditional_frames=0, control_guidance=1.0, "
-                        "and share_vision_temporal_positions=true"
+                        "Direct causal Transfer (transfer_resize_mode='direct_resize' on a causal checkpoint) "
+                        "cannot run this request:\n  - " + "\n  - ".join(culprits)
                     )
             if self.multiview is not None or any(
                 key not in {TransferHintKey.EDGE, TransferHintKey.BLUR, TransferHintKey.DEPTH, TransferHintKey.SEG}
@@ -1565,7 +1695,18 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
             ):
                 raise ValueError("Direct Transfer resizing supports single-view edge, blur, depth, and seg only")
             if self.resolution not in {"480", "720"}:
-                raise ValueError("Direct Transfer resizing supports the teacher's trained 480 and 720 tiers only")
+                # A 480-only checkpoint would reject 720 later too; name its real limit instead of the teacher's tiers.
+                if (
+                    self._is_sf_dmd_transfer_model(model_config)
+                    and str(getattr(model_config, "resolution", "")) == "480"
+                ):
+                    raise ValueError(
+                        f"This SF-DMD Transfer checkpoint supports only resolution='480', got resolution='{self.resolution}'."
+                    )
+                raise ValueError(
+                    "Direct Transfer resizing supports the teacher's trained 480 and 720 tiers only, "
+                    f"got resolution='{self.resolution}'."
+                )
 
         for hint_key, config in hints.items():
             for field, default in self._TRANSFER_HINT_DEFAULTS.get(hint_key, {}).items():
@@ -1596,6 +1737,142 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
                 if user_fields is None or field not in user_fields:
                     setattr(self, field, value)
 
+        # After the hint defaults, so control_guidance is final. Only the bidirectional single-view
+        # path runs a control-guidance pass, and only when control_guidance is not 1.0.
+        interval = self.control_guidance_interval
+        if (
+            interval is not None
+            and len(interval) == 2
+            and interval[0] >= interval[1]
+            and not self.autoregressive
+            and self.multiview is None
+            and getattr(model_config, "fixed_step_sampler_config", None) is None
+            and getattr(self, "control_guidance", None) not in (None, 1.0)
+        ):
+            # control_active() tests lo < t < hi, so a reversed window silently never applies control guidance.
+            log.warning(
+                f"[transfer] 'control_guidance_interval'={list(interval)} is reversed (lo >= hi): control guidance "
+                "runs only on steps with lo < t < hi, so it never runs. Use [lo, hi] with lo < hi."
+            )
+
+    def _warn_ignored_transfer_fields(
+        self,
+        model_config: "OmniMoTModelConfig",
+        hints: dict,
+        user_set: frozenset[str],
+    ) -> None:
+        """Reject invalid control weights and warn about requested settings that cannot take effect."""
+        self = cast("SampleDataOverrides", self)
+        weights = {key: (1.0 if config.weight is None else config.weight) for key, config in hints.items()}
+        # Only the bidirectional path passes these weights to build_transfer_batch, which asserts the same
+        # rule after the model has loaded; the causal path hard-codes a single weight of 1.0.
+        # Joint camera+LiDAR transfer reads only the wsm weight, unnormalized, so it is left alone here.
+        reads_weights = not self.autoregressive and TransferHintKey.LIDAR not in hints
+        if reads_weights and (any(w < 0 for w in weights.values()) or sum(weights.values()) <= 0):
+            raise ValueError(f"Control weights must be non-negative with a positive sum, got {weights}")
+        if len(hints) == 1 and self.multiview is None:
+            ((hint_key, weight),) = weights.items()
+            if weight != 1.0:
+                # build_transfer_batch divides each weight by the sum, and the network only takes the
+                # weighted path for more than one control, so a lone control's weight is never read.
+                log.warning(
+                    f"[transfer] '{hint_key}.weight'={weight} has no effect with a single control; "
+                    "weights only set the relative mix between multiple controls."
+                )
+        # load_transfer_control_frames reads a control_path as-is and computes edge/blur only when it is
+        # missing, so the preset of a control that comes from a file is never read. The default preset
+        # (medium, as in the shipped cookbook specs) stays silent.
+        preset_fields = {TransferHintKey.EDGE: "preset_edge_threshold", TransferHintKey.BLUR: "preset_blur_strength"}
+        for hint_key, config in hints.items():
+            preset_field = preset_fields.get(hint_key)
+            preset = getattr(config, preset_field, None) if preset_field else None
+            if hint_key in user_set and config.control_path is not None and preset is not None and preset != "medium":
+                log.warning(
+                    f"[transfer] '{hint_key}.{preset_field}'='{preset}' is ignored: '{hint_key}.control_path' is set, "
+                    "so that control video is used as-is and the preset only applies when the control is computed "
+                    "from 'vision_path'. Remove control_path and set 'vision_path' to apply the preset."
+                )
+        # show_input pastes the source RGB next to the output, so without vision_path there is nothing
+        # to show: single-view Transfer writes the output alone, and streaming Transfer rejects it.
+        if (
+            self.show_input is True
+            and "show_input" in user_set
+            and self.vision_path is None
+            and self.multiview is None
+            and all(config.control_path is not None for config in hints.values())
+        ):
+            log.warning(
+                "[transfer] 'show_input' has no effect without 'vision_path': there is no input video to show next "
+                "to the output (streaming Transfer rejects this request). Set 'vision_path' to the source video."
+            )
+        # Single-view Transfer returns through _generate_transfer_batch before the native upsampler,
+        # but native_prompt_upsampling still skips the duration/resolution text added to plain prompts.
+        if (
+            self.prompt_upsampling is True
+            and not getattr(self, "prompt_upsampling_applied", None)
+            and self.multiview is None
+        ):
+            log.warning(
+                "[transfer] 'prompt_upsampling' is ignored by Transfer: the prompt is not upsampled, and a "
+                "plain-text prompt also loses the duration/resolution text normally added to it. "
+                "Leave 'prompt_upsampling' off and pass the detailed prompt directly."
+            )
+
+        # Mirrors the sampler choice in generate_transfer_sample: a fixed-step (distilled)
+        # sampler runs at guidance 1.0, so these settings are never read.
+        if (
+            self.autoregressive
+            and self.multiview is None
+            and getattr(model_config, "fixed_step_sampler_config", None) is not None
+        ):
+            for field, (neutral, reason) in self._DISTILLED_TRANSFER_IGNORED_FIELDS.items():
+                value = getattr(self, field)
+                if field == "negative_metadata_mode" and self._negative_metadata_mode_promoted:
+                    value = NegativeMetadataMode.NONE  # the request said 'none'; keep_metadata promoted it
+                if field in user_set and value is not None and value != neutral:
+                    log.warning(f"[transfer] '{field}' is ignored by distilled causal Transfer: {reason}.")
+            # The recipe keeps the chunk equal to num_frames (601 for the long rollout), so a fixed
+            # neutral value does not fit; flag only a chunk that would imply chunked generation.
+            chunk = self.num_video_frames_per_chunk
+            if "num_video_frames_per_chunk" in user_set and chunk is not None and chunk != self.num_frames:
+                log.warning(
+                    f"[transfer] 'num_video_frames_per_chunk'={chunk} is ignored by distilled causal Transfer: "
+                    "it generates the whole clip one latent frame at a time."
+                )
+            # Any control routes to the transfer path whatever the mode says, and this path has no
+            # first-frame conditioning, so only video2video describes what runs. Action modes fail on
+            # their own capability check, and multiview transfer uses text2video/image2video on purpose.
+            mode = self.model_mode
+            if (
+                "model_mode" in user_set
+                and self.multiview is None
+                and mode is not None
+                and mode != ModelMode.VIDEO2VIDEO
+                and not mode.is_action
+                and not mode.is_reasoner
+            ):
+                log.warning(
+                    f"[transfer] 'model_mode'='{mode.value}' is ignored by distilled causal Transfer: "
+                    "a control video always runs video-to-video transfer here; use 'video2video'."
+                )
+
+    @staticmethod
+    def _is_sf_dmd_transfer_model(model_config: "OmniMoTModelConfig") -> bool:
+        """Whether the loaded model is the causal SF-DMD Transfer student whose contract applies."""
+        video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
+        is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
+        is_distilled = getattr(model_config, "fixed_step_sampler_config", None) is not None
+        if not video_temporal_causal or not (is_self_forcing or is_distilled):
+            return False
+        if int(getattr(model_config, "teacher_forcing_frames_per_chunk", 1) or 1) != 1:
+            return False
+        replay_policy = getattr(model_config, "teacher_forcing_replay_policy", None)
+        return (
+            getattr(replay_policy, "control_visibility", None) == "causal"
+            and bool(getattr(replay_policy, "controls_read_strict_past_clean_rgb", False))
+            and getattr(replay_policy, "clean_pass_causality", None) == "frame"
+        )
+
     def _apply_sf_dmd_transfer_inference_contract(
         self,
         *,
@@ -1604,26 +1881,16 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     ) -> None:
         """Apply the resolution contract recorded by the SF-DMD Transfer checkpoint."""
         self = cast("SampleDataOverrides", self)
-        video_temporal_causal = bool(getattr(model_config, "video_temporal_causal", False))
-        is_self_forcing = getattr(model_config, "simulation_mode", None) == "self_forcing"
-        is_distilled = getattr(model_config, "fixed_step_sampler_config", None) is not None
-        if not video_temporal_causal or not (is_self_forcing or is_distilled):
-            return
-        if int(getattr(model_config, "teacher_forcing_frames_per_chunk", 1) or 1) != 1:
-            return
-        replay_policy = getattr(model_config, "teacher_forcing_replay_policy", None)
-        if (
-            getattr(replay_policy, "control_visibility", None) != "causal"
-            or not getattr(replay_policy, "controls_read_strict_past_clean_rgb", False)
-            or getattr(replay_policy, "clean_pass_causality", None) != "frame"
-        ):
+        if not self._is_sf_dmd_transfer_model(model_config):
             return
 
         resolution = self.resolution
         # The selected 480-only checkpoint must not inherit the legacy 720 preset.
         # Earlier mixed-resolution students record resolution=720 and retain both tiers.
         if str(getattr(model_config, "resolution", "")) == "480" and resolution != "480":
-            raise ValueError("This SF-DMD Transfer checkpoint supports only resolution='480'.")
+            raise ValueError(
+                f"This SF-DMD Transfer checkpoint supports only resolution='480', got resolution='{resolution}'."
+            )
         if not self.transfer_hints or not self.autoregressive:
             return
         frame_cap = self._SF_DMD_TRANSFER_MAX_FRAMES.get(resolution)
@@ -1657,8 +1924,8 @@ class _SampleDataBase:
         # single-view path reads, so the top-level mode stays None for a multiview i2v
         # sample. Leaving it None makes _get_multiview_condition_pixel_frames return
         # [None, ...] and an image2video sample then generates text2video output --
-        # byte-identical to the t2v run, with no error anywhere. Measured: parity job
-        # 2041279, all 11 views identical to the t2v run.
+        # byte-identical to the t2v run, with no error anywhere. Measured: all 11 views
+        # identical to the t2v run.
         if self.multiview is not None:
             condition_vision_mode = self.multiview.condition_vision_mode
         return SampleMeta(
@@ -1791,6 +2058,29 @@ CAUSAL_MULTIVIEW_ROLLING_EXPORT_OVERRIDES = (
 )
 
 
+def check_auto_fps_options(sample: "OmniSampleOverrides | OmniSampleArgs", config: Any) -> None:
+    """Validate effective arguments for CLI and API callers, including already-built samples."""
+    camera_fps = getattr(config, "_auto_camera_fps", None)
+    if camera_fps is None or sample.multiview is None:
+        if sample.output_fps is not None:
+            raise ValueError("output_fps is only supported for identified Auto camera models with multiview inputs.")
+        return
+    if sample.fps != camera_fps:
+        raise ValueError(
+            f"This Auto checkpoint requires model conditioning fps={camera_fps}, got fps={sample.fps}. "
+            f"For RGB-only playback at {sample.fps} FPS, omit --fps and use --output-fps {sample.fps} "
+            "(JSON: output_fps). Keep the synchronized input frames unchanged."
+        )
+    if sample.output_fps is not None and sample.output_fps != camera_fps:
+        if sample.is_joint_cam_lidar_transfer:
+            raise ValueError(
+                "Joint RGB/LiDAR retiming is not supported: output_fps must equal fps=30 to preserve "
+                "camera/sweep synchronization. Use different output_fps only for RGB-only Auto generation."
+            )
+        if sample.enable_sound or sample.sound_path is not None:
+            raise ValueError("Auto output_fps retiming supports RGB-only generation without audio.")
+
+
 def check_causal_multiview_lidar_prefix_options(sample: "OmniSampleOverrides", config: Any) -> None:
     """Check the causal joint LiDAR-prefix options before transfer defaults fill them in.
 
@@ -1843,7 +2133,14 @@ class OmniSampleArgs(
     SamplingArgs,
     SampleDataArgs,
     PromptUpsamplingArgs,
-): ...
+):
+    # Fields the sample or CLI set explicitly (not filled from defaults), so generation can tell a
+    # request apart from a default when it reports a setting it had to override. Not serialized.
+    _requested_fields: frozenset[str] = pydantic.PrivateAttr(default_factory=frozenset)
+
+    @property
+    def requested_fields(self) -> frozenset[str]:
+        return self._requested_fields
 
 
 class OmniSampleOverrides(
@@ -1862,7 +2159,7 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-32B-Instruct": "32B",
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
-        "nvidia/Cosmos3-Edge-Reasoner": "2B",
+        "nvidia/Cosmos3-Edge": "2B",
         "nvidia/Cosmos3-Nano-Reasoner": "8B",
     }
 
@@ -1870,8 +2167,17 @@ class OmniSampleOverrides(
         # Cosmos3-Edge defaults to a shorter 121-frame clip for video
         # generation; every other model keeps the per-modality JSON default
         # (189). Keyed by ``vlm_config.model_name`` so only Edge is affected.
-        "nvidia/Cosmos3-Edge-Reasoner": 121,
+        "nvidia/Cosmos3-Edge": 121,
     }
+
+    @staticmethod
+    def _vlm_model_key(vlm_config: Any) -> str:
+        """Resolve public defaults from architecture as well as a checkpoint's descriptive name."""
+        model_instance = getattr(vlm_config, "model_instance", None)
+        target = str(_mapping_get(model_instance, "_target_") or "")
+        if "Nemotron3DenseVLTextForCausalLM" in target:
+            return "nvidia/Cosmos3-Edge"
+        return getattr(vlm_config, "model_name", "") or ""
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
         # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
@@ -1955,6 +2261,12 @@ class OmniSampleOverrides(
         # User-provided values take precedence over JSON defaults.
         if self.defaults_file is not None:
             defaults = json.loads(self.defaults_file.read_text())
+            # A defaults file is validated outside any chdir, so resolve its relative caption file here.
+            neg_file = defaults.get("negative_prompt_file")
+            if isinstance(neg_file, str) and not Path(neg_file).expanduser().is_absolute():
+                beside = self.defaults_file.parent / neg_file
+                if beside.is_file():
+                    defaults["negative_prompt_file"] = str(beside.absolute())
         else:
             defaults_key = sample_meta.model_mode
             if self.multiview is not None:
@@ -2001,6 +2313,17 @@ class OmniSampleOverrides(
             if "guidance" not in configured and getattr(model_config, "fixed_step_sampler_config", None) is not None:
                 self.guidance = 1.0
 
+        # Auto's released camera clock is fixed, but the shared interface remains variable-FPS
+        # for other models. Only omitted FPS gets defaulted; sample/CLI/custom-defaults values
+        # must pass validation rather than being silently replaced.
+        auto_fps = getattr(model_config, "_auto_camera_fps", None)
+        if auto_fps is not None and self.multiview is not None:
+            if "fps" not in configured or self.fps is None:
+                self.fps = auto_fps
+            if self.output_fps is None:
+                self.output_fps = self.fps
+        check_auto_fps_options(self, model_config)
+
         # Model-specific num_frames default for video generation (e.g.
         # Cosmos3-Edge -> 121). Applies only when the user did not request a
         # frame count and the mode produces a plain video; image, action, and
@@ -2012,7 +2335,7 @@ class OmniSampleOverrides(
             and not sample_meta.model_mode.is_action
             and not sample_meta.model_mode.is_reasoner
         ):
-            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(model_config.vlm_config.model_name)
+            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(self._vlm_model_key(model_config.vlm_config))
             if num_frames_default is not None:
                 self.num_frames = num_frames_default
 
@@ -2055,11 +2378,14 @@ class OmniSampleOverrides(
         self._build_multiview_data(sample_meta=sample_meta, model_config=model_config)
         # After the transfer defaults, so control_guidance and the joint clock are resolved.
         check_causal_multiview_options(self, model_config)
+        check_auto_fps_options(self, model_config)
+        if auto_fps is not None and self.multiview is not None:
+            log.info(f"Model conditioning: {self.fps} FPS | Output playback: {self.output_fps} FPS")
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             # Unregistered backbone names (custom fine-tunes) simply skip shift
             # defaulting rather than KeyError-ing.
-            model_size = self._VLM_MODEL_SIZE.get(model_config.vlm_config.model_name)
+            model_size = self._VLM_MODEL_SIZE.get(self._vlm_model_key(model_config.vlm_config))
             key = (model_size, self.resolution)
             if key in self._RESOLUTION_SHIFT_DEFAULTS:
                 self.shift = self._RESOLUTION_SHIFT_DEFAULTS[key]
@@ -2084,7 +2410,9 @@ class OmniSampleOverrides(
         # than ``applied is False`` (which would miss case (a)).
         prompt_upsampling_applied = getattr(self, "prompt_upsampling_applied", None)
         native_prompt_upsampling = self.prompt_upsampling is True and not prompt_upsampling_applied
-        return self._build(OmniSampleArgs, native_prompt_upsampling=native_prompt_upsampling)
+        sample_args = self._build(OmniSampleArgs, native_prompt_upsampling=native_prompt_upsampling)
+        sample_args._requested_fields = user_fields
+        return sample_args
 
 
 _MODEL_MEMORY_FACTOR: int = int(1e9) * 2 * 2  # 1B params/tower * 2 bytes/param (bfloat16) * 2 towers
@@ -2101,7 +2429,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Nano": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["8B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Nano.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_16bm8b_v2_midtrain/checkpoints/iter_000006000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Nano",
             revision="main",
@@ -2110,7 +2437,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Edge": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["2B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Edge.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_4bm2b_v1_midtrain_0630a/checkpoints/iter_000028000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Edge",
             revision="main",
@@ -2119,19 +2445,16 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_64bm32b_v3_midtrain/checkpoints/iter_000001800/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super",
             revision="main",
         ),
     ),
     # Task-specialized Super variants published as diffusers HF checkpoints.
-    # s3_uri is unused for HF-backed checkpoints (kept for parity with the
-    # registry schema); the architecture lives in each model YAML.
+    # Each public checkpoint carries its own Hub source and architecture YAML.
     "Cosmos3-Super-Image2Video": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video",
             revision="main",
@@ -2143,7 +2466,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image",
             revision="main",
@@ -2155,7 +2477,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Text2Image-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image-4Step",
             revision="main",
@@ -2177,7 +2498,6 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
     "Cosmos3-Super-Image2Video-4Step": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
-        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video-4Step",
             revision="main",
@@ -2280,6 +2600,21 @@ class OmniSetupArgs(SetupArgs):
         return self
 
 
+def _is_sf_dmd_transfer_config(config: dict[str, Any]) -> bool:
+    """Whether an exported ``model.config`` is the SF-DMD Transfer (Sim-Transfer) student."""
+    replay_policy = config.get("teacher_forcing_replay_policy")
+    if not isinstance(replay_policy, dict):
+        return False
+    return (
+        config.get("fixed_step_sampler_config") is not None
+        and config.get("video_temporal_causal") is True
+        and config.get("teacher_forcing_frames_per_chunk") == 1
+        and replay_policy.get("control_visibility") == "causal"
+        and replay_policy.get("controls_read_strict_past_clean_rgb") is True
+        and replay_policy.get("clean_pass_causality") == "frame"
+    )
+
+
 class OmniSetupOverrides(SetupOverrides):
     variant: Suppress[Literal["omni"]] = "omni"
     """Discriminator."""
@@ -2376,19 +2711,7 @@ class OmniSetupOverrides(SetupOverrides):
     def _is_sf_dmd_transfer_hf_checkpoint(self) -> bool:
         """Recognize the student inference contract without a private experiment name."""
         config = self._hf_checkpoint_model_config()
-        if config is None:
-            return False
-        replay_policy = config.get("teacher_forcing_replay_policy")
-        if not isinstance(replay_policy, dict):
-            return False
-        return (
-            config.get("fixed_step_sampler_config") is not None
-            and config.get("video_temporal_causal") is True
-            and config.get("teacher_forcing_frames_per_chunk") == 1
-            and replay_policy.get("control_visibility") == "causal"
-            and replay_policy.get("controls_read_strict_past_clean_rgb") is True
-            and replay_policy.get("clean_pass_causality") == "frame"
-        )
+        return config is not None and _is_sf_dmd_transfer_config(config)
 
     def _apply_causal_multiview_setup_contract(self, world_size: int) -> None:
         """Pin the eager rolling runtime of a causal multiview checkpoint (Cosmos3-Nano-Sim-Auto).
@@ -2501,6 +2824,42 @@ class OmniSetupOverrides(SetupOverrides):
             log.warning("CFG parallelism takes precedence over batched CFG; disabling batched CFG.")
             self.use_batched_cfg = False
 
+    def _warn_degrading_transfer_history_window(self) -> None:
+        """Warn about Sim-Transfer history windows that are known to degrade the output.
+
+        The causal Transfer window counts the frame being generated, so it exposes
+        ``kv_cache_inference_size - attention_sink_size - 1`` earlier non-sink frames. With none, the
+        output can wash out and lose fine detail. A finite window without an attention sink can let
+        brightness drift once the clip outgrows the window. Unset flags resolve to the checkpoint's
+        exported values; with neither flag set the checkpoint's own window stands and nothing is read. A sink
+        that is not smaller than the window is left to the model's own check.
+        """
+        if self.kv_cache_inference_size is None and self.attention_sink_size is None:
+            return
+        config = self._hf_checkpoint_model_config()
+        if config is None or not _is_sf_dmd_transfer_config(config):
+            return
+        window = self.kv_cache_inference_size
+        if window is None:
+            window = config.get("kv_cache_inference_size")
+        sink = self.attention_sink_size
+        if sink is None:
+            sink = config.get("attention_sink_size") or 0
+        if not window or sink >= window:
+            return
+        if window - sink - 1 < 1:
+            log.warning(
+                f"kv_cache_inference_size={window} with attention_sink_size={sink} leaves no earlier non-sink "
+                "frames in the causal history window (the window includes the frame being generated); the "
+                "output can wash out. Set kv_cache_inference_size to 0 for full history, or use a window such as 30 "
+                "with a sink of 3."
+            )
+        elif sink == 0:
+            log.warning(
+                f"kv_cache_inference_size={window} has no attention sink; once the clip outgrows the window, "
+                "brightness can drift. Set attention_sink_size to 1 or more, as in 30 with a sink of 3."
+            )
+
     @override
     def build_setup(
         self, world_size: int | None = None, local_world_size: int | None = None, device_memory_bytes: int | None = None
@@ -2519,6 +2878,7 @@ class OmniSetupOverrides(SetupOverrides):
             resolved_value = "null" if field == "kv_cache_inference_size" and value == 0 else str(value)
             self.experiment_overrides = [item for item in self.experiment_overrides if not item.startswith(key)]
             self.experiment_overrides.append(key + resolved_value)
+        self._warn_degrading_transfer_history_window()
         self._build_parallelism(
             world_size=world_size, local_world_size=local_world_size, device_memory_bytes=device_memory_bytes
         )

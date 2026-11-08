@@ -15,7 +15,6 @@ import warnings
 import pytest
 from omegaconf import OmegaConf
 
-from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.posttrain.config import build
 from cosmos_framework.posttrain.config.config_grpo import PosttrainGRPOConfig
 from cosmos_framework.posttrain.config.model import HFModelConfig
@@ -45,6 +44,7 @@ from cosmos_framework.posttrain.config.rl import (
 from cosmos_framework.posttrain.control.loop.batching import informative_quota_per_cell, prompts_per_data_cell
 from cosmos_framework.posttrain.schema.checkpoint import FULL_CHECKPOINT_COMPONENTS, CheckpointComponentPlan
 from cosmos_framework.posttrain.tests.helpers.config import skip_recipe_registration
+from cosmos_framework.utils.lazy_config import instantiate
 
 
 @pytest.mark.L0
@@ -351,7 +351,7 @@ class TestCheckpointStoragePolicyConfig:
         assert config.emergency_checkpoint_components == "run"
 
     def test_emergency_run_plan_requires_the_model_in_a_saving_validation_plan(self) -> None:
-        """Review of b7fa3ebe4a (thread a4491f8c): under "run", a step's only artifact before the emergency save can be
+        """Under "run", a step's only artifact before the emergency save can be
         an off-cadence validation artifact; a committed artifact is never re-committed, so if it lacked the weights the
         emergency save could only write the full plan -- the TiB-scale save "run" exists to avoid. The config refuses
         that combination; a validation plan with the model, a validation that saves nothing, or the default "full"
@@ -392,7 +392,7 @@ class TestCheckpointStoragePolicyConfig:
                 )
 
     def test_emergency_run_plan_requires_the_validation_plan_to_cover_the_run_plan(self) -> None:
-        """Review of 418cfb184da (LDCR 2026-10-01, mrs-ours V11): requiring only the model in a saving validation plan left
+        """Requiring only the model in a saving validation plan left
         the TiB-scale escalation reachable. Run plan `[model, training_state]` with validation plan `[model]` was
         ACCEPTED, and the coordinator's emergency save of a step holding that validation artifact wrote the FULL plan --
         the optimizer added, the one component "run" exists to avoid. The emergency plan under "run" is the run plan
@@ -831,7 +831,7 @@ def test_zero_means_degenerate_to_today():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_grpo_rejects_a_non_default_grad_accum():
-    """Retired as a GRPO knob — the trainer's value is derived from n_micro (§5.2)."""
+    """Retired as a GRPO knob — the trainer's value is derived from n_micro."""
     with pytest.raises(ValueError, match="grad_accum"):
         GRPOConfig(batch_per_replica=64, group_size=8, grad_accum=4)
 
@@ -852,7 +852,7 @@ def test_prompts_per_data_replica_derives_from_batch_per_replica():
 def test_dpo_grad_accum_is_unaffected():
     """`grad_accum` is retired as a GRPO knob only. DPO really uses it —
     wallace_8b_hpdv3_repro_v1.py:51 sets 32, ga_32b_hpdv3_repro_v1.py:58 sets 4 — and DPO's
-    MEAN reduction is untouched by any of this (§5.2)."""
+    MEAN reduction is untouched by any of this."""
     assert DPOConfig(grad_accum=4).grad_accum == 4
 
 
@@ -891,7 +891,7 @@ def test_batch_per_replica_must_divide_by_group_size():
     assert cfg.prompts_per_data_replica == 8
 
 
-# --------------------------------------------------------------------------- §8.2/§8.4 grid.shapes
+# --------------------------------------------------------------------------- grid.shapes
 
 
 @pytest.mark.L0
@@ -1215,7 +1215,7 @@ def test_fixed_normaliser_optimizer_eps_warning() -> None:
     messages = [str(w.message) for w in record if "eps-dominated" in str(w.message)]
     assert len(messages) == 1
     assert "rl.optimizer.eps=1e-06" in messages[0]
-    assert "(lr/eps)*m" in messages[0] and "1e-8" in messages[0] and "re-tune lr" in messages[0]
+    assert "lr/eps" in messages[0] and "1e-8" in messages[0] and "re-tune lr" in messages[0]
     with pytest.warns(UserWarning, match="eps-dominated"):
         GRPOConfig(loss_type=fixed, optimizer=OptimizerConfig(eps=2e-7))  # just above the ceiling
     with warnings.catch_warnings():
@@ -1452,7 +1452,7 @@ def test_native_backend_refuses_autocast_mode() -> None:
 def test_native_backend_refuses_autocast_mode_without_any_dtype_field() -> None:
     """The mode check asks whether the BUILDER has an autocast path, which no native builder has; it must not hide
     behind the dtype comparisons, so a native config exposing neither `dtype` nor `fsdp_reduce_dtype` is still
-    refused (`docs/reference/config.md` promises the refusal unconditionally for `model_backend="i4"`)."""
+    refused (`docs/reference/config.md` promises the refusal unconditionally for `model_backend="native"`)."""
     from types import SimpleNamespace
 
     bare = SimpleNamespace()
@@ -1606,7 +1606,7 @@ def test_recipe_guard_severity_rejects_unknown_values_and_reaches_the_validator_
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_require_full_emergency_plan_refuses_run_for_a_loop_that_always_writes_the_full_plan() -> None:
-    """Review of c2af017642d (thread 0069d0e0): the shared selector must fail loud wherever a loop cannot honour it.
+    """The shared selector must fail loud wherever a loop cannot honour it.
     `require_full_emergency_plan` is the one check the PPO validators call; "full" (and an absent field) pass."""
     from types import SimpleNamespace
 

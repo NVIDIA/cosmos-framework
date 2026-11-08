@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-Imaginaire4 Attention Subpackage:
+Attention Subpackage:
 Unit tests for backend filtering via environment variables.
 """
 
@@ -94,7 +94,7 @@ class TestFilterAPIs(unittest.TestCase):
     def setUp(self):
         """Save and clear environment variables before each test."""
         self.saved_env = {}
-        for var in ["I4_ATTN_BACKENDS", "I4_ATTN_BACKENDS_MULTIDIM", "I4_ATTN_BACKENDS_MERGE"]:
+        for var in ["COSMOS_ATTN_BACKENDS", "COSMOS_ATTN_BACKENDS_MULTIDIM", "COSMOS_ATTN_BACKENDS_MERGE"]:
             self.saved_env[var] = os.environ.get(var)
             if var in os.environ:
                 del os.environ[var]
@@ -115,14 +115,14 @@ class TestFilterAPIs(unittest.TestCase):
 
     def test_attention_backends_ban_list(self):
         """Test filter_attention_backends with ban-list."""
-        os.environ["I4_ATTN_BACKENDS"] = "-flash2"
+        os.environ["COSMOS_ATTN_BACKENDS"] = "-flash2"
         default = ["flash2", "natten", "cudnn"]
         result = filter_attention_backends(default)
         assert result == ["natten", "cudnn"]
 
     def test_attention_backends_allow_list(self):
         """Test filter_attention_backends with allow-list."""
-        os.environ["I4_ATTN_BACKENDS"] = "natten"
+        os.environ["COSMOS_ATTN_BACKENDS"] = "natten"
         default = ["flash2", "natten", "cudnn"]
         result = filter_attention_backends(default)
         assert result == ["natten"]
@@ -135,7 +135,7 @@ class TestFilterAPIs(unittest.TestCase):
 
     def test_multi_dim_backends_ban_list(self):
         """Test filter_multi_dim_attention_backends with ban-list."""
-        os.environ["I4_ATTN_BACKENDS_MULTIDIM"] = "-natten"
+        os.environ["COSMOS_ATTN_BACKENDS_MULTIDIM"] = "-natten"
         default = ["natten"]
         result = filter_multi_dim_attention_backends(default)
         assert result == []
@@ -148,15 +148,15 @@ class TestFilterAPIs(unittest.TestCase):
 
     def test_merge_backends_ban_list(self):
         """Test filter_attention_merge_backends with ban-list."""
-        os.environ["I4_ATTN_BACKENDS_MERGE"] = "-natten"
+        os.environ["COSMOS_ATTN_BACKENDS_MERGE"] = "-natten"
         default = ["natten"]
         result = filter_attention_merge_backends(default)
         assert result == []
 
     def test_multiple_env_vars_independent(self):
         """Test that different filter functions use independent env vars."""
-        os.environ["I4_ATTN_BACKENDS"] = "-flash2"
-        os.environ["I4_ATTN_BACKENDS_MULTIDIM"] = "natten"
+        os.environ["COSMOS_ATTN_BACKENDS"] = "-flash2"
+        os.environ["COSMOS_ATTN_BACKENDS_MULTIDIM"] = "natten"
 
         default_sdpa = ["flash2", "natten"]
         default_multidim = ["natten"]
@@ -175,7 +175,7 @@ class TestBackendListIntegration(unittest.TestCase):
     def setUp(self):
         """Save and clear environment variables before each test."""
         self.saved_env = {}
-        for var in ["I4_ATTN_BACKENDS", "I4_ATTN_BACKENDS_MULTIDIM", "I4_ATTN_BACKENDS_MERGE"]:
+        for var in ["COSMOS_ATTN_BACKENDS", "COSMOS_ATTN_BACKENDS_MULTIDIM", "COSMOS_ATTN_BACKENDS_MERGE"]:
             self.saved_env[var] = os.environ.get(var)
             if var in os.environ:
                 del os.environ[var]
@@ -197,7 +197,7 @@ class TestBackendListIntegration(unittest.TestCase):
         assert "flash3" in backends or "flash2" in backends or "natten" in backends
 
         # Test with ban-list
-        os.environ["I4_ATTN_BACKENDS"] = "-flash3,-flash2"
+        os.environ["COSMOS_ATTN_BACKENDS"] = "-flash3,-flash2"
         backends = get_backend_list(90)
         assert "flash3" not in backends
         assert "flash2" not in backends
@@ -211,7 +211,7 @@ class TestBackendListIntegration(unittest.TestCase):
         assert backends == ["natten"]
 
         # Test with ban-list
-        os.environ["I4_ATTN_BACKENDS_MULTIDIM"] = "-natten"
+        os.environ["COSMOS_ATTN_BACKENDS_MULTIDIM"] = "-natten"
         backends = get_multi_dim_backend_list(90)
         assert backends == []
 
@@ -229,7 +229,7 @@ class TestBackendListOrdering(unittest.TestCase):
     def setUp(self):
         """Save and clear backend env vars so defaults are exercised unmodified."""
         self.saved_env = {}
-        for var in ["I4_ATTN_BACKENDS", "I4_ATTN_BACKENDS_MULTIDIM", "I4_ATTN_BACKENDS_MERGE"]:
+        for var in ["COSMOS_ATTN_BACKENDS", "COSMOS_ATTN_BACKENDS_MULTIDIM", "COSMOS_ATTN_BACKENDS_MERGE"]:
             self.saved_env[var] = os.environ.get(var)
             if var in os.environ:
                 del os.environ[var]

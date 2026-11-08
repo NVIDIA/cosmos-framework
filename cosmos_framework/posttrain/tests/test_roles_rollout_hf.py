@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for HFRollout (DESIGN §1.2 body=(a)). Uses a tiny random GPT2 on CPU."""
+"""Tests for HFRollout (the contract body=(a)). Uses a tiny random GPT2 on CPU."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from cosmos_framework.posttrain.schema import ObsBundle, Status
 def _tiny():
     cfg = GPT2Config(n_layer=2, n_head=2, n_embd=32, vocab_size=50257, n_positions=64)
     model = GPT2LMHeadModel(cfg).eval()
-    packer = init_data_packer("gpt2")  # rollout-side shaping seam; owns the tokenizer (design 2026-07-28)
+    packer = init_data_packer("gpt2")  # rollout-side shaping seam; owns the tokenizer
     return model, packer
 
 

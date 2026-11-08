@@ -25,13 +25,13 @@ BASE = {
     "NUM_GPUS": "1",
     "CPUS_PER_TASK": "16",
     "TIME": "04:00:00",
-    "LOG_DIR": "/lustre/fsw/portfolios/edgeai/users/me/results/cosmos3-train-a1b2c3/slurm-logs",
-    "SBATCH_EXTRA": "#SBATCH --account=edgeai\n#SBATCH --partition=polar,polar3",
+    "LOG_DIR": "/shared/users/me/results/cosmos3-train-a1b2c3/slurm-logs",
+    "SBATCH_EXTRA": "#SBATCH --account=my-account\n#SBATCH --partition=batch",
     "ENV_FILE": "",
     "EXTRA_ENV": "",
-    "IMAGE": "/lustre/fsw/sqsh/cosmos-framework.sqsh",
-    "CONTAINER_MOUNTS": "/lustre",
-    "COMMAND": "python -m cosmos_framework.scripts.train --sft-toml /lustre/fsw/.../specs/cosmos3-train-a1b2c3/spec.yaml",
+    "IMAGE": "/shared/sqsh/cosmos-framework.sqsh",
+    "CONTAINER_MOUNTS": "/shared",
+    "COMMAND": "python -m cosmos_framework.scripts.train --sft-toml /shared/.../specs/cosmos3-train-a1b2c3/spec.yaml",
 }
 
 
@@ -58,10 +58,10 @@ def test_rendered_is_valid_bash():
 
 
 def test_env_file_present_case_is_valid_bash():
-    rendered = render({"ENV_FILE": "/lustre/.../job_cosmos3-train-a1b2c3.env"})
+    rendered = render({"ENV_FILE": "/shared/.../job_cosmos3-train-a1b2c3.env"})
     assert bash_syntax_ok(rendered)
     assert "trap 'shred -u" in rendered  # sidecar shredded on exit
-    assert 'source "/lustre' in rendered
+    assert 'source "/shared' in rendered
 
 
 def test_load_bearing_directives_present():
@@ -71,8 +71,8 @@ def test_load_bearing_directives_present():
         "#SBATCH --nodes=1",
         "#SBATCH --gres=gpu:1",
         "srun --container-image=",
-        "--container-mounts=/lustre",
-        "#SBATCH --account=edgeai",
+        "--container-mounts=/shared",
+        "#SBATCH --account=my-account",
     ):
         assert needle in rendered, f"missing: {needle}"
 

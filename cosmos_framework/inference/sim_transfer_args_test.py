@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pydantic
 import pytest
 
 import cosmos_framework.inference.args as args_module
+import cosmos_framework.inference.common.args as common_args
 from cosmos_framework.inference.args import OmniSampleOverrides, OmniSetupOverrides
 
 _GB200_MEMORY_BYTES = 192 * 1024**3
@@ -375,3 +377,605 @@ def test_public_causal_cache_overrides_preserve_exported_config(
     assert config["attention_sink_size"] == sink
     assert json.loads(config_path.read_text()) == source_config
     assert overrides.build_setup(world_size=1, local_world_size=1, device_memory_bytes=_GB200_MEMORY_BYTES) == setup
+
+
+def _distilled_causal_model_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        fixed_step_sampler_config=SimpleNamespace(t_list=[1.0, 0.9375, 0.8333333333333334, 0.625]),
+        video_temporal_causal=True,
+        teacher_forcing_frames_per_chunk=1,
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("weight,warns", [(None, False), (1.0, False), (0.5, True), (5.0, True)])
+def test_single_control_weight_warns_when_it_cannot_take_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, weight: float | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control), "weight": weight}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert any("'depth.weight'" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_multi_control_weights_do_not_warn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    rgb = tmp_path / "rgb.mp4"
+    rgb.touch()
+    sample = OmniSampleOverrides(vision_path=str(rgb), edge={"weight": 0.9}, blur={"weight": 0.1}, autoregressive=False)
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"edge", "blur"}))
+
+    assert not any(".weight'" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("weights", [{"depth": 0.0}, {"depth": -1.0}, {"edge": 0.0, "blur": 0.0}])
+def test_invalid_control_weights_are_rejected(tmp_path: Path, weights: dict[str, float]) -> None:
+    control = tmp_path / "control.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        **{key: {"control_path": str(control), "weight": w} for key, w in weights.items()}, autoregressive=False
+    )
+    with pytest.raises(ValueError, match="non-negative with a positive sum"):
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset(weights))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_is_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+    # The skill's defaults file supplies negative_prompt=""; only the sample sets the file.
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=True,
+        negative_prompt="",
+        negative_prompt_file=str(negative),
+    )
+    sample._build_transfer_data(
+        _distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth", "negative_prompt_file"})
+    )
+
+    assert sample.negative_prompt == ""
+    assert any("'negative_prompt_file' is ignored by distilled causal Transfer" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_explicit_negative_prompt_wins_over_file_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        negative_prompt="grainy",
+        negative_prompt_file=str(negative),
+    )
+    sample._build_transfer_data(
+        SimpleNamespace(),
+        sample.sample_meta,
+        user_fields=frozenset({"depth", "negative_prompt", "negative_prompt_file"}),
+    )
+
+    assert sample.negative_prompt == "grainy"
+    assert any("both 'negative_prompt' and 'negative_prompt_file' are set" in w for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "field,value,warns",
+    [
+        ("guidance", 1.0, False),
+        ("guidance", 3.0, True),
+        ("sigma_max", 80.0, False),
+        ("sigma_max", 200.0, True),
+        ("shift", 5.0, False),
+        ("shift", 10.0, True),
+        ("normalize_cfg", False, False),
+        ("normalize_cfg", True, True),
+        ("num_conditional_frames", 0, False),
+        ("num_conditional_frames", 2, True),
+        ("negative_metadata_mode", "none", False),
+        ("negative_metadata_mode", "same", True),
+        ("negative_metadata_mode", "inverse", True),
+        ("negative_prompt_keep_metadata", False, False),
+        ("negative_prompt_keep_metadata", True, True),
+    ],
+)
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sampler_fields_are_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: float | bool | str, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, autoregressive=True, **{field: value})
+    sample._build_transfer_data(
+        _distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth", field})
+    )
+
+    assert any(f"'{field}' is ignored by distilled causal Transfer" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("upsampling,warns", [(True, True), (False, False), (None, False)])
+def test_prompt_upsampling_is_flagged_as_ignored_by_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, upsampling: bool | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, autoregressive=False, prompt_upsampling=upsampling
+    )
+    model_config = SimpleNamespace(tokenizer=SimpleNamespace(temporal_compression_factor=4))
+    sample._build_transfer_data(model_config, sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert any("'prompt_upsampling' is ignored by Transfer" in w for w in warnings) is warns
+
+
+@pytest.mark.parametrize(
+    "mode,mode_set,warns",
+    [
+        ("video2video", True, False),
+        ("text2video", True, True),
+        ("image2video", True, True),
+        ("text2video", False, False),
+    ],
+)
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_non_video2video_mode_is_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, mode_set: bool, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, autoregressive=True, model_mode=mode)
+    user_fields = frozenset({"depth", "model_mode"} if mode_set else {"depth"})
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=user_fields)
+
+    assert any(f"'model_mode'='{mode}' is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("chunk,warns", [(121, False), (61, True)])
+def test_chunk_size_unlike_num_frames_is_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunk: int, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, autoregressive=True, num_frames=121, num_video_frames_per_chunk=chunk
+    )
+    sample._build_transfer_data(
+        _distilled_causal_model_config(),
+        sample.sample_meta,
+        user_fields=frozenset({"depth", "num_frames", "num_video_frames_per_chunk"}),
+    )
+
+    assert any("'num_video_frames_per_chunk'=61 is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("resolution", ["256", "704", "720", "768"])
+def test_480_only_checkpoint_names_its_own_limit_for_every_rejected_tier(tmp_path: Path, resolution: str) -> None:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    model_config = SimpleNamespace(
+        resolution="480",
+        fixed_step_sampler_config=SimpleNamespace(t_list=[1.0, 0.9375, 5 / 6, 0.625]),
+        video_temporal_causal=True,
+        causal_training_strategy="none",
+        teacher_forcing_frames_per_chunk=1,
+        teacher_forcing_replay_policy=SimpleNamespace(
+            control_visibility="causal", controls_read_strict_past_clean_rgb=True, clean_pass_causality="frame"
+        ),
+    )
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=True,
+        resolution=resolution,
+        transfer_resize_mode="direct_resize",
+        control_guidance=1.0,
+        num_first_chunk_conditional_frames=0,
+        share_vision_temporal_positions=True,
+    )
+    with pytest.raises(ValueError, match=f"supports only resolution='480', got resolution='{resolution}'"):
+        sample._build_transfer_data(model_config, sample.sample_meta, user_fields=frozenset())
+        sample._apply_sf_dmd_transfer_inference_contract(model_config=model_config, user_fields=frozenset())
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_bidirectional_480_model_keeps_the_teacher_tier_message(tmp_path: Path) -> None:
+    # Only the causal SF-DMD student is 480-only; a bidirectional model recording 480 still runs 720.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    model_config = SimpleNamespace(resolution="480", fixed_step_sampler_config=None, video_temporal_causal=False)
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, resolution="256", transfer_resize_mode="direct_resize"
+    )
+    with pytest.raises(ValueError, match="teacher's trained 480 and 720 tiers only, got resolution='256'"):
+        sample._build_transfer_data(model_config, sample.sample_meta, user_fields=frozenset())
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("interval,warns", [(None, False), ([0.0, 1000.0], True)])
+def test_control_guidance_interval_is_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interval: list[float] | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, autoregressive=True, control_guidance_interval=interval
+    )
+    sample._build_transfer_data(
+        _distilled_causal_model_config(),
+        sample.sample_meta,
+        user_fields=frozenset({"depth", "control_guidance_interval"}),
+    )
+
+    assert any("'control_guidance_interval' is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("interval,warns", [(None, False), ([0.0, 1000.0], True)])
+def test_guidance_interval_is_flagged_as_ignored_by_distilled_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interval: list[float] | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, autoregressive=True, guidance_interval=interval)
+    sample._build_transfer_data(
+        _distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth", "guidance_interval"})
+    )
+
+    assert any("'guidance_interval' is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_unused_negative_prompt_file_is_not_opened(tmp_path: Path) -> None:
+    # Specs such as the cookbook's set a negative_prompt_file next to a negative_prompt from the defaults;
+    # the file is only read when it supplies the caption, so the default caption is kept.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    negative = tmp_path / "negative.json"
+    negative.write_text("not json: never opened")
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        negative_prompt="grainy",
+        negative_prompt_file=str(negative),
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert sample.negative_prompt == "grainy"
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("autoregressive", [True, False])
+def test_missing_negative_prompt_file_fails_only_its_sample(tmp_path: Path, autoregressive: bool) -> None:
+    # Parsing accepts the spec, so one bad path does not abort the whole file; building the sample that
+    # would read the file raises a ValueError, which --skip-invalid-samples turns into a skipped sample.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=autoregressive,
+        negative_prompt_file="missing_negative.json",
+    )
+    with pytest.raises(ValueError, match="negative_prompt_file not found: missing_negative.json"):
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_missing_negative_prompt_file_warns_when_another_caption_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before, a typo here passed silently whenever a default negative_prompt won, which is almost always.
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        negative_prompt="grainy",
+        negative_prompt_file="missing_negative.json",
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert sample.negative_prompt == "grainy"
+    assert any("negative_prompt_file not found: missing_negative.json" in w and "not used" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_resolves_relative_to_the_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The cookbook layout: specs/<control>.json points at ../assets/negative_prompt.json.
+    (tmp_path / "assets").mkdir()
+    negative = tmp_path / "assets" / "negative_prompt.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "depth.mp4").touch()
+    monkeypatch.chdir(specs)  # load_args_from_file validates with the spec's folder as the working directory
+    sample = OmniSampleOverrides(
+        depth={"control_path": "depth.mp4"}, negative_prompt_file="../assets/negative_prompt.json"
+    )
+    monkeypatch.chdir(tmp_path.parent)
+
+    assert Path(sample.negative_prompt_file).resolve() == negative.resolve()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_negative_prompt_file_still_resolves_from_the_launch_folder_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before this check the file was read from the folder the run was launched from; keep that working.
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    (launch / "neg.json").write_text(json.dumps({"caption": "launch"}))
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "neg.json").write_text(json.dumps({"caption": "spec"}))
+    (specs / "depth.mp4").touch()
+    spec = specs / "sample.json"
+    spec.write_text(json.dumps({"depth": {"control_path": "depth.mp4"}, "negative_prompt_file": "neg.json"}))
+    monkeypatch.chdir(launch)  # the folder the run is launched from, chosen after the module was imported
+    (sample,) = common_args._from_file(OmniSampleOverrides, spec, {})
+
+    assert Path(sample.negative_prompt_file).resolve() == (launch / "neg.json").resolve()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_launch_folder_is_read_when_the_spec_is_loaded_not_at_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server or test that changes folder after import must resolve against the folder it loads the spec from.
+    first, second, specs = tmp_path / "first", tmp_path / "second", tmp_path / "specs"
+    for folder in (first, second, specs):
+        folder.mkdir()
+    (second / "neg.json").write_text(json.dumps({"caption": "second"}))
+    (specs / "depth.mp4").touch()
+    spec = specs / "sample.json"
+    spec.write_text(json.dumps({"depth": {"control_path": "depth.mp4"}, "negative_prompt_file": "neg.json"}))
+    monkeypatch.chdir(first)
+    monkeypatch.chdir(second)
+    (sample,) = common_args._from_file(OmniSampleOverrides, spec, {})
+
+    assert Path(sample.negative_prompt_file).resolve() == (second / "neg.json").resolve()
+    assert common_args.current_launch_dir() == second  # reset after loading
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_defaults_name_fallback_applies_only_to_a_bare_filename(tmp_path: Path) -> None:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="typo_dir/neg_prompts.json")
+    with pytest.raises(ValueError, match="negative_prompt_file not found: typo_dir/neg_prompts.json"):
+        sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_keep_metadata_promotion_does_not_report_a_requested_none_as_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The built-in video2video defaults set negative_prompt_keep_metadata=true, which promotes 'none' to 'same'.
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=True,
+        negative_metadata_mode="none",
+        negative_prompt_keep_metadata=True,
+    )
+    sample._build_text_data(SimpleNamespace(), sample.sample_meta)
+    assert sample.negative_metadata_mode == "same"
+    sample._build_transfer_data(
+        _distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth", "negative_metadata_mode"})
+    )
+
+    assert not any("'negative_metadata_mode' is ignored" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_defaults_negative_prompt_file_name_is_still_accepted(tmp_path: Path) -> None:
+    # The built-in modality defaults name their caption file by bare filename under defaults/.
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control)}, negative_prompt_file="neg_prompts.json")
+
+    assert sample.negative_prompt_file == "neg_prompts.json"
+    # Building reads it from defaults/ and is not reported as missing.
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"depth"}))
+    assert sample.negative_prompt
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_zero_weight_on_the_causal_path_warns_instead_of_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The causal path hard-codes one weight of 1.0, so the value is ignored rather than invalid there.
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(depth={"control_path": str(control), "weight": 0.0}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"depth"}))
+
+    assert any("'depth.weight'=0.0 has no effect" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("interval", [[800.0, 200.0], [500.0, 500.0]])
+def test_reversed_control_guidance_interval_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interval: list[float]
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, autoregressive=False, control_guidance_interval=interval
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset())
+
+    assert any("'control_guidance_interval'" in w and "is reversed" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("interval", [[800.0, 200.0], [500.0, 500.0]])
+def test_reversed_guidance_interval_warns(monkeypatch: pytest.MonkeyPatch, interval: list[float]) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    sample = OmniSampleOverrides(guidance_interval=interval, num_steps=35, guidance=3.0)
+    sample._build_sampling(SimpleNamespace(fixed_step_sampler_config=None), sample.sample_meta)
+
+    assert any("'guidance_interval'" in w and "is reversed" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("control_guidance", "autoregressive", "warns"), [(1.5, False, True), (1.0, False, False), (1.5, True, False)]
+)
+def test_reversed_control_guidance_interval_warns_only_where_control_guidance_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, control_guidance: float, autoregressive: bool, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)},
+        autoregressive=autoregressive,
+        control_guidance=control_guidance,
+        control_guidance_interval=[800.0, 200.0],
+    )
+    sample._build_transfer_data(SimpleNamespace(), sample.sample_meta, user_fields=frozenset({"control_guidance"}))
+
+    assert any("is reversed" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "hint,preset_field,preset,warns",
+    [
+        ("blur", "preset_blur_strength", "very_high", True),
+        ("blur", "preset_blur_strength", "medium", False),
+        ("blur", "preset_blur_strength", None, False),
+        ("edge", "preset_edge_threshold", "low", True),
+        ("edge", "preset_edge_threshold", "medium", False),
+    ],
+)
+def test_preset_is_flagged_as_ignored_when_control_path_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hint: str, preset_field: str, preset: str | None, warns: bool
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / f"{hint}.mp4"
+    control.touch()
+    config: dict[str, str] = {"control_path": str(control)}
+    if preset is not None:
+        config[preset_field] = preset
+    sample = OmniSampleOverrides(**{hint: config}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({hint}))
+
+    assert any(f"'{hint}.{preset_field}'" in w and "is ignored" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_preset_without_control_path_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    rgb = tmp_path / "rgb.mp4"
+    rgb.touch()
+    sample = OmniSampleOverrides(vision_path=str(rgb), blur={"preset_blur_strength": "very_high"}, autoregressive=True)
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset({"blur"}))
+
+    assert not any("preset_blur_strength" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "show_input,with_vision,user_set,warns",
+    [
+        (True, False, True, True),
+        (True, True, True, False),
+        (False, False, True, False),
+        (True, False, False, False),  # from a defaults file, not the request
+    ],
+)
+def test_show_input_without_vision_path_is_flagged_as_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    show_input: bool,
+    with_vision: bool,
+    user_set: bool,
+    warns: bool,
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    extra: dict[str, str] = {}
+    if with_vision:
+        rgb = tmp_path / "rgb.mp4"
+        rgb.touch()
+        extra["vision_path"] = str(rgb)
+    sample = OmniSampleOverrides(
+        depth={"control_path": str(control)}, show_input=show_input, autoregressive=True, **extra
+    )
+    fields = {"depth", "show_input"} if user_set else {"depth"}
+    sample._build_transfer_data(_distilled_causal_model_config(), sample.sample_meta, user_fields=frozenset(fields))
+
+    assert any("'show_input' has no effect without 'vision_path'" in w for w in warnings) is warns
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value,expected", [(480, "480"), ("480", "480"), (720, "720")])
+def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: str) -> None:
+    assert OmniSampleOverrides(resolution=value).resolution == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", [1080, "4k", True])
+def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        OmniSampleOverrides(resolution=value)
