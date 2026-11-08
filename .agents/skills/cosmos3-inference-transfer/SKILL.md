@@ -119,7 +119,7 @@ Skill note (not in the notebooks): the vLLM-Omni, SGLang and TensorRT-LLM notebo
 nothing else in the cells — with:
 
 ```python
-# Skill note (not in the notebooks): run from this skill directory; every other line of the notebooks' cells runs unchanged
+# Skill note (not in the notebooks): run from this skill directory — path cell, helper cells and use-case cell as ONE python file — with a python that has `requests` and `ipython` (the § 2 cells and the TensorRT-LLM helper cell import `IPython.display`): Variant 2 = "$COSMOS3_DIFFUSERS_VENV/bin/python"; Variants 3–5 = a client venv, because the default python3 may lack pip or be another venv: uv venv --no-config .venv-client --python 3.12 --seed --managed-python && uv pip install --no-config --python .venv-client/bin/python requests pillow ipython av==18.0.0 — then run the file with .venv-client/bin/python. Every other line of the cells runs unchanged
 import os, sys
 from pathlib import Path
 
@@ -194,7 +194,7 @@ export COSMOS3_TRANSFER_ROOT="$PWD"                                             
 export COSMOS3_TRANSFER_OUTPUT_ROOT="${COSMOS3_TRANSFER_OUTPUT_ROOT:-$PWD/outputs/notebooks}"
 export COSMOS3_REPO="${COSMOS3_REPO:?set COSMOS3_REPO to the framework checkout (an existing tree skips the clone of § 5; a new path is cloned there)}"
 export COSMOS3_GIT_URL="${COSMOS3_GIT_URL:-https://github.com/NVIDIA/cosmos-framework.git}"; export HF_TOKEN="${HF_TOKEN:-}"   # HF_TOKEN: the § 2 cell (empty when `hf auth login` is used)
-export COSMOS3_UV_GROUP="${COSMOS3_UV_GROUP:-cu128-train}"   # the notebook's x86_64 default (aarch64: cu130-train); the setup guide pairs the tag with the driver's CUDA version
+export COSMOS3_UV_GROUP="${COSMOS3_UV_GROUP:-cu130-train}"   # skill note (not in the notebook): driver CUDA 13.x → cu130-train, 12.x → cu128-train ("Read this first" 2; setup guide: "The notebooks honor `COSMOS3_UV_GROUP` (default `cu130-train`); set `export COSMOS3_UV_GROUP=cu128-train` … on CUDA 12.x systems"; aarch64: always cu130-train, natten). The notebook's own x86_64 default cu128-train left Transformer Engine without libcudart on toolkit-free CUDA 13 hosts (eval 2026-11-08, 2 of 4 first runs: `RuntimeError: cudart shared object not found`; fix row: references/cosmos-framework.md after § 7)
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$COSMOS3_TRANSFER_ROOT/.cache/uv}"; export HF_HOME="${HF_HOME:-$COSMOS3_TRANSFER_ROOT/.cache/huggingface}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"; export COSMOS3_NUM_GPUS="${COSMOS3_NUM_GPUS:-1}"   # the Super cells use the GPU list and count
 export COSMOS3_MASTER_ADDR="${COSMOS3_MASTER_ADDR:-127.0.0.1}"; export COSMOS3_MASTER_PORT="${COSMOS3_MASTER_PORT:-29500}"   # 29500 = the README's Super block (--master-port=29500); the notebook's § 3 cell picks a free port (free_local_port()) instead
@@ -223,9 +223,11 @@ guidance_scale=3.0, generator=torch.Generator(device="cuda").manual_seed(2026), 
 "Transfer is reachable only through the modular pipeline, which takes precomputed control videos as `control_videos={hint: frames}`" (README).
 
 The notebook's venv — the § 2 exports, verbatim ("use the CUDA 13 or 12.8 Torch backend depending on the CUDA version installed on your system
-(`cu130` or `cu128`)"), then its § 3 install cell. § 1: "**uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework"; "**Headless
-servers:** if you see an error like `libxcb.so.1: cannot open shared object file` … install the required system libraries:
-`apt-get install -y libxcb1 libgl1 libglib2.0-0`":
+(`cu130` or `cu128`)"), then its § 3 install cell. § 1: "**uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework" — skill note (not in
+the notebook): mandatory here — the checkout's `pyproject.toml` pins `required-version = "==0.11.29"`, so any other uv aborts the § 3 cell and `uv self update`
+fails on a package-manager uv; open the § 3 call with `uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }`.
+"**Headless servers:** … install the required system libraries: `apt-get install -y libxcb1 libgl1 libglib2.0-0`" — skill note: run `apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0`
+BEFORE the first python run, not after the error: `cosmos_guardrail` imports `cv2` at pipeline import (`Cosmos3OmniModularPipeline`), safety checker on or off (eval 2026-11-08: 3 of 4 first runs failed here):
 
 ```bash
 export COSMOS3_DIFFUSERS_VENV=/path/to/.venv-cosmos3-diffusers
@@ -240,10 +242,9 @@ Then the § 3 install cell — run it from `references/diffusers.md` as ONE shel
 venv with `uv venv "$COSMOS3_DIFFUSERS_VENV" --python 3.13 --seed --managed-python --allow-existing`, activates it and installs
 `diffusers @ git+https://github.com/huggingface/diffusers.git`, `accelerate`, `av`, `cosmos_guardrail`, `huggingface_hub`, `imageio`,
 `imageio-ffmpeg`, `ipykernel`, `torch`, `torchvision`, `transformers` and `nvidia-modelopt==0.44.0` with `--torch-backend="$COSMOS3_TORCH_BACKEND"`,
-then registers the Jupyter kernel); do not compose an install command from this summary.
-
-Skill note (not in the notebook): the `export`s and the `source` do not survive a new shell call, hence ONE call; the kernel registration and the
-"switch kernel" cells (§ 4) are Jupyter plumbing — outside Jupyter run the later cells with `"$COSMOS3_DIFFUSERS_VENV/bin/python"`.
+then registers the Jupyter kernel); do not compose an install command from this summary. Skill note (not in the notebook): the `export`s and the
+`source` do not survive a new shell call, hence ONE call; the kernel registration and the "switch kernel" cells (§ 4) are Jupyter plumbing — outside
+Jupyter run the later cells with `"$COSMOS3_DIFFUSERS_VENV/bin/python"`.
 
 Run: the notebook's § 2 `configure_diffusers_environment()` cell with, inside the function, `COSMOS_ROOT = Path.cwd().resolve()` and
 `COSMOS3_TRANSFER_ROOT = COSMOS_ROOT` in place of its first two assignments (skill note: the path translation of "Paths"; everything else in the
@@ -265,7 +266,7 @@ cards." "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoin
 `modelopt_state.pth`." The loader (`resolve_pretrained_source`, `materialize_checkpoint_dir`, `validate_fp8_transformer`, the ModelOpt imports in
 `get_pipe`) is § 7 of the reference. To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md` (see Variant 1's note).
 
-## Variant 3 — vLLM-Omni (Docker server, multipart `POST /v1/videos/sync`)
+## Variant 3 — vLLM-Omni (Docker server, form `POST /v1/videos/sync`)
 
 Reference: [`references/vllm-omni.md`](references/vllm-omni.md) — read it before the first command (§ 1 Prerequisites — server launch and
 guardrails — "Quantized Checkpoints", § 2 Configure Paths and Endpoints, § 3 Verify Endpoint Configuration, § 4 Define Transfer Request Helpers,
@@ -312,7 +313,7 @@ add `--no-guardrails` to the `vllm serve` line above. Readiness: "Cosmos3 checkp
 `/v1/models`, `docker logs`, then `docker stop && docker rm` — the pattern of `../cosmos3-generate-media/references/skill-notes.md` § 4.
 
 Request (§ 4 `build_transfer_request` / `run_transfer`): `requests.post(VIDEOS_SYNC_URL, data=form, headers={"Accept": "video/mp4"}, timeout=3600)` to
-`POST /v1/videos/sync` — a multipart form with `prompt` and `negative_prompt` (compact JSON of `assets/edge/prompt.json` and
+`POST /v1/videos/sync` — form fields sent as `data=form` (skill note: URL-encoded, as the README quickstart does; not multipart — keep the line as written) with `prompt` and `negative_prompt` (compact JSON of `assets/edge/prompt.json` and
 `assets/negative_prompt.json`), `size` from the spec (`"1280x720"`), `num_frames "121"`, `fps "30"`, `num_inference_steps "50"`, `guidance_scale "3.0"`
 (the spec's `guidance`), `flow_shift "10.0"`, `seed "2026"` and `extra_params` = compact JSON of `{"use_resolution_template": false,
 "use_duration_template": false, "guardrails": <false for edge and depth>, "edge": {"control_path": "assets/edge/control_edge.mp4",
@@ -392,14 +393,14 @@ Reference: [`references/trt-llm.md`](references/trt-llm.md) — read it before t
 the helper cell — `wait_for_server`, `CONTROL_CASES`, `run_transfer` — "Canny / Edge transfer"), `references/transfer-readme.md` "Run with
 TensorRT-LLM", and the setup guide's "TensorRT-LLM Generator" section (install, `TRTLLM_ROOT`, Nano / Super launch, routes, `ffmpeg`, `use_guardrails`).
 
-Install: "Follow the shared TensorRT-LLM setup, then launch one server from the TensorRT-LLM checkout" (notebook). Setup guide: "Install TensorRT-LLM
-following its upstream documentation."; the source build (`git checkout cc63e66daf52644f1441e117bb7ba67d20566016`, the
-`nvcr.io/nvidia/tensorrt-llm/devel:<tag>` container, `python3 scripts/build_wheel.py --use_ccache --skip_building_wheel --linking_install_binary`,
-`pip install -e .`) "is the right path when you need a checkout that contains a recent Cosmos3 VisualGen change"; then `pip install cosmos_guardrail==0.3.2`
-(headless hosts: swap in `opencv-python-headless==5.0.0.93`) "unless you explicitly disable guardrails before starting the server"; `TRTLLM_ROOT` must
-hold `$TRTLLM_ROOT/examples/visual_gen/configs` (the setup guide's `test -d` preflight), and "Keep `ffmpeg` on the server `PATH`". Skill note
-(unverified — not a route): `../cosmos3-generate-media/references/trt-llm.md` § 7.1–7.4 documents a prebuilt-wheel install (`tensorrt_llm==1.3.0rc27`)
-that the generate-media eval verified for the audiovisual server; whether that wheel carries the transfer `extra_params` schema is unknown.
+Install: "Follow the shared TensorRT-LLM setup, then launch one server from the TensorRT-LLM checkout" (notebook). Setup guide: "Install TensorRT-LLM following its upstream documentation."
+Skill note (not in the sources): the install is the Route A block of `../cosmos3-generate-media/references/trt-llm.md` § 7.2, run as ONE script — stock uv with `--no-config`, OpenMPI,
+`tensorrt_llm==1.3.0rc27` (pypi.nvidia.com) + `torch==2.13.0+cu130` (the cu130 torch index), its `CUDA_HOME` line (the venv's `nvidia/cu13`), the configs-only checkout `bca6761` (§ 7.3) —
+then `export TRTLLM_ROOT`; eval 2026-11-08: edge HTTP 200 on 1x H100 from 3 of 4 runs with that wheel (the fourth passed on an editable 1.4.0rc0 install — an unvalidated mix, not a route).
+Not `pip install tensorrt-llm` (PyPI has only sdists), not the guide's `TRTLLM_USE_PRECOMPILED=1 pip install -e .` (§ 7.5: it resolves an unpublished `+<sha>` wheel). The guide's source build
+(`git checkout cc63e66…`, the `nvcr.io/nvidia/tensorrt-llm/devel:<tag>` container, `build_wheel.py`, `pip install -e .`) "is the right path when you need a checkout that contains a recent Cosmos3
+VisualGen change". Then `pip install cosmos_guardrail==0.3.2` (headless hosts: swap in `opencv-python-headless==5.0.0.93`) "unless you explicitly disable guardrails before starting the server";
+`TRTLLM_ROOT` must hold `$TRTLLM_ROOT/examples/visual_gen/configs` (the setup guide's `test -d` preflight), and "Keep `ffmpeg` on the server `PATH`".
 
 The notebook's launch, verbatim:
 

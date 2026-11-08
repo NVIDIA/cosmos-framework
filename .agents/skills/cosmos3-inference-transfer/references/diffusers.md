@@ -25,7 +25,11 @@ Blur, segmentation, and WSM use the Guardrail and require access to the gated [n
 > apt-get install -y libxcb1 libgl1 libglib2.0-0
 > ```
 
+**Skill note (not in the source):** on a headless host run `apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0` BEFORE the first import, not after the error — `cosmos_guardrail` imports `cv2` whenever `Cosmos3OmniModularPipeline` is imported, safety checker disabled or not, and the bare `apt-get install` above fails with `E: Unable to locate package libxcb1` on an image without package lists (eval 2026-11-08: 3 of 4 first runs failed here).
+
 > **uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework. Install it from <https://astral.sh/uv/0.11.29/install.sh> or update an existing self-managed installation with `uv self update 0.11.29`.
+
+**Skill note (not in the source):** mandatory from this skill directory: the framework checkout's `pyproject.toml` pins `[tool.uv] required-version = "==0.11.29"`, so any other uv aborts the § 3 cell (`error: Required uv version ==0.11.29 does not match the running version …`) and `uv self update` fails on a package-manager uv. Install the standalone 0.11.29 and keep its bin dir first on PATH in every shell call — `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"` — or open the § 3 call with the guard `uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }` (eval 2026-11-08: 2 of 4 runs hit the pin).
 
 ## 2. Configure Paths and Environment
 

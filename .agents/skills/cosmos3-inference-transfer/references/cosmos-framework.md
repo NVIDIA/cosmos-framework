@@ -404,6 +404,8 @@ if result.returncode != 0:
     )
 ```
 
+> **Skill note (not in the source):** § 7 does not exercise Transformer Engine. If the § 9 run dies at import with `RuntimeError: cudart shared object not found` (toolkit-free host, `cu128-train` wheels — eval 2026-11-08: 2 of 4 first runs, while the two runs on `cu130-train` passed), set `COSMOS3_UV_GROUP=cu130-train` (CUDA 13 driver; the setup guide's default), re-run § 6 with `COSMOS3_FORCE_UV_SYNC=1`, then § 7 and § 9. The loader mechanism is inferred from the agents' traces, not verified against the Transformer Engine source; the fix rests on that 4-of-4 correlation plus the setup guide's driver-to-tag rule. Keep `unset LD_LIBRARY_PATH` (source text in every cell; both passing runs kept it).
+
 ## 8. Input Specs and Preview Helpers
 
 Checked-in [`specs/<control>.json`](../specs) are model-agnostic — the same spec runs with Nano and Super.

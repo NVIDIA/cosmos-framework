@@ -14,6 +14,8 @@ Cosmos3-Super; select the checkpoint when launching the server.
 Follow the shared [TensorRT-LLM setup](../../cookbooks/cosmos3/README.md#tensorrt-llm-generator), then launch one
 server from the TensorRT-LLM checkout.
 
+> **Skill note (not in the source):** the install this skill verified for the transfer server (eval 2026-11-08: edge `/v1/videos/sync` HTTP 200 on 1x H100, 3 of 4 runs) is Route A of `../../cosmos3-generate-media/references/trt-llm.md` § 7.2 — the prebuilt `tensorrt_llm==1.3.0rc27` wheel with `torch==2.13.0+cu130`, its `CUDA_HOME` line and the configs-only checkout `bca6761` (§ 7.3); see SKILL.md Variant 5 "Install". The setup guide's devel-container source build (`nvcr.io/nvidia/tensorrt-llm/devel:<tag>`, `build_wheel.py`, `pip install -e .`) remains the reference path for a newer checkout; its `TRTLLM_USE_PRECOMPILED=1 pip install -e .` shortcut resolved an unpublished `+<sha>` wheel (1 of 4 runs) and `pip install tensorrt-llm` finds only sdists on PyPI (1 of 4 runs).
+
 ```bash
 export TRTLLM_ROOT="${TRTLLM_ROOT:-$PWD}"
 
