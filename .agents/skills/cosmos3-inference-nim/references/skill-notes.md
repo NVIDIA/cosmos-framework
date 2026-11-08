@@ -2,7 +2,8 @@
 
 Skill-authored text of `SKILL.md`, moved here on 2026-11-07 to keep SKILL.md within its 500-line budget when deployment.md's
 bash blocks were quoted there (layout change only; wording unchanged apart from lead-ins; § 5 adds the rows of the support
-matrix that SKILL.md's floors table does not keep). Nothing in this file is a cookbook page's text unless it is quoted and
+matrix that SKILL.md's floors table does not keep; § 2's `cache_ok` commands were added after eval 2026-11-08). Nothing in this
+file is a cookbook page's text unless it is quoted and
 names the page, and nothing in it is measured by this skill. The cookbook is
 [`../../cookbooks/cosmos3/nim/`](../../cookbooks/cosmos3/nim/README.md). Read this file with SKILL.md before the first command.
 
@@ -37,13 +38,24 @@ None of this is in deployment.md. The eval cells run unattended, from a containe
 - **Cache mount from a container**: the Docker daemon resolves every `-v` path on the host and creates a missing bind-mount
   source itself, root-owned, while the page's `chmod -R a+rwX "$LOCAL_NIM_CACHE"` runs inside your own container. The NIM runs
   as UID/GID 1000 (deployment.md "Prepare the Model Cache"; operations.md "Cache permission denied": "Host mount is not
-  writable by the container"), so test the mount as uid 1000 before the launch.
+  writable by the container" → "Fix ownership/ACLs"), so after the cache block and before EITHER launch (Generator and Reasoner
+  alike) run, with `NIM_IMAGE` and `LOCAL_NIM_CACHE` exported:
+
+  ```bash
+  cache_ok() { docker run --rm --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'touch /opt/nim/.cache/.w && rm /opt/nim/.cache/.w' 2>/dev/null; }
+  cache_ok || { docker run --rm --user 0 --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c '[ -z "$(ls -A /opt/nim/.cache)" ] && chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX /opt/nim/.cache'; cache_ok || { echo "LOCAL_NIM_CACHE=$LOCAL_NIM_CACHE is not writable by uid 1000 and not empty: use a directory of your own"; exit 1; }; }
+  ```
+
+  Both lines use the already-pulled NIM image (its default user is uid 1000 and it has `/bin/sh`); they are the `cache_ok` test and
+  repair of `../../cosmos3-generate-media/SKILL.md` Variant 7 minus its `NIM_CACHE_REPAIR` opt-in, with the emptiness test moved
+  inside the root helper so it inspects the directory the daemon mounted, not your container's view of the path — the repair
+  therefore touches only an empty cache, never a populated one. A launch without a passing `cache_ok` dies within a minute with
+  `ManifestDownloadError … Permission denied (os error 13)`; do not drop the `-v` mount instead ("Keep the cache between runs to
+  avoid repeated downloads", deployment.md; "retain a persistent writable `/opt/nim/.cache`", operations.md).
 - **Eval-verified form**: the Variant 7 block of [`../../cosmos3-generate-media/SKILL.md`](../../cosmos3-generate-media/SKILL.md)
-  is the Generator launch with all three additions (cache preflight `cache_ok`, a 40-min readiness loop with the container-exit
-  check, `docker logs` before `docker rm`) plus that skill's guardrail switches;
-  [`../../cosmos3-generate-media/references/skill-notes.md`](../../cosmos3-generate-media/references/skill-notes.md) § 4 says why
-  each line is there. For the Reasoner, the command stays SKILL.md's quoted Nano Reasoner block — add only these wrappers around
-  it (no `NIM_PERF_PROFILE`; no guardrail switches: "The Reasoner has no NIM-provided guardrails", operations.md).
+  is the Generator launch with the three additions above written out as one script (its readiness loop has a 40-min deadline)
+  plus that skill's guardrail switches. For the Reasoner, the command stays SKILL.md's quoted Nano Reasoner block — add only the
+  three additions above around it (no `NIM_PERF_PROFILE`; no guardrail switches: "The Reasoner has no NIM-provided guardrails", operations.md).
 
 ## 3. Output checks (SKILL.md "Verify the output")
 
