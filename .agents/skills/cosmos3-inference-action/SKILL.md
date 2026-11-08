@@ -67,7 +67,7 @@ Before the first command of any block, including a single AV smoke run:
   `../cosmos3-inference-action-inverse-dynamics/SKILL.md`; policy: `../cosmos3-inference-action-policy/SKILL.md`
 - The Cosmos3 NIM serves all three modes through `POST /v1/infer`: the NIM cookbook page
   [`../cookbooks/cosmos3/nim/action.md`](../cookbooks/cosmos3/nim/action.md) and its skill
-  `../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md` (not part of this row)
+  `../cosmos3-inference-nim/SKILL.md` (not part of this row)
 - Not for audiovisual generation without actions (`../cosmos3-generate-media/SKILL.md`), environment failures
   (`../cosmos3-env-troubleshoot/SKILL.md`), post-training (README "Post-Train" pointer:
   `../cookbooks/cosmos3/generator/action/finetune/README.md`) or quantizing a checkpoint (the
@@ -454,15 +454,15 @@ vendored here (the cookbook keeps its `assets` directory as LFS and its `finetun
 
 ## Related skills
 
-| Skill                                                               | When to use                                                                                    |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `../cosmos3-inference-action-forward-dynamics/SKILL.md`             | Forward dynamics: future video from a start image plus an action trajectory                    |
-| `../cosmos3-inference-action-inverse-dynamics/SKILL.md`             | Inverse dynamics: ego-motion / end-effector trajectory from a video                            |
-| `../cosmos3-inference-action-policy/SKILL.md`                       | Policy: action chunk (and rollout) for DROID from one observation and an instruction           |
-| `../cosmos3-setup/SKILL.md`                                         | Framework checkout and venv (`COSMOS3_REPO`, uv 0.11.29) for the cosmos_framework variants     |
-| `../cosmos3-inference/SKILL.md`                                     | Framework-native inference reference (`cosmos_framework.scripts.inference` flags)              |
-| `../cosmos3-env-troubleshoot/SKILL.md`                              | CUDA / import / server / container failures                                                    |
-| `../cosmos3-generate-media/SKILL.md`                                | Audiovisual generation on the same backends; headless-server pattern and measured server notes |
-| `../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md` | Operating the Cosmos3 NIM, which serves the action modes through `POST /v1/infer`              |
-| `../cosmos3-inference-quantization/SKILL.md`                        | Quantizing your own FP8 checkpoint (the released FP8 routes: "FP8 checkpoints" above)          |
-| `../cosmos3-skill-authoring/SKILL.md`                               | Editing the blocks' eval cases and running the eval                                            |
+| Skill                                                   | When to use                                                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `../cosmos3-inference-action-forward-dynamics/SKILL.md` | Forward dynamics: future video from a start image plus an action trajectory                    |
+| `../cosmos3-inference-action-inverse-dynamics/SKILL.md` | Inverse dynamics: ego-motion / end-effector trajectory from a video                            |
+| `../cosmos3-inference-action-policy/SKILL.md`           | Policy: action chunk (and rollout) for DROID from one observation and an instruction           |
+| `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv (`COSMOS3_REPO`, uv 0.11.29) for the cosmos_framework variants     |
+| `../cosmos3-inference/SKILL.md`                         | Framework-native inference reference (`cosmos_framework.scripts.inference` flags)              |
+| `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server / container failures                                                    |
+| `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation on the same backends; headless-server pattern and measured server notes |
+| `../cosmos3-inference-nim/SKILL.md`                     | Operating the Cosmos3 NIM, which serves the action modes through `POST /v1/infer`              |
+| `../cosmos3-inference-quantization/SKILL.md`            | Quantizing your own FP8 checkpoint (the released FP8 routes: "FP8 checkpoints" above)          |
+| `../cosmos3-skill-authoring/SKILL.md`                   | Editing the blocks' eval cases and running the eval                                            |
