@@ -32,7 +32,11 @@ Guardrails are disabled by default in this notebook. If you enable them, request
 > apt-get install -y libxcb1 libgl1 libglib2.0-0
 > ```
 
+Skill note (not in the source): run it before the first import — `Cosmos3OmniPipeline` imports `cosmos_guardrail` -> `cv2` even with guardrails disabled — and on a fresh container prefix `apt-get update &&` (empty package lists; eval 2026-11-08): `apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0`.
+
 > **uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework. Install it from https://astral.sh/uv/0.11.29/install.sh or update an existing self-managed installation with `uv self update 0.11.29`.
+
+Skill note (not in the source): `uv self update` works only for a standalone-installer uv (a package-managed uv exits 2); the § 3 block below carries a skill-added first line that installs 0.11.29 beside any other uv (eval 2026-11-08).
 
 <!-- rumdl-enable MD034 -->
 
@@ -119,6 +123,7 @@ configure_diffusers_environment()
 ## 3. Install Diffusers Dependencies
 
 ```bash
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the notebook's uv 0.11.29; inside the checkout any other uv stops at the pyproject pin
 set -euo pipefail
 
 if ! command -v uv >/dev/null 2>&1; then

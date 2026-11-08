@@ -87,12 +87,12 @@ LFS objects at the pinned commit); then point `resolve_input(...)` / `asset_path
 The sources name models and GPU counts, not memory figures (skill note, not in the source: the bf16 text-to-image
 footprints in `../cosmos3-generate-media/references/skill-notes.md` § 2 are audiovisual measurements, not action ones):
 
-| Checkpoint             | What the sources say                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nvidia/Cosmos3-Nano`  | The default of every notebook ("Runs `Cosmos3-Nano` on every line of the spec"; README: inverse dynamics "using the Cosmos3-Nano"); one GPU in every launch (`--gpus '"device=0"'`, `cosmos3-nano-1gpu.yaml`, `CUDA_VISIBLE_DEVICES=0`)                                                                                                                                                                    |
-| `nvidia/Cosmos3-Edge`  | Framework: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` or `Cosmos3-Super` before the configuration cell — nothing else changes"; vLLM-Omni: a Nano or an Edge server ("The commands are mutually exclusive"); setup guide: "Edge is the compact 4B checkpoint" and, for TensorRT-LLM, "its action weights are not served by this pipeline"; the diffusers notebook's `MODEL_IDS` lists Nano and Super only |
-| `nvidia/Cosmos3-Super` | Framework `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers `MODEL_IDS["Cosmos3-Super"]`; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"; setup guide: TensorRT-LLM Super on "four GPUs"                                                                                                                                      |
-| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`                                                                                                                                   |
+| Checkpoint             | What the sources say                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nvidia/Cosmos3-Nano`  | The default of every notebook ("Runs `Cosmos3-Nano` on every line of the spec"; README: inverse dynamics "using the Cosmos3-Nano"); one GPU in every launch (`--gpus '"device=0"'`, `cosmos3-nano-1gpu.yaml`, `CUDA_VISIBLE_DEVICES=0`)                                                                                                                                                                                                                                             |
+| `nvidia/Cosmos3-Edge`  | Framework: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` or `Cosmos3-Super` before the configuration cell — nothing else changes"; vLLM-Omni: a Nano or an Edge server ("The commands are mutually exclusive"); setup guide: "Edge is the compact 4B checkpoint"; TensorRT-LLM (the generate-media notebook, `../cosmos3-generate-media/references/trt-llm.md`): "its action weights are not served by this pipeline"; the diffusers notebook's `MODEL_IDS` lists Nano and Super only |
+| `nvidia/Cosmos3-Super` | Framework `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers `MODEL_IDS["Cosmos3-Super"]`; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"; setup guide: TensorRT-LLM Super on "four GPUs"                                                                                                                                                                                                               |
+| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`                                                                                                                                                                                                            |
 
 All checkpoints are gated on Hugging Face: the notebooks require model access and `uvx hf@latest auth login` or
 `HF_TOKEN`. "Generator requires the Guardrail" (the gated `nvidia/Cosmos-1.0-Guardrail`); the README's switches to run
@@ -106,9 +106,9 @@ Reference: [`references/diffusers.md`](references/diffusers.md) — read it befo
 § 2 Configure Paths and Environment, § 3 Install, § 7 the helper cell: `ACTION_SETS`, `LEROBOT_ID_SETS`, `get_pipe`,
 `run_action`, `run_lerobot_action`, `view_action`, `view_lerobot_action`; "Quantized Checkpoints (FP8)"; Use Cases).
 
-The notebook's environment (§ 2), with the torch backend matching the driver's CUDA major version. § 1: "use
-`uv 0.11.29`, matching the version pinned by Cosmos Framework" (`uv self update 0.11.29`, or `../cosmos3-setup/SKILL.md`
-step 3; skill note, not in the source: the framework checkout this skill sits in applies that pin to any `uv` run under it):
+The notebook's environment (§ 2), with the torch backend matching the driver's CUDA major version, plus two skill-note lines at
+the end. § 1: "use `uv 0.11.29`, matching the version pinned by Cosmos Framework" — § 1's installer, which the guard line runs when
+`uv --version` differs (skill note, not in the source: `uv self update 0.11.29` is refused by a package-installed uv such as a host's 0.13.0, and the framework checkout this skill sits in applies the pin to any `uv` run under it):
 
 ```bash
 export COSMOS3_DIFFUSERS_ACTION_VENV=/path/to/.venv-cosmos3-diffusers-action
@@ -120,12 +120,13 @@ export CUDA_VISIBLE_DEVICES=0
 export COSMOS3_DIFFUSERS_PRECISION=bf16  # or fp8
 export COSMOS3_ACTION_OUTPUT_ROOT="$PWD/outputs"   # skill note (not in the source): the notebook's default is <cookbook>/outputs/notebooks/diffusers
 export COSMOS3_DIFFUSERS_GUARDRAILS=false           # skill note (not in the source): the notebook's § 1 switch, for runs without Cosmos-1.0-Guardrail access
+apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0   # skill note (not in the source): § 1 "Headless servers" BEFORE the first run, not after the error — Cosmos3OmniPipeline imports cosmos_guardrail -> cv2, which needs libxcb.so.1 even with guardrails off (eval 2026-11-08: all four first runs died on it)
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): § 1's pin — the standalone installer, not `uv self update`, which a package-installed uv refuses
 ```
 
-Install (skill note, not in the source): the § 3 cell verbatim, as ONE shell call together with the exports above —
-`uv venv "$COSMOS3_DIFFUSERS_ACTION_VENV" --python 3.13 --seed --managed-python --allow-existing`, then its pinned
-`uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND" …` list (its last lines register the Jupyter kernel, not
-needed here). § 1, headless servers: on `libxcb.so.1: cannot open shared object file`, `apt-get install -y libxcb1 libgl1 libglib2.0-0`.
+Install (skill note, not in the source): the block above — its last two lines are the headless pre-flight and the uv guard — and the
+§ 3 cell verbatim, as ONE shell call: `uv venv "$COSMOS3_DIFFUSERS_ACTION_VENV" --python 3.13 --seed --managed-python --allow-existing`,
+then its pinned `uv pip install --torch-backend="$COSMOS3_TORCH_BACKEND" …` list (its last lines register the Jupyter kernel, not needed here).
 
 Run (skill note, not in the source): with `"$COSMOS3_DIFFUSERS_ACTION_VENV/bin/python"`, from this skill directory, ONE
 file made of the § 4 restore cell (`configure_diffusers_environment()`), the re-point below, the § 7 helper cell verbatim
@@ -158,11 +159,10 @@ integrates it with `pose_rel_to_abs(..., translation_scale=1.35)` and saves `av_
 Robot episodes: `run_lerobot_action("bridge_inverse")` / `view_lerobot_action("bridge_inverse")` (one 16-transition
 window; `umi_inverse`, `fractal_inverse`, `robomind_franka_inverse` are vendored too, the other three are not).
 
-FP8 (notebook, "Quantized Checkpoints (FP8)"): "Default loads are BF16 (`COSMOS3_DIFFUSERS_PRECISION=bf16`). Set the
-env var to `fp8` before running the helper cell's `get_pipe` … Use-case request cells stay the same. Nano and Super
-load `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8`. Do not pass `revision=fp8` on the BF16 cards."
-"Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint directory." To quantize your own checkpoint:
-the `cosmos3-inference-quantization` skill (FP8 row of "Model sizes vs GPU").
+FP8 (notebook, "Quantized Checkpoints (FP8)"): "Default loads are BF16 (`COSMOS3_DIFFUSERS_PRECISION=bf16`). Set the env var to
+`fp8` before running the helper cell's `get_pipe` … Nano and Super load `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8`.
+Do not pass `revision=fp8` on the BF16 cards." "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint
+directory." To quantize your own checkpoint: the `cosmos3-inference-quantization` skill (FP8 row of "Model sizes vs GPU").
 
 ## Variant 2 — cosmos_framework (native PyTorch, in-repo)
 
@@ -175,9 +175,9 @@ functions"; § 6 AV Inverse Dynamics: spec, run, visualize; § 7–13 the robot 
 (`https://github.com/NVIDIA/cosmos-framework.git`), `COSMOS3_UV_GROUP` (`cu130-train`; "use cu128-train for a CUDA
 12.x driver"), `COSMOS3_OUTPUT_ROOT`, `COSMOS3_CHECKPOINT_PATH` ("defaults to Cosmos3-Nano"), `HF_HOME`,
 `CUDA_VISIBLE_DEVICES`. Clone or reuse the checkout with the § 3 cell (`git clone "$COSMOS3_GIT_URL" "$COSMOS3_REPO"`
-unless `$COSMOS3_REPO/.git` exists), then install with the § 4 cell (`export GIT_LFS_SKIP_SMUDGE=1`, `cd
-"$COSMOS3_REPO"`, `uv sync --all-extras --group="$COSMOS3_UV_GROUP"` — "May take several minutes"; the framework pins
-`uv` 0.11.29, `../cosmos3-setup/SKILL.md` step 3), each as ONE shell call with those variables exported.
+unless `$COSMOS3_REPO/.git` exists), then install with the § 4 cell (`export GIT_LFS_SKIP_SMUDGE=1`, `cd "$COSMOS3_REPO"`,
+`uv sync --all-extras --group="$COSMOS3_UV_GROUP"` — "May take several minutes"; skill note, not in the source: it aborts with `Required uv
+version ==0.11.29 does not match the running version` on any other uv — put Variant 1's uv guard first in the same call (the `uv --version … || { curl … install.sh | sh; …; }` line at the end of its export block), not `uv self update`, which a package-installed uv refuses), each as ONE shell call with those variables exported.
 
 Spec (§ 6 "Create the AV Inverse-Dynamics Input Spec"): a JSONL, one record per run, `vision_path` absolute "because
 the loader resolves relative paths against the spec file's own directory" — `action_chunk_size` 60, `domain_name`
@@ -206,7 +206,7 @@ input_videos = {"av_inverse_0": "../cosmos3-inference-action/assets/videos/av_0.
 Run (§ 6 "Run AV Inverse-Dynamics Inference"): "Runs `Cosmos3-Nano` on every line of the spec. Inverse dynamics
 predicts an action rather than a video, so each run writes its result to `<output>/<name>/sample_outputs.json`. The
 predicted action trajectory is stored under `outputs[0].content["action"]`." The cell reads its variables from the
-kernel's environment; the exports before the cell text replace that (values = the notebook's defaults, except the output root, which this skill points at `./outputs` as the Python block above does):
+kernel's environment; the exports before the cell text replace that, and the link line restores § 5's `LD_LIBRARY_PATH` (values = the notebook's defaults, except the output root, which this skill points at `./outputs` as the Python block above does):
 
 ```bash
 # Skill note (not in the source): the environment the notebook's configuration and spec cells exported — same shell call as the cell.
@@ -218,6 +218,8 @@ export COSMOS3_CHECKPOINT_PATH="${COSMOS3_CHECKPOINT_PATH:-Cosmos3-Nano}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export COSMOS3_MASTER_ADDR="${COSMOS3_MASTER_ADDR:-127.0.0.1}"
 export COSMOS3_NANO_TEXT_MASTER_PORT="${COSMOS3_NANO_TEXT_MASTER_PORT:-$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}"   # the notebook's free_local_port()
+# Skill note (not in the source): § 5's configure_cosmos_framework_runtime_env() for this shell — torchcodec dlopens libavutil.so.60 & co., which the venv has only as PyAV's hashed av.libs files; without the seven links: "Could not load libtorchcodec" (eval 2026-11-08, three of four cells)
+d="$COSMOS3_OUTPUT_ROOT/torchcodec_ffmpeg_links"; mkdir -p "$d"; for f in "$COSMOS3_REPO"/.venv/lib/python3.*/site-packages/av.libs/lib{avcodec,avdevice,avfilter,avformat,avutil,swresample,swscale}-*.so.*; do b=${f##*/}; v=${b##*.so.}; ln -sfn "$f" "$d/${b%%-*}.so.${v%%.*}"; done; export LD_LIBRARY_PATH="$d:${f%/*}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # --- the notebook's run cell from here on, verbatim ---
 set -euo pipefail
 
@@ -233,10 +235,9 @@ MASTER_ADDR="$COSMOS3_MASTER_ADDR" MASTER_PORT="$COSMOS3_NANO_TEXT_MASTER_PORT" 
   --benchmark
 ```
 
-Guardrails: the cell runs with the framework default (on — the gated `nvidia/Cosmos-1.0-Guardrail` plus the setup
-guide's system packages: "`uv sync --all-extras` alone is not enough for guardrails"); the README's switch is
-`--no-guardrails` (setup guide: "pass `--no-guardrails` to `cosmos_framework.scripts.inference`"). Skill note (not in the
-source): for the smoke cases of `eval/eval.config` (guardrails disabled) append it as the command's last option.
+Guardrails: the cell runs with the framework default (on — the gated `nvidia/Cosmos-1.0-Guardrail` plus the setup guide's system
+packages: "`uv sync --all-extras` alone is not enough for guardrails"); the README's switch is `--no-guardrails` (setup guide: "pass
+`--no-guardrails` to `cosmos_framework.scripts.inference`"). Skill note (not in the source): for the smoke cases of `eval/eval.config` (guardrails disabled) append it as the command's last option.
 
 Visualize (§ 6): "The output action can be fed into `pose_rel_to_abs` to convert back to camera poses (camera-to-world
 transformation, opencv convention, unit in meter)" — the "Import dependencies and define helper functions" cell plus
@@ -386,21 +387,19 @@ Reference: [`references/trt-llm.md`](references/trt-llm.md) — read it before t
 server; TensorRT-LLM response contract; the helper cell: `wait_for_server`, `submit_action`, `save_and_view_video`;
 Prepare the checked-in AV observation; Run inverse dynamics; Inspect).
 
-Install: "Follow the shared TensorRT-LLM setup" — the setup guide's "TensorRT-LLM Generator" section (`../cookbooks/cosmos3/README.md`):
-a source build of TensorRT-LLM at commit `cc63e66daf52644f1441e117bb7ba67d20566016` inside `nvcr.io/nvidia/tensorrt-llm/devel:<tag>`
-(`python3 scripts/build_wheel.py --use_ccache --skip_building_wheel --linking_install_binary && pip install -e .`,
-`apt-get -y install ffmpeg`), then `pip install cosmos_guardrail==0.3.2` "unless you explicitly disable guardrails
-before starting the server". README: "Both notebooks' current multipart fields were exercised against TensorRT-LLM
-source revision `cc63e66daf52644f1441e117bb7ba67d20566016`. Follow the source pin in the shared setup." Skill note
-(not in the source): the prebuilt-wheel route of `../cosmos3-generate-media/references/trt-llm.md` § 7.2
-(`tensorrt_llm==1.3.0rc27`) was verified by that skill's eval for image and video routes only — unverified for action
-requests, not a route of this skill. Edge: the setup guide says "its action weights are not served by this pipeline";
-the notebook serves Nano.
+Install: "Follow the shared TensorRT-LLM setup" — the setup guide's source build at `cc63e66daf52644f1441e117bb7ba67d20566016` in `nvcr.io/nvidia/tensorrt-llm/devel:<tag>`
+(`../cookbooks/cosmos3/README.md` "TensorRT-LLM Generator"; quoted in full in `references/trt-llm.md` "Skill notes", with the devel-tag cmake failure and the 17 + 33 min
+the eval 2026-11-08 measured). README: "Both notebooks' current multipart fields were exercised against TensorRT-LLM source revision `cc63e66daf52644f1441e117bb7ba67d20566016`.
+Follow the source pin in the shared setup." Skill note (not in the source): the install this skill runs, with or without Docker on the host, is the Route A block of `../cosmos3-generate-media/references/trt-llm.md`
+§ 7.2 as ONE shell call, verbatim — the `tensorrt_llm==1.3.0rc27` wheel, its `export CUDA_HOME=…/nvidia/cu13` line (without it `trtllm-serve` exits at import: `AssertionError` in
+`_find_cuda_home()`) and the pinned checkout `bca6761` as `TRTLLM_ROOT` — verified for this action route by the eval 2026-11-08 (action 60 × 9, ~16 s per request; host NVDEC/NVENC
+driver libraries available). Never `TRTLLM_USE_PRECOMPILED=1` (§ 7.5). Edge: "its action weights are not served by this pipeline" (`../cosmos3-generate-media/references/trt-llm.md`); the notebook serves Nano.
 
 Serve (notebook: "run this from the TensorRT-LLM checkout. This notebook is a client; keep the server in a separate
-terminal"):
+terminal"; skill note, not in the source: with Route A, run the block from the directory § 7.2's block ran in — its first line is the skill's — or export `TRTLLM_VENV` and `TRTLLM_ROOT` yourself):
 
 ```bash
+if [ -x "${TRTLLM_VENV:-$PWD/.venv-trtllm}/bin/python" ]; then export TRTLLM_VENV="${TRTLLM_VENV:-$PWD/.venv-trtllm}"; export TRTLLM_ROOT="${TRTLLM_ROOT:-$PWD/TensorRT-LLM}"; export PATH="$TRTLLM_VENV/bin:$PATH"; export CUDA_HOME="$("$TRTLLM_VENV/bin/python" -c 'import nvidia,os;print(os.path.join(nvidia.__path__[0],"cu13"))')"; fi   # skill note (not in the source): Route A only — § 7.2's venv, checkout and CUDA_HOME line again, because a new shell call has none of its exports (Read this first, 4); the venv first on PATH makes the notebook's `trtllm-serve` the venv's; without CUDA_HOME the server exits at import with AssertionError in _find_cuda_home(); TRTLLM_ROOT = the pinned checkout (holds examples/visual_gen/configs), not this skill directory; inside the devel container (no .venv-trtllm) the line is a no-op and the notebook's own TRTLLM_ROOT line applies
 export TRTLLM_ROOT="${TRTLLM_ROOT:-$PWD}"
 trtllm-serve nvidia/Cosmos3-Nano \
   --visual_gen_args "$TRTLLM_ROOT/examples/visual_gen/configs/cosmos3-nano-1gpu.yaml" \
@@ -415,7 +414,7 @@ process group): `../cosmos3-generate-media/references/skill-notes.md` § 4.
 Client ("Install client-side decoding dependencies in this notebook kernel if needed"):
 
 ```bash
-pip install requests safetensors torch imageio imageio-ffmpeg pillow
+uv venv --no-config .venv-client --python 3.12 --seed --managed-python && uv pip install --no-config --python .venv-client/bin/python requests safetensors torch imageio imageio-ffmpeg pillow ipython av==18.0.0   # skill note (not in the source): the notebook's `pip install requests safetensors torch imageio imageio-ffmpeg pillow` as a headless client venv (--no-config: the framework checkout's uv pin does not apply to it), plus ipython — the helper cell imports IPython.display; display() then prints a repr — and av for "Verify the output"; run the client cells with .venv-client/bin/python
 export COSMOS3_TRTLLM_ACTION_OUTPUT_ROOT="$PWD/outputs"   # skill note (not in the source): the notebook's default is <cookbook>/outputs/notebooks/trt_llm; repeat it in the shell call that runs the client python
 ```
 

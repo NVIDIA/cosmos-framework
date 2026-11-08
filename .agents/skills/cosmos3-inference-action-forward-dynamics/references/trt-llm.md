@@ -21,6 +21,8 @@ trtllm-serve nvidia/Cosmos3-Nano \
   --port 8000
 ```
 
+> Skill note (not in the source): eval-verified install for this request — `../../cosmos3-generate-media/references/trt-llm.md` § 7.2 Route A (the `tensorrt_llm==1.3.0rc27` wheel with `torch==2.13.0+cu130`, the YAML-configs checkout `bca6761` as `TRTLLM_ROOT`, and that block's `export CUDA_HOME=...` line), then the serve block above; export `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` before `trtllm-serve` for a guardrail-free run (SKILL.md Variant 3). Three eval cells served the AV request this way (HTTP 200, `video` (61,480,832,3), `action` (60,9), `frame_rate` 10; eval 2026-11-08). Failure -> fix observed the same day: the README's devel-container source build at `cc63e66` with `nvcr.io/nvidia/tensorrt-llm/devel:1.4.0rc3` died at CMake with `undefined symbol: ncclGetPeerDeviceLeInfo` (the devel tag's torch/NCCL did not match the checkout) -> installed Route A instead. Keep the README's source build only for a VisualGen change newer than rc27, with a devel tag that matches the checkout.
+
 Install client-side decoding dependencies in this notebook kernel if needed:
 
 ```bash

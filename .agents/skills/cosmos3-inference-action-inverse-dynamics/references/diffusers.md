@@ -30,6 +30,8 @@ Generator requires the Guardrail. Request access to the gated [nvidia/Cosmos-1.0
 > apt-get install -y libxcb1 libgl1 libglib2.0-0
 > ```
 
+**Skill note (not in the source):** on a headless host run this before the first import, not after the error — `apt-get update` first if `Unable to locate package`; `Cosmos3OmniPipeline` imports `cosmos_guardrail` -> `cv2`, which needs `libxcb.so.1` even with `COSMOS3_DIFFUSERS_GUARDRAILS=false` (eval 2026-11-08: all four first runs died on it).
+
 > **uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework. Install it from https://astral.sh/uv/0.11.29/install.sh or update an existing self-managed installation with `uv self update 0.11.29`.
 
 <!-- rumdl-enable MD034 -->

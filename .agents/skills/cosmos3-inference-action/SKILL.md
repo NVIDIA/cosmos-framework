@@ -1,16 +1,15 @@
 ---
 name: cosmos3-inference-action
 description: >
-  Entry skill of the Cosmos3 Action row: the action definition and embodiment table, the guardrail rule, the
-  bundled sample assets (AV, camera-pose, UMI, Bridge, Fractal, RoboMIND Franka, an egocentric hand-action example) and the per-backend
-  quickstarts of the Action cookbook README, routing each request to one of three block skills: forward dynamics
-  (start image + action trajectory -> future video), inverse dynamics (video -> ego-motion trajectory) or policy
-  (observation + instruction -> action chunk and rollout) on cosmos_framework, diffusers, TensorRT-LLM, vLLM-Omni,
-  SGLang or TensorRT-Edge-LLM. Use when the user asks "run Cosmos3 action inference", "which action mode or backend
-  do I need", "where are the Cosmos3 AV / DROID / UMI sample assets", "what is the Cosmos3 action representation",
-  "predict future frames from a trajectory", "recover the ego-motion from a video" or "run the Cosmos3 DROID
-  policy", before handing off to the matching block. Not for audiovisual generation without actions
-  (cosmos3-generate-media), post-training the action models (the finetune cookbook) or quantizing checkpoints
+  Entry skill of the Cosmos3 Action row: the action definition and embodiment table, the guardrail rule, the sample
+  assets (AV, camera-pose, UMI, Bridge, Fractal, RoboMIND Franka, hand action) and the Action cookbook README's
+  per-backend quickstarts, routing each request to a block skill: forward dynamics (start image + actions -> future
+  video), inverse dynamics (video -> ego-motion) or policy (observation + instruction -> action chunk) on
+  cosmos_framework, diffusers, TensorRT-LLM, vLLM-Omni, SGLang or TensorRT-Edge-LLM. Use when the user asks "run
+  Cosmos3 action inference", "which action mode or backend do I need", "where are the Cosmos3 AV / DROID / UMI
+  assets", "what is the Cosmos3 action representation", "predict future frames from a trajectory", "recover the
+  ego-motion from a video" or "run the Cosmos3 DROID policy", before handing off. Not for audiovisual generation
+  without actions (cosmos3-generate-media), post-training (finetune cookbook) or quantizing checkpoints
   (cosmos3-inference-quantization).
 ---
 

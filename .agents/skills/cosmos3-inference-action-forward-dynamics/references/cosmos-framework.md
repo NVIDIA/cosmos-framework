@@ -310,7 +310,10 @@ Expected behavior:
 - Sets `GIT_LFS_SKIP_SMUDGE=1` during install so optional git-LFS test artifacts do not block the local dependency mirror.
 - May print a uv cache hardlink warning if your cache and repo are on different filesystems; this is usually harmless.
 
+> Skill note (not in the source): the first line of the block below is a skill addition — the notebook only checks that `uv` exists, but `uv sync` aborts unless `uv --version` is 0.11.29 (the checkout's `required-version`); the guard installs 0.11.29 beside a different host uv (`uv self update` works only for a standalone-installer uv; eval 2026-11-08, 3 of 4 agents). Every other line is the notebook's.
+
 ```bash
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the checkout pins uv ==0.11.29; `uv self update` works only for a standalone-installer uv
 set -euo pipefail
 
 if ! command -v uv >/dev/null 2>&1; then

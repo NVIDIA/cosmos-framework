@@ -34,6 +34,8 @@ export COSMOS3_REPO=/path/to/cosmos-framework
 
 This must be the framework checkout that contains the `cosmos_framework/` Python package—not this `cosmos` cookbook repository, a model directory, or the `packages/cosmos3` model sources. The server container mounts this checkout at `/workspace/cosmos-framework`.
 
+> **Skill note (not in the source):** for a guardrail-free run (no access to the gated `nvidia/Cosmos-1.0-Guardrail`) add `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \` after the `PYTHONPATH` line (SKILL.md's Variant 3 block carries it, plus `-e HF_TOKEN \`); without it the server exits at startup with `GatedRepoError 401` and `/v1/models` never answers (eval 2026-11-08, Cosmos3-Nano-Policy-DROID).
+
 ```bash
 docker rm -f cosmos3-sglang-policy-notebook 2>/dev/null || true
 

@@ -25,12 +25,16 @@ chmod 777 "$SGLANG_HF_CACHE"
 
 ### Start the SGLang server:
 
+> Skill note (not in the source): the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` lines below are skill additions, verified eval 2026-11-08 (without the first the server exits at init with `GatedRepoError 401` on the gated guardrail repo; without the second anonymous Hub downloads are rate-limited); every other line is the notebook's.
+
 ```bash
 docker rm -f cosmos3-sglang-notebook 2>/dev/null || true
 
 docker run -d --init --name cosmos3-sglang-notebook \
   --runtime nvidia --gpus '"device=0"' \
   -e CUDA_DEVICE_ORDER=PCI_BUS_ID \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$PWD:/workspace" \
   -p 30000:30000 --ipc=host \

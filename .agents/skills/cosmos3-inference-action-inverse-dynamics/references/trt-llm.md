@@ -192,3 +192,83 @@ print("predicted action shape:", id_action.shape)
 print("first five predicted action rows:")
 print(id_action[:5])
 ```
+
+## Skill notes (not in the source) — install routes (from SKILL.md Variant 5)
+
+### 1. "Follow the shared TensorRT-LLM setup": the setup guide's source build, quoted
+
+The setup guide (`../../cookbooks/cosmos3/README.md`, "TensorRT-LLM Generator" — in the framework checkout:
+`.agents/skills/cookbooks/cosmos3/README.md`): "Install TensorRT-LLM following its upstream documentation. To build
+TensorRT-LLM from source, follow NVIDIA's Build from Source guide. This is the right path when you need a checkout that
+contains a recent Cosmos3 VisualGen change before it is available in your installed package or release image."
+
+```bash
+apt-get update && apt-get -y install git git-lfs
+git lfs install
+
+git clone https://github.com/NVIDIA/TensorRT-LLM.git
+cd TensorRT-LLM
+git checkout cc63e66daf52644f1441e117bb7ba67d20566016
+git submodule update --init --recursive
+git lfs pull
+
+# Pick a devel tag from the upstream build-from-source guide or NGC.
+# Skill note (not in the source; eval 2026-11-08, two cells): a devel tag newer than the checkout fails at cmake configure with
+#   `undefined symbol: ncclGetPeerDeviceLeInfo` (its torch links a newer NCCL than requirements.txt's `nvidia-nccl-cu13` pin;
+#   seen with devel:1.4.0rc3 on this checkout) — verified remedy: comment out that pin in requirements.txt before build_wheel.py;
+#   `-a 90-real` builds H100 only (~33 min on 256 cores; the clone with LFS took ~17 min — longer than a 10-minute tool cap, so background it).
+docker pull nvcr.io/nvidia/tensorrt-llm/devel:<tag>
+docker run --rm -it \
+  --ipc=host \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  --gpus=all \
+  --volume "$PWD":"$PWD" \
+  --workdir "$PWD" \
+  nvcr.io/nvidia/tensorrt-llm/devel:<tag>
+
+# Inside the container:
+apt-get update && apt-get -y install ffmpeg
+python3 scripts/build_wheel.py --use_ccache --skip_building_wheel --linking_install_binary
+pip install -e .
+```
+
+"For Python-only changes, the upstream guide also documents `TRTLLM_USE_PRECOMPILED=1 pip install -e .` to reuse
+precompiled binaries while installing the checkout in editable mode." Skill note (not in the source): do not — it resolves
+an unpublished `+<sha>` version and, when forced to a published wheel, an ABI mismatch
+(`../../cosmos3-generate-media/references/trt-llm.md` § 7.5; eval 2026-11-08, one cell).
+
+"Then install the Cosmos3 guardrail package in the same environment unless you explicitly disable guardrails before
+starting the server:"
+
+```bash
+pip install cosmos_guardrail==0.3.2
+# On headless servers without libGL.so.1, replace the OpenCV wheel pulled in by
+# cosmos_guardrail with the matching headless build:
+pip uninstall -y opencv-python
+pip install opencv-python-headless==5.0.0.93
+```
+
+Skill note (not in the source): the smoke path disables guardrails (SKILL.md Variant 5, "Guardrails"), so the package is not
+needed there.
+
+### 2. The install this skill runs: Route A of the generate-media skill (skill note, not in the source)
+
+With or without Docker (the § 1 source build is the fallback, not the smoke path), run the Route A block of
+`../../cosmos3-generate-media/references/trt-llm.md` § 7.2 as ONE shell call, verbatim: the `tensorrt_llm==1.3.0rc27` wheel
+(`torch==2.13.0+cu130`, `torchvision==0.28.0+cu130`, OpenMPI and `ffmpeg` from apt), its `export CUDA_HOME=…/nvidia/cu13`
+line and the pinned checkout `bca6761ab84fbcd58fc7f914eade7de48b32e35e` fetched by SHA as `TRTLLM_ROOT` (the checkout
+supplies only `examples/visual_gen/configs/cosmos3-nano-1gpu.yaml`; § 7.3). Verified for this action route by the eval
+2026-11-08 (one 80 GB GPU): the request answered in ~16 s with
+`video (61, 480, 832, 3) uint8`, `action (60, 9) float32`; the whole cell took 8.7 min against 47–67 min
+for the source-build attempts.
+
+- `CUDA_HOME` must be set in the shell call that runs `trtllm-serve` (DeepGEMM asserts `_find_cuda_home()` at import, so
+  the server exits before `/health` is up); the SKILL.md serve block re-exports § 7.2's line for that reason, and puts the
+  venv first on `PATH` so the notebook's bare `trtllm-serve` is the venv's.
+- "Host NVDEC/NVENC driver libraries available" (SKILL.md): the request's `video_reference` is decoded on the GPU
+  (PyNvVideoCodec), so the server's host or container must expose the driver's `libnvcuvid.so.1` and
+  `libnvidia-encode.so.1` — in Docker start the server container with `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` —
+  or `POST /v1/videos/sync` answers HTTP 500 `Failed to load NVENC library` (eval 2026-11-08, two cells).
+- The client cells import `IPython.display`; the SKILL.md client line adds `ipython` (and `av` for the MP4 check of "Verify
+  the output") to the notebook's list and creates the client venv with `uv venv --no-config`, so the framework checkout's
+  `uv` pin does not apply to it.

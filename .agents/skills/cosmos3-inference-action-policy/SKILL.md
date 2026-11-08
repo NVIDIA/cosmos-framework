@@ -1,21 +1,19 @@
 ---
 name: cosmos3-inference-action-policy
 description: >
-  Run Cosmos3 action-policy inference for the DROID robot: one conditioning
-  observation (the 640x540 wrist + two-exterior-camera concat_view) plus a task
-  instruction in, a 16-step action chunk out, optionally with a 17-frame
-  predicted rollout video, through the Cosmos3-Nano-Policy-DROID /
-  Cosmos3-Edge-Policy-DROID checkpoints on diffusers in-process, vLLM-Omni,
-  SGLang, TensorRT-Edge-LLM, or the Cosmos Framework policy server with a
-  RoboLab client. Use when the user asks "predict the robot's next actions from
-  this observation", "run the Cosmos3 DROID policy", "serve
-  Cosmos3-Nano-Policy-DROID / Cosmos3-Edge-Policy-DROID", "roll out a policy
-  with vLLM-Omni / SGLang", "build the policy engines with TensorRT-Edge-LLM"
-  or "start the Cosmos3 policy server for RoboLab". Not for forward dynamics
-  (video from an action trajectory: ../cosmos3-inference-action-forward-dynamics),
-  inverse dynamics (actions from a video: ../cosmos3-inference-action-inverse-dynamics),
-  audiovisual generation (../cosmos3-generate-media) or post-training the
-  policy. The entry point for the whole Action row is ../cosmos3-inference-action.
+  Run Cosmos3 action-policy inference for the DROID robot: one 640x540 concat_view
+  observation (wrist + two exterior cameras) plus a task instruction in, an action
+  chunk out (16 steps; the TensorRT-Edge-LLM engines return 32), optionally with a
+  17-frame rollout video, with Cosmos3-Nano-Policy-DROID / Cosmos3-Edge-Policy-DROID
+  on diffusers in-process, vLLM-Omni, SGLang, TensorRT-Edge-LLM or the Cosmos
+  Framework policy server with a RoboLab client. Use when the user asks "predict the
+  robot's next actions from this observation", "run / serve the Cosmos3 DROID policy",
+  "roll out a policy with vLLM-Omni / SGLang", "build the policy engines with
+  TensorRT-Edge-LLM" or "start the Cosmos3 policy server for RoboLab". Not for forward
+  dynamics (../cosmos3-inference-action-forward-dynamics), inverse dynamics
+  (../cosmos3-inference-action-inverse-dynamics), audiovisual generation
+  (../cosmos3-generate-media) or post-training the policy. Row entry point:
+  ../cosmos3-inference-action.
 ---
 
 # Cosmos3 Action Policy Inference (DROID)
@@ -24,7 +22,7 @@ The policy block of the Cosmos3 Action row: the four policy notebooks and the po
 cookbook, migrated 1:1 into `references/`. "Policy (`policy`) — predict future observations and action trajectories from
 a start image, task instruction, and state" (cookbook README). Input: the first frame of the three DROID camera clips
 composed into one 640x540 `concat_view` image plus the instruction `"Pick up the object and place it in the target
-container."`; output: a 16-step action chunk (plus a 17-frame, 15 fps rollout video on three of the five paths: Variants 1–3). Everything below quotes the sources; text that is not in a source is marked "skill note".
+container."`; output: a 16-step action chunk (skill note: Variant 4's v0.11.0 engines return their canonical 32-step chunk), plus a 17-frame, 15 fps rollout video on three of the five paths: Variants 1–3. Everything below quotes the sources; text that is not in a source is marked "skill note".
 
 ## Read this first
 
@@ -127,10 +125,9 @@ Variants 2 and 3 expect "a `[16, 8]` DROID joint-position action chunk" ("7 join
 
 Guardrails: "Generator requires the Guardrail. Request access to the gated nvidia/Cosmos-1.0-Guardrail HF repository
 before running these examples." Variant 1: `COSMOS3_DIFFUSERS_GUARDRAILS=false`; Variant 2: `--no-guardrails` (in the
-notebook's launch) and `"guardrails": False` per request; Variant 3: `"guardrails": False` per request — the launch has no
-server-wide switch (skill note: for the same `lmsysorg/sglang:dev` image the generate-media eval runs needed
-`-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` on `docker run`, otherwise the server loaded the gated guardrail at startup and
-exited with `GatedRepoError 401`, `../cosmos3-generate-media/references/skill-notes.md` § 3; unverified for the policy checkpoint).
+notebook's launch) and `"guardrails": False` per request; Variant 3: `"guardrails": False` per request plus the skill-added
+`-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` line in the Variant 3 launch (skill note, verified for Cosmos3-Nano-Policy-DROID, eval 2026-11-08:
+without it `lmsysorg/sglang:dev` loads the gated guardrail at startup and exits with `GatedRepoError 401`; the per-request flag alone does not prevent it).
 
 ## Variant 1 — diffusers (in-process, Cosmos3-Nano-Policy-DROID)
 
@@ -139,9 +136,11 @@ Reference: [`references/diffusers.md`](references/diffusers.md) — read it befo
 
 "Use a Linux machine with NVIDIA GPU access, model access on Hugging Face, and either `uvx hf@latest auth login` or
 `HF_TOKEN` set." "Point `COSMOS3_REPO` at your framework checkout (it defaults to `packages/cosmos3` beside this repo)."
-"uv version: use `uv 0.11.29`, matching the version pinned by Cosmos Framework." Headless servers: "if you see an error
-like `libxcb.so.1: cannot open shared object file` … `apt-get install -y libxcb1 libgl1 libglib2.0-0`". The notebook's
-§ 2 exports (replace the placeholders; skill note: `COSMOS3_ACTION_OUTPUT_ROOT` is the notebook's output root — it
+"uv version: use `uv 0.11.29`, matching the version pinned by Cosmos Framework." Headless servers / bare containers — run the
+notebook's remedy as a pre-flight, before the first run, not after the error (skill note: `Cosmos3OmniPipeline` imports `cosmos_guardrail` → `cv2`
+even with guardrails disabled, so the first import fails without these libraries; a fresh container needs the `apt-get update` first):
+`apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0` (the notebook's fix for "`libxcb.so.1: cannot open shared object file`"). The notebook's
+§ 2 exports (replace the placeholders; skill note: the block's last line is the skill-added uv guard; `COSMOS3_ACTION_OUTPUT_ROOT` is the notebook's output root — it
 defaults to `outputs/notebooks/diffusers` under the cookbook's action directory; point it at your output directory):
 
 ```bash
@@ -151,10 +150,11 @@ export COSMOS3_TORCH_BACKEND=cu130
 export HF_HOME=/path/to/large/huggingface/cache
 export UV_LINK_MODE=copy
 export CUDA_VISIBLE_DEVICES=0
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the checkout pins uv ==0.11.29 — standalone installer, not uv self update
 ```
 
-Install (§ 3, the notebook's `%%bash` cell, verbatim — run it as ONE shell call with the exports above in the same call;
-skill note: the `ipykernel install` lines register the Jupyter kernel and are harmless outside Jupyter):
+Install (§ 3, the notebook's `%%bash` cell, verbatim — run it as ONE shell call with the exports block above (its last line is the uv guard) in the
+same call; skill note: the `ipykernel install` lines register the Jupyter kernel and are harmless outside Jupyter):
 
 ```bash
 set -euo pipefail
@@ -210,8 +210,9 @@ echo "After switching kernels, run the Restore Environment cell below, then cont
 ```
 
 Skill note: this skill directory sits inside a cosmos-framework checkout whose `pyproject.toml` pins `[tool.uv] required-version = "==0.11.29"`,
-and uv applies that pin from any cwd under the checkout — the notebook's "uv 0.11.29" prerequisite satisfies it (the generate-media
-skill handles the pin differently for its standalone venv: `../cosmos3-generate-media/SKILL.md`, "Read this first" item 3).
+and uv applies that pin from any cwd under the checkout — any other uv aborts the install cell at `uv venv` (`Required uv version ==0.11.29 does not
+match the running version …`); `uv self update` works only for a standalone-installer uv; the exports block's last line installs the pinned
+0.11.29 beside a different host uv (eval 2026-11-08, install cell unchanged).
 
 Run: with the exports of § 2 set in the same shell call, execute § 2's Python cell, § 5 (Verify GPU and Python
 Environment), § 7 (helpers) and the two cells of "Policy: DROID Pick and Place", in that order, as ONE file with
@@ -268,9 +269,9 @@ docker run -d --name cosmos3-vllm-omni-policy-notebook \
 curl http://localhost:8001/v1/models
 ```
 
-Readiness: the notebook's `check_vllm_server()` polls `GET /v1/models` every 10 s for up to 600 s and returns the first
-model id ("Check `docker logs -f cosmos3-vllm-omni-policy-notebook`" on timeout). Skill notes: the launch passes no
-`HF_TOKEN` and mounts no Hugging Face cache (the setup guide's Prerequisites require Hugging Face access to the gated
+Readiness (skill note: the block's last `curl` runs while the model still loads and returns `curl: (52) Empty reply` — poll instead:
+`timeout 600 bash -c 'until curl -sf localhost:8001/v1/models; do sleep 10; done' || docker logs cosmos3-vllm-omni-policy-notebook`; ~80–95 s to ready for Edge on one H100, eval 2026-11-08): the notebook's `check_vllm_server()` polls `GET /v1/models` every 10 s for up to 600 s and returns the first
+model id ("Check `docker logs -f cosmos3-vllm-omni-policy-notebook`" on timeout). Skill notes: the launch passes no `HF_TOKEN` and mounts no Hugging Face cache (the setup guide's Prerequisites require Hugging Face access to the gated
 checkpoints); when done, keep the logs before removing the container — `docker logs cosmos3-vllm-omni-policy-notebook > <OUT>/vllm-server.log 2>&1; docker stop cosmos3-vllm-omni-policy-notebook; docker rm cosmos3-vllm-omni-policy-notebook`.
 
 Client: run the notebook's three Python cells (paths; "Prepare a DROID Policy Input"; "Run One-Shot Policy Inference
@@ -301,7 +302,7 @@ Cache", "Start SGLang Server", "Prepare a DROID Policy Input", "Run Policy Infer
 action vector. It can then send that action vector to the forward-dynamics `POST /v1/videos` endpoint to render a rollout
 video." "The notebook uses this same server for both the policy action request and the rollout-video request by
 default." Set `COSMOS3_REPO` as in Variant 2 ("Start the server in a terminal from the cookbook root (`.agents/skills`)"),
-then the notebook's two launch blocks:
+then the notebook's two launch blocks (the second is the notebook's plus two skill-added `-e` lines, `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `HF_TOKEN`; see "Guardrails" above):
 
 ```bash
 export SGLANG_HF_CACHE="${SGLANG_HF_CACHE:-$HOME/.cache/sglang-huggingface}"
@@ -316,6 +317,8 @@ docker run -d --init --name cosmos3-sglang-policy-notebook \
   --runtime nvidia --gpus '"device=0"' \
   -e CUDA_DEVICE_ORDER=PCI_BUS_ID \
   -e PYTHONPATH=/workspace/cosmos-framework \
+  -e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1 \
+  -e HF_TOKEN \
   -v $SGLANG_HF_CACHE:/root/.cache/huggingface \
   -v "$PWD:/workspace" \
   -p 30000:30000 --ipc=host \
@@ -329,11 +332,11 @@ curl http://localhost:30000/v1/models
 ```
 
 "When serving Cosmos3 Edge, use `nvidia/Cosmos3-Edge-Policy-DROID` as `model-path`." Logs: `docker logs -f cosmos3-sglang-policy-notebook`.
-Readiness: `check_sglang_server()` polls `GET /v1/models` every 10 s for up to 600 s. Skill notes (observations, not
-changes to the command): this launch mounts `$PWD` at `/workspace` and sets `PYTHONPATH=/workspace/cosmos-framework`, so
-the framework package is visible to the server only when the directory you launch from contains the checkout as a
-`cosmos-framework` directory (the command does not reference `COSMOS3_REPO`); it passes no `HF_TOKEN` and no guardrail
-switch (see "Guardrails" above). Teardown as in Variant 2 with the name `cosmos3-sglang-policy-notebook`.
+Readiness: `check_sglang_server()` polls `GET /v1/models` every 10 s for up to 600 s (skill note: the block's last `curl` runs while the model
+still loads and fails — poll instead: `timeout 600 bash -c 'until curl -sf localhost:30000/v1/models; do sleep 10; done' || docker logs cosmos3-sglang-policy-notebook`;
+~80–125 s to ready for Nano on one H100, eval 2026-11-08 — a cold cache downloads the weights first). Skill notes: this launch mounts `$PWD` at `/workspace` and sets
+`PYTHONPATH=/workspace/cosmos-framework`, so the framework package is visible to the server only when the directory you launch from contains the checkout as a
+`cosmos-framework` directory (the command does not reference `COSMOS3_REPO`); the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` lines are the skill's additions (see "Guardrails" above; `-e HF_TOKEN` forwards the host's token only when it is set). Teardown as in Variant 2 with the name `cosmos3-sglang-policy-notebook`.
 
 Client: the notebook's three Python cells as ONE script from this skill directory (same client packages as Variant 2;
 `COSMOS3_SGLANG_OUTPUT_ROOT` sets the output root, `COSMOS3_SGLANG_FD_BASE_URL` a separate forward-dynamics server). First
@@ -358,10 +361,11 @@ developer build). Policy on v0.11.0 builds engines with the direct builder." "Us
 the upstream Installation guide first (Python package on the host; C++ runtime on the device). Policy examples need
 `-DBUILD_EXPERIMENTAL_MODELS=ON` so `cosmos3_policy_inference` exists, and `-DENABLE_CUTE_DSL=ALL` for `tensorrt-edgellm-build`."
 Notebook: a v0.11.0 checkout built with those flags "and a Python environment with `pip install -e ".[builder]"`"; "Run this
-on the target GPU". Skill note: the C++ runtime build needs a CUDA toolkit and TensorRT on the build host — without them
-(the eval's task container has no CUDA toolkit) build inside a CUDA development container.
+on the target GPU". Skill note: the C++ runtime build needs a CUDA toolkit and a v0.11.0-qualified TensorRT (10.16.0.72 or 11.0.0.114 on x86 —
+`tensorrt_edgellm/_native/dependencies.py`) on the build host; the eval's task container has neither, so build inside a CUDA development container (e.g.
+`nvcr.io/nvidia/pytorch:26.03-py3`, listed with TensorRT 10.16.0.72 in the NGC support matrix — not run by this eval) and run the x86 pre-flight table at the top of `references/trt-edge-llm.md` first (TensorRT version, CuTe DSL artifact + `-DCUTE_DSL_ARTIFACT_TAG=sm_90`, `huggingface_hub`, § 3 packages).
 
-§ 1 defaults (the setup cell exports them): `EDGELLM_ROOT=~/TensorRT-Edge-LLM` ("It must contain
+§ 1 defaults (skill note: the setup cell sets them in its own `os.environ` only — `export` them in the shell that runs § 2 and § 4, and `OBSERVATION_IMAGE` after § 3): `EDGELLM_ROOT=~/TensorRT-Edge-LLM` ("It must contain
 `build/experimental_models/cosmos3/examples/` after a CMake build"), `ENGINE_DIR=~/tensorrt-edgellm-workspace/Cosmos3-Edge/engines`,
 `POLICY_CHECKPOINT=nvidia/Cosmos3-Edge-Policy-DROID` (a local directory or the Hugging Face repo id), `POLICY_PROMPT`, `POLICY_STATE=0,0,0,0,0,0,0,0`
 ("a zero placeholder; replace it with the robot's current state"), `POLICY_ENGINE_DIR=$ENGINE_DIR/policy`, `WORK_DIR=$POLICY_ENGINE_DIR/cookbook_work`, `OUTPUT_JSON=$WORK_DIR/action.json`.
@@ -372,7 +376,7 @@ v0.11.0 policy prompt budget. For DROID, the builder sets `content_height=540` a
 if/else, which the excerpt omits) is `cd "$EDGELLM_ROOT"`, `mkdir -p "$POLICY_ENGINE_DIR"`, then `tensorrt-edgellm-build --model-dir "$MODEL_DIR"
 --engine-dir "$POLICY_ENGINE_DIR" --components und-prefill,gen,vae-encoder --max-input-len 512 --max-batch-size 1`,
 followed by the cell's contract check (`content_height == 540`, `content_width == 640`, `attention_position_ids` in the
-UND profile, `embed_tokens.safetensors` and the tokenizer JSON under `text_tokenizer`). § 3 composes the 640x540 `concat_view`
+UND profile, `embed_tokens.safetensors` and the tokenizer JSON under `text_tokenizer`). § 3 (after `pip install pillow imageio-ffmpeg` in the environment that runs it — skill note) composes the 640x540 `concat_view`
 from the three DROID clips ("Same geometry as run_policy_with_vllm_omni.ipynb / run_policy_with_sglang.ipynb") into
 `$WORK_DIR/droid_policy_first_frame.png` and exports `OBSERVATION_IMAGE`. § 4, verbatim:
 
@@ -448,10 +452,10 @@ Skill note — tool commands (`ffprobe` is absent on a bare host and in the eval
 every client environment above installs, ships an `ffmpeg` binary):
 
 - Frame count / size / fps of a rollout: `FF="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"; "$FF" -i <file>.mp4 -map 0:v:0 -f null - 2>&1 | grep -E 'Stream #0:0|frame='`
-  (17 frames at 15 fps per the requests; the frame size is unverified — expected to follow the request size, `736x544` for Variant 2 and `640x528` for Variant 3) —
+  (17 frames at 15 fps per the requests; the frame size follows the request size — observed `736x544` for Variant 2 (Edge) and `640x528` for Variants 1 and 3, eval 2026-11-08) —
   or, in the Variant 1 venv, `python -c "import av,sys; c=av.open(sys.argv[1]); s=c.streams.video[0]; print(s.codec_context.name, s.width, s.height, sum(1 for _ in c.decode(s)), float(s.average_rate))" <file>.mp4`.
-- Action chunk: `python -c "import json,sys,numpy as np; d=json.load(open(sys.argv[1])); a=np.asarray((d.get('values') or d.get('data')) if isinstance(d,dict) else d, dtype=float); print(a.shape, np.isfinite(a).all())" <action.json>`
-  (Variant 1: `(16, 10)` normalised — inferred from `chunk_size=16` and the 10-D stats file, not printed by the notebook; Variants 2–3: `(16, 8)`, the notebooks' own check — Variant 3's file is keyed `values` or `data`, as its `action_values_from_response` reads it; Variant 4: the file's `[batch, chunk, action_dimension]`).
+- Action chunk: `python -c "import json,sys,numpy as np; d=json.load(open(sys.argv[1])); a=np.asarray((d.get('action') or d.get('values') or d.get('data')) if isinstance(d,dict) else d, dtype=float); print(a.shape, np.isfinite(a).all())" <action.json>`
+  (Variant 1: `(16, 10)` normalised — observed; `view_policy` prints "16 steps x 10D"; Variants 2–3: `(16, 8)`, the notebooks' own check — Variant 3's file is keyed `values` or `data`, as its `action_values_from_response` reads it; Variant 4: keyed `action` — the single-batch `[32, 8]` list, so the checker prints `(32, 8)` — plus a `shape` field, observed `[1, 32, 8]` on v0.11.0 engines (their canonical 32-step chunk, not 16)).
 - Record in `result_summary.md`: checkpoint, server command or script, time-to-ready, latency or generation time, the shapes above and the output paths; never report a file you did not inspect.
 
 ## Reference files
