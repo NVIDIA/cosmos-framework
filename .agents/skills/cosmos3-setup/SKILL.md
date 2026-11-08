@@ -40,7 +40,7 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 
 1. **Clone** the repository and `cd` into the project root (the directory containing `pyproject.toml`)
 2. **System deps**: `sudo apt-get install -y --no-install-recommends curl ffmpeg git-lfs libgl1 libglib2.0-0 libx11-dev tree wget`
-3. **Install uv**: `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh && source $HOME/.local/bin/env`. Verify `uv --version` matches `tool.uv.required-version`; update an existing installation with `uv self update 0.11.29`.
+3. **Install uv**: `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"`. Verify `uv --version` matches `tool.uv.required-version`; update an existing installation with `uv self update 0.11.29`.
 4. **Install package**: `uv sync --locked --all-extras --group=cu130-train && source .venv/bin/activate` (use `cu128-train` on older drivers without a supported CUDA 13 compatibility setup; the inference-only `cu130` / `cu128` groups omit the training extras)
 5. **Checkpoints**: auto-downloaded during inference; requires HuggingFace auth (see docs)
 6. **Verify**: follow `docs/setup.md` § Verify the GPU and media runtime. Check CUDA initialization and actual video decoding, not just package imports.
