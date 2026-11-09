@@ -1,5 +1,7 @@
 # Adapter implementation: final qualification review
 
+The subsequent [public portable-inference continuation](adapter-public-inference.md) adds a production loader and an opt-in FP64 factorized profile. Results below remain historical at their recorded revisions; new qualification, costs and the additional canonical-cache failure are recorded in that continuation.
+
 This is the **November 2 qualification baseline**, preserved at `e2db816`.
 The [November 4 extension](adapter-extension-progress.md) separately records new
 mixed-component, execution and deployment work; it does not relabel these runs.

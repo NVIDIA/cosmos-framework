@@ -1,5 +1,7 @@
 # Final trained-artifact deployment
 
+The subsequent [public portable-inference continuation](adapter-public-inference.md) adds a production loader and an opt-in FP64 factorized profile. Results below remain historical at their recorded revisions; new qualification, costs and the additional canonical-cache failure are recorded in that continuation.
+
 This continuation starts at `bf622ea` and evaluates the final update-1111
 Qwen3-VL-2B-Instruct mixed-component WTS artifacts. It does not repeat training
 or change the historical 12-checkpoint / 48-profile / 47-pass qualification.
