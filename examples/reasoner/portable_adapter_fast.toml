@@ -1,0 +1,29 @@
+# Stage the immutable base and final portable artifact; replace the two paths.
+# See docs/posttrain/adapter-cache-production.md for installation and support limits.
+# python -m cosmos_framework.inference.reasoner.generate --config examples/reasoner/portable_adapter_fast.toml --output answer.json
+[model]
+model_name = "/models/Qwen3-VL-2B-Instruct/89644892e4d85e24eaac8bacfd4f463576704203"
+dtype = "bfloat16"
+attn_implementation = "sdpa"
+
+[model.portable_adapter]
+directory = "/adapters/update-1111-merged-weight/portable"
+execution_profile = "qwen3_vl_bf16_tensorcore_prefill_v1"
+cache_effective_weights = true
+# Use qwen3_vl_bf16_canonical_cache_v2 for the slower correctness reference.
+# A completed merged export declares its profile in config.json/.materialized:
+# point model_name at that export and omit this portable_adapter table.
+
+[generation]
+max_tokens = 32
+temperature = 0.0
+seed = 42
+
+[vision]
+num_frames = 4
+min_pixels = 50176
+max_pixels = 81920
+
+[[tasks]]
+question = "Describe one reason a vehicle should slow down near a pedestrian crossing."
+# For an image or video add media_paths=["/data/example.mp4"], media_mode="video".

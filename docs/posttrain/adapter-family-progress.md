@@ -1,6 +1,12 @@
 # Adapter family extension: implementation and evidence
 
-The subsequent [public portable-inference continuation](adapter-public-inference.md) adds a production loader and an opt-in FP64 factorized profile. Results below remain historical at their recorded revisions; new qualification, costs and the additional canonical-cache failure are recorded in that continuation.
+The subsequent [public portable-inference continuation](adapter-public-inference.md)
+adds a production loader and an opt-in FP64 factorized profile. The
+[canonical-cache production continuation](adapter-cache-production.md) resolves
+the installation conflict, fixes the expanded-input cache failure under an
+explicit v2 profile, and qualifies opt-in fast prefill through both public
+loaders. Results below and legacy failures remain historical at their recorded
+revisions; new inference executions do not increase the training-profile counts.
 
 This is the preserved family qualification history. Additional mixed settings,
 HSDP/selective checkpointing, BF16 deployment and checkpoint corrections are

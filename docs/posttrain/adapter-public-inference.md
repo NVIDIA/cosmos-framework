@@ -1,5 +1,11 @@
 # Portable adapter inference
 
+The current corrected BF16 and fast-prefill profiles, clean-install evidence and
+support boundaries are in [adapter-cache-production.md](adapter-cache-production.md).
+The qualification sections below preserve the earlier `df88223` results,
+including its expanded-input canonical cache failure. They are historical
+results, not qualification of the corrected profiles.
+
 Use the separate pinned `cosmos-framework-reasoner-runtime` distribution. The
 shared framework wheel no longer selects a Transformers backend; `[native]`,
 `[train]` and the default repository `uv sync` groups retain Transformers 4.x.
@@ -9,7 +15,8 @@ CPython 3.12, single-A100 installation route, not a general backend upgrade.
 
 Build **both wheels from this checkout**; older framework wheels also named
 1.2.2 still have the incompatible mandatory Transformers dependency. From an
-empty environment, with dependency resolution enabled:
+empty environment, with dependency resolution enabled. Commands run from this
+checkout require **uv 0.11.29**, as declared by `tool.uv.required-version`:
 
 ```bash
 # Run in the checkout; python -m build uses an isolated build environment.
@@ -35,13 +42,17 @@ dependency resolution for this installation route.
 `CosmosFrameworkRuntime` accepts a local immutable base snapshot and
 `portable_adapter={"directory": ..., "execution_profile": ...}`. The same
 dictionary is `[model.portable_adapter]` in the reasoner evaluator TOML. A public
-generation example is [portable_adapter.toml](../../examples/reasoner/portable_adapter.toml):
+generation example for the qualified fast profile is
+[portable_adapter_fast.toml](../../examples/reasoner/portable_adapter_fast.toml):
 
 ```bash
 python -m cosmos_framework.inference.reasoner.generate \
-  --config examples/reasoner/portable_adapter.toml --output answer.json
+  --config examples/reasoner/portable_adapter_fast.toml --output answer.json
 python -m cosmos_framework.evaluation.reasoner.evaluate --config evaluation.toml
 ```
+
+The earlier [portable_adapter.toml](../../examples/reasoner/portable_adapter.toml)
+preserves the legacy canonical configuration and the stable-factorized variant.
 
 In both commands `model.model_name` is the original base snapshot. The portable
 directory must contain `adapter_manifest.json` and `adapter.safetensors`.
@@ -52,13 +63,16 @@ point `model_name` at the completed export.
 
 | Explicit profile | Artifact / deployment precision | Computation |
 | --- | --- | --- |
-| `qwen3_vl_bf16_canonical_cache_v1` | v4 `merged_weight_bf16_v1`; BF16 frozen base and FP32 adapter storage | Existing canonical linear/attention arithmetic and rounded effective weights. Optional `cache_effective_weights=true`. |
+| `qwen3_vl_bf16_canonical_cache_v1` | v4 `merged_weight_bf16_v1`; BF16 frozen base and FP32 adapter storage | Legacy arithmetic retained for reproducibility; recorded cache failure on `video-961109`. |
+| `qwen3_vl_bf16_canonical_cache_v2` | Same unchanged v4 artifact | Fixed-row language RMSNorm plus canonical linear/attention arithmetic. Correctness reference; long-prefill performance gates remain unmet. |
+| `qwen3_vl_bf16_tensorcore_prefill_v1` | Same unchanged v4 artifact | Corrected normalization; FP64 tensor-core attention for long prefill, reference attention for short inputs/decoding. Qualified opt-in fast profile. |
 | `qwen3_vl_factorized_fp64_branch_v1` | v3 `qwen3_vl_hf_stock_v1`, `factorized_v1`; BF16 base loaded then explicitly promoted to FP32 | FP32 frozen base projection, FP64 separate low-rank projections and final sum. PiSSA subtracts its saved initial branch; DoRA computes its direction norm and magnitude ratio in FP64. No dense effective-weight forward or cache. |
 
-Both public profiles are inference-only: exact stock dense HF Qwen3-VL,
+All public profiles are inference-only: exact stock dense HF Qwen3-VL,
 Transformers 5.8.1 / PyTorch 2.10.0, a single A100 SM80, SDPA, batch one, eager
 `eval()` and `no_grad()`/`inference_mode()`, no autocast, compilation, CUDA graphs
-or CPU/disk offload. Canonical additionally requires Triton 3.6.0. Stable
+or CPU/disk offload. BF16 profiles additionally require Triton 3.6.0 and permit
+`cache_effective_weights=true`. Stable
 factorized requires FP32 matmul without TF32 (`torch.set_float32_matmul_precision("highest")`).
 Ordinary non-offloaded `DynamicCache` and the existing runtime's video-prefix
 reuse are supported; static/custom caches are rejected. These profiles do not
@@ -100,9 +114,9 @@ Plain Transformers loading of a portable directory is unsupported. Merged BF16
 canonical artifacts also require the Cosmos loader to activate their declared
 arithmetic; the existing FP32 stock merged model remains the comparison oracle.
 
-## Qualification of the final update-1111 artifacts
+## Historical qualification of the final update-1111 artifacts at df88223
 
-The final production revision is `df88223` on `feat/posttrain-family-adapters`;
+The production revision for this historical qualification is `df88223` on `feat/posttrain-family-adapters`;
 its clean wheel SHA256 is
 `ae5d30f7d083f94efca0b8c1d28bd4c8169627e75a76327fd1a4df61248cd2b6`.
 Core model/runtime review and the final task run used `00714d6`, wheel
@@ -155,7 +169,7 @@ The new evaluator provenance records the effective settings. Generated-token
 NLL is .007896; it is not a training or validation loss. Physical-model runs
 remain correctness evidence, without simulator/driving-quality claims.
 
-## Performance and remaining numerical limits
+## Historical performance and numerical limits at df88223
 
 Warm synchronized A100-SXM4-80GB, batch-one latencies in seconds:
 
@@ -197,7 +211,7 @@ Separate 10 ms whole-process NVML sampling observed the same 6,396,313,600-byte 
 for construction and 8K prefill in the reference and candidate, including memory
 outside the PyTorch allocator.
 
-**Neither experimental profile is a supported public loader option.** Both match
+**At df88223, neither experimental profile was a supported public loader option.** Both match
 all 48 controlled full-forward outputs bitwise, and their 2K/8K cache checks pass,
 but additional video fixture `video-961109` (index 8 in the new set, combined
 index 40) fails full-versus-incremental decoding. The unchanged canonical reference
@@ -207,8 +221,10 @@ Both candidate and reference cached outputs are bitwise identical to each other,
 as are their full-recomputation outputs. No input or threshold was removed.
 This newly discovered expanded-input limitation is separate from the historical
 final-artifact qualification, and prevents broadening cache qualification or
-promoting the faster kernel. The original canonical implementation remains the
-production reference; its long-prefill performance criterion is incomplete.
+promoting the faster kernel at that revision. The original canonical implementation
+remains available with its original semantics. The later repair and explicitly
+versioned production integration are recorded in
+[adapter-cache-production.md](adapter-cache-production.md).
 
 ## Review and reproduction evidence
 
