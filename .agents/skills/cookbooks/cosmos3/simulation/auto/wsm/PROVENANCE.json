@@ -31,7 +31,7 @@
     },
     "cosmos_auto/wm/bbox_utils.py": {
       "source_sha256": "3c6e24811baf5f5894443cad8d56388b45d66e7caf1085c30037b8dd21a748a8",
-      "sha256": "e85225c2edd41c3629115c4d6ab3016f70410e1b04a69bd4b32ec78170e878b7"
+      "sha256": "5ed6d1d513a9bb59531360287f0b12d83a9fead707dd245cd93e32ee8936e794"
     },
     "cosmos_auto/wm/camera/__init__.py": {
       "source_sha256": "dad6afb146e05f87c2e2aac08f83781f3517bc924da2c31331b9a1ce3817149a",
@@ -501,7 +501,8 @@
     "Optional recorded-RGB dependency loaded only for that workflow",
     "Standalone documentation paths and portability validation",
     "Framework backsync documentation uses the full repository checkout and standalone pytest boundary",
-    "Markdown table formatting follows the containing repository checks"
+    "Markdown table formatting follows the containing repository checks",
+    "Pinhole bounding-box edges use native calibration with per-frame GPU buffer cleanup and regression tests"
   ],
   "incremental_sources": [
     {
