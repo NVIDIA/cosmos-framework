@@ -288,7 +288,7 @@ docker run --runtime nvidia --gpus all \
   -v "${COSMOS3_WORKDIR}:/workspace" \
   -v "${COSMOS3_WORKDIR}:${COSMOS3_WORKDIR}" \
   -e HF_TOKEN \
-  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \   # skill note (not in the source): the server caps /v1/videos/sync at 600 s by default; Nano edge transfer took 700–810 s on one H100 and returned HTTP 504 "Video generation timed out after 600.0s"
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \
   -p "${COSMOS3_HOST_PORT}:8000" --ipc=host \
   -w /workspace \
   vllm/vllm-omni:cosmos3 \
@@ -300,7 +300,7 @@ docker run --runtime nvidia --gpus all \
     --init-timeout 1800
 ```
 
-Skill note (not in the notebook): run it from this skill directory instead of `.agents/skills` (`cd` here, so `COSMOS3_WORKDIR="$PWD"` mounts this directory at `/workspace`): the helper's `repo_relative_path()` sends `control_path` relative to `COSMOS_ROOT` — with the "Paths" block that is
+Skill note (not in the notebook): the `-e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` line is skill-added (the server caps `/v1/videos/sync` at 600 s by default; Nano edge transfer took 700–810 s on one H100 → HTTP 504). Run it from this skill directory inside the framework checkout — a path the Docker daemon shares with this shell, not an agent's own skills folder — instead of `.agents/skills` (`cd` here, so `COSMOS3_WORKDIR="$PWD"` mounts this directory at `/workspace`): the helper's `repo_relative_path()` sends `control_path` relative to `COSMOS_ROOT` — with the "Paths" block that is
 `assets/edge/control_edge.mp4`, which the server, running in `/workspace`, reads from this mount. Guardrails (notebook): "Generator guardrails are on
 by default and require access to the gated `nvidia/Cosmos-1.0-Guardrail` repository. When guardrails are enabled, also set and pass `HF_TOKEN` to the
 container; it must be a Hugging Face token authorized for that repository. The edge and depth requests explicitly disable guardrails; blur,
