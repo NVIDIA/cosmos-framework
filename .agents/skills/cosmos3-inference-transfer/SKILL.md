@@ -256,7 +256,7 @@ note), then the use-case cell `edge_nano_output = run_transfer("edge", model="Co
 text CFG and `control_guidance` amplifies the control signal on top of it. Both come from the spec, as do the step count, flow shift, seed, frame
 count, and FPS." Guardrails: `GUARDRAIL_DISABLED_CONTROLS = frozenset({"edge", "depth"})` — `run_transfer` calls `pipe.disable_safety_checker()` for
 those two controls and `pipe.enable_safety_checker()` for blur, seg and wsm (gated repository, "Read this first" 5). Output:
-`outputs/notebooks/diffusers/Cosmos3-Nano/transfer_edge/vision.mp4`. "To run **Cosmos3-Super** instead, load the larger checkpoint:
+`$PWD/outputs/notebooks/diffusers/Cosmos3-Nano/transfer_edge/vision.mp4`. "To run **Cosmos3-Super** instead, load the larger checkpoint:
 `Cosmos3OmniModularPipeline.from_pretrained("nvidia/Cosmos3-Super", ...)`."
 
 FP8 (the notebook's route): "FP8 checkpoints: set `COSMOS3_DIFFUSERS_PRECISION=fp8` before loading. Nano and Super use the dedicated Hub repos
@@ -319,7 +319,7 @@ Request (§ 4 `build_transfer_request` / `run_transfer`): `requests.post(VIDEOS_
 "use_duration_template": false, "guardrails": <false for edge and depth>, "edge": {"control_path": "assets/edge/control_edge.mp4",
 "preset_edge_threshold": "medium"}, "resolution": "720", "control_guidance": 1.5, "num_video_frames_per_chunk": 121, "num_conditional_frames": 1,
 "num_first_chunk_conditional_frames": 0, "share_vision_temporal_positions": true, "max_frames": 121}`; the response body is the MP4, written to
-`outputs/vllm_omni/edge/transfer_edge.mp4`. README: "Transfer requests should also pass the spec `resolution` inside `extra_params`. Cosmos3 transfer
+`$PWD/outputs/vllm_omni/edge/transfer_edge.mp4`. README: "Transfer requests should also pass the spec `resolution` inside `extra_params`. Cosmos3 transfer
 bucket selection reads `extra_params.resolution` and the control/input aspect ratio; set the video API `size` field to the matching `<width>x<height>`
 value for a consistent request." "vLLM-Omni accepts multiple control hints in one request, but does not support the per-hint `weight` field available
 in Cosmos Framework."
@@ -377,7 +377,7 @@ Headless (skill note): `docker run -d --name cosmos3-sglang …`, poll `/v1/mode
 Request (§ 4): `requests.post(VIDEOS_GENERATION_URL, json=form, headers={"Accept": "video/mp4"}, timeout=3600)` to `POST /v1/videos` with the same
 `form` fields as Variant 3 (a JSON body here; `extra_params` additionally carries `"control_hint": "edge"`, and `control_path` is the absolute host
 path), then poll `GET /v1/videos/{id}` every 5 s until `status == "completed"` (`failed` / `cancelled` raise) and download `GET /v1/videos/{id}/content`
-→ `outputs/sglang/edge/transfer_edge.mp4` (`response.json` and `final.json` are written beside it). `COSMOS3_SGLANG_API_KEY`, when set, is sent as
+→ `$PWD/outputs/sglang/edge/transfer_edge.mp4` (`response.json` and `final.json` are written beside it). `COSMOS3_SGLANG_API_KEY`, when set, is sent as
 `Authorization: Bearer`. "SGLang also accepts unweighted multi-control requests by passing a list of control videos in the API request. Per-hint
 `weight` is supported only by Cosmos Framework."
 
@@ -434,7 +434,7 @@ assets/edge/control_edge.mp4>"}, "control_guidance": 1.5, "num_video_frames_per_
 `Accept: video/mp4` and `Authorization: Bearer <COSMOS3_TRTLLM_API_KEY>` (default `tensorrt_llm`). "Every checked-in asset is already a precomputed
 control, so the notebook sends it once as base64 media inside JSON `extra_params`; no top-level reference upload is needed." The response is checked —
 `"video/mp4" in content_type` and `response.content[4:8] == b"ftyp"`, else `RuntimeError("Expected browser-compatible MP4 …")` — and written to
-`outputs/notebooks/trt_llm/transfer_edge.mp4`. Request matrix: edge, blur and depth 121 frames / 30 fps with text / control guidance 3.0 / 1.5;
+`$PWD/outputs/notebooks/trt_llm/transfer_edge.mp4`. Request matrix: edge, blur and depth 121 frames / 30 fps with text / control guidance 3.0 / 1.5;
 segmentation 3.0 / 2.0; WSM 100 frames / 10 fps, 1.0 / 3.0; "The blur control is 4:3 and explicitly selects `1104x832`; the other controls are 16:9 and
 explicitly select `1280x720`." README: "Only edge and blur can be generated from a raw uploaded source (`"edge": true` or `"blur": true`); depth,
 segmentation, and WSM always require precomputed control media. Precomputed edge and blur are also accepted. Use `use_guardrails`, not vLLM-Omni's
