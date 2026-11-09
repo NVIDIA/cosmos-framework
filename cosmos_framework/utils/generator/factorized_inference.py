@@ -77,6 +77,7 @@ def _before_forward(model, args, kwargs):
     from transformers.cache_utils import DynamicCache
 
     _guard(model)
+    _validate_attention(model)
     record = model._cosmos_factorized_profile
     if any(p.dtype != torch.float32 or p.device != record["device"] for p in model.parameters()):
         raise ValueError(f"{PROFILE} parameters changed precision/device; restore the profile before conversion")
@@ -95,6 +96,13 @@ def _before_forward(model, args, kwargs):
             or getattr(module.lora_dropout, "p", 0)
         ):
             raise ValueError(f"{PROFILE} adapter structure/settings changed; restore and reload the profile")
+
+
+def _validate_attention(model):
+    sections = [model.config, model.config.text_config, model.config.vision_config]
+    sections.extend(getattr(m, "config", None) for m in model.modules())
+    if any(getattr(c, "_attn_implementation", "sdpa") != "sdpa" for c in sections if c is not None):
+        raise ValueError(f"{PROFILE} requires stock SDPA throughout; restore before changing attention")
 
 
 def install(model, *, adapter_type):
@@ -120,10 +128,7 @@ def install(model, *, adapter_type):
         raise ValueError(f"{PROFILE} requires a single A100 (SM80), without offload")
     if any(p.dtype != torch.float32 for p in model.parameters()):
         raise ValueError(f"{PROFILE} requires explicit FP32 materialization before installation")
-    sections = [model.config, model.config.text_config, model.config.vision_config]
-    sections.extend(getattr(m, "config", None) for m in model.modules())
-    if any(getattr(c, "_attn_implementation", "sdpa") != "sdpa" for c in sections if c is not None):
-        raise ValueError(f"{PROFILE} requires stock SDPA throughout")
+    _validate_attention(model)
     targets = [(n, m) for n, m in model.named_modules(remove_duplicate=False) if isinstance(m, adapter_type)]
     expected = model._posttrain_adapter_identity["resolved"]["targets"]
     if {n for n, _ in targets} != {r["name"] for r in expected} or any(

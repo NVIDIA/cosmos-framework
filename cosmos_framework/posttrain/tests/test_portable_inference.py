@@ -194,6 +194,16 @@ def test_public_loader_strict_identity_ownership_and_restoration(tmp_path, monke
         with torch.no_grad(), pytest.raises(ValueError, match="DynamicCache"):
             loaded(**batch, past_key_values=StaticCache(config=loaded.config, max_cache_len=32))
         stable.install(loaded, adapter_type=PosttrainAdapterLinear)  # Idempotent, not double wrapped.
+        from transformers.cache_utils import DynamicCache
+
+        empty_cache = DynamicCache(config=loaded.config)
+        original_signature = model_cache_signature(loaded)
+        loaded.set_attn_implementation("eager")
+        assert model_cache_signature(loaded) != original_signature
+        with torch.no_grad(), pytest.raises(ValueError, match="stock SDPA throughout"):
+            loaded(**batch, past_key_values=empty_cache)
+        assert empty_cache.get_seq_length() == 0
+        loaded.set_attn_implementation("sdpa")
         runtime.restore_factorized_execution()
         stable.restore(source)
         with torch.no_grad():

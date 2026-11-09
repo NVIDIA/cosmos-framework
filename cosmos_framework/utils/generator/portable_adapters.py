@@ -161,6 +161,11 @@ def model_cache_signature(model):
     tensors.extend((n, b) for n, b in model.named_buffers() if n.endswith(("initial_A", "initial_B")))
     return (
         getattr(model, "_cosmos_deployment_profile", None),
+        tuple(
+            (name, id(module.config), getattr(module.config, "_attn_implementation", None))
+            for name, module in model.named_modules()
+            if hasattr(module, "config")
+        ),
         tuple((n, id(t), t._version, t.data_ptr(), t.dtype, t.device, tuple(t.shape)) for n, t in tensors),
         tuple(
             (n, id(m), getattr(m, "method", None), getattr(m, "_lora_scale", None), getattr(m, "execution", None))
