@@ -1,5 +1,11 @@
 # Portable adapter inference
 
+Use the pinned HF runtime below; the generic native Transformers 4.x dependency
+range is not this Transformers 5.8.1 qualification. Evaluation needs the existing
+`reasoner-eval` dependencies. Standalone generation uses standard-library TOML
+on Python 3.11+; Python 3.10 needs the `toml` package from `reasoner-eval`. The
+recorded GPU runtime is Python 3.12; this is not a Python 3.10 GPU qualification.
+
 `CosmosFrameworkRuntime` accepts a local immutable base snapshot and
 `portable_adapter={"directory": ..., "execution_profile": ...}`. The same
 dictionary is `[model.portable_adapter]` in the reasoner evaluator TOML. A public
@@ -70,9 +76,16 @@ arithmetic; the existing FP32 stock merged model remains the comparison oracle.
 
 ## Qualification of the final update-1111 artifacts
 
-The implementation and independent review cover production `00714d6` on
-`feat/posttrain-family-adapters`. The clean installed wheel has SHA256
+The final production revision is `df88223` on `feat/posttrain-family-adapters`;
+its clean wheel SHA256 is
+`ae5d30f7d083f94efca0b8c1d28bd4c8169627e75a76327fd1a4df61248cd2b6`.
+Core model/runtime review and the final task run used `00714d6`, wheel
 `abfa5bf8e7971468331eb8692efca4d708792f037e26106488e19d5f43aa7c9a`.
+The only subsequent production change is the generation CLI TOML import/fallback.
+An independent parser review caught the intermediate optional-dependency issue;
+`df88223` restores dependency-free parsing on modern Python and an actionable
+Python 3.10 fallback. Both fresh public generation checks pass on the final wheel.
+No model arithmetic or evaluator logic changed after `00714d6`.
 All 1,918 packaged files were verified against that revision. Numerical runs on
 `2bccfba`, resource runs on `a2bfca4`, and final public evaluation/affected tests
 on `00714d6` remain attributed to those revisions. The later production changes
