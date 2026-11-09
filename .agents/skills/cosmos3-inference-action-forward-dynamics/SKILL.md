@@ -106,7 +106,7 @@ Camera, § 8 DROID (autoregressive, non-vendored episode), § 9 UMI (`umi_lerobo
 `COSMOS3_OUTPUT_ROOT`, `COSMOS3_CHECKPOINT_PATH`, `HF_HOME`, `CUDA_VISIBLE_DEVICES`. § 4 install ("May take several minutes"), plus a skill-added first line:
 
 ```bash
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the checkout pins uv ==0.11.29; `uv self update` works only for a standalone-installer uv
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the checkout pins uv ==0.11.29; `uv self update` works only for a standalone-installer uv
 set -euo pipefail
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -194,7 +194,7 @@ cell to enable them." "**uv version:** use `uv 0.11.29`, matching the version pi
 `CUDA_VISIBLE_DEVICES`, `COSMOS3_DIFFUSERS_PRECISION` (`bf16  # or fp8`). § 3 install (the venv and install lines plus a skill-added first line; the rest registers a Jupyter kernel):
 
 ```bash
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the notebook's uv 0.11.29; inside the checkout any other uv stops at the pyproject pin
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the notebook's uv 0.11.29; inside the checkout any other uv stops at the pyproject pin
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 uv venv "$COSMOS3_DIFFUSERS_ACTION_VENV" --python 3.13 --seed --managed-python --allow-existing
 source "$COSMOS3_DIFFUSERS_ACTION_VENV/bin/activate"

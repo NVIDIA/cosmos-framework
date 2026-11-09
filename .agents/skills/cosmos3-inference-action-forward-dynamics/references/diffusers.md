@@ -123,7 +123,7 @@ configure_diffusers_environment()
 ## 3. Install Diffusers Dependencies
 
 ```bash
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the notebook's uv 0.11.29; inside the checkout any other uv stops at the pyproject pin
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }  # skill note (not in the source): the notebook's uv 0.11.29; inside the checkout any other uv stops at the pyproject pin
 set -euo pipefail
 
 if ! command -v uv >/dev/null 2>&1; then

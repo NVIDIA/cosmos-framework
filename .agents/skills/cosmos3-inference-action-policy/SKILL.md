@@ -150,7 +150,7 @@ export COSMOS3_TORCH_BACKEND=cu130
 export HF_HOME=/path/to/large/huggingface/cache
 export UV_LINK_MODE=copy
 export CUDA_VISIBLE_DEVICES=0
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the checkout pins uv ==0.11.29 — standalone installer, not uv self update
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the checkout pins uv ==0.11.29 — standalone installer, not uv self update
 ```
 
 Install (§ 3, the notebook's `%%bash` cell, verbatim — run it as ONE shell call with the exports block above (its last line is the uv guard) in the
@@ -363,7 +363,7 @@ the upstream Installation guide first (Python package on the host; C++ runtime o
 Notebook: a v0.11.0 checkout built with those flags "and a Python environment with `pip install -e ".[builder]"`"; "Run this
 on the target GPU". Skill note: the C++ runtime build needs a CUDA toolkit and a v0.11.0-qualified TensorRT (10.16.0.72 or 11.0.0.114 on x86 —
 `tensorrt_edgellm/_native/dependencies.py`) on the build host; the eval's task container has neither, so build inside a CUDA development container (e.g.
-`nvcr.io/nvidia/pytorch:26.03-py3`, listed with TensorRT 10.16.0.72 in the NGC support matrix — not run by this eval) and run the x86 pre-flight table at the top of `references/trt-edge-llm.md` first (TensorRT version, CuTe DSL artifact + `-DCUTE_DSL_ARTIFACT_TAG=sm_90`, `huggingface_hub`, § 3 packages).
+`nvcr.io/nvidia/pytorch:26.03-py3`, listed with TensorRT 10.16.0.72 in the NGC support matrix — not run by this eval) and run the x86 pre-flight block (the eval-verified build sequence) and table at the top of `references/trt-edge-llm.md` first (TensorRT version, CuTe DSL artifact + `-DCUTE_DSL_ARTIFACT_TAG=sm_90`, `huggingface_hub`, § 3 packages).
 
 § 1 defaults (skill note: the setup cell sets them in its own `os.environ` only — `export` them in the shell that runs § 2 and § 4, and `OBSERVATION_IMAGE` after § 3): `EDGELLM_ROOT=~/TensorRT-Edge-LLM` ("It must contain
 `build/experimental_models/cosmos3/examples/` after a CMake build"), `ENGINE_DIR=~/tensorrt-edgellm-workspace/Cosmos3-Edge/engines`,

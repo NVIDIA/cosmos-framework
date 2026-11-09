@@ -121,7 +121,7 @@ export COSMOS3_DIFFUSERS_PRECISION=bf16  # or fp8
 export COSMOS3_ACTION_OUTPUT_ROOT="$PWD/outputs"   # skill note (not in the source): the notebook's default is <cookbook>/outputs/notebooks/diffusers
 export COSMOS3_DIFFUSERS_GUARDRAILS=false           # skill note (not in the source): the notebook's § 1 switch, for runs without Cosmos-1.0-Guardrail access
 apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0   # skill note (not in the source): § 1 "Headless servers" BEFORE the first run, not after the error — Cosmos3OmniPipeline imports cosmos_guardrail -> cv2, which needs libxcb.so.1 even with guardrails off (eval 2026-11-08: all four first runs died on it)
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): § 1's pin — the standalone installer, not `uv self update`, which a package-installed uv refuses
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): § 1's pin — the standalone installer, not `uv self update`, which a package-installed uv refuses
 ```
 
 Install (skill note, not in the source): the block above — its last two lines are the headless pre-flight and the uv guard — and the
@@ -177,7 +177,7 @@ functions"; § 6 AV Inverse Dynamics: spec, run, visualize; § 7–13 the robot 
 `CUDA_VISIBLE_DEVICES`. Clone or reuse the checkout with the § 3 cell (`git clone "$COSMOS3_GIT_URL" "$COSMOS3_REPO"`
 unless `$COSMOS3_REPO/.git` exists), then install with the § 4 cell (`export GIT_LFS_SKIP_SMUDGE=1`, `cd "$COSMOS3_REPO"`,
 `uv sync --all-extras --group="$COSMOS3_UV_GROUP"` — "May take several minutes"; skill note, not in the source: it aborts with `Required uv
-version ==0.11.29 does not match the running version` on any other uv — put Variant 1's uv guard first in the same call (the `uv --version … || { curl … install.sh | sh; …; }` line at the end of its export block), not `uv self update`, which a package-installed uv refuses), each as ONE shell call with those variables exported.
+version ==0.11.29 does not match the running version` on any other uv — put Variant 1's uv guard first in the same call (the `uv --version … || { curl … install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; …; }` line at the end of its export block), not `uv self update`, which a package-installed uv refuses), each as ONE shell call with those variables exported.
 
 Spec (§ 6 "Create the AV Inverse-Dynamics Input Spec"): a JSONL, one record per run, `vision_path` absolute "because
 the loader resolves relative paths against the spec file's own directory" — `action_chunk_size` 60, `domain_name`
