@@ -130,7 +130,7 @@ table in README "Install the recipe files" lists what each copy is.
 
 ```bash
 source recipe.env
-hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include 'libero_10/**' \
+.venv/bin/hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include 'libero_10/**' \
   --revision e5907374380b8f96511957e6ba5582be52a1e179 --local-dir examples/data/LIBERO_LeRobot_v3     # 603 MB
 .venv/bin/python scripts/make_holdout.py --root $LIBERO_ROOT --out data/holdout_19.generated.txt
 diff <(grep -v '^#' data/holdout_19.generated.txt) <(grep -v '^#' data/holdout_19.txt) && echo "holdout matches the pinned list"
@@ -148,8 +148,8 @@ reads `data/holdout_19.txt`, the pinned list, not the generated file.
 
 ```bash
 source recipe.env
-hf download nvidia/Cosmos3-Nano --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --local-dir hf/Cosmos3-Nano   # 33 GB
-hf download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth --revision 921dbaf3f1674a56f47e83fb80a34bac8a8f203e --local-dir examples/checkpoints/wan22_vae
+.venv/bin/hf download nvidia/Cosmos3-Nano --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --local-dir hf/Cosmos3-Nano   # 33 GB
+.venv/bin/hf download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth --revision 921dbaf3f1674a56f47e83fb80a34bac8a8f203e --local-dir examples/checkpoints/wan22_vae
 CUDA_VISIBLE_DEVICES= .venv/bin/python -m cosmos_framework.scripts.convert_model_to_dcp \
   -o examples/checkpoints/Cosmos3-Nano --checkpoint-path $PWD/hf/Cosmos3-Nano
 ls examples/checkpoints/Cosmos3-Nano
