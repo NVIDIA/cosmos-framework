@@ -187,7 +187,7 @@ class CosmosFrameworkRuntime:
 
         profile = deployment_profile(self.model_path)
         if profile:
-            validate_deployment_environment(profile, self.device)
+            validate_deployment_environment(profile, self.device, device_map=self.device_map)
         model_profile = model_execution_profile(self.model_path)
         if model_profile in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
             config = json.loads((Path(self.model_path) / "config.json").read_text())

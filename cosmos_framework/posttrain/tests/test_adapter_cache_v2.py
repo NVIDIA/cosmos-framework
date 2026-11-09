@@ -20,6 +20,10 @@ def test_merged_environment_preflight_rejects_other_gpu_without_weight_loading(m
         validate_deployment_environment(profile, "cuda:0")
     with pytest.raises(ValueError, match="A100"):
         validate_deployment_environment(profile, "cpu")
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _: pytest.fail("probed the wrong target"))
+    for device_map in ("cuda:1", "balanced", {"": "cuda:1"}):
+        with pytest.raises(ValueError, match="rank-local GPU"):
+            validate_deployment_environment(profile, "cuda:0", device_map=device_map)
 
 
 def test_shared_guard_preserves_qwen3_5_legacy_profile(monkeypatch):

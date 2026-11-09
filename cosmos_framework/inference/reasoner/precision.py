@@ -25,10 +25,12 @@ from cosmos_framework.utils.generator.bf16_cache_contract import (
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
 
-def validate_deployment_environment(profile: str | None, device: str) -> None:
+def validate_deployment_environment(profile: str | None, device: str, *, device_map: str = "auto") -> None:
     """Fail before allocating weights on an unsupported v2/fast deployment host."""
     if profile not in (CORRECTED_PROFILE, FAST_PROFILE):
         return  # Preserve the legacy loaders' original validation boundary.
+    if device_map not in ("auto", device):
+        raise ValueError(f"{profile} requires one rank-local GPU; alternate device maps/offload are unsupported")
     from importlib.metadata import version
 
     import torch
