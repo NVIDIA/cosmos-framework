@@ -40,6 +40,8 @@ docker run --runtime nvidia --gpus all \
     --init-timeout 1800
 ```
 
+> **Skill note (not in the source):** add `-e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600` to the `docker run` launches in this file: the server caps `/v1/videos/sync` at 600 s by default, and Nano edge transfer took 700–810 s on one H100 (HTTP 504 "Video generation timed out after 600.0s"; the client-side `timeout=3600` does not cover it).
+
 Generator guardrails are on by default and require access to the gated `nvidia/Cosmos-1.0-Guardrail` repository. When guardrails are enabled, also set and pass `HF_TOKEN` to the container; it must be a Hugging Face token authorized for that repository. The edge and depth requests explicitly disable guardrails; blur, segmentation, and WSM use `COSMOS3_VLLM_GUARDRAILS` (default `true`). To disable guardrails server-wide, pass `--no-guardrails` to `vllm serve`; alternatively, set `COSMOS3_VLLM_GUARDRAILS=false` for these sample requests.
 
 ### Quantized Checkpoints

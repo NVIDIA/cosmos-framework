@@ -225,7 +225,7 @@ guidance_scale=3.0, generator=torch.Generator(device="cuda").manual_seed(2026), 
 The notebook's venv — the § 2 exports, verbatim ("use the CUDA 13 or 12.8 Torch backend depending on the CUDA version installed on your system
 (`cu130` or `cu128`)"), then its § 3 install cell. § 1: "**uv version:** use `uv 0.11.29`, matching the version pinned by Cosmos Framework" — skill note (not in
 the notebook): mandatory here — the checkout's `pyproject.toml` pins `required-version = "==0.11.29"`, so any other uv aborts the § 3 cell and `uv self update`
-fails on a package-manager uv; open the § 3 call with `uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }`.
+fails on a package-manager uv; open the § 3 call with `uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }`.
 "**Headless servers:** … install the required system libraries: `apt-get install -y libxcb1 libgl1 libglib2.0-0`" — skill note: run `apt-get update && apt-get install -y libxcb1 libgl1 libglib2.0-0`
 BEFORE the first python run, not after the error: `cosmos_guardrail` imports `cv2` at pipeline import (`Cosmos3OmniModularPipeline`), safety checker on or off (eval 2026-11-08: 3 of 4 first runs failed here):
 
@@ -288,6 +288,7 @@ docker run --runtime nvidia --gpus all \
   -v "${COSMOS3_WORKDIR}:/workspace" \
   -v "${COSMOS3_WORKDIR}:${COSMOS3_WORKDIR}" \
   -e HF_TOKEN \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=3600 \   # skill note (not in the source): the server caps /v1/videos/sync at 600 s by default; Nano edge transfer took 700–810 s on one H100 and returned HTTP 504 "Video generation timed out after 600.0s"
   -p "${COSMOS3_HOST_PORT}:8000" --ipc=host \
   -w /workspace \
   vllm/vllm-omni:cosmos3 \
@@ -299,8 +300,7 @@ docker run --runtime nvidia --gpus all \
     --init-timeout 1800
 ```
 
-Skill note (not in the notebook): run it from this skill directory instead of `.agents/skills` (`cd` here, so `COSMOS3_WORKDIR="$PWD"` mounts this
-directory at `/workspace`): the helper's `repo_relative_path()` sends `control_path` relative to `COSMOS_ROOT` — with the "Paths" block that is
+Skill note (not in the notebook): run it from this skill directory instead of `.agents/skills` (`cd` here, so `COSMOS3_WORKDIR="$PWD"` mounts this directory at `/workspace`): the helper's `repo_relative_path()` sends `control_path` relative to `COSMOS_ROOT` — with the "Paths" block that is
 `assets/edge/control_edge.mp4`, which the server, running in `/workspace`, reads from this mount. Guardrails (notebook): "Generator guardrails are on
 by default and require access to the gated `nvidia/Cosmos-1.0-Guardrail` repository. When guardrails are enabled, also set and pass `HF_TOKEN` to the
 container; it must be a Hugging Face token authorized for that repository. The edge and depth requests explicitly disable guardrails; blur,
