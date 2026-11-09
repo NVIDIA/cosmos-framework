@@ -14,9 +14,31 @@ import json
 import types
 from pathlib import Path
 
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES, QWEN3_5_PROFILE, QWEN3_VL_PROFILES
+from cosmos_framework.utils.generator.bf16_cache_contract import (
+    CORRECTED_PROFILE,
+    FAST_PROFILE,
+    PROFILE_FAMILIES,
+    QWEN3_5_PROFILE,
+    QWEN3_VL_PROFILES,
+)
 
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
+
+
+def validate_deployment_environment(profile: str | None, device: str) -> None:
+    """Fail before allocating weights on an unsupported v2/fast deployment host."""
+    if profile not in (CORRECTED_PROFILE, FAST_PROFILE):
+        return  # Preserve the legacy loaders' original validation boundary.
+    from importlib.metadata import version
+
+    import torch
+
+    target = torch.device(device)
+    if target.type != "cuda" or torch.cuda.get_device_capability(target) != (8, 0):
+        raise ValueError(f"{profile} requires one A100 (SM80); select its CUDA UUID before loading")
+    required = {"torch": "2.10.0", "transformers": "5.8.1", "triton": "3.6.0"}
+    if any(version(name).split("+")[0] != expected for name, expected in required.items()):
+        raise ValueError(f"{profile} requires the pinned cosmos-framework-reasoner-runtime environment: {required}")
 
 
 def deployment_profile(path: str) -> str | None:

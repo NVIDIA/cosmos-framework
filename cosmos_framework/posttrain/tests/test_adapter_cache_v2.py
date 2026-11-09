@@ -12,6 +12,36 @@ from cosmos_framework.utils.generator.bf16_cache_contract import CORRECTED_PROFI
 
 
 @pytest.mark.parametrize("profile", [CORRECTED_PROFILE, FAST_PROFILE])
+def test_merged_environment_preflight_rejects_other_gpu_without_weight_loading(monkeypatch, profile):
+    from cosmos_framework.inference.reasoner.precision import validate_deployment_environment
+
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _: (7, 5))
+    with pytest.raises(ValueError, match="A100.*UUID"):
+        validate_deployment_environment(profile, "cuda:0")
+    with pytest.raises(ValueError, match="A100"):
+        validate_deployment_environment(profile, "cpu")
+
+
+def test_shared_guard_preserves_qwen3_5_legacy_profile(monkeypatch):
+    from inspect import signature
+
+    from cosmos_framework.utils.generator.bf16_cache import _inference_only
+    from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_5_PROFILE
+
+    def forward(input_ids=None, past_key_values=None):
+        pass
+
+    model = SimpleNamespace(
+        training=False,
+        _cosmos_deployment_profile=QWEN3_5_PROFILE,
+        _cosmos_forward_signature=signature(forward),
+    )  # The legacy Qwen3.5 installer owns no v2 attention-signature attribute.
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    with torch.no_grad():
+        _inference_only(model, (), {"input_ids": torch.ones(1, 3, dtype=torch.long)})
+
+
+@pytest.mark.parametrize("profile", [CORRECTED_PROFILE, FAST_PROFILE])
 def test_public_export_cli_and_api_admit_versioned_profiles(monkeypatch, tmp_path, profile):
     from cosmos_framework.posttrain.checkpoint.tools import adapters
 

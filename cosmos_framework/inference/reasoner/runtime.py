@@ -179,9 +179,14 @@ class CosmosFrameworkRuntime:
             self._refresh_adapter_caches()
             return
         from cosmos_framework.inference.reasoner.model_execution import model_execution_profile, validate_loaded_model
-        from cosmos_framework.inference.reasoner.precision import deployment_profile, install_deployment_profile
+        from cosmos_framework.inference.reasoner.precision import (
+            deployment_profile,
+            install_deployment_profile,
+            validate_deployment_environment,
+        )
 
         profile = deployment_profile(self.model_path)
+        validate_deployment_environment(profile, self.device)
         model_profile = model_execution_profile(self.model_path)
         if model_profile in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
             config = json.loads((Path(self.model_path) / "config.json").read_text())

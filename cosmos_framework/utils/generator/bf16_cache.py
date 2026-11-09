@@ -14,7 +14,12 @@ from types import MethodType
 import torch
 from torch import nn
 
-from cosmos_framework.utils.generator.bf16_cache_contract import FAST_PROFILE, PROFILE, QWEN3_VL_PROFILES
+from cosmos_framework.utils.generator.bf16_cache_contract import (
+    CORRECTED_PROFILE,
+    FAST_PROFILE,
+    PROFILE,
+    QWEN3_VL_PROFILES,
+)
 
 
 def _require_inference(device):
@@ -63,7 +68,7 @@ def _inference_only(model, args, kwargs):
     cache = call.get("past_key_values")
     if cache is not None and (type(cache) is not DynamicCache or getattr(cache, "offloading", False)):
         raise ValueError(f"{PROFILE} supports an ordinary DynamicCache without offload")
-    if model._cosmos_deployment_profile != PROFILE:
+    if model._cosmos_deployment_profile in (CORRECTED_PROFILE, FAST_PROFILE):
         # Reject live backend changes before mutating any caller-owned cache.
         if _attention_signature(model) != model._cosmos_deployment_attention:
             raise ValueError("attention execution changed after deployment installation; reload the model")
