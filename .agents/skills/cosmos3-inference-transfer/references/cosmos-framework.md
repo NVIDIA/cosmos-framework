@@ -84,6 +84,8 @@ print(f"HF_TOKEN: {'set' if HF_TOKEN else 'not set — using existing hf login s
 
 Run this **before** install (§6) or inference (§9+). If it fails, fix GPU allocation or driver setup before continuing.
 
+> **Skill note (not in the source):** this cell and the `%%bash` cells of § 6, § 9 and § 19 clear `LD_LIBRARY_PATH` (`os.environ.pop`, `unset`, `env -u`) — the notebook's shortcut for NGC PyTorch images. On a host whose driver relies on the container's `cuda-compat` directory that breaks CUDA initialisation (`docs/setup.md`, "Do not clear LD_LIBRARY_PATH unconditionally"): run the cells with those lines removed after SKILL.md § 3's filtered export (drops only the torch / cudnn / nccl / tensorrt / triton package dirs) and check `python -c 'import torch; torch.cuda.init()'`.
+
 ```python
 from pathlib import Path
 import json

@@ -160,7 +160,7 @@ unset LD_LIBRARY_PATH
 ```
 
 Skill note (not in the source): from this skill directory, `export TRANSFER_ROOT="$PWD"` replaces the `$(pwd)/cookbooks/cosmos3/generator/transfer`
-line — the specs and assets are here. Then the README's Nano block, verbatim:
+line — the specs and assets are here — and the filtered `LD_LIBRARY_PATH` export of § 3 below replaces `unset LD_LIBRARY_PATH` (keep a cuda-compat dir). Then the README's Nano block, verbatim:
 
 ```bash
 cd "$COSMOS_FRAMEWORK"
@@ -198,7 +198,7 @@ export COSMOS3_UV_GROUP="${COSMOS3_UV_GROUP:-cu130-train}"   # skill note (not i
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$COSMOS3_TRANSFER_ROOT/.cache/uv}"; export HF_HOME="${HF_HOME:-$COSMOS3_TRANSFER_ROOT/.cache/huggingface}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"; export COSMOS3_NUM_GPUS="${COSMOS3_NUM_GPUS:-1}"   # the Super cells use the GPU list and count
 export COSMOS3_MASTER_ADDR="${COSMOS3_MASTER_ADDR:-127.0.0.1}"; export COSMOS3_MASTER_PORT="${COSMOS3_MASTER_PORT:-29500}"   # 29500 = the README's Super block (--master-port=29500); the notebook's § 3 cell picks a free port (free_local_port()) instead
-unset LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="$(tr ':' '\n' <<<"${LD_LIBRARY_PATH:-}" | grep -v -E 'torch|cudnn|nccl|tensorrt|triton|site-packages|dist-packages' | paste -sd: -)"   # skill note (not in the notebook): drops only the inherited NGC library dirs that conflict with the venv's torch and keeps a cuda-compat dir (docs/setup.md: do not clear LD_LIBRARY_PATH unconditionally); the notebook's `unset` / `os.environ.pop` / `env -u LD_LIBRARY_PATH` lines are its NGC-container shortcut — run the cells without them; verify after § 6: `.venv/bin/python -c 'import torch; torch.cuda.init(); print(torch.cuda.get_device_name())'`
 ```
 
 The notebook's § 9 cell is the README command with `-i "$COSMOS3_TRANSFER_ROOT/specs/edge.json"`, `-o "$COSMOS3_TRANSFER_OUTPUT_ROOT/Cosmos3-Nano"`
