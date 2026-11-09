@@ -6,7 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
-import toml
+try:
+    import tomllib as toml
+except ModuleNotFoundError:  # Python 3.10; also used by the existing reasoner evaluator.
+    try:
+        import toml
+    except ModuleNotFoundError as error:
+        raise ImportError(
+            "Python 3.10 generation requires the reasoner-eval extra (toml); Python 3.11+ uses tomllib"
+        ) from error
 
 from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 
