@@ -372,7 +372,15 @@ def read_adapter_snapshot(
 
 def load_adapter_artifact(net: torch.nn.Module, directory: str) -> None:
     """Strict warm start after structure creation/base load, before FSDP. No re-init."""
-    _, state = read_adapter_artifact(directory, expected_identity=net._posttrain_adapter_identity)
+    identity, state = read_adapter_artifact(directory, expected_identity=net._posttrain_adapter_identity)
+    load_adapter_state(net, identity, state)
+
+
+def load_adapter_state(net: torch.nn.Module, identity: dict, state: dict[str, torch.Tensor]) -> None:
+    """Load an already captured snapshot without reopening mutable artifact paths."""
+    if identity != net._posttrain_adapter_identity:
+        raise ValueError("adapter snapshot identity differs from the installed model")
+    _validate_state(state, identity)
     parameters = net.state_dict()
     expected_missing = set(parameters) - set(state)
     result = net.load_state_dict(state, strict=False)

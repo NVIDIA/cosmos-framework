@@ -1,0 +1,28 @@
+# Stage the immutable base and portable directory, then replace these two paths.
+# python -m cosmos_framework.inference.reasoner.generate --config examples/reasoner/portable_adapter.toml --output answer.json
+[model]
+model_name = "/models/Qwen3-VL-2B-Instruct/89644892e4d85e24eaac8bacfd4f463576704203"
+dtype = "bfloat16"
+attn_implementation = "sdpa"
+
+[model.portable_adapter]
+directory = "/adapters/update-1111-merged-weight/portable"
+execution_profile = "qwen3_vl_bf16_canonical_cache_v1"
+cache_effective_weights = true
+# For a v3 qwen3_vl_hf_stock_v1 / factorized_v1 portable artifact instead:
+# use dtype="float32" above, execution_profile="qwen3_vl_factorized_fp64_branch_v1",
+# and cache_effective_weights=false. This is an inference precision override.
+
+[generation]
+max_tokens = 32
+temperature = 0.0
+seed = 42
+
+[vision]
+num_frames = 4
+min_pixels = 50176
+max_pixels = 81920
+
+[[tasks]]
+question = "Describe one reason a vehicle should slow down near a pedestrian crossing."
+# For an image or video add media_paths=["/data/example.mp4"], media_mode="video".

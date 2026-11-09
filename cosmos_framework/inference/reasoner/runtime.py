@@ -102,6 +102,7 @@ class CosmosFrameworkRuntime:
         dtype: str = "bfloat16",
         device_map: str = "auto",
         attn_implementation: str | None = None,
+        portable_adapter: dict[str, Any] | None = None,
     ) -> None:
         import torch
 
@@ -111,13 +112,30 @@ class CosmosFrameworkRuntime:
             self.device = f"cuda:{self.local_rank}"
         else:
             self.device = "cpu"
-        self.model_path = ensure_evaluation_checkpoint(
-            model_path,
-            enable_lora=enable_lora,
-            base_model_path=base_model_path,
-            config_file=config_file,
-            export_dir=export_dir,
-            vit_checkpoint_path=vit_checkpoint_path,
+        self.portable_adapter = None
+        self.adapter_deployment = None
+        self._adapter_cache_signature = None
+        if portable_adapter is not None:
+            from cosmos_framework.utils.generator.portable_adapters import PortableAdapterConfig
+
+            self.portable_adapter = PortableAdapterConfig(**portable_adapter)
+            if any((config_file, export_dir, vit_checkpoint_path, enable_lora, base_model_path)):
+                raise ValueError(
+                    "portable_adapter uses model_path as its immutable base; native checkpoint/export options conflict"
+                )
+            if device_map not in ("auto", self.device):
+                raise ValueError("portable_adapter requires one rank-local GPU; device maps/offload are unsupported")
+        self.model_path = (
+            str(model_path)
+            if self.portable_adapter
+            else ensure_evaluation_checkpoint(
+                model_path,
+                enable_lora=enable_lora,
+                base_model_path=base_model_path,
+                config_file=config_file,
+                export_dir=export_dir,
+                vit_checkpoint_path=vit_checkpoint_path,
+            )
         )
         self.model_type = _read_model_type(self.model_path)
         self.dtype = dtype
@@ -147,6 +165,19 @@ class CosmosFrameworkRuntime:
         self._load()
 
     def _load(self) -> None:
+        if getattr(self, "portable_adapter", None) is not None:
+            from cosmos_framework.utils.generator.portable_adapters import load_portable_model
+
+            self.model, self.processor, self.adapter_deployment = load_portable_model(
+                self.model_path,
+                self.portable_adapter,
+                dtype=self.dtype,
+                device=self.device,
+                attn_implementation=self.attn_implementation,
+            )
+            self.backend = "transformers"
+            self._refresh_adapter_caches()
+            return
         from cosmos_framework.inference.reasoner.model_execution import model_execution_profile, validate_loaded_model
         from cosmos_framework.inference.reasoner.precision import deployment_profile, install_deployment_profile
 
@@ -269,6 +300,41 @@ class CosmosFrameworkRuntime:
         if getattr(self.processor, "tokenizer", None) is not None:
             self.processor.tokenizer.padding_side = "left"
         self.backend = "transformers"
+
+    def clear_adapter_caches(self) -> None:
+        """Clear derived weights, features and prefixes after untracked (.data/fused) writes.
+
+        Normal version-tracked updates, replacement and dtype/device changes are
+        detected at generation entry. Mutating a live runtime concurrently with
+        generation is unsupported. External prefix caches belong to their caller.
+        """
+        from cosmos_framework.utils.generator.portable_adapters import clear_derived_weights
+
+        clear_derived_weights(self.model)
+        for name in ("_video_feature_cache", "_video_processor_cache", "_video_input_cache", "_video_prefix_cache"):
+            getattr(self, name, {}).clear()
+        self._adapter_cache_signature = None
+
+    def _refresh_adapter_caches(self) -> None:
+        if getattr(self, "portable_adapter", None) is None:
+            return
+        from cosmos_framework.utils.generator.portable_adapters import model_cache_signature
+
+        current = model_cache_signature(self.model)
+        if self._adapter_cache_signature != current:
+            if self._adapter_cache_signature is not None and self.adapter_deployment is not None:
+                self.adapter_deployment["state_modified_since_load"] = True
+            self.clear_adapter_caches()
+            self._adapter_cache_signature = current
+
+    def restore_factorized_execution(self) -> None:
+        """Remove the opt-in FP64 branch profile; keep the loaded FP32 original tensors."""
+        from cosmos_framework.utils.generator.factorized_inference import restore
+
+        restore(self.model)
+        self.clear_adapter_caches()
+        self.adapter_deployment["execution_profile"] = "factorized_v1"
+        self.adapter_deployment["restored_original_execution"] = True
 
     def _install_video_feature_cache(self, capacity: int) -> None:
         """Install an opt-in rank-local cache around the deterministic VLM encoder."""
@@ -463,6 +529,7 @@ class CosmosFrameworkRuntime:
 
         import torch
 
+        self._refresh_adapter_caches()
         capacity = int(capacity)
         if capacity <= 0:
             return self.model.generate(**inputs, **generation_kwargs)
@@ -987,6 +1054,10 @@ class CosmosFrameworkRuntime:
     ) -> tuple[list[str], list[float]]:
         generation_config = generation_config or {}
         vision_config = vision_config or {}
+        self._refresh_adapter_caches()
+        if getattr(self, "adapter_deployment", None) is not None:
+            self.adapter_deployment["effective_generation"] = copy.deepcopy(generation_config)
+            self.adapter_deployment["effective_media_preprocessing"] = copy.deepcopy(vision_config)
         if self.backend == "omni":
             return self._generate_omni(tasks, generation_config, vision_config)
         return self._generate_transformers(tasks, generation_config, vision_config)

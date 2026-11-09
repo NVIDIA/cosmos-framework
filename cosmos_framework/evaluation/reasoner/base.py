@@ -116,6 +116,7 @@ class BaseEvaluator(ABC):
             dtype=self.model_config.get("dtype", "bfloat16"),
             device_map=self.model_config.get("device_map", "auto"),
             attn_implementation=self.model_config.get("attn_implementation"),
+            portable_adapter=self.model_config.get("portable_adapter"),
         )
         processor = model.processor
 
@@ -284,6 +285,13 @@ class BaseEvaluator(ABC):
             results_output_dir = results_dir / Path(model_name).name / answer_type
 
         results_output_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(self.model, "adapter_deployment", None) is not None:
+            deployment = dict(self.model.adapter_deployment)
+            deployment["effective_media_preprocessing"] = self.vision_config
+            deployment["effective_generation"] = dict(self.gen_config, seed=self.eval_config.get("seed", 1))
+            (results_output_dir / f"adapter-deployment-shard{shard_id}.json").write_text(
+                json.dumps(deployment, indent=2) + "\n"
+            )
         rank, world_size, _ = distributed_identity()
         marker_dir = None
         if world_size > 1:
