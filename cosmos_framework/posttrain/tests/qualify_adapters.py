@@ -36,7 +36,6 @@ from cosmos_framework.posttrain.roles.env.sft import build_sft_env
 from cosmos_framework.posttrain.roles.trainer.validation.runtime import reshard_fsdp_modules
 from cosmos_framework.posttrain.tests.adapter_numerics import configure_qualification_numerics
 from cosmos_framework.posttrain.utils.dist import init_local_process_group
-from cosmos_framework.utils.config import load_config
 
 
 def installed_environment(wheel: str) -> dict:
@@ -191,6 +190,8 @@ def verify_trainable_updates(before, after):
 
 
 def runtime(recipe, opts, output):
+    from cosmos_framework.utils.config import load_config
+
     config = load_config(recipe, ["--", *opts])
     component = os.environ.get("SFT_QUALIFY_COMPONENT", "all")
     if component != "all":

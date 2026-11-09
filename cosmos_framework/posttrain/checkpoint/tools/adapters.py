@@ -26,6 +26,9 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
 from cosmos_framework.posttrain.checkpoint.adapters import (
     merged_export_metadata as merged_export_metadata,
 )
+from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
+
+DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES)
 
 
 def validate_merged_export_metadata(
@@ -114,11 +117,7 @@ def export_merged_adapter(
 
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
-    if execution_profile is not None and (
-        execution_profile
-        not in ("qwen3_vl_bf16_residual_fp32_v1", "qwen3_vl_bf16_canonical_cache_v1", "qwen3_5_bf16_canonical_cache_v1")
-        or output_dtype != "bfloat16"
-    ):
+    if execution_profile is not None and (execution_profile not in DEPLOYMENT_PROFILES or output_dtype != "bfloat16"):
         raise ValueError("execution_profile requires a supported BF16 deployment profile and bfloat16 output")
     record, state = read_adapter_snapshot(adapter)
     identity = record["identity"]
@@ -224,11 +223,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--execution-profile",
-        choices=[
-            "qwen3_vl_bf16_residual_fp32_v1",
-            "qwen3_vl_bf16_canonical_cache_v1",
-            "qwen3_5_bf16_canonical_cache_v1",
-        ],
+        choices=DEPLOYMENT_PROFILES,
         help="BF16 merged inference arithmetic; requires Framework loading, not plain stock HF execution",
     )
     args = parser.parse_args(argv)

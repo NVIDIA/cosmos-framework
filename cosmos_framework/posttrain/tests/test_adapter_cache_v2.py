@@ -11,6 +11,41 @@ import torch
 from cosmos_framework.utils.generator.bf16_cache_contract import CORRECTED_PROFILE, FAST_PROFILE
 
 
+@pytest.mark.parametrize("profile", [CORRECTED_PROFILE, FAST_PROFILE])
+def test_public_export_cli_and_api_admit_versioned_profiles(monkeypatch, tmp_path, profile):
+    from cosmos_framework.posttrain.checkpoint.tools import adapters
+
+    # Both public admission points must reach artifact validation, not reject
+    # a profile accepted only by lower-level metadata serialization.
+    class ReachedArtifactValidation(Exception):
+        pass
+
+    def read(*args):
+        raise ReachedArtifactValidation
+
+    monkeypatch.setattr(adapters, "read_adapter_snapshot", read)
+    with pytest.raises(ReachedArtifactValidation):
+        adapters.export_merged_adapter(
+            "adapter", "base", str(tmp_path / "export"), output_dtype="bfloat16", execution_profile=profile
+        )
+    with pytest.raises(ReachedArtifactValidation):
+        adapters.main(
+            [
+                "--adapter",
+                "adapter",
+                "--base",
+                "base",
+                "--merged",
+                "--out",
+                str(tmp_path / "export"),
+                "--output-dtype",
+                "bfloat16",
+                "--execution-profile",
+                profile,
+            ]
+        )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="qualified kernels require A100")
 def test_real_rounding_boundary_norm_is_independent_of_batch_shape():
     from cosmos_framework.utils.generator.bf16_cache import _rms_norm_forward
