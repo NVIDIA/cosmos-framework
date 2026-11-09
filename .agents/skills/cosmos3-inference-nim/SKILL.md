@@ -200,7 +200,7 @@ Preflight, Launch Generator; request: the Quickstart's `uv run python examples/t
 
 ```bash
 docker run --rm \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   -e NIM_MODEL_TYPE=generator \
   -e NIM_MODEL_VARIANT=nano \
   -e NIM_PERF_PROFILE=latency \
@@ -219,7 +219,7 @@ failure before a cold download." Launch Generator — "This example runs general
 
 ```bash
 docker run -d --name cosmos3-generator \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   --shm-size 16g \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
@@ -247,7 +247,7 @@ startup. DFlash speculative decoding is on by default for Nano and Super." Prefl
 
 ```bash
 docker run --rm \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   -e NIM_MODEL_TYPE=reasoner \
   -e NIM_MODEL_VARIANT=nano \
   --entrypoint /bin/bash \
@@ -269,7 +269,7 @@ value"), so it is the discrete-GPU form as written; the page's "Discrete GPU Exa
 
 ```bash
 docker run -d --name cosmos3-reasoner \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   --shm-size 16g \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
@@ -363,7 +363,7 @@ rules while doing so:
   validated configuration in [`prerequisites.md`](../cookbooks/cosmos3/nim/prerequisites.md) as tested versions, not
   minimums. Do not invent other fixed CPU, RAM, disk, or Docker minimums.
 - **GPU exposure** ([GPU selection](../cookbooks/cosmos3/nim/configuration.md#gpu-selection)):
-  select GPUs with Docker `--gpus`, not `CUDA_VISIBLE_DEVICES`.
+  select GPUs with Docker `--gpus`, not `CUDA_VISIBLE_DEVICES` (single device: `--gpus device=0`; the docs' nested-quote form `'"device=0"'` is only needed for a comma list, and some agent shells mangle it into `invalid reference format`).
 - **Offline or air-gapped**
   ([procedure](../cookbooks/cosmos3/nim/deployment.md#offline-and-air-gapped-deployment)):
   fill the cache online, copy it preserving symlinks, and do not set
