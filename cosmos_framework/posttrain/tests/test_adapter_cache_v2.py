@@ -130,6 +130,11 @@ def test_profile_conflicts_and_live_attention_changes_precede_cache_mutation(tmp
         install(net, profile=FAST_PROFILE if profile == CORRECTED_PROFILE else CORRECTED_PROFILE)
     cache = DynamicCache(config=net.config)
     batch = dict(input_ids=torch.ones(1, 3, dtype=torch.long, device="cuda"))
+    net.set_attn_implementation({"vision_config": "eager"})
+    with torch.no_grad(), pytest.raises(ValueError, match="attention execution changed"):
+        net(**batch, past_key_values=cache)
+    assert cache.get_seq_length() == 0
+    net.set_attn_implementation({"vision_config": "sdpa"})
     net.set_attn_implementation("eager")
     with torch.no_grad(), pytest.raises(ValueError, match="attention execution changed"):
         net(**batch, past_key_values=cache)

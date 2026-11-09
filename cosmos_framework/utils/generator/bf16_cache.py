@@ -30,6 +30,16 @@ def _require_inference(device):
             raise RuntimeError(f"{PROFILE} requires eager no_grad/inference_mode, and no autocast or CUDA graphs")
 
 
+def _attention_signature(model):
+    configs = [
+        ("root", model.config),
+        ("text", model.config.text_config),
+        ("vision", model.config.vision_config),
+    ]
+    configs.extend((name, module.config) for name, module in model.named_modules() if hasattr(module, "config"))
+    return tuple((name, id(config), config._attn_implementation) for name, config in configs)
+
+
 def _inference_only(model, args, kwargs):
     from transformers.cache_utils import DynamicCache
 
@@ -55,10 +65,8 @@ def _inference_only(model, args, kwargs):
         raise ValueError(f"{PROFILE} supports an ordinary DynamicCache without offload")
     if model._cosmos_deployment_profile != PROFILE:
         # Reject live backend changes before mutating any caller-owned cache.
-        for module in model.modules():
-            if type(module).__name__ == "Qwen3VLTextAttention":
-                if module.config._attn_implementation != model._cosmos_deployment_profile:
-                    raise ValueError("attention execution changed after deployment installation; reload the model")
+        if _attention_signature(model) != model._cosmos_deployment_attention:
+            raise ValueError("attention execution changed after deployment installation; reload the model")
 
 
 def _rms_norm_forward(self, inputs):
@@ -374,5 +382,7 @@ def install(model, *, adapter_type=None, profile=PROFILE):
     model._cosmos_forward_signature = signature(model.forward)
     model.register_forward_pre_hook(_inference_only, with_kwargs=True)
     model._cosmos_deployment_profile = profile
+    if profile != PROFILE:
+        model._cosmos_deployment_attention = _attention_signature(model)
     model._cosmos_deployment_modules = tuple(changed)
     return changed
