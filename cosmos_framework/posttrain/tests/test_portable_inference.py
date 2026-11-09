@@ -73,8 +73,50 @@ def test_runtime_cache_invalidation_tracks_sources_and_clear():
     runtime._refresh_adapter_caches()
     assert runtime._video_prefix_cache  # Unchanged parameters retain reusable prefixes.
     runtime.model.weight.data.add_(1)
+    runtime.adapter_deployment.clear()
     runtime.clear_adapter_caches()  # Explicitly required for unsafe .data/fused writes.
     assert not runtime._video_prefix_cache
+    runtime._refresh_adapter_caches()
+    assert runtime.adapter_deployment["state_modified_since_load"]
+
+
+def test_evaluator_records_executed_generation_settings(tmp_path):
+    from types import SimpleNamespace
+
+    from cosmos_framework.evaluation.reasoner.base import BaseEvaluator
+
+    class Evaluator(BaseEvaluator):
+        def make_tasks(self, *args):
+            pass
+
+        def save(self, *args):
+            pass
+
+        def compute_metrics(self, *args):
+            pass
+
+        def aggregate_metrics_if_all_shards_present(self, *args):
+            pass
+
+    evaluator = Evaluator({"generation": {"max_tokens": 32, "temperature": 0.7, "seed": 99}, "evaluation": {"seed": 1}})
+    evaluator._send_status_callback = lambda *args: None
+    evaluator._adapter_deployment_path = tmp_path / "deployment.json"
+    runtime = SimpleNamespace(adapter_deployment={})
+
+    def generate_tasks(tasks, *, generation_config, vision_config):
+        runtime.adapter_deployment["effective_generation"] = generation_config
+        return ["A"], [0.0]
+
+    runtime.generate_tasks = generate_tasks
+    evaluator.model = runtime
+    evaluator.run_model_inference([{}], [{}], answer_type="letter")
+    import json
+
+    assert json.loads(evaluator._adapter_deployment_path.read_text())["effective_generation"] == {
+        "max_tokens": 10,
+        "temperature": 0.0,
+        "seed": 99,
+    }
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="public profiles require A100")

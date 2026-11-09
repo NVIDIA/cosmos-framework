@@ -308,6 +308,14 @@ class CosmosFrameworkRuntime:
         detected at generation entry. Mutating a live runtime concurrently with
         generation is unsupported. External prefix caches belong to their caller.
         """
+        if getattr(self, "adapter_deployment", None) is not None:
+            # The caller uses this boundary for mutations whose versions cannot
+            # be observed (.data/fused optimizers). Do not keep claiming that
+            # current execution is bound to the unchanged serialized payload.
+            self.adapter_deployment["state_modified_since_load"] = True
+        self._clear_adapter_caches()
+
+    def _clear_adapter_caches(self) -> None:
         from cosmos_framework.utils.generator.portable_adapters import clear_derived_weights
 
         clear_derived_weights(self.model)
@@ -324,7 +332,7 @@ class CosmosFrameworkRuntime:
         if self._adapter_cache_signature != current:
             if self._adapter_cache_signature is not None and self.adapter_deployment is not None:
                 self.adapter_deployment["state_modified_since_load"] = True
-            self.clear_adapter_caches()
+            self._clear_adapter_caches()
             self._adapter_cache_signature = current
 
     def restore_factorized_execution(self) -> None:
@@ -332,7 +340,7 @@ class CosmosFrameworkRuntime:
         from cosmos_framework.utils.generator.factorized_inference import restore
 
         restore(self.model)
-        self.clear_adapter_caches()
+        self._clear_adapter_caches()
         self.adapter_deployment["execution_profile"] = "factorized_v1"
         self.adapter_deployment["restored_original_execution"] = True
 

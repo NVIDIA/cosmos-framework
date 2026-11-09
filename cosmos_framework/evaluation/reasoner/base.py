@@ -226,6 +226,12 @@ class BaseEvaluator(ABC):
                 )
 
         inference_time = time.time() - inference_start
+        deployment_path = getattr(self, "_adapter_deployment_path", None)
+        if deployment_path is not None:
+            # The runtime records precisely the settings supplied to generation,
+            # including letter-answer limits and the effective seed. Initial
+            # configuration alone is not the executed decoding contract.
+            deployment_path.write_text(json.dumps(self.model.adapter_deployment, indent=2) + "\n")
         log.info(f"Finished Framework generation. Received {len(all_outputs)} outputs in {inference_time:.1f}s.")
         cache_stats = getattr(self.model, "video_cache_stats", lambda: {})()
         if cache_stats:
@@ -288,10 +294,9 @@ class BaseEvaluator(ABC):
         if getattr(self.model, "adapter_deployment", None) is not None:
             deployment = dict(self.model.adapter_deployment)
             deployment["effective_media_preprocessing"] = self.vision_config
-            deployment["effective_generation"] = dict(self.gen_config, seed=self.eval_config.get("seed", 1))
-            (results_output_dir / f"adapter-deployment-shard{shard_id}.json").write_text(
-                json.dumps(deployment, indent=2) + "\n"
-            )
+            deployment["requested_generation"] = self.gen_config
+            self._adapter_deployment_path = results_output_dir / f"adapter-deployment-shard{shard_id}.json"
+            self._adapter_deployment_path.write_text(json.dumps(deployment, indent=2) + "\n")
         rank, world_size, _ = distributed_identity()
         marker_dir = None
         if world_size > 1:
