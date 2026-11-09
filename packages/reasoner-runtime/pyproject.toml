@@ -21,6 +21,7 @@ dependencies = [
   "safetensors==0.8.0",
   "qwen-vl-utils==0.0.14",
   "pillow==13.0.0",
+  "av==18.0.0",
   "toml",
 ]
 

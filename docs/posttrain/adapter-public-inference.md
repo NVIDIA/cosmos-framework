@@ -1,10 +1,36 @@
 # Portable adapter inference
 
-Use the pinned HF runtime below; the generic native Transformers 4.x dependency
-range is not this Transformers 5.8.1 qualification. Evaluation needs the existing
-`reasoner-eval` dependencies. Standalone generation uses standard-library TOML
-on Python 3.11+; Python 3.10 needs the `toml` package from `reasoner-eval`. The
-recorded GPU runtime is Python 3.12; this is not a Python 3.10 GPU qualification.
+Use the separate pinned `cosmos-framework-reasoner-runtime` distribution. The
+shared framework wheel no longer selects a Transformers backend; `[native]`,
+`[train]` and the default repository `uv sync` groups retain Transformers 4.x.
+The reasoner distribution selects exactly Transformers 5.8.1 and owns no Python
+source files. Do not combine it with native/train extras. This is a Linux x86_64,
+CPython 3.12, single-A100 installation route, not a general backend upgrade.
+
+Build **both wheels from this checkout**; older framework wheels also named
+1.2.2 still have the incompatible mandatory Transformers dependency. From an
+empty environment, with dependency resolution enabled:
+
+```bash
+# Run in the checkout; python -m build uses an isolated build environment.
+python -m build --wheel --outdir dist
+python -m build --wheel --outdir dist packages/reasoner-runtime
+uv venv --python 3.12 --seed /path/to/new-reasoner-env
+uv pip install --python /path/to/new-reasoner-env/bin/python \
+  'dist/cosmos_framework-1.2.2-py3-none-any.whl[reasoner-eval]' \
+  dist/cosmos_framework_reasoner_runtime-1.2.2-py3-none-any.whl \
+  -r packages/reasoner-runtime/requirements-cu128.txt \
+  --index-strategy unsafe-best-match
+/path/to/new-reasoner-env/bin/python -m pip check
+source /path/to/new-reasoner-env/bin/activate
+```
+
+The explicit PyTorch index supplies CUDA 12.8 wheels; TorchCodec uses the
+hash-pinned CPU decoder wheel. Host CUDA drivers and FFmpeg shared libraries
+remain system prerequisites. AV 18.0.0, processor versions and the complete
+artifact dependency identity are checked before model mutation. The historical
+prepared-environment results keep their original identities; they do not prove
+dependency resolution for this installation route.
 
 `CosmosFrameworkRuntime` accepts a local immutable base snapshot and
 `portable_adapter={"directory": ..., "execution_profile": ...}`. The same

@@ -1,0 +1,7 @@
+# Linux x86_64 / CPython 3.12 / A100 qualification platform.
+# Install alongside both locally built wheels; dependency resolution stays enabled.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+# CPU media decoding avoids unrelated CUDA/NPP dependencies; exact published wheel.
+torchcodec @ https://download.pytorch.org/whl/cpu/torchcodec-0.10.0-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=6e43184d83ccced965b31cad5bb6200c779646fee2ec153a6d784b4def40c91b
