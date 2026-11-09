@@ -99,6 +99,7 @@ export RUN=$WORKDIR/runs/main/cosmos3_action_fd/action_sft/action_fd_libero_post
 export CELL2=$WORKDIR/runs/cell2/cosmos3_action_fd/action_sft/action_fd_id_libero_posttrain
 export EVAL=$WORKDIR/eval
 export PYTHONPATH=.
+export PATH=$PWD/.venv/bin:$PATH   # the launch scripts call bare `torchrun`
 EOF
 .venv/bin/python -c "import torch, natten, lerobot, torchcodec; print(torch.__version__)"
 ```
