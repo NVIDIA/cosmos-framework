@@ -112,7 +112,7 @@ Face model access (`uvx hf@latest auth login` or `HF_TOKEN`). Follow the
 local checkout, not a separate PyPI or Git installation:"
 
 ```bash
-uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the pinned uv, Read this first item 5 — the installer writes no ~/.local/bin/env when that directory is already on PATH, so PATH is exported instead of sourcing it; the README block starts on the next line
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }   # skill note (not in the source): the pinned uv, Read this first item 5 — the installer writes no ~/.local/bin/env when that directory is already on PATH, so PATH is exported instead of sourcing it; the README block starts on the next line
 cd /path/to/cosmos-framework
 export FRAMEWORK_ROOT="$PWD"
 export COSMOS3_QUANTIZE_VENV="${COSMOS3_QUANTIZE_VENV:-$FRAMEWORK_ROOT/.venv}"
