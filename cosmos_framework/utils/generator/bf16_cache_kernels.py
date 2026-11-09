@@ -13,6 +13,19 @@ from triton.language.extra.cuda import libdevice
 
 
 @triton.jit
+def _rms_norm_kernel(X, W, Y, D: tl.constexpr, EPS: tl.constexpr, BLOCK: tl.constexpr):
+    # v2: one fixed reduction tree per row, independent of prompt/cache length.
+    # Preserve the stock BF16 rounding boundary BEFORE the affine multiply.
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    x = tl.load(X + row * D + cols, cols < D, 0).to(tl.float32)
+    variance = tl.sum(x * x, 0) / D
+    normalized = (x * tl.rsqrt(variance + EPS)).to(tl.bfloat16).to(tl.float32)
+    weight = tl.load(W + cols, cols < D, 0).to(tl.bfloat16).to(tl.float32)
+    tl.store(Y + row * D + cols, normalized * weight, cols < D)
+
+
+@triton.jit
 def _attention_kernel(
     Q,
     K,

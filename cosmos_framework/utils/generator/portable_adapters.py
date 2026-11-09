@@ -13,7 +13,8 @@ import json
 from dataclasses import dataclass
 from importlib.metadata import version
 
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CANONICAL
+from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CANONICAL  # noqa: F401
+from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_VL_PROFILES
 from cosmos_framework.utils.generator.factorized_inference import PROFILE as FACTORIZED
 
 
@@ -27,8 +28,8 @@ class PortableAdapterConfig:
     def __post_init__(self):
         if not isinstance(self.directory, str) or not self.directory:
             raise ValueError("portable_adapter.directory must name a complete local portable adapter")
-        if self.execution_profile not in (CANONICAL, FACTORIZED):
-            raise ValueError(f"portable execution_profile must be {CANONICAL!r} or {FACTORIZED!r}")
+        if self.execution_profile not in (*QWEN3_VL_PROFILES, FACTORIZED):
+            raise ValueError(f"portable execution_profile must be one of {(*QWEN3_VL_PROFILES, FACTORIZED)!r}")
         if type(self.cache_effective_weights) is not bool:
             raise ValueError("cache_effective_weights must be a boolean")
         if self.execution_profile == FACTORIZED and self.cache_effective_weights:
@@ -61,7 +62,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     if not isinstance(config, PortableAdapterConfig):
         config = PortableAdapterConfig(**config)
     profile = config.execution_profile
-    target_dtype = "bfloat16" if profile == CANONICAL else "float32"
+    target_dtype = "bfloat16" if profile in QWEN3_VL_PROFILES else "float32"
     aliases = {"bf16": "bfloat16", "fp32": "float32"}
     if aliases.get(dtype, dtype) not in ("auto", target_dtype) or attn_implementation not in (None, "sdpa"):
         raise ValueError(f"{profile} requires dtype={target_dtype!r} and SDPA")
@@ -71,8 +72,8 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         )
     record, state = read_adapter_snapshot(config.directory)
     identity = record["identity"]
-    if profile == CANONICAL:
-        validate_adapter_identity(identity)
+    if profile in QWEN3_VL_PROFILES:
+        validate_adapter_identity(identity, profile=profile)
     else:
         factorized_inference.validate_identity(identity)
     for name, expected in identity["dependencies"].items():

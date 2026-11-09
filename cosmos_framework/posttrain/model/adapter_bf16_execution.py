@@ -108,6 +108,7 @@ def install_adapter_inference_profile(net, profile, *, cache_effective_weights=F
     validate_adapter_identity(identity, profile=profile)
     if profile == QWEN3_5_PROFILE:
         from cosmos_framework.utils.generator.qwen3_5_cache import install, validate_model
+    profile_kwargs = {} if profile == QWEN3_5_PROFILE else {"profile": profile}
     spec = state_spec(identity)
     state = net.state_dict()
     _validate_state({name: state[name] for name in spec if name in state}, identity)
@@ -115,7 +116,7 @@ def install_adapter_inference_profile(net, profile, *, cache_effective_weights=F
         expected = torch.float32 if name in spec else torch.bfloat16
         if parameter.dtype != expected:
             raise ValueError(f"portable inference dtype differs for {name}: expected {expected}, got {parameter.dtype}")
-    validate_model(net, adapter_type=PosttrainAdapterLinear)
+    validate_model(net, adapter_type=PosttrainAdapterLinear, **profile_kwargs)
     targets = [(name, module) for name, module in net.named_modules() if isinstance(module, PosttrainAdapterLinear)]
     if not targets or any(module.execution != PROFILE for _, module in targets):
         raise ValueError("canonical cache requires rounded-weight adapters throughout the portable model")
@@ -133,7 +134,7 @@ def install_adapter_inference_profile(net, profile, *, cache_effective_weights=F
         stock_modality_forward = MethodType(Qwen3VLModel.forward, net.model)
     # All checks precede mutation. Reuse the adapter's existing effective-weight
     # implementation, including DoRA magnitude and PiSSA initial-factor semantics.
-    changed = install(net, adapter_type=PosttrainAdapterLinear)
+    changed = install(net, adapter_type=PosttrainAdapterLinear, **profile_kwargs)
     if stock_modality_forward is not None:
         # The ordered training forward executes dummy vision for absent media
         # to coordinate cross-rank collectives/replay. The validated single-GPU,

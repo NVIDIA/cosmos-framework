@@ -3,8 +3,11 @@
 """Shared, lightweight deployment identity; no inference/training cross-imports."""
 
 PROFILE = "qwen3_vl_bf16_canonical_cache_v1"
+CORRECTED_PROFILE = "qwen3_vl_bf16_canonical_cache_v2"
+FAST_PROFILE = "qwen3_vl_bf16_tensorcore_prefill_v1"
+QWEN3_VL_PROFILES = (PROFILE, CORRECTED_PROFILE, FAST_PROFILE)
 QWEN3_5_PROFILE = "qwen3_5_bf16_canonical_cache_v1"
-PROFILE_FAMILIES = {PROFILE: "qwen3_vl", QWEN3_5_PROFILE: "qwen3_5"}
+PROFILE_FAMILIES = {**dict.fromkeys(QWEN3_VL_PROFILES, "qwen3_vl"), QWEN3_5_PROFILE: "qwen3_5"}
 
 
 def validate_adapter_identity(identity: dict, *, profile: str = PROFILE) -> None:

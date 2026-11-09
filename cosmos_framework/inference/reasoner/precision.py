@@ -14,8 +14,7 @@ import json
 import types
 from pathlib import Path
 
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CACHE_PROFILE
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES, QWEN3_5_PROFILE
+from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES, QWEN3_5_PROFILE, QWEN3_VL_PROFILES
 
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
@@ -124,10 +123,10 @@ def install_deployment_profile(model, profile: str) -> list[str]:
         from cosmos_framework.utils.generator.qwen3_5_cache import install
 
         return install(model)
-    if profile == CACHE_PROFILE:
+    if profile in QWEN3_VL_PROFILES:
         from cosmos_framework.utils.generator.bf16_cache import install
 
-        return install(model)
+        return install(model, profile=profile)
     if profile != PROFILE:
         raise ValueError(f"unknown deployment profile: {profile!r}")
     if (

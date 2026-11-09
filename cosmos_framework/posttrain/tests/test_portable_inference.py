@@ -12,6 +12,7 @@ from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig
 from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear
 from cosmos_framework.utils.generator import factorized_inference as stable
+from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_VL_PROFILES
 from cosmos_framework.utils.generator.portable_adapters import CANONICAL, PortableAdapterConfig, model_cache_signature
 
 
@@ -120,7 +121,7 @@ def test_evaluator_records_executed_generation_settings(tmp_path):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="public profiles require A100")
-@pytest.mark.parametrize("profile", [CANONICAL, stable.PROFILE])
+@pytest.mark.parametrize("profile", [*QWEN3_VL_PROFILES, stable.PROFILE])
 def test_public_loader_strict_identity_ownership_and_restoration(tmp_path, monkeypatch, profile):
     from transformers.cache_utils import StaticCache
 
@@ -164,13 +165,13 @@ def test_public_loader_strict_identity_ownership_and_restoration(tmp_path, monke
         portable_adapter={
             "directory": str(artifact),
             "execution_profile": profile,
-            "cache_effective_weights": profile == CANONICAL,
+            "cache_effective_weights": profile in QWEN3_VL_PROFILES,
         },
     )
     loaded = runtime.model
     assert loaded.lm_head.weight is loaded.model.language_model.embed_tokens.weight
     batch = {"input_ids": torch.tensor([[1, 2, 3]], device="cuda")}
-    if profile == CANONICAL:
+    if profile in QWEN3_VL_PROFILES:
         install_adapter_inference_profile(source, profile)
     else:
         source.float()

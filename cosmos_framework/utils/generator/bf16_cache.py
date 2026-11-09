@@ -14,7 +14,7 @@ from types import MethodType
 import torch
 from torch import nn
 
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE
+from cosmos_framework.utils.generator.bf16_cache_contract import FAST_PROFILE, PROFILE, QWEN3_VL_PROFILES
 
 
 def _require_inference(device):
@@ -53,6 +53,43 @@ def _inference_only(model, args, kwargs):
     cache = call.get("past_key_values")
     if cache is not None and (type(cache) is not DynamicCache or getattr(cache, "offloading", False)):
         raise ValueError(f"{PROFILE} supports an ordinary DynamicCache without offload")
+    if model._cosmos_deployment_profile != PROFILE:
+        # Reject live backend changes before mutating any caller-owned cache.
+        for module in model.modules():
+            if type(module).__name__ == "Qwen3VLTextAttention":
+                if module.config._attn_implementation != model._cosmos_deployment_profile:
+                    raise ValueError("attention execution changed after deployment installation; reload the model")
+
+
+def _rms_norm_forward(self, inputs):
+    import triton
+
+    from cosmos_framework.utils.generator.bf16_cache_kernels import _rms_norm_kernel
+
+    _require_inference(inputs.device)
+    if (
+        inputs.dtype != torch.bfloat16
+        or inputs.device.type != "cuda"
+        or self.weight.device != inputs.device
+        or self.weight.dtype not in (torch.bfloat16, torch.float32)
+        or tuple(self.weight.shape) != (inputs.shape[-1],)
+    ):
+        raise ValueError("canonical v2 RMSNorm requires BF16 CUDA inputs and a matching BF16/FP32 norm weight")
+    flat = inputs.reshape(-1, inputs.shape[-1]).contiguous()
+    output = torch.empty_like(flat)
+    if flat.shape[0]:
+        with torch.cuda.device(inputs.device):
+            _rms_norm_kernel[(flat.shape[0],)](
+                flat,
+                self.weight.contiguous(),
+                output,
+                flat.shape[1],
+                self.variance_epsilon,
+                triton.next_power_of_2(flat.shape[1]),
+                num_warps=4,
+                enable_fp_fusion=False,
+            )
+    return output.reshape(inputs.shape)
 
 
 def linear(inputs, weight, bias=None):
@@ -111,11 +148,7 @@ def _attention_warp_count(module, query_length, head_dim):
     return 1 if family == "qwen3_vl_text" and query_length >= 1024 and head_dim == 128 else 4
 
 
-def _attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
-    import triton
-
-    from cosmos_framework.utils.generator.bf16_cache_kernels import _attention_kernel
-
+def _attention_inputs(module, query, key, value, attention_mask, dropout, kwargs):
     b, h, m, d = query.shape
     n = key.shape[-2]
     if (
@@ -150,6 +183,16 @@ def _attention_forward(module, query, key, value, attention_mask=None, dropout=0
         strides = (mask.stride(0), mask.stride(2), mask.stride(3))
     else:
         mask, strides = query, (0, 0, 0)
+    _require_inference(query.device)
+    return (b, h, m, d, n), mask, strides
+
+
+def _attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
+    import triton
+
+    from cosmos_framework.utils.generator.bf16_cache_kernels import _attention_kernel
+
+    (b, h, m, d, n), mask, strides = _attention_inputs(module, query, key, value, attention_mask, dropout, kwargs)
     output = torch.empty((b, h, m, d), device=query.device, dtype=query.dtype)
     _require_inference(query.device)
     with torch.cuda.device(query.device):
@@ -181,6 +224,43 @@ def _attention_forward(module, query, key, value, attention_mask=None, dropout=0
     return output.transpose(1, 2).contiguous(), None
 
 
+def _tensorcore_attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
+    if query.shape[-2] < 1024 or query.shape[-1] != 128:
+        return _attention_forward(module, query, key, value, attention_mask, dropout, scaling, **kwargs)
+    import triton
+
+    from cosmos_framework.utils.generator.bf16_prefill_kernels import _attention_tensorcore_kernel
+
+    (b, h, m, d, n), mask, strides = _attention_inputs(module, query, key, value, attention_mask, dropout, kwargs)
+    output = torch.empty((b, h, m, d), device=query.device, dtype=query.dtype)
+    with torch.cuda.device(query.device):
+        _attention_tensorcore_kernel[(triton.cdiv(m, 16), h, b)](
+            query,
+            key,
+            value,
+            output,
+            mask,
+            *query.stride(),
+            *key.stride(),
+            *value.stride(),
+            *strides,
+            m,
+            n,
+            h,
+            key.shape[1],
+            d,
+            d**-0.5 if scaling is None else scaling,
+            attention_mask is not None,
+            attention_mask is not None and attention_mask.dtype == torch.bool,
+            16,
+            64,
+            triton.next_power_of_2(d),
+            num_warps=4,
+            num_stages=1,
+        )
+    return output.transpose(1, 2).contiguous(), None
+
+
 def _adapter_children(model, adapter_type):
     # FP32 factor modules are owned by adapter effective_weight(); they must
     # never be reclassified as frozen BF16 linears or independently patched.
@@ -193,10 +273,12 @@ def _adapter_children(model, adapter_type):
     }
 
 
-def validate_model(model, *, adapter_type=None):
+def validate_model(model, *, adapter_type=None, profile=PROFILE):
     """Validate the entire profile before mutating modules or their configurations."""
     installed = getattr(model, "_cosmos_deployment_profile", None)
-    if installed not in (None, PROFILE):
+    if profile not in QWEN3_VL_PROFILES:
+        raise ValueError(f"unsupported Qwen3-VL deployment profile: {profile!r}")
+    if installed not in (None, profile):
         raise ValueError("a different deployment profile is already installed")
     if (
         type(model).__module__ != "transformers.models.qwen3_vl.modeling_qwen3_vl"
@@ -216,7 +298,7 @@ def validate_model(model, *, adapter_type=None):
         raise ValueError(f"{PROFILE} is qualified on a single A100 (SM80), without CPU/disk offload")
     sections = [model.config, model.config.text_config, model.config.vision_config]
     sections.extend(getattr(module, "config", None) for module in model.modules())
-    accepted_attention = ("sdpa", PROFILE) if installed else ("sdpa",)
+    accepted_attention = ("sdpa", profile) if installed else ("sdpa",)
     if any(
         getattr(section, "_attn_implementation", "sdpa") not in accepted_attention
         for section in sections
@@ -249,18 +331,20 @@ def validate_model(model, *, adapter_type=None):
         raise ValueError(f"{PROFILE} requires the stock linear output head")
 
 
-def install(model, *, adapter_type=None):
+def install(model, *, adapter_type=None, profile=PROFILE):
     """Install only language projections/head and causal attention, preserving ownership."""
-    validate_model(model, adapter_type=adapter_type)
-    if getattr(model, "_cosmos_deployment_profile", None) == PROFILE:
+    validate_model(model, adapter_type=adapter_type, profile=profile)
+    if getattr(model, "_cosmos_deployment_profile", None) == profile:
         return list(model._cosmos_deployment_modules)
     from transformers import AttentionInterface
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, AttentionMaskInterface
 
-    AttentionInterface.register(PROFILE, _attention_forward)
+    AttentionInterface.register(
+        profile, _tensorcore_attention_forward if profile == FAST_PROFILE else _attention_forward
+    )
     # The mask registration is essential for multi-token cached suffixes. It
     # retains the existing SDPA causal/padding mask and its cache offset.
-    AttentionMaskInterface.register(PROFILE, ALL_MASK_ATTENTION_FUNCTIONS["sdpa"])
+    AttentionMaskInterface.register(profile, ALL_MASK_ATTENTION_FUNCTIONS["sdpa"])
     changed = []
     owned = _adapter_children(model, adapter_type)
     for name, module in model.named_modules():
@@ -274,10 +358,21 @@ def install(model, *, adapter_type=None):
                 module.forward = forward
             changed.append(name)
         elif type(module).__name__ == "Qwen3VLTextAttention":
-            module.config._attn_implementation = PROFILE
+            module.config._attn_implementation = profile
+            changed.append(name)
+        elif (
+            profile != PROFILE
+            and name.startswith("model.language_model.")
+            and type(module).__name__ == "Qwen3VLTextRMSNorm"
+        ):
+            forward = MethodType(_rms_norm_forward, module)
+            if hasattr(module, "_hf_hook"):
+                module._old_forward = forward
+            else:
+                module.forward = forward
             changed.append(name)
     model._cosmos_forward_signature = signature(model.forward)
     model.register_forward_pre_hook(_inference_only, with_kwargs=True)
-    model._cosmos_deployment_profile = PROFILE
+    model._cosmos_deployment_profile = profile
     model._cosmos_deployment_modules = tuple(changed)
     return changed

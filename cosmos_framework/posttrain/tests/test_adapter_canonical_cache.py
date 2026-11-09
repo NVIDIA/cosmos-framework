@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE, validate_adapter_identity
+from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE, QWEN3_VL_PROFILES, validate_adapter_identity
 
 
 def identity():
@@ -25,7 +25,8 @@ def identity():
     }
 
 
-def test_contract_and_export_binding(tmp_path):
+@pytest.mark.parametrize("profile", QWEN3_VL_PROFILES)
+def test_contract_and_export_binding(tmp_path, profile):
     from cosmos_framework.inference.reasoner.model_execution import model_execution_profile
     from cosmos_framework.inference.reasoner.precision import deployment_profile
     from cosmos_framework.posttrain.checkpoint.adapters import merged_export_metadata
@@ -34,15 +35,15 @@ def test_contract_and_export_binding(tmp_path):
     ident = identity()
     manifest = {"kind": "portable_adapter", "identity": ident, "weights_sha256": "digest"}
     metadata = merged_export_metadata(
-        "unused", ident, artifact_record=manifest, output_dtype="bfloat16", execution_profile=PROFILE
+        "unused", ident, artifact_record=manifest, output_dtype="bfloat16", execution_profile=profile
     )
     config = config_with_export_dtype(
-        {"model_type": "qwen3_vl"}, "bfloat16", execution_profile=PROFILE, model_execution="merged_weight_bf16_v1"
+        {"model_type": "qwen3_vl"}, "bfloat16", execution_profile=profile, model_execution="merged_weight_bf16_v1"
     )
     marker = {"identity": {"output_dtype": "bfloat16", "export_metadata": metadata}}
     (tmp_path / "config.json").write_text(json.dumps(config))
     (tmp_path / ".materialized").write_text(json.dumps(marker))
-    assert deployment_profile(tmp_path) == PROFILE
+    assert deployment_profile(tmp_path) == profile
     assert model_execution_profile(tmp_path) == "merged_weight_bf16_v1"
     for key, value in [
         ("format", "cosmos-posttrain-adapter-v3"),
@@ -60,7 +61,7 @@ def test_contract_and_export_binding(tmp_path):
             with pytest.raises(ValueError, match="resolved target"):
                 validate_adapter_identity(bad)
     with pytest.raises(ValueError, match="bfloat16 output"):
-        merged_export_metadata("unused", ident, artifact_record=manifest, execution_profile=PROFILE)
+        merged_export_metadata("unused", ident, artifact_record=manifest, execution_profile=profile)
     config.pop("cosmos_inference_profile")
     (tmp_path / "config.json").write_text(json.dumps(config))
     with pytest.raises(ValueError, match="conflicting"):
