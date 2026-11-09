@@ -42,14 +42,16 @@ None of this is in deployment.md. The eval cells run unattended, from a containe
   alike) run, with `NIM_IMAGE` and `LOCAL_NIM_CACHE` exported:
 
   ```bash
-  cache_ok() { docker run --rm --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'touch /opt/nim/.cache/.w && rm /opt/nim/.cache/.w' 2>/dev/null; }
-  cache_ok || { docker run --rm --user 0 --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c '[ -z "$(ls -A /opt/nim/.cache)" ] && chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX /opt/nim/.cache'; cache_ok || { echo "LOCAL_NIM_CACHE=$LOCAL_NIM_CACHE is not writable by uid 1000 and not empty: use a directory of your own"; exit 1; }; }
+  cache_fix() { docker run --rm --user 0 --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'chown -R 1000:1000 /opt/nim/.cache && chmod -R u+rwX /opt/nim/.cache'; }
+  cache_ok() { docker run --rm --entrypoint /bin/sh -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" "$NIM_IMAGE" -c 'mkdir -p /opt/nim/.cache/.w && touch /opt/nim/.cache/.w/f && rm -r /opt/nim/.cache/.w && [ -z "$(find /opt/nim/.cache ! -writable -print -quit)" ]' 2>/dev/null; }
+  cache_fix; cache_ok || { echo "LOCAL_NIM_CACHE=$LOCAL_NIM_CACHE is still not writable by uid 1000 after the repair: use a directory of your own"; exit 1; }
   ```
 
   Both lines use the already-pulled NIM image (its default user is uid 1000 and it has `/bin/sh`); they are the `cache_ok` test and
-  repair of `../../cosmos3-generate-media/SKILL.md` Variant 7 minus its `NIM_CACHE_REPAIR` opt-in, with the emptiness test moved
-  inside the root helper so it inspects the directory the daemon mounted, not your container's view of the path — the repair
-  therefore touches only an empty cache, never a populated one. A launch without a passing `cache_ok` dies within a minute with
+  repair of `../../cosmos3-generate-media/SKILL.md` Variant 7 minus its `NIM_CACHE_REPAIR` opt-in; the repair now runs first and
+  unconditionally (idempotent `chown -R 1000:1000`, operations.md "Fix ownership/ACLs") and the test then creates a directory and a file
+  and walks the tree (`find ! -writable`): a cache the daemon created root-owned, or populated by an earlier run as another uid, passed
+  the old single `touch` and still killed the launch with `Permission denied` (two cells, eval 2026-11-09). A launch without a passing `cache_ok` dies within a minute with
   `ManifestDownloadError … Permission denied (os error 13)`; do not drop the `-v` mount instead ("Keep the cache between runs to
   avoid repeated downloads", deployment.md; "retain a persistent writable `/opt/nim/.cache`", operations.md).
 - **Eval-verified form**: the Variant 7 block of [`../../cosmos3-generate-media/SKILL.md`](../../cosmos3-generate-media/SKILL.md)

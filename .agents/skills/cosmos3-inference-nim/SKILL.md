@@ -189,7 +189,7 @@ mkdir -p "$LOCAL_NIM_CACHE"
 chmod -R a+rwX "$LOCAL_NIM_CACHE"
 ```
 
-Skill note (not in the source): from a container that shares the host's Docker daemon the `chmod` above does not reach the host-side directory the daemon created root-owned — before either launch run the uid-1000 `cache_ok` test and empty-cache repair in [`references/skill-notes.md`](references/skill-notes.md) § 2; a launch without it dies with `ManifestDownloadError … Permission denied (os error 13)`.
+Skill note (not in the source): from a container that shares the host's Docker daemon the `chmod` above does not reach the host-side directory the daemon created root-owned — before either launch run the uid-1000 `cache_ok` test and repair in [`references/skill-notes.md`](references/skill-notes.md) § 2; a launch without it dies with `ManifestDownloadError … Permission denied (os error 13)`.
 
 ## Generator (deployment.md)
 
