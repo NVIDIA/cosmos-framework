@@ -59,6 +59,14 @@ For CUDA 12.8 builds, pin to an earlier NGC tag (e.g. `nvcr.io/nvidia/pytorch:25
 
 If you encounter issues, see [Troubleshooting](#troubleshooting).
 
+The base wheel contains shared code without selecting a Transformers backend.
+Standalone native installs use `cosmos-framework[native]`; the `train` extra and
+default `uv sync` groups retain Transformers 4.x. The separately pinned
+`packages/reasoner-runtime` environment selects Transformers 5.8.1 for the
+qualified public adapter profiles. See [portable inference](posttrain/adapter-public-inference.md).
+Keep these environments separate: optional extras cannot override incompatible
+mandatory dependencies. Ordinary native `--all-extras` setup is unchanged.
+
 Clone the repository:
 
 ```bash
@@ -185,7 +193,7 @@ source .venv/bin/activate
 uv venv --clear && source .venv/bin/activate
 
 uv pip install -r pyproject.toml --all-extras --group=cu130-train
-uv pip install -e .
+uv pip install -e '.[native]'
 ```
 
 </details>

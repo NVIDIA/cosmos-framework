@@ -2371,7 +2371,6 @@ dependencies = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-libero') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-vllm')" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-16-cosmos-framework-train' and extra == 'group-16-cosmos-framework-libero') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-torch213-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-torch213-train' and extra == 'group-16-cosmos-framework-vllm')" },
     { name = "termcolor" },
-    { name = "transformers" },
     { name = "tyro" },
     { name = "uv" },
     { name = "websockets" },
@@ -2387,6 +2386,9 @@ guardrail = [
     { name = "protobuf" },
     { name = "retinaface-py" },
     { name = "sentencepiece" },
+]
+native = [
+    { name = "transformers" },
 ]
 reasoner-eval = [
     { name = "attrs" },
@@ -2482,6 +2484,7 @@ train = [
     { name = "torch-fidelity" },
     { name = "torch-optimizer" },
     { name = "torchtitan" },
+    { name = "transformers" },
     { name = "trimesh" },
     { name = "typeguard" },
     { name = "urllib3" },
@@ -2672,6 +2675,9 @@ libero = [
     { name = "libero" },
     { name = "mujoco", version = "3.3.2", source = { registry = "https://pypi.org/simple" } },
 ]
+native = [
+    { name = "transformers" },
+]
 policy-server = [
     { name = "filelock" },
     { name = "openpi-server" },
@@ -2800,7 +2806,8 @@ requires-dist = [
     { name = "torch-fidelity", marker = "extra == 'train'" },
     { name = "torch-optimizer", marker = "extra == 'train'" },
     { name = "torchtitan", marker = "extra == 'train'" },
-    { name = "transformers", specifier = ">=4.57.1,<5.0.0" },
+    { name = "transformers", marker = "extra == 'native'", specifier = ">=4.57.1,<5.0.0" },
+    { name = "transformers", marker = "extra == 'train'", specifier = ">=4.57.1,<5.0.0" },
     { name = "trimesh", marker = "extra == 'train'" },
     { name = "typeguard", marker = "extra == 'train'" },
     { name = "tyro" },
@@ -2812,7 +2819,7 @@ requires-dist = [
     { name = "xatlas", marker = "extra == 'train'" },
     { name = "zarr", marker = "extra == 'train'" },
 ]
-provides-extras = ["automl", "automl-prompts", "reasoner-eval", "guardrail", "interactive", "serve", "train"]
+provides-extras = ["native", "automl", "automl-prompts", "reasoner-eval", "guardrail", "interactive", "serve", "train"]
 
 [package.metadata.requires-dev]
 cu128 = [
@@ -2996,6 +3003,7 @@ libero = [
     { name = "libero" },
     { name = "mujoco", specifier = "==3.3.2" },
 ]
+native = [{ name = "transformers", specifier = ">=4.57.1,<5.0.0" }]
 policy-server = [
     { name = "filelock", specifier = ">=3.27.0" },
     { name = "openpi-server" },

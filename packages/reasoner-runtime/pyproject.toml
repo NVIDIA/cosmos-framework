@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cosmos-framework-reasoner-runtime"
+version = "1.2.2"
+description = "Pinned single-A100 Cosmos portable and merged reasoner inference environment"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "cosmos-framework==1.2.2",
+  "transformers==5.8.1",
+  "torch==2.10.0",
+  "torchvision==0.25.0",
+  "torchcodec==0.10.0",
+  "triton==3.6.0; sys_platform == 'linux'",
+  "accelerate==1.15.0",
+  "diffusers==0.39.0",
+  "safetensors==0.8.0",
+  "qwen-vl-utils==0.0.14",
+  "pillow==13.0.0",
+  "toml",
+]
+
+# A dependency-only distribution: the framework remains the sole owner of
+# cosmos_framework/. Do not install the native/train extras in this environment.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

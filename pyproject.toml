@@ -52,13 +52,16 @@ dependencies = [
   "requests",
   "scipy",
   "termcolor",
-  "transformers>=4.57.1,<5.0.0",
   "tyro",
   "uv",
   "websockets",
 ]
 
 [project.optional-dependencies]
+# Backend selection is explicit in wheel metadata. The separate
+# cosmos-framework-reasoner-runtime distribution pins the qualified HF runtime;
+# an extra cannot override the native backend's incompatible Transformers pin.
+native = ["transformers>=4.57.1,<5.0.0"]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
 reasoner-eval = [
@@ -88,6 +91,7 @@ serve = [
   "ray[serve]",
 ]
 train = [
+  "transformers>=4.57.1,<5.0.0",
   "aioboto3",
   "aiofiles",
   "aiohttp",
@@ -174,6 +178,7 @@ cosmos-automl = "cosmos_framework.scripts.automl:main"
 cosmos-reasoner-evaluate = "cosmos_framework.evaluation.reasoner.evaluate:main"
 
 [dependency-groups]
+native = ["transformers>=4.57.1,<5.0.0"]
 dev = [
   "hatch",
   "pyinstrument",
@@ -344,6 +349,7 @@ issues = "https://github.com/NVIDIA/cosmos-framework/issues"
 repository = "https://github.com/NVIDIA/cosmos-framework"
 
 [tool.uv]
+default-groups = ["dev", "native"]
 # The lock is generated and checked with this exact resolver version in CI.
 # Keep the locked `uv` runtime dependency equal to it: the Posttrain guide
 # activates this project's venv, whose `uv` then runs that sync.
