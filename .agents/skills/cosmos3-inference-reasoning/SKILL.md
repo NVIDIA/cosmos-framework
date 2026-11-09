@@ -46,7 +46,7 @@ Before the first command of any variant — including a single image-caption smo
    and "uv applies that pin from any cwd under the checkout" (`../cosmos3-generate-media/SKILL.md`, Read this first item 3), so
    Variant 1 (`uv sync`) and Variant 5 (`uv venv` / `uv pip` from this directory inside a checkout) need exactly that version
    — transformers.md § 1: "use `uv 0.11.29`, matching the version pinned by Cosmos Framework". Before the first `uv` command,
-   install it as `../cosmos3-setup/SKILL.md` step 3 does, `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"`;
+   install it as `../cosmos3-setup/SKILL.md` step 3 does, `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"`;
    every later shell call that runs `uv` starts with `export PATH="$HOME/.local/bin:$PATH"` (item 4), and `uv --version` must print 0.11.29.
 6. Hugging Face access: the notebooks authenticate with `hf auth login` / `uvx hf@latest auth login` or
    `export HF_TOKEN=<your_token>`; "The Cosmos3-Super Reasoner checkpoint is gated on Hugging Face." Skill note (not in

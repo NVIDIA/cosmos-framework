@@ -33,6 +33,8 @@ cells mount `~/.cache/huggingface` into the container so downloaded weights are 
 hf auth login
 ```
 
+> **Skill note (not in the source):** from this skill directory the `COSMOS_REASONER_ASSETS` assertion below fails (no `cookbooks/cosmos3` tree here); set `COSMOS_ROOT = Path.cwd()` and `COSMOS_REASONER_ASSETS = COSMOS_ROOT / "assets"` instead (SKILL.md Read this first 3).
+
 ```python
 from pathlib import Path
 import os

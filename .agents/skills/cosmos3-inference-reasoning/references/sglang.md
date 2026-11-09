@@ -31,6 +31,8 @@ cells mount `~/.cache/huggingface` into the container so downloaded weights are 
 hf auth login
 ```
 
+> **Skill note (not in the source):** from this skill directory `find_repo_root()` raises `FileNotFoundError` (no `cookbooks/cosmos3` tree here); replace the assignments that call it with `Path.cwd()` and `Path.cwd() / "assets"` (SKILL.md Read this first 3).
+
 ```python
 from pathlib import Path
 import os

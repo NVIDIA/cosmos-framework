@@ -63,6 +63,8 @@ export UV_LINK_MODE=copy
 export CUDA_VISIBLE_DEVICES=0
 ```
 
+> **Skill note (not in the source):** from this skill directory `find_repo_root()` raises `FileNotFoundError` (no `cookbooks/cosmos3` tree here); replace the assignments that call it with `Path.cwd()` and `Path.cwd() / "assets"` (SKILL.md Read this first 3).
+
 ```python
 from pathlib import Path
 import os
@@ -175,6 +177,8 @@ The install cell registers the `Cosmos3 Transformers (Python 3.13)` Jupyter kern
 **Switch this notebook to that kernel before running the remaining Python cells**,
 then run the Restore Environment cell immediately below. It can take a moment for
 the new kernel to appear in the notebook interface.
+
+> **Skill note (not in the source):** from this skill directory `find_repo_root()` raises `FileNotFoundError` (no `cookbooks/cosmos3` tree here); replace the assignments that call it with `Path.cwd()` and `Path.cwd() / "assets"` (SKILL.md Read this first 3).
 
 ```python
 # Run this cell immediately after switching to the Cosmos3 Transformers kernel.

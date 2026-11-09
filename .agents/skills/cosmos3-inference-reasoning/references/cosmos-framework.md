@@ -60,6 +60,8 @@ export CUDA_VISIBLE_DEVICES=0
 
 For SSH access, set `COSMOS3_GIT_URL=git@github.com:NVIDIA/cosmos-framework.git`.
 
+> **Skill note (not in the source):** from this skill directory `find_repo_root()` raises `FileNotFoundError` (no `cookbooks/cosmos3` tree here); replace the assignments that call it with `Path.cwd()` and `Path.cwd() / "assets"` (SKILL.md Read this first 3).
+
 ```python
 from pathlib import Path
 import os

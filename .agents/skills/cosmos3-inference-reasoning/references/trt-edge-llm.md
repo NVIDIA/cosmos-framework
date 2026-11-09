@@ -28,6 +28,8 @@ Set `EDGELLM_ROOT` to your TensorRT-Edge-LLM checkout (the directory that
 contains `build/` after you compile the runtime). Optional: override
 `ONNX_DIR` / `ENGINE_DIR`.
 
+> **Skill note (not in the source):** from this skill directory `find_repo_root()` raises `FileNotFoundError` (no `cookbooks/cosmos3` tree here); replace the assignments that call it with `Path.cwd()` and `Path.cwd() / "assets"` (SKILL.md Read this first 3).
+
 ```python
 from pathlib import Path
 import os
@@ -97,7 +99,7 @@ checkout). It downloads `nvidia/Cosmos3-Edge` on first use.
 > **Skill note (not in the source):** at v0.11.0 `pip install -e .` installs only `cuda-python` and `numpy`, and the
 > `[export]` extra lacks `nvidia-modelopt`, which the visual export imports (`ModuleNotFoundError: No module named 'modelopt'`
 > after the LLM half is written). Host install that runs this cell unchanged:
-> `git clone --branch v0.11.0 https://github.com/NVIDIA/TensorRT-Edge-LLM.git "$EDGELLM_ROOT" && cd "$EDGELLM_ROOT" && python3 -m venv venv && . venv/bin/activate && pip install -e ".[tools]"`
+> `git clone --branch v0.11.0 https://github.com/NVIDIA/TensorRT-Edge-LLM.git "$EDGELLM_ROOT" && cd "$EDGELLM_ROOT" && python3 -m venv venv && . venv/bin/activate && uv pip install --python venv/bin/python -e ".[tools]"` (`uv pip`, parallel cached downloads — the notebook's `pip install` of the same extras exceeded a 10-minute tool limit on the CUDA wheels in the eval; uv 0.11.29 is installed per SKILL.md Read this first 5)
 > (the upstream Installation page tracks `main`; the v0.11.0 text is `docs/source/user_guide/getting_started/installation.md` in the checkout).
 
 ```bash
