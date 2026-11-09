@@ -169,7 +169,7 @@ Published [Edge FP8](https://huggingface.co/nvidia/Cosmos3-Edge-FP8),
 [Nano FP8](https://huggingface.co/nvidia/Cosmos3-Nano-FP8) and
 [Super FP8](https://huggingface.co/nvidia/Cosmos3-Super-FP8) checkpoints can be
 downloaded to a local directory. Or use an output from the
-[quantization walkthrough](../../cosmos3-inference-quantization/SKILL.md).
+[quantization walkthrough](../../cosmos3-quantization/SKILL.md).
 Serve that directory with the original `--served-model-name` so the request
 cells keep their existing model IDs. Do not select FP8 with `--revision` alone:
 the Cosmos3 vLLM-Omni pipeline must receive a materialized local checkpoint.

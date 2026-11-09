@@ -1,5 +1,5 @@
 ---
-name: cosmos3-inference-quantization
+name: cosmos3-quantization
 description: >
   Quantize Cosmos3 generator checkpoints to static-scale FP8 with the
   cosmos_framework.quantization recipe (NVIDIA TensorRT Model Optimizer): the Edge,

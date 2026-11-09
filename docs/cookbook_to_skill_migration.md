@@ -21,7 +21,7 @@ declared inside the block that carries it.
 Links into the retired files: the cookbook READMEs and the docs navigation point at `SKILL.md`; the NVIDIA/cosmos
 short links were re-pointed to `SKILL.md` and its vLLM-Omni section (NVIDIA/cosmos#390).
 
-## Quantization (COOKBOOK row "Quantized (FP8)") → `cosmos3-inference-quantization`
+## Quantization (COOKBOOK row "Quantized (FP8)") → `cosmos3-quantization`
 
 Where each retired file of `.agents/skills/cookbooks/cosmos3/quantization/` went. The sources are the files' version on
 `main` at `bbd4a67` (2026-11-07). The three notebooks were converted 1:1 (every markdown and code cell in notebook order;
@@ -31,13 +31,13 @@ inference skills link to it. The skill is part 2 of the cookbook (how to quantiz
 checkpoints) stays in the inference skills' own FP8 sections. Everything the skill adds is marked "Skill note (not in
 the source):" or is a summary in `SKILL.md` that quotes the source.
 
-| Retired source (`cookbooks/cosmos3/quantization/`) | Destination (`.agents/skills/cosmos3-inference-quantization/`) | Notes                                                                                                                                                                                                             |
-| -------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `README.md`                                        | `references/quantization-readme.md`                            | whole README; `SKILL.md` quotes its Setup (once) block, the three Run commands (as text — they executed the retired notebooks), the Demo vs. full runs table, the What gets produced tree and the Inference notes |
-| `quantize_cosmos3.ipynb`                           | `references/quantize-cosmos3.md`                               | `SKILL.md` Variant 1 (Edge / Nano / Super); eval case `framework-edge-quantize-fp8`                                                                                                                               |
-| `quantize_super_text2image.ipynb`                  | `references/quantize-super-text2image.md`                      | `SKILL.md` Variant 2; eval case `framework-super-t2i-quantize-fp8`                                                                                                                                                |
-| `quantize_super_image2video.ipynb`                 | `references/quantize-super-image2video.md`                     | `SKILL.md` Variant 3; eval case `framework-super-i2v-quantize-fp8`                                                                                                                                                |
-| (assets)                                           | —                                                              | the cookbook shipped no assets: nothing vendored, nothing left behind; the calibration prompts and the I2V fallback images are datasets the recipe fetches at run time                                            |
+| Retired source (`cookbooks/cosmos3/quantization/`) | Destination (`.agents/skills/cosmos3-quantization/`) | Notes                                                                                                                                                                                                             |
+| -------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `README.md`                                        | `references/quantization-readme.md`                  | whole README; `SKILL.md` quotes its Setup (once) block, the three Run commands (as text — they executed the retired notebooks), the Demo vs. full runs table, the What gets produced tree and the Inference notes |
+| `quantize_cosmos3.ipynb`                           | `references/quantize-cosmos3.md`                     | `SKILL.md` Variant 1 (Edge / Nano / Super); eval case `framework-edge-quantize-fp8`                                                                                                                               |
+| `quantize_super_text2image.ipynb`                  | `references/quantize-super-text2image.md`            | `SKILL.md` Variant 2; eval case `framework-super-t2i-quantize-fp8`                                                                                                                                                |
+| `quantize_super_image2video.ipynb`                 | `references/quantize-super-image2video.md`           | `SKILL.md` Variant 3; eval case `framework-super-i2v-quantize-fp8`                                                                                                                                                |
+| (assets)                                           | —                                                    | the cookbook shipped no assets: nothing vendored, nothing left behind; the calibration prompts and the I2V fallback images are datasets the recipe fetches at run time                                            |
 
 The notebook-derived references keep the notebooks' text; the converter's provenance note sits after each notebook's
 first cell (title and introduction). Link targets re-pointed inside `references/` (link text unchanged):
@@ -58,7 +58,7 @@ first cell (title and introduction). Link targets re-pointed inside `references/
   `../README.md#cosmos-framework` → `../../cookbooks/cosmos3/README.md#cosmos-framework`, `../../../../../docs/setup.md` →
   `../../../../docs/setup.md`.
 
-Inbound links re-pointed to `.agents/skills/cosmos3-inference-quantization/SKILL.md` (link text unchanged):
+Inbound links re-pointed to `.agents/skills/cosmos3-quantization/SKILL.md` (link text unchanged):
 `.agents/skills/cookbooks/cosmos3/README.md` (`quantization/README.md`), `docs/inference.md`
 (`../.agents/skills/cookbooks/cosmos3/quantization/README.md`), `.agents/skills/cosmos3-generate-media/references/payloads.md`,
 `references/sglang.md` and `references/vllm-omni.md` (`../../cookbooks/cosmos3/quantization/README.md`), and the cookbook pages
@@ -67,9 +67,9 @@ Inbound links re-pointed to `.agents/skills/cosmos3-inference-quantization/SKILL
 Action, Transfer and Visual Reasoning rows retire the pages themselves (their deletions supersede these edits). Seven notebooks also linked the retired README; this PR re-points them to the new skill (review ask, link-only edits to markdown cells) — `generator/action/run_fd_with_sglang.ipynb`,
 `run_fd_with_vllm_omni.ipynb`, `run_id_with_sglang.ipynb`, `run_id_with_vllm_omni.ipynb`,
 `generator/transfer/run_video_transfer_with_sglang.ipynb`, `run_video_transfer_with_vllm_omni.ipynb`
-(`../../../../cosmos3-inference-quantization/SKILL.md`) and `reasoner/run_with_vllm.ipynb` (`../../../cosmos3-inference-quantization/SKILL.md`); the Action,
+(`../../../../cosmos3-quantization/SKILL.md`) and `reasoner/run_with_vllm.ipynb` (`../../../cosmos3-quantization/SKILL.md`); the Action,
 Transfer and Visual Reasoning rows retire those notebooks, which supersedes these edits. Their migrated copies in the
-sibling rows link the README at its current location too and are re-pointed at `.agents/skills/cosmos3-inference-quantization/SKILL.md`
+sibling rows link the README at its current location too and are re-pointed at `.agents/skills/cosmos3-quantization/SKILL.md`
 in the follow-up round; until then those links are dead on GitHub rendering once this change is merged (a merge-order dependency
 between the rows, not a missing file). No navigation entry: the cookbook had none; the skill is
 reached through the agent-skills table and the links above.

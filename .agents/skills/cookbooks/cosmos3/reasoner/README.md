@@ -1,6 +1,6 @@
 # Cosmos3 Reasoner Examples
 
-For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../../cosmos3-inference-quantization/SKILL.md)
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM notebook.
 
 Run the Cosmos3 Reasoner (vision-language reasoning over images and video) across
