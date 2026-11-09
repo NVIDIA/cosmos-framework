@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-import tomllib
+import toml
 
 from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 
@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--config", required=True, help="TOML with model, generation, vision and tasks sections")
     parser.add_argument("--output", required=True, help="New JSON output path (existing files are not overwritten)")
     args = parser.parse_args()
-    config = tomllib.loads(Path(args.config).read_text())
+    config = toml.loads(Path(args.config).read_text())
     model = dict(config["model"])
     model["model_path"] = model.pop("model_name")
     # Reserve the result before expensive loading; an interrupted invocation
