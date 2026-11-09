@@ -29,6 +29,8 @@ Install client-side decoding dependencies in this notebook kernel if needed:
 pip install requests safetensors torch imageio imageio-ffmpeg pillow
 ```
 
+> **Skill note (not in the source):** add `ipython` to that line outside Jupyter — the helper cell below imports `IPython.display`.
+
 ```python
 from pathlib import Path
 import os

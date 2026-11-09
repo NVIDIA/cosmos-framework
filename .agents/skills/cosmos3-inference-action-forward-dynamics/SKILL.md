@@ -272,7 +272,7 @@ serve block above (§ 7.7 has the same lines): it served this AV request on thre
 devel-container source build at `cc63e66` needs a devel tag whose torch/NCCL match the checkout (`devel:1.4.0rc3` failed at CMake, `undefined symbol: ncclGetPeerDeviceLeInfo`); use it only for a VisualGen change newer than rc27 (`references/trt-llm.md`).
 
 Client: "Install client-side decoding dependencies in this notebook kernel if needed:
-`pip install requests safetensors torch imageio imageio-ffmpeg pillow`". The paths cell sets `ACTION_ROOT` to the cookbook
+`pip install requests safetensors torch imageio imageio-ffmpeg pillow`" — plus `ipython` (skill note: the helper cell imports `IPython.display`; a headless shell has no kernel). The paths cell sets `ACTION_ROOT` to the cookbook
 directory, `OUTPUT_ROOT` from `COSMOS3_TRTLLM_ACTION_OUTPUT_ROOT`, `TRTLLM_BASE_URL` from `COSMOS3_TRTLLM_BASE_URL`
 (`http://localhost:8000`) and `TRTLLM_API_KEY` from `COSMOS3_TRTLLM_API_KEY` (`tensorrt_llm`). Skill note (not in the
 source): set `image_path` / `action_path` to the vendored `../cosmos3-inference-action/assets/images/av_0.jpg` and
