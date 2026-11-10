@@ -12,7 +12,7 @@ description: >
   Cosmos3", "which Reasoner backend fits my GPU", or how to prompt the Reasoner (sampling
   parameters, the <think> format, 0-1000 coordinates). Do not use it to generate images, video
   or audio (cosmos3-generate-media), for Action / robot-policy inference, to operate the
-  Cosmos3 NIM container, or to quantize a checkpoint yourself (cosmos3-inference-quantization).
+  Cosmos3 NIM container, or to quantize a checkpoint yourself (cosmos3-quantization).
   The cookbook's sample image and clips ship in assets/.
 ---
 
@@ -106,7 +106,7 @@ path; it does not unload the generator weights." Skill note (not in the source; 
 | `nvidia/Cosmos3-Edge`  | "the smaller tier and runs on a single GPU" (vllm.md, sglang.md); "Edge is smaller" than the "tens of GiB" Nano/Super downloads (transformers.md § 6); Transformers: `AutoModelForImageTextToText`, "do not load Edge with the Omni class"                                                                                                                                         | one GPU in every notebook (`--gpus '"device=0"'`, `--tp-size 1`); TensorRT-LLM needs `release:1.4.0rc2` ("`v1.4.0rc1` and `release:1.3.0rc22` do not include `Cosmos3EdgeForConditionalGeneration`"); TensorRT-Edge-LLM is Edge-only |
 | `nvidia/Cosmos3-Nano`  | README: "on a single GPU the Cosmos3-Nano Reasoner needs roughly ~34 GB with the Cosmos Framework backend versus ~16–17 GB with vLLM / TensorRT-LLM / Transformers / NIM — about half"; "Nano downloads can use tens of GiB in the Hugging Face cache"; skill note: ~19 GiB peak measured for a reasoner-only Nano image request on one H100 (eval 2026-11-08, see the note above) | one GPU: framework `--parallelism-preset=latency`, TensorRT-LLM `release:1.3.0rc22` (`--gpus '"device=0"'`), Transformers `device_map="auto"`                                                                                        |
 | `nvidia/Cosmos3-Super` | README: "Larger tiers (e.g. Cosmos3-Super) use more in absolute terms, but the same full-omni-vs-reasoner-only gap applies"; "gated on Hugging Face"; framework: "needs a large-memory GPU (or multiple GPUs)"                                                                                                                                                                     | four GPUs in every server notebook (`--tensor-parallel-size 4`, `--tp-size 4`, `--tensor_parallel_size 4`); Transformers `device_map="auto"` "shards Super across multiple GPUs"                                                     |
-| FP8 checkpoints        | vllm.md "Quantized Checkpoints": `nvidia/Cosmos3-Edge-FP8` on `vllm/vllm-openai:nightly`, `nvidia/Cosmos3-Super-FP8` on `vllm/vllm-openai:v0.31.0`; cosmos-framework.md § 7a: `nvidia/Cosmos3-Nano` at revision `fp8`; transformers.md § 3a / § 6: the Nano/Super `fp8` revision through ModelOpt ("Edge has none")                                                                | launched like the bf16 tier of the same backend (FP8 lines per variant below); to quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`                                                                         |
+| FP8 checkpoints        | vllm.md "Quantized Checkpoints": `nvidia/Cosmos3-Edge-FP8` on `vllm/vllm-openai:nightly`, `nvidia/Cosmos3-Super-FP8` on `vllm/vllm-openai:v0.31.0`; cosmos-framework.md § 7a: `nvidia/Cosmos3-Nano` at revision `fp8`; transformers.md § 3a / § 6: the Nano/Super `fp8` revision through ModelOpt ("Edge has none")                                                                | launched like the bf16 tier of the same backend (FP8 lines per variant below); to quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`                                                                                   |
 
 ## Variant 1 — Cosmos Framework (in-repo `cosmos_framework.scripts.inference`)
 
@@ -176,7 +176,7 @@ FP8 (§ 7a "Optional: Run Nano FP8 Text Inference"): "FP8 checkpoints are publis
 repositories as the standard checkpoints, under the `fp8` revision" — `FP8_MODEL_ID="nvidia/Cosmos3-Nano"`,
 `FP8_REVISION="fp8"`, `uvx hf@latest download "$FP8_MODEL_ID" --revision "$FP8_REVISION" --local-dir "$COSMOS3_REPO/checkpoints/Cosmos3-Nano-FP8"`,
 then `.venv/bin/torchrun --nproc-per-node="$FP8_NUM_GPUS" … -m cosmos_framework.scripts.inference --parallelism-preset=throughput --dp-shard-size="$FP8_NUM_GPUS" --dp-replicate-size=1 --cp-size=1 --cfgp-size=1 --no-use-torch-compile … --checkpoint-path "$FP8_CHECKPOINT"`
-("Set `FP8_NUM_GPUS=1` to run without FSDP"); full block in § 7a. To quantize your own: `../cosmos3-inference-quantization/SKILL.md`.
+("Set `FP8_NUM_GPUS=1` to run without FSDP"); full block in § 7a. To quantize your own: `../cosmos3-quantization/SKILL.md`.
 
 ## Variant 2 — vLLM (Docker server + OpenAI client)
 
@@ -256,7 +256,7 @@ FP8 (§ 2 "Quantized Checkpoints"): "Standalone vLLM uses ModelOpt FP8 for reaso
 `snapshot_download("nvidia/Cosmos3-Edge-FP8", local_dir=str(FP8_MODEL_DIR))` (skipped when `FP8_MODEL_DIR/hf_quant_config.json` exists — "set `FP8_MODEL_DIR` to the local `edge-fp8` or `super-fp8` output" of your own quantization), then the § 2
 FP8 launch: image `vllm/vllm-openai:nightly`, model argument `"$FP8_MODEL_DIR"` with `--served-model-name nvidia/Cosmos3-Edge --async-scheduling --trust-request-mm-kwargs` ("lets each request override media settings such as `num_frames` and `fps`"),
 `-e HF_TOKEN`, the directory mounted read-only; Super FP8: `nvidia/Cosmos3-Super-FP8` on `vllm/vllm-openai:v0.31.0` with `--tensor-parallel-size 4`. "For locally generated outputs, set `FP8_SOURCE_DIR` to the source checkpoint directory … so
-exported symlinks remain readable"; "Keep `HF_HOME` consistent with quantization." To quantize your own: `../cosmos3-inference-quantization/SKILL.md`.
+exported symlinks remain readable"; "Keep `HF_HOME` consistent with quantization." To quantize your own: `../cosmos3-quantization/SKILL.md`.
 
 ## Variant 3 — SGLang (Docker server + OpenAI client)
 
@@ -403,7 +403,7 @@ FP8 (§ 3a + § 6): `uv pip install "nvidia-modelopt==0.44.0" requests` into the
 because ModelOpt `0.44.0` imports it but does not declare it as a dependency"), then `USE_MODELOPT_FP8 = True` in the § 6
 cell: it imports `modelopt.torch.opt` and `modelopt.torch.quantization.backends.fp8_per_tensor_gemm`, calls
 `enable_huggingface_checkpointing()` and loads `snapshot_download(model_id, revision="fp8")` — "this is not runtime
-quantization" (Nano/Super only: "Edge has none"). To quantize your own: `../cosmos3-inference-quantization/SKILL.md`.
+quantization" (Nano/Super only: "Edge has none"). To quantize your own: `../cosmos3-quantization/SKILL.md`.
 
 ## Variant 6 — TensorRT-Edge-LLM (ONNX export → engines → C++ `llm_inference`)
 
@@ -490,11 +490,11 @@ Origin: `.agents/skills/cookbooks/cosmos3/reasoner/` of the public cosmos-framew
 
 ## Related skills
 
-| Skill                                        | When to use                                                            |
-| -------------------------------------------- | ---------------------------------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`                  | Framework checkout and venv for Variant 1                              |
-| `../cosmos3-env-troubleshoot/SKILL.md`       | CUDA / import / Docker / download failures                             |
-| `../cosmos3-generate-media/SKILL.md`         | Image, video and audio generation (the Generator, not the Reasoner)    |
-| `../cosmos3-inference-quantization/SKILL.md` | Quantizing your own FP8 checkpoint (the released FP8 routes are above) |
-| `../cosmos3-inference-nim/SKILL.md`          | Operating the Cosmos3 NIM (Reasoner runtime)                           |
-| `../cosmos3-skill-authoring/SKILL.md`        | Editing this skill's eval cases                                        |
+| Skill                                  | When to use                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`            | Framework checkout and venv for Variant 1                              |
+| `../cosmos3-env-troubleshoot/SKILL.md` | CUDA / import / Docker / download failures                             |
+| `../cosmos3-generate-media/SKILL.md`   | Image, video and audio generation (the Generator, not the Reasoner)    |
+| `../cosmos3-quantization/SKILL.md`     | Quantizing your own FP8 checkpoint (the released FP8 routes are above) |
+| `../cosmos3-inference-nim/SKILL.md`    | Operating the Cosmos3 NIM (Reasoner runtime)                           |
+| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases                                        |

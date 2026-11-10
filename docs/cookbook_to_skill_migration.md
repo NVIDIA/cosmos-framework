@@ -45,8 +45,8 @@ edits inside `references/` are the link targets listed below.
 
 The NIM quickstart of the README stays inside `references/reasoner-readme.md`; the NIM cookbook pages
 (`cookbooks/cosmos3/nim/`) and their nested skill are unchanged. `SKILL.md` points to the quantization skill
-(`cosmos3-inference-quantization`) for making an FP8 checkpoint; the released-FP8 inference routes are the notebooks' own
-sections, surfaced per variant. That skill is created by the Quantization row of this migration: the `../cosmos3-inference-quantization/SKILL.md` pointers
+(`cosmos3-quantization`) for making an FP8 checkpoint; the released-FP8 inference routes are the notebooks' own
+sections, surfaced per variant. That skill is created by the Quantization row of this migration: the `../cosmos3-quantization/SKILL.md` pointers
 in `SKILL.md` resolve once that row is merged. Links from the migrated copies to pages that sibling rows retire — the
 quantization README (`reasoner-readme.md`, `vllm.md`) and the policy TensorRT-Edge-LLM notebook (`reasoner-readme.md`,
 `trt-edge-llm.md`) — point at those pages' current location, so every link resolves at this change's head; they go dead when
