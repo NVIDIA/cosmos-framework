@@ -11,7 +11,7 @@ description: >
   reasoning or VQA", "return a bounding box, a gripper trajectory or the next action with
   Cosmos3", "which Reasoner backend fits my GPU", or how to prompt the Reasoner (sampling
   parameters, the <think> format, 0-1000 coordinates). Do not use it to generate images, video
-  or audio (cosmos3-generate-media), for Action / robot-policy inference, to operate the
+  or audio (cosmos3-inference-generate-media), for Action / robot-policy inference, to operate the
   Cosmos3 NIM container, or to quantize a checkpoint yourself (cosmos3-quantization).
   The cookbook's sample image and clips ship in assets/.
 ---
@@ -43,7 +43,7 @@ Before the first command of any variant — including a single image-caption smo
    item 3 (and a variant's own exports) at the top of every call, or run a variant's setup, launch and request as one
    script.
 5. uv (skill note, not in the source): a framework checkout's `pyproject.toml` pins `[tool.uv] required-version = "==0.11.29"`
-   and "uv applies that pin from any cwd under the checkout" (`../cosmos3-generate-media/SKILL.md`, Read this first item 3), so
+   and "uv applies that pin from any cwd under the checkout" (`../cosmos3-inference-generate-media/SKILL.md`, Read this first item 3), so
    Variant 1 (`uv sync`) and Variant 5 (`uv venv` / `uv pip` from this directory inside a checkout) need exactly that version
    — transformers.md § 1: "use `uv 0.11.29`, matching the version pinned by Cosmos Framework". Before the first `uv` command,
    install it as `../cosmos3-setup/SKILL.md` step 3 does, `curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"`;
@@ -61,7 +61,7 @@ Before the first command of any variant — including a single image-caption smo
   grounding, describe-anything, embodied next-action, robot planning, action-CoT trajectories, physical plausibility,
   situation understanding (prompts and expected answer shapes: `references/prompt-guide.md`)
 - Use to choose a Reasoner backend (in-process vs server; Docker vs venv) and a tier (Edge / Nano / Super) for the GPU
-- For image, video or audio generation this is the wrong skill: `../cosmos3-generate-media/SKILL.md`
+- For image, video or audio generation this is the wrong skill: `../cosmos3-inference-generate-media/SKILL.md`
 - For the Cosmos3 NIM container: `../cosmos3-inference-nim/SKILL.md`; the README's "Run with NIM" quickstart is kept in
   `references/reasoner-readme.md`, the full guide is [`../cookbooks/cosmos3/nim/reasoning.md`](../cookbooks/cosmos3/nim/reasoning.md)
 - For environment problems (CUDA / import / Docker failures), hand off to `../cosmos3-env-troubleshoot/SKILL.md`
@@ -490,11 +490,11 @@ Origin: `.agents/skills/cookbooks/cosmos3/reasoner/` of the public cosmos-framew
 
 ## Related skills
 
-| Skill                                  | When to use                                                            |
-| -------------------------------------- | ---------------------------------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`            | Framework checkout and venv for Variant 1                              |
-| `../cosmos3-env-troubleshoot/SKILL.md` | CUDA / import / Docker / download failures                             |
-| `../cosmos3-generate-media/SKILL.md`   | Image, video and audio generation (the Generator, not the Reasoner)    |
-| `../cosmos3-quantization/SKILL.md`     | Quantizing your own FP8 checkpoint (the released FP8 routes are above) |
-| `../cosmos3-inference-nim/SKILL.md`    | Operating the Cosmos3 NIM (Reasoner runtime)                           |
-| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases                                        |
+| Skill                                          | When to use                                                            |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`                    | Framework checkout and venv for Variant 1                              |
+| `../cosmos3-env-troubleshoot/SKILL.md`         | CUDA / import / Docker / download failures                             |
+| `../cosmos3-inference-generate-media/SKILL.md` | Image, video and audio generation (the Generator, not the Reasoner)    |
+| `../cosmos3-quantization/SKILL.md`             | Quantizing your own FP8 checkpoint (the released FP8 routes are above) |
+| `../cosmos3-inference-nim/SKILL.md`            | Operating the Cosmos3 NIM (Reasoner runtime)                           |
+| `../cosmos3-skill-authoring/SKILL.md`          | Editing this skill's eval cases                                        |

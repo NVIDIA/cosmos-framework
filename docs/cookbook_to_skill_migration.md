@@ -5,7 +5,7 @@ last version on `main` before their retirement (`7738e9e`, after #329). Notebook
 plumbing and preview/viewer cells aside); everything the skill adds is marked "Skill note (not in the notebook)" or
 declared inside the block that carries it.
 
-| Retired source (`cookbooks/cosmos3/generator/audiovisual/`)                                                                                     | Destination (`.agents/skills/cosmos3-generate-media/`)                                                                                                                                                                                                                                                                                 | Notes                                                                                                                 |
+| Retired source (`cookbooks/cosmos3/generator/audiovisual/`)                                                                                     | Destination (`.agents/skills/cosmos3-inference-generate-media/`)                                                                                                                                                                                                                                                                       | Notes                                                                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `README.md` — introduction, licensing, asset catalogue, per-backend quickstarts                                                                 | `references/payloads.md` § 1–3 (introduction, licensing and access, asset catalogue); the quickstarts in `references/diffusers.md`, `cosmos-framework.md`, `trt-llm.md` and `distilled-trt-llm.md` § "Quickstart (cookbook README)" and `vllm-omni.md` § "Run with vLLM-Omni"; `SKILL.md` Variants 1–6 quote each backend's smoke path | The README's FP8 pointer (#329) is in `payloads.md` § 1                                                               |
 | `run_with_diffusers.ipynb`                                                                                                                      | `references/diffusers.md`                                                                                                                                                                                                                                                                                                              | `SKILL.md` Variant 1                                                                                                  |
@@ -163,8 +163,8 @@ first cell (title and introduction). Link targets re-pointed inside `references/
   → `quantize-super-text2image.md` (2), `./quantize_super_image2video.ipynb` → `quantize-super-image2video.md` (2);
   `../README.md#cosmos-framework`, `../README.md`, `../README.md#vllm`, `../README.md#vllm-omni` →
   `../../cookbooks/cosmos3/README.md` with the same anchors (4);
-  `../../../cosmos3-generate-media/references/vllm-omni.md#quantized-checkpoints` →
-  `../../cosmos3-generate-media/references/vllm-omni.md#quantized-checkpoints` (1); the Inference table's
+  `../../../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints` →
+  `../../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints` (1); the Inference table's
   `../generator/action/run_fd_with_vllm_omni.ipynb`, `../generator/action/run_id_with_vllm_omni.ipynb`,
   `../generator/transfer/run_video_transfer_with_vllm_omni.ipynb`, `../reasoner/run_with_vllm.ipynb` →
   `../../cookbooks/cosmos3/generator/action/…`, `../../cookbooks/cosmos3/generator/transfer/…`,
@@ -177,7 +177,7 @@ first cell (title and introduction). Link targets re-pointed inside `references/
 
 Inbound links re-pointed to `.agents/skills/cosmos3-quantization/SKILL.md` (link text unchanged):
 `.agents/skills/cookbooks/cosmos3/README.md` (`quantization/README.md`), `docs/inference.md`
-(`../.agents/skills/cookbooks/cosmos3/quantization/README.md`), `.agents/skills/cosmos3-generate-media/references/payloads.md`,
+(`../.agents/skills/cookbooks/cosmos3/quantization/README.md`), `.agents/skills/cosmos3-inference-generate-media/references/payloads.md`,
 `references/sglang.md` and `references/vllm-omni.md` (`../../cookbooks/cosmos3/quantization/README.md`), and the cookbook pages
 `.agents/skills/cookbooks/cosmos3/generator/action/README.md`, `generator/transfer/README.md` (`../../quantization/README.md`) and
 `reasoner/README.md` (`../quantization/README.md`) — the docs build stages those three pages, so their links are re-pointed although the

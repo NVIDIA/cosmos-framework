@@ -10,7 +10,7 @@ description: >
   checkpoint", "run quantize_fp8_checkpoint", "DEMO=1 vs DEMO=0 calibration", or
   "what does the FP8 export contain". Do not use it to run inference with a published
   FP8 checkpoint (nvidia/Cosmos3-Edge-FP8, -Nano-FP8, -Super-FP8) — that is the FP8
-  route of cosmos3-generate-media and of the Reasoner / Action / Transfer cookbook
+  route of cosmos3-inference-generate-media and of the Reasoner / Action / Transfer cookbook
   notebooks (their skills follow in later rows) — nor for the framework's load-time
   --quantization-method flags.
 ---
@@ -67,7 +67,7 @@ Before the first command of any variant — including a `DEMO=1` run:
 - Use to understand what the export contains (`hf_quant_config.json`, the
   `quantization_config.runtime.diffusion_step_policy` in `transformer/config.json`, the symlinked components) and how
   `DEMO=1` differs from a full calibration
-- Not for inference with a published or self-made FP8 checkpoint: `../cosmos3-generate-media/SKILL.md` (Variant 1
+- Not for inference with a published or self-made FP8 checkpoint: `../cosmos3-inference-generate-media/SKILL.md` (Variant 1
   diffusers `COSMOS3_DIFFUSERS_PRECISION=fp8`, Variant 3 vLLM-Omni "Quantized Checkpoints", Variant 4 SGLang "FP8")
   and the Reasoner / Action / Transfer cookbook notebooks listed in the README reference's Inference table carry that
   route (their skills follow in later rows; "Serving the FP8 output" below)
@@ -96,7 +96,7 @@ Disk (§ 1 of every notebook): "You also need free disk for the Hugging Face che
 (each output is roughly the size of the bf16 source). Point `HF_HOME` at a large volume in the next step." Access
 (§ 1): "Use a Linux machine with an NVIDIA GPU, model access on Hugging Face, and either `uvx hf@latest auth login` or
 `HF_TOKEN` set." Skill note (not in the source): on one 80 GB or 94 GB GPU the Edge section is the single-GPU path this
-skill's eval exercises; Nano is unverified by any run of this skill. `../cosmos3-generate-media/SKILL.md` measured
+skill's eval exercises; Nano is unverified by any run of this skill. `../cosmos3-inference-generate-media/SKILL.md` measured
 131.4 GB = 122.4 GiB of bf16 safetensors per 4-step student (a generate-media figure, not one of this skill's sources),
 so the 4-step students exceed such a GPU in bf16 by that measured figure; the 64B Super video checkpoint and the Super
 base models have no measured size in these sources (unknown) — attempt any Super section only to document the measured
@@ -429,13 +429,13 @@ checkpoint (and any backing HF cache) at its original absolute path inside Docke
 
 "**Runnable inference examples live in the other Cosmos3 cookbooks, not here.**" — today they are the inference skills:
 
-- `../cosmos3-generate-media/SKILL.md` Variant 3 → [its vLLM-Omni reference § Quantized Checkpoints](../cosmos3-generate-media/references/vllm-omni.md#quantized-checkpoints):
+- `../cosmos3-inference-generate-media/SKILL.md` Variant 3 → [its vLLM-Omni reference § Quantized Checkpoints](../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints):
   the `FP8_MODEL_DIR` / `FP8_SOURCE_DIR` mounts for a generated output, the table mapping `edge-fp8`, `nano-fp8`,
   `super-fp8`, `super-t2i-fp8`, `super-t2i-distilled-fp8`, `super-i2v-fp8`, `super-i2v-distilled-fp8` to their
   `SERVED_MODEL`, and the shared `vllm serve "$FP8_MODEL_DIR" --served-model-name "$SERVED_MODEL"` launch. Variant 1
-  → [its diffusers reference § Quantized Checkpoints (FP8)](../cosmos3-generate-media/references/diffusers.md#quantized-checkpoints-fp8):
+  → [its diffusers reference § Quantized Checkpoints (FP8)](../cosmos3-inference-generate-media/references/diffusers.md#quantized-checkpoints-fp8):
   `COSMOS3_DIFFUSERS_PRECISION=fp8`; "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint
-  directory." Variant 4 → [its SGLang reference § FP8](../cosmos3-generate-media/references/sglang.md#fp8): "To
+  directory." Variant 4 → [its SGLang reference § FP8](../cosmos3-inference-generate-media/references/sglang.md#fp8): "To
   serve a checkpoint you quantized yourself, pass its local directory to `--model-path`. If the server runs in
   Docker, mount that directory and use its path inside the container."
 - The Reasoner, Action and Transfer cookbooks' vLLM / vLLM-Omni notebooks keep their "Quantized Checkpoints"
@@ -490,10 +490,10 @@ Skill notes (not in the source) unless a sentence is quoted:
 
 ## Related skills
 
-| Skill                                  | When to use                                                                                                          |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`            | Framework checkout; the pinned uv is installed by the first line of Setup (once)                                     |
-| `../cosmos3-env-troubleshoot/SKILL.md` | CUDA / import / library failures during `uv sync` or the GPU check                                                   |
-| `../cosmos3-generate-media/SKILL.md`   | Serve the FP8 output or a published FP8 checkpoint (Variant 1 diffusers, Variant 3 vLLM-Omni, Variant 4 SGLang)      |
-| `../cosmos3-inference/SKILL.md`        | Framework-native inference, including the load-time `--quantization-method` flags that are distinct from this export |
-| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases                                                                                      |
+| Skill                                          | When to use                                                                                                          |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`                    | Framework checkout; the pinned uv is installed by the first line of Setup (once)                                     |
+| `../cosmos3-env-troubleshoot/SKILL.md`         | CUDA / import / library failures during `uv sync` or the GPU check                                                   |
+| `../cosmos3-inference-generate-media/SKILL.md` | Serve the FP8 output or a published FP8 checkpoint (Variant 1 diffusers, Variant 3 vLLM-Omni, Variant 4 SGLang)      |
+| `../cosmos3-inference/SKILL.md`                | Framework-native inference, including the load-time `--quantization-method` flags that are distinct from this export |
+| `../cosmos3-skill-authoring/SKILL.md`          | Editing this skill's eval cases                                                                                      |
