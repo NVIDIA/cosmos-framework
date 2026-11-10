@@ -82,7 +82,7 @@ python -c "import vlmeval; print('vlmeval OK')"
 ## 2. Deploy the model endpoint (vLLM)
 
 Serve the model behind an OpenAI-compatible `/v1/chat/completions` endpoint (see also
-**[Reasoner with vLLM](../../../../cookbooks/cosmos3/reasoner/README.md#run-with-vllm)**):
+**[Reasoner with vLLM](../../../../cosmos3-inference-reasoning/references/reasoner-readme.md#run-with-vllm)**):
 
 ```bash
 VLLM_USE_FLASHINFER_SAMPLER=0 vllm serve nvidia/Cosmos3-Nano \
