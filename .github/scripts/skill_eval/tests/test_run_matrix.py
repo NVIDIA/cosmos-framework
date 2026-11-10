@@ -34,7 +34,7 @@ OTHER_SHA = "b" * 40
 BASE_SHA = "c" * 40
 DASH = "http://dash.test"
 CANARY = rm.CANARY_SKILL  # cosmos3-ci-smoke: lives in .github/scripts/skill_eval, never under .agents/skills
-SKILL = "cosmos3-inference-generate-media"  # a shipped skill under .agents/skills
+SKILL = "cosmos3-generate-media"  # a shipped skill under .agents/skills
 BACKENDS = ["claude", "codex", "cursor", "opencode"]
 FIXED_NOW = datetime(2026, 10, 18, 7, 0, 0, tzinfo=timezone.utc)
 

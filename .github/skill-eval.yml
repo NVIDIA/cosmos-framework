@@ -10,7 +10,7 @@
 # cosmos3-ci-smoke canary (.github/scripts/skill_eval/cosmos3-ci-smoke) runs first, but only when asked
 # for: trigger argument `with-smoke` (canary + skills) or `smoke-only` (canary alone). Optional keys:
 #   smoke: true|false                   # canary on every full run / never (beats `with-smoke`); unset = on request
-#   skills: [cosmos3-inference-generate-media]    # explicit override: run exactly these, skip detection
+#   skills: [cosmos3-generate-media]    # explicit override: run exactly these, skip detection
 
 backends: [claude, codex, cursor, opencode]
 # Where the cell jobs run. Every cell job's runs-on = runner_labels; a cell of a backend listed in serial_backends
