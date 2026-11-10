@@ -23,7 +23,8 @@ local Framework environment below with ModelOpt, datasets, and notebook tooling.
 
 ## Prerequisites
 
-- Linux with NVIDIA GPU access.
+- Linux with NVIDIA GPU access, or an Intel GPU supported by PyTorch XPU for the
+  Cosmos3-Edge Diffusers backend.
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/), `git`, and `git-lfs` installed.
 - Hugging Face access to the gated Cosmos3 model repos. Generator also requires
   access to the gated
@@ -158,7 +159,9 @@ for a one-off run, pass `--no-guardrails` to `cosmos_framework.scripts.inference
 
 Direct generation with `Cosmos3OmniPipeline` (Generator · Audiovisual). Create a
 venv and install the backend, choosing `--torch-backend` to match your driver
-(see [CUDA driver and the `cuXXX` backend](#cuda-driver-and-the-cuxxx-backend)):
+(see [CUDA driver and the `cuXXX` backend](#cuda-driver-and-the-cuxxx-backend)).
+XPU is supported for Cosmos3-Edge generation only; other backends retain their
+documented NVIDIA GPU requirements.
 
 ```bash
 uv venv --python 3.13 --seed --managed-python
@@ -176,6 +179,39 @@ uv pip install --torch-backend=cu130 \
   torchvision \
   transformers
 ```
+
+For Cosmos3-Edge on an Intel GPU, install the same dependencies with the
+PyTorch XPU backend, then verify the device:
+
+```bash
+uv pip install --torch-backend=xpu \
+  "diffusers @ git+https://github.com/huggingface/diffusers.git" \
+  accelerate \
+  av \
+  cosmos_guardrail \
+  huggingface_hub \
+  imageio \
+  imageio-ffmpeg \
+  torch \
+  torchvision \
+  transformers
+
+python -c 'import torch; print(torch.xpu.is_available(), torch.xpu.get_device_name(0))'
+```
+
+Validated for Cosmos3-Edge text-to-video (480p, 17 frames, 20 steps, guardrail
+off) on an Intel Core Ultra 9 285H with Intel Arc Graphics (iGPU), using a
+fresh install from the command above: Python 3.13.18, PyTorch `2.15.0+xpu`,
+torchvision `0.29.2+xpu`, Diffusers `0.42.0.dev0` (git commit `86ef420`), and
+Transformers `5.22.1`. On this iGPU, VAE decode at 480p with 33 or more frames,
+including Edge's default 121, did not complete. The guardrail cannot be enabled
+on XPU with `cosmos_guardrail` 0.3.2, which loads a CUDA-saved checkpoint
+without `map_location`; see
+[the Diffusers skill reference](../../cosmos3-generate-media/references/diffusers.md#cosmos3-edge-on-intel-xpu-skill-addition-not-in-the-readme).
+
+If `import torch` fails with `undefined symbol: urGraphGetIdExp`, a system oneAPI
+install on `LD_LIBRARY_PATH` is shadowing the runtime shipped with the XPU wheel;
+remove the oneAPI entries from `LD_LIBRARY_PATH` for this venv.
 
 ## TensorRT-LLM Generator
 
