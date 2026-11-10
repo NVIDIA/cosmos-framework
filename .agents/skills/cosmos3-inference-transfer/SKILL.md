@@ -10,7 +10,7 @@ description: >
   segmentation or WSM control video", "run the transfer specs with the framework", "serve
   Cosmos3 transfer with vLLM-Omni / SGLang / TensorRT-LLM", or which transfer backend fits
   their GPU. Not for the Transfer-Auto and Sim-Transfer world-simulation models, for
-  text/image-to-video without a control video (cosmos3-generate-media), for Reasoner inference,
+  text/image-to-video without a control video (cosmos3-inference-generate-media), for Reasoner inference,
   or for quantizing a checkpoint yourself (cosmos3-quantization). Ships the edge, blur
   and depth control videos, every prompt, the negative prompt and the framework specs in assets/
   and specs/; the seg and wsm control videos are fetched by a documented command.
@@ -58,7 +58,7 @@ Before the first command of any variant — including a single edge smoke:
 - Not for Transfer-Auto or Sim-Transfer: "**Transfer-Auto** is driven like a transfer model (control video in, photoreal video out) but belongs
   to the Simulation family" (simulation cookbook README) — use `../cosmos3-nano-transfer-auto/inference/SKILL.md` and
   `../cosmos3-nano-sim-transfer/inference/SKILL.md`
-- Not for text-, image- or video-to-video generation without a control video (`../cosmos3-generate-media/SKILL.md`), not for Reasoner
+- Not for text-, image- or video-to-video generation without a control video (`../cosmos3-inference-generate-media/SKILL.md`), not for Reasoner
   inference, not for making an FP8 checkpoint (see "FP8" in the variant blocks)
 - For environment problems, hand off to `../cosmos3-env-troubleshoot/SKILL.md`
 
@@ -310,7 +310,7 @@ before serving requests. Per-request `guardrails: false` in `extra_params` … d
 add `--no-guardrails` to the `vllm serve` line above. Readiness: "Cosmos3 checkpoints can exceed the default server init timeout — always pass
 `--init-timeout 1800`"; "vLLM-Omni prints `Application startup complete.` when the API is ready" (setup guide); the notebook's § 3 checks
 `GET http://localhost:8000/v1/models`. Headless automation (skill note): `docker run -d --name cosmos3-vllm …` with the rest unchanged, poll
-`/v1/models`, `docker logs`, then `docker stop && docker rm` — the pattern of `../cosmos3-generate-media/references/skill-notes.md` § 4.
+`/v1/models`, `docker logs`, then `docker stop && docker rm` — the pattern of `../cosmos3-inference-generate-media/references/skill-notes.md` § 4.
 
 Request (§ 4 `build_transfer_request` / `run_transfer`): `requests.post(VIDEOS_SYNC_URL, data=form, headers={"Accept": "video/mp4"}, timeout=3600)` to
 `POST /v1/videos/sync` — form fields sent as `data=form` (skill note: URL-encoded, as the README quickstart does; not multipart — keep the line as written) with `prompt` and `negative_prompt` (compact JSON of `assets/edge/prompt.json` and
@@ -372,7 +372,7 @@ repository. To disable guardrails server-wide, set `SGLANG_DISABLE_COSMOS3_GUARD
 `-e HF_TOKEN` to pass the token) on the `docker run` above. The notebook's requests send `guardrails` from `COSMOS3_SGLANG_GUARDRAILS` (default
 `"false"`). Readiness: the notebook's § 3 checks `GET http://localhost:30000/v1/models` (`requests.get(MODELS_URL, timeout=30)`, `raise_for_status()`).
 Headless (skill note): `docker run -d --name cosmos3-sglang …`, poll `/v1/models`, `docker logs`, `docker stop && docker rm` — pattern:
-`../cosmos3-generate-media/references/skill-notes.md` § 4.
+`../cosmos3-inference-generate-media/references/skill-notes.md` § 4.
 
 Request (§ 4): `requests.post(VIDEOS_GENERATION_URL, json=form, headers={"Accept": "video/mp4"}, timeout=3600)` to `POST /v1/videos` with the same
 `form` fields as Variant 3 (a JSON body here; `extra_params` additionally carries `"control_hint": "edge"`, and `control_path` is the absolute host
@@ -394,7 +394,7 @@ the helper cell — `wait_for_server`, `CONTROL_CASES`, `run_transfer` — "Cann
 TensorRT-LLM", and the setup guide's "TensorRT-LLM Generator" section (install, `TRTLLM_ROOT`, Nano / Super launch, routes, `ffmpeg`, `use_guardrails`).
 
 Install: "Follow the shared TensorRT-LLM setup, then launch one server from the TensorRT-LLM checkout" (notebook). Setup guide: "Install TensorRT-LLM following its upstream documentation."
-Skill note (not in the sources): the install is the Route A block of `../cosmos3-generate-media/references/trt-llm.md` § 7.2, run as ONE script — stock uv with `--no-config`, OpenMPI,
+Skill note (not in the sources): the install is the Route A block of `../cosmos3-inference-generate-media/references/trt-llm.md` § 7.2, run as ONE script — stock uv with `--no-config`, OpenMPI,
 `tensorrt_llm==1.3.0rc27` (pypi.nvidia.com) + `torch==2.13.0+cu130` (the cu130 torch index), its `CUDA_HOME` line (the venv's `nvidia/cu13`), the configs-only checkout `bca6761` (§ 7.3) —
 then `export TRTLLM_ROOT`; eval 2026-11-08: edge HTTP 200 on 1x H100 from 3 of 4 runs with that wheel (the fourth passed on an editable 1.4.0rc0 install — an unvalidated mix, not a route).
 Not `pip install tensorrt-llm` (PyPI has only sdists), not the guide's `TRTLLM_USE_PRECOMPILED=1 pip install -e .` (§ 7.5: it resolves an unpublished `+<sha>` wheel). The guide's source build
@@ -422,7 +422,7 @@ torchrun --nproc_per_node=4 -m tensorrt_llm.commands.serve \
 Skill note (not in the notebook): on one GPU run only the Nano lines (the block lists both launches — "run instead of Nano"); guardrails off for a
 smoke run = `export TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` before `trtllm-serve`, or `use_guardrails: false` in `extra_params` (setup guide; the notebook
 sends `"use_guardrails": True`). Headless: `setsid trtllm-serve … > serve.log 2>&1 &`, poll `/health`, teardown by process group — pattern:
-`../cosmos3-generate-media/references/skill-notes.md` § 4. Readiness: the notebook's `wait_for_server()` polls `GET <server root>/health` every 10 s
+`../cosmos3-inference-generate-media/references/skill-notes.md` § 4. Readiness: the notebook's `wait_for_server()` polls `GET <server root>/health` every 10 s
 for up to 1800 s ("TensorRT-LLM server is ready"). "Install `requests` in this notebook kernel if needed, and install `ffmpeg` in the server environment."
 
 Request (`run_transfer`): `POST /v1/videos/sync` with a JSON body — `prompt` / `negative_prompt` (compact JSON of `assets/edge/prompt.json` and
@@ -487,14 +487,14 @@ reference the assets.
 
 ## Related skills
 
-| Skill                                                                                                 | When to use                                                                                                                                                                         |
-| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `../cookbooks/cosmos3/README.md`                                                                      | The shared environment setup every variant points at (Cosmos Framework, Diffusers, TensorRT-LLM Generator, vLLM-Omni, NIM)                                                          |
-| `../cosmos3-setup/SKILL.md`                                                                           | Framework installation and checkpoint download (Variant 1)                                                                                                                          |
-| `../cosmos3-inference/SKILL.md`                                                                       | Framework-native inference reference (`cosmos_framework.scripts.inference` arguments, parallelism presets)                                                                          |
-| `../cosmos3-env-troubleshoot/SKILL.md`                                                                | CUDA / import / server failures                                                                                                                                                     |
-| `../cosmos3-generate-media/SKILL.md`                                                                  | Text-, image- and video-to-video generation without a control video on the same backends; `../cosmos3-generate-media/references/skill-notes.md` § 4 has the headless server pattern |
-| `../cookbooks/cosmos3/nim/transfer.md`, `../cosmos3-inference-nim/SKILL.md`                           | Transfer through the Cosmos3 NIM (`POST /v1/infer`, `model_mode=video2video`) — not covered by the cookbook sources of this skill                                                   |
-| `../cosmos3-nano-transfer-auto/inference/SKILL.md`, `../cosmos3-nano-sim-transfer/inference/SKILL.md` | The Transfer-Auto and Sim-Transfer world-simulation models (different checkpoints and inputs)                                                                                       |
-| `../cosmos3-quantization/SKILL.md`                                                                    | Making your own FP8 checkpoint (the released FP8 routes are in the variant blocks)                                                                                                  |
-| `../cosmos3-skill-authoring/SKILL.md`                                                                 | Editing this skill's eval cases                                                                                                                                                     |
+| Skill                                                                                                 | When to use                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../cookbooks/cosmos3/README.md`                                                                      | The shared environment setup every variant points at (Cosmos Framework, Diffusers, TensorRT-LLM Generator, vLLM-Omni, NIM)                                                                    |
+| `../cosmos3-setup/SKILL.md`                                                                           | Framework installation and checkpoint download (Variant 1)                                                                                                                                    |
+| `../cosmos3-inference/SKILL.md`                                                                       | Framework-native inference reference (`cosmos_framework.scripts.inference` arguments, parallelism presets)                                                                                    |
+| `../cosmos3-env-troubleshoot/SKILL.md`                                                                | CUDA / import / server failures                                                                                                                                                               |
+| `../cosmos3-inference-generate-media/SKILL.md`                                                        | Text-, image- and video-to-video generation without a control video on the same backends; `../cosmos3-inference-generate-media/references/skill-notes.md` § 4 has the headless server pattern |
+| `../cookbooks/cosmos3/nim/transfer.md`, `../cosmos3-inference-nim/SKILL.md`                           | Transfer through the Cosmos3 NIM (`POST /v1/infer`, `model_mode=video2video`) — not covered by the cookbook sources of this skill                                                             |
+| `../cosmos3-nano-transfer-auto/inference/SKILL.md`, `../cosmos3-nano-sim-transfer/inference/SKILL.md` | The Transfer-Auto and Sim-Transfer world-simulation models (different checkpoints and inputs)                                                                                                 |
+| `../cosmos3-quantization/SKILL.md`                                                                    | Making your own FP8 checkpoint (the released FP8 routes are in the variant blocks)                                                                                                            |
+| `../cosmos3-skill-authoring/SKILL.md`                                                                 | Editing this skill's eval cases                                                                                                                                                               |
