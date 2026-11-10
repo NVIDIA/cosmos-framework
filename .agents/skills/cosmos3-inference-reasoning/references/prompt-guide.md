@@ -3,7 +3,10 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 # Cosmos3-Reasoner Prompt Guide
 
+> **Skill note (not in the source):** this file is the cookbook prompt guide `reasoner_prompt_guide.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
+
 ## Inference Setup
+
 ### Sampling Parameters
 
 Without reasoning:
@@ -106,7 +109,7 @@ The examples below mirror the notebook prompts. Media references point to the lo
 
 Media:
 
-![robot_153.jpg](./assets/robot_153.jpg)
+![robot_153.jpg](../assets/robot_153.jpg)
 
 User Prompt:
 
@@ -124,7 +127,7 @@ This photograph, taken from a first-person perspective, appears to be captured b
 
 Media:
 
-[View video](assets/video_caption.mp4)
+[View video](../assets/video_caption.mp4)
 
 User Prompt:
 
@@ -150,7 +153,7 @@ Overall, the video showcases the capabilities of modern robotic technology in ha
 
 Media:
 
-[View video](assets/temporal_localization_1.mp4)
+[View video](../../cookbooks/cosmos3/reasoner/assets/temporal_localization_1.mp4)
 
 User Prompt:
 
@@ -214,7 +217,7 @@ Model Answer:
 
 Media:
 
-[View video](assets/temporal_localization_2.mp4)
+[View video](../../cookbooks/cosmos3/reasoner/assets/temporal_localization_2.mp4)
 
 User Prompt:
 
@@ -265,7 +268,7 @@ Model Answer:
 
 Media:
 
-[View video](assets/temporal_localization_2.mp4)
+[View video](../../cookbooks/cosmos3/reasoner/assets/temporal_localization_2.mp4)
 
 User Prompt:
 
@@ -288,7 +291,7 @@ Model Answer:
 
 Media:
 
-[View video](assets/temporal_localization_2.mp4)
+[View video](../../cookbooks/cosmos3/reasoner/assets/temporal_localization_2.mp4)
 
 User Prompt:
 
@@ -308,7 +311,7 @@ The door on the left opens, and three individuals sequentially emerge, each carr
 
 Media:
 
-[View video](assets/robotics_next_action.mp4)
+[View video](../assets/robotics_next_action.mp4)
 
 User Prompt:
 
@@ -338,7 +341,7 @@ The robot arm places the smart charger into the cardboard box, positioning it se
 
 Media:
 
-[View video](assets/drive_scene_next_action.mp4)
+[View video](../../cookbooks/cosmos3/reasoner/assets/drive_scene_next_action.mp4)
 
 User Prompt:
 
@@ -356,7 +359,7 @@ I am driving straight on a three-lane road, maintaining a safe distance from the
 
 Media:
 
-![robot_planning.png](assets/robot_planning.png)
+![robot_planning.png](../assets/robot_planning.png)
 
 User Prompt:
 
@@ -379,7 +382,7 @@ Model Answer:
 
 Media:
 
-[View video](assets/assisted_task_next_action.mp4)
+[View video](../assets/assisted_task_next_action.mp4)
 
 User Prompt:
 
@@ -409,7 +412,7 @@ grab new ink_cartridge
 
 Media:
 
-[View video](assets/common_sense_reasoning.mp4)
+[View video](../assets/common_sense_reasoning.mp4)
 
 User Prompt:
 
@@ -452,7 +455,7 @@ The countertop appears capable of supporting the weight of the juicers. Here's t
 
 Media:
 
-![grounding_2d.png](assets/grounding_2d.png)
+![grounding_2d.png](../assets/grounding_2d.png)
 
 User Prompt:
 
@@ -486,7 +489,7 @@ Model Answer:
 
 Media:
 
-![describe_anything.png](assets/describe_anything.png)
+![describe_anything.png](../assets/describe_anything.png)
 
 User Prompt:
 
@@ -529,7 +532,7 @@ axis is independently normalized to 0-1000, regardless of aspect ratio.
 
 Media:
 
-![action_cot_trajectory.png](assets/action_cot_trajectory.png)
+![action_cot_trajectory.png](../assets/action_cot_trajectory.png)
 
 User Prompt:
 
@@ -577,7 +580,7 @@ Second trajectory example:
 
 Media:
 
-![robot_planning.png](assets/robot_planning.png)
+![robot_planning.png](../assets/robot_planning.png)
 
 User Prompt:
 
@@ -613,7 +616,7 @@ So my next steps should look like this: [490, 419], [411, 568], [529, 305], [749
 
 Media:
 
-[View video](assets/action_cot_driving_scene.mp4)
+[View video](../assets/action_cot_driving_scene.mp4)
 
 User Prompt:
 
@@ -639,7 +642,7 @@ Pedestrians & Personal Mobility - Adults walking
 
 Media:
 
-[View video](assets/physical_plausibility.mp4)
+[View video](../assets/physical_plausibility.mp4)
 
 User Prompt:
 
@@ -660,7 +663,7 @@ A
 
 Media:
 
-[View video](assets/situation_understanding.mp4)
+[View video](../assets/situation_understanding.mp4)
 
 User Prompt:
 

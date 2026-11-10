@@ -333,7 +333,7 @@ install, C++ runtime with `-DBUILD_EXPERIMENTAL_MODELS=ON` and
 
 This is separate from workstation [vLLM-Omni](#run-with-vllm-omni) policy
 serving. Multimodal reasoning on the same Edge-LLM runtime is documented in
-[`../../reasoner/run_with_trt_edge_llm.ipynb`](../../reasoner/run_with_trt_edge_llm.ipynb).
+[`../../reasoner/run_with_trt_edge_llm.ipynb`](../../../../cosmos3-inference-reasoning/references/trt-edge-llm.md).
 
 ### Notebook walkthrough
 
