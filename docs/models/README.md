@@ -27,7 +27,7 @@ Each checkpoint has two capabilities: the Generator produces images, video, audi
 | Cosmos3-Edge  | 3.86B                           | All except audio                          |
 
 - Run: [Inference](../inference.md). Edge fits on a single GPU; Super does not fit on one 80 GB H100 and is sharded across GPUs.
-- Reasoner: [Reasoner notebooks](../../.agents/skills/cookbooks/cosmos3/reasoner/README.md) · [Prompt guide](../../.agents/skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md). The vLLM, TensorRT-LLM, Transformers and NIM backends load only the Reasoner weights and use less GPU memory than the framework backend.
+- Reasoner: [Reasoner notebooks](../../.agents/skills/cosmos3-inference-reasoning/SKILL.md) · [Prompt guide](../../.agents/skills/cosmos3-inference-reasoning/references/prompt-guide.md). The vLLM, TensorRT-LLM, Transformers and NIM backends load only the Reasoner weights and use less GPU memory than the framework backend.
 - Train: [SFT recipes](../training.md) (Generator and Reasoner SFT for each checkpoint) · [RL post-training](../posttrain/index.md)
 
 ## Super Text2Image and Image2Video
