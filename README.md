@@ -116,6 +116,11 @@ for supported model/algorithm combinations, concrete recipes and validation scop
 reusable training cores that may still need configuration, scripts or data wiring; available
 recipes are marked **R** and linked in the matrix.
 
+For an unlisted combination, start from the closest linked example and adapt its model/data
+wiring. Many compatible models can reuse the existing objective and trainer. Follow the
+[adaptation steps and customization guides](./docs/post_training/model_algorithm_support.md#adding-or-qualifying-another-combination)
+for model inputs, datasets, objectives, rewards and simulators.
+
 The repository has two user-facing SFT paths. Use the main [Training](./docs/training.md) path for Cosmos3
 generator, reasoner, and policy recipes built on the framework's native configuration, checkpoint,
 and distributed-training stack. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Hugging
