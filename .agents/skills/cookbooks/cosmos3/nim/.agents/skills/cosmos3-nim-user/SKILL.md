@@ -99,7 +99,8 @@ tested-GPU inventory is the validation scope, not an allowlist.
    fits but preflight rejects current free memory, report **fits hardware but
    not the current memory state** and ask the operator to stop only the
    identified workloads before rerunning preflight.
-4. Recommend model selectors, not image-specific profile IDs.
+4. Recommend model selectors, not image-specific profile IDs. The multiview
+   Generator is not supported on unified-memory systems.
 
 Never clear page cache, delete model cache, stop unidentified processes, or
 reboot automatically. Page-cache reclamation is an approved host-wide
@@ -113,6 +114,7 @@ diagnostic only, with explicit operator confirmation and before/after evidence.
 | Forward, policy, or inverse dynamics | Generator | `action.md` | `examples/action.py` |
 | Edge-/Nano-DROID action-only policy | Generator (`edge-droid` or `nano-droid`) | `action.md` | `examples/policy_droid.py` |
 | Controlled video generation | Generator | `transfer.md` | `examples/transfer.py` |
+| Multi-camera driving video, optionally with LiDAR | Generator, `NIM_MODEL_VARIANT=multiview` | `multiview.md` | `examples/mv_rgb.py`, `examples/mv_joint.py` |
 | Image or video understanding | Reasoner | `reasoning.md` | `examples/reasoner.py` |
 | Responses API | Reasoner | `reasoning.md` | `examples/reasoner_responses.py` |
 | Streaming video reasoning | Reasoner | `streaming.md` | `examples/streaming.py` |

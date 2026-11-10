@@ -43,6 +43,7 @@ selects a compatible profile, as described in
 | Policy | Generator | Image + task/state | Video + predicted action | [Action](action.md#policy) |
 | Nano-DROID policy | Generator | Image + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
 | Edge-DROID policy ([experimental](support-matrix.md#choose-a-model)) | Generator | Composed camera views + task/current state | Predicted action | [Action](action.md#edge-droid-and-nano-droid-policy) |
+| Multiview driving video and LiDAR | Generator | Per-camera captions + WSM controls, optional RGB first frames; LiDAR control required for LiDAR output | One MP4 per camera, optional LiDAR tensor | [Multiview](multiview.md) |
 | Inverse dynamics | Generator | Video | Video + predicted action | [Action](action.md#inverse-dynamics) |
 | Video Transfer | Generator | Prompt + spatial control | Controlled MP4 video | [Transfer](transfer.md) |
 | Image/video reasoning | Reasoner | Media + text | Text or structured result | [Reasoning](reasoning.md) |
@@ -99,8 +100,10 @@ Specialist variants accept only their task: run
 [`t2i_4step.py`](examples/t2i_4step.py),
 [`i2v_4step.py`](examples/i2v_4step.py), or
 [`policy_droid.py`](action.md#edge-droid-and-nano-droid-policy) only against the
-matching variant. Examples save outputs under the ignored `examples/outputs/`
-directory.
+matching variant. Multiview requests, including
+[`mv_rgb.py`](examples/mv_rgb.py) and [`mv_joint.py`](examples/mv_joint.py),
+require `NIM_MODEL_VARIANT=multiview`. Examples save outputs under the ignored
+`examples/outputs/` directory.
 
 Validate the selected configuration with representative requests before
 production use.
@@ -134,6 +137,7 @@ pages and examples as their source of truth and default to read-only assistance.
 - [Streaming Video](streaming.md)
 - [Action](action.md)
 - [Transfer](transfer.md)
+- [Multiview](multiview.md)
 - [Python Examples](examples/)
 
 ### Operate

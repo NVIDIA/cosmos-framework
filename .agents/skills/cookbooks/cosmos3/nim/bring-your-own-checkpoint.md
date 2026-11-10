@@ -37,6 +37,13 @@ The NIM infers Edge, Nano, or Super and the precision from
 `NIM_MODEL_VARIANT` to select a specialist Generator contract. The only Edge
 Generator contract is the BF16 `edge-droid` policy.
 
+A multiview checkpoint requires `NIM_MODEL_VARIANT=multiview`. Its
+`model_index.json` names `Cosmos3MultiviewPipeline`, its
+`transformer/config.json` sets `backbone_type` to `cosmos3_multiview`, and it
+adds a `lidar_vae/` directory for joint camera and LiDAR generation. A multiview
+profile rejects a checkpoint without that backbone type, and other profiles
+reject a multiview checkpoint.
+
 ### Launch
 
 Add these options to the command in

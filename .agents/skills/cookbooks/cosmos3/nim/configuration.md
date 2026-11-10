@@ -22,7 +22,7 @@ commands.
 | Name | Default | Use |
 | --- | --- | --- |
 | `NIM_MODEL_TYPE` | `generator` | Select `generator` or `reasoner` |
-| `NIM_MODEL_VARIANT` | `nano` preference | Select `nano` or `super` for either runtime; Reasoner also accepts `edge`, and Generator also accepts `edge-droid`, `nano-droid`, `super-t2i`, `super-t2i-4step`, `super-i2v`, and `super-i2v-4step` |
+| `NIM_MODEL_VARIANT` | `nano` preference | Select `nano` or `super` for either runtime; Reasoner also accepts `edge`, and Generator also accepts `edge-droid`, `nano-droid`, `multiview`, `super-t2i`, `super-t2i-4step`, `super-i2v`, and `super-i2v-4step` |
 | `NIM_PRECISION` | Generator: FP8 preference; Reasoner: GPU-derived preference | Optionally pin a precision available in the image; refer to [Precision Selection](deployment.md#precision-selection) |
 | `NIM_PERF_PROFILE` | `latency` | Generator only: choose `latency` or `throughput` |
 
@@ -117,7 +117,8 @@ profile-pin variables, refer to [Advanced Settings](#advanced-settings).
 | Name | Default | Use |
 | --- | --- | --- |
 | `NIM_ALLOW_URL_INPUT` | `true` | Allow HTTP(S) image, video, and Transfer inputs; set `false` to require encoded input |
-| `NIM_TRITON_REQUEST_TIMEOUT` | 30 minutes (`1800000000` microseconds) | Set the queue-plus-execution timeout in microseconds |
+| `NIM_TRITON_REQUEST_TIMEOUT` | 30 minutes (`1800000000` microseconds); 4 hours (`14400000000`) for multiview | Set the queue-plus-execution timeout in microseconds |
+| `NIM_HTTP_KEEP_ALIVE_TIMEOUT_SECS` | `10` for multiview; unset (5 seconds) otherwise | Close an idle client connection after this many seconds; raise it for clients that reuse connections between large requests (refer to [Multiview Common Failures](multiview.md#common-failures)) |
 
 Client HTTP timeouts do not change this backend ceiling. Refer to
 [Long-Running Requests](operations.md#long-running-requests).
@@ -188,6 +189,41 @@ an operator-provided OpenAI-compatible endpoint.
 
 Endpoint, model, and key are required when the feature is enabled. A request-time
 external failure logs a warning and continues with the original prompt.
+
+### Multiview
+
+These variables apply only to `NIM_MODEL_VARIANT=multiview`. Profiles tagged
+`offload: layer` turn on GPU memory reductions so that the largest requests fit
+on GPUs with less memory. Each reduction costs speed and can be turned off on
+its own. Refer to [GPU Memory and `layer` Profiles](multiview.md#gpu-memory-and-layer-profiles).
+
+These variables are runtime overrides. They do not take part in profile
+selection: the NIM first selects a profile, including its VRAM floor, and then
+applies them. To choose a different profile, use `NIM_OFFLOAD_MODE` or the
+other [Advanced Profile Controls](#advanced-profile-controls) instead.
+
+| Name | Default | Use |
+| --- | --- | --- |
+| `NIM_MULTIVIEW_LAYER_OFFLOAD` | Unset: follows the selected profile (on for `layer` profiles) | Override DiT layer offload for the selected profile without changing profile selection; set `false` to keep the transformer on the GPU. Two-GPU tensor-parallel `layer` profiles reject `false` |
+| `NIM_MULTIVIEW_VAE_TILING` | Unset: follows the selected profile (on for `layer` profiles) | Override VAE tiling for the selected profile; set `false` to encode and decode whole frames |
+| `VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD` | `1` on single-GPU `layer` engines, otherwise `0` | Keep the camera VAE and the LiDAR encoder and decoder in host memory except while they encode or decode; set `0` to keep them on the GPU, or `1` to use it on any profile |
+| `VLLM_OMNI_COSMOS3_MASKLESS_HEAD_GROUPS` | `8` on single-GPU engines, otherwise `1` | Split each attention pass into this many KV-head groups to bound attention working memory; set `1` for a single pass |
+| `VLLM_OMNI_COSMOS3_FA3_NUM_SPLITS` | `1` | FlashAttention 3 split count for maskless attention passes on Hopper GPUs; `1` avoids the slower split-KV kernel on long K/V sequences such as LiDAR. Set `0` for automatic split selection or another non-negative integer to force that count. A blank value counts as unset; the NIM rejects other invalid values at startup |
+| `VLLM_OMNI_COSMOS3_FUSED_INDEXED_MERGE` | `false` | Experimental. Use a fused Triton kernel for the gather, FP32 log-sum-exp merge, and indexed accumulator writes of maskless attention passes. Accepts `1/0/true/false/yes/no`. Unsupported devices or layouts fall back to the default path |
+| `VLLM_OMNI_SEACACHE_HISTORY_DEVICE` | `cpu` on single-GPU engines, otherwise `cuda` | Keep SeaCache residual history in pinned host memory; set `cuda` to keep it on the GPU |
+| `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` on single-GPU engines, otherwise unset | PyTorch allocator settings; expandable segments reduce memory fragmentation |
+
+A single-GPU engine is a multiview profile whose engine runs on one GPU: the
+one-GPU `layer` profile and `throughput` profiles that run one replica per GPU.
+
+The NIM sets these variables automatically for the selected profile, so most
+deployments do not need to set any of them. Override them only for advanced
+tuning; an explicitly set value always takes precedence over the profile
+default.
+
+At startup the Generator logs a `VRAM optimizations for profile <id>` block
+that lists each reduction in effect and the setting that turns it off. Check
+that block after changing any of these variables.
 
 ## Reasoner Configuration
 
