@@ -112,22 +112,17 @@ single-host recipes to distributed Ray execution. Start with the
 [step-by-step container run guide](./docs/posttrain/howto/run-posttrain.md).
 
 See the [model and algorithm support matrix](./docs/post_training/model_algorithm_support.md)
-for supported model/algorithm combinations, concrete recipes and validation scope. Support includes
-reusable training cores that may still need configuration, scripts or data wiring; available
-recipes are marked **R** and linked in the matrix.
+for supported combinations and reference recipes marked **R**. Support includes reusable training
+cores that may still need configuration, launch scripts or data wiring.
 
 For an unlisted combination, start from the closest linked example and adapt its model/data
 wiring. Many compatible models can reuse the existing objective and trainer. Follow the
 [adaptation steps and customization guides](./docs/post_training/model_algorithm_support.md#adding-or-qualifying-another-combination)
 for model inputs, datasets, objectives, rewards and simulators.
 
-The repository has two user-facing SFT paths. Use the main [Training](./docs/training.md) path for Cosmos3
-generator, reasoner, and policy recipes built on the framework's native configuration, checkpoint,
-and distributed-training stack. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Hugging
-Face-based models outside the Cosmos3 recipes. Its default conversation-SFT launcher covers Qwen
-text models, dense Qwen3.5/3.8 multimodal models, and Qwen3-VL/Qwen3-VL-MoE. Other compatible HF
-models can reuse the SFT objective and trainer with tokenizer/template/media shaping and launcher
-wiring; that default-launcher coverage is narrower than the core support shown in the matrix.
+For SFT, use the main [Training](./docs/training.md) path for Cosmos3 generator, reasoner and
+policy recipes. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Qwen and compatible
+Hugging Face models; the matrix explains model-specific training scope and adaptation needs.
 
 | Algorithm    | Description                                                         | Guide                                                                                                                   |
 | ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |

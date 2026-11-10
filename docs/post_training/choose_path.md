@@ -1,10 +1,9 @@
 # Choose a post-training path
 
 Choose your model and training signal together. Start with the
-[model and algorithm support matrix](model_algorithm_support.md) to distinguish implemented
-support (including reusable cores that need script/data wiring), concrete reference recipes and
-their validation limits. The native Cosmos3 recipes
-start from a matching Cosmos3 checkpoint; Posttrain also integrates Qwen, GR00T-N1.7 and π0.5.
+[model and algorithm support matrix](model_algorithm_support.md) for supported combinations,
+reference recipes and adaptation guidance. The native Cosmos3 recipes start from a matching
+Cosmos3 checkpoint; Posttrain also integrates Qwen, GR00T-N1.7 and π0.5.
 
 | You have                                                                   | Method       | Where                         |
 | -------------------------------------------------------------------------- | ------------ | ----------------------------- |
@@ -37,7 +36,7 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 
 ## RL
 
-Check the [algorithm-specific model combinations](model_algorithm_support.md#preference-optimization-rl-and-on-policy-distillation) before selecting an algorithm. The available model integrations are not a model-by-algorithm compatibility guarantee.
+Use the [RL and OPD recipe index](model_algorithm_support.md#preference-optimization-rl-and-on-policy-distillation) to find a starting point for your model and method.
 
 RL runs on the `cosmos_framework.posttrain` runtime in its own environment: the Framework base plus a locked dependency set. Start with the [overview](../posttrain/index.md) and the [run guide](../posttrain/howto/run-posttrain.md).
 
