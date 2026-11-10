@@ -1,175 +1,240 @@
 #!/usr/bin/env python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Convert one AgiBotWorld-Beta episode into Cosmos3-Nano-Sim-Bimanual forward-dynamics inputs.
+"""Convert one AgiBotWorld-Beta episode into schema-5 inputs for the released Cosmos3-Nano-Sim-Bimanual.
 
-Pipeline (all measured/derived from the framework and the checkpoint, no hand-tuned constants):
-  1. Read proprio_stats.h5 (state/effector/position, state/joint/position, state/head/position,
-     state/waist/position, state/robot/position, state/robot/orientation).
-  2. Build per-frame rows with the LeRobot key names the framework's dataset class expects and call
-     AgiBotWorldBetaLeRobotDataset._build_fk_action(...) -> raw [T-1, 29] backward-framewise rot6d actions
-     (head 9 | right 9 | right gripper 1 | left 9 | left gripper 1), 30 fps, gripper = next frame's open fraction.
-  3. Normalise with the checkpoint schema's affine quantile_rot transform: (raw - offset) / scale, float32, no clamp
-     (verified bit-exact against the bundled examples' action_raw/action tensors).
-  4. Cut the head_color.mp4 to frames [start, start + N + 1), center-crop 640x480 -> 640x360, write mp4 @ 30 fps.
-  5. Emit an inference JSONL row in the same shape as inputs/omni/agibot.jsonl.
+The released checkpoint takes ``normalized_unified_v1`` actions: 59 values per row, already normalised and masked by the
+source (inference does not normalise again). This tool produces them with the framework's own code, not a copy of it:
+
+  1. Read ``proprio_stats.h5`` (effector, joint, head, waist, robot position and orientation) and assemble the FK state
+     with ``agibot_semantics.assemble_embodiment_c_state``, exactly as ``LanceAgiBotDataset._build_fk_state`` does.
+  2. Robotiq episodes get the dataset's audited gripper calibration (``agibot_grippers.calibrated_gripper_fields``):
+     the observed actuator-close range 35..120 is stretched to 0..120 before the open fraction is taken.
+  3. ``agibot_semantics.build_agibot_fk_action`` -> 29-D actions in the pose convention the checkpoint pins
+     (``backward_chunk_anchored_16f``, read from the checkpoint's action_schema.json).
+  4. The AgiBot unified mapping (``LanceAgiBotDataset.get_unified_action_mapping``) scatters the 29-D action into the 59-D
+     layout: ego 0-8, right wrist 9-17, right openness 33, left wrist 34-42, left openness 58; every other slot stays zero.
+  5. Global-asinh normalisation with the statistics the checkpoint pins (path and sha256 from action_schema.json; the
+     file is checked against that hash). The two gripper slots use the metric reference: the statistics are divided by the
+     AgiBot gripper width of 0.12 m (``LanceAgiBotDataset.fully_open_gripper_width_m``), as ``LocalBimanualPipeline`` does.
+     Invalid slots are set to exactly zero afterwards.
+  6. The real clip is cut to frames [start, start + N + 1), resized 640x480 -> 640x360 with the framework's
+     ``agibot_video.resize_to_640x360`` (what training does), and written as an mp4 plus a lossless PNG of its first
+     frame (the ``vision_path`` of the inference row).
+  7. One inference row in the shape of the published ``sim_bimanual_unifiedv1_hf.jsonl`` rows.
+
+Camera masking: training rows where only the head moves are re-labelled ``camera_pose``. This tool writes one scalar
+domain, ``agibotworld``, for the whole episode (the recipe's protocol), so every row keeps its robot slots.
+
+``check_conversion_gate.py`` is the acceptance gate: it runs this module's functions against the framework's own data
+loader before any rollout.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import h5py
 import numpy as np
+import torch
 
-# Recipe copy: the station original hard-coded two local paths here. Set these two variables instead:
-#   COSMOS_FRAMEWORK_ROOT   root of the cosmos-framework checkout (the (early access) branch the recipe names)
-#   SIM_BIMANUAL_CHECKPOINT the downloaded nvidia/Cosmos3-Nano-Sim-Bimanual directory (default ./Cosmos3-Nano-Sim-Bimanual)
-if "COSMOS_FRAMEWORK_ROOT" not in os.environ:
-    sys.exit("convert_agibot_episode.py: set COSMOS_FRAMEWORK_ROOT to your cosmos-framework checkout")
-FRAMEWORK = Path(os.environ["COSMOS_FRAMEWORK_ROOT"]).expanduser().resolve()
+# COSMOS_FRAMEWORK_ROOT: the cosmos-framework checkout (default: the current directory).
+# SIM_BIMANUAL_CHECKPOINT: the downloaded nvidia/Cosmos3-Nano-Sim-Bimanual directory (default ./Cosmos3-Nano-Sim-Bimanual).
+FRAMEWORK = Path(os.environ.get("COSMOS_FRAMEWORK_ROOT", ".")).expanduser().resolve()
 CHECKPOINT = Path(os.environ.get("SIM_BIMANUAL_CHECKPOINT", "./Cosmos3-Nano-Sim-Bimanual")).expanduser().resolve()
 sys.path.insert(0, str(FRAMEWORK))
 
-from cosmos_framework.data.generator.action.datasets.agibotworld_beta_lerobot_dataset import (  # noqa: E402
-    AgiBotWorldBetaLeRobotDataset,
-    _EFFECTOR_KEY, _HEAD_STATE_KEY, _JOINT_KEY, _ROBOT_ORIENTATION_KEY, _ROBOT_POSITION_KEY, _WAIST_KEY,
+from cosmos_framework.data.generator.action import agibot_grippers  # noqa: E402
+from cosmos_framework.data.generator.action.agibot_semantics import (  # noqa: E402
+    assemble_embodiment_c_state,
+    build_agibot_fk_action,
 )
-from cosmos_framework.data.generator.action.utils.domain_utils import get_domain_id  # noqa: E402
+from cosmos_framework.data.generator.action.agibot_video import resize_to_640x360  # noqa: E402
+from cosmos_framework.data.generator.action.lance.lance_agibot_dataset import LanceAgiBotDataset  # noqa: E402
+from cosmos_framework.data.generator.action.utils.action_processing import (  # noqa: E402
+    load_action_normalization_stats,
+    resolve_action_normalization,
+)
+from cosmos_framework.data.generator.action.utils.unified_action_schema import (  # noqa: E402
+    LEFT_OPENNESS,
+    RIGHT_OPENNESS,
+    UNIFIED_ACTION_DIM,
+)
+from cosmos_framework.inference.bimanual import _invalid_action_slots  # noqa: E402
 
+SOURCE_DATASET = "agibot_world__AgiBotWorld-Beta_20260102"
+DOMAIN = "agibotworld"
 H5_KEYS = {
-    _EFFECTOR_KEY: "state/effector/position",
-    _JOINT_KEY: "state/joint/position",
-    _HEAD_STATE_KEY: "state/head/position",
-    _WAIST_KEY: "state/waist/position",
-    _ROBOT_POSITION_KEY: "state/robot/position",
-    _ROBOT_ORIENTATION_KEY: "state/robot/orientation",
+    "effector": ("state/effector/position", 2),
+    "joint": ("state/joint/position", 14),
+    "head": ("state/head/position", 2),
+    "waist": ("state/waist/position", 2),
+    "robot_position": ("state/robot/position", 3),
+    "robot_orientation": ("state/robot/orientation", 4),
 }
-EXPECTED_DIMS = {_EFFECTOR_KEY: 2, _JOINT_KEY: 14, _HEAD_STATE_KEY: 2, _WAIST_KEY: 2, _ROBOT_POSITION_KEY: 3, _ROBOT_ORIENTATION_KEY: 4}
 
 
-def load_schema_transform(schema_path: Path, embodiment: str = "agibotworld") -> tuple[np.ndarray, np.ndarray]:
+def load_release_normalizer(checkpoint: Path = CHECKPOINT):
+    """Return (normalizer, pose_convention, info) from the checkpoint's pinned action schema."""
+    schema_path = checkpoint / "cosmos3_nano_sim_bimanual_action_sources" / "action_schema.json"
     schema = json.loads(schema_path.read_text())
-    emb = schema["embodiments"][embodiment]
-    assert emb["layout"]["id"] == "agibot_backward_framewise_rot6d_v1", emb["layout"]["id"]
-    assert emb["layout"]["pose_convention"] == "backward_framewise"
-    norm = emb["normalizer"]
-    assert norm["method"] == "quantile_rot" and norm["transform"]["type"] == "affine" and not norm["transform"]["forward_clamp"]
-    assert emb["domain_id"] == get_domain_id(embodiment), (emb["domain_id"], get_domain_id(embodiment))
-    offset = np.asarray(norm["transform"]["offset"], dtype=np.float32)
-    scale = np.asarray(norm["transform"]["scale"], dtype=np.float32)
-    assert offset.shape == (29,) and scale.shape == (29,) and (scale > 0).all()
-    return offset, scale
+    assert schema["schema_version"] == 5 and schema["input_contract"]["action_space"] == "normalized_unified_v1"
+    assert schema["input_contract"]["action_dim"] == UNIFIED_ACTION_DIM
+    assert schema["embodiments"][DOMAIN]["domain_id"] == 15
+    pose_convention = schema["layout"]["pose_convention"]
+    source = schema["normalizer"]["source"]
+    stats_path = checkpoint / source["artifact_path"]
+    digest = hashlib.sha256(stats_path.read_bytes()).hexdigest()
+    assert digest == source["sha256"], f"pinned statistics hash mismatch: {digest} != {source['sha256']}"
+    stats = load_action_normalization_stats("global_asinh", stats_path=stats_path, expected_dim=UNIFIED_ACTION_DIM)
+    width = LanceAgiBotDataset.fully_open_gripper_width_m
+    q01, q99 = stats["q01"].clone(), stats["q99"].clone()
+    for slot in (RIGHT_OPENNESS, LEFT_OPENNESS):  # metric gripper reference -> fraction units of this gripper
+        q01[slot] /= width
+        q99[slot] /= width
+    normalizer = resolve_action_normalization("global_asinh", {**stats, "q01": q01, "q99": q99}, pose_convention=pose_convention)
+    info = {"stats_artifact": source["artifact_path"], "stats_sha256": digest, "pose_convention": pose_convention,
+            "gripper_width_m": width, "schema_contract_sha256": schema["contract_sha256"]}
+    return normalizer, pose_convention, info
+
+
+def gripper_hardware(task_id: int | str, override: str | None = None) -> str:
+    """Hardware of the task's grippers from the audited manifest; one label for the whole task, else an override."""
+    if override:
+        return override
+    shards = agibot_grippers._manifest()["datasets"][SOURCE_DATASET]["shards"].get(f"task_{int(task_id)}")
+    if not shards or len(shards) != 1:
+        raise SystemExit(f"task {task_id}: the audited manifest has no single gripper hardware label; pass --gripper-hardware")
+    return next(iter(shards))
 
 
 def read_states(h5_path: Path) -> dict[str, np.ndarray]:
     out = {}
     with h5py.File(h5_path, "r") as f:
-        for row_key, h5_key in H5_KEYS.items():
+        for key, (h5_key, width) in H5_KEYS.items():
             arr = np.asarray(f[h5_key][()], dtype=np.float32)
-            assert arr.ndim == 2 and arr.shape[1] == EXPECTED_DIMS[row_key], (h5_key, arr.shape)
-            out[row_key] = arr
-        out["timestamp"] = np.asarray(f["timestamp"][()]) if "timestamp" in f else None
-    lengths = {k: v.shape[0] for k, v in out.items() if k != "timestamp"}
-    assert len(set(lengths.values())) == 1, lengths
+            assert arr.ndim == 2 and arr.shape[1] == width, (h5_key, arr.shape)
+            out[key] = arr
+    assert len({v.shape[0] for v in out.values()}) == 1, {k: v.shape for k, v in out.items()}
     return out
 
 
-def raw_actions_from_states(states: dict[str, np.ndarray], start: int, num_actions: int) -> tuple[np.ndarray, dict]:
-    """Return raw [num_actions, 29] actions for frames [start, start+num_actions] via the framework's FK conversion."""
-    rows = [{k: states[k][i].tolist() for k in H5_KEYS} for i in range(start, start + num_actions + 1)]
-    stub = SimpleNamespace(_pose_convention="backward_framewise")
-    action, extras = AgiBotWorldBetaLeRobotDataset._build_fk_action(stub, rows)
-    raw = action.numpy().astype(np.float32)
-    assert raw.shape == (num_actions, 29), raw.shape
-    assert np.isfinite(raw).all(), "non-finite raw actions"
-    return raw, {k: v.numpy().tolist() for k, v in extras.items()}
+def fk_state(effector, joint, head, waist, hardware: str) -> np.ndarray:
+    """Window [T+1] of observations -> FK state, with the audited gripper calibration applied to the effector."""
+    ee = np.zeros((effector.shape[0], 20), dtype=np.float32)  # the Beta state_end_effector layout the dataset reads
+    ee[:, 0:2], ee[:, 16:18], ee[:, 18:20] = effector, head, waist
+    ee = agibot_grippers.calibrated_gripper_fields(
+        {"state_end_effector": ee}, hardware=hardware, state_layout="beta", state_width=None)["state_end_effector"]
+    return assemble_embodiment_c_state(ee[:, 0:2], joint, ee[:, 16:18], ee[:, 18:20])
 
 
-def normalise(raw: np.ndarray, offset: np.ndarray, scale: np.ndarray) -> np.ndarray:
-    norm = ((raw.astype(np.float32) - offset) / scale).astype(np.float32)
-    assert np.isfinite(norm).all(), "non-finite normalised actions"
-    return norm
+def unified_actions(states, robot_position, robot_orientation, pose_convention: str, normalizer):
+    """Observations -> (native 29-D, unified raw 59-D, normalised 59-D, validity mask [59]); all torch float32."""
+    native, extras = build_agibot_fk_action(
+        states, fk_embodiment_type="embodiment_c_gripper", pose_convention=pose_convention,
+        robot_position=robot_position, robot_orientation=robot_orientation)
+    mapping = LanceAgiBotDataset.get_unified_action_mapping(None)  # does not use self
+    raw, mask = mapping.to_unified(native)
+    normalised = torch.where(mask, normalizer.normalize_action(raw), torch.zeros_like(raw))
+    return native, raw, normalised, mask, extras
 
 
-def cut_video(src: Path, dst: Path, start: int, num_frames: int, fps: int = 30) -> dict:
-    """Frames [start, start+num_frames) of src, center-cropped to 640x360, re-encoded losslessly enough (crf 8)."""
-    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-                            "-show_entries", "stream=width,height,r_frame_rate,nb_read_frames", "-of", "json", str(src)],
-                           check=True, capture_output=True, text=True)
-    st = json.loads(probe.stdout)["streams"][0]
-    w, h, n = int(st["width"]), int(st["height"]), int(st["nb_read_frames"])
+def check_sidecar_rows(norm: np.ndarray, domain: str = DOMAIN) -> None:
+    """The release's own rule (inference/bimanual.py): slots without meaning for the domain are exactly zero."""
+    assert norm.ndim == 2 and norm.shape[1] == UNIFIED_ACTION_DIM, norm.shape
+    assert np.isfinite(norm).all(), "non-finite action"
+    invalid = list(_invalid_action_slots(domain, UNIFIED_ACTION_DIM))
+    assert not np.any(norm[:, invalid]), f"nonzero values in slots that are invalid for {domain}"
+
+
+def decode_and_resize(src: Path, start: int, num_frames: int) -> np.ndarray:
+    """Frames [start, start+num_frames) of a 640x480 clip, resized 640x480 -> 640x360 as in training: uint8 [T,360,640,3]."""
+    probe = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+         "stream=width,height,nb_read_frames", "-of", "json", str(src)], check=True, capture_output=True, text=True).stdout)["streams"][0]
+    w, h, n = int(probe["width"]), int(probe["height"]), int(probe["nb_read_frames"])
+    assert (w, h) == (640, 480), f"expected a 640x480 head camera, got {w}x{h}"
     assert start + num_frames <= n, f"video has {n} frames, need {start + num_frames}"
-    crop_h = int(round(w * 9 / 16))  # 640x480 -> 640x360
-    assert crop_h <= h, (w, h)
-    y0 = (h - crop_h) // 2
-    vf = f"select='between(n\\,{start}\\,{start + num_frames - 1})',setpts=N/{fps}/TB,crop={w}:{crop_h}:0:{y0}"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", vf, "-frames:v", str(num_frames), "-r", str(fps),
-                    "-c:v", "libx264", "-crf", "8", "-pix_fmt", "yuv420p", "-an", str(dst)], check=True)
-    probe2 = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-                             "-show_entries", "stream=width,height,r_frame_rate,nb_read_frames", "-of", "json", str(dst)],
-                            check=True, capture_output=True, text=True)
-    st2 = json.loads(probe2.stdout)["streams"][0]
-    assert int(st2["nb_read_frames"]) == num_frames, st2
-    return {"src": {"width": w, "height": h, "frames": n, "r_frame_rate": st["r_frame_rate"]},
-            "dst": {"width": int(st2["width"]), "height": int(st2["height"]), "frames": int(st2["nb_read_frames"]), "crop_y0": y0}}
+    vf = f"select='between(n\\,{start}\\,{start + num_frames - 1})',setpts=N/30/TB"
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-vf", vf, "-frames:v", str(num_frames), "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+    video = torch.from_numpy(np.frombuffer(raw, np.uint8).reshape(num_frames, h, w, 3).copy()).permute(0, 3, 1, 2)
+    out = resize_to_640x360(video)  # [T,3,360,640] uint8
+    return out.permute(0, 2, 3, 1).contiguous().numpy()
+
+
+def write_video(frames: np.ndarray, dst: Path, fps: int = 30) -> None:
+    h, w = frames.shape[1:3]
+    p = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps),
+                          "-i", "-", "-c:v", "libx264", "-crf", "8", "-pix_fmt", "yuv420p", "-an", str(dst)], stdin=subprocess.PIPE)
+    p.communicate(frames.tobytes())
+    assert p.returncode == 0, "ffmpeg encode failed"
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h5", required=True, type=Path)
+    ap.add_argument("--h5", required=True, type=Path, help="proprio_stats.h5")
     ap.add_argument("--video", required=True, type=Path, help="head_color.mp4")
     ap.add_argument("--name", required=True)
+    ap.add_argument("--task-id", required=True, type=int, help="AgiBot task id (selects the audited gripper hardware)")
+    ap.add_argument("--gripper-hardware", choices=["robotiq", "omnipicker"], default=None)
     ap.add_argument("--prompt", default="")
     ap.add_argument("--start", type=int, default=0, help="first frame index of the window")
     ap.add_argument("--num-actions", type=int, default=900, help="N action rows -> N+1 video frames")
-    ap.add_argument("--schema", type=Path, default=CHECKPOINT / "cosmos3_nano_sim_bimanual_action_sources/action_schema.json")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--guidance", type=float, default=3.0, help="as in the published rows")
+    ap.add_argument("--shift", type=float, default=5.0, help="as in the published rows")
     ap.add_argument("--skip-video", action="store_true")
     args = ap.parse_args()
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "actions").mkdir(exist_ok=True)
-    offset, scale = load_schema_transform(args.schema)
-    states = read_states(args.h5)
-    T = states[_JOINT_KEY].shape[0]
-    assert args.start + args.num_actions + 1 <= T, f"episode has {T} proprio frames, need {args.start + args.num_actions + 1}"
-    raw, extras = raw_actions_from_states(states, args.start, args.num_actions)
-    norm = normalise(raw, offset, scale)
+    (args.out / "actions").mkdir(parents=True, exist_ok=True)
+    normalizer, pose_convention, norm_info = load_release_normalizer()
+    hardware = gripper_hardware(args.task_id, args.gripper_hardware)
+    s = read_states(args.h5)
+    T = s["joint"].shape[0]
+    lo, hi = args.start, args.start + args.num_actions + 1
+    assert hi <= T, f"episode has {T} proprio frames, need {hi}"
+    states = fk_state(s["effector"][lo:hi], s["joint"][lo:hi], s["head"][lo:hi], s["waist"][lo:hi], hardware)
+    native, raw, normalised, mask, _ = unified_actions(
+        states, s["robot_position"][lo:hi], s["robot_orientation"][lo:hi], pose_convention, normalizer)
+    norm = normalised.numpy().astype(np.float32)
+    assert norm.shape == (args.num_actions, UNIFIED_ACTION_DIM), norm.shape
+    check_sidecar_rows(norm)
 
-    np.save(args.out / "actions" / f"{args.name}_raw.npy", raw)
-    action_json = args.out / "actions" / f"{args.name}.json"
-    action_json.write_text(json.dumps([[float(v) for v in row] for row in norm]))
+    np.save(args.out / "actions" / f"{args.name}_raw_unified.npy", raw.numpy())
+    (args.out / "actions" / f"{args.name}.json").write_text(json.dumps(
+        {"action_space": "normalized_unified_v1", "domain_names": DOMAIN, "action": norm.tolist()}))
 
-    info = {"name": args.name, "h5": str(args.h5), "video": str(args.video), "start": args.start, "num_actions": args.num_actions,
-            "proprio_frames": int(T), "raw_action_stats": {"min": raw.min(0).tolist(), "max": raw.max(0).tolist(), "mean": raw.mean(0).tolist()},
-            "norm_action_stats": {"min": norm.min(0).tolist(), "max": norm.max(0).tolist(), "abs_mean": np.abs(norm).mean(0).tolist(),
-                                  "frac_outside_unit": float((np.abs(norm) > 1).mean())},
-            "initial_poses": extras}
-    if states["timestamp"] is not None:
-        ts = np.asarray(states["timestamp"], dtype=np.float64).ravel()
-        if ts.size > 1:
-            dt = np.diff(ts[args.start: args.start + args.num_actions + 1])
-            info["timestamp_dt_median"] = float(np.median(dt)); info["timestamp_dt_min"] = float(dt.min()); info["timestamp_dt_max"] = float(dt.max())
-    if not args.skip_video:
-        vid = args.out / f"{args.name}_640x360.mp4"
-        info["video_cut"] = cut_video(args.video, vid, args.start, args.num_actions + 1)
-        vision_path = str(vid.resolve())
-    else:
+    info = {"name": args.name, "h5": args.h5.name, "task_id": args.task_id, "gripper_hardware": hardware, "start": args.start,
+            "num_actions": args.num_actions, "proprio_frames": int(T), "normalisation": norm_info,
+            "valid_slots": [int(i) for i in np.flatnonzero(mask.numpy())],
+            "norm_stats": {"abs_max": float(np.abs(norm).max()), "frac_outside_unit": float((np.abs(norm) > 1).mean())}}
+    if args.skip_video:
         vision_path = str(args.video.resolve())
-    row = {"model_mode": "forward_dynamics", "name": args.name, "prompt": args.prompt, "vision_path": vision_path,
-           "action_path": f"actions/{args.name}.json", "domain_name": "agibotworld", "action_condition": True,
-           "raw_action_dim": 29, "fps": 30, "num_frames": args.num_actions + 1, "seed": args.seed}
+    else:
+        frames = decode_and_resize(args.video, args.start, args.num_actions + 1)
+        clip = args.out / f"{args.name}_640x360.mp4"
+        write_video(frames, clip)
+        from PIL import Image
+        png = args.out / f"{args.name}_initial.png"
+        Image.fromarray(frames[0]).save(png)
+        info["video"] = {"frames": int(frames.shape[0]), "size": [int(frames.shape[2]), int(frames.shape[1])],
+                         "resize": "agibot_video.resize_to_640x360 (bicubic, antialias)"}
+        vision_path = str(png.resolve())
+    row = {"name": args.name, "model_mode": "forward_dynamics", "prompt": args.prompt, "vision_path": vision_path,
+           "domain_name": DOMAIN, "action_condition": True, "raw_action_dim": UNIFIED_ACTION_DIM, "resolution": "480",
+           "aspect_ratio": "16,9", "fps": 30, "num_frames": args.num_actions + 1, "action_chunk_size": args.num_actions,
+           "num_steps": 4, "guidance": args.guidance, "shift": args.shift, "seed": args.seed, "autoregressive": True,
+           "action_path": f"actions/{args.name}.json", "format_prompt_as_json": False}
     (args.out / f"{args.name}.jsonl").write_text(json.dumps(row) + "\n")
     (args.out / f"{args.name}_convert_info.json").write_text(json.dumps(info, indent=1))
-    print(json.dumps({k: info[k] for k in ("name", "proprio_frames", "num_actions")} | {"frac_outside_unit": info["norm_action_stats"]["frac_outside_unit"],
-          "timestamp_dt_median": info.get("timestamp_dt_median"), "video_cut": info.get("video_cut", {}).get("dst")}))
+    print(json.dumps({"name": args.name, "hardware": hardware, "rows": int(norm.shape[0]), "abs_max": info["norm_stats"]["abs_max"]}))
 
 
 if __name__ == "__main__":
