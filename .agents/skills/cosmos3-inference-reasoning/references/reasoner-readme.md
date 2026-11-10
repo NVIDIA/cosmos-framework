@@ -33,6 +33,8 @@ with the Cosmos Framework backend versus **~16–17 GB** with vLLM / TensorRT-LL
 Transformers / NIM — about half. Larger tiers (e.g. Cosmos3-Super) use more in
 absolute terms, but the same full-omni-vs-reasoner-only gap applies.
 
+> **Skill note (not in the source):** the Framework figures above describe a batch that also generates. For a batch whose samples are all `model_mode=reasoner`, `cosmos_framework.scripts.inference` applies `reasoner_only_overrides()` (framework main bbd4a67: `load_vision_tokenizer`, `vision_gen`, `action_gen`, `sound_gen` and `include_gen_pathway` off; those tensors are never read from the checkpoint) and logs "Reasoner-only inputs detected; generation-side modules will not be loaded"; eval 2026-11-08 measured ~19 GiB peak for Cosmos3-Nano image reasoning on one H100. The other backends still load the Reasoner weights only.
+
 ## Reasoner Prompt Guide
 
 See the [Reasoner Prompt Guide](./prompt-guide.md).
