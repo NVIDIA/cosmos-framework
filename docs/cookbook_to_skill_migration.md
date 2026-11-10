@@ -48,8 +48,8 @@ inference table in `cookbooks/cosmos3/quantization/README.md` at `references/vll
 in all three). That README is itself retired by the Quantization row of this migration; its link is re-pointed anyway so that this
 change leaves no dead link behind (the sibling row's deletion supersedes the edit). The three quantization-README links inside the
 migrated copies point at the README's current location, so every link resolves at this change's head; they go dead when the
-Quantization row merges and are re-pointed at `.agents/skills/cosmos3-inference-quantization/SKILL.md` in the follow-up round (a
-merge-order dependency between the rows). The `../cosmos3-inference-quantization/SKILL.md` pointers in `SKILL.md` resolve once that
+Quantization row merges and are re-pointed at `.agents/skills/cosmos3-quantization/SKILL.md` in the follow-up round (a
+merge-order dependency between the rows). The `../cosmos3-quantization/SKILL.md` pointers in `SKILL.md` resolve once that
 row is merged.
 
 Link targets re-pointed inside the migrated copies (the only hand edits made to the copied text; link text unchanged — the

@@ -11,7 +11,7 @@ description: >
   Cosmos3 transfer with vLLM-Omni / SGLang / TensorRT-LLM", or which transfer backend fits
   their GPU. Not for the Transfer-Auto and Sim-Transfer world-simulation models, for
   text/image-to-video without a control video (cosmos3-generate-media), for Reasoner inference,
-  or for quantizing a checkpoint yourself (cosmos3-inference-quantization). Ships the edge, blur
+  or for quantizing a checkpoint yourself (cosmos3-quantization). Ships the edge, blur
   and depth control videos, every prompt, the negative prompt and the framework specs in assets/
   and specs/; the seg and wsm control videos are fetched by a documented command.
 ---
@@ -208,7 +208,7 @@ control files are needed." "The framework also saves the intermediate control si
 
 FP8: the framework notebook and README have no FP8 route of their own; the README's pointer is "For Nano/Super static FP8 checkpoints, see the
 [quantization cookbook](../cookbooks/cosmos3/quantization/README.md) and the **Quantized Checkpoints** section in the vLLM-Omni notebooks" (Variant 3).
-To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md` (the quantization cookbook's own migration; the path resolves once that row merges).
+To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md` (the quantization cookbook's own migration; the path resolves once that row merges).
 
 ## Variant 2 — Diffusers (`Cosmos3OmniModularPipeline`, in-process)
 
@@ -264,7 +264,7 @@ FP8 (the notebook's route): "FP8 checkpoints: set `COSMOS3_DIFFUSERS_PRECISION=f
 Set the env var to `fp8` before running the helper cell's `get_pipe` (or re-run that cell after changing it)." "Do not pass `revision=fp8` on the BF16
 cards." "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint directory. Transfer preloads `transformer/` so ModelOpt 0.44 restores
 `modelopt_state.pth`." The loader (`resolve_pretrained_source`, `materialize_checkpoint_dir`, `validate_fp8_transformer`, the ModelOpt imports in
-`get_pipe`) is § 7 of the reference. To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md` (see Variant 1's note).
+`get_pipe`) is § 7 of the reference. To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md` (see Variant 1's note).
 
 ## Variant 3 — vLLM-Omni (Docker server, form `POST /v1/videos/sync`)
 
@@ -334,7 +334,7 @@ alone: the Cosmos3 vLLM-Omni pipeline must receive a materialized local checkpoi
 quantization run" — the full `add_mount` block is in the reference. Skill note: that block runs "from the **Framework checkout root**" and mounts
 `$PWD/.agents/skills` at `/workspace`; from this skill directory use `add_mount "$PWD" /workspace` so the control paths under `assets/` resolve as above.
 "Poll `curl http://localhost:8000/v1/models` until ready and verify the ID equals `SERVED_MODEL`." To quantize your own checkpoint:
-`../cosmos3-inference-quantization/SKILL.md` (see Variant 1's note).
+`../cosmos3-quantization/SKILL.md` (see Variant 1's note).
 
 ## Variant 4 — SGLang (Docker server, asynchronous `POST /v1/videos`)
 
@@ -385,7 +385,7 @@ FP8 (§ 1 "FP8"): "To serve Cosmos3-Nano in FP8, you can either: Download the pr
 Quantize a checkpoint yourself by following the quantization guide." "To serve the prebuilt checkpoint, pass its Hugging Face ID to `--model-path`" —
 `sglang serve --model-path nvidia/Cosmos3-Nano-FP8 --host 0.0.0.0`; "To serve a checkpoint you quantized yourself, pass its local directory to
 `--model-path`. If the server runs in Docker, mount that directory and use its path inside the container." To quantize your own checkpoint:
-`../cosmos3-inference-quantization/SKILL.md` (see Variant 1's note).
+`../cosmos3-quantization/SKILL.md` (see Variant 1's note).
 
 ## Variant 5 — TensorRT-LLM (`trtllm-serve`, synchronous `POST /v1/videos/sync`)
 
@@ -441,7 +441,7 @@ segmentation, and WSM always require precomputed control media. Precomputed edge
 `guardrails`, and send encoded control bytes rather than a server-local `control_path`." "`/v1/videos/generations` remains only as a deprecated alias of
 the canonical blocking `/v1/videos/sync` route."
 
-FP8: the TensorRT-LLM transfer notebook and README have no FP8 route; to quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`
+FP8: the TensorRT-LLM transfer notebook and README have no FP8 route; to quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`
 (see Variant 1's note).
 
 ## Verify the output
@@ -496,5 +496,5 @@ reference the assets.
 | `../cosmos3-generate-media/SKILL.md`                                                                  | Text-, image- and video-to-video generation without a control video on the same backends; `../cosmos3-generate-media/references/skill-notes.md` § 4 has the headless server pattern |
 | `../cookbooks/cosmos3/nim/transfer.md`, `../cosmos3-inference-nim/SKILL.md`                           | Transfer through the Cosmos3 NIM (`POST /v1/infer`, `model_mode=video2video`) — not covered by the cookbook sources of this skill                                                   |
 | `../cosmos3-nano-transfer-auto/inference/SKILL.md`, `../cosmos3-nano-sim-transfer/inference/SKILL.md` | The Transfer-Auto and Sim-Transfer world-simulation models (different checkpoints and inputs)                                                                                       |
-| `../cosmos3-inference-quantization/SKILL.md`                                                          | Making your own FP8 checkpoint (the released FP8 routes are in the variant blocks)                                                                                                  |
+| `../cosmos3-quantization/SKILL.md`                                                                    | Making your own FP8 checkpoint (the released FP8 routes are in the variant blocks)                                                                                                  |
 | `../cosmos3-skill-authoring/SKILL.md`                                                                 | Editing this skill's eval cases                                                                                                                                                     |
