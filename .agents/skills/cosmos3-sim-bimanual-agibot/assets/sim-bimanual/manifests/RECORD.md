@@ -21,12 +21,12 @@ The release's own input check (`tools/check_bimanual_mixed_inputs.py`) passed. F
 
 ## Rollouts (public command, `--num-steps=4 --seed=42 --kv-cache-inference-size=64 --attention-sink-size=8`, one GPU, no compile, no guardrails)
 
-| run | rollouts | wall incl. model load |
-| --- | -------- | --------------------- |
-| published AgiBot 001 example (seed 2026) | 1 (901 frames, 640x352, 30 fps) | 80 s |
-| matched, task 600 | 10 | 509 s |
-| matched, task 596 | 10 | 506 s |
-| action swap (cross-task) | 20 | 1070 s |
+| run                                      | rollouts                        | wall incl. model load |
+| ---------------------------------------- | ------------------------------- | --------------------- |
+| published AgiBot 001 example (seed 2026) | 1 (901 frames, 640x352, 30 fps) | 80 s                  |
+| matched, task 600                        | 10                              | 509 s                 |
+| matched, task 596                        | 10                              | 506 s                 |
+| action swap (cross-task)                 | 20                              | 1070 s                |
 
 All 40 receipts `status: success`, 901 frames each. Per rollout 48 to 62 s (mean 51.0 s, 17.6 frames per second).
 Peak torch memory 39.95 GB allocated, 47.94 GB reserved; nvidia-smi whole-GPU peak 49973 MiB.
