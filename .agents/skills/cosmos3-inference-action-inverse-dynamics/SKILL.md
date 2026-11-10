@@ -392,8 +392,9 @@ Install: "Follow the shared TensorRT-LLM setup" — the setup guide's source bui
 the eval 2026-11-08 measured). README: "Both notebooks' current multipart fields were exercised against TensorRT-LLM source revision `cc63e66daf52644f1441e117bb7ba67d20566016`.
 Follow the source pin in the shared setup." Skill note (not in the source): the install this skill runs, with or without Docker on the host, is the Route A block of `../cosmos3-generate-media/references/trt-llm.md`
 § 7.2 as ONE shell call, verbatim — the `tensorrt_llm==1.3.0rc27` wheel, its `export CUDA_HOME=…/nvidia/cu13` line (without it `trtllm-serve` exits at import: `AssertionError` in
-`_find_cuda_home()`) and the pinned checkout `bca6761` as `TRTLLM_ROOT` — verified for this action route by the eval 2026-11-08 (action 60 × 9, ~16 s per request; host NVDEC/NVENC
-driver libraries available). Never `TRTLLM_USE_PRECOMPILED=1` (§ 7.5). Edge: "its action weights are not served by this pipeline" (`../cosmos3-generate-media/references/trt-llm.md`); the notebook serves Nano.
+`_find_cuda_home()`) and the pinned checkout `bca6761` as `TRTLLM_ROOT` — verified for this action route by the eval 2026-11-08 (action 60 × 9, ~16 s per request). Prerequisite (skill note, not in the source): host NVDEC/NVENC driver libraries available — `video_reference` is decoded on NVDEC, so the driver's `libnvcuvid.so.1` and `libnvidia-encode.so.1` must load where `trtllm-serve` runs
+(check `ldconfig -p | grep -E 'nvcuvid|nvidia-encode'` lists both; a container needs `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` at creation), else the first `POST /v1/videos/sync` is HTTP 500 `Failed to load NVENC library` (eval 2026-11-08, two cells);
+remedies and the HTTP 400 mismatch signature: `references/trt-llm.md` "Skill notes" § 2. Never `TRTLLM_USE_PRECOMPILED=1` (§ 7.5). Edge: "its action weights are not served by this pipeline" (`../cosmos3-generate-media/references/trt-llm.md`); the notebook serves Nano.
 
 Serve (notebook: "run this from the TensorRT-LLM checkout. This notebook is a client; keep the server in a separate
 terminal"; skill note, not in the source: with Route A, run the block from the directory § 7.2's block ran in — its first line is the skill's — or export `TRTLLM_VENV` and `TRTLLM_ROOT` yourself):

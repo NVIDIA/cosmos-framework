@@ -266,9 +266,14 @@ for the source-build attempts.
   the server exits before `/health` is up); the SKILL.md serve block re-exports § 7.2's line for that reason, and puts the
   venv first on `PATH` so the notebook's bare `trtllm-serve` is the venv's.
 - "Host NVDEC/NVENC driver libraries available" (SKILL.md): the request's `video_reference` is decoded on the GPU
-  (PyNvVideoCodec), so the server's host or container must expose the driver's `libnvcuvid.so.1` and
-  `libnvidia-encode.so.1` — in Docker start the server container with `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` —
-  or `POST /v1/videos/sync` answers HTTP 500 `Failed to load NVENC library` (eval 2026-11-08, two cells).
+  (PyNvVideoCodec loads the driver's `libnvcuvid.so.1` and `libnvidia-encode.so.1` at the first request; `/health` answers
+  without them), so they must load where `trtllm-serve` runs — check that `ldconfig -p | grep -E 'nvcuvid|nvidia-encode'`
+  lists both before the launch. A container gets them from the host driver only with
+  `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` set when it is created (`docker run -e`, image ENV or pod spec);
+  otherwise install the driver's codec packages at the exact `nvidia-smi` version (`libnvidia-decode-<branch>` /
+  `libnvidia-encode-<branch>` from the NVIDIA CUDA apt repository, or copy the two libraries into a directory `ldconfig`
+  scans, then run `ldconfig`) and restart the server. Missing: `POST /v1/videos/sync` answers HTTP 500 `Failed to load NVENC
+  library` (eval 2026-11-08, two cells); libraries of another driver version: HTTP 400 `cuvidGetDecoderCaps returned error 100`.
 - The client cells import `IPython.display`; the SKILL.md client line adds `ipython` (and `av` for the MP4 check of "Verify
   the output") to the notebook's list and creates the client venv with `uv venv --no-config`, so the framework checkout's
   `uv` pin does not apply to it.
