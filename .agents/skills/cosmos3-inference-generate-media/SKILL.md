@@ -1,5 +1,5 @@
 ---
-name: cosmos3-generate-media
+name: cosmos3-inference-generate-media
 description: >
   Generate images, videos, and audio-synchronized videos with the Cosmos3
   audiovisual generator models (Edge / Nano / Super / Super-4Step) through any

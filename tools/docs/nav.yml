@@ -25,7 +25,7 @@ nav:
   - Inference & Deploy:
       - Run inference: inference.md
       - Prompt upsampling: prompt_upsampling.md
-      - Prompting the Reasoner: skills/cookbooks/cosmos3/reasoner/reasoner_prompt_guide.md
+      - Prompting the Reasoner: skills/cosmos3-inference-reasoning/references/prompt-guide.md
       - World simulation:
           - Transfer-Auto: inference_auto.md
           - Sim-Auto: inference_sim_auto.md
@@ -38,10 +38,10 @@ nav:
           - Backend environments: skills/cookbooks/cosmos3/README.md
           - Deploy with NIM: skills/cookbooks/cosmos3/nim/README.md # the other NIM pages are extra_pages
       - Notebooks:
-          - Generation: skills/cosmos3-generate-media/SKILL.md
+          - Generation: skills/cosmos3-inference-generate-media/SKILL.md
           - Action: skills/cookbooks/cosmos3/generator/action/README.md
           - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
-          - Reasoner: skills/cookbooks/cosmos3/reasoner/README.md
+          - Reasoner: skills/cosmos3-inference-reasoning/SKILL.md
           - Simulation: skills/cookbooks/cosmos3/simulation/README.md
   - Post-Training:
       - Choose a path: post_training/choose_path.md

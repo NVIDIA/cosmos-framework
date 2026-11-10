@@ -54,7 +54,7 @@ None of this is in deployment.md. The eval cells run unattended, from a containe
   the old single `touch` and still killed the launch with `Permission denied` (two cells, eval 2026-11-09). A launch without a passing `cache_ok` dies within a minute with
   `ManifestDownloadError … Permission denied (os error 13)`; do not drop the `-v` mount instead ("Keep the cache between runs to
   avoid repeated downloads", deployment.md; "retain a persistent writable `/opt/nim/.cache`", operations.md).
-- **Eval-verified form**: the Variant 7 block of [`../../cosmos3-inference-generate-media/SKILL.md`](../../cosmos3-generate-media/SKILL.md)
+- **Eval-verified form**: the Variant 7 block of [`../../cosmos3-inference-generate-media/SKILL.md`](../../cosmos3-inference-generate-media/SKILL.md)
   is the Generator launch with the three additions above written out as one script (its readiness loop has a 40-min deadline)
   plus that skill's guardrail switches. For the Reasoner, the command stays SKILL.md's quoted Nano Reasoner block — add only the
   three additions above around it (no `NIM_PERF_PROFILE`; no guardrail switches: "The Reasoner has no NIM-provided guardrails", operations.md).
