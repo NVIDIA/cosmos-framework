@@ -38,6 +38,7 @@ Supply these environment variables when running the relevant block:
 | `LIDAR_SMOKE`                                 | Fresh smoke output directory outside the repository                |
 | `LIDAR_RUN`                                   | Separate fresh output directory for an optional full run           |
 | `LIDAR_CANDIDATE`, `LIDAR_EXPORT_ROOT`        | Completed native checkpoint and fresh export parent for evaluation |
+| `LIDAR_SELECTED_EXPORT`                       | Selected export directory for the serving example                  |
 
 Check the selected environment before loading data or allocating model memory:
 
@@ -51,10 +52,10 @@ COSMOS_INTERNAL=0 COSMOS_TRAINING=1 \
 
 The help must list `train`, `export` and `evaluate`. Resolve missing imports
 using the setup guide before continuing. On the allocated GPU host, also perform
-the setup guide's CUDA runtime check. The [validation record](../../../../examples/lidar_tokenizer/VALIDATION.md)
-covers CPU checks and a bounded full-size four-GPU run. Qualify the bounded run
-below on the selected hardware; throughput and long-run convergence need
-separate validation.
+the setup guide's CUDA runtime check. See the
+[recipe notes and validation limits](references/recipe-notes.md) for focused CPU
+checks and qualification limits. Qualify the bounded run below on the selected
+hardware; throughput and long-run convergence need separate validation.
 
 The native [recipe](../../../../cosmos_framework/configs/tokenizer/lidar_post_training.py)
 uses 128×1800 semantic rays, circular padding to width 1808,
@@ -204,9 +205,7 @@ done
 ```
 
 Exports contain `tokenizer.pt`, `latent_stats.pt` and `config.json` with matching
-network/projection/compression metadata, weight variant and hashes. Initialize
-`LidarTokenizerV1Interface` with these explicit settings; see the
-[recipe example](../../../../examples/lidar_tokenizer/README.md).
+network/projection/compression metadata, weight variant and hashes.
 
 The native check uses FP32 posterior means, the first eight sweeps per clip,
 validity threshold 0.5 and excludes the prepended duplicate from scoring. It
@@ -215,6 +214,40 @@ reconstruction check. It does not establish long-sequence reconstruction or
 point-cloud geometry quality. Keep the same held-out recordings and protocol
 across candidates, inspect reconstructions/BEV as well as scalar metrics, and
 select the measured winner rather than assuming EMA improves every metric.
+
+After exporting and evaluating both weight variants, set `LIDAR_SELECTED_EXPORT`
+to the measured winner's export directory. Load its explicit metadata with the
+configured Python environment:
+
+```python
+import json
+import os
+from pathlib import Path
+
+import torch
+
+from cosmos_framework.model.generator.tokenizers.lidar.lidar_tokenizer_v1 import LidarTokenizerV1Interface
+
+artifact = Path(os.environ["LIDAR_SELECTED_EXPORT"])
+config = json.loads((artifact / "config.json").read_text())
+tokenizer = LidarTokenizerV1Interface(
+    vae_path=str(artifact / "tokenizer.pt"),
+    device="cuda",
+    dtype=torch.float32,
+    sample_posterior=False,
+    network_config=config["network_config"],
+    range_projection=config["range_projection"],
+    spatial_compression=config["spatial_compression"],
+    temporal_compression_factor=config["temporal_compression"],
+)
+# metric_video: [B,3,T,128,1808], range metres / unit intensity / validity.
+# latent = tokenizer.encode(metric_video)  # [B,128,T,8,113]
+# reconstruction = tokenizer.decode(latent)  # [B,3,T,128,1808]
+```
+
+The serialized checkpoint includes its learned latent moments and metric range
+bounds. Keep the accompanying configuration and statistics together. The
+ordinary inference default network configuration differs from this recipe's architecture.
 
 Updating a generator to use new tokenizer weights/statistics changes its latent
 space. Qualify or adapt that generator explicitly before replacing its bundled

@@ -36,16 +36,45 @@ reconstruction, streaming behavior, point-cloud geometry or downstream generator
 quality. Inspect reconstructions and BEV alongside scalar metrics before choosing
 a serving candidate.
 
-CPU tests can establish loss/backpropagation, scheduling, checkpoint restoration
-and serving-format behavior. They do not establish full-resolution GPU memory,
-throughput, distributed numerical stability or convergence. Before a continuation
-campaign, complete a bounded GPU train/save/resume check and evaluate the exported
-candidate on held-out measured recordings. Any hardware, precision, topology,
-batch, objective or learning-rate change needs corresponding validation.
+## Focused CPU checks
 
-See the [public validation record](../../../../../examples/lidar_tokenizer/VALIDATION.md)
-for CPU coverage, the bounded full-size four-GPU workflow check and remaining
-validation limits.
+Run the focused suite from this checkout with a configured training environment:
+
+```bash
+set -euo pipefail
+cd "${FRAMEWORK_DIR:?set the Framework checkout root}"
+PYTHONPATH="$PWD" COSMOS_INTERNAL=0 COSMOS_TRAINING=1 OMP_NUM_THREADS=2 \
+  "${TRAIN_PYTHON:?set the configured training environment Python}" \
+  -m pytest --noconftest -o addopts='' --disable-warnings \
+  cosmos_framework/model/tokenizer/lidar/post_training_test.py \
+  cosmos_framework/model/generator/tokenizers/lidar/checkpoint_test.py \
+  cosmos_framework/model/generator/tokenizers/lidar/dtypes_test.py \
+  cosmos_framework/model/generator/tokenizers/lidar/preprocessing_test.py \
+  cosmos_framework/model/generator/tokenizers/lidar/normalization_test.py \
+  cosmos_framework/model/generator/tokenizers/lidar/range_projection_test.py -q
+```
+
+`--noconftest` isolates these CPU checks from repository GPU/inference fixture
+initialization. Existing L0/CPU marks can generate warnings in that isolated mode.
+
+These checks use a small network and synthetic recordings. They exercise
+loss/backpropagation, scheduling, checkpoint restoration, strict initialization,
+EMA seeding, preprocessing and serving-format behavior. They do not establish
+full-resolution GPU memory, throughput, distributed numerical stability or
+convergence.
+
+## GPU qualification limits
+
+Before a continuation campaign, follow the
+[skill's bounded train/save/resume/evaluate procedure](../SKILL.md#resolve-smoke-and-train)
+on the selected hardware and evaluate the exported candidate on held-out measured
+recordings. Any hardware, precision, topology, batch, objective or learning-rate
+change needs corresponding validation.
+
+A bounded run qualifies the tested workflow and settings. It does not establish
+multi-node operation, replay equivalence to uninterrupted training, full-schedule
+stability, training-corpus coverage, convergence or reconstruction quality
+improvements.
 
 Keep network, projection, compression and latent-statistics metadata together
 when loading an export. A tokenizer change alters a generator's latent space;
