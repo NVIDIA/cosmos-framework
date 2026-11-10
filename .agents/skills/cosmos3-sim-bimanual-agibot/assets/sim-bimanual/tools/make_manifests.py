@@ -5,18 +5,22 @@
 # 20-row action-swap manifest and the evaluation JSONL files but do not contain the commands that produced them.
 # This script rebuilds the three from the per-episode files that tools/convert_agibot_episode.py writes, following
 # the rules the records state (see README.md, "Commands", and CHECKLIST.md). Standard library only; `frozen` needs
-# ffmpeg on PATH.
+# ffmpeg on PATH. Updated for the released checkpoint's schema-5 rows: the row's vision_path is now the lossless
+# first-frame PNG, the real 901-frame clip is <name>_640x360.mp4 next to it, and `prompts` fills the fixed prompts in.
 """
 make_manifests.py  --  build the control inputs and the evaluation manifests of the Sim-Bimanual recipe.
 
 Layout assumed (the recipe's, all paths relative to the framework root unless given):
-  heldout/inputs/<task>/<name>.jsonl            one inference row per episode (convert_agibot_episode.py)
+  heldout/inputs/<task>/<name>.jsonl            one schema-5 inference row per episode (convert_agibot_episode.py)
+  heldout/inputs/<task>/<name>_initial.png      the first frame, the row's vision_path (same tool)
   heldout/inputs/<task>/<name>_640x360.mp4      the real 901-frame clip (same tool)
-  heldout/inputs/<task>/actions/<name>.json     normalised 900x29 actions (same tool)
+  heldout/inputs/<task>/actions/<name>.json     schema-5 sidecar: 900x59 normalized_unified_v1 actions (same tool)
   outputs/cosmos3_nano_simulation_humanoid_heldout/<name>/vision.mp4          matched rollouts (run08)
   outputs/cosmos3_nano_simulation_humanoid_heldout_swap20/<swap name>/vision.mp4   swap rollouts (run10)
 
 Sub-commands
+  prompts write the fixed prompt of every episode (manifests/prompts_heldout_20.json, {name: prompt}) into its row,
+          and concatenate one JSONL per task (heldout/inputs/task<task>/task<task>.jsonl). Run it before any rollout.
   swap    write heldout/inputs/swap20/heldout_swap20.jsonl: the i-th task-600 episode (ids ascending) paired with the
           i-th task-596 episode, both directions, 20 rows. Each row keeps the frame episode's prompt and real clip
           and takes the partner's action file. Row name: swap_<frame episode>_actions_<action episode>.
@@ -66,10 +70,7 @@ def read_rows(inputs: Path) -> dict[str, list[dict]]:
 
 
 def real_clip(row: dict) -> str:
-    """The real 901-frame clip of a row: vision_path if it exists, else <dir>/<name>_640x360.mp4."""
-    p = Path(row.get("vision_path", ""))
-    if p.is_file():
-        return str(p.resolve())
+    """The real 901-frame clip of a row: <dir>/<name>_640x360.mp4 (the row's vision_path is the first-frame PNG)."""
     return str((Path(row["_dir"]) / f"{row['name']}_640x360.mp4").resolve())
 
 
@@ -80,6 +81,24 @@ def action_file(row: dict) -> str:
     return str(p.resolve())
 
 
+def cmd_prompts(a: argparse.Namespace) -> None:
+    prompts = json.loads(a.prompts.read_text())
+    rows = read_rows(a.inputs)
+    n = 0
+    for task in TASKS:
+        lines = []
+        for r in rows[task]:
+            if r["name"] not in prompts or not prompts[r["name"]].strip():
+                sys.exit(f"no prompt for {r['name']} in {a.prompts}")
+            row = {k: v for k, v in r.items() if not k.startswith("_")}
+            row["prompt"] = prompts[r["name"]].strip()
+            (Path(r["_dir"]) / f"{r['name']}.jsonl").write_text(json.dumps(row) + "\n")
+            lines.append(json.dumps(row) + "\n")
+            n += 1
+        (Path(rows[task][0]["_dir"]) / f"task{task}.jsonl").write_text("".join(lines))
+    print(f"wrote the prompts of {n} rows")
+
+
 def cmd_swap(a: argparse.Namespace) -> None:
     rows = read_rows(a.inputs)
     out_rows = []
@@ -87,7 +106,7 @@ def cmd_swap(a: argparse.Namespace) -> None:
         for frame_row, act_row in ((r600, r596), (r596, r600)):
             row = {k: v for k, v in frame_row.items() if not k.startswith("_")}
             row["name"] = f"swap_{frame_row['name']}_actions_{act_row['name']}"
-            row["vision_path"] = real_clip(frame_row)
+            row["vision_path"] = str(Path(frame_row["vision_path"]).resolve())  # the frame episode's first frame
             row["action_path"] = action_file(act_row)  # absolute, so the row works from any working directory
             out_rows.append(row)
     a.out.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +161,8 @@ def cmd_eval(a: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("prompts"); p.add_argument("--inputs", type=Path, default=Path("heldout/inputs"))
+    p.add_argument("--prompts", type=Path, default=Path("manifests/prompts_heldout_20.json")); p.set_defaults(fn=cmd_prompts)
     s = sub.add_parser("swap"); s.add_argument("--inputs", type=Path, default=Path("heldout/inputs"))
     s.add_argument("--out", type=Path, default=Path("heldout/inputs/swap20/heldout_swap20.jsonl")); s.set_defaults(fn=cmd_swap)
     f = sub.add_parser("frozen"); f.add_argument("--inputs", type=Path, default=Path("heldout/inputs"))
