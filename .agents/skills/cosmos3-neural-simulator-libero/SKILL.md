@@ -156,7 +156,7 @@ CUDA_VISIBLE_DEVICES= .venv/bin/python -m cosmos_framework.scripts.convert_model
 ls examples/checkpoints/Cosmos3-Nano
 ```
 
-Expected: a DCP directory (70 s to convert). Pass the local directory to the converter, never the catalog name.
+Expected: a DCP directory (20 to 70 s to convert). Pass the local directory to the converter, never the catalog name.
 
 ### 5. Smoke test: 10 iterations (about 20 minutes)
 
@@ -168,7 +168,7 @@ NPROC_PER_NODE=1 bash examples/launch_sft_action_fd_libero_posttrain.sh
 find $WORKDIR/runs/smoke -maxdepth 6 -name 'iter_000000010'
 ```
 
-Expected: the training log says `kept 360/379`, about 96 s per iteration, 241 GB allocated, finite loss, and
+Expected: the training log says `kept 360/379`, about 48 to 96 s per iteration (both measured on a GB300), 218 to 241 GB allocated, finite loss, and
 `iter_000000010` found. The distinct `job.name` keeps the main run from resuming from the smoke checkpoint.
 
 ### 6. Train cell 1 (FD), 1000 iterations (about 27 GB300-hours)
@@ -219,9 +219,10 @@ done
 cat $EVAL/cells_final_table.md
 ```
 
-Expected: the export is about 30 GB (7 shards, bf16 EMA weights; CPU, 69 to 79 s); the classifier reports about 93.6 %
-accuracy on held-out real frames; each `fd_rollout_eval.py` run takes 16 to 17 minutes at 35.6 GB; the table shows cell 1
-at PSNR about 20.6 dB, SSIM about 0.78, LPIPS about 0.13 against the control's 12.83 / 0.402 / 0.534, all at 160 × 320
+Expected: the export is about 30 GB (7 shards, bf16 EMA weights; CPU, 25 to 79 s); the classifier reports about 92.5 to
+93.6 % accuracy on held-out real frames; each `fd_rollout_eval.py` run takes 9 to 17 minutes at about 36 GB; the table
+shows cell 1 at PSNR about 20.6 dB, SSIM about 0.78, LPIPS about 0.13 against the control's 12.83 to 12.88 dB / 0.40 /
+0.534 (the control on two GB300 machines), all at 160 × 320
 content over the full episode. The first chunk is about 31 dB and chunk 10 stays near 19 dB where the control is at
 12 dB. With cell 2 trained, add its runs to `compare_cells.py` with `--delta cell2_iter1000 cell1_iter1000` as the
 README's "Export and evaluate" block shows (measured: −0.38 dB PSNR for FD+ID).

@@ -56,11 +56,11 @@ the cheap check of data, checkpoint and memory; it needs the same GPU as trainin
 
 ## Hardware (measured unless marked)
 
-| Configuration                  | Training                                                                                              | Evaluation                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| 1 × DGX Station GB300 (256 GB) | 102 s per iteration (113 s by iteration 1000 at the power cap), 248 GB peak, about 62 h               | three seeds concurrently in 2.7 h, 34 GB per server |
-| 4 × H100 80 GB                 | 46.1 s per iteration at 64 × 8, 65.4 GB per GPU, measured over 50 iterations; about 26 h extrapolated | not measured                                        |
-| 1 × RTX PRO 6000 (96 GB)       | does not fit                                                                                          | serves the policy (34 GB)                           |
+| Configuration                  | Training                                                                                              | Evaluation                                                 |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1 × DGX Station GB300 (256 GB) | 102 s per iteration (113 s by iteration 1000 at the power cap), 248 GB peak, about 62 h               | three seeds concurrently in 1.9 to 2.7 h, 34 GB per server |
+| 4 × H100 80 GB                 | 46.1 s per iteration at 64 × 8, 65.4 GB per GPU, measured over 50 iterations; about 26 h extrapolated | not measured                                               |
+| 1 × RTX PRO 6000 (96 GB)       | does not fit                                                                                          | serves the policy (34 GB)                                  |
 
 Smoke variant: step 4 alone (10 iterations, one checkpoint, about 25 minutes including the 9-minute tokenizer compile).
 
@@ -141,7 +141,7 @@ NPROC_PER_NODE=1 bash examples/launch_sft_action_policy_libero_10_nano.sh
 ls $RUN/checkpoints
 ```
 
-Expected: the log compiles 30 tokenizer variants (about 9 minutes), then iterations at about 102 s each with a finite
+Expected: the log compiles 30 tokenizer variants (about 9 minutes), then iterations at about 74 to 102 s each (both measured on a GB300) with a finite
 loss, peak memory about 248 GB, and `iter_000000010` listed. **If iterations take about 180 s**, the compile settings
 are not in effect: check `model.compile.enabled` and the `compile_tokenizer` callback in the resolved config before the
 long run. On 80 GB GPUs use `dataloader_train.max_samples_per_batch=64 trainer.grad_accum_iter=$((32 / NGPU))` so the
@@ -203,7 +203,7 @@ grep -h success_rate results/libero_10_iter2000_seed*/summary.json
 ```
 
 Expected: each server answers `/info` within about 14 s and uses 34 GB; each client writes `summary.json` with an
-overall success rate and one line per task; 176 to 179 episodes per hour per server. A checkpoint from iteration 1500
+overall success rate and one line per task; 176 to 270 episodes per hour per server (both measured on a GB300). A checkpoint from iteration 1500
 or later scores 90 % or more over the three seeds, and no task is at 0 %. **If a late checkpoint scores under 80 %**,
 check the evaluation setup before the model: the gripper sign (model outputs 0 to 1, the simulator expects −1 to 1),
 the 180° image orientation the client corrects, and that the server got the normalisation statistics above. The
@@ -214,7 +214,7 @@ server's `--seed` sets the sampler; the client's `--seed` alone does not give di
 | Step | Correct when                                                                                         |
 | ---- | ---------------------------------------------------------------------------------------------------- |
 | 2    | `inspect_libero10.py` prints 379 episodes, 101469 frames, 10 tasks                                   |
-| 4    | `iter_000000010` saved, finite loss, about 102 s per steady iteration, about 248 GB peak             |
+| 4    | `iter_000000010` saved, finite loss, about 74 to 102 s per steady iteration, about 248 GB peak       |
 | 5    | eight checkpoints `iter_000000250` … `iter_000002000`                                                |
 | 7    | three `summary.json`; mean over seeds ≥ 90 % at iteration ≥ 1500; per-task table with no task at 0 % |
 
