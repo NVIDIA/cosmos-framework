@@ -11,7 +11,7 @@ description: >
   Do not use it to maintain the NIM documentation itself, to serve Cosmos3
   through the Hugging Face backends (diffusers, cosmos_framework, vLLM-Omni,
   SGLang, TensorRT-LLM: cosmos3-generate-media), or to quantize a checkpoint
-  (cosmos3-inference-quantization).
+  (cosmos3-quantization).
 license: OpenMDW-1.1
 ---
 
@@ -488,11 +488,11 @@ matching page before the first command (Read this first, item 1); `references/sk
 
 ## Related skills
 
-| Skill                                        | When to use                                                                                                                                                                                                                                        |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-generate-media/SKILL.md`         | Variant 7 — the NIM Generator driven from that skill's bundled prompts and reference images (eval-verified headless launch: preflight, cache-mount check, readiness loop, i2v request), and the six Hugging Face serving paths for the same models |
-| `../cosmos3-setup/SKILL.md`                  | Framework environment, when a task also needs the Cosmos Framework checkout (the NIM itself needs only Docker, NGC access and the pinned client environment)                                                                                       |
-| `../cosmos3-env-troubleshoot/SKILL.md`       | Host-side CUDA / Docker / import failures; the NIM's own failures are in `../cookbooks/cosmos3/nim/operations.md`                                                                                                                                  |
-| `../cosmos3-inference/SKILL.md`              | Framework-native inference reference                                                                                                                                                                                                               |
-| `../cosmos3-inference-quantization/SKILL.md` | Quantizing your own checkpoint (the NIM serves its own FP8 profiles — `NIM_PRECISION=fp8` pins the precision; bring-your-own-checkpoint.md covers `NIM_MODEL_PATH`)                                                                                |
-| `../cosmos3-skill-authoring/SKILL.md`        | Editing this skill's eval cases                                                                                                                                                                                                                    |
+| Skill                                  | When to use                                                                                                                                                                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../cosmos3-generate-media/SKILL.md`   | Variant 7 — the NIM Generator driven from that skill's bundled prompts and reference images (eval-verified headless launch: preflight, cache-mount check, readiness loop, i2v request), and the six Hugging Face serving paths for the same models |
+| `../cosmos3-setup/SKILL.md`            | Framework environment, when a task also needs the Cosmos Framework checkout (the NIM itself needs only Docker, NGC access and the pinned client environment)                                                                                       |
+| `../cosmos3-env-troubleshoot/SKILL.md` | Host-side CUDA / Docker / import failures; the NIM's own failures are in `../cookbooks/cosmos3/nim/operations.md`                                                                                                                                  |
+| `../cosmos3-inference/SKILL.md`        | Framework-native inference reference                                                                                                                                                                                                               |
+| `../cosmos3-quantization/SKILL.md`     | Quantizing your own checkpoint (the NIM serves its own FP8 profiles — `NIM_PRECISION=fp8` pins the precision; bring-your-own-checkpoint.md covers `NIM_MODEL_PATH`)                                                                                |
+| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases                                                                                                                                                                                                                    |
