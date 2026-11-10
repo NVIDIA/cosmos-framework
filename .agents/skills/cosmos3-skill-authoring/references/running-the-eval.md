@@ -1,6 +1,6 @@
 # Running the skill eval: GitHub CI, local runs, and reading the dashboard
 
-Everything here was exercised on the `cosmos3-inference-generate-media` skill (PRs #324 and #327, October 2026); the
+Everything here was exercised on the `cosmos3-generate-media` skill (PRs #324 and #327, October 2026); the
 eval-derived fixes and the 44/44 result cited in § 4 come from the stacked PR #327, which merges into the #324
 branch before that branch reaches `main`. The evaluator is `cosmos-skill-eval` (Harbor-based); its image and the dashboard URL are the `image:` and
 `dashboard:` values of `.github/skill-eval.yml` (CI reads them from the repository variables `COSMOS_SKILL_EVAL_IMAGE` and
@@ -131,7 +131,7 @@ pieces are already in place (`~/cosmos-skill-eval-src`, `~/cosmos-skill-eval.env
   (`group:<id>`, `branch:<name>` or `run:<run_id>`) — or write the URL yourself (§ 3). The same values are in
   `published.json` beside `report.json` (`url`, `group_url`, `compare_url`, `s3_prefix`) for scripts.
 - Lease shortcut (generate-media only): `IMAGE=… OUT_PREFIX=loop ~/run-case.sh <backend> <case>` runs one
-  `cosmos3-inference-generate-media` cell detached with the docker-socket guard — the script names that skill directory;
+  `cosmos3-generate-media` cell detached with the docker-socket guard — the script names that skill directory;
   copy and edit it for another skill. Outputs under `~/<prefix>-<backend>-<case>/`, log
   `~/<prefix>-<backend>-<case>.log`. Run directories contain root-owned files (written from inside containers):
   remove them with `sudo rm -rf`.
