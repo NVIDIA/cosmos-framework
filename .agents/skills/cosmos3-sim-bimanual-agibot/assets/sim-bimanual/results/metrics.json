@@ -1,188 +1,40 @@
 {
- "_about": "Every number in the tables of README.md (Sim-Bimanual skill), with the record file each came from. Means are over episodes, std with ddof = 1. PSNR in dB.",
- "_record_root": "sim-bimanual run records: folder recipes/sim-bimanual of the internal records repository, machine branch of the GB300 station that ran the study; paths are relative to that folder. README.md there is the recipe-level record; assets/results_tables_*.md there are byte-identical to the copies in this folder except where CHECKLIST.md says a label was changed.",
- "_measured_on": "1x NVIDIA GB300 (DGX Station GB300, 256703 MiB, driver 595.91.07, CUDA 13.2); checkpoint 1d95a0b5b19d49a24aceebf578cf5e85db310ac0; framework 573d46507dcd91155d7f371b366da760a7a5f718; dataset 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278; 4 denoising steps, guidance 1.0, autoregressive, seed 42",
+ "_about": "Every number in the tables of the Sim-Bimanual skill README and result tables, recomputed by tools/make_results.py from the eval_fidelity.py summaries. Means over episodes, std with ddof = 1.",
+ "_record": "manifests/RECORD.md and the per-phase run record (command, revision, GPU, wall time, peak memory) of this run",
+ "_measured_on": "1x NVIDIA GB300; checkpoint a9e3adf6235f56f0082be7a96e497348c286c472; framework 1a6eff922e31e1eab259cb46b7189fc09741898f",
  "speed_and_memory": {
-  "_columns": "frames, rollouts, total wall including model load (s), generation window per rollout min/max/mean (s), frames per second (mean), peak GPU memory (MiB)",
-  "rows": [
-   {
-    "run": "bundled example, 901 frames (run01, seed 42)",
-    "frames": 901,
-    "rollouts": 4,
-    "wall_s": 543.96,
-    "wall_text": "9 min 04 s",
-    "window_s": {
-     "min": 96,
-     "max": 156,
-     "mean": 125,
-     "each": [
-      156,
-      121,
-      96,
-      128
-     ]
-    },
-    "fps": 7.19,
-    "peak_gpu_mib": 56169,
-    "peak_gpu_text": "56.2 GB",
-    "record": "runs/run01_bundled_901/RECORD.md"
-   },
-   {
-    "run": "bundled example, 61 frames (run02)",
-    "frames": 61,
-    "rollouts": 4,
-    "wall_s": 95.51,
-    "wall_text": "1 min 36 s",
-    "window_s": {
-     "min": 7,
-     "max": 19,
-     "mean": 10.8,
-     "each": [
-      9,
-      19,
-      8,
-      7
-     ]
-    },
-    "fps": 5.67,
-    "peak_gpu_mib": 36071,
-    "peak_gpu_text": "36.1 GB",
-    "record": "runs/run02_bundled_61/RECORD.md"
-   },
-   {
-    "run": "held-out, task 600 (run08)",
-    "frames": 901,
-    "rollouts": 10,
-    "wall_s": 1176.48,
-    "wall_text": "19 min 36 s",
-    "window_s": {
-     "min": 98,
-     "max": 130,
-     "mean": 111.1,
-     "each": [
-      110,
-      116,
-      112,
-      111,
-      112,
-      130,
-      104,
-      100,
-      118,
-      98
-     ]
-    },
-    "fps": 8.11,
-    "peak_gpu_mib": 56167,
-    "peak_gpu_text": "56.2 GB",
-    "record": "runs/run08_heldout_task600/RECORD.md"
-   },
-   {
-    "run": "held-out, task 596 (run08)",
-    "frames": 901,
-    "rollouts": 10,
-    "wall_s": 1006.37,
-    "wall_text": "16 min 46 s",
-    "window_s": {
-     "min": 72,
-     "max": 119,
-     "mean": 92.3,
-     "each": [
-      79,
-      73,
-      72,
-      73,
-      81,
-      96,
-      117,
-      119,
-      108,
-      105
-     ]
-    },
-    "fps": 9.76,
-    "peak_gpu_mib": 56169,
-    "peak_gpu_text": "56.2 GB",
-    "record": "runs/run08_heldout_task596/RECORD.md"
-   },
-   {
-    "run": "cross-task action swap, early four-episode probe (run09)",
-    "frames": 901,
-    "rollouts": 4,
-    "wall_s": 321.08,
-    "wall_text": "5 min 21 s",
-    "window_s": {
-     "min": 69,
-     "max": 73,
-     "mean": 70.5,
-     "each": [
-      73,
-      70,
-      69,
-      70
-     ]
-    },
-    "fps": 12.78,
-    "peak_gpu_mib": 56181,
-    "peak_gpu_text": "56.2 GB",
-    "record": "runs/run09_heldout_swap/RECORD.md"
-   },
-   {
-    "run": "cross-task action swap, all 20 episodes (run10, the control in the fidelity tables)",
-    "frames": 901,
-    "rollouts": 20,
-    "wall_s": 2292.5,
-    "wall_text": "38 min 12 s",
-    "window_s": {
-     "min": 96,
-     "max": 122,
-     "mean": 108.3,
-     "sum": 2166
-    },
-    "fps": 8.32,
-    "peak_gpu_mib": 56171,
-    "peak_gpu_text": "56.2 GB",
-    "gpu_hours_wall": 0.64,
-    "record": "runs/run10_heldout_swap20/RECORD.md"
-   },
-   {
-    "run": "all 901-frame rollouts before run10 (runs 01, 03 to 09)",
-    "frames": 901,
-    "rollouts": 39,
-    "wall_s": null,
-    "window_s": {
-     "min": 69,
-     "max": 156,
-     "mean": 103.4
-    },
-    "fps": 8.72,
-    "peak_gpu_mib": 58462,
-    "peak_gpu_text": "58.5 GB",
-    "peak_from": "runs/run06_seed0_idx11_12_16/RECORD.md (58462 MiB)",
-    "record": "README.md (Rollout speed and memory, last row)"
-   }
-  ],
-  "cost_card": {
-   "rollout_901_frames_s": {
-    "min": 69,
-    "max": 156,
-    "typical": "about 100"
-   },
-   "peak_gpu_mib_901_frame_runs": {
-    "min": 52041,
-    "max": 58462
-   },
-   "clip_61_frames_s": 11,
-   "clip_61_frames_peak_mib": 36071,
-   "scoring_per_pair_gpu_s": 14,
-   "scoring_per_pair_cpu_s": 32,
-   "record": "README.md (Cost card)"
+  "rollouts_timed": 40,
+  "generation_window_s": {
+   "min": 48.0,
+   "max": 62.0,
+   "mean": 51.05
+  },
+  "frames_per_second_mean": 17.649363369245837,
+  "peak_torch_memory_gb": {
+   "allocated": 39.95,
+   "reserved": 47.94
+  },
+  "peak_gpu_mib_nvidia_smi": {
+   "cosmos3_nano_simulation_humanoid_heldout": 49967,
+   "cosmos3_nano_simulation_humanoid_heldout_swap20": 49973
+  },
+  "wall_s_by_run": {
+   "matched_task600_10": 509,
+   "matched_task596_10": 506,
+   "swap20_20": 1070
+  },
+  "published_agibot_001_example": {
+   "name": "agibot_001 (seed 2026)",
+   "frames": 901,
+   "fps": 30,
+   "size": "640x352",
+   "wall_s_incl_load": 80,
+   "peak_gpu_mib_nvidia_smi": 43234
   }
  },
  "fidelity_checkpoint_frames_20_heldout_episodes": {
-  "_about": "Matched real actions vs two controls, the same 20 held-out AgiBotWorld-Beta episodes (10 of task 600, 10 of task 596), real video cropped to its top 352 rows.",
   "matched_actions": {
-   "PSNR_dB": {
+   "psnr": {
     "frames": [
      30,
      60,
@@ -193,36 +45,32 @@
     ],
     "values": [
      {
-      "mean": 31.08,
-      "std": 4.72
+      "mean": 24.8794,
+      "std": 2.171
      },
      {
-      "mean": 24.64,
-      "std": 5.93
+      "mean": 18.651,
+      "std": 1.9793
      },
      {
-      "mean": 19.89,
-      "std": 2.04
+      "mean": 19.4216,
+      "std": 1.8901
      },
      {
-      "mean": 17.03,
-      "std": 2.13
+      "mean": 20.1571,
+      "std": 1.938
      },
      {
-      "mean": 15.63,
-      "std": 3.07
+      "mean": 18.721,
+      "std": 2.0763
      },
      {
-      "mean": 14.74,
-      "std": 2.18
+      "mean": 17.5713,
+      "std": 2.0626
      }
-    ],
-    "record": [
-     "README.md (Fidelity table)",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "frames": [
      30,
      60,
@@ -233,36 +81,32 @@
     ],
     "values": [
      {
-      "mean": 0.927,
-      "std": 0.041
+      "mean": 0.8931,
+      "std": 0.0232
      },
      {
-      "mean": 0.853,
-      "std": 0.075
+      "mean": 0.8034,
+      "std": 0.0458
      },
      {
-      "mean": 0.801,
-      "std": 0.057
+      "mean": 0.7909,
+      "std": 0.0376
      },
      {
-      "mean": 0.743,
-      "std": 0.074
+      "mean": 0.7758,
+      "std": 0.0583
      },
      {
-      "mean": 0.667,
-      "std": 0.116
+      "mean": 0.7232,
+      "std": 0.0852
      },
      {
-      "mean": 0.621,
-      "std": 0.096
+      "mean": 0.6805,
+      "std": 0.0818
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "frames": [
      30,
      60,
@@ -273,38 +117,34 @@
     ],
     "values": [
      {
-      "mean": 0.062,
-      "std": 0.032
+      "mean": 0.0763,
+      "std": 0.0177
      },
      {
-      "mean": 0.112,
-      "std": 0.057
+      "mean": 0.165,
+      "std": 0.0404
      },
      {
-      "mean": 0.171,
-      "std": 0.049
+      "mean": 0.1661,
+      "std": 0.0327
      },
      {
-      "mean": 0.232,
-      "std": 0.067
+      "mean": 0.1584,
+      "std": 0.0378
      },
      {
-      "mean": 0.309,
-      "std": 0.098
+      "mean": 0.2025,
+      "std": 0.0405
      },
      {
-      "mean": 0.362,
-      "std": 0.068
+      "mean": 0.2606,
+      "std": 0.0527
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
   "frozen_first_frame_control": {
-   "PSNR_dB": {
+   "psnr": {
     "frames": [
      30,
      60,
@@ -315,36 +155,32 @@
     ],
     "values": [
      {
-      "mean": 33.78,
-      "std": 7.14
+      "mean": 34.5985,
+      "std": 8.1976
      },
      {
-      "mean": 23.32,
-      "std": 9.17
+      "mean": 23.1764,
+      "std": 9.2499
      },
      {
-      "mean": 16.51,
-      "std": 2.37
+      "mean": 16.7544,
+      "std": 2.3713
      },
      {
-      "mean": 15.2,
-      "std": 2.44
+      "mean": 15.4629,
+      "std": 2.2742
      },
      {
-      "mean": 13.46,
-      "std": 2.0
+      "mean": 13.7343,
+      "std": 2.1766
      },
      {
-      "mean": 12.59,
-      "std": 1.98
+      "mean": 12.8573,
+      "std": 1.9982
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "frames": [
      30,
      60,
@@ -355,78 +191,70 @@
     ],
     "values": [
      {
-      "mean": 0.945,
-      "std": 0.042
+      "mean": 0.9449,
+      "std": 0.0461
      },
      {
-      "mean": 0.848,
-      "std": 0.097
+      "mean": 0.8453,
+      "std": 0.0975
      },
      {
-      "mean": 0.791,
-      "std": 0.073
+      "mean": 0.7924,
+      "std": 0.0702
      },
      {
-      "mean": 0.734,
-      "std": 0.084
+      "mean": 0.7411,
+      "std": 0.0779
      },
      {
-      "mean": 0.643,
-      "std": 0.115
+      "mean": 0.6519,
+      "std": 0.1083
      },
      {
-      "mean": 0.597,
+      "mean": 0.604,
+      "std": 0.0898
+     }
+    ]
+   },
+   "lpips": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.042,
+      "std": 0.0406
+     },
+     {
+      "mean": 0.1359,
       "std": 0.094
+     },
+     {
+      "mean": 0.2011,
+      "std": 0.0809
+     },
+     {
+      "mean": 0.2513,
+      "std": 0.0894
+     },
+     {
+      "mean": 0.3588,
+      "std": 0.0958
+     },
+     {
+      "mean": 0.4257,
+      "std": 0.0887
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
-    ]
-   },
-   "LPIPS": {
-    "frames": [
-     30,
-     60,
-     120,
-     240,
-     480,
-     900
-    ],
-    "values": [
-     {
-      "mean": 0.045,
-      "std": 0.04
-     },
-     {
-      "mean": 0.143,
-      "std": 0.098
-     },
-     {
-      "mean": 0.21,
-      "std": 0.082
-     },
-     {
-      "mean": 0.264,
-      "std": 0.09
-     },
-     {
-      "mean": 0.375,
-      "std": 0.101
-     },
-     {
-      "mean": 0.438,
-      "std": 0.09
-     }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
-  "wrong_actions_same_20_episodes_control_run10": {
-   "PSNR_dB": {
+  "wrong_actions_same_20_episodes_control": {
+   "psnr": {
     "frames": [
      30,
      60,
@@ -437,37 +265,32 @@
     ],
     "values": [
      {
-      "mean": 27.61,
-      "std": 6.28
+      "mean": 22.8277,
+      "std": 3.5718
      },
      {
-      "mean": 17.8,
-      "std": 4.4
+      "mean": 15.9123,
+      "std": 2.095
      },
      {
-      "mean": 14.72,
-      "std": 2.13
+      "mean": 14.5543,
+      "std": 1.6685
      },
      {
-      "mean": 14.43,
-      "std": 2.07
+      "mean": 14.881,
+      "std": 2.1578
      },
      {
-      "mean": 12.49,
-      "std": 1.5
+      "mean": 13.3703,
+      "std": 1.4749
      },
      {
-      "mean": 12.07,
-      "std": 1.41
+      "mean": 12.7342,
+      "std": 1.4489
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md",
-     "runs/run10_heldout_swap20/RECORD.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "frames": [
      30,
      60,
@@ -478,36 +301,32 @@
     ],
     "values": [
      {
-      "mean": 0.902,
-      "std": 0.052
+      "mean": 0.8678,
+      "std": 0.0429
      },
      {
-      "mean": 0.769,
-      "std": 0.092
+      "mean": 0.7323,
+      "std": 0.0634
      },
      {
-      "mean": 0.716,
-      "std": 0.072
+      "mean": 0.7077,
+      "std": 0.0586
      },
      {
-      "mean": 0.674,
-      "std": 0.09
+      "mean": 0.6794,
+      "std": 0.0968
      },
      {
-      "mean": 0.57,
-      "std": 0.102
+      "mean": 0.6024,
+      "std": 0.0958
      },
      {
-      "mean": 0.52,
-      "std": 0.088
+      "mean": 0.5557,
+      "std": 0.0856
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "frames": [
      30,
      60,
@@ -518,39 +337,35 @@
     ],
     "values": [
      {
-      "mean": 0.086,
-      "std": 0.057
+      "mean": 0.1018,
+      "std": 0.0455
      },
      {
-      "mean": 0.226,
-      "std": 0.099
+      "mean": 0.2562,
+      "std": 0.0675
      },
      {
-      "mean": 0.293,
-      "std": 0.079
+      "mean": 0.2945,
+      "std": 0.0619
      },
      {
-      "mean": 0.332,
-      "std": 0.082
+      "mean": 0.3177,
+      "std": 0.0839
      },
      {
-      "mean": 0.464,
-      "std": 0.079
+      "mean": 0.4133,
+      "std": 0.0807
      },
      {
-      "mean": 0.539,
-      "std": 0.056
+      "mean": 0.4799,
+      "std": 0.0733
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md"
     ]
    }
   },
-  "per_task_matched_rows_not_in_README_table": {
+  "per_task_matched_rows": {
    "task_600_10": {
-    "PSNR_dB": {
+    "psnr": {
      "frames": [
       30,
       60,
@@ -561,33 +376,32 @@
      ],
      "values": [
       {
-       "mean": 32.96,
-       "std": 2.04
+       "mean": 25.881,
+       "std": 2.409
       },
       {
-       "mean": 26.9,
-       "std": 5.92
+       "mean": 18.7495,
+       "std": 2.3371
       },
       {
-       "mean": 20.58,
-       "std": 2.44
+       "mean": 19.3984,
+       "std": 1.8962
       },
       {
-       "mean": 18.24,
-       "std": 1.91
+       "mean": 20.594,
+       "std": 2.4874
       },
       {
-       "mean": 17.61,
-       "std": 3.03
+       "mean": 19.7065,
+       "std": 2.3828
       },
       {
-       "mean": 16.18,
-       "std": 2.11
+       "mean": 18.2947,
+       "std": 2.6397
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     },
-    "SSIM": {
+    "ssim": {
      "frames": [
       30,
       60,
@@ -598,33 +412,32 @@
      ],
      "values": [
       {
-       "mean": 0.946,
-       "std": 0.013
+       "mean": 0.8992,
+       "std": 0.0251
       },
       {
-       "mean": 0.876,
-       "std": 0.081
+       "mean": 0.8078,
+       "std": 0.0583
       },
       {
-       "mean": 0.814,
-       "std": 0.076
+       "mean": 0.7973,
+       "std": 0.0405
       },
       {
-       "mean": 0.786,
-       "std": 0.071
+       "mean": 0.8073,
+       "std": 0.0546
       },
       {
-       "mean": 0.759,
-       "std": 0.079
+       "mean": 0.7929,
+       "std": 0.0551
       },
       {
-       "mean": 0.693,
-       "std": 0.078
+       "mean": 0.7394,
+       "std": 0.0695
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     },
-    "LPIPS": {
+    "lpips": {
      "frames": [
       30,
       60,
@@ -635,35 +448,34 @@
      ],
      "values": [
       {
-       "mean": 0.054,
-       "std": 0.01
+       "mean": 0.0783,
+       "std": 0.0178
       },
       {
-       "mean": 0.086,
-       "std": 0.038
+       "mean": 0.1721,
+       "std": 0.0486
       },
       {
-       "mean": 0.153,
-       "std": 0.056
+       "mean": 0.1715,
+       "std": 0.0337
       },
       {
-       "mean": 0.195,
-       "std": 0.059
+       "mean": 0.1583,
+       "std": 0.0431
       },
       {
-       "mean": 0.244,
-       "std": 0.071
+       "mean": 0.1937,
+       "std": 0.0374
       },
       {
-       "mean": 0.32,
-       "std": 0.062
+       "mean": 0.2568,
+       "std": 0.0636
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     }
    },
    "task_596_10": {
-    "PSNR_dB": {
+    "psnr": {
      "frames": [
       30,
       60,
@@ -674,33 +486,32 @@
      ],
      "values": [
       {
-       "mean": 29.2,
-       "std": 5.92
+       "mean": 23.8777,
+       "std": 1.3846
       },
       {
-       "mean": 22.37,
-       "std": 5.28
+       "mean": 18.5525,
+       "std": 1.6694
       },
       {
-       "mean": 19.21,
-       "std": 1.34
+       "mean": 19.4448,
+       "std": 1.9862
       },
       {
-       "mean": 15.81,
-       "std": 1.63
+       "mean": 19.7203,
+       "std": 1.1481
       },
       {
-       "mean": 13.65,
-       "std": 1.41
+       "mean": 17.7354,
+       "std": 1.1247
       },
       {
-       "mean": 13.31,
-       "std": 1.02
+       "mean": 16.8479,
+       "std": 0.9223
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     },
-    "SSIM": {
+    "ssim": {
      "frames": [
       30,
       60,
@@ -711,33 +522,32 @@
      ],
      "values": [
       {
-       "mean": 0.909,
-       "std": 0.051
+       "mean": 0.887,
+       "std": 0.0205
       },
       {
-       "mean": 0.83,
-       "std": 0.064
+       "mean": 0.799,
+       "std": 0.0313
       },
       {
-       "mean": 0.788,
-       "std": 0.029
+       "mean": 0.7844,
+       "std": 0.0354
       },
       {
-       "mean": 0.7,
-       "std": 0.047
+       "mean": 0.7443,
+       "std": 0.0445
       },
       {
-       "mean": 0.575,
-       "std": 0.056
+       "mean": 0.6535,
+       "std": 0.0386
       },
       {
-       "mean": 0.548,
-       "std": 0.043
+       "mean": 0.6216,
+       "std": 0.04
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     },
-    "LPIPS": {
+    "lpips": {
      "frames": [
       30,
       60,
@@ -748,765 +558,749 @@
      ],
      "values": [
       {
-       "mean": 0.07,
-       "std": 0.044
+       "mean": 0.0743,
+       "std": 0.0184
       },
       {
-       "mean": 0.137,
-       "std": 0.064
+       "mean": 0.158,
+       "std": 0.0313
       },
       {
-       "mean": 0.188,
-       "std": 0.036
+       "mean": 0.1607,
+       "std": 0.0325
       },
       {
-       "mean": 0.269,
-       "std": 0.054
+       "mean": 0.1584,
+       "std": 0.034
       },
       {
-       "mean": 0.374,
-       "std": 0.074
+       "mean": 0.2112,
+       "std": 0.0434
       },
       {
-       "mean": 0.403,
-       "std": 0.046
+       "mean": 0.2644,
+       "std": 0.0422
       }
-     ],
-     "record": "assets/results_tables_heldout.md"
+     ]
     }
    }
   }
  },
  "fidelity_window_means": {
   "matched_20_episodes": {
-   "PSNR_dB": {
+   "psnr": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 21.08,
-      "std": 2.53
+      "mean": 21.1524,
+      "std": 1.318
      },
      {
-      "mean": 15.9,
-      "std": 2.98
+      "mean": 19.0726,
+      "std": 2.0588
      },
      {
-      "mean": 14.93,
-      "std": 2.57
+      "mean": 17.6669,
+      "std": 2.0571
      },
      {
-      "mean": 17.3,
-      "std": 2.45
+      "mean": 19.2955,
+      "std": 1.5838
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.801,
-      "std": 0.057
+      "mean": 0.8039,
+      "std": 0.0388
      },
      {
-      "mean": 0.677,
-      "std": 0.11
+      "mean": 0.7301,
+      "std": 0.0844
      },
      {
-      "mean": 0.63,
-      "std": 0.111
+      "mean": 0.6886,
+      "std": 0.0917
      },
      {
-      "mean": 0.703,
-      "std": 0.088
+      "mean": 0.7408,
+      "std": 0.0684
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.173,
-      "std": 0.051
+      "mean": 0.1483,
+      "std": 0.0271
      },
      {
-      "mean": 0.295,
-      "std": 0.092
+      "mean": 0.1961,
+      "std": 0.0398
      },
      {
-      "mean": 0.348,
-      "std": 0.081
+      "mean": 0.2488,
+      "std": 0.0487
      },
      {
-      "mean": 0.272,
-      "std": 0.071
+      "mean": 0.1978,
+      "std": 0.0349
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
   "matched_task_600_10": {
-   "PSNR_dB": {
+   "psnr": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 22.46,
-      "std": 2.35
+      "mean": 21.5487,
+      "std": 1.561
      },
      {
-      "mean": 17.96,
-      "std": 2.84
+      "mean": 20.271,
+      "std": 2.0969
      },
      {
-      "mean": 16.89,
-      "std": 2.13
+      "mean": 19.0109,
+      "std": 1.9866
      },
      {
-      "mean": 19.1,
-      "std": 2.13
+      "mean": 20.2755,
+      "std": 1.6183
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.832,
-      "std": 0.061
+      "mean": 0.8235,
+      "std": 0.0403
      },
      {
-      "mean": 0.767,
-      "std": 0.075
+      "mean": 0.7994,
+      "std": 0.0539
      },
      {
-      "mean": 0.728,
-      "std": 0.058
+      "mean": 0.7669,
+      "std": 0.0525
      },
      {
-      "mean": 0.776,
-      "std": 0.06
+      "mean": 0.7966,
+      "std": 0.0459
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.144,
-      "std": 0.043
+      "mean": 0.1489,
+      "std": 0.0306
      },
      {
-      "mean": 0.231,
-      "std": 0.066
+      "mean": 0.1859,
+      "std": 0.0388
      },
      {
-      "mean": 0.285,
-      "std": 0.053
+      "mean": 0.2286,
+      "std": 0.0476
      },
      {
-      "mean": 0.22,
-      "std": 0.051
+      "mean": 0.1878,
+      "std": 0.0357
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
   "matched_task_596_10": {
-   "PSNR_dB": {
+   "psnr": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 19.69,
-      "std": 1.94
+      "mean": 20.756,
+      "std": 0.9389
      },
      {
-      "mean": 13.83,
-      "std": 1.12
+      "mean": 17.8742,
+      "std": 1.1662
      },
      {
-      "mean": 12.96,
-      "std": 0.9
+      "mean": 16.3229,
+      "std": 0.9863
      },
      {
-      "mean": 15.49,
-      "std": 0.95
+      "mean": 18.3155,
+      "std": 0.7363
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.77,
-      "std": 0.033
+      "mean": 0.7842,
+      "std": 0.0264
      },
      {
-      "mean": 0.587,
-      "std": 0.045
+      "mean": 0.6608,
+      "std": 0.0382
      },
      {
-      "mean": 0.533,
-      "std": 0.036
+      "mean": 0.6102,
+      "std": 0.0372
      },
      {
-      "mean": 0.63,
-      "std": 0.031
+      "mean": 0.685,
+      "std": 0.0291
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.203,
-      "std": 0.041
+      "mean": 0.1476,
+      "std": 0.0246
      },
      {
-      "mean": 0.359,
-      "std": 0.065
+      "mean": 0.2063,
+      "std": 0.04
      },
      {
-      "mean": 0.41,
-      "std": 0.046
+      "mean": 0.2691,
+      "std": 0.0428
      },
      {
-      "mean": 0.324,
-      "std": 0.046
+      "mean": 0.2077,
+      "std": 0.0329
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
   "frozen_first_frame_20": {
-   "PSNR_dB": {
+   "psnr": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 19.63,
-      "std": 3.24
+      "mean": 20.0279,
+      "std": 3.2034
      },
      {
-      "mean": 13.67,
-      "std": 1.94
+      "mean": 13.9242,
+      "std": 2.0908
      },
      {
-      "mean": 12.6,
-      "std": 1.93
+      "mean": 12.9131,
+      "std": 1.9966
      },
      {
-      "mean": 15.3,
-      "std": 2.23
+      "mean": 15.6187,
+      "std": 2.2906
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.795,
-      "std": 0.067
+      "mean": 0.7985,
+      "std": 0.0636
      },
      {
-      "mean": 0.655,
-      "std": 0.108
+      "mean": 0.6623,
+      "std": 0.1028
      },
      {
-      "mean": 0.602,
-      "std": 0.109
+      "mean": 0.6102,
+      "std": 0.1054
      },
      {
-      "mean": 0.684,
-      "std": 0.088
+      "mean": 0.6903,
+      "std": 0.0839
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.203,
-      "std": 0.07
+      "mean": 0.194,
+      "std": 0.0701
      },
      {
-      "mean": 0.361,
-      "std": 0.097
+      "mean": 0.3473,
+      "std": 0.0939
      },
      {
-      "mean": 0.43,
-      "std": 0.086
+      "mean": 0.4173,
+      "std": 0.0879
      },
      {
-      "mean": 0.331,
-      "std": 0.079
+      "mean": 0.3196,
+      "std": 0.0787
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_heldout.md"
     ]
    }
   },
-  "wrong_actions_same_20_episodes_run10": {
-   "PSNR_dB": {
+  "wrong_actions_same_20_episodes": {
+   "psnr": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 17.18,
-      "std": 2.23
+      "mean": 16.8068,
+      "std": 1.7343
      },
      {
-      "mean": 12.81,
-      "std": 1.36
+      "mean": 13.6692,
+      "std": 1.3367
      },
      {
-      "mean": 11.9,
-      "std": 1.29
+      "mean": 12.545,
+      "std": 1.1699
      },
      {
-      "mean": 13.96,
-      "std": 1.32
+      "mean": 14.3384,
+      "std": 1.2002
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md"
     ]
    },
-   "SSIM": {
+   "ssim": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.734,
-      "std": 0.07
+      "mean": 0.7278,
+      "std": 0.0619
      },
      {
-      "mean": 0.584,
-      "std": 0.093
-     },
-     {
-      "mean": 0.516,
+      "mean": 0.6132,
       "std": 0.088
      },
      {
-      "mean": 0.611,
-      "std": 0.075
+      "mean": 0.5481,
+      "std": 0.085
+     },
+     {
+      "mean": 0.6296,
+      "std": 0.0723
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md"
     ]
    },
-   "LPIPS": {
+   "lpips": {
     "windows": [
-     "frames_0_299",
-     "frames_300_599",
-     "frames_600_900",
+     "0-300",
+     "300-600",
+     "600-end",
      "overall"
     ],
     "values": [
      {
-      "mean": 0.27,
-      "std": 0.069
+      "mean": 0.2672,
+      "std": 0.0579
      },
      {
-      "mean": 0.446,
-      "std": 0.07
+      "mean": 0.3981,
+      "std": 0.0663
      },
      {
-      "mean": 0.551,
-      "std": 0.054
+      "mean": 0.4945,
+      "std": 0.0543
      },
      {
-      "mean": 0.422,
-      "std": 0.055
+      "mean": 0.3867,
+      "std": 0.0481
      }
-    ],
-    "record": [
-     "README.md",
-     "assets/results_tables_swap20.md"
     ]
    }
   },
-  "swap_per_task_rows_not_in_README_table": {
+  "swap_per_task_rows": {
    "frame_episode_task_600_10": {
-    "PSNR_dB": {
+    "psnr": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 17.5,
-       "std": 2.65
+       "mean": 17.4941,
+       "std": 2.1715
       },
       {
-       "mean": 13.69,
-       "std": 1.17
+       "mean": 14.453,
+       "std": 1.2276
       },
       {
-       "mean": 12.92,
-       "std": 0.95
+       "mean": 13.246,
+       "std": 1.2159
       },
       {
-       "mean": 14.7,
-       "std": 1.4
+       "mean": 15.0624,
+       "std": 1.2804
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     },
-    "SSIM": {
+    "ssim": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 0.76,
-       "std": 0.078
+       "mean": 0.7604,
+       "std": 0.0671
       },
       {
-       "mean": 0.661,
-       "std": 0.054
+       "mean": 0.6856,
+       "std": 0.0529
       },
       {
-       "mean": 0.594,
-       "std": 0.047
+       "mean": 0.6218,
+       "std": 0.0523
       },
       {
-       "mean": 0.671,
-       "std": 0.055
+       "mean": 0.6892,
+       "std": 0.0506
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     },
-    "LPIPS": {
+    "lpips": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 0.261,
-       "std": 0.076
+       "mean": 0.2514,
+       "std": 0.0647
       },
       {
-       "mean": 0.422,
-       "std": 0.056
+       "mean": 0.383,
+       "std": 0.0585
       },
       {
-       "mean": 0.544,
-       "std": 0.054
+       "mean": 0.5028,
+       "std": 0.0599
       },
       {
-       "mean": 0.409,
-       "std": 0.053
+       "mean": 0.3792,
+       "std": 0.0497
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     }
    },
    "frame_episode_task_596_10": {
-    "PSNR_dB": {
+    "psnr": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 16.86,
-       "std": 1.8
+       "mean": 16.1195,
+       "std": 0.7643
       },
       {
-       "mean": 11.94,
-       "std": 0.91
+       "mean": 12.8854,
+       "std": 0.9485
       },
       {
-       "mean": 10.88,
-       "std": 0.52
+       "mean": 11.8441,
+       "std": 0.5649
       },
       {
-       "mean": 13.22,
-       "std": 0.72
+       "mean": 13.6144,
+       "std": 0.4866
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     },
-    "SSIM": {
+    "ssim": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 0.708,
-       "std": 0.052
+       "mean": 0.6951,
+       "std": 0.0347
       },
       {
-       "mean": 0.508,
-       "std": 0.048
+       "mean": 0.5408,
+       "std": 0.0438
       },
       {
-       "mean": 0.438,
-       "std": 0.029
+       "mean": 0.4745,
+       "std": 0.0217
       },
       {
-       "mean": 0.551,
-       "std": 0.03
+       "mean": 0.57,
+       "std": 0.0243
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     },
-    "LPIPS": {
+    "lpips": {
      "windows": [
-      "frames_0_299",
-      "frames_300_599",
-      "frames_600_900",
+      "0-300",
+      "300-600",
+      "600-end",
       "overall"
      ],
      "values": [
       {
-       "mean": 0.279,
-       "std": 0.064
+       "mean": 0.283,
+       "std": 0.0483
       },
       {
-       "mean": 0.47,
-       "std": 0.077
+       "mean": 0.4132,
+       "std": 0.0732
       },
       {
-       "mean": 0.557,
-       "std": 0.056
+       "mean": 0.4862,
+       "std": 0.0499
       },
       {
-       "mean": 0.436,
-       "std": 0.056
+       "mean": 0.3942,
+       "std": 0.0478
       }
-     ],
-     "record": "assets/results_tables_swap20.md"
+     ]
     }
    }
   }
  },
- "early_four_episode_swap_probe_run09_not_in_README_tables": {
-  "_about": "run09: four swap rollouts (815362 <-> 810449, 824031 <-> 813610). Superseded by run10 on all 20 episodes; kept because results_tables_heldout.md carries these rows.",
-  "vs_real_overall": {
-   "PSNR_dB": {
-    "mean": 14.45,
-    "std": 1.1
-   },
-   "SSIM": {
-    "mean": 0.628,
-    "std": 0.071
-   },
-   "LPIPS": {
-    "mean": 0.406,
-    "std": 0.026
-   },
-   "record": [
-    "README.md (Do different actions give different motion?)",
-    "assets/results_tables_heldout.md"
-   ]
-  },
-  "vs_matched_generation_overall": {
-   "PSNR_dB": {
-    "mean": 15.46,
-    "std": 0.79
-   },
-   "SSIM": {
-    "mean": 0.676,
-    "std": 0.025
-   },
-   "LPIPS": {
-    "mean": 0.357,
-    "std": 0.053
-   },
-   "record": "assets/results_tables_heldout.md"
-  },
-  "per_first_frame_PSNR_dB_matched_vs_swapped": {
-   "task600_ep815362": [
-    19.08,
-    14.59
-   ],
-   "task596_ep810449": [
-    16.82,
-    13.47
-   ],
-   "task600_ep824031": [
-    21.45,
-    15.94
-   ],
-   "task596_ep813610": [
-    15.08,
-    13.78
-   ],
-   "record": "README.md"
-  }
- },
  "derived_in_README_prose": {
-  "matched_minus_frozen_PSNR_dB": {
-   "frame_120": 3.38,
-   "frame_900": 2.15,
-   "how": "differences of the table means (19.89 - 16.51; 14.74 - 12.59); README rounds to +3.4 and +2.2"
-  },
-  "task_difference_overall_PSNR_dB": {
-   "value": 3.61,
-   "how": "19.10 - 15.49, README rounds to 3.6"
-  },
-  "matched_vs_frozen_paired": {
-   "mean_dB": 2.0,
-   "min_dB": -0.28,
-   "max_dB": 4.75,
-   "episodes_better": "19 of 20",
-   "record": "README.md (Does quality hold past 300 frames?)"
+  "working_run_rule": {
+   "matched_overall_psnr": 19.295486086485944,
+   "frozen_overall_psnr": 15.618704372283204,
+   "swap_overall_psnr": 14.338362598117396,
+   "matched_beats_frozen_per_frame_mean_psnr_first_frame": 88,
+   "matched_beats_frozen_at_every_frame_from": 88,
+   "matched_minus_frozen_paired_overall_psnr_db": {
+    "mean": 3.6767817142027424,
+    "min": 0.8274967880278474,
+    "max": 5.77474980259327,
+    "episodes_better": 20,
+    "of": 20
+   },
+   "matched_minus_swap_paired_overall_psnr_db": {
+    "mean": 4.957123488368549,
+    "min": 3.4562194311880194,
+    "max": 7.8846954278220345,
+    "episodes_better": 20,
+    "of": 20
+   },
+   "matched_beats_swap_overall": true,
+   "recipe_rule": "matched beats frozen from about frame 60 and beats the action swap overall; reported as measured, not tuned"
   },
   "frame0_alignment_PSNR_dB": {
-   "range": [
-    32.9,
-    36.1
+   "chosen": [
+    "top"
    ],
-   "wrong_crop_range": [
-    17,
-    24
+   "chosen_range": [
+    32.9,
+    36.73
+   ],
+   "other_crops_range": [
+    16.2,
+    23.35
    ],
    "example_task600_ep815362": {
-    "top": 35.5,
-    "center": 22.17,
-    "bottom": 19.48
-   },
-   "record": [
-    "README.md (How you know it worked)",
-    "assets/captions.md"
-   ]
-  },
-  "leakage_check_first_frame_PSNR_dB_max": {
-   "task_600": 13.0,
-   "task_596": 13.2,
-   "record": "runs/heldout/RECORD.md"
+    "top": 35.5466,
+    "center": 21.2522,
+    "bottom": 18.5669
+   }
   }
  },
+ "conversion_gate": {
+  "normalisation": {
+   "stats_artifact": "cosmos3_nano_sim_bimanual_action_sources/ae695e2c643a5626b3c3564f00705aa3a83ab0da7640549c7340db71172594b0.json",
+   "stats_sha256": "ae695e2c643a5626b3c3564f00705aa3a83ab0da7640549c7340db71172594b0",
+   "pose_convention": "backward_chunk_anchored_16f",
+   "gripper_width_m": 0.12,
+   "schema_contract_sha256": "bb69c3678ea0a17e0685933606b44d5b9fe946d1f657fa945d7b4dce321723df"
+  },
+  "A_loader_oracle": {
+   "records": [
+    {
+     "identity": "agibot_robot_example_000",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 811,
+     "camera_pose_rows": 89,
+     "pass": true
+    },
+    {
+     "identity": "agibot_robot_example_001",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 677,
+     "camera_pose_rows": 223,
+     "pass": true
+    },
+    {
+     "identity": "agibot_robot_example_002",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 771,
+     "camera_pose_rows": 129,
+     "pass": true
+    }
+   ],
+   "pass": true
+  },
+  "B_published_sidecars": {
+   "sidecars": [
+    {
+     "name": "001",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 838,
+     "camera_pose_rows": 62,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.1920928955078125e-07,
+     "openness_min": 0.009411782026290894,
+     "openness_max": 0.9999999403953552
+    },
+    {
+     "name": "006",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 871,
+     "camera_pose_rows": 29,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.7881393432617188e-07,
+     "openness_min": 0.0,
+     "openness_max": 0.9999999403953552
+    },
+    {
+     "name": "034",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 857,
+     "camera_pose_rows": 43,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.1920928955078125e-07,
+     "openness_min": 0.06431373953819275,
+     "openness_max": 0.9999999403953552
+    }
+   ],
+   "first_frame_rmse_bundle_vs_published": {
+    "001": [
+     73.4,
+     73.2,
+     76.3
+    ],
+    "006": [
+     81.7,
+     85.0,
+     95.0
+    ],
+    "034": [
+     91.4,
+     88.8,
+     95.8
+    ]
+   },
+   "pass": true
+  },
+  "pass": true
+ },
  "checkpoint_download": {
-  "size_on_disk_gb": 58,
-  "download_s": 45,
-  "record": "runs/run01_bundled_901/RECORD.md"
+  "size_on_disk_gb": 30,
+  "revision": "a9e3adf6235f56f0082be7a96e497348c286c472"
  }
 }
