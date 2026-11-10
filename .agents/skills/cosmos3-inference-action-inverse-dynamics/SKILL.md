@@ -92,7 +92,7 @@ footprints in `../cosmos3-generate-media/references/skill-notes.md` § 2 are aud
 | `nvidia/Cosmos3-Nano`  | The default of every notebook ("Runs `Cosmos3-Nano` on every line of the spec"; README: inverse dynamics "using the Cosmos3-Nano"); one GPU in every launch (`--gpus '"device=0"'`, `cosmos3-nano-1gpu.yaml`, `CUDA_VISIBLE_DEVICES=0`)                                                                                                                                                                                                                                             |
 | `nvidia/Cosmos3-Edge`  | Framework: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` or `Cosmos3-Super` before the configuration cell — nothing else changes"; vLLM-Omni: a Nano or an Edge server ("The commands are mutually exclusive"); setup guide: "Edge is the compact 4B checkpoint"; TensorRT-LLM (the generate-media notebook, `../cosmos3-generate-media/references/trt-llm.md`): "its action weights are not served by this pipeline"; the diffusers notebook's `MODEL_IDS` lists Nano and Super only |
 | `nvidia/Cosmos3-Super` | Framework `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers `MODEL_IDS["Cosmos3-Super"]`; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"; setup guide: TensorRT-LLM Super on "four GPUs"                                                                                                                                                                                                               |
-| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`                                                                                                                                                                                                            |
+| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`                                                                                                                                                                                                                      |
 
 All checkpoints are gated on Hugging Face: the notebooks require model access and `uvx hf@latest auth login` or
 `HF_TOKEN`. "Generator requires the Guardrail" (the gated `nvidia/Cosmos-1.0-Guardrail`); the README's switches to run
@@ -162,7 +162,7 @@ window; `umi_inverse`, `fractal_inverse`, `robomind_franka_inverse` are vendored
 FP8 (notebook, "Quantized Checkpoints (FP8)"): "Default loads are BF16 (`COSMOS3_DIFFUSERS_PRECISION=bf16`). Set the env var to
 `fp8` before running the helper cell's `get_pipe` … Nano and Super load `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8`.
 Do not pass `revision=fp8` on the BF16 cards." "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local Diffusers checkpoint
-directory." To quantize your own checkpoint: the `cosmos3-inference-quantization` skill (FP8 row of "Model sizes vs GPU").
+directory." To quantize your own checkpoint: the `cosmos3-quantization` skill (FP8 row of "Model sizes vs GPU").
 
 ## Variant 2 — cosmos_framework (native PyTorch, in-repo)
 
@@ -315,7 +315,7 @@ materialized local checkpoint." Its blocks run "from the **Framework checkout ro
 (`snapshot_download("nvidia/Cosmos3-Nano-FP8", local_dir=…)`, `SERVED_MODEL=nvidia/Cosmos3-Nano`; Edge likewise) and
 a launch that mounts `FP8_MODEL_DIR` (and `FP8_SOURCE_DIR`: "The source mount preserves exported symlinks") read-only,
 checks `test -f "$FP8_MODEL_DIR/hf_quant_config.json"` and serves `vllm serve "$FP8_MODEL_DIR" --served-model-name
-"$SERVED_MODEL" --no-guardrails …`. To quantize your own checkpoint: the `cosmos3-inference-quantization` skill (FP8 row above).
+"$SERVED_MODEL" --no-guardrails …`. To quantize your own checkpoint: the `cosmos3-quantization` skill (FP8 row above).
 
 ## Variant 4 — SGLang (Docker server + action generation API)
 
@@ -379,7 +379,7 @@ FP8 (notebook, "FP8"): "To serve Cosmos3-Nano in FP8, you can either: Download t
 Hugging Face: `nvidia/Cosmos3-Nano-FP8`. Quantize a checkpoint yourself …" — `sglang serve --model-path
 nvidia/Cosmos3-Nano-FP8 --host 0.0.0.0`, or `--model-path /path/to/fp8/checkpoint` ("If the server runs in Docker,
 mount that directory and use its path inside the container"). To quantize your own checkpoint: the
-`cosmos3-inference-quantization` skill (FP8 row of "Model sizes vs GPU").
+`cosmos3-quantization` skill (FP8 row of "Model sizes vs GPU").
 
 ## Variant 5 — TensorRT-LLM (trtllm-serve VisualGen + synchronous video API)
 
@@ -488,13 +488,13 @@ cosmos-framework repository; superseded by this skill (the cookbook keeps its `a
 
 ## Related skills
 
-| Skill                                                                                                            | When to use                                                                        |
-| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `../cosmos3-inference-action/SKILL.md`                                                                           | Entry: cookbook README, action definition, the sample assets                       |
-| `../cosmos3-inference-action-forward-dynamics/SKILL.md`                                                          | Forward dynamics (image + trajectory -> video)                                     |
-| `../cosmos3-inference-action-policy/SKILL.md`                                                                    | Policy (image + instruction + state -> video + action chunk)                       |
-| `../cosmos3-setup/SKILL.md`                                                                                      | Framework environment for Variant 2 and the viewer imports                         |
-| `../cosmos3-env-troubleshoot/SKILL.md`                                                                           | CUDA / import / server failures                                                    |
-| `../cosmos3-generate-media/SKILL.md`                                                                             | Audiovisual generation; shared server patterns and TensorRT-LLM install notes      |
-| `../cosmos3-inference-quantization/SKILL.md`                                                                     | Quantizing your own FP8 checkpoint (the released FP8 checkpoints: FP8 lines above) |
-| `../cosmos3-skill-authoring/SKILL.md`                                                                            | Editing this skill's eval cases                                                    |
+| Skill                                                   | When to use                                                                        |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `../cosmos3-inference-action/SKILL.md`                  | Entry: cookbook README, action definition, the sample assets                       |
+| `../cosmos3-inference-action-forward-dynamics/SKILL.md` | Forward dynamics (image + trajectory -> video)                                     |
+| `../cosmos3-inference-action-policy/SKILL.md`           | Policy (image + instruction + state -> video + action chunk)                       |
+| `../cosmos3-setup/SKILL.md`                             | Framework environment for Variant 2 and the viewer imports                         |
+| `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server failures                                                    |
+| `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation; shared server patterns and TensorRT-LLM install notes      |
+| `../cosmos3-quantization/SKILL.md`                      | Quantizing your own FP8 checkpoint (the released FP8 checkpoints: FP8 lines above) |
+| `../cosmos3-skill-authoring/SKILL.md`                   | Editing this skill's eval cases                                                    |

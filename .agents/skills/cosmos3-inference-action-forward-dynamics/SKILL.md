@@ -10,7 +10,7 @@ description: >
   Action row: the cookbook README and every sample asset live in the entry skill ../cosmos3-inference-action.
   Not for inverse dynamics (video to actions: the inverse-dynamics block), policy (the policy block),
   text/image-to-video without actions (cosmos3-generate-media) or quantizing checkpoints
-  (cosmos3-inference-quantization).
+  (cosmos3-quantization).
 ---
 
 # Cosmos3 Action: Forward Dynamics
@@ -245,7 +245,7 @@ hand pose chain 16-action chunks with `run_rollout` (DROID and hand pose need `C
 FP8: "set `COSMOS3_DIFFUSERS_PRECISION=fp8` before loading. Nano and Super use the dedicated Hub repos
 `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8`. Use-case cells stay the same." "Optional: point `COSMOS3_FP8_MODEL_PATH` at a local
 Diffusers checkpoint directory." The loader (`resolve_pretrained_source`, `ensure_modelopt_state`, `validate_fp8_transformer`) is in § 7; the
-notebook's BF16-card and W8A16/W8A8 schedule notes are in the reference's "Quantized Checkpoints (FP8)" section. To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`.
+notebook's BF16-card and W8A16/W8A8 schedule notes are in the reference's "Quantized Checkpoints (FP8)" section. To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`.
 
 ## Variant 3 — TensorRT-LLM (`trtllm-serve`, `POST /v1/videos/sync`)
 
@@ -384,7 +384,7 @@ directory. Or use an output from the quantization walkthrough. Serve that direct
 `--served-model-name` so the request cells keep their existing model IDs. Do not select FP8 with `--revision` alone: the
 Cosmos3 vLLM-Omni pipeline must receive a materialized local checkpoint." The reference holds the download blocks (`snapshot_download`
 into `FP8_MODEL_DIR`, with `SERVED_MODEL`) and "Serve the selected checkpoint" (mounts `HF_HOME`, the model directory and `FP8_SOURCE_DIR` — "The source mount
-preserves exported symlinks" — then `vllm serve "$FP8_MODEL_DIR" --served-model-name "$SERVED_MODEL" --no-guardrails --omni ...`; "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed."). To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md`.
+preserves exported symlinks" — then `vllm serve "$FP8_MODEL_DIR" --served-model-name "$SERVED_MODEL" --no-guardrails --omni ...`; "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed."). To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`.
 
 ## Variant 5 — SGLang (Docker server, `POST /v1/videos`)
 
@@ -448,7 +448,7 @@ The Robotics cell rounds `size` down to multiples of 16. Poll and download as in
 Robotics: "Before running this LeRobot section, PyAV may need to be reinstalled as `av==15.1.0`."
 
 FP8 ("FP8"): "To serve Cosmos3-Nano in FP8, you can either: Download the prebuilt FP8 checkpoint from Hugging Face: `nvidia/Cosmos3-Nano-FP8`.
-Quantize a checkpoint yourself by following the quantization guide." (`../cosmos3-inference-quantization/SKILL.md`) — `sglang serve --model-path nvidia/Cosmos3-Nano-FP8 --host 0.0.0.0`;
+Quantize a checkpoint yourself by following the quantization guide." (`../cosmos3-quantization/SKILL.md`) — `sglang serve --model-path nvidia/Cosmos3-Nano-FP8 --host 0.0.0.0`;
 "To serve a checkpoint you quantized yourself, pass its local directory to `--model-path`. If the server runs in Docker, mount that directory and use its path inside the container."
 
 ## Verify the output
@@ -494,4 +494,4 @@ Origin: the forward-dynamics notebooks of `.agents/skills/cookbooks/cosmos3/gene
 | `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv for Variant 1 and the LeRobot readers        |
 | `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server failures                                          |
 | `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation on the same backends; measured server notes       |
-| `../cosmos3-inference-quantization/SKILL.md`            | Making your own FP8 checkpoint for the FP8 routes of Variants 2, 4 and 5 |
+| `../cosmos3-quantization/SKILL.md`                      | Making your own FP8 checkpoint for the FP8 routes of Variants 2, 4 and 5 |

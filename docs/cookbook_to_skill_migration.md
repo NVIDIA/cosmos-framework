@@ -145,6 +145,6 @@ sibling rows retire — the Reasoner TensorRT-Edge-LLM notebook (`action-readme.
 quantization README (`action-readme.md`, the forward- and inverse-dynamics `sglang.md` and `vllm-omni.md`) — point at those
 pages' current location, so every link resolves at this change's head; they go dead when the sibling row merges and are
 re-pointed at that row's skill (`.agents/skills/cosmos3-inference-reasoning/references/trt-edge-llm.md`,
-`.agents/skills/cosmos3-inference-quantization/SKILL.md`) in the follow-up round (a merge-order dependency between the rows).
-Every "quantize your own checkpoint" pointer of the four `SKILL.md` files is the path `../cosmos3-inference-quantization/SKILL.md`,
+`.agents/skills/cosmos3-quantization/SKILL.md`) in the follow-up round (a merge-order dependency between the rows).
+Every "quantize your own checkpoint" pointer of the four `SKILL.md` files is the path `../cosmos3-quantization/SKILL.md`,
 which resolves once the Quantization row is merged.

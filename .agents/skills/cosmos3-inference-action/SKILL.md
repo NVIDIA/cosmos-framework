@@ -10,7 +10,7 @@ description: >
   assets", "what is the Cosmos3 action representation", "predict future frames from a trajectory", "recover the
   ego-motion from a video" or "run the Cosmos3 DROID policy", before handing off. Not for audiovisual generation
   without actions (cosmos3-generate-media), post-training (finetune cookbook) or quantizing checkpoints
-  (cosmos3-inference-quantization).
+  (cosmos3-quantization).
 ---
 
 # Cosmos3 Action Inference: Entry
@@ -70,7 +70,7 @@ Before the first command of any block, including a single AV smoke run:
 - Not for audiovisual generation without actions (`../cosmos3-generate-media/SKILL.md`), environment failures
   (`../cosmos3-env-troubleshoot/SKILL.md`), post-training (README "Post-Train" pointer:
   `../cookbooks/cosmos3/generator/action/finetune/README.md`) or quantizing a checkpoint (the
-  `cosmos3-inference-quantization` skill, see "FP8 checkpoints")
+  `cosmos3-quantization` skill, see "FP8 checkpoints")
 
 ## Routing: task and backend -> block skill
 
@@ -141,7 +141,7 @@ surfaced as the FP8 line of these block variants (read the variant's reference s
 | Forward dynamics 5, inverse dynamics 4 (SGLang)       | "FP8"                         | "To serve the prebuilt checkpoint, pass its Hugging Face ID to `--model-path`" (the notebook's `sglang serve` block with `--model-path nvidia/Cosmos3-Nano-FP8`); "To serve a checkpoint you quantized yourself, pass its local directory to `--model-path`. If the server runs in Docker, mount that directory and use its path inside the container."                                      |
 | Policy (all variants), TensorRT-LLM, cosmos_framework | none                          | no FP8 section in these notebooks; the README's pointer above is the row's only FP8 statement for them                                                                                                                                                                                                                                                                                       |
 
-To quantize your own checkpoint: `../cosmos3-inference-quantization/SKILL.md` (the quantization cookbook's own migration;
+To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md` (the quantization cookbook's own migration;
 the path resolves once that row merges — the README copy and the notebooks' FP8 sections link the cookbook README). Skill note
 (not in the source): the quantization steps are not copied into the Action skills; one canonical copy, linked.
 
@@ -463,5 +463,5 @@ vendored here (the cookbook keeps its `assets` directory as LFS and its `finetun
 | `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server / container failures                                                    |
 | `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation on the same backends; headless-server pattern and measured server notes |
 | `../cosmos3-inference-nim/SKILL.md`                     | Operating the Cosmos3 NIM, which serves the action modes through `POST /v1/infer`              |
-| `../cosmos3-inference-quantization/SKILL.md`            | Quantizing your own FP8 checkpoint (the released FP8 routes: "FP8 checkpoints" above)          |
+| `../cosmos3-quantization/SKILL.md`                      | Quantizing your own FP8 checkpoint (the released FP8 routes: "FP8 checkpoints" above)          |
 | `../cosmos3-skill-authoring/SKILL.md`                   | Editing the blocks' eval cases and running the eval                                            |
