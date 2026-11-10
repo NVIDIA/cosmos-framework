@@ -160,7 +160,7 @@ echo "Cosmos3-Super starting in container '$CONTAINER' — run the readiness cel
 Standalone vLLM uses ModelOpt FP8 for reasoner inference; the generator's
 diffusion-step activation policy does not apply. Download a published Edge or Super
 FP8 checkpoint to a local directory, or set `FP8_MODEL_DIR` to the local
-`edge-fp8` or `super-fp8` output from the [quantization cookbook](../../cookbooks/cosmos3/quantization/README.md)
+`edge-fp8` or `super-fp8` output from the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and skip the download. Choose one tier below. The launches preserve the original
 served model ID. Edge FP8 uses `vllm/vllm-openai:nightly`; Super FP8 uses
 `vllm/vllm-openai:v0.31.0`. Validate the image on your runtime before relying on it

@@ -34,7 +34,7 @@ OTHER_SHA = "b" * 40
 BASE_SHA = "c" * 40
 DASH = "http://dash.test"
 CANARY = rm.CANARY_SKILL  # cosmos3-ci-smoke: lives in .github/scripts/skill_eval, never under .agents/skills
-SKILL = "cosmos3-generate-media"  # a shipped skill under .agents/skills
+SKILL = "cosmos3-inference-generate-media"  # a shipped skill under .agents/skills
 BACKENDS = ["claude", "codex", "cursor", "opencode"]
 FIXED_NOW = datetime(2026, 10, 18, 7, 0, 0, tzinfo=timezone.utc)
 
@@ -719,7 +719,7 @@ def test_detect_changed_skills_prefers_the_api_and_falls_back_to_git(git_checkou
 
     github.compare_files = None  # API path fails -> `git diff --name-only <base>...HEAD` in the checkout
     # alphabetical; the deleted skill is a candidate too; cosmos3-accent only changed a non-ASCII-named asset
-    expected = ["cosmos3-accent", SKILL, "cosmos3-gone", "cosmos3-inference"]
+    expected = sorted(["cosmos3-accent", SKILL, "cosmos3-gone", "cosmos3-inference"])
     assert rm.detect_changed_skills(info, root, api) == expected
     assert rm.detect_changed_skills(info, root, None) == expected  # --no-github: git only
 

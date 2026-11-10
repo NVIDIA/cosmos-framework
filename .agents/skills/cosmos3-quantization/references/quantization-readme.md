@@ -1,5 +1,7 @@
 # Cosmos3 FP8 Quantization Examples
 
+> **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/quantization/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only relative link targets were re-pointed so that they resolve from this directory (the three notebooks this migration moved, and the cookbook and skill files whose relative path changed when the README moved), each one listed in the migration record.
+
 Convert the Cosmos3 checkpoints to static-scale **FP8** with NVIDIA TensorRT Model
 Optimizer (ModelOpt). FP8 reduces weight storage and can accelerate
 inference on NVIDIA GPUs with FP8 tensor cores; total memory also includes
@@ -13,11 +15,11 @@ These notebooks are walkthroughs of that API.
 
 ## What's in this folder
 
-| Path | Role |
-| --- | --- |
-| [quantize_cosmos3.ipynb](./quantize_cosmos3.ipynb) | Edge, Nano, and Super video-model quantization. |
-| [quantize_super_text2image.ipynb](./quantize_super_text2image.ipynb) | Base and distilled Text-to-Image quantization. |
-| [quantize_super_image2video.ipynb](./quantize_super_image2video.ipynb) | Base and distilled Image-to-Video quantization. |
+| Path                                                              | Role                                            |
+| ----------------------------------------------------------------- | ----------------------------------------------- |
+| [quantize_cosmos3.ipynb](quantize-cosmos3.md)                     | Edge, Nano, and Super video-model quantization. |
+| [quantize_super_text2image.ipynb](quantize-super-text2image.md)   | Base and distilled Text-to-Image quantization.  |
+| [quantize_super_image2video.ipynb](quantize-super-image2video.md) | Base and distilled Image-to-Video quantization. |
 
 The whole pipeline for one checkpoint is a single call:
 
@@ -58,7 +60,7 @@ with the chosen runtime image.
 
 Use a Linux machine with an NVIDIA GPU and Hugging Face model access
 (`uvx hf@latest auth login` or `HF_TOKEN`). Follow the
-[Framework environment setup](../README.md#cosmos-framework), including system
+[Framework environment setup](../../cookbooks/cosmos3/README.md#cosmos-framework), including system
 libraries. Use the local checkout, not a separate PyPI or Git installation:
 
 ```bash
@@ -106,7 +108,7 @@ DEMO=1 "$COSMOS3_QUANTIZE_VENV/bin/jupyter" nbconvert --to notebook --execute --
 
 ### Notebook walkthrough
 
-[`quantize_cosmos3.ipynb`](./quantize_cosmos3.ipynb) walks
+[`quantize_cosmos3.ipynb`](quantize-cosmos3.md) walks
 through prerequisites, environment setup, and then quantizes Edge, Nano, and Super in separate
 sections, printing a short summary of each FP8 checkpoint it writes.
 
@@ -128,7 +130,7 @@ DEMO=1 "$COSMOS3_QUANTIZE_VENV/bin/jupyter" nbconvert --to notebook --execute --
 
 ### Notebook walkthrough
 
-[`quantize_super_text2image.ipynb`](./quantize_super_text2image.ipynb)
+[`quantize_super_text2image.ipynb`](quantize-super-text2image.md)
 quantizes the base model in one section, then the distilled model in a second section that
 explains the sampler difference.
 
@@ -152,17 +154,17 @@ DEMO=1 I2V_COND_DIR=/path/to/cond_images \
 
 ### Notebook walkthrough
 
-[`quantize_super_image2video.ipynb`](./quantize_super_image2video.ipynb)
+[`quantize_super_image2video.ipynb`](quantize-super-image2video.md)
 sets up conditioning images, then quantizes the base and distilled models in separate
 sections.
 
 ## Demo vs. full runs
 
-| | `DEMO=1` (default) | `DEMO=0` (full calibration) |
-| --- | --- | --- |
-| Calibration prompts | 1 | 8 |
-| Shape | small (e.g. 480×720, 29 frames) | production (720×1280, up to 189 frames) |
-| Purpose | quick end-to-end check | calibrate with more prompts and a larger shape |
+|                     | `DEMO=1` (default)              | `DEMO=0` (full calibration)                    |
+| ------------------- | ------------------------------- | ---------------------------------------------- |
+| Calibration prompts | 1                               | 8                                              |
+| Shape               | small (e.g. 480×720, 29 frames) | production (720×1280, up to 189 frames)        |
+| Purpose             | quick end-to-end check          | calibrate with more prompts and a larger shape |
 
 The FP8 **weights** are identical either way — they are computed directly from the bf16
 weights (`weight_scale = max|W| / 448`) and do not depend on calibration. DEMO only affects
@@ -215,15 +217,15 @@ vllm serve cosmos3-nano-fp8 --served-model-name nvidia/Cosmos3-Nano ...
 vLLM / vLLM-Omni notebook has a **Quantized Checkpoints** section that downloads the FP8
 weights and serves them from a local directory:
 
-| Cookbook | Notebook(s) |
-| --- | --- |
-| Generator · Audiovisual | [`cosmos3-generate-media` · vLLM-Omni](../../../cosmos3-generate-media/references/vllm-omni.md#quantized-checkpoints) |
-| Generator · Action | [`run_fd_with_vllm_omni.ipynb`](../generator/action/run_fd_with_vllm_omni.ipynb), [`run_id_with_vllm_omni.ipynb`](../generator/action/run_id_with_vllm_omni.ipynb) |
-| Generator · Transfer | [`run_video_transfer_with_vllm_omni.ipynb`](../generator/transfer/run_video_transfer_with_vllm_omni.ipynb) |
-| Reasoner | [`run_with_vllm.ipynb`](../../../cosmos3-inference-reasoning/references/vllm.md) |
+| Cookbook                | Notebook(s)                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Generator · Audiovisual | [`cosmos3-inference-generate-media` · vLLM-Omni](../../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints)                                                                       |
+| Generator · Action      | [`run_fd_with_vllm_omni.ipynb`](../../cookbooks/cosmos3/generator/action/run_fd_with_vllm_omni.ipynb), [`run_id_with_vllm_omni.ipynb`](../../cookbooks/cosmos3/generator/action/run_id_with_vllm_omni.ipynb) |
+| Generator · Transfer    | [`run_video_transfer_with_vllm_omni.ipynb`](../../cookbooks/cosmos3/generator/transfer/run_video_transfer_with_vllm_omni.ipynb)                                                                              |
+| Reasoner                | [`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md)                                                                                                                                |
 
-See the shared [Cosmos3 cookbooks environment setup](../README.md) for server install and
-launch details ([vLLM](../README.md#vllm), [vLLM-Omni](../README.md#vllm-omni)).
+See the shared [Cosmos3 cookbooks environment setup](../../cookbooks/cosmos3/README.md) for server install and
+launch details ([vLLM](../../cookbooks/cosmos3/README.md#vllm), [vLLM-Omni](../../cookbooks/cosmos3/README.md#vllm-omni)).
 
 For the four specialized Super checkpoints, use the locally quantized outputs;
 this guide does not assume published `fp8` revisions. The audiovisual notebook
