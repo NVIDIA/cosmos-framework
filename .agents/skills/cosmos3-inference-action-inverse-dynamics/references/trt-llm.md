@@ -267,7 +267,7 @@ for the source-build attempts.
   venv first on `PATH` so the notebook's bare `trtllm-serve` is the venv's.
 - "Host NVDEC/NVENC driver libraries available" (SKILL.md): the request's `video_reference` is decoded on the GPU
   (PyNvVideoCodec loads the driver's `libnvcuvid.so.1` and `libnvidia-encode.so.1` at the first request; `/health` answers
-  without them), so they must load where `trtllm-serve` runs — check that `ldconfig -p | grep -E 'nvcuvid|nvidia-encode'`
+  without them), so they must load where `trtllm-serve` runs — check that `/sbin/ldconfig -p | grep -E 'nvcuvid|nvidia-encode'`
   lists both before the launch. A container gets them from the host driver only with
   `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` set when it is created (`docker run -e`, image ENV or pod spec);
   otherwise install the driver's codec packages at the exact `nvidia-smi` version (`libnvidia-decode-<branch>` /
