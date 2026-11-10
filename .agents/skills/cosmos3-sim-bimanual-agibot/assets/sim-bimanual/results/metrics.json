@@ -1,7 +1,7 @@
 {
  "_about": "Every number in the tables of the Sim-Bimanual skill README and result tables, recomputed by tools/make_results.py from the eval_fidelity.py summaries. Means over episodes, std with ddof = 1.",
  "_record": "manifests/RECORD.md and the per-phase run record (command, revision, GPU, wall time, peak memory) of this run",
- "_measured_on": "1x NVIDIA GB300; checkpoint a9e3adf6235f56f0082be7a96e497348c286c472; framework 1a6eff922e31e1eab259cb46b7189fc09741898f",
+ "_measured_on": "1x NVIDIA GB300; checkpoint a9e3adf6235f56f0082be7a96e497348c286c472; framework 86e3528d791446ac9928bfff8432951b23d8bf47 (main; inference code unchanged)",
  "speed_and_memory": {
   "rollouts_timed": 40,
   "generation_window_s": {

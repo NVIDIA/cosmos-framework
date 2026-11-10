@@ -1,220 +1,119 @@
 # Tools of the Cosmos3-Nano-Sim-Bimanual recipe
 
-Copies of the four scripts the recipe ran from its run directory on the GB300 station (sources named in the recipe's run records, "Document information"), published to the records on 2026-10-13 without change, plus one new helper. **Recipe copy:** this folder is that publication with one edit, in `convert_agibot_episode.py` only: the two hard-coded local paths (framework root and checkpoint directory) are replaced by the environment variables `COSMOS_FRAMEWORK_ROOT` (required) and `SIM_BIMANUAL_CHECKPOINT` (default `./Cosmos3-Nano-Sim-Bimanual`, the download directory in the recipe). The other three published files are byte-identical to the record. `make_manifests.py` is a reconstruction written for this skill folder (its first lines say so): it builds the frozen-first-frame clips, the 20-row action-swap manifest and the evaluation JSONL files that the records describe but whose generating commands were not published.
+The scripts the recipe runs (`../../../README.md`, "Commands"). Run them from the framework root with the venv of
+`docs/inference_bimanual.md` active, set up with the `train` extra:
+`uvx --from 'uv==0.11.29' uv sync --locked --group cu130 --extra guardrail --extra train`. The `train` extra brings
+`mujoco` 3.10.0 (the AgiBot forward kinematics) and the data loader the conversion gate compares against.
+`convert_agibot_episode.py` and `make_manifests.py frozen` also need `ffmpeg` and `ffprobe` on `PATH`.
 
-Hashes and line counts of the files in this folder (computed 2026-11-09 from the folder itself, after the schema-5 port):
+Two environment variables are read, by `convert_agibot_episode.py` and `check_conversion_gate.py` only:
+`COSMOS_FRAMEWORK_ROOT` (default `.`; put first on `sys.path`) and `SIM_BIMANUAL_CHECKPOINT` (default
+`./Cosmos3-Nano-Sim-Bimanual`; the downloaded checkpoint, whose `action_schema.json` pins the pose convention and the
+normalisation statistics). Every path argument resolves against the working directory.
 
-| script                      | role in the pipeline (`../../../README.md`)                                                                                                                                | lines | sha256 (this folder)                                               | sha256 in the record                                                  |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `select_episodes.py`        | Select episodes: `task_info/*.json` + tar listings -> episodes and tars to fetch                                                                                           | 904   | `b690b663d93282c4031efc0308d1fedc2395b314696a0a670a4c0dc78aef518d` | same                                                                  |
-| `convert_agibot_episode.py` | Convert episode (released checkpoint, schema 5): `proprio_stats.h5` + `head_color.mp4` -> 900x59 `normalized_unified_v1` JSON + 640x360 clip + first-frame PNG + JSONL row | 241   | `4d0aa03f76bc987267333508b239f4f898d87a5cbe8edc912ae4d393e5394752` | rewritten for the release; the early-access original is not published |
-| `eval_fidelity.py`          | Fidelity: real mp4 + generated mp4 -> per-frame CSV, checkpoint table, drift plot                                                                                          | 1113  | `63f73ad3d47fd55b60fa76872937aa063a99f6b97588615674588c3b6f391503` | same                                                                  |
-| `make_review_page.py`       | Review page: entries JSONL + summaries -> `index.html`, videos, frame strips                                                                                               | 793   | `f4a6b917488e235625a3f738349e8c2d3e2c2aa3041ee1569799e98da65048c4` | same                                                                  |
-| `make_manifests.py`         | Reconstruction: fixed prompts into the rows, frozen-first-frame clips, 20-row swap manifest, evaluation JSONL manifests                                                    | 180   | `3e01434d509e7027c79bbd7e738867093bd339eb8c137aec1d25c35c8b3cac78` | not in the record                                                     |
-| `check_conversion_gate.py`  | Acceptance gate for the converter: compares it with the framework data loader on the release training bundle and checks the published sidecars                             | 130   | `9cb361ab078d949b6c76aaffa5551c9fafb27dd135f83fbc461b9a5a3547876e` | new                                                                   |
-| `make_media.py`             | Reconstruction: hero figure, strip mp4/GIF and stills                                                                                                                      | 123   | `1ecfc486f062448ff3d0a452f0eb6cdc062bbcc45aee82801a25607bd67a3e68` | not in the record                                                     |
-| `make_results.py`           | Reconstruction: results tables and `results/metrics.json` from the eval_fidelity.py summaries                                                                              | 198   | `47b959bb07a0d4debb97ce4ee21dd33cc190ad7a7f48252f2cad41bba9f338a5` | not in the record                                                     |
-| `run_with_peak_memory.py`   | Runs `cosmos_framework.scripts.inference` unchanged and prints torch peak GPU memory                                                                                       | 24    | `67343235fd6787d9dba5cc22374b9dc0f3b651ec219209993c26ac3e106e8051` | new                                                                   |
-
-Verification at publication of the four originals: `sha256sum` of each copy equalled the source's hash and matched the prefix and suffix quoted in the record README's "Tools (sha256)" line. A scan of the four files for credentials, tokens, hostnames, IP addresses, URLs and environment lookups found nothing except the hard-coded framework path in the original `convert_agibot_episode.py`, which the recipe copy replaces with environment variables. Nothing in this directory was executed to write this document: the descriptions come from reading the sources and the recipe's run records (`heldout/RECORD.md`, `heldout/eval/RECORD.md`, `eval/bundled/RECORD.md` in the work directory), and the dependency versions were read from the installed package metadata of the recipe venv.
-
-## Environment the scripts ran in
-
-All recipe commands run from the framework root with the venv active (`../../../README.md`, "Commands"): `uv sync --all-extras --group=cu130-train` in `cosmos-framework-private` at commit 573d465, then `source .venv/bin/activate`. The scripts start with `#!/usr/bin/env python`, so the venv's interpreter is used when it is activated or when they are invoked as `python tools/<script>`.
-
-Versions read from that venv on 2026-10-13 (`importlib.metadata`; distribution names):
-
-| package                                       | version                              | used by                                                                 |
-| --------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
-| Python                                        | 3.13.15                              | all                                                                     |
-| cosmos-framework                              | 1.2.2 (editable checkout at 573d465) | `convert_agibot_episode.py`                                             |
-| torch                                         | 2.10.0+cu130                         | `eval_fidelity.py` (LPIPS); transitively `convert_agibot_episode.py`    |
-| torchvision                                   | 0.25.0+cu130                         | `eval_fidelity.py` (LPIPS backbone, pulled in by lpips)                 |
-| numpy                                         | 2.2.6                                | `convert_agibot_episode.py`, `eval_fidelity.py`                         |
-| h5py                                          | 3.15.1                               | `convert_agibot_episode.py`                                             |
-| mujoco                                        | 3.14.0                               | transitively `convert_agibot_episode.py` (framework forward kinematics) |
-| huggingface_hub                               | 0.36.2                               | `select_episodes.py` (`--fetch-index` only)                             |
-| scikit-image                                  | 0.26.0                               | `eval_fidelity.py`                                                      |
-| av (PyAV)                                     | 18.1.0                               | `eval_fidelity.py`, `make_review_page.py`                               |
-| pillow                                        | 12.2.0                               | `eval_fidelity.py` (resize alignment only), `make_review_page.py`       |
-| matplotlib                                    | 3.10.8                               | `eval_fidelity.py`                                                      |
-| lpips                                         | 0.1.4                                | `eval_fidelity.py`                                                      |
-| ffmpeg, ffprobe (system binaries, `/usr/bin`) | 6.1.1-3ubuntu5                       | `convert_agibot_episode.py`                                             |
-
-In the record, none of the four published scripts reads an environment variable; in this recipe copy, `convert_agibot_episode.py` reads `COSMOS_FRAMEWORK_ROOT` and `SIM_BIMANUAL_CHECKPOINT` as described above, and `make_manifests.py` reads none. All path arguments are plain paths resolved against the current working directory, which is the framework root in the recipe README and the eval directory in the run records, so relative paths inside entry files are relative to where the command runs, not to the file that names them.
-
-## make_manifests.py (reconstruction)
-
-**Purpose.** Rebuilds the three inputs of the recipe that the records describe without a published generating command: (`frozen`) one 901-frame clip per held-out episode holding the real frame 0, cropped to the generator's 640x352 top rows, encoded like the real clips (libx264, crf 8, yuv420p, 30 fps); (`swap`) the 20-row action-swap manifest `heldout/inputs/swap20/heldout_swap20.jsonl` with the run10 pairing rule (i-th task-600 episode with the i-th task-596 episode, ids ascending, both directions; frame episode's prompt and clip, partner's action file, absolute `action_path`); (`eval`) `entries_heldout.jsonl`, `entries_frozen.jsonl`, `entries_swap20_vs_real.jsonl` in the `--batch` format of `eval_fidelity.py` and `review_entries.jsonl` for `make_review_page.py`, with the frozen and swap clips as extra columns. It reads the per-episode `task<task>_ep*.jsonl` rows that `convert_agibot_episode.py` writes under `heldout/inputs/<task>/`.
-
-**Inputs.** `swap --inputs DIR --out FILE`; `frozen --inputs DIR --out DIR [--frames 901 --fps 30 --width 640 --height 352]`; `eval --inputs DIR --outputs DIR --frozen DIR --out DIR`. Defaults are the recipe layout (`heldout/inputs`, `outputs`, `heldout/frozen`, `heldout/eval`). Output directory names of the rollouts are fixed to the record's: `outputs/cosmos3_nano_simulation_humanoid_heldout` (matched) and `outputs/cosmos3_nano_simulation_humanoid_heldout_swap20` (swap).
-
-**Dependencies.** Standard library; `frozen` calls `ffmpeg` on `PATH`. Not executed on the measured machine: the measured frozen baseline and swap rows were produced by unpublished commands following the same rules (CHECKLIST.md).
-
-## select_episodes.py
-
-**Purpose.** Selects held-out AgiBotWorld-Beta episodes from the dataset's `task_info/task_<task_id>.json` files and plans which Hub tar files must be downloaded to fetch them (`observations/<task_id>/<first>-<last>.tar` with videos and depth, about 48 GB each, and `proprio_stats/<first>-<last>.tar`). It filters episodes by length and exclusion lists, maps each episode to the tars whose id range contains it (ranges overlap on the real Hub; `--ambiguous` decides how such episodes are handled), chooses tars with a greedy bundle planner (plus a diversity-first greedy variant when `--min-tasks` is above 1) cross-checked by an exhaustive search bounded at 300,000 evaluations, picks `--n` episodes round-robin over tasks and `init_scene_text` with a seeded shuffle, and writes one selection JSON. CPU only; network only with `--fetch-index`.
-
-**Inputs.**
-
-| flag                           | required       | default                                     | meaning                                                                                                                                                                                                                                    |
-| ------------------------------ | -------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--task-info-dir DIR`          | yes            |                                             | directory of `task_<task_id>.json`; the task id comes from the filename, a disagreeing `task_id` inside the file is overridden and flagged `task_id_mismatch`; the `lable_info` misspelling is accepted, duplicate episode ids are dropped |
-| `--n N`                        | yes            |                                             | number of episodes to select (at least 1)                                                                                                                                                                                                  |
-| `--min-frames N`               | no             | 901                                         | minimum episode length, computed as max(`end_frame`) + 1 over `action_config` (0 if missing)                                                                                                                                               |
-| `--exclude-text FILE.json`     | no             | none                                        | JSON list of strings; an episode is excluded if any string is a case-insensitive substring of its `init_scene_text` or of any `action_text`, or equals its `task_name`                                                                     |
-| `--exclude-episode-ids ID ...` | no             | none                                        | episode ids dropped before planning                                                                                                                                                                                                        |
-| `--obs-index FILE.json`        | one of the two |                                             | tar listing: the cache written by `--fetch-index`, a `{task_id: [{path, size}]}` mapping, or a flat list of `{path, size}`                                                                                                                 |
-| `--fetch-index`                | one of the two | off                                         | list `observations/<task_id>` for every task in `--task-info-dir` plus `proprio_stats` once from the Hub (`huggingface_hub.HfApi().list_repo_tree`) and cache the listing next to `--out`                                                  |
-| `--proprio-index FILE.json`    | no             | none                                        | proprio tar listing (same formats); without it the `proprio_stats` section of `--obs-index` is used; ignored when `--fetch-index` is given                                                                                                 |
-| `--repo-id ID`                 | no             | `agibot-world/AgiBotWorld-Beta`             | Hub dataset repository listed by `--fetch-index`                                                                                                                                                                                           |
-| `--index-cache FILE.json`      | no             | `<out stem>.hub_index.json` next to `--out` | where `--fetch-index` writes the listing                                                                                                                                                                                                   |
-| `--max-obs-tars N`             | no             | 2                                           | maximum number of observation tars in a plan                                                                                                                                                                                               |
-| `--min-tasks N`                | no             | 2                                           | preferred minimum of distinct tasks; a preference, not a constraint (a `MIN-TASKS NOT SATISFIED` note is written when unmet)                                                                                                               |
-| `--seed N`                     | no             | 0                                           | seed of the per-(task, scene) shuffles                                                                                                                                                                                                     |
-| `--planner MODE`               | no             | `auto`                                      | `auto` (greedy, then keep an exhaustive plan when it reaches `--n`, covers `--min-tasks` and needs fewer bytes), `greedy`, `exhaustive`                                                                                                    |
-| `--ambiguous MODE`             | no             | `all`                                       | episode inside several tar ranges: `all` (every candidate tar is downloaded, always correct), `narrowest`, `any`, `drop`                                                                                                                   |
-| `--out FILE.json`              | yes            |                                             | selection JSON; its parent directory is created                                                                                                                                                                                            |
-
-**Outputs.**
-
-- `--out`: `{"episodes": [...], "tars": [...], "total_download_bytes": int, "stats": {...}, "excluded": {...}}`. Episodes are sorted by (task id, episode id) and carry id, task, task name, frame count, scene text, first action text, assigned and candidate tars and an ambiguity flag. `tars[]` entries carry `path`, `size_bytes`, `kind`, `task_id`, `n_selected_episodes`. `stats` carries the counters of the parse and filter stages, the candidate plans (`greedy`, `greedy-diverse`, `exhaustive`), `planner_used`, `shortfall`, `notes` and `index_source`.
-- With `--fetch-index`: the listing cache `{"repo_id", "fetched_at", "observations": {"<task_id>": [{"path", "size"}]}, "proprio_stats": [...], "errors": [...]}`, written right after the listing and reusable later as `--obs-index` to skip the Hub round trip.
-- stdout: a report with summary lines, one line per candidate plan, an episode table (`*` marks ambiguous ids), a tar table and the download total. stderr: warnings and `[fetch-index]` progress.
-- Exit status: 0; 3 when fewer than `--n` episodes could be selected (the JSON is still written, read `stats.shortfall` and `stats.notes`); 1 for fatal errors printed as `error: ...`; 2 for argparse usage errors, including giving both `--obs-index` and `--fetch-index`.
-
-**Python dependencies.** Standard library only, plus `huggingface_hub` 0.36.2 for `--fetch-index`. Python 3.9 or newer (PEP 585 generics evaluated at import). The tree listing works without gated dataset access; the script reads no token, any token in the environment or the Hub login cache would be used by `huggingface_hub` itself.
-
-**Example command (recipe README, Commands).**
-
-```bash
-python tools/select_episodes.py --task-info-dir heldout/task_info --n 20 --min-frames 901 \
-  --exclude-text exclude_text.json --fetch-index --max-obs-tars 2 --min-tasks 2 --out heldout/selection.json
-```
-
-**As run on the measured machine** (`heldout/RECORD.md`): `tools/select_episodes.py --fetch-index` listed 217 observation directories plus `proprio_stats` and cached them as `tar_index.json` (2 min 41 s for the whole run, about 42 s of it the Hub listing), then `select_episodes.py --n 20 --min-frames 901 --exclude-text exclude_text_heldout.json --max-obs-tars 2 --min-tasks 2` selected 20 episodes of task 600 only, because overlapping tar ranges force two observation tars for one task; task 596 was added by hand. The exclusion file used on the measured machine was `exclude_text_heldout.json`, not the README example's `exclude_text.json`.
-
-**Assumed paths and layout.** Everything is relative to the working directory; the default cache goes next to `--out`. The Hub layout is hardcoded: `observations/<task_id>/<first>-<last>.tar`, `proprio_stats/<first>-<last>.tar`, `task_info/task_<id>.json`, an episode belongs to a tar iff first <= id <= last. No environment variables.
+| script                      | role                                                                                                                                                                                | lines | sha256                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------ |
+| `select_episodes.py`        | Select held-out episodes from `task_info/*.json` and plan which dataset tars to download                                                                                            | 904   | `b690b663d93282c4031efc0308d1fedc2395b314696a0a670a4c0dc78aef518d` |
+| `convert_agibot_episode.py` | One AgiBotWorld-Beta episode (`proprio_stats.h5` + `head_color.mp4`) to a 900x59 `normalized_unified_v1` action file, the real 901-frame clip, its first frame and an inference row | 241   | `4d0aa03f76bc987267333508b239f4f898d87a5cbe8edc912ae4d393e5394752` |
+| `check_conversion_gate.py`  | Acceptance gate for the converter: the framework's data loader on the checkpoint's training bundle as the oracle, plus structural checks of the published sidecars                  | 130   | `9cb361ab078d949b6c76aaffa5551c9fafb27dd135f83fbc461b9a5a3547876e` |
+| `make_manifests.py`         | Fixed prompts into the rows, the 20-row action-swap manifest, the frozen-first-frame clips, the evaluation manifests                                                                | 180   | `3e01434d509e7027c79bbd7e738867093bd339eb8c137aec1d25c35c8b3cac78` |
+| `eval_fidelity.py`          | Real mp4 + generated mp4 to per-frame PSNR/SSIM/LPIPS, checkpoint and window tables, drift plots                                                                                    | 1113  | `63f73ad3d47fd55b60fa76872937aa063a99f6b97588615674588c3b6f391503` |
+| `make_review_page.py`       | Entries JSONL + summaries to one self-contained HTML review page                                                                                                                    | 793   | `f4a6b917488e235625a3f738349e8c2d3e2c2aa3041ee1569799e98da65048c4` |
+| `make_results.py`           | The results tables and `results/metrics.json` from the `eval_fidelity.py` summaries                                                                                                 | 198   | `47b959bb07a0d4debb97ce4ee21dd33cc190ad7a7f48252f2cad41bba9f338a5` |
+| `make_media.py`             | Hero figure, strip GIF and stills                                                                                                                                                   | 123   | `1ecfc486f062448ff3d0a452f0eb6cdc062bbcc45aee82801a25607bd67a3e68` |
+| `run_with_peak_memory.py`   | Runs `cosmos_framework.scripts.inference` unchanged and prints the torch peak GPU memory                                                                                            | 24    | `67343235fd6787d9dba5cc22374b9dc0f3b651ec219209993c26ac3e106e8051` |
 
 ## convert_agibot_episode.py
 
-**Purpose.** Converts one AgiBotWorld-Beta episode into Cosmos3-Nano-Sim-Bimanual forward-dynamics inputs. It reads six state arrays from `proprio_stats.h5` (effector, joint, head, waist, robot position and orientation), calls the framework's `AgiBotWorldBetaLeRobotDataset._build_fk_action` to obtain raw `[N, 29]` backward-framewise rot6d actions (head 9, right arm 9, right gripper 1, left arm 9, left gripper 1; 30 fps; gripper = next frame's open fraction), normalises them with the checkpoint schema's affine `quantile_rot` transform `(raw - offset) / scale` in float32 without clamping (bit-exact against the bundled examples, per the docstring), cuts `head_color.mp4` to frames `[start, start + N + 1)` with a centred 640x480 to 640x360 crop re-encoded with libx264 (crf 8, yuv420p, 30 fps, no audio), and writes one inference JSONL row plus a provenance sidecar. The recipe README explains why: the forward-dynamics path applies no normaliser to `action_path`, so the file must already hold checkpoint-normalised values.
+Builds the checkpoint's schema-5 input from one episode with the framework's own code: it assembles the FK state from
+`proprio_stats.h5` (effector, joint, head, waist, robot position and orientation), applies the dataset's audited gripper
+calibration (`robotiq`: the observed close range 35..120 stretched to 0..120), computes the 29-D AgiBot FK actions in the
+pose convention the checkpoint pins (`backward_chunk_anchored_16f`), scatters them into the 59-D unified layout (head and
+right wrist 0–17, right gripper 33, left wrist 34–42, left gripper 58), normalises with the global-asinh statistics the
+checkpoint pins (file checked against its sha256; gripper slots against the 0.12 m metric width) and sets every invalid
+slot to exactly zero. The real clip is cut to frames `[start, start + N + 1)` and resized 640x480 to 640x360 with the
+framework's `agibot_video.resize_to_640x360`, as training does.
 
-**Inputs.**
+| flag                              | required | default          | meaning                                                                       |
+| --------------------------------- | -------- | ---------------- | ----------------------------------------------------------------------------- |
+| `--h5 PATH`                       | yes      |                  | the episode's `proprio_stats.h5`                                              |
+| `--video PATH`                    | yes      |                  | the episode's `head_color.mp4`                                                |
+| `--name NAME`                     | yes      |                  | basename of every output and the row's `name`                                 |
+| `--task-id N`                     | yes      |                  | AgiBot task id; selects the audited gripper hardware                          |
+| `--gripper-hardware HW`           | no       | from the task id | `robotiq` or `omnipicker`                                                     |
+| `--prompt TEXT`                   | no       | empty            | the row's prompt (the recipe fills it later with `make_manifests.py prompts`) |
+| `--start N`                       | no       | 0                | first frame of the window                                                     |
+| `--num-actions N`                 | no       | 900              | N action rows, N + 1 video frames                                             |
+| `--out DIR`                       | yes      |                  | output directory                                                              |
+| `--seed`, `--guidance`, `--shift` | no       | 42, 3.0, 5.0     | written into the row, as in the published example rows                        |
+| `--skip-video`                    | no       | off              | do not cut the clip                                                           |
 
-| flag              | required | default                                                                                                                                             | meaning                                                                                                                                                                                                                                        |
-| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--h5 PATH`       | yes      |                                                                                                                                                     | the episode's `proprio_stats.h5` (datasets `state/effector/position` [T,2], `state/joint/position` [T,14], `state/head/position` [T,2], `state/waist/position` [T,2], `state/robot/position`, `state/robot/orientation`; optional `timestamp`) |
-| `--video PATH`    | yes      |                                                                                                                                                     | the episode's `head_color.mp4`                                                                                                                                                                                                                 |
-| `--name NAME`     | yes      |                                                                                                                                                     | basename of every output file and the row's `name`                                                                                                                                                                                             |
-| `--prompt TEXT`   | no       | empty                                                                                                                                               | copied verbatim into the row                                                                                                                                                                                                                   |
-| `--start N`       | no       | 0                                                                                                                                                   | first frame of the window                                                                                                                                                                                                                      |
-| `--num-actions N` | no       | 900                                                                                                                                                 | N action rows, N + 1 video frames; requires start + N + 1 <= proprio frames and <= video frames (901 frames with the defaults, hence `--min-frames 901` in the selection)                                                                      |
-| `--schema PATH`   | no       | `<SIM_BIMANUAL_CHECKPOINT>/cosmos3_nano_sim_bimanual_action_sources/action_schema.json` (record: the same file under the hard-coded framework root) | the checkpoint's action schema; asserted: layout `agibot_backward_framewise_rot6d_v1`, pose convention `backward_framewise`, normaliser `quantile_rot` affine                                                                                  |
-| `--out DIR`       | yes      |                                                                                                                                                     | output directory, created with an `actions/` subdirectory                                                                                                                                                                                      |
-| `--seed N`        | no       | 42                                                                                                                                                  | recorded in the row only; the script has no randomness                                                                                                                                                                                         |
-| `--skip-video`    | no       | off                                                                                                                                                 | skip the ffmpeg cut and write the resolved `--video` path as `vision_path`; the clip must then already have N + 1 frames at 30 fps, which is not checked                                                                                       |
+Outputs under `--out`: `actions/<name>.json` (the 900x59 sidecar the row's `action_path` names), `<name>_640x360.mp4`
+(the real clip), `<name>_initial.png` (its first frame, lossless; the row's `vision_path`), `<name>.jsonl` (one
+inference row in the shape of the published `sim_bimanual_unifiedv1_hf.jsonl` rows: `raw_action_dim` 59,
+`action_chunk_size` 900, `num_frames` 901, `fps` 30, `domain_name` `agibotworld`) and `<name>_convert_info.json`
+(provenance). About 10 s per episode on CPU.
 
-**Outputs** (all under `--out`, overwritten silently).
+## check_conversion_gate.py
 
-- `actions/<name>_raw.npy`: raw actions, float32 `[N, 29]`.
-- `actions/<name>.json`: normalised actions, a JSON list of N rows of 29 floats; the file the row's `action_path` points to.
-- `<name>_640x360.mp4`: the cut clip with N + 1 frames (the suffix is a fixed string; the actual crop is width x round(width x 9/16), recorded in the sidecar).
-- `<name>.jsonl`: one row with `model_mode` `forward_dynamics`, `name`, `prompt`, `vision_path` (absolute, resolved), `action_path` `actions/<name>.json` (relative), `domain_name` `agibotworld`, `action_condition` true, `raw_action_dim` 29, `fps` 30, `num_frames` N + 1, `seed`.
-- `<name>_convert_info.json`: provenance and statistics: inputs as given, `start`, `num_actions`, `proprio_frames`, per-dimension raw and normalised statistics including `frac_outside_unit` (4.2 to 6.5 % on the held-out set, 4.5 % for the bundled sidecars), `initial_poses`, `timestamp_dt_*` when the h5 has a `timestamp` dataset (plain differences in the dataset's unit, nanoseconds on AgiBotWorld-Beta), `video_cut` with the ffprobe results.
-- stdout: one JSON summary line.
-- The two action files are written before the video cut: if ffprobe or ffmpeg fails (all subprocess calls use `check=True`) the JSONL row and the sidecar are missing while the action files remain.
+`--bundle DIR` (the extracted `examples/training/sim_bimanual_robot_example_v1.tar.zst` of the checkpoint, the directory
+holding `samples.json`), `--out FILE` (default `conversion_gate.json`). Check A runs the converter on every raw record
+of the bundle and compares it with the normalised action the framework's `LocalSimulationDataset` produces for the same
+record: max |difference| at most 1e-5 on the valid slots of the `agibotworld` rows and exact zeros elsewhere. Check B
+reads the published `agibot_{001,006,034}` sidecars: shape, exact zeros outside each row's domain mask, de-normalised
+rot6d unit norm, gripper openness in [0, 1]. It also prints the first-frame RMSE of the bundle clips against the
+published initial images, the evidence that the bundle holds different episodes from those sidecars, so the sidecars
+cannot be reproduced from it. Exit status 0 only when every check passes. Measured: max difference 0.0 on all three
+records (`results/metrics.json`, key `conversion_gate`).
 
-**Python dependencies.** `h5py` 3.15.1, `numpy` 2.2.6, `cosmos-framework` 1.2.2 imported from the checkout at commit 573d465 (private API: `AgiBotWorldBetaLeRobotDataset._build_fk_action` called unbound with a stub, plus the module's private key constants; other framework commits may break this), and through the framework `torch` 2.10.0+cu130 and `mujoco` 3.14.0 (forward kinematics on the committed G1 URDF; `uv pip install mujoco` in the recipe). Python 3.9 or newer (dict union operator). External binaries: `ffprobe` and `ffmpeg` with libx264 on `PATH` unless `--skip-video`.
+## make_manifests.py
 
-**Example command (recipe README, Commands).**
+Four sub-commands, defaults in the recipe layout (`heldout/inputs/<task>/`, `outputs/`, `heldout/frozen`, `heldout/eval`):
 
-```bash
-python tools/convert_agibot_episode.py --h5 <task>/<episode>/proprio_stats.h5 --video <episode>/videos/head_color.mp4 \
-  --name task<task>_ep<episode> --prompt "<task name>. <first action text>" --start 0 --num-actions 900 --out heldout/inputs
-```
+- `prompts --inputs DIR --prompts FILE`: write the fixed prompt of every episode into its row and concatenate one
+  `task<task>.jsonl` per task. Run it before any rollout.
+- `swap --inputs DIR --out FILE`: the 20-row action-swap manifest. The i-th task-600 episode (ids ascending) is paired
+  with the i-th task-596 episode, both directions; each row keeps the frame episode's first frame and prompt and takes
+  the partner's action file. Row name `swap_<frame episode>_actions_<action episode>`.
+- `frozen --inputs DIR --out DIR`: one 901-frame clip per episode holding the real frame 0, cropped to the generator's
+  640x352 top rows (libx264, crf 8, yuv420p, 30 fps).
+- `eval --inputs DIR --outputs DIR --frozen DIR --out DIR`: `entries_heldout.jsonl`, `entries_frozen.jsonl`,
+  `entries_swap20_vs_real.jsonl` (the `--batch` format of `eval_fidelity.py`) and `review_entries.jsonl`.
 
-**As run on the measured machine** (`heldout/RECORD.md`): `tools/convert_agibot_episode.py --start 0 --num-actions 900` for each of the 20 held-out episodes, 12 to 16 s per episode (4 min 40 s for 20).
-
-**Assumed paths.** The recipe copy reads `COSMOS_FRAMEWORK_ROOT` (required; the script exits with a message if unset) and puts it first on `sys.path`, so the `cosmos_framework` imports resolve from that checkout and shadow any installed copy. The `--schema` default is `<SIM_BIMANUAL_CHECKPOINT>/cosmos3_nano_sim_bimanual_action_sources/action_schema.json`, with `SIM_BIMANUAL_CHECKPOINT` defaulting to `./Cosmos3-Nano-Sim-Bimanual`, the download directory in the recipe's step 1; pass `--schema` explicitly otherwise. (The original hard-coded both paths as absolute local directories; see the note at the top.) `vision_path` in the row is an absolute path of the machine that produced it, while `action_path` is relative; moving `--out` to another machine means rewriting `vision_path`. No other environment variables; no GPU code in the script (the framework FK runs on CPU tensors here).
+The rollout output directories are fixed: `outputs/cosmos3_nano_simulation_humanoid_heldout` (matched) and
+`outputs/cosmos3_nano_simulation_humanoid_heldout_swap20` (swap).
 
 ## eval_fidelity.py
 
-**Purpose.** Measures how closely a generated rollout tracks the real recording it was conditioned on. Both videos are decoded fully with PyAV into uint8 RGB arrays; if the frame counts differ the first min(T_real, T_gen) frames are compared with a WARNING. The real frames are aligned to the generated frame size by a top, centre or bottom crop or an antialiased bicubic resize, `--align auto` picking the candidate with the best frame-0 PSNR (640x360 real against 640x352 generated gave the top crop on every pair in the recipe). Per-frame PSNR and SSIM (`data_range` 255, PSNR capped at 100 dB for identical frames with the number of capped frames reported) run in a CPU process pool over shared memory while LPIPS (`lpips.LPIPS(net=alex)`, inputs in [-1, 1], batched, `no_grad`) runs on `--device` in the main process. Values are reported at checkpoint frames and over the windows [0, 300), [300, 600), [600, end) and overall; standard deviations use ddof = 1. Deterministic: no random numbers, cuDNN deterministic, TF32 off. Tool version string `1.1`.
-
-**Inputs.** Single mode needs `--real`, `--gen` and `--name`; batch mode needs `--batch`; the two are mutually exclusive.
-
-| flag                 | required    | default                         | meaning                                                                                                                                             |
-| -------------------- | ----------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--real PATH`        | single mode |                                 | real recording (mp4)                                                                                                                                |
-| `--gen PATH`         | single mode |                                 | generated rollout (mp4); its frame size defines the comparison geometry                                                                             |
-| `--name NAME`        | single mode |                                 | episode name for the output files, sanitised to `[A-Za-z0-9-_.]`                                                                                    |
-| `--batch FILE.jsonl` | batch mode  |                                 | one `{"name", "real", "gen", "prompt"?}` object per line; blank lines and `#` lines are skipped; duplicate or colliding names are rejected up front |
-| `--out DIR`          | yes         |                                 | output directory (made absolute and created)                                                                                                        |
-| `--frames N ...`     | no          | `30 60 120 240 480 900`         | checkpoint frame indices (deduplicated, sorted; those beyond the compared range are skipped with a WARNING)                                         |
-| `--align MODE`       | no          | `auto`                          | `auto`, `top`, `center`, `bottom`, `resize`; crops need the real frame to be at least as large as the generated one                                 |
-| `--device DEV`       | no          | `cuda` if available, else `cpu` | LPIPS device; `cuda` without CUDA falls back to CPU with a WARNING                                                                                  |
-| `--stride K`         | no          | 1                               | evaluate every k-th frame; checkpoints are always included                                                                                          |
-| `--lpips-net NET`    | no          | `alex`                          | `alex`, `vgg`, `squeeze`                                                                                                                            |
-| `--lpips-batch N`    | no          | 16                              | frames per LPIPS batch                                                                                                                              |
-| `--workers N`        | no          | min(16, CPU count)              | CPU processes for PSNR/SSIM (1 = serial in-process); the pool is created only for N > 1 and used only when at least 32 frames are evaluated         |
-
-**Outputs** (all directly in `--out`; `<stem>` is the sanitised name).
-
-- `<stem>_per_frame.csv`: `frame,psnr,ssim,lpips`, one row per evaluated frame.
-- `<stem>_summary.json`: name, prompt, decode info of both videos (absolute path, fps, codec, declared and decoded frame counts), `frame_count_mismatch`, frames compared and evaluated, the chosen alignment, checkpoint and window statistics, number of PSNR-capped frames, LPIPS device, worker count, tool and library versions.
-- `<stem>_drift.png`: three stacked panels (PSNR, SSIM, LPIPS over frame index) with checkpoint markers and a 300-frame reference line, rendered headless (matplotlib Agg, DejaVu Sans).
-- Batch mode adds `aggregate_per_frame.csv` (`frame,n,<metric>_mean,<metric>_std` over the union of evaluated frames), `aggregate_summary.json` (per-episode results, `failed_episodes`, settings, checkpoint and window mean/std/min/max/n, elapsed seconds, absolute output paths) and `aggregate_drift.png` (mean with a shaded plus or minus one standard deviation band). The aggregate files are written when at least one episode succeeded.
-- stdout: progress, WARNING and ERROR lines, per-episode and aggregate tables. stderr: usage errors and tracebacks of unexpected exceptions.
-- Exit status: 0; 1 when at least one episode failed; 2 for usage errors. Batch mode isolates per-episode failures (decode, alignment, frame size, metric runtime errors including CUDA out of memory) and records them in `failed_episodes`.
-
-**Python dependencies.** `numpy` 2.2.6, `scikit-image` 0.26.0, `av` 18.1.0, `pillow` 12.2.0 (only for the resize alignment), `torch` 2.10.0+cu130, `lpips` 0.1.4 with its backbone from `torchvision` 0.25.0+cu130, `matplotlib` 3.10.8. The LPIPS linear heads ship inside the lpips package (`weights/v0.1/alex.pth`); the pretrained AlexNet backbone comes from torchvision's model zoo and is fetched into torch's hub cache on first use unless already present, which the script does not control. Python 3.9 or newer; on 3.13 shared memory is created with `track=False`, with a fallback for older versions. No external binaries (PyAV brings its own FFmpeg libraries).
-
-**Example command (recipe README, Commands).**
-
-```bash
-python tools/eval_fidelity.py --batch heldout/eval/entries_heldout.jsonl --out heldout/eval/matched --align auto --device cuda
-```
-
-**As run on the measured machine.** Bundled episodes (`eval/bundled/RECORD.md`, `run_all.sh`): `eval_fidelity.py --batch <entries>.jsonl --out <group> --align auto --device cuda` per group (`matched_seed42`, `matched_seed0`, `matched_all`, ...). Held-out episodes (`heldout/eval/RECORD.md`): `eval_fidelity.py --batch entries_task600.jsonl --out matched_task600 --device cpu`, 320 s for 10 episodes on the CPU while the GPU was running rollouts. The recipe README's figure is 14 s per 901-frame pair on the GPU (273 s for 20).
-
-**Assumed paths, GPU and parallelism.** `--real`, `--gen`, `--batch` and the `real`/`gen` paths inside the batch JSONL are resolved against the working directory, not against the JSONL's directory. The summary JSONs embed absolute paths of the inputs and outputs, so published result files should be checked for machine paths. Only LPIPS uses an accelerator; beside a running GPU job pass `--device cpu` and a smaller `--workers` (the default starts up to 16 forkserver processes). No environment variables are read; CUDA visibility comes from torch alone.
+Decodes both videos with PyAV, aligns the real frames to the generated size (`--align auto` picks the top, centre or
+bottom crop, or a resize, by frame-0 PSNR; the top crop wins on every pair here), and computes per-frame PSNR and SSIM
+on the CPU and LPIPS (AlexNet) on `--device`. It reports checkpoint frames (`--frames`, default 30 60 120 240 480 900)
+and the windows [0, 300), [300, 600), [600, end) and overall, mean ± std with ddof 1. Single mode takes `--real`,
+`--gen`, `--name`; batch mode takes `--batch FILE.jsonl` with `{"name", "real", "gen", "prompt"}` rows and adds
+`aggregate_summary.json`, `aggregate_per_frame.csv` and `aggregate_drift.png` in `--out`. Exit 1 when an episode
+failed. Deterministic. About 90 s per batch of 20 on one GPU.
 
 ## make_review_page.py
 
-**Purpose.** Builds one self-contained HTML review page that shows, per episode, the real recording and the generated rollout side by side (plus optional extra clips), a strip of JPEG thumbnails at fixed frame indices, and the PSNR/SSIM/LPIPS checkpoint and window tables read from the `<name>_summary.json` files that `eval_fidelity.py` writes. With `--aggregate` and `--aggregate-plot` it adds a page-top table of mean plus or minus standard deviation (n) and the aggregate drift plot. Every referenced video is copied, never moved, into `OUT_DIR/assets/<name>/`, thumbnails are decoded with PyAV and written with Pillow, and all links are relative to `OUT_DIR`, so the directory can be moved or served as it is. Missing videos or summaries produce WARNINGs and placeholders rather than aborting. CPU only, sequential; the last step of the pipeline.
+`--entries FILE.jsonl --out DIR/index.html [--aggregate FILE.json --aggregate-plot FILE.png]`: one HTML page with each
+episode's real and generated videos side by side (plus the frozen and swap clips), thumbnails at fixed frames and the
+metric tables. Videos are copied into `DIR/assets/`, all links are relative, so the directory can be moved. CPU only.
 
-**Inputs.**
+## select_episodes.py
 
-| flag                        | required | default                             | meaning                                                                                                                                                                                                                                                                   |
-| --------------------------- | -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--entries FILE.jsonl`      | yes      |                                     | one object per line: `name`, `prompt`, `real`, `gen`, optional `summary` (the `<name>_summary.json` of `eval_fidelity.py`) and optional `extra` (a list of `{"label", "video"}`, a single object or a bare path); blank, `#` and invalid lines are skipped with a WARNING |
-| `--out PATH`                | yes      |                                     | `OUT_DIR/index.html`; a directory or a path without `.html`/`.htm` gets `index.html` appended; assets go under `OUT_DIR/assets/`                                                                                                                                          |
-| `--frames N ...`            | no       | `30 60 120 240 480 900`             | frame indices of the strip (deduplicated, sorted; indices past the clip end give `frame N unavailable` placeholders, so pass shorter indices for the 61-frame variant)                                                                                                    |
-| `--aggregate FILE.json`     | no       | none                                | `aggregate_summary.json` of `eval_fidelity.py` (checkpoint and window mean/std/n)                                                                                                                                                                                         |
-| `--aggregate-plot FILE.png` | no       | none                                | `aggregate_drift.png`, copied into `assets/`                                                                                                                                                                                                                              |
-| `--title TEXT`              | no       | `Rollout review: real vs generated` | page title and heading                                                                                                                                                                                                                                                    |
-| `--intro TEXT`              | no       | built-in paragraph                  | intro paragraph under the title                                                                                                                                                                                                                                           |
-| `--generated-at TEXT`       | no       | current local time                  | text of the `Generated ...` line; pass a fixed value for reproducible page bytes                                                                                                                                                                                          |
+Picks episodes from the dataset's `task_info/task_<id>.json` files by length (`--min-frames`, default 901) and an
+exclusion list (`--exclude-text`, here `../manifests/exclusions.json`: the bundled examples' captions and task names),
+and plans the fewest observation tars that hold them (`--fetch-index` lists the Hub, `--max-obs-tars`, `--min-tasks`).
+Not needed to reproduce the measured set: its 20 episodes and three tars are in `../manifests/heldout_20.json`. The
+measured set was taken by even spread over the sorted eligible ids of tasks 600 and 596, not by the selector's seeded
+shuffle. `python select_episodes.py --help` lists every flag.
 
-**Outputs.**
+## make_results.py, make_media.py, run_with_peak_memory.py
 
-- `OUT_DIR/index.html`: the page (inline CSS and JavaScript, muted looping videos with per-entry play, pause and restart controls, lazy-loaded thumbnails, a table of contents when there is more than one entry).
-- `OUT_DIR/assets/<name>/<role>__<basename>.mp4` (`role` = `real`, `gen`, `extra00`, ...): copies of the referenced videos (`shutil.copy2`); a destination with identical size and integer mtime is reused on a re-run. `<name>` is the entry name sanitised to `[A-Za-z0-9._-]`, with `_2`, `_3` suffixes on collisions.
-- `OUT_DIR/assets/<name>/frames/<role>_f<NNNN>.jpg`: thumbnails, width 320, JPEG quality 85.
-- `OUT_DIR/assets/<basename of --aggregate-plot>`: the copied aggregate plot.
-- stdout: one progress line per entry and a final line with entries, videos copied, reused copies, missing videos, thumbnails written, failed entries and warnings, then `wrote <path>`. stderr: WARNING lines.
-- Exit status: 0 even when items are missing (check the final `warnings:` count); 2 when the entries file does not exist, a `--frames` value is negative, or for argparse usage errors.
-
-**Python dependencies.** `av` 18.1.0 and `pillow` 12.2.0; everything else is standard library. No external binaries, no network, no GPU.
-
-**Example command (recipe README, Commands).**
-
-```bash
-python tools/make_review_page.py --entries heldout/eval/review_entries.jsonl --out heldout/eval/review/index.html \
-  --aggregate heldout/eval/matched/aggregate_summary.json --aggregate-plot heldout/eval/matched/aggregate_drift.png
-```
-
-**As run on the measured machine.** Held-out (`heldout/eval/RECORD.md`): `make_review_page.py --entries review_entries.jsonl --out review/index.html --aggregate matched/aggregate_summary.json --aggregate-plot matched/aggregate_drift.png` from the eval directory: 10 episodes, 23 videos, 138 thumbnails, 147 MB. Bundled (`eval/bundled/RECORD.md`): the same with `matched_all/aggregate_summary.json` and `matched_all/aggregate_drift.png`: 4 entries, 15 videos, 90 thumbnails, 13 MB, 0 warnings.
-
-**Assumed paths.** Video and summary paths inside the entries file are used as given (`~` is expanded; relative paths resolve against the working directory, not against the entries file), `--aggregate` and `--aggregate-plot` are plain paths without `~` expansion. `OUT_DIR` and its parents are created. The page itself contains only relative links. No environment variables.
+- `make_results.py --eval heldout/eval --outputs outputs --out-dir <this folder> --meta meta.json` writes
+  `results_tables_heldout.md`, `results_tables_swap20.md` and `results/metrics.json`; `meta.json` names the hardware,
+  revisions, the inference console logs (per-rollout seconds) and the peak-memory lines.
+- `make_media.py hero --real R --matched M --frozen F --title T --out-dir DIR --stem STEM` writes the hero PNG, a strip MP4 and the GIF (this folder keeps the PNG and the GIF);
+  `make_media.py stills ... --out FILE.png [--frames 30 900]` writes a stills figure.
+- `run_with_peak_memory.py` takes the arguments of `cosmos_framework.scripts.inference`, runs it unchanged and prints
+  the torch peak allocated and reserved memory at the end.

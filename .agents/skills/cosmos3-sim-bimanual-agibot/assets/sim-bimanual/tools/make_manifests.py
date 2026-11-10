@@ -4,7 +4,7 @@
 # RECONSTRUCTION, not a published run script: the run records describe the frozen-first-frame control, the
 # 20-row action-swap manifest and the evaluation JSONL files but do not contain the commands that produced them.
 # This script rebuilds the three from the per-episode files that tools/convert_agibot_episode.py writes, following
-# the rules the records state (see README.md, "Commands", and CHECKLIST.md). Standard library only; `frozen` needs
+# the rules the records state (see README.md, "Commands"). Standard library only; `frozen` needs
 # ffmpeg on PATH. Updated for the released checkpoint's schema-5 rows: the row's vision_path is now the lossless
 # first-frame PNG, the real 901-frame clip is <name>_640x360.mp4 next to it, and `prompts` fills the fixed prompts in.
 """

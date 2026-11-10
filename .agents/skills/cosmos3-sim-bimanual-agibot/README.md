@@ -1,68 +1,62 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: OpenMDW-1.1 -->
 
-# Sim-Bimanual — Run the Cosmos3 Real-Time Two-Arm Neural Simulator on AgiBot Data
+# Sim-Bimanual — Run the Cosmos3 Two-Arm Neural Simulator on Held-Out AgiBot Data
 
 > **Authors:** [Saeed Babamohamadi](https://www.linkedin.com/in/saeedbabamohamadi)
 > **Organization:** [NVIDIA](https://nvidia.com/)
-> **Status:** draft v0.3 (skill folder), 2026-10-15; numbers unchanged from v0.2 of 2026-10-05. All numbers measured on 1× GB300; records committed. What each input is backed by is in [CHECKLIST.md](CHECKLIST.md).
 
-Run the `Cosmos3-Nano-Sim-Bimanual` checkpoint (early access) as an action-conditioned neural simulator on
-public AgiBot bimanual data, measure how fast it runs and how closely it follows real episodes, and learn
-what it can and cannot be used for today.
+Run the released `Cosmos3-Nano-Sim-Bimanual` checkpoint as an action-conditioned neural simulator on public
+AgiBot episodes it was not trained on, measure how fast it runs, and measure how closely it follows the real
+recording when it is given the real actions, against two controls.
 
 ![Held-out episode 815362 of task 600 (hang the key on the hook and place the bag in the storage box) at frames 30, 60 and 900. Columns: real video, matched-action rollout, frozen first frame](assets/sim-bimanual/hero_task600_ep815362_f30_f60_f900.png)
-*Held-out AgiBotWorld-Beta episode 815362, task 600. Rows: frames 30, 60, 900. Columns: real head camera; the simulator driven by the episode's real actions from its real first frame; the frozen-first-frame control. By frame 60 the rollout has moved with the actions and the frozen frame has not. [Strip video](assets/sim-bimanual/hero_task600_ep815362_strip.mp4), [gif](assets/sim-bimanual/hero_task600_ep815362_strip.gif), [captions](assets/sim-bimanual/captions.md).*
+*Held-out AgiBotWorld-Beta episode 815362, task 600. Rows: frames 30, 60, 900. Columns: the real head camera; the
+simulator driven by the episode's recorded actions from its real first frame; the frozen-first-frame control. By frame
+900 the rollout has moved both arms as the real episode does and a tag hangs on the hook, but the bag at the bottom
+right is gone. [GIF](assets/sim-bimanual/hero_task600_ep815362_strip.gif), [captions](assets/sim-bimanual/captions.md).*
 
-**Who this is for, today.** You have a two-arm AgiBot policy that outputs the 29-D AgiBot action
-schema, and a real first frame from an AgiBot episode or your own AgiBot workcell. The policy
-proposes actions, the simulator shows what the cameras would see, the policy reacts, and you watch
-where it goes wrong. That is a preview for debugging and demos. It
-is not a scoreboard: nobody has shown that this simulator ranks policies the way a physics simulator
-does, so do not use it to choose between checkpoints. It is also not a data generator yet: no policy
-has been post-trained on its output in this program, so that use is not claimed here. When the
-post-training recipe for the simulator is released and a post-training result on its generated data
-exists, both will be added.
+**Who this is for.** You have a two-arm AgiBot G1 policy and a real first frame from an AgiBot episode or your own
+AgiBot workcell. The policy proposes actions, the simulator shows what the head camera would see, and you watch where
+it goes wrong. That is a preview for debugging and demos. It is not a scoreboard: nobody has shown that this
+simulator ranks policies the way a physics simulator does, so do not use it to choose between checkpoints.
 
-| Model                                             | Workload       | Use case                                                                                      |
-| ------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------- |
-| `nvidia/Cosmos3-Nano-Sim-Bimanual` (early access) | Inference only | Given a start frame and a stream of 29-D two-arm actions, generate what the cameras would see |
+| Model                              | Workload       | Use case                                                                                                                                     |
+| ---------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nvidia/Cosmos3-Nano-Sim-Bimanual` | Inference only | Given a start frame and a stream of two-arm actions (schema 5, `normalized_unified_v1`), generate what the head camera would see, 901 frames |
 
 ## What You'll Build
 
-- A **running neural simulator** for the AgiBot G1 two-arm embodiment on one GB300
-- A **cost card**: frames per second, memory, time per action chunk
-- A **fidelity check**: generated video against the real episode for the same actions, on held-out episodes
-- A clear statement of **what the checkpoint does not accept**: it is trained for the AgiBot action
-  schema only. It does not accept single-arm robots or other bimanual action spaces.
+- A **converter** from a raw AgiBotWorld-Beta episode to the checkpoint's schema-5 action file, checked against the
+  framework's own data loader before any rollout
+- A **fidelity check**: 20 held-out episodes rolled out from their real first frame with their real actions, scored
+  against the real video and against two controls (a frozen first frame, and the same episodes driven by another
+  task's actions)
+- A **cost card**: seconds per 901-frame rollout, frames per second, peak memory, on one GB300
 
 ## Pipeline
 
-| Stage | What happens                                                                                | GPU                       |
-| ----- | ------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Download the checkpoint and an AgiBot episode set; inspect the action schema                | no                        |
-| 2     | Run the bundled examples; confirm output resolution and frame rate                          | minutes                   |
-| 3     | Roll out held-out episodes from their first frame with their real actions; measure fidelity | about 1 h per 20 episodes |
+| Stage | What happens                                                                                   | GPU    |
+| ----- | ---------------------------------------------------------------------------------------------- | ------ |
+| 1     | Install the framework, download the checkpoint, run its own input check and AgiBot example     | 80 s   |
+| 2     | Download three AgiBotWorld-Beta tars, extract 20 held-out episodes, convert them, run the gate | no     |
+| 3     | 20 matched-action rollouts and 20 action-swap rollouts; build the frozen-frame control         | 35 min |
+| 4     | Score the three against the real video; tables, plot and review page                           | 5 min  |
 
 ## Prerequisites
 
-The checkpoint does not load on the public framework at `c23e51f2f157ae3e51cfcd86ebfb5464850894f2` (its model alias is missing there). The numbers
-below were measured on framework revision `573d46507dcd91155d7f371b366da760a7a5f718` and cookbook revision `190b6565726fea4695ad168ee6bf197d30ca7c88` (early access)
-(`cookbooks/cosmos3/simulation/bimanual/bimanual.md`), both of which ship publicly with the checkpoint at GTC Berlin.
-Until then, access to those two repositories is required. The commands are the cookbook's, unchanged except where noted.
-
-Revision reconciliation. Every run record of this recipe (run01 to run10, 2026-09-30 to 2026-10-07) names the same two revisions, framework `573d46507dcd91155d7f371b366da760a7a5f718` and cookbook `190b6565726fea4695ad168ee6bf197d30ca7c88`; no number here was measured on the public `c23e51f2f157ae3e51cfcd86ebfb5464850894f2` (the LIBERO recipes' pin) or on any other revision. The public revision of the bimanual documentation that will ship with the checkpoint did not exist when this was written, so it cannot be named; when it does, run step 2 on it and confirm 640×352, 901 frames and `status: success` before trusting the numbers below on that revision.
-
-| Requirement                                                                                                                                                                                               | Why                                    |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| 1× GB300 (measured); 1× H100 80 GB is a fit estimate from the 58.5 GB peak, not measured                                                                                                                  | the checkpoint is 62 GB on disk        |
-| Hugging Face read access to `nvidia/Cosmos3-Nano-Sim-Bimanual`, revision `1d95a0b5b19d49a24aceebf578cf5e85db310ac0` (early access)                                                                        | checkpoint is private until GTC Berlin |
-| Access to [`agibot-world/AgiBotWorld-Beta`](https://huggingface.co/datasets/agibot-world/AgiBotWorld-Beta) (gated; accept the terms on Hugging Face), revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278` | the held-out episodes                  |
+| Requirement                                                                                                                                                                                               | Why                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `cosmos-framework` at `86e3528d791446ac9928bfff8432951b23d8bf47` (`main`, 2026-11-06), set up as [docs/inference_bimanual.md](../../../docs/inference_bimanual.md) describes                              | the checkpoint loads on `main`; the measurements ran here |
+| Read access to [`nvidia/Cosmos3-Nano-Sim-Bimanual`](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual), revision `a9e3adf6235f56f0082be7a96e497348c286c472`                                         | the checkpoint, 30 GB on disk                             |
+| Access to [`agibot-world/AgiBotWorld-Beta`](https://huggingface.co/datasets/agibot-world/AgiBotWorld-Beta) (gated; accept the terms on Hugging Face), revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278` | the held-out episodes, three tars of about 48.5 GB each   |
+| `ffmpeg` and `ffprobe` on `PATH`                                                                                                                                                                          | the converter cuts the real clips                         |
 
 ### GPU you need
 
-One GPU with at least 64 GB (peak 58.5 GB measured on a GB300; an 80 GB card should fit, not measured). The 20
-held-out rollouts take under an hour; the checkpoint download is 58 GB.
+One GPU with about 50 GB free: the rollouts peaked at 39.95 GB allocated and 47.94 GB reserved by torch, 49,973 MiB on
+the whole GPU (one GB300). An 80 GB GPU should fit; that was not measured. Disk: about 180 GB (checkpoint and the three
+dataset tars; the tars can be deleted after extraction).
 
 ## Dataset
 
@@ -70,109 +64,100 @@ held-out rollouts take under an hour; the checkpoint download is 58 GB.
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | AgiBotWorld-Beta, G1 bimanual episodes | [`agibot-world/AgiBotWorld-Beta`](https://huggingface.co/datasets/agibot-world/AgiBotWorld-Beta) on Hugging Face, downloaded by each user from the publisher; revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278` | CC BY-NC-SA 4.0. This recipe does not bundle or rehost any file from it. Each user is responsible for checking the content of datasets and the applicable licenses and determining if suitable for the intended use. |
 
-Action schema the checkpoint expects, from its configuration: embodiments `agibotworld` and
-`agibot_gear_gripper` (29-D actions), plus `camera_pose` and `hand_pose` streams. The checkpoint's model
-card was a placeholder at the time of testing; the configuration file is the authority.
+The checkpoint takes schema-5 `normalized_unified_v1` actions: 59 values per frame (padded to 64), already normalised
+and masked by the source, because inference does not normalise again. For an AgiBot episode the valid slots are 0–17
+(head and right wrist), 33 (right gripper), 34–42 (left wrist) and 58 (left gripper); every other slot is exactly zero.
+[docs/inference_bimanual.md](../../../docs/inference_bimanual.md) is the authority for the input contract.
 
 ## Splits
 
-| Split            | Content                                                                                                                                                                                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| bundled examples | the clips shipped with the checkpoint (in-distribution; useful for a smoke test only)                                                                                                                                                                                                    |
-| held-out         | AgiBot episodes not used in the checkpoint's post-training, selected from the public set: the 20 episodes (10 of task 600, 10 of task 596) listed with their tars and selection rule in [`assets/sim-bimanual/manifests/heldout_20.json`](assets/sim-bimanual/manifests/heldout_20.json) |
+| Split            | Content                                                                                                                                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| bundled examples | the examples shipped with the checkpoint (smoke test only)                                                                                                                                                                                                    |
+| held-out         | 20 AgiBotWorld-Beta episodes (10 of task 600, 10 of task 596) from tasks the bundled examples do not come from, listed with their tars and selection rule in [`assets/sim-bimanual/manifests/heldout_20.json`](assets/sim-bimanual/manifests/heldout_20.json) |
 
-Fidelity on bundled examples is not a result. Only held-out episodes count.
+Fidelity on bundled examples is not a result. Only held-out episodes count. The 10 per task were taken by even spread
+over the sorted eligible episode ids; the swap pairing is in
+[`assets/sim-bimanual/manifests/heldout_swap20_pairs.json`](assets/sim-bimanual/manifests/heldout_swap20_pairs.json).
 
 ## Commands, one GB300
 
-The five `tools/` scripts live in [`assets/sim-bimanual/tools/`](assets/sim-bimanual/tools/) (README of inputs, outputs and dependencies there). Copy that folder to `tools/`, and [`assets/sim-bimanual/manifests/`](assets/sim-bimanual/manifests/) to `manifests/`, next to the cookbook checkout before running the block below; every command runs from the framework root with the venv active.
+Every command runs from the framework root with the venv active. The scripts ship in this folder; `S` points at them.
 
 ```bash
-# 1. environment and checkpoint (early access: framework revision 573d46507dcd91155d7f371b366da760a7a5f718; see Prerequisites)
-uv sync --all-extras --group=cu130-train && source .venv/bin/activate
-uv pip install mujoco   # 3.14.0 used; the AgiBot forward kinematics in step 3 need it
-hf download nvidia/Cosmos3-Nano-Sim-Bimanual --revision 1d95a0b5b19d49a24aceebf578cf5e85db310ac0 --local-dir ./Cosmos3-Nano-Sim-Bimanual   # 58 GB, about 45 s
-# The cookbook says `export LD_LIBRARY_PATH=`; torchcodec then fails on libnppicc.so.13. Expose the venv's CUDA 13 runtime instead:
-export LD_LIBRARY_PATH=$PWD/.venv/lib/python3.13/site-packages/nvidia/cu13/lib
+# 1. Framework, checkpoint, the release's own checks (docs/inference_bimanual.md; the train extra adds mujoco 3.10.0 for the converter)
+git checkout 86e3528d791446ac9928bfff8432951b23d8bf47 && git lfs install --local
+uvx --from 'uv==0.11.29' uv lock --check
+uvx --from 'uv==0.11.29' uv sync --locked --group cu130 --extra guardrail --extra train
+source .venv/bin/activate && export COSMOS_TRAINING=0
+export S=$PWD/.agents/skills/cosmos3-sim-bimanual-agibot/assets/sim-bimanual
+export SIM_BIMANUAL_CHECKPOINT=$PWD/checkpoints/Cosmos3-Nano-Sim-Bimanual COSMOS_FRAMEWORK_ROOT=$PWD
+hf download nvidia/Cosmos3-Nano-Sim-Bimanual --revision a9e3adf6235f56f0082be7a96e497348c286c472 --local-dir $SIM_BIMANUAL_CHECKPOINT
+python tools/check_bimanual_mixed_inputs.py --checkpoint-path $SIM_BIMANUAL_CHECKPOINT   # prints passed: true
+# then run the AgiBot 001 example exactly as docs/inference_bimanual.md "Run on one GPU" shows: 901 frames, 640x352, 30 fps
 
-# 2. bundled 901-frame rollout, the cookbook's command (these flags are "the step-2 flags" below)
-torchrun --standalone --nproc-per-node=1 -m cosmos_framework.scripts.inference   -i inputs/omni/agibot.jsonl -o outputs/cosmos3_nano_simulation_humanoid   --checkpoint-path ./Cosmos3-Nano-Sim-Bimanual --model-mode=FORWARD_DYNAMICS   --resolution=480 --image-size=480 --action-chunk-size=900 --num-frames=901 --num-steps=4   --autoregressive=True --parallelism-preset=latency --max-num-seqs=1   --no-use-torch-compile --no-diffusion-cache --no-guardrails --video-save-quality=4
-# 61-frame variant: truncate each action array to 60 rows; --action-chunk-size=60 --num-frames=61
-
-# 3. held-out episodes: accept the dataset terms on Hugging Face first (gated)
-hf download agibot-world/AgiBotWorld-Beta --repo-type dataset --revision 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278 --include "task_info/*" --local-dir heldout
-# To reproduce the measured set, skip the selector: the 20 episode ids, the two task ids and the three tars are in
-# assets/sim-bimanual/manifests/heldout_20.json. To select a fresh set, this is the command the record shows
-# (its exclusion file, 31 strings = the bundled examples' captions and task names, ships as assets/sim-bimanual/manifests/exclusions.json):
-python tools/select_episodes.py --task-info-dir heldout/task_info --n 20 --min-frames 901   --exclude-text manifests/exclusions.json --fetch-index --max-obs-tars 2 --min-tasks 2 --out heldout/selection.json
-# The three tars of the measured set, one per call, 48.4 to 48.9 GB each:
-hf download agibot-world/AgiBotWorld-Beta proprio_stats/804068-856282.tar     --repo-type dataset --revision 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278 --local-dir heldout/raw
-hf download agibot-world/AgiBotWorld-Beta observations/600/815362-842380.tar  --repo-type dataset --revision 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278 --local-dir heldout/raw
-hf download agibot-world/AgiBotWorld-Beta observations/596/810449-822244.tar  --repo-type dataset --revision 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278 --local-dir heldout/raw
-# Extract one member per selected episode (members: <episode>/videos/head_color.mp4 and <task>/<episode>/proprio_stats.h5), e.g.:
+# 2. Held-out episodes (accept the dataset terms first). The 20 ids and the three tars are in $S/manifests/heldout_20.json.
+R="--repo-type dataset --revision 2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278 --local-dir heldout/raw"
+hf download agibot-world/AgiBotWorld-Beta proprio_stats/804068-856282.tar    $R
+hf download agibot-world/AgiBotWorld-Beta observations/600/815362-842380.tar $R
+hf download agibot-world/AgiBotWorld-Beta observations/596/810449-822244.tar $R
+mkdir -p heldout/extracted   # one video and one state file per episode, for example:
 tar -xf heldout/raw/observations/600/815362-842380.tar -C heldout/extracted 815362/videos/head_color.mp4
 tar -xf heldout/raw/proprio_stats/804068-856282.tar    -C heldout/extracted 600/815362/proprio_stats.h5
-# Convert each episode to the checkpoint's 29-value normalised action layout (framework forward kinematics plus the schema normaliser).
-# Prompt = task name + the episode's first action text from task_info/task_<task>.json; one --out directory per task.
-export COSMOS_FRAMEWORK_ROOT=$PWD SIM_BIMANUAL_CHECKPOINT=$PWD/Cosmos3-Nano-Sim-Bimanual
-python tools/convert_agibot_episode.py --h5 heldout/extracted/600/815362/proprio_stats.h5 --video heldout/extracted/815362/videos/head_color.mp4   --name task600_ep815362 --prompt "Hang the key on the hook and place the bag in the storage box. Pick up the key on the cabinet with left arm."   --start 0 --num-actions 900 --out heldout/inputs/task600
-# ... the same for the other 19 episodes in heldout_20.json (task 596 rows go to --out heldout/inputs/task596); then one JSONL per task:
-cat heldout/inputs/task600/task600_ep*.jsonl > heldout/inputs/task600/task600.jsonl
-cat heldout/inputs/task596/task596_ep*.jsonl > heldout/inputs/task596/task596.jsonl
+python $S/tools/convert_agibot_episode.py --task-id 600 --name task600_ep815362 --start 0 --num-actions 900 \
+  --h5 heldout/extracted/600/815362/proprio_stats.h5 --video heldout/extracted/815362/videos/head_color.mp4 \
+  --out heldout/inputs/task600
+# ... the same for the other 19 episodes (task 596 rows go to heldout/inputs/task596), then the fixed prompts:
+python $S/tools/make_manifests.py prompts --inputs heldout/inputs --prompts $S/manifests/prompts_heldout_20.json
+# Gate, before any rollout: the converter against the framework's own data loader on the checkpoint's training bundle
+mkdir -p heldout/bundle && tar --zstd -xf $SIM_BIMANUAL_CHECKPOINT/examples/training/sim_bimanual_robot_example_v1.tar.zst -C heldout/bundle
+B=$(dirname "$(find heldout/bundle -name samples.json | head -1)")   # the bundle directory holds samples.json
+python $S/tools/check_conversion_gate.py --bundle $B --out heldout/conversion_gate.json   # exit 0, "pass": true
 
-# 4a. matched-action rollouts (the measurement): the step-2 flags with -i and -o changed, one process per task
-torchrun --standalone --nproc-per-node=1 -m cosmos_framework.scripts.inference   -i heldout/inputs/task600/task600.jsonl -o outputs/cosmos3_nano_simulation_humanoid_heldout   --checkpoint-path ./Cosmos3-Nano-Sim-Bimanual --model-mode=FORWARD_DYNAMICS   --resolution=480 --image-size=480 --action-chunk-size=900 --num-frames=901 --num-steps=4   --autoregressive=True --parallelism-preset=latency --max-num-seqs=1   --no-use-torch-compile --no-diffusion-cache --no-guardrails --video-save-quality=4
-# then the same with -i heldout/inputs/task596/task596.jsonl (same -o)
+# 3. Rollouts: the documented command with -i/-o changed and seed 42 (each row carries guidance 3.0 and shift 5.0)
+FLAGS="--checkpoint-path $SIM_BIMANUAL_CHECKPOINT --model-mode=FORWARD_DYNAMICS --resolution=480 --image-size=480 \
+  --num-steps=4 --seed=42 --kv-cache-inference-size=64 --attention-sink-size=8 --autoregressive=True \
+  --parallelism-preset=latency --max-num-seqs=1 --no-use-torch-compile --no-diffusion-cache --no-guardrails --video-save-quality=4"
+for t in 600 596; do
+  torchrun --standalone --nproc-per-node=1 -m cosmos_framework.scripts.inference \
+    -i heldout/inputs/task$t/task$t.jsonl -o outputs/cosmos3_nano_simulation_humanoid_heldout $FLAGS
+done
+python $S/tools/make_manifests.py swap   --inputs heldout/inputs --out heldout/inputs/swap20/heldout_swap20.jsonl
+torchrun --standalone --nproc-per-node=1 -m cosmos_framework.scripts.inference \
+  -i heldout/inputs/swap20/heldout_swap20.jsonl -o outputs/cosmos3_nano_simulation_humanoid_heldout_swap20 $FLAGS
+python $S/tools/make_manifests.py frozen --inputs heldout/inputs --out heldout/frozen   # no rollout: real frame 0 held for 901 frames
 
-# 4b. frozen-first-frame control: no rollout; the real frame 0 held for 901 frames at the generator's 640x352 geometry
-python tools/make_manifests.py frozen --inputs heldout/inputs --out heldout/frozen
-
-# 4c. cross-task action-swap control on the same 20 episodes: i-th task-600 episode paired with the i-th task-596 episode
-#     (ids ascending), both directions; frame and prompt from the frame episode, 900 actions from the partner
-python tools/make_manifests.py swap --inputs heldout/inputs --out heldout/inputs/swap20/heldout_swap20.jsonl
-torchrun --standalone --nproc-per-node=1 -m cosmos_framework.scripts.inference   -i heldout/inputs/swap20/heldout_swap20.jsonl -o outputs/cosmos3_nano_simulation_humanoid_heldout_swap20   --checkpoint-path ./Cosmos3-Nano-Sim-Bimanual --model-mode=FORWARD_DYNAMICS   --resolution=480 --image-size=480 --action-chunk-size=900 --num-frames=901 --num-steps=4   --autoregressive=True --parallelism-preset=latency --max-num-seqs=1   --no-use-torch-compile --no-diffusion-cache --no-guardrails --video-save-quality=4
-
-# 5. score all three against the real video (entries_*.jsonl are {"name","real","gen","prompt"} rows), then the review page
-python tools/make_manifests.py eval --inputs heldout/inputs --outputs outputs --frozen heldout/frozen --out heldout/eval
-python tools/eval_fidelity.py --batch heldout/eval/entries_heldout.jsonl        --out heldout/eval/matched        --align auto --device cuda
-python tools/eval_fidelity.py --batch heldout/eval/entries_frozen.jsonl         --out heldout/eval/frozen         --align auto --device cuda
-python tools/eval_fidelity.py --batch heldout/eval/entries_swap20_vs_real.jsonl --out heldout/eval/swap20_vs_real --align auto --device cuda
-python tools/make_review_page.py --entries heldout/eval/review_entries.jsonl --out heldout/eval/review/index.html   --aggregate heldout/eval/matched/aggregate_summary.json --aggregate-plot heldout/eval/matched/aggregate_drift.png
+# 4. Score all three against the real video, then the review page
+python $S/tools/make_manifests.py eval --inputs heldout/inputs --outputs outputs --frozen heldout/frozen --out heldout/eval
+for g in heldout:matched frozen:frozen swap20_vs_real:swap20_vs_real; do
+  python $S/tools/eval_fidelity.py --batch heldout/eval/entries_${g%%:*}.jsonl --out heldout/eval/${g##*:} --align auto --device cuda
+done
+python $S/tools/make_review_page.py --entries heldout/eval/review_entries.jsonl --out heldout/eval/review/index.html \
+  --aggregate heldout/eval/matched/aggregate_summary.json --aggregate-plot heldout/eval/matched/aggregate_drift.png
 ```
 
-The four published `tools/` scripts (`select_episodes.py`, `convert_agibot_episode.py`, `eval_fidelity.py`, `make_review_page.py`)
-are not part of the cookbook; they ship with this recipe in `assets/sim-bimanual/tools/`, with a README of inputs,
-outputs and dependencies. The fifth, `make_manifests.py`, is a reconstruction (its header says so): the records state the
-pairing rule, the frozen-frame definition and the manifest formats, not the commands that produced them.
-One trap: the forward-dynamics path applies no normaliser to the action file, so the file must already hold
-checkpoint-normalised values; the conversion script does that and reproduces the bundled example sidecars bit-exactly.
-Held-out episodes: 20 from tasks 600 and 596, chosen because the bundled examples come from other tasks (first-frame
-PSNR against every bundled clip at most 13.2 dB; the same episode would score above 30 dB). The 10 per task were taken by
-even spread over the sorted eligible episode ids, not by the selector's seeded shuffle (its `--seed` default is 0); ids,
-tars and the rule are in `assets/sim-bimanual/manifests/heldout_20.json`, the swap pairing in
-`assets/sim-bimanual/manifests/heldout_swap20_pairs.json`. Dataset revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278`.
+What each script reads and writes is in [`assets/sim-bimanual/tools/README.md`](assets/sim-bimanual/tools/README.md).
+Inspect every rollout receipt (`sample_outputs.json`): all 40 must say `status: success`.
 
 ## Settings
 
-| Setting                       | Value                                                                                                                                                                    |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Denoising steps               | 4                                                                                                                                                                        |
-| Guidance                      | 1.0                                                                                                                                                                      |
-| Decoding                      | autoregressive, causal                                                                                                                                                   |
-| Resolution                    | model config "480"; 640×360 input, 640×352 output                                                                                                                        |
-| Frame rate                    | model base 24 fps with fps modulation; rollouts resolved at 30 fps                                                                                                       |
-| Action chunk                  | the model's internal latent chunk is 2 frames per autoregressive step; each request carries the whole action file (900 actions for 901-frame runs, 60 for 61-frame runs) |
-| Seed                          | 42 on every rollout in the tables (same seed, same GPU: byte-identical repeat)                                                                                           |
-| Checkpoint revision           | `1d95a0b5b19d49a24aceebf578cf5e85db310ac0` (checkpoint id `demo_stage3_sfdmd_chunk2_mecka_agibot_480p_step42@iter_000002000`)                                            |
-| Framework / cookbook revision | `573d46507dcd91155d7f371b366da760a7a5f718` / `190b6565726fea4695ad168ee6bf197d30ca7c88` (early access)                                                                   |
-| Dataset revision              | `agibot-world/AgiBotWorld-Beta` `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278`                                                                                               |
+| Setting         | Value                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Model mode      | forward dynamics, autoregressive, KV cache 64, attention sink 8                                                  |
+| Denoising steps | 4 (the release's four-step schedule)                                                                             |
+| Guidance, shift | 3.0, 5.0 in every row, as in the published example rows                                                          |
+| Resolution      | 640×360 first frame in, 640×352 out (the generator keeps the top-left 22×40 latents of the padded canvas)        |
+| Length          | 900 actions, 901 frames at 30 fps                                                                                |
+| Seed            | 42 on every rollout in the tables                                                                                |
+| Actions         | schema 5, `normalized_unified_v1`, global-asinh statistics pinned by the checkpoint, scalar domain `agibotworld` |
+| Prompt          | fixed per episode, [`manifests/prompts_heldout_20.json`](assets/sim-bimanual/manifests/prompts_heldout_20.json)  |
 
 ## Results
 
-Measured on 1× GB300, 4 denoising steps, guidance 1.0, autoregressive rollouts from the real first frame with the real
-29-D actions. Fidelity against the real video on 20 held-out AgiBotWorld-Beta episodes (10 each from two tasks), top
-352 rows, mean ± std over episodes. Every number in the tables below is in
-[`assets/sim-bimanual/results/metrics.json`](assets/sim-bimanual/results/metrics.json) with the run record it came from.
+Measured on one GB300 with the checkpoint at `a9e3adf6235f56f0082be7a96e497348c286c472`: 20 held-out AgiBotWorld-Beta
+episodes, 10 each from two tasks, mean ± std over episodes, real video cropped to its top 352 rows. Every number below
+is in [`assets/sim-bimanual/results/metrics.json`](assets/sim-bimanual/results/metrics.json); the run record is
+[`assets/sim-bimanual/manifests/RECORD.md`](assets/sim-bimanual/manifests/RECORD.md).
 
 ### What the numbers look like
 
@@ -180,117 +165,113 @@ Measured on 1× GB300, 4 denoising steps, guidance 1.0, autoregressive rollouts 
 | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | task 600, episode 815362: real, matched rollout, frozen control at frame 30 and frame 900                                                            | task 596, episode 810449 (place the inner pot with rice into the rice cooker): the same three at frame 30 and frame 900                              |
 
-The two tasks differ by 3.6 dB overall; episode ids in `assets/sim-bimanual/captions.md`. The "top 352 rows" crop keeps
-rows 0 to 351 of the 360-row real frame, because the generator outputs 352 rows and keeps the top of the input: frame 0
-of every generated video scores 33 to 36 dB against that crop (the autoencoder round-trip of the conditioning frame),
-while a centre or bottom crop gives 17 to 24 dB. If your alignment check gives the lower numbers, the crop is wrong.
+The "top 352 rows" crop keeps rows 0 to 351 of the 360-row real frame, because the generator outputs 352 rows and keeps
+the top of its input. Frame 0 of every generated video scores 32.9 to 36.7 dB against that crop (the autoencoder
+round-trip of the conditioning frame), while a centre or bottom crop gives 16.2 to 23.4 dB. If your alignment check gives
+the lower numbers, the crop is wrong.
 
 ### Speed and memory
 
-| Run                                                      | Frames | Rollouts | Wall incl. load | Seconds per rollout | Frames/s | Peak GPU |
-| -------------------------------------------------------- | ------ | -------- | --------------- | ------------------- | -------- | -------- |
-| bundled example, 901 frames                              | 901    | 4        | 9 min 04 s      | 96–156 (mean 125)   | 7.2      | 56.2 GB  |
-| bundled example, 61 frames                               | 61     | 4        | 1 min 36 s      | 7–19 (mean 10.8)    | 5.7      | 36.1 GB  |
-| held-out, task 600                                       | 901    | 10       | 19 min 36 s     | 98–130 (mean 111)   | 8.1      | 56.2 GB  |
-| held-out, task 596                                       | 901    | 10       | 16 min 46 s     | 72–119 (mean 92)    | 9.8      | 56.2 GB  |
-| cross-task action swap, early four-episode probe (run09) | 901    | 4        | 5 min 21 s      | 69–73 (mean 70.5)   | 12.8     | 56.2 GB  |
-| cross-task action swap, all 20 episodes (control; run10) | 901    | 20       | 38 min 12 s     | 96–122 (mean 108)   | 8.3      | 56.2 GB  |
-| all 901-frame rollouts before run10                      | 901    | 39       | —               | 69–156 (mean 103)   | 8.7      | 58.5 GB  |
+| Run                                     | Rollouts | Wall incl. model load | Seconds per 901-frame rollout | Frames/s | Peak GPU (whole device) |
+| --------------------------------------- | -------- | --------------------- | ----------------------------- | -------- | ----------------------- |
+| bundled AgiBot 001 example (seed 2026)  | 1        | 80 s                  | —                             | —        | 43,234 MiB              |
+| held-out, task 600, matched             | 10       | 509 s                 | 48–62 (all 40: mean 51.1)     | 17.6     | 49,967 MiB              |
+| held-out, task 596, matched             | 10       | 506 s                 |                               |          |                         |
+| held-out, cross-task action swap        | 20       | 1070 s                |                               |          | 49,973 MiB              |
 
-At these settings the simulator produces 7 to 13 frames per second of wall-clock throughput on one GB300, not real
-time. The 30 fps in Settings is the clock of the saved video, not the generation speed: a 901-frame rollout plays back
-in 30 s and takes 70 to 156 s to generate.
+Peak torch memory over the 40 rollouts: 39.95 GB allocated, 47.94 GB reserved. At these settings one GB300 generates
+about 17.6 frames per second, not real time: a 901-frame rollout plays back in 30 s and takes about 51 s to generate.
 
-### Fidelity over the rollout (matched real actions vs two controls)
+### Fidelity over the rollout (matched real actions against two controls)
 
 | Comparison                                | Metric  | frame 30     | frame 60     | frame 120    | frame 240    | frame 480    | frame 900    |
 | ----------------------------------------- | ------- | ------------ | ------------ | ------------ | ------------ | ------------ | ------------ |
-| matched actions                           | PSNR dB | 31.08 ± 4.72 | 24.64 ± 5.93 | 19.89 ± 2.04 | 17.03 ± 2.13 | 15.63 ± 3.07 | 14.74 ± 2.18 |
-|                                           | SSIM    | 0.927        | 0.853        | 0.801        | 0.743        | 0.667        | 0.621        |
-|                                           | LPIPS   | 0.062        | 0.112        | 0.171        | 0.232        | 0.309        | 0.362        |
-| frozen first frame (control)              | PSNR dB | 33.78 ± 7.14 | 23.32 ± 9.17 | 16.51 ± 2.37 | 15.20 ± 2.44 | 13.46 ± 2.00 | 12.59 ± 1.98 |
-|                                           | SSIM    | 0.945        | 0.848        | 0.791        | 0.734        | 0.643        | 0.597        |
-|                                           | LPIPS   | 0.045        | 0.143        | 0.210        | 0.264        | 0.375        | 0.438        |
-| wrong actions, same 20 episodes (control) | PSNR dB | 27.61 ± 6.28 | 17.80 ± 4.40 | 14.72 ± 2.13 | 14.43 ± 2.07 | 12.49 ± 1.50 | 12.07 ± 1.41 |
-|                                           | SSIM    | 0.902        | 0.769        | 0.716        | 0.674        | 0.570        | 0.520        |
-|                                           | LPIPS   | 0.086        | 0.226        | 0.293        | 0.332        | 0.464        | 0.539        |
+| matched actions                           | PSNR dB | 24.88 ± 2.17 | 18.65 ± 1.98 | 19.42 ± 1.89 | 20.16 ± 1.94 | 18.72 ± 2.08 | 17.57 ± 2.06 |
+|                                           | SSIM    | 0.893        | 0.803        | 0.791        | 0.776        | 0.723        | 0.680        |
+|                                           | LPIPS   | 0.076        | 0.165        | 0.166        | 0.158        | 0.202        | 0.261        |
+| frozen first frame (control)              | PSNR dB | 34.60 ± 8.20 | 23.18 ± 9.25 | 16.75 ± 2.37 | 15.46 ± 2.27 | 13.73 ± 2.18 | 12.86 ± 2.00 |
+|                                           | SSIM    | 0.945        | 0.845        | 0.792        | 0.741        | 0.652        | 0.604        |
+|                                           | LPIPS   | 0.042        | 0.136        | 0.201        | 0.251        | 0.359        | 0.426        |
+| wrong actions, same 20 episodes (control) | PSNR dB | 22.83 ± 3.57 | 15.91 ± 2.10 | 14.55 ± 1.67 | 14.88 ± 2.16 | 13.37 ± 1.47 | 12.73 ± 1.45 |
+|                                           | SSIM    | 0.868        | 0.732        | 0.708        | 0.679        | 0.602        | 0.556        |
+|                                           | LPIPS   | 0.102        | 0.256        | 0.295        | 0.318        | 0.413        | 0.480        |
 
 Window means (frames 0–299 | 300–599 | 600–900 | overall):
 
-| Comparison                                                                                                               | PSNR dB                                 | SSIM                             | LPIPS                            |
-| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- | -------------------------------- | -------------------------------- |
-| matched, 20 episodes                                                                                                     | 21.08 \| 15.90 \| 14.93 \| 17.30 ± 2.45 | 0.801 \| 0.677 \| 0.630 \| 0.703 | 0.173 \| 0.295 \| 0.348 \| 0.272 |
-| matched, task 600 (10)                                                                                                   | 22.46 \| 17.96 \| 16.89 \| 19.10        | 0.832 \| 0.767 \| 0.728 \| 0.776 | 0.144 \| 0.231 \| 0.285 \| 0.220 |
-| matched, task 596 (10)                                                                                                   | 19.69 \| 13.83 \| 12.96 \| 15.49        | 0.770 \| 0.587 \| 0.533 \| 0.630 | 0.203 \| 0.359 \| 0.410 \| 0.324 |
-| frozen first frame (20)                                                                                                  | 19.63 \| 13.67 \| 12.60 \| 15.30 ± 2.23 | 0.795 \| 0.655 \| 0.602 \| 0.684 | 0.203 \| 0.361 \| 0.430 \| 0.331 |
-| wrong actions, same 20 episodes (control: each task-600 episode driven by a task-596 episode's actions, and the reverse) | 17.18 \| 12.81 \| 11.90 \| 13.96 ± 1.32 | 0.734 \| 0.584 \| 0.516 \| 0.611 | 0.270 \| 0.446 \| 0.551 \| 0.422 |
+| Comparison                                                                                                      | PSNR dB                                 | SSIM                             | LPIPS                            |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------- | -------------------------------- |
+| matched, 20 episodes                                                                                            | 21.15 \| 19.07 \| 17.67 \| 19.30 ± 1.58 | 0.804 \| 0.730 \| 0.689 \| 0.741 | 0.148 \| 0.196 \| 0.249 \| 0.198 |
+| matched, task 600 (10)                                                                                          | 21.55 \| 20.27 \| 19.01 \| 20.28        | 0.824 \| 0.799 \| 0.767 \| 0.797 | 0.149 \| 0.186 \| 0.229 \| 0.188 |
+| matched, task 596 (10)                                                                                          | 20.76 \| 17.87 \| 16.32 \| 18.32        | 0.784 \| 0.661 \| 0.610 \| 0.685 | 0.148 \| 0.206 \| 0.269 \| 0.208 |
+| frozen first frame (20)                                                                                         | 20.03 \| 13.92 \| 12.91 \| 15.62 ± 2.29 | 0.799 \| 0.662 \| 0.610 \| 0.690 | 0.194 \| 0.347 \| 0.417 \| 0.320 |
+| wrong actions, same 20 episodes (each task-600 episode driven by a task-596 episode's actions, and the reverse) | 16.81 \| 13.67 \| 12.55 \| 14.34 ± 1.20 | 0.728 \| 0.613 \| 0.548 \| 0.630 | 0.267 \| 0.398 \| 0.494 \| 0.387 |
 
-Full tables with standard deviations on every cell and the per-task rows: [`results_tables_heldout.md`](assets/sim-bimanual/results_tables_heldout.md) (matched and frozen; also the early four-episode swap probe, superseded) and [`results_tables_swap20.md`](assets/sim-bimanual/results_tables_swap20.md) (the twenty-episode swap control, with its drift plot [`aggregate_drift_swap20.png`](assets/sim-bimanual/aggregate_drift_swap20.png)).
+Full tables with standard deviations on every cell and the per-task rows:
+[`results_tables_heldout.md`](assets/sim-bimanual/results_tables_heldout.md) (matched and frozen) and
+[`results_tables_swap20.md`](assets/sim-bimanual/results_tables_swap20.md) (action swap, with its drift plot
+[`aggregate_drift_swap20.png`](assets/sim-bimanual/aggregate_drift_swap20.png)).
 
-Reading. All three rows are the same 20 episodes. The generated video tracks the real episode better than a frozen
-first frame from about frame 60 onward (+3.4 dB at frame 120, +2.2 dB at frame 900). Driven by the wrong episode's
-actions it scores below both the matched rollout (14.0 against 17.3 dB overall) and the frozen frame (15.3 dB), so the
-output depends on the actions it is given and not only on the first frame. Fidelity decays steadily over a 900-frame rollout,
-from 31 dB to about 15 dB, and differs by task by 3.6 dB. These are fidelity numbers only; whether the simulator ranks
-policies like a physics simulator has not been measured.
+Reading. All three rows are the same 20 episodes. Overall, the matched rollout beats the frozen first frame by 3.68 dB
+(paired, 0.83 to 5.77 dB, better on 20 of 20 episodes) and the action swap by 4.96 dB (3.46 to 7.88 dB, 20 of 20), so
+the output follows the actions it is given and not only the first frame. Early in the rollout the frozen frame is ahead,
+because little has moved yet: the per-frame mean of the matched rollout passes the frozen frame at frame 88 and stays
+above it to frame 900 (+4.7 dB at frame 900). Fidelity decays from 24.9 dB at frame 30 to 17.6 dB at frame 900, and the
+two tasks differ by 2.0 dB overall. These are fidelity numbers only; whether the simulator ranks policies like a
+physics simulator has not been measured.
 
 ### How you know it worked
 
-- The bundled example renders with two arms visible and the gripper state following the action stream.
-- A held-out rollout beats the frozen-first-frame control from about frame 60 onward and beats the action-swap control overall.
+- `check_bimanual_mixed_inputs.py` prints `passed: true`, the AgiBot 001 example gives 901 frames at 640×352, and
+  `check_conversion_gate.py` exits 0.
+- Frame 0 of every rollout scores above 30 dB against the top-352-row crop of the real clip.
+- The matched rollout beats the action-swap control overall and the frozen first frame overall, and stays above the
+  frozen frame from about frame 90 to the end.
 
 ## Prompt and agent guide
 
-**Prompts for the simulator.** Each rollout takes the first frame, the 29-D action file and one text prompt. The
-prompt used for every held-out rollout here was the task name followed by the first action description from the
-dataset's own annotation ("Hang the key on the hook and place the bag in the storage box. Pick up the key on the
-cabinet with left arm."). Keep it short, factual and in the dataset's words. The prompt sets the scene the model
-imagines; the actions drive the motion. Whether a richer prompt changes fidelity was not measured; the prompt was held
-fixed so that the action and frozen-frame controls isolate the actions.
+**Prompts for the simulator.** Each rollout takes the first frame, the action file and one text prompt. The 20 prompts
+in [`manifests/prompts_heldout_20.json`](assets/sim-bimanual/manifests/prompts_heldout_20.json) were written from each
+episode's first frame and the dataset's task text before any generation. Each describes the starting scene (objects,
+surfaces, camera), the two arms and the task, and never narrates what happens later. The action-swap rollouts keep
+the frame episode's prompt, so the two controls isolate the actions. Whether a different prompt changes fidelity was not
+measured. The model's general prompt guidance is in the
+[Sim-Bimanual prompt guide](../cosmos3-nano-sim-bimanual/shared/prompt-guide.md).
 
-**Running this recipe with a coding agent.** What to give an agent that runs this recipe from the document alone:
+**Running this recipe with a coding agent.**
 
-- Pin everything the agent cannot guess: framework commit, model and dataset revisions, the exact command block,
-  the output directory layout. An agent that has to choose a version will choose a different one each run.
-- Give it a stop rule and a budget in GPU-hours, and the three checks under "How you know it worked". Without a
-  stop rule it keeps going past a finished result; without the checks it reports a broken run as done.
-- Make it write a record per run (data, split, GPU type and count, peak memory, GPU-hours, result with seeds,
-  control, leakage check) before it reports. A number without a record is not a result.
-- Tell it what it may not do: delete checkpoints, change a pinned revision, write a secret to disk, enter
-  generated data into a test set. Everything else it should fix itself and note in the record.
-- Expect it to hit the deviations listed under Known limitations; they are the ones a careful reader hits too.
-- For this recipe specifically: the agent must apply the checkpoint's own normaliser to the action file (the inference
-  path applies none), check frame-0 alignment at 33 to 36 dB before scoring anything, and keep the bundled examples out
-  of the held-out set. All three caught real mistakes during this work.
+- Pin everything the agent cannot guess: framework commit, model and dataset revisions, the command block, the output
+  layout. An agent that has to choose a version will choose a different one each run.
+- Give it a stop rule, a budget in GPU-hours and the checks under "How you know it worked".
+- Make it write a record per run (data, split, GPU, peak memory, GPU-hours, result, controls, leakage check) before it
+  reports. A number without a record is not a result.
+- For this recipe specifically: the action file must already be normalised and masked (inference normalises nothing);
+  run the conversion gate before any rollout; check frame-0 alignment above 30 dB before scoring anything; keep the
+  bundled examples out of the held-out set. Each of these caught a real mistake during this work.
 
 ## Known limitations
 
-- **Embodiment.** AgiBot 29-D actions only. No single-arm support, no YAM, no other bimanual schemas. Do
-  not feed it LIBERO or SO-101 actions; there is no adapter.
-- **Not a policy evaluator yet.** Whether this simulator ranks policy checkpoints the same way a physics
-  simulator does has not been measured, because no public bimanual policy with a physics evaluator was
-  available. Until that agreement is shown, use it for previewing and debugging a policy, not for
-  deciding between checkpoints.
-- **Not a data generator yet.** No policy or detector has been post-trained on this simulator's output
-  in this program, so no claim is made about its value as training data.
-- **(early access)** Checkpoint, cookbook and licence can change before release; replace every line marked (early access) at the GTC Berlin release.
-- **Not real time at these settings.** 7 to 13 generated frames per second on one GB300 for 900-frame rollouts.
-- **Dataset licence.** AgiBotWorld-Beta is CC BY-NC-SA 4.0 (see Dataset). This recipe is a guide: it points at the publisher's download and ships no data.
-
-## Related measurement, different model (not part of this recipe's results)
-
-A Cosmos3-Nano forward-dynamics model post-trained on AgiBot data (8× GB200, 1000 iterations, a different checkpoint
-from `Cosmos3-Nano-Sim-Bimanual`, scored with an action-conditioned prediction error rather than PSNR) reached a held-out
-error of 0.0012 against 0.0197 for a baseline that predicts the mean action chunk. It shows that the post-training path
-works on this data; it says nothing about the released simulator checkpoint.
+- **Embodiment.** The converter handles AgiBot G1 episodes with the `robotiq` gripper calibration (every episode of
+  tasks 600 and 596); other AgiBot grippers need the matching audited calibration (`--gripper-hardware`). Do not feed
+  it LIBERO or SO-101 actions.
+- **The literal sidecar gate is not possible.** The release's training bundle holds three different episodes from the
+  ones behind its published `agibot_{001,006,034}` action sidecars (different scenes and camera-mask spans), so the
+  converter was checked against the framework's data loader on the bundle (max difference 0.0) and the published
+  sidecars were checked for structure only. See [`manifests/RECORD.md`](assets/sim-bimanual/manifests/RECORD.md).
+- **Not a policy evaluator yet.** Whether this simulator ranks policy checkpoints the way a physics simulator does has
+  not been measured. Use it for previewing and debugging a policy, not for deciding between checkpoints.
+- **Not a data generator yet.** No policy has been post-trained on this simulator's output here, so no claim is made
+  about its value as training data.
+- **Not real time at these settings:** about 17.6 generated frames per second on one GB300.
+- **Dataset licence.** AgiBotWorld-Beta is CC BY-NC-SA 4.0 (see Dataset). This recipe points at the publisher's
+  download and ships no data; the media in this folder are derivative works under the same licence (see
+  [captions](assets/sim-bimanual/captions.md)).
 
 ## Document Information
 
-|                             |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Framework                   | `cosmos-framework` revision `573d46507dcd91155d7f371b366da760a7a5f718` and cookbook revision `190b6565726fea4695ad168ee6bf197d30ca7c88` (early access; `cookbooks/cosmos3/simulation/bimanual/bimanual.md`; public at GTC Berlin); the checkpoint does not load on public `c23e51f2f157ae3e51cfcd86ebfb5464850894f2`; the public bimanual documentation revision is not known yet (see Prerequisites)                                                                                                                                                                                                                                                  |
-| Model                       | `nvidia/Cosmos3-Nano-Sim-Bimanual`, revision `1d95a0b5b19d49a24aceebf578cf5e85db310ac0` (early access)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Data                        | `agibot-world/AgiBotWorld-Beta`, revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278`, CC BY-NC-SA 4.0, user-downloaded, not bundled; episode manifest `assets/sim-bimanual/manifests/heldout_20.json`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Tools (sha256, this folder) | `select_episodes.py` `b690b663d93282c4031efc0308d1fedc2395b314696a0a670a4c0dc78aef518d` (904 lines), `convert_agibot_episode.py` `9098f6256c7e5e0ea21d1ec31bc80622c71ac0b86ddd86b02ea9f3604b55e09d` (174 lines; the record's original `f6ea4df7…605105c`, 167 lines, hard-coded two local paths that this copy reads from environment variables), `eval_fidelity.py` `63f73ad3d47fd55b60fa76872937aa063a99f6b97588615674588c3b6f391503` (1113 lines), `make_review_page.py` `f4a6b917488e235625a3f738349e8c2d3e2c2aa3041ee1569799e98da65048c4` (793 lines); `make_manifests.py` is new (reconstruction; hash in `assets/sim-bimanual/tools/README.md`) |
-| Records                     | one RECORD.md per run (run01 bundled 901, run02 bundled 61, run03 to run07 bundled controls and seeds, run08 held-out task 600 and task 596, run09 four-episode swap probe, run10 twenty-episode swap control) plus the held-out data record, in the internal run-records repository under `recipes/sim-bimanual/`; `assets/sim-bimanual/results/metrics.json` names the record behind every number                                                                                                                                                                                                                                                    |
-| Measured on                 | 1× GB300, 2026-10-01 → 2026-10-07; 20 held-out AgiBotWorld-Beta episodes, two tasks; wrong-action control on the same 20 episodes, 2026-10-07                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|             |                                                                                                                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework   | `cosmos-framework` `86e3528d791446ac9928bfff8432951b23d8bf47` (`main`, 2026-11-06); inference code unchanged, the recipe's scripts are in this folder                        |
+| Model       | `nvidia/Cosmos3-Nano-Sim-Bimanual`, revision `a9e3adf6235f56f0082be7a96e497348c286c472` (schema 5)                                                                           |
+| Data        | `agibot-world/AgiBotWorld-Beta`, revision `2252b3fdc88dc67fa5d5e4b771e1b86f5e71c278`, CC BY-NC-SA 4.0, user-downloaded, not bundled; episodes in `manifests/heldout_20.json` |
+| Tools       | sha256 and line counts in [`assets/sim-bimanual/tools/README.md`](assets/sim-bimanual/tools/README.md)                                                                       |
+| Measured on | 1× GB300, 2026-11-09                                                                                                                                                         |

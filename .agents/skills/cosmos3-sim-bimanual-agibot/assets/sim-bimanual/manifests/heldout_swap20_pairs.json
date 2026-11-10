@@ -1,30 +1,11 @@
 {
-  "_about": "Cross-task action-swap control on all 20 held-out episodes (run10, 2026-10-07): each episode is re-rolled from its own real first frame and prompt with the 900 actions of a partner episode of the other task.",
-  "_record": "sim-bimanual run records (internal records repository, folder recipes/sim-bimanual of the machine branch that ran the study); paths below are relative to that folder",
-  "_sources": [
-    "runs/run10_heldout_swap20/RECORD.md (Inputs: pairing rule, 20 rows, rows 0 and 1 equal run09 rows 0 and 1)",
-    "runs/run09_heldout_swap/RECORD.md (row naming pattern and the four-episode probe)"
-  ],
+  "_about": "Cross-task action-swap control on all 20 held-out episodes: each episode is re-rolled from its own real first frame and prompt with the 900 actions of a partner episode of the other task.",
+  "_record": "Episode selection of the earlier study of this recipe on the early-access checkpoint (its run records are not published). The 2026-11-09 measurement on the released checkpoint used exactly these episodes; its record is manifests/RECORD.md.",
   "pairing_rule": "the i-th task-600 episode (ids sorted ascending) is paired with the i-th task-596 episode, i = 0..9; both directions per pair -> 10 task-600-frame rows + 10 task-596-frame rows",
-  "row_naming": "swap_<frame episode>_actions_<action episode>, the pattern of run09; the record of run10 states the rule and the row count, not the 20 names, so names for pairs 2..9 follow the pattern",
-  "rollout_settings": "identical to the matched rollouts: FORWARD_DYNAMICS, resolution 480, image-size 480, action-chunk-size 900, num-frames 901, 4 steps, autoregressive, seed 42, latency preset, no torch.compile, no diffusion cache, no guardrails, video-save-quality 4",
+  "row_naming": "swap_<frame episode>_actions_<action episode>, as tools/make_manifests.py swap writes them",
+  "rollout_settings": "identical to the matched rollouts: the documented FORWARD_DYNAMICS command of docs/inference_bimanual.md, 4 steps, seed 42, KV cache 64, attention sink 8, autoregressive, latency preset, no torch.compile, no diffusion cache, no guardrails; each row carries guidance 3.0, shift 5.0, 900 actions, 901 frames, 30 fps",
   "output_dir": "outputs/cosmos3_nano_simulation_humanoid_heldout_swap20",
-  "eval": "tools/eval_fidelity.py --batch entries_swap20_vs_real.jsonl --out heldout/eval/swap20_vs_real --align auto --device cuda (282.8 s on GPU; alignment 'top' chosen for 20/20)",
-  "reproducibility_note": "rows 0 and 1 (815362 <-> 810449) are the first two rows of run09; run10 reproduced run09's mp4 files bit-for-bit on the same machine",
-  "early_probe_run09": [
-    {
-      "name": "swap_task600_ep815362_actions_task596_ep810449"
-    },
-    {
-      "name": "swap_task596_ep810449_actions_task600_ep815362"
-    },
-    {
-      "name": "swap_task600_ep824031_actions_task596_ep813610"
-    },
-    {
-      "name": "swap_task596_ep813610_actions_task600_ep824031"
-    }
-  ],
+  "eval": "tools/eval_fidelity.py --batch heldout/eval/entries_swap20_vs_real.jsonl --out heldout/eval/swap20_vs_real --align auto --device cuda (about 90 s on one GPU; alignment 'top' chosen for 20 of 20)",
   "pairs": [
     {
       "pair_index": 0,

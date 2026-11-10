@@ -1,12 +1,6 @@
 {
   "_about": "The 20 held-out AgiBotWorld-Beta episodes of the Cosmos3-Nano-Sim-Bimanual recipe (matched-action rollouts, frozen-first-frame control and cross-task action-swap control all use exactly these 20).",
-  "_record": "sim-bimanual run records (internal records repository, folder recipes/sim-bimanual of the machine branch that ran the study); paths below are relative to that folder",
-  "_sources": [
-    "runs/heldout/RECORD.md (section 'Episodes'; tars and selection steps)",
-    "runs/run08_heldout_task600/RECORD.md (Data)",
-    "runs/run08_heldout_task596/RECORD.md (Data)",
-    "README.md (Dataset and licence)"
-  ],
+  "_record": "Episode selection of the earlier study of this recipe on the early-access checkpoint (its run records are not published). The 2026-11-09 measurement on the released checkpoint used exactly these episodes; its record is manifests/RECORD.md.",
   "dataset": {
     "repo_id": "agibot-world/AgiBotWorld-Beta",
     "repo_type": "dataset",
@@ -17,7 +11,7 @@
     "start_frame": 0,
     "num_actions": 900,
     "num_video_frames": 901,
-    "camera": "head_color.mp4 (640x480 at 30 fps, centre-cropped to 640x360, crop_y0 = 60)",
+    "camera": "head_color.mp4 (640x480 at 30 fps), resized to 640x360 as in training (agibot_video.resize_to_640x360)",
     "proprio": "proprio_stats.h5"
   },
   "selection": {
@@ -52,7 +46,6 @@
     "600": {
       "task_name": "Hang the key on the hook and place the bag in the storage box",
       "first_action_text": "Pick up the key on the cabinet with left arm.",
-      "prompt": "Hang the key on the hook and place the bag in the storage box. Pick up the key on the cabinet with left arm.",
       "video_frames_range_of_selected": "1002-1705",
       "episodes": [
         815362,
@@ -70,7 +63,6 @@
     "596": {
       "task_name": "Place the inner pot with rice into the rice cooker to cook",
       "first_action_text": "Press the lid-opening button with the left arm to open the rice cooker lid.",
-      "prompt": "Place the inner pot with rice into the rice cooker to cook. Press the lid-opening button with the left arm to open the rice cooker lid.",
       "video_frames_range_of_selected": "1748-2457",
       "episodes": [
         810449,
@@ -188,5 +180,5 @@
       "episode_id": 815752
     }
   ],
-  "_note_prompt": "The prompt of every held-out rollout is the task name followed by the first annotated action text of the dataset. The two prompts above are quoted from assets/captions.md of the records; the records do not state that the first action text is identical for all ten episodes of a task, so read it from task_info/task_<id>.json per episode when you convert."
+  "_note_prompt": "The rollouts use the fixed per-episode prompts in prompts_heldout_20.json (starting scene, both arms, task text; nothing that happens later). The task texts above are the dataset's."
 }
