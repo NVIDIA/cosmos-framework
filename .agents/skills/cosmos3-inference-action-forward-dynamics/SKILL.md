@@ -9,7 +9,7 @@ description: >
   autoregressively", or asks which backend serves action forward dynamics on their GPU. Block skill of the
   Action row: the cookbook README and every sample asset live in the entry skill ../cosmos3-inference-action.
   Not for inverse dynamics (video to actions: the inverse-dynamics block), policy (the policy block),
-  text/image-to-video without actions (cosmos3-generate-media) or quantizing checkpoints
+  text/image-to-video without actions (cosmos3-inference-generate-media) or quantizing checkpoints
   (cosmos3-quantization).
 ---
 
@@ -56,7 +56,7 @@ Before the first command of any variant, including the single AV smoke rollout:
 - Inverse dynamics (ego-motion from a video) is `../cosmos3-inference-action-inverse-dynamics/SKILL.md`; policy (future
   observations plus actions from an instruction) is `../cosmos3-inference-action-policy/SKILL.md`; the row's README, Action
   Definition and assets are `../cosmos3-inference-action/SKILL.md`; text/image-to-video without actions is
-  `../cosmos3-generate-media/SKILL.md`; environment failures go to `../cosmos3-env-troubleshoot/SKILL.md`
+  `../cosmos3-inference-generate-media/SKILL.md`; environment failures go to `../cosmos3-env-troubleshoot/SKILL.md`
 
 ## Bundled assets (vendored in the entry skill)
 
@@ -89,7 +89,7 @@ directory (the Variant 2 and 4 DROID cells also accept `COSMOS3_DROID_ROOT`).
 | `nvidia/Cosmos3-Edge`                                     | framework notebook: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` ... nothing else changes"; vLLM-Omni notebook: a Nano **or** Edge server, and (FP8) "the launch below serves either tier"; setup guide: "Edge is the compact 4B checkpoint" whose "action weights are not served by this pipeline" (TensorRT-LLM); not in the diffusers `MODEL_IDS`, not in the SGLang notebook | one GPU, the Nano launch with the model name swapped                                                                       |
 | `nvidia/Cosmos3-Super`                                    | framework notebook: `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers: "Cosmos3-Super also ships `action_gen=True`, so passing `model="Cosmos3-Super"` works unchanged"; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"                                                                            | no FD notebook launches it; the setup guide's Super servers use four GPUs                                                  |
 
-Skill note (not in the source): no FD notebook states a footprint or runtime; the measured figures in `../cosmos3-generate-media/references/skill-notes.md` § 2 are for audiovisual generation.
+Skill note (not in the source): no FD notebook states a footprint or runtime; the measured figures in `../cosmos3-inference-generate-media/references/skill-notes.md` § 2 are for audiovisual generation.
 
 ## Variant 1 — cosmos_framework (`cosmos_framework.scripts.inference`, in the checkout)
 
@@ -266,7 +266,7 @@ trtllm-serve nvidia/Cosmos3-Nano \
 Setup guide: "TensorRT-LLM serves Edge for text-to-image, text-to-video, and image-to-video only: Edge has no audio tower,
 its action weights are not served by this pipeline" — Nano is the TensorRT-LLM forward-dynamics model. Guardrails: the
 notebook sends `"use_guardrails": True`; README: `use_guardrails: false` (TensorRT-LLM `extra_params`); setup guide:
-`TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` before starting the server. Skill note (not in the source): install with `../cosmos3-generate-media/references/trt-llm.md`
+`TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` before starting the server. Skill note (not in the source): install with `../cosmos3-inference-generate-media/references/trt-llm.md`
 § 7.2 Route A — the `tensorrt_llm==1.3.0rc27` wheel (`torch==2.13.0+cu130`), the YAML-configs checkout `bca6761` as `TRTLLM_ROOT` and the block's `export CUDA_HOME=...` line — then the
 serve block above (§ 7.7 has the same lines): it served this AV request on three eval cells, eval 2026-11-08 (HTTP 200, `video` (61,480,832,3), `action` (60,9), `frame_rate` 10). The README's
 devel-container source build at `cc63e66` needs a devel tag whose torch/NCCL match the checkout (`devel:1.4.0rc3` failed at CMake, `undefined symbol: ncclGetPeerDeviceLeInfo`); use it only for a VisualGen change newer than rc27 (`references/trt-llm.md`).
@@ -341,7 +341,7 @@ Edge: the same block with `vllm serve nvidia/Cosmos3-Edge`. Prerequisites: "To d
 `--no-guardrails` to `vllm serve`" (both blocks do); "When running with guardrails enabled, also set and pass `HF_TOKEN`
 to the container". Setup guide: "always pass `--init-timeout 1800`"; "vLLM-Omni prints `Application startup complete.`
 when the API is ready". Skill note (not in the source): the block mounts no Hugging Face cache and passes no `HF_TOKEN`, so
-every new container downloads the checkpoint anonymously (`../cosmos3-generate-media/references/skill-notes.md` § 4: headless pattern, token).
+every new container downloads the checkpoint anonymously (`../cosmos3-inference-generate-media/references/skill-notes.md` § 4: headless pattern, token).
 
 Client: "`%pip install matplotlib pandas pyarrow "lerobot[dataset]"`" and "`%pip install av==18.0.0`", plus `requests`. Skill note (not in the source): headless
 client venv for the AV request — `uv venv --no-config .venv-client --python 3.12 --seed --managed-python && uv pip install --no-config --python .venv-client/bin/python requests pillow ipython av==18.0.0`,
@@ -420,8 +420,8 @@ curl http://localhost:30000/v1/models
 ```
 
 Skill note (not in the source): the `-e SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` and `-e HF_TOKEN` lines are skill additions (the notebook passes neither; the same two lines as
-`../cosmos3-inference-action-inverse-dynamics/SKILL.md` and `../cosmos3-generate-media/SKILL.md` Variant 4): without the first the server loads the gated `nvidia/Cosmos-1.0-Guardrail` at startup and exits with
-`GatedRepoError 401` (all four eval agents' verbatim launches, eval 2026-11-08; the per-request `"guardrails": False` below does not prevent it; `../cosmos3-generate-media/references/skill-notes.md` § 3); without `HF_TOKEN` anonymous Hub downloads are rate-limited (`../cosmos3-generate-media/SKILL.md` Variant 4, `../cosmos3-generate-media/references/sglang.md` § 2).
+`../cosmos3-inference-action-inverse-dynamics/SKILL.md` and `../cosmos3-inference-generate-media/SKILL.md` Variant 4): without the first the server loads the gated `nvidia/Cosmos-1.0-Guardrail` at startup and exits with
+`GatedRepoError 401` (all four eval agents' verbatim launches, eval 2026-11-08; the per-request `"guardrails": False` below does not prevent it; `../cosmos3-inference-generate-media/references/skill-notes.md` § 3); without `HF_TOKEN` anonymous Hub downloads are rate-limited (`../cosmos3-inference-generate-media/SKILL.md` Variant 4, `../cosmos3-inference-generate-media/references/sglang.md` § 2).
 
 Client: "`%pip install matplotlib pandas pyarrow "lerobot[dataset]"`", "`%pip install av==18.0.0`", `requests` (client venv: the Variant 4 skill note). The
 configuration cell reads `COSMOS3_FRAMEWORK_PATH` ("the root of a local checkout of the **cosmos-framework** repository
@@ -464,7 +464,7 @@ vLLM-Omni / SGLang — `final.json` `status` `completed`; TensorRT-LLM — `vide
 Skill note (not in the source): check the file before reporting it. Video: `ffprobe -v error -select_streams v:0
 -count_frames -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames,duration -of default=nw=1 <file>`
 (`ffprobe` is on neither a bare host nor in the venvs: `apt-get update && apt-get install -y ffmpeg` as root, or the `av` decoder one-liner in
-`../cosmos3-generate-media/SKILL.md` "Verify the output"). Record codec, size, frames, fps, runtime and GPU memory in `result_summary.md`: framework CLI —
+`../cosmos3-inference-generate-media/SKILL.md` "Verify the output"). Record codec, size, frames, fps, runtime and GPU memory in `result_summary.md`: framework CLI —
 `nvidia-smi --query-gpu=memory.used --format=csv,noheader -lms 1000 > gpu_mem.csv &` during the run, `kill %1` after, report the max; diffusers — `torch.cuda.max_memory_allocated()`; vLLM-Omni — `final.json` `peak_memory_mb`.
 
 ## Reference files
@@ -493,5 +493,5 @@ Origin: the forward-dynamics notebooks of `.agents/skills/cookbooks/cosmos3/gene
 | `../cosmos3-inference-action-policy/SKILL.md`           | Policy (observations plus action chunk from an instruction)              |
 | `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv for Variant 1 and the LeRobot readers        |
 | `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server failures                                          |
-| `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation on the same backends; measured server notes       |
+| `../cosmos3-inference-generate-media/SKILL.md`          | Audiovisual generation on the same backends; measured server notes       |
 | `../cosmos3-quantization/SKILL.md`                      | Making your own FP8 checkpoint for the FP8 routes of Variants 2, 4 and 5 |

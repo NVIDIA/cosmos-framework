@@ -235,7 +235,7 @@ pip install -e .
 "For Python-only changes, the upstream guide also documents `TRTLLM_USE_PRECOMPILED=1 pip install -e .` to reuse
 precompiled binaries while installing the checkout in editable mode." Skill note (not in the source): do not — it resolves
 an unpublished `+<sha>` version and, when forced to a published wheel, an ABI mismatch
-(`../../cosmos3-generate-media/references/trt-llm.md` § 7.5; eval 2026-11-08, one cell).
+(`../../cosmos3-inference-generate-media/references/trt-llm.md` § 7.5; eval 2026-11-08, one cell).
 
 "Then install the Cosmos3 guardrail package in the same environment unless you explicitly disable guardrails before
 starting the server:"
@@ -254,7 +254,7 @@ needed there.
 ### 2. The install this skill runs: Route A of the generate-media skill (skill note, not in the source)
 
 With or without Docker (the § 1 source build is the fallback, not the smoke path), run the Route A block of
-`../../cosmos3-generate-media/references/trt-llm.md` § 7.2 as ONE shell call, verbatim: the `tensorrt_llm==1.3.0rc27` wheel
+`../../cosmos3-inference-generate-media/references/trt-llm.md` § 7.2 as ONE shell call, verbatim: the `tensorrt_llm==1.3.0rc27` wheel
 (`torch==2.13.0+cu130`, `torchvision==0.28.0+cu130`, OpenMPI and `ffmpeg` from apt), its `export CUDA_HOME=…/nvidia/cu13`
 line and the pinned checkout `bca6761ab84fbcd58fc7f914eade7de48b32e35e` fetched by SHA as `TRTLLM_ROOT` (the checkout
 supplies only `examples/visual_gen/configs/cosmos3-nano-1gpu.yaml`; § 7.3). Verified for this action route by the eval

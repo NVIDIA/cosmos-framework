@@ -9,7 +9,7 @@ description: >
   Cosmos3 action inference", "which action mode or backend do I need", "where are the Cosmos3 AV / DROID / UMI
   assets", "what is the Cosmos3 action representation", "predict future frames from a trajectory", "recover the
   ego-motion from a video" or "run the Cosmos3 DROID policy", before handing off. Not for audiovisual generation
-  without actions (cosmos3-generate-media), post-training (finetune cookbook) or quantizing checkpoints
+  without actions (cosmos3-inference-generate-media), post-training (finetune cookbook) or quantizing checkpoints
   (cosmos3-quantization).
 ---
 
@@ -67,7 +67,7 @@ Before the first command of any block, including a single AV smoke run:
 - The Cosmos3 NIM serves all three modes through `POST /v1/infer`: the NIM cookbook page
   [`../cookbooks/cosmos3/nim/action.md`](../cookbooks/cosmos3/nim/action.md) and its skill
   `../cosmos3-inference-nim/SKILL.md` (not part of this row)
-- Not for audiovisual generation without actions (`../cosmos3-generate-media/SKILL.md`), environment failures
+- Not for audiovisual generation without actions (`../cosmos3-inference-generate-media/SKILL.md`), environment failures
   (`../cosmos3-env-troubleshoot/SKILL.md`), post-training (README "Post-Train" pointer:
   `../cookbooks/cosmos3/generator/action/finetune/README.md`) or quantizing a checkpoint (the
   `cosmos3-quantization` skill, see "FP8 checkpoints")
@@ -198,7 +198,7 @@ do not).
 | `nvidia/Cosmos3-Edge-FP8`, `nvidia/Cosmos3-Nano-FP8`, `nvidia/Cosmos3-Super-FP8` | the README's FP8 pointer and the notebooks' FP8 sections ("FP8 checkpoints" above)                                                                                                                                                                                                                                                                                                                                                                        |
 
 Skill note (not in the source): no source of the row states a GPU-memory footprint or a runtime for action inference. The
-measured figures in `../cosmos3-generate-media/references/skill-notes.md` § 2 are for audiovisual generation on the same
+measured figures in `../cosmos3-inference-generate-media/references/skill-notes.md` § 2 are for audiovisual generation on the same
 checkpoints, not action measurements.
 
 ## Quickstarts (README, verbatim) and the block each belongs to
@@ -405,7 +405,7 @@ vLLM-Omni: "Policy inference uses async `POST /v1/videos` to retrieve a rollout 
 TensorRT-Edge-LLM: "writes `action.json` (`[batch, chunk, action_dimension]`)". The per-variant checks (what each
 notebook's viewer cell printed, the expected shapes, the tool one-liners) are the "Verify the output" sections of the three
 blocks. Skill note (not in the source): `ffprobe` is on neither a bare host nor in the eval's task container; the video,
-image, JSON and safetensors check commands are in each block and in `../cosmos3-generate-media/SKILL.md` "Verify the
+image, JSON and safetensors check commands are in each block and in `../cosmos3-inference-generate-media/SKILL.md` "Verify the
 output". Never report a file you did not inspect.
 
 ## Things not obvious from the docs (skill notes, not in the source)
@@ -461,7 +461,7 @@ vendored here (the cookbook keeps its `assets` directory as LFS and its `finetun
 | `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv (`COSMOS3_REPO`, uv 0.11.29) for the cosmos_framework variants     |
 | `../cosmos3-inference/SKILL.md`                         | Framework-native inference reference (`cosmos_framework.scripts.inference` flags)              |
 | `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server / container failures                                                    |
-| `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation on the same backends; headless-server pattern and measured server notes |
+| `../cosmos3-inference-generate-media/SKILL.md`          | Audiovisual generation on the same backends; headless-server pattern and measured server notes |
 | `../cosmos3-inference-nim/SKILL.md`                     | Operating the Cosmos3 NIM, which serves the action modes through `POST /v1/infer`              |
 | `../cosmos3-quantization/SKILL.md`                      | Quantizing your own FP8 checkpoint (the released FP8 routes: "FP8 checkpoints" above)          |
 | `../cosmos3-skill-authoring/SKILL.md`                   | Editing the blocks' eval cases and running the eval                                            |

@@ -12,7 +12,7 @@ description: >
   TensorRT-Edge-LLM" or "start the Cosmos3 policy server for RoboLab". Not for forward
   dynamics (../cosmos3-inference-action-forward-dynamics), inverse dynamics
   (../cosmos3-inference-action-inverse-dynamics), audiovisual generation
-  (../cosmos3-generate-media) or post-training the policy. Row entry point:
+  (../cosmos3-inference-generate-media) or post-training the policy. Row entry point:
   ../cosmos3-inference-action.
 ---
 
@@ -60,7 +60,7 @@ Before the first command of any variant:
 - Forward dynamics (video from a given action trajectory) → `../cosmos3-inference-action-forward-dynamics/SKILL.md`;
   inverse dynamics (actions from a video) → `../cosmos3-inference-action-inverse-dynamics/SKILL.md`; the row's README,
   Action Definition and shared assets → `../cosmos3-inference-action/SKILL.md`
-- Audiovisual generation is `../cosmos3-generate-media/SKILL.md`; environment problems → `../cosmos3-env-troubleshoot/SKILL.md`
+- Audiovisual generation is `../cosmos3-inference-generate-media/SKILL.md`; environment problems → `../cosmos3-env-troubleshoot/SKILL.md`
 
 ## Bundled assets
 
@@ -481,13 +481,13 @@ in the public cosmos-framework repository (`main` bbd4a67); superseded by this s
 
 ## Related skills
 
-| Skill                                                   | When to use                                                                                                                                                                |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-inference-action/SKILL.md`                  | Entry point of the Action row: README, Action Definition, vendored sample assets                                                                                           |
-| `../cosmos3-inference-action-forward-dynamics/SKILL.md` | Forward dynamics: future video from a start image plus an action trajectory                                                                                                |
-| `../cosmos3-inference-action-inverse-dynamics/SKILL.md` | Inverse dynamics: ego-motion / end-effector trajectories from a video                                                                                                      |
-| `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv (`COSMOS3_REPO`, Variant 5's `uv sync`)                                                                                                        |
-| `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / container failures                                                                                                                                         |
-| `../cosmos3-generate-media/SKILL.md`                    | Same server images (vLLM-Omni, SGLang) for audiovisual generation; headless-server pattern and guardrail switches in `../cosmos3-generate-media/references/skill-notes.md` |
-| `../cosmos3-quantization/SKILL.md`                      | Quantizing your own checkpoint (no policy source documents an FP8 route; the row's FP8 pointer is in the entry skill)                                                      |
-| `../cosmos3-skill-authoring/SKILL.md`                   | Editing this skill's eval cases and running the eval                                                                                                                       |
+| Skill                                                   | When to use                                                                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `../cosmos3-inference-action/SKILL.md`                  | Entry point of the Action row: README, Action Definition, vendored sample assets                                                                                                     |
+| `../cosmos3-inference-action-forward-dynamics/SKILL.md` | Forward dynamics: future video from a start image plus an action trajectory                                                                                                          |
+| `../cosmos3-inference-action-inverse-dynamics/SKILL.md` | Inverse dynamics: ego-motion / end-effector trajectories from a video                                                                                                                |
+| `../cosmos3-setup/SKILL.md`                             | Framework checkout and venv (`COSMOS3_REPO`, Variant 5's `uv sync`)                                                                                                                  |
+| `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / container failures                                                                                                                                                   |
+| `../cosmos3-inference-generate-media/SKILL.md`          | Same server images (vLLM-Omni, SGLang) for audiovisual generation; headless-server pattern and guardrail switches in `../cosmos3-inference-generate-media/references/skill-notes.md` |
+| `../cosmos3-quantization/SKILL.md`                      | Quantizing your own checkpoint (no policy source documents an FP8 route; the row's FP8 pointer is in the entry skill)                                                                |
+| `../cosmos3-skill-authoring/SKILL.md`                   | Editing this skill's eval cases and running the eval                                                                                                                                 |

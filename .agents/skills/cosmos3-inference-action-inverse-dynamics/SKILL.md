@@ -56,7 +56,7 @@ Before the first command of any variant:
 - For forward dynamics (image + trajectory -> video) use `../cosmos3-inference-action-forward-dynamics/SKILL.md`; for
   policy (image + instruction + state -> video + actions) `../cosmos3-inference-action-policy/SKILL.md`; the README,
   action definition and assets are in `../cosmos3-inference-action/SKILL.md`
-- For audiovisual generation (t2i / t2v / i2v) this is the wrong skill (`../cosmos3-generate-media/SKILL.md`); for
+- For audiovisual generation (t2i / t2v / i2v) this is the wrong skill (`../cosmos3-inference-generate-media/SKILL.md`); for
   environment setup problems hand off to `../cosmos3-env-troubleshoot/SKILL.md`
 
 ## Bundled assets (in the entry skill)
@@ -85,14 +85,14 @@ LFS objects at the pinned commit); then point `resolve_input(...)` / `asset_path
 ## Model sizes vs GPU
 
 The sources name models and GPU counts, not memory figures (skill note, not in the source: the bf16 text-to-image
-footprints in `../cosmos3-generate-media/references/skill-notes.md` § 2 are audiovisual measurements, not action ones):
+footprints in `../cosmos3-inference-generate-media/references/skill-notes.md` § 2 are audiovisual measurements, not action ones):
 
-| Checkpoint             | What the sources say                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nvidia/Cosmos3-Nano`  | The default of every notebook ("Runs `Cosmos3-Nano` on every line of the spec"; README: inverse dynamics "using the Cosmos3-Nano"); one GPU in every launch (`--gpus '"device=0"'`, `cosmos3-nano-1gpu.yaml`, `CUDA_VISIBLE_DEVICES=0`)                                                                                                                                                                                                                                             |
-| `nvidia/Cosmos3-Edge`  | Framework: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` or `Cosmos3-Super` before the configuration cell — nothing else changes"; vLLM-Omni: a Nano or an Edge server ("The commands are mutually exclusive"); setup guide: "Edge is the compact 4B checkpoint"; TensorRT-LLM (the generate-media notebook, `../cosmos3-generate-media/references/trt-llm.md`): "its action weights are not served by this pipeline"; the diffusers notebook's `MODEL_IDS` lists Nano and Super only |
-| `nvidia/Cosmos3-Super` | Framework `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers `MODEL_IDS["Cosmos3-Super"]`; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"; setup guide: TensorRT-LLM Super on "four GPUs"                                                                                                                                                                                                               |
-| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`                                                                                                                                                                                                                      |
+| Checkpoint             | What the sources say                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nvidia/Cosmos3-Nano`  | The default of every notebook ("Runs `Cosmos3-Nano` on every line of the spec"; README: inverse dynamics "using the Cosmos3-Nano"); one GPU in every launch (`--gpus '"device=0"'`, `cosmos3-nano-1gpu.yaml`, `CUDA_VISIBLE_DEVICES=0`)                                                                                                                                                                                                                                                       |
+| `nvidia/Cosmos3-Edge`  | Framework: "set `COSMOS3_CHECKPOINT_PATH=Cosmos3-Edge` or `Cosmos3-Super` before the configuration cell — nothing else changes"; vLLM-Omni: a Nano or an Edge server ("The commands are mutually exclusive"); setup guide: "Edge is the compact 4B checkpoint"; TensorRT-LLM (the generate-media notebook, `../cosmos3-inference-generate-media/references/trt-llm.md`): "its action weights are not served by this pipeline"; the diffusers notebook's `MODEL_IDS` lists Nano and Super only |
+| `nvidia/Cosmos3-Super` | Framework `COSMOS3_CHECKPOINT_PATH=Cosmos3-Super`; diffusers `MODEL_IDS["Cosmos3-Super"]`; vLLM-Omni FP8: "For Super, add the upstream `--tensor-parallel-size 4` and `--enable-layerwise-offload` options if needed"; setup guide: TensorRT-LLM Super on "four GPUs"                                                                                                                                                                                                                         |
+| FP8 checkpoints        | `nvidia/Cosmos3-Nano-FP8` and `nvidia/Cosmos3-Super-FP8` (diffusers, vLLM-Omni), `nvidia/Cosmos3-Edge-FP8` (vLLM-Omni), `nvidia/Cosmos3-Nano-FP8` (SGLang) — the FP8 line of each variant; to quantize your own checkpoint: `../cosmos3-quantization/SKILL.md`                                                                                                                                                                                                                                |
 
 All checkpoints are gated on Hugging Face: the notebooks require model access and `uvx hf@latest auth login` or
 `HF_TOKEN`. "Generator requires the Guardrail" (the gated `nvidia/Cosmos-1.0-Guardrail`); the README's switches to run
@@ -257,7 +257,7 @@ The notebook's Nano launch ("start that server in a terminal from the cookbook r
 container's port `8000` to host port `8001`, which matches the notebook's default `http://localhost:8001` endpoint"),
 plus two lines that are not in the notebook, marked: `-e HF_TOKEN` (Prerequisites: "also set and pass `HF_TOKEN` to
 the container" — stated for guardrails, but the checkpoint download is gated too;
-`../cosmos3-generate-media/references/vllm-omni.md` § 7.1: anonymous Hub downloads were rate-limited on a cold cache)
+`../cosmos3-inference-generate-media/references/vllm-omni.md` § 7.1: anonymous Hub downloads were rate-limited on a cold cache)
 and the setup guide's cache mount `-v "${HF_HOME}:/root/.cache/huggingface"` (its vLLM-Omni Docker command; without it
 every container start downloads the checkpoint again):
 
@@ -289,7 +289,7 @@ curl http://localhost:8001/v1/models
 
 Readiness: the `curl` above "returns model metadata" when the server is up; setup guide: "vLLM-Omni prints
 `Application startup complete.` when the API is ready" and "always pass `--init-timeout 1800`". Headless pattern (poll
-`/v1/models`, keep `docker logs`, `docker stop && docker rm`): `../cosmos3-generate-media/references/skill-notes.md`
+`/v1/models`, keep `docker logs`, `docker stop && docker rm`): `../cosmos3-inference-generate-media/references/skill-notes.md`
 § 4. Edge: the reference's "Cosmos3-Edge" block — the same command with `nvidia/Cosmos3-Edge`.
 
 Client: the configuration cell verbatim (`find_framework_root()`: "Launch from the Framework checkout or a notebook
@@ -326,7 +326,7 @@ Inference; Visualize the Predicted Action). The route is `POST /v1/actions/gener
 The notebook's cache block and Nano launch ("Start the server in a terminal from the cookbook root"), plus two `-e`
 lines that are not in the notebook, marked: `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` — the generate-media eval found that
 `lmsysorg/sglang:dev` loads the gated guardrail at startup and exits with `GatedRepoError 401` without it
-(`../cosmos3-generate-media/references/sglang.md` § 2; the request-level `guardrails: False` this notebook sends does
+(`../cosmos3-inference-generate-media/references/sglang.md` § 2; the request-level `guardrails: False` this notebook sends does
 not prevent that exit) — and `HF_TOKEN` (anonymous Hub downloads are rate-limited on a cold cache; same source). Both
 are skill additions not re-verified for the action route:
 
@@ -357,9 +357,9 @@ curl http://localhost:30000/v1/models
 ```
 
 Readiness: the `curl` above; the generate-media eval observed `GET /health` turning from 503 to 200
-`{"status":"ok"}` after `The server is fired up and ready to roll!` (`../cosmos3-generate-media/references/sglang.md`
+`{"status":"ok"}` after `The server is fired up and ready to roll!` (`../cosmos3-inference-generate-media/references/sglang.md`
 § 2 skill note and § 7.1 — a text-to-image measurement, not this notebook's). Headless pattern:
-`../cosmos3-generate-media/references/skill-notes.md` § 4.
+`../cosmos3-inference-generate-media/references/skill-notes.md` § 4.
 
 Client: the configuration cell verbatim (prose: "set `COSMOS3_REPO` to the root of a local checkout of the
 **cosmos-framework** repository"; the cell reads `COSMOS3_FRAMEWORK_PATH`, default two levels above the cookbook root
@@ -390,11 +390,11 @@ Prepare the checked-in AV observation; Run inverse dynamics; Inspect).
 Install: "Follow the shared TensorRT-LLM setup" — the setup guide's source build at `cc63e66daf52644f1441e117bb7ba67d20566016` in `nvcr.io/nvidia/tensorrt-llm/devel:<tag>`
 (`../cookbooks/cosmos3/README.md` "TensorRT-LLM Generator"; quoted in full in `references/trt-llm.md` "Skill notes", with the devel-tag cmake failure and the 17 + 33 min
 the eval 2026-11-08 measured). README: "Both notebooks' current multipart fields were exercised against TensorRT-LLM source revision `cc63e66daf52644f1441e117bb7ba67d20566016`.
-Follow the source pin in the shared setup." Skill note (not in the source): the install this skill runs, with or without Docker on the host, is the Route A block of `../cosmos3-generate-media/references/trt-llm.md`
+Follow the source pin in the shared setup." Skill note (not in the source): the install this skill runs, with or without Docker on the host, is the Route A block of `../cosmos3-inference-generate-media/references/trt-llm.md`
 § 7.2 as ONE shell call, verbatim — the `tensorrt_llm==1.3.0rc27` wheel, its `export CUDA_HOME=…/nvidia/cu13` line (without it `trtllm-serve` exits at import: `AssertionError` in
 `_find_cuda_home()`) and the pinned checkout `bca6761` as `TRTLLM_ROOT` — verified for this action route by the eval 2026-11-08 (action 60 × 9, ~16 s per request). Prerequisite (skill note, not in the source): host NVDEC/NVENC driver libraries available — `video_reference` is decoded on NVDEC, so the driver's `libnvcuvid.so.1` and `libnvidia-encode.so.1` must load where `trtllm-serve` runs
 (check `/sbin/ldconfig -p | grep -E 'nvcuvid|nvidia-encode'` lists both; a container needs `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` at creation), else the first `POST /v1/videos/sync` is HTTP 500 `Failed to load NVENC library` (eval 2026-11-08, two cells);
-remedies and the HTTP 400 mismatch signature: `references/trt-llm.md` "Skill notes" § 2. Never `TRTLLM_USE_PRECOMPILED=1` (§ 7.5). Edge: "its action weights are not served by this pipeline" (`../cosmos3-generate-media/references/trt-llm.md`); the notebook serves Nano.
+remedies and the HTTP 400 mismatch signature: `references/trt-llm.md` "Skill notes" § 2. Never `TRTLLM_USE_PRECOMPILED=1` (§ 7.5). Edge: "its action weights are not served by this pipeline" (`../cosmos3-inference-generate-media/references/trt-llm.md`); the notebook serves Nano.
 
 Serve (notebook: "run this from the TensorRT-LLM checkout. This notebook is a client; keep the server in a separate
 terminal"; skill note, not in the source: with Route A, run the block from the directory § 7.2's block ran in — its first line is the skill's — or export `TRTLLM_VENV` and `TRTLLM_ROOT` yourself):
@@ -410,7 +410,7 @@ trtllm-serve nvidia/Cosmos3-Nano \
 Guardrails: the notebook's request sends `"use_guardrails": True`; the README's switch is `use_guardrails: false`
 (TensorRT-LLM `extra_params`), the setup guide's server-side one `TRTLLM_DISABLE_COSMOS3_GUARDRAILS=1` — use one of
 them for a run without `nvidia/Cosmos-1.0-Guardrail` access. Headless launch / teardown of `trtllm-serve` (`setsid`,
-process group): `../cosmos3-generate-media/references/skill-notes.md` § 4.
+process group): `../cosmos3-inference-generate-media/references/skill-notes.md` § 4.
 
 Client ("Install client-side decoding dependencies in this notebook kernel if needed"):
 
@@ -464,7 +464,7 @@ notes; the notebooks only plotted inline in Jupyter):
   expects `video` as `[T,H,W,3]` (a leading batch dimension of 1 is squeezed) and writes the MP4 at `frame_rate`; the
   last cell prints `predicted action shape:` and `first five predicted action rows`. Skill note: with the client
   python, `python -c "import sys; from safetensors.torch import load; p = load(open(sys.argv[1], 'rb').read()); print({k: (tuple(v.shape), str(v.dtype)) for k, v in p.items()})" <file>.safetensors`;
-  MP4 facts with `ffprobe` or the `av` package as in `../cosmos3-generate-media/SKILL.md` "Verify the output"
+  MP4 facts with `ffprobe` or the `av` package as in `../cosmos3-inference-generate-media/SKILL.md` "Verify the output"
   (`ffprobe` is on neither a bare host nor in these venvs).
 - Record in `result_summary.md`: backend and checkpoint, input clip, the action shape and dtype, wall-clock time and
   GPU memory observed, and for a server its launch command, time-to-ready and request latency.
@@ -495,6 +495,6 @@ cosmos-framework repository; superseded by this skill (the cookbook keeps its `a
 | `../cosmos3-inference-action-policy/SKILL.md`           | Policy (image + instruction + state -> video + action chunk)                       |
 | `../cosmos3-setup/SKILL.md`                             | Framework environment for Variant 2 and the viewer imports                         |
 | `../cosmos3-env-troubleshoot/SKILL.md`                  | CUDA / import / server failures                                                    |
-| `../cosmos3-generate-media/SKILL.md`                    | Audiovisual generation; shared server patterns and TensorRT-LLM install notes      |
+| `../cosmos3-inference-generate-media/SKILL.md`          | Audiovisual generation; shared server patterns and TensorRT-LLM install notes      |
 | `../cosmos3-quantization/SKILL.md`                      | Quantizing your own FP8 checkpoint (the released FP8 checkpoints: FP8 lines above) |
 | `../cosmos3-skill-authoring/SKILL.md`                   | Editing this skill's eval cases                                                    |
