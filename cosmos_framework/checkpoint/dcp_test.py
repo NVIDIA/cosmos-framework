@@ -4,6 +4,7 @@
 import builtins
 import pickle
 import random
+import sys
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,10 @@ from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, pad
 
 pytestmark = [pytest.mark.level(0), pytest.mark.gpus(0)]
 
+# The capacity check reads os.statvfs, os.sysconf and the /dev/shm mount, none of which exist on
+# Windows, where _check_staging_shared_memory returns before reaching them.
+requires_dev_shm = pytest.mark.skipif(sys.platform == "win32", reason="the /dev/shm staging check is POSIX-only")
+
 
 def test_staging_bytes_count_local_allocations_and_page_rounding() -> None:
     tensor = torch.empty(1025, dtype=torch.float32)  # [1025]
@@ -36,6 +41,7 @@ def test_staging_bytes_count_local_allocations_and_page_rounding() -> None:
     assert checkpoint._staging_shared_memory_bytes(state, 4096) == 5 * 4096
 
 
+@requires_dev_shm
 @pytest.mark.parametrize("checkpointer_type", [checkpoint.DistributedCheckpointer, DistillCheckpointer])
 def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type: type) -> None:
     handler = object.__new__(checkpointer_type)
@@ -43,7 +49,7 @@ def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type
     handler.cpu_offload_state_dict = None
     state = {"model": (torch.empty(4), "model")}  # model tensor: [4]
     with (
-        patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=0, f_frsize=4096), create=True),
+        patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)),
         patch("torch.distributed._state_dict_utils._create_cpu_state_dict") as allocate,
         pytest.raises(RuntimeError, match="checkpoint.dcp_async_mode_enabled=false"),
     ):
@@ -78,9 +84,7 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
         # Both ranks fit together in two pages; one page per rank independently
         # fits, but the aggregate does not fit in a one-page shared mount.
         for pages in (2, 1):
-            with patch.object(
-                checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096), create=True
-            ):
+            with patch.object(checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096)):
                 if pages == 2:
                     checkpoint._check_staging_shared_memory(state)
                 else:
@@ -93,10 +97,7 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
             for remote_shortage in (False, True):
                 pages = 0 if remote_shortage and rank == 1 else 1
                 with patch.object(
-                    checkpoint.os,
-                    "statvfs",
-                    return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096),
-                    create=True,
+                    checkpoint.os, "statvfs", return_value=SimpleNamespace(f_bavail=pages, f_frsize=4096)
                 ):
                     if remote_shortage:
                         with pytest.raises(RuntimeError, match="on host-1"):
@@ -129,13 +130,14 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
             store.set("old_pages", "0")
         with (
             patch.object(checkpoint.dist, "barrier", side_effect=enter_capacity_check),
-            patch.object(checkpoint.os, "statvfs", side_effect=available_capacity, create=True),
+            patch.object(checkpoint.os, "statvfs", side_effect=available_capacity),
         ):
             checkpoint._check_staging_shared_memory(state)
     finally:
         dist.destroy_process_group()
 
 
+@requires_dev_shm
 def test_staging_capacity_aggregates_local_shards_and_fails_on_all_ranks(tmp_path: Path) -> None:
     torch.multiprocessing.spawn(
         _distributed_capacity_worker,
