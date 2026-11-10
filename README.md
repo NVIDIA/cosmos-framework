@@ -113,24 +113,25 @@ single-host recipes to distributed Ray execution. Start with the
 
 Choose a model/algorithm combination using the
 [model and algorithm support matrix](./docs/post_training/model_algorithm_support.md).
-Implementation, reference recipes, and validation are tracked separately; the model integrations
-below do not imply support for every algorithm.
+Support includes reusable training cores that may still need configuration, scripts or data wiring.
+Concrete recipes are marked **R** in the matrix; implementation support and runtime validation are separate.
 
-| Model / family                 | Supervised training                                                                                                                                                                  | Preference optimization / RL / distillation                                                                  |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| Cosmos3                        | Native generator, reasoner and policy SFT paths                                                                                                                                      | Flow-DPO and image/video DiffusionNFT implementations; public Nano recipes cover narrower combinations       |
-| HF causal text / dense VLMs    | Conversation SFT supports explicit Qwen types; other HF families need a compatible SFT packer                                                                                        | Generic causal-token GRPO/PPO/OPD and image-VLM paths, with model/engine/processor constraints               |
-| Native Qwen3-VL / Qwen3-VL-MoE | Conversation-SFT implementation                                                                                                                                                      | Clipped GRPO (including Dr-GRPO/GSPO), token PPO and OPD implementations; not limited to models with recipes |
-| GR00T-N1.7                     | Action-head flow-BC implementation and parity tests; no public end-to-end offline SFT recipe. For customer SFT, use [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning) | Public LIBERO-Spatial Joint PPO recipe                                                                       |
-| π0.5                           | The CF adapter has no supervised training forward                                                                                                                                    | Joint action/value PPO implementation and public LIBERO-Spatial recipe                                       |
-| Alpamayo                       | No SFT workflow documented here                                                                                                                                                      | Closed-loop RL integration through the external AlpaGym runtime                                              |
+| Model / family                 | Supervised training                                                                                                                                                                          | Preference optimization / RL / distillation                                                                                    |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Cosmos3                        | Native generator, reasoner and policy SFT paths                                                                                                                                              | Flow-DPO and image/video DiffusionNFT implementations; public Nano recipes cover narrower combinations                         |
+| HF causal text / dense VLMs    | SFT core support; default conversation launcher covers Qwen, other families need tokenizer/template/media wiring                                                                             | GRPO/PPO/OPD support through the compatible generic model, processor and rollout paths; named recipes are listed in the matrix |
+| Native Qwen3-VL / Qwen3-VL-MoE | Conversation-SFT implementation                                                                                                                                                              | Clipped GRPO (including Dr-GRPO/GSPO), token PPO and OPD implementations; not limited to models with recipes                   |
+| GR00T-N1.7                     | Action-head SFT (flow-BC) support; offline script/data wiring needed, no public end-to-end SFT recipe. Customer quickstart: [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning) | Joint PPO support; public LIBERO-Spatial recipe                                                                                |
+| π0.5                           | The CF adapter has no supervised training forward                                                                                                                                            | Joint action/value PPO implementation and public LIBERO-Spatial recipe                                                         |
+| Alpamayo                       | No SFT workflow documented here                                                                                                                                                              | Closed-loop RL integration through the external AlpaGym runtime                                                                |
 
 The repository has two user-facing SFT paths. Use the main [Training](./docs/training.md) path for Cosmos3
 generator, reasoner, and policy recipes built on the framework's native configuration, checkpoint,
 and distributed-training stack. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Hugging
-Face-based models outside the Cosmos3 recipes. It currently supports Qwen text models, dense
-Qwen3.5/3.8 multimodal models, and Qwen3-VL/Qwen3-VL-MoE, with a common Hugging Face foundation for
-extending support to additional compatible models.
+Face-based models outside the Cosmos3 recipes. Its default conversation-SFT launcher covers Qwen
+text models, dense Qwen3.5/3.8 multimodal models, and Qwen3-VL/Qwen3-VL-MoE. Other compatible HF
+models can reuse the SFT objective and trainer with tokenizer/template/media shaping and launcher
+wiring; that default-launcher coverage is narrower than the core support shown in the matrix.
 
 | Algorithm    | Description                                                         | Guide                                                                                                                   |
 | ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |

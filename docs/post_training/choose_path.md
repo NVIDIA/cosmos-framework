@@ -2,7 +2,8 @@
 
 Choose your model and training signal together. Start with the
 [model and algorithm support matrix](model_algorithm_support.md) to distinguish implemented
-capabilities, runnable reference recipes and their validation limits. The native Cosmos3 recipes
+support (including reusable cores that need script/data wiring), concrete reference recipes and
+their validation limits. The native Cosmos3 recipes
 start from a matching Cosmos3 checkpoint; Posttrain also integrates Qwen, GR00T-N1.7 and π0.5.
 
 | You have                                                                   | Method       | Where                         |
@@ -24,6 +25,7 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 - Robot actions from Cosmos3-Nano: [DROID policy](../action_policy_droid_posttrain.md) (reproduces Cosmos3-Nano-Policy-DROID), [DROID forward dynamics](../action_fd_droid_posttrain.md) and [LIBERO-10 policy](../action_policy_libero_posttrain.md).
 - [Transfer-Auto](../training_transfer_auto.md): a four-phase RGB/LiDAR curriculum from Cosmos3-Nano, run with `cosmos_framework.scripts.train_experiment` instead.
 - Qwen text and supported VLM families: use the separate [Posttrain conversation-SFT guide](../posttrain/guides/sft.md).
+- Other compatible HF text/dense-VLM models can reuse the SFT core with tokenizer/template/media shaping and launcher wiring; see [support and recipe availability](model_algorithm_support.md#support-matrix).
 - GR00T-N1.7: CF has an action-head flow-BC implementation but no public end-to-end offline SFT recipe. For customer demonstrations, start with [Isaac-GR00T fine-tuning](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning); see [GR00T workflow boundaries](model_algorithm_support.md#gr00t-choosing-a-repository-and-handing-off-a-checkpoint).
 
 ## Distillation
