@@ -1,13 +1,15 @@
 # Cosmos3 Reasoner Examples
 
-For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../../cosmos3-quantization/SKILL.md)
+> **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/reasoner/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
+
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM notebook.
 
 Run the Cosmos3 Reasoner (vision-language reasoning over images and video) across
-multiple inference backends. Sample inputs live under [`assets/`](./assets).
+multiple inference backends. Sample inputs live under [`assets/`](../../cookbooks/cosmos3/reasoner/assets).
 
 Environment setup for every backend is centralized in the shared
-[Cosmos3 cookbooks environment setup](../README.md) guide; each backend below
+[Cosmos3 cookbooks environment setup](../../cookbooks/cosmos3/README.md) guide; each backend below
 links to the section you need.
 
 ## Choosing a backend (memory footprint)
@@ -31,19 +33,21 @@ with the Cosmos Framework backend versus **~16–17 GB** with vLLM / TensorRT-LL
 Transformers / NIM — about half. Larger tiers (e.g. Cosmos3-Super) use more in
 absolute terms, but the same full-omni-vs-reasoner-only gap applies.
 
+> **Skill note (not in the source):** the Framework figures above describe a batch that also generates. For a batch whose samples are all `model_mode=reasoner`, `cosmos_framework.scripts.inference` applies `reasoner_only_overrides()` (framework main bbd4a67: `load_vision_tokenizer`, `vision_gen`, `action_gen`, `sound_gen` and `include_gen_pathway` off; those tensors are never read from the checkpoint) and logs "Reasoner-only inputs detected; generation-side modules will not be loaded"; eval 2026-11-08 measured ~19 GiB peak for Cosmos3-Nano image reasoning on one H100. The other backends still load the Reasoner weights only.
+
 ## Reasoner Prompt Guide
 
-See the [Reasoner Prompt Guide](./reasoner_prompt_guide.md).
+See the [Reasoner Prompt Guide](./prompt-guide.md).
 
 ## Run with Cosmos Framework
 
 ### Quickstart
 
-Set up the environment: [Cosmos Framework setup](../README.md#cosmos-framework).
+Set up the environment: [Cosmos Framework setup](../../cookbooks/cosmos3/README.md#cosmos-framework).
 This produces the framework venv at `packages/cosmos3/.venv`; run the commands
 below from that checkout (`cd packages/cosmos3`).
 
-Create a Reasoner input file. The Reasoner does not currently support the audio modality by design, so the `enable_sound=false` field is intentional and required. The framework's strict validation rejects audio requests on a model that doesn't support audio, rather than ignoring the flag: 
+Create a Reasoner input file. The Reasoner does not currently support the audio modality by design, so the `enable_sound=false` field is intentional and required. The framework's strict validation rejects audio requests on a model that doesn't support audio, rather than ignoring the flag:
 
 ```bash
 mkdir -p outputs/cookbooks/cosmos3/reasoner/inputs
@@ -77,7 +81,7 @@ The generated text is written to
 
 ### Notebook walkthrough
 
-[`run_with_cosmos_framework.ipynb`](./run_with_cosmos_framework.ipynb) is the full
+[`run_with_cosmos_framework.ipynb`](./cosmos-framework.md) is the full
 tutorial cover Nano, Super, Edge. It writes text and image smoke tests, then walks through image
 capability sections — detailed captioning, robot task planning, 2D grounding,
 describe-anything, and action-trajectory prompts — rendering the prompt, media
@@ -92,11 +96,11 @@ because the current Cosmos Framework Reasoner path expects image inputs through
 ### Quickstart
 
 Set up the environment and start the server:
-[vLLM setup](../README.md#vllm) (install) and
-[Start the server](../README.md#start-the-server) (launch commands).
+[vLLM setup](../../cookbooks/cosmos3/README.md#vllm) (install) and
+[Start the server](../../cookbooks/cosmos3/README.md#start-the-server) (launch commands).
 
 The quickstart below uses **Cosmos3-Nano** on port 8000. The
-[`run_with_vllm.ipynb`](./run_with_vllm.ipynb) notebook defaults to
+[`run_with_vllm.ipynb`](./vllm.md) notebook defaults to
 **Cosmos3-Super** on port **8001** — use that launch command from the env setup
 guide and point the client at `http://localhost:8001/v1`.
 
@@ -131,8 +135,8 @@ print(response.choices[0].message.content)
 
 ### Notebook walkthrough
 
-[`run_with_vllm.ipynb`](./run_with_vllm.ipynb) uses the **Cosmos3-Super** launch
-from the [environment setup guide](../README.md#start-the-server) and walks
+[`run_with_vllm.ipynb`](./vllm.md) uses the **Cosmos3-Super** launch
+from the [environment setup guide](../../cookbooks/cosmos3/README.md#start-the-server) and walks
 through many more image and video examples: detailed captioning,
 VQA, temporal localization, embodied reasoning, common-sense reasoning, 2D
 grounding, describe-anything, action CoT trajectories, driving scenes,
@@ -145,7 +149,7 @@ example resolves the model dynamically
 
 ### Quickstart
 
-Set up the environment: [NIM setup](../README.md#cosmos3-nim). The
+Set up the environment: [NIM setup](../../cookbooks/cosmos3/README.md#cosmos3-nim). The
 Cosmos3 NIM serves the Reasoner through the same OpenAI-compatible
 chat-completions API as the vLLM path on port 8000, without the vLLM/CUDA
 setup. You can also try this same NIM interactively in your browser on the
@@ -173,8 +177,8 @@ docker run -d --name cosmos3-reasoner \
 ```
 
 For Super, Edge, and unified-memory systems such as DGX Spark, refer to
-[Launch Reasoner](../nim/deployment.md#launch-reasoner) and
-[Deploy Edge Models](../nim/deployment.md#deploy-edge-models). Once the server
+[Launch Reasoner](../../cookbooks/cosmos3/nim/deployment.md#launch-reasoner) and
+[Deploy Edge Models](../../cookbooks/cosmos3/nim/deployment.md#deploy-edge-models). Once the server
 is up, query it with the OpenAI client and resolve the served model name
 dynamically:
 
@@ -211,15 +215,15 @@ print(response.choices[0].message.content)
 Video inputs use the `video_url` content type and accept `media_io_kwargs`
 frame-sampling controls through `extra_body`
 (`{"media_io_kwargs": {"video": {"fps": 4.0}}}`). See the
-[Cosmos3 NIM reasoning guide](../nim/reasoning.md) for the full request
+[Cosmos3 NIM reasoning guide](../../cookbooks/cosmos3/nim/reasoning.md) for the full request
 reference, the Responses API, structured output, and a runnable task catalog
-under [`nim/examples/`](../nim/examples).
+under [`nim/examples/`](../../cookbooks/cosmos3/nim/examples).
 
 ## Run with Transformers
 
 ### Quickstart
 
-Set up the environment: [Transformers setup](../README.md#transformers). This
+Set up the environment: [Transformers setup](../../cookbooks/cosmos3/README.md#transformers). This
 installs a Transformers release with the Cosmos3 Nano/Super integration.
 
 Run **Cosmos3-Nano** Reasoner inference in process:
@@ -309,7 +313,7 @@ OpenAI-compatible server instead of local Python inference.
 
 ### Notebook walkthrough
 
-[`run_with_transformers.ipynb`](./run_with_transformers.ipynb) is the Python-first
+[`run_with_transformers.ipynb`](./transformers.md) is the Python-first
 counterpart to the server notebooks: instead of launching a server, it installs an
 isolated venv (Transformers from `main`, so Edge is available), registers a
 `Cosmos3 Transformers (Python 3.13)` Jupyter kernel, and loads the Reasoner in
@@ -326,7 +330,7 @@ GPUs.
 ### Quickstart
 
 Set up the environment and start the server with the shared
-[TensorRT-LLM Reasoner setup](../README.md#tensorrt-llm-reasoner). It covers the
+[TensorRT-LLM Reasoner setup](../../cookbooks/cosmos3/README.md#tensorrt-llm-reasoner). It covers the
 prebuilt release container or a local source installation, Hugging Face
 authentication, and launch commands for **Cosmos3-Nano** or **Cosmos3-Edge**
 on one GPU, or **Cosmos3-Super** on four GPUs. Nano and Super use the pinned
@@ -335,7 +339,7 @@ on one GPU, or **Cosmos3-Super** on four GPUs. Nano and Super use the pinned
 `Cosmos3EdgeForConditionalGeneration`. A source build at or after `39a44fab`
 is the fallback when that image is unavailable.
 
-The [`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) notebook
+The [`run_with_tensorrt_llm.ipynb`](./tensorrt-llm.md) notebook
 publishes the selected server on host port **8001** and waits for `/health`
 before running the request examples. Point standalone clients at
 `http://localhost:8001/v1`.
@@ -375,7 +379,7 @@ and set `max_tokens=1024` and `temperature=0`.
 
 ### Notebook walkthrough
 
-[`run_with_tensorrt_llm.ipynb`](./run_with_tensorrt_llm.ipynb) launches
+[`run_with_tensorrt_llm.ipynb`](./tensorrt-llm.md) launches
 **Cosmos3-Nano** or **Cosmos3-Super** from `release:1.3.0rc22`, or
 **Cosmos3-Edge** from `release:1.4.0rc2`.
 It waits for the server to become healthy
@@ -389,18 +393,18 @@ physical plausibility, and situation understanding.
 ### Quickstart
 
 Set up the environment with the shared
-[TensorRT-Edge-LLM setup](../README.md#tensorrt-edge-llm) (upstream install,
+[TensorRT-Edge-LLM setup](../../cookbooks/cosmos3/README.md#tensorrt-edge-llm) (upstream install,
 `EDGELLM_ROOT`, ONNX/engine workspace). This path targets **Cosmos3-Edge** on
 Jetson Thor/Orin, DRIVE, DGX Spark, or an x86 developer build. It is separate
 from the datacenter [TensorRT-LLM](#run-with-tensorrt-llm) server.
 
-[`run_with_trt_edge_llm.ipynb`](./run_with_trt_edge_llm.ipynb) exports
+[`run_with_trt_edge_llm.ipynb`](./trt-edge-llm.md) exports
 `nvidia/Cosmos3-Edge`, builds the LLM and visual engines, writes an image
 reasoning `input.json` for `assets/robot_153.jpg`, and runs `llm_inference`.
 
 ### Notebook walkthrough
 
-[`run_with_trt_edge_llm.ipynb`](./run_with_trt_edge_llm.ipynb) is a
+[`run_with_trt_edge_llm.ipynb`](./trt-edge-llm.md) is a
 command-driven walkthrough (export → engine build → image caption). For
 **Cosmos3-Edge-Policy-DROID** on the same runtime, see
-[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../generator/action/run_policy_with_trt_edge_llm.ipynb).
+[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb).
