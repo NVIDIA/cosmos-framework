@@ -48,13 +48,13 @@ None of this is in deployment.md. The eval cells run unattended, from a containe
   ```
 
   Both lines use the already-pulled NIM image (its default user is uid 1000 and it has `/bin/sh`); they are the `cache_ok` test and
-  repair of `../../cosmos3-generate-media/SKILL.md` Variant 7 minus its `NIM_CACHE_REPAIR` opt-in; the repair now runs first and
+  repair of `../../cosmos3-inference-generate-media/SKILL.md` Variant 7 minus its `NIM_CACHE_REPAIR` opt-in; the repair now runs first and
   unconditionally (idempotent `chown -R 1000:1000`, operations.md "Fix ownership/ACLs") and the test then creates a directory and a file
   and walks the tree (`find ! -writable`): a cache the daemon created root-owned, or populated by an earlier run as another uid, passed
   the old single `touch` and still killed the launch with `Permission denied` (two cells, eval 2026-11-09). A launch without a passing `cache_ok` dies within a minute with
   `ManifestDownloadError … Permission denied (os error 13)`; do not drop the `-v` mount instead ("Keep the cache between runs to
   avoid repeated downloads", deployment.md; "retain a persistent writable `/opt/nim/.cache`", operations.md).
-- **Eval-verified form**: the Variant 7 block of [`../../cosmos3-generate-media/SKILL.md`](../../cosmos3-generate-media/SKILL.md)
+- **Eval-verified form**: the Variant 7 block of [`../../cosmos3-inference-generate-media/SKILL.md`](../../cosmos3-inference-generate-media/SKILL.md)
   is the Generator launch with the three additions above written out as one script (its readiness loop has a 40-min deadline)
   plus that skill's guardrail switches. For the Reasoner, the command stays SKILL.md's quoted Nano Reasoner block — add only the
   three additions above around it (no `NIM_PERF_PROFILE`; no guardrail switches: "The Reasoner has no NIM-provided guardrails", operations.md).
@@ -81,7 +81,7 @@ The tool commands are skill additions that use only the pinned client environmen
 ## 4. uv (SKILL.md "Read this first", item 5)
 
 The client project has its own `[tool.uv]` table (`package = false`), so the framework's `[tool.uv] required-version = "==0.11.29"`
-pin (which `../../cosmos3-generate-media/SKILL.md` has to work around) does not apply inside `.agents/skills/cookbooks/cosmos3/nim`:
+pin (which `../../cosmos3-inference-generate-media/SKILL.md` has to work around) does not apply inside `.agents/skills/cookbooks/cosmos3/nim`:
 `uv sync --locked` there resolves with the stock uv the prerequisites install (checked 2026-11-07 with uv 0.13.0, `--dry-run`).
 Do not install uv 0.11.29 for the client environment.
 

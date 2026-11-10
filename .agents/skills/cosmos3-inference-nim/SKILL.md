@@ -10,7 +10,7 @@ description: >
   profile fits my GPU", or says "the NIM is not ready / returns 404 or 422".
   Do not use it to maintain the NIM documentation itself, to serve Cosmos3
   through the Hugging Face backends (diffusers, cosmos_framework, vLLM-Omni,
-  SGLang, TensorRT-LLM: cosmos3-generate-media), or to quantize a checkpoint
+  SGLang, TensorRT-LLM: cosmos3-inference-generate-media), or to quantize a checkpoint
   (cosmos3-quantization).
 license: OpenMDW-1.1
 ---
@@ -86,7 +86,7 @@ Skill note (not in the source): the numbered rules below are skill additions; ev
 - Use to choose the model (`NIM_MODEL_VARIANT`), precision and latency/throughput objective for the hardware, and to run the
   cookbook's example clients (T2I, T2V, I2V, V2V, Action, Transfer, the Reasoner catalog, the Responses API, streaming)
 - For Cosmos3 generation through diffusers, cosmos_framework, vLLM-Omni, SGLang or TensorRT-LLM use
-  `../cosmos3-generate-media/SKILL.md` (its Variant 7 drives the NIM Generator from that skill's bundled prompts and images)
+  `../cosmos3-inference-generate-media/SKILL.md` (its Variant 7 drives the NIM Generator from that skill's bundled prompts and images)
 - Editing the NIM pages or examples is not this skill's job (AGENTS.md: "Default to read-only assistance"); host CUDA / Docker
   failures outside the NIM go to `../cosmos3-env-troubleshoot/SKILL.md` — the NIM needs no venv or CUDA toolkit on the host
   ("Do not install a host CUDA toolkit solely for the NIM", prerequisites.md)
@@ -95,11 +95,11 @@ Skill note (not in the source): the numbered rules below are skill additions; ev
 
 None — nothing is vendored here; the clients read the cookbook's assets (paths relative to this skill directory; LFS = git-LFS object, item 4):
 
-| Need                                                            | Where it lives                                                                                                                                                                                                  |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Generation prompts, negative prompts, reference image and video | `../cookbooks/cosmos3/generator/audiovisual/assets/` (JSON plain; JPEG / MP4 LFS); the same prompts and images are vendored as plain files in `../cosmos3-generate-media/assets/` for that skill's own requests |
-| Reasoner images and videos                                      | `../cookbooks/cosmos3/reasoner/assets/` (all LFS; the `image_caption` case reads `../cookbooks/cosmos3/reasoner/assets/robot_153.jpg`)                                                                          |
-| Action and Transfer inputs                                      | `../cookbooks/cosmos3/generator/action/assets/`, `../cookbooks/cosmos3/generator/transfer/assets/`                                                                                                              |
+| Need                                                            | Where it lives                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Generation prompts, negative prompts, reference image and video | `../cookbooks/cosmos3/generator/audiovisual/assets/` (JSON plain; JPEG / MP4 LFS); the same prompts and images are vendored as plain files in `../cosmos3-inference-generate-media/assets/` for that skill's own requests |
+| Reasoner images and videos                                      | `../cookbooks/cosmos3/reasoner/assets/` (all LFS; the `image_caption` case reads `../cookbooks/cosmos3/reasoner/assets/robot_153.jpg`)                                                                                    |
+| Action and Transfer inputs                                      | `../cookbooks/cosmos3/generator/action/assets/`, `../cookbooks/cosmos3/generator/transfer/assets/`                                                                                                                        |
 
 ## Hardware floors, as the support matrix states them
 
@@ -488,11 +488,11 @@ matching page before the first command (Read this first, item 1); `references/sk
 
 ## Related skills
 
-| Skill                                  | When to use                                                                                                                                                                                                                                        |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-generate-media/SKILL.md`   | Variant 7 — the NIM Generator driven from that skill's bundled prompts and reference images (eval-verified headless launch: preflight, cache-mount check, readiness loop, i2v request), and the six Hugging Face serving paths for the same models |
-| `../cosmos3-setup/SKILL.md`            | Framework environment, when a task also needs the Cosmos Framework checkout (the NIM itself needs only Docker, NGC access and the pinned client environment)                                                                                       |
-| `../cosmos3-env-troubleshoot/SKILL.md` | Host-side CUDA / Docker / import failures; the NIM's own failures are in `../cookbooks/cosmos3/nim/operations.md`                                                                                                                                  |
-| `../cosmos3-inference/SKILL.md`        | Framework-native inference reference                                                                                                                                                                                                               |
-| `../cosmos3-quantization/SKILL.md`     | Quantizing your own checkpoint (the NIM serves its own FP8 profiles — `NIM_PRECISION=fp8` pins the precision; bring-your-own-checkpoint.md covers `NIM_MODEL_PATH`)                                                                                |
-| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases                                                                                                                                                                                                                    |
+| Skill                                          | When to use                                                                                                                                                                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../cosmos3-inference-generate-media/SKILL.md` | Variant 7 — the NIM Generator driven from that skill's bundled prompts and reference images (eval-verified headless launch: preflight, cache-mount check, readiness loop, i2v request), and the six Hugging Face serving paths for the same models |
+| `../cosmos3-setup/SKILL.md`                    | Framework environment, when a task also needs the Cosmos Framework checkout (the NIM itself needs only Docker, NGC access and the pinned client environment)                                                                                       |
+| `../cosmos3-env-troubleshoot/SKILL.md`         | Host-side CUDA / Docker / import failures; the NIM's own failures are in `../cookbooks/cosmos3/nim/operations.md`                                                                                                                                  |
+| `../cosmos3-inference/SKILL.md`                | Framework-native inference reference                                                                                                                                                                                                               |
+| `../cosmos3-quantization/SKILL.md`             | Quantizing your own checkpoint (the NIM serves its own FP8 profiles — `NIM_PRECISION=fp8` pins the precision; bring-your-own-checkpoint.md covers `NIM_MODEL_PATH`)                                                                                |
+| `../cosmos3-skill-authoring/SKILL.md`          | Editing this skill's eval cases                                                                                                                                                                                                                    |
