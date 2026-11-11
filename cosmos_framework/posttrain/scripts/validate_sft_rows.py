@@ -315,7 +315,17 @@ class AssistantBlockCount:
     the row's ``opener: prefilled`` (its first supervised token; a ``<think>`` later in the body stays supervised)."""
 
 
-def assistant_block_counts(encode: Callable[[str], Sequence[int]], rendered: str) -> list[AssistantBlockCount]:
+_TEXT_END_MARKERS = {
+    "chatml": "<|im_end|>",
+    "llama3_headers": "<|eot_id|>",
+    "gemma_turns": "<end_of_turn>",
+    "mistral_inst": "</s>",
+}
+
+
+def assistant_block_counts(
+    encode: Callable[[str], Sequence[int]], rendered: str, *, text_format: str = "chatml"
+) -> list[AssistantBlockCount]:
     """Count supervised tokens the way the mask is DEFINED, not the way the packer computes them.
 
     The packer paints character spans of the final expanded stream and reads labels through token offsets.
@@ -330,15 +340,27 @@ def assistant_block_counts(encode: Callable[[str], Sequence[int]], rendered: str
     """
     from cosmos_framework.posttrain.data.packer.sft import _CHAT, _MEDIA
 
-    end_tokens = len(encode("<|im_end|>"))
+    # Independent of the packer's span parser and offset mapping. These explicit
+    # delimiters are the admitted text-template contracts; do not infer a mask
+    # from a generic template or count the packer's own supervised labels.
+    if text_format == "chatml":
+        bodies = [block[2] for block in _CHAT.finditer(rendered) if block[1] == "assistant"]
+    else:
+        patterns = {
+            "llama3_headers": r"<\|start_header_id\|>assistant<\|end_header_id\|>\n\n(.*?)<\|eot_id\|>",
+            "gemma_turns": r"<start_of_turn>model\n(.*?)<end_of_turn>",
+            "mistral_inst": r"\[/INST\](.*?)</s>",
+        }
+        if text_format not in patterns:
+            raise ValueError(f"No independent SFT token audit for text format {text_format!r}")
+        bodies = re.findall(patterns[text_format], rendered, re.DOTALL)
+    end_tokens = len(encode(_TEXT_END_MARKERS[text_format]))
     counts = []
-    for block in _CHAT.finditer(rendered):
-        if block[1] != "assistant":
-            continue
-        body_tokens = sum(len(encode(fragment)) for fragment in _MEDIA.split(block[2]) if fragment)
+    for body in bodies:
+        body_tokens = sum(len(encode(fragment)) for fragment in _MEDIA.split(body) if fragment)
         counts.append(
             AssistantBlockCount(
-                body_tokens=body_tokens, end_tokens=end_tokens, opens_with_think=block[2].startswith("<think>")
+                body_tokens=body_tokens, end_tokens=end_tokens, opens_with_think=body.startswith("<think>")
             )
         )
     return counts
@@ -435,7 +457,8 @@ def inspect_row(
     def encode(text: str) -> Sequence[int]:
         return packer.tokenizer(text, add_special_tokens=False)["input_ids"]
 
-    blocks = assistant_block_counts(encode, rendered)
+    text_format = getattr(packer, "text_format", "chatml")
+    blocks = assistant_block_counts(encode, rendered, text_format=text_format)
     report.assistant_blocks = len(blocks)
     report.body_tokens = [block.body_tokens for block in blocks]
     # The blocks the row's rule supervises (every one, or the last alone), counted as the mask is defined: the body's
@@ -450,7 +473,9 @@ def inspect_row(
         for i in keep
     ]
     report.assistant_tokens = sum(independent)
-    report.loss_tokens_per_block = loss_tokens_per_block(labels, _token_id(packer.tokenizer, "<|im_end|>"))
+    report.loss_tokens_per_block = loss_tokens_per_block(
+        labels, _token_id(packer.tokenizer, _TEXT_END_MARKERS[text_format])
+    )
     if report.total_tokens > max_length:
         report.reasons.append(f"{report.total_tokens} tokens exceed rl.max_length={max_length}")
     if report.loss_tokens == 0:

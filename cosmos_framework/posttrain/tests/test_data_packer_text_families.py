@@ -135,3 +135,30 @@ def test_mistral_system_tool_and_missing_reasoning_fail():
     row.messages[-1]["reasoning_content"] = "Lost reasoning"
     with pytest.raises(ValueError, match="reasoning/tool calls were dropped"):
         packer.sft_process_sample(row)
+
+
+@pytest.mark.parametrize("format", list(TEMPLATES))
+@pytest.mark.parametrize("supervise", ["all_assistant", "last_assistant"])
+def test_independent_row_audit_counts_text_templates_and_detects_wrong_mask(format, supervise):
+    from cosmos_framework.posttrain.scripts.validate_sft_rows import inspect_row
+
+    packer = TextSFTDataPacker(tokenizer(format), max_length=1024)
+    sample = target(supervise=supervise)
+    row = {"messages": sample.messages, "supervise": supervise}
+    report = inspect_row(packer, row, split="train", index=0, max_length=1024)
+    assert report.reasons == []
+    assert report.mask_matches
+    assert report.assistant_blocks == 2
+    assert report.supervised_blocks == (2 if supervise == "all_assistant" else 1)
+    process = packer.sft_process_sample
+
+    def corrupted(target):
+        result = process(target)
+        # Incorrectly supervise a user token; the independent audit must catch it.
+        result.labels[0] = result.input_ids[0]
+        return result
+
+    packer.sft_process_sample = corrupted
+    report = inspect_row(packer, row, split="train", index=0, max_length=1024)
+    assert not report.mask_matches
+    assert any("independent assistant tokens" in reason for reason in report.reasons)
