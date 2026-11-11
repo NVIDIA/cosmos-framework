@@ -385,7 +385,7 @@ Reference: the Cosmos3 NIM cookbook in this checkout, [`../cookbooks/cosmos3/nim
 [deployment.md](../cookbooks/cosmos3/nim/deployment.md) (How Selection Works, profile preflight, Launch Generator, Wait for
 Readiness, Verify the Selection), [generation.md](../cookbooks/cosmos3/nim/generation.md) (Image-to-Video; Choose Resolution,
 Frames, and FPS), [api-reference.md](../cookbooks/cosmos3/nim/api-reference.md), [operations.md](../cookbooks/cosmos3/nim/operations.md) —
-and its own skill [`cosmos3-nim-user`](../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md); read deployment.md and
+and its skill [`cosmos3-inference-nim`](../cosmos3-inference-nim/SKILL.md); read deployment.md and
 generation.md before the first command. Upstream replaced `run_with_nim.ipynb` with this cookbook and its example scripts (`../cookbooks/cosmos3/nim/examples/`)
 (cosmos-framework #296), so this skill keeps only the README quickstart, the request it sends from the bundled assets, and its own additions (marked). The
 checkout's copy is the 2.0.0 edition (it pins `cosmos3:2.0.0`; quotes below are the pinned 2.1.0 wording) — flags, selectors, switches
@@ -477,27 +477,27 @@ conditioning, audio, multi-GPU, the complete request contracts and helper code) 
 `references/payloads.md` before the first command (see the top). Do not look for the notebooks; these files replace them
 (Variant 7: the NIM cookbook in `../cookbooks/cosmos3/nim/` replaced that notebook upstream — see its row).
 
-| File                                                              | Backend                                                                                                                                                |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `references/skill-notes.md`                                       | Shared skill notes: payload rules, measured footprints, guardrail switches, Things not obvious from the docs, smoke facts, uv version detail           |
-| `references/payloads.md`                                          | Shared: assets, prompt serialisation, sampling defaults, use-case matrix                                                                               |
-| `references/diffusers.md`                                         | Variant 1 — diffusers                                                                                                                                  |
-| `references/cosmos-framework.md`                                  | Variant 2 — cosmos_framework                                                                                                                           |
-| `references/vllm-omni.md`                                         | Variant 3 — vLLM-Omni                                                                                                                                  |
-| `references/sglang.md`                                            | Variant 4 — SGLang                                                                                                                                     |
-| `references/trt-llm.md`                                           | Variant 5 — TensorRT-LLM                                                                                                                               |
-| `references/distilled-trt-llm.md`                                 | Variant 6 — distilled 4-step students                                                                                                                  |
-| [`../cookbooks/cosmos3/nim/`](../cookbooks/cosmos3/nim/README.md) | Variant 7 — NIM: the Cosmos3 NIM cookbook (deployment, generation, api-reference, operations) and its `cosmos3-nim-user` skill; not part of this skill |
+| File                                                              | Backend                                                                                                                                                     |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `references/skill-notes.md`                                       | Shared skill notes: payload rules, measured footprints, guardrail switches, Things not obvious from the docs, smoke facts, uv version detail                |
+| `references/payloads.md`                                          | Shared: assets, prompt serialisation, sampling defaults, use-case matrix                                                                                    |
+| `references/diffusers.md`                                         | Variant 1 — diffusers                                                                                                                                       |
+| `references/cosmos-framework.md`                                  | Variant 2 — cosmos_framework                                                                                                                                |
+| `references/vllm-omni.md`                                         | Variant 3 — vLLM-Omni                                                                                                                                       |
+| `references/sglang.md`                                            | Variant 4 — SGLang                                                                                                                                          |
+| `references/trt-llm.md`                                           | Variant 5 — TensorRT-LLM                                                                                                                                    |
+| `references/distilled-trt-llm.md`                                 | Variant 6 — distilled 4-step students                                                                                                                       |
+| [`../cookbooks/cosmos3/nim/`](../cookbooks/cosmos3/nim/README.md) | Variant 7 — NIM: the Cosmos3 NIM cookbook (deployment, generation, api-reference, operations); its skill is `cosmos3-inference-nim`; not part of this skill |
 
 Origin: the `.agents/skills/cookbooks/cosmos3/generator/audiovisual` notebooks and README of the public cosmos-framework
 repository (Variant 7: the `cosmos3/nim/` cookbook pages); superseded by this skill.
 
 ## Related skills
 
-| Skill                                                               | When to use                           |
-| ------------------------------------------------------------------- | ------------------------------------- |
-| `../cosmos3-setup/SKILL.md`                                         | Framework environment for Variant 2   |
-| `../cosmos3-inference/SKILL.md`                                     | Framework-native inference reference  |
-| `../cosmos3-env-troubleshoot/SKILL.md`                              | CUDA/import/server failures           |
-| `../cosmos3-skill-authoring/SKILL.md`                               | Editing this skill's eval cases       |
-| `../cookbooks/cosmos3/nim/.agents/skills/cosmos3-nim-user/SKILL.md` | Operating the Cosmos3 NIM (Variant 7) |
+| Skill                                  | When to use                           |
+| -------------------------------------- | ------------------------------------- |
+| `../cosmos3-setup/SKILL.md`            | Framework environment for Variant 2   |
+| `../cosmos3-inference/SKILL.md`        | Framework-native inference reference  |
+| `../cosmos3-env-troubleshoot/SKILL.md` | CUDA/import/server failures           |
+| `../cosmos3-skill-authoring/SKILL.md`  | Editing this skill's eval cases       |
+| `../cosmos3-inference-nim/SKILL.md`    | Operating the Cosmos3 NIM (Variant 7) |
