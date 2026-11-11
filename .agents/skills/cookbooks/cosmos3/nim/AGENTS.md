@@ -5,7 +5,7 @@ SPDX-License-Identifier: OpenMDW-1.1 -->
 
 These instructions help customers deploy, call, and troubleshoot the Cosmos3
 NIM from this public documentation directory. For the guided
-workflow, load `.agents/skills/cosmos3-nim-user/SKILL.md`.
+workflow, load the repository skill `../../../cosmos3-inference-nim/SKILL.md` (`cosmos3-inference-nim`).
 
 ## Default behavior
 

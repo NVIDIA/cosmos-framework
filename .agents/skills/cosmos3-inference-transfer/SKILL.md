@@ -207,7 +207,7 @@ and `cd "$COSMOS3_REPO"`; its output is `<COSMOS3_TRANSFER_OUTPUT_ROOT>/Cosmos3-
 control files are needed." "The framework also saves the intermediate control signals alongside the output: `control_edge.mp4` and `control_blur.mp4`."
 
 FP8: the framework notebook and README have no FP8 route of their own; the README's pointer is "For Nano/Super static FP8 checkpoints, see the
-[quantization cookbook](../cookbooks/cosmos3/quantization/README.md) and the **Quantized Checkpoints** section in the vLLM-Omni notebooks" (Variant 3).
+[quantization cookbook](../cosmos3-quantization/SKILL.md) and the **Quantized Checkpoints** section in the vLLM-Omni notebooks" (Variant 3).
 To quantize your own checkpoint: `../cosmos3-quantization/SKILL.md` (the quantization cookbook's own migration; the path resolves once that row merges).
 
 ## Variant 2 — Diffusers (`Cosmos3OmniModularPipeline`, in-process)

@@ -2,7 +2,7 @@
 
 > **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/generator/transfer/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cookbooks/cosmos3/quantization/README.md)
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
 
 Cosmos3 video **transfer** examples — **Nano** (single GPU) and **Super** (multi-GPU, 32B) — on
