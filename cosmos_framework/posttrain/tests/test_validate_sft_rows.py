@@ -783,8 +783,8 @@ def test_missing_split_is_that_splits_load_refusal_and_never_blocks_the_other(
     ``split="all"`` does both. The trainer's own ``validate_config`` still refuses the configuration.
     """
     _packer_module()
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints import sft as entry
+    from cosmos_framework.utils.config import load_config
 
     _builder_for_this_transformers(monkeypatch)
     model = tmp_path / "model"
@@ -922,13 +922,13 @@ _EMPTY_FACTORY = f"{__name__}.empty_factory"
 
 
 def test_redaction_keeps_the_last_two_path_components_and_bounds_length() -> None:
-    text = "/path/to/shared-storage missing image file /path/to/shared-storage"
+    text = "/path/to/y/rows.jsonl:2: missing image file /path/to/media/missing_0042.png"
     assert validator.redact(text) == "y/rows.jsonl:2: missing image file media/missing_0042.png"
     assert (
         validator.redact("Got /nonexistent/dir/secret_item_0042.png. Failed") == "Got dir/secret_item_0042.png. Failed"
     )
-    a = validator.redact("missing image file /path/to/shared-storage")
-    b = validator.redact("missing image file /path/to/shared-storage")
+    a = validator.redact("missing image file /path/to/shared-storage/item_0007/image.png")
+    b = validator.redact("missing image file /path/to/shared-storage/item_0008/image.png")
     assert a == "missing image file item_0007/image.png" and a != b, "the item directory still discriminates"
     assert validator.redact("~/rel/x.png and ./rel/y.png and ratio 3/4") == "~/rel/x.png and ./rel/y.png and ratio 3/4"
     assert validator.redact("no path here") == "no path here"
@@ -1572,7 +1572,7 @@ def test_census_read_refusal_redacts_and_bounds_the_item_id_in_its_prefix(
         raise PermissionError(13, "Permission denied", path)
 
     monkeypatch.setattr(datasets, "sha256_file", unreadable)
-    item = "/path/to/shared-storage" + "x" * 600
+    item = "/path/to/shared-storage/item_7/" + "x" * 600
     validation = _backed_source(tmp_path / "held", [_image_row(tmp_path / "media" / "img_0.png", item), _HELD_ROWS[1]])
     train = _jsonl_source(tmp_path / "train.jsonl", _TRAIN_ROWS)
     status, printed, lines, out = _run_pair(text_packer, tmp_path, train, validation, capsys)
@@ -1829,8 +1829,8 @@ def test_native_seat_config_builds_the_packer_from_sft_policy_source(
     ``model_hf.name_or_path`` is refused by that same function. The entrypoint defines no ``packer_source`` and contains
     no ``globals()``."""
     _packer_module()
-    from cosmos_framework.utils.config import load_config
     from cosmos_framework.posttrain.entrypoints import sft as entry
+    from cosmos_framework.utils.config import load_config
 
     assert not hasattr(entry, "packer_source") and "globals()" not in Path(entry.__file__).read_text()
     _builder_for_this_transformers(monkeypatch)
@@ -2260,3 +2260,51 @@ def test_validate_from_config_builds_the_packer_with_the_runs_opener_mask(
     assert status == 0
     lines = [json.loads(line) for line in plain.read_text(encoding="utf-8").splitlines()]
     assert [line["loss_tokens"] for line in lines[:2]] == [118, 96], "without the knob the opener is the student's"
+
+
+@pytest.mark.parametrize("epochs,updates,expected_status", [(None, 2, 1), (2, 2, 0), (2, 3, 1)])
+def test_finite_epoch_validator_uses_zero_weight_tail_contract(tmp_path, text_packer, epochs, updates, expected_status):
+    from cosmos_framework.posttrain.config.sft import SFTDatasetConfig
+
+    source = SFTDatasetConfig(path=str(_stub_jsonl(tmp_path / "train.jsonl", [_agentic_row()] * 5)))
+    out = tmp_path / "report.jsonl"
+    status = validator.validate_sources(
+        text_packer,
+        [("train", source, 4)],
+        max_length=4096,
+        out=str(out),
+        training_epochs=epochs,
+        samples_per_update=2,
+        expected_updates=updates,
+    )
+    summary = json.loads(out.read_text().splitlines()[-1])["summary"]
+    assert status == expected_status
+    assert summary["dp_world"] == 4 and summary["dp_remainder"] == 1
+    if epochs is not None:
+        assert summary["finite_training"]["padding_slots_per_epoch"] == 3
+        assert summary["finite_training"]["updates"] == 2
+        if updates == 3:
+            assert "max_steps=2" in summary["coverage_error"]
+    else:
+        assert "finite_training" not in summary
+
+
+def test_finite_epoch_validator_keeps_invalid_row_failures(tmp_path, text_packer):
+    from cosmos_framework.posttrain.config.sft import SFTDatasetConfig
+
+    source = SFTDatasetConfig(path=str(_stub_jsonl(tmp_path / "train.jsonl", [_agentic_row()] * 5)))
+    out = tmp_path / "report.jsonl"
+    assert (
+        validator.validate_sources(
+            text_packer,
+            [("train", source, 4)],
+            max_length=1,
+            out=str(out),
+            training_epochs=1,
+            samples_per_update=2,
+            expected_updates=1,
+        )
+        == 1
+    )
+    summary = json.loads(out.read_text().splitlines()[-1])["summary"]
+    assert summary["over_long_rows"] == 5 and summary["finite_training"]["padding_slots_per_epoch"] == 3

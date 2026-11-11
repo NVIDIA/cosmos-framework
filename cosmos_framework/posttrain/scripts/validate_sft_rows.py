@@ -510,6 +510,7 @@ def summarize(
     load_error: str | None = None,
     census: dict[str, Any] | None = None,
     census_error: str | None = None,
+    allow_uneven_dp: bool = False,
 ) -> dict[str, Any]:
     rows = len(reports)
     failed = [report.row for report in reports if not report.ok]
@@ -544,7 +545,11 @@ def summarize(
         round(summary["loss_tokens"] / summary["total_tokens"], 4) if summary["total_tokens"] else 0.0
     )
     summary["ok"] = (
-        not failed and not summary["dp_remainder"] and rows > 0 and load_error is None and census_error is None
+        not failed
+        and (allow_uneven_dp or not summary["dp_remainder"])
+        and rows > 0
+        and load_error is None
+        and census_error is None
     )
     return summary
 
@@ -560,6 +565,14 @@ def gate_line(summary: dict[str, Any]) -> str:
     )
     if summary["dp_world"]:
         line += f" | rows % dp_world({summary['dp_world']}) = {summary['dp_remainder']}"
+    if summary.get("finite_training") is not None:
+        coverage = summary["finite_training"]
+        line += (
+            f" | finite epochs {coverage['epochs']}, updates {coverage['updates']}, "
+            f"zero-weight slots/epoch {coverage['padding_slots_per_epoch']}"
+        )
+    if summary.get("coverage_error") is not None:
+        line += f" | finite coverage refused: {summary['coverage_error']}"
     if summary.get("census_error") is not None:
         line += f" | held-out census refused: {summary['census_error']}"
     elif summary.get("held_out_census") is not None:
@@ -578,6 +591,7 @@ def validate_dataset(
     dp_world: int | None = None,
     census: dict[str, Any] | None = None,
     census_error: str | None = None,
+    allow_uneven_dp: bool = False,
 ) -> tuple[list[RowReport], dict[str, Any]]:
     """Every row of a map-style source (``len`` + integer ``__getitem__`` returning normalized rows).
 
@@ -607,7 +621,13 @@ def validate_dataset(
             )
         )
     return reports, summarize(
-        reports, split=split, max_length=max_length, dp_world=dp_world, census=census, census_error=census_error
+        reports,
+        split=split,
+        max_length=max_length,
+        dp_world=dp_world,
+        census=census,
+        census_error=census_error,
+        allow_uneven_dp=allow_uneven_dp,
     )
 
 
@@ -761,6 +781,9 @@ def validate_sources(
     allow_empty_assistant: bool = False,
     force: bool = False,
     stream: TextIO | None = None,
+    training_epochs: int | None = None,
+    samples_per_update: int = 1,
+    expected_updates: int | None = None,
 ) -> int:
     """Validate ``(split name, SFTDatasetConfig, dp_world)`` sources into one report; 0 only when every split is ok.
 
@@ -775,6 +798,7 @@ def validate_sources(
     the summary as ``held_out_census``. The census needs the training split loaded in the same run (``--split all``).
     """
     from cosmos_framework.posttrain.data.datasets.sft import build_sft_dataset
+    from cosmos_framework.posttrain.roles.env.sft_cursor import FiniteSFTCursor
 
     stream = stream or sys.stdout
     if os.path.exists(out) and not force:
@@ -832,22 +856,48 @@ def validate_sources(
                 dp_world=world,
                 census=census,
                 census_error=census_error,
+                allow_uneven_dp=name == "train" and training_epochs is not None,
             )
+            if name == "train" and training_epochs is not None and world is not None:
+                try:
+                    cursor = FiniteSFTCursor(
+                        dataset,
+                        rank=0,
+                        world_size=world,
+                        shuffle=False,
+                        seed=0,
+                        epochs=training_epochs,
+                        samples_per_update=samples_per_update,
+                    )
+                    updates = cursor.updates_per_epoch * training_epochs
+                    summary["finite_training"] = {
+                        **cursor.identity,
+                        "updates": updates,
+                        "padding_slots_per_epoch": cursor.slots_per_epoch * world - len(dataset),
+                    }
+                    if expected_updates is not None and updates != expected_updates:
+                        raise ValueError(f"finite SFT requires max_steps={updates}, got {expected_updates}")
+                except ValueError as error:
+                    summary["coverage_error"] = str(error)
+                    summary["failed"] += 1
+                    summary["ok"] = False
             write_report(handle, reports, summary)
             for report in reports:
                 if not report.ok:
                     print(f"FAIL {name} row {report.row}: " + "; ".join(report.reasons), file=stream)
-            if summary["dp_remainder"]:
+            if summary["dp_remainder"] and not (name == "train" and training_epochs is not None):
                 print(
                     f"FAIL {name}: {summary['rows']} rows are not divisible by dp_world={summary['dp_world']} "
                     "(the SFT source refuses this at setup; no rows are dropped)",
                     file=stream,
                 )
+            if summary.get("coverage_error"):
+                print(f"FAIL {name}: {summary['coverage_error']}", file=stream)
             print(gate_line(summary), file=stream)
             if name == "train" and world is None:
                 print(
                     "train: dp_world not checked (run under torchrun or pass --dp-world to "
-                    "scripts/validate_sft_rows.py; the setup refuses a row count the DP world does not divide)",
+                    "scripts/validate_sft_rows.py to check the configured coverage policy)",
                     file=stream,
                 )
             if not summary["ok"]:
@@ -917,6 +967,9 @@ def validate_from_config(
         allow_empty_assistant=allow_empty_assistant,
         force=force or minted,
         stream=stream,
+        training_epochs=rl.training_epochs,
+        samples_per_update=rl.micro_batch_size * rl.grad_accum,
+        expected_updates=rl.max_steps,
     )
 
 
