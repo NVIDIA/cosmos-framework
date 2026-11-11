@@ -134,6 +134,7 @@ class AdapterConfig:
             "qwen3_vl_moe_stock_v1",
             "merged_weight_bf16_v1",
             "qwen3_vl_hf_stock_v1",
+            "qwen_vl_hf_ordered_v1",
         ):
             raise ValueError(f"unsupported adapter model execution {self.model_execution!r}")
         if (self.model_execution == "merged_weight_bf16_v1") != any(

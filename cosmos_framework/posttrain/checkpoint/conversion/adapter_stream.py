@@ -63,6 +63,12 @@ class AdapterTensorSource(Mapping[str, torch.Tensor]):
         for shard in set(self.weight_map.values()):
             if Path(shard).is_absolute() or ".." in Path(shard).parts:
                 raise ValueError(f"invalid base weight shard path: {shard!r}")
+        self.source_names = {}
+        from cosmos_framework.posttrain.model.qwen_vl_hf_execution import canonical_weight_name
+
+        remap = self.identity["resolved"].get("model_execution") == "qwen_vl_hf_ordered_v1"
+        if remap:
+            self.conversion = "materialize_adapter_shards_to_hf/2-ordered-qwen"
         self.handles = {}
         self.stats = {}
         self.excluded = {}
@@ -70,7 +76,11 @@ class AdapterTensorSource(Mapping[str, torch.Tensor]):
         self.sizes = {}
         for shard in sorted(set(self.weight_map.values())):
             header, _ = hf.safetensors_header(os.path.join(base, shard))
-            for name, entry in header.items():
+            for source_name, entry in header.items():
+                name = canonical_weight_name(self.identity["architecture"], source_name) if remap else source_name
+                if name in self.source_names:
+                    raise ValueError(f"multiple base tensors resolve to the same owner: {name!r}")
+                self.source_names[name] = source_name
                 if name not in architecture:
                     if self.identity["architecture"] == "qwen3_5" and name.startswith("mtp."):
                         self.excluded[name] = {"shape": entry["shape"], "reason": "unused_source_mtp_head"}
@@ -205,9 +215,9 @@ class AdapterTensorSource(Mapping[str, torch.Tensor]):
             raise RuntimeError("adapter tensor source must be opened under the export lock")
         # A new mapping per tensor releases already touched shard pages. Holding
         # a safe_open for an entire 50GB shard would defeat the resident bound.
-        path = f"/proc/self/fd/{self.handles[self.weight_map[name]].fileno()}"
+        path = f"/proc/self/fd/{self.handles[self.weight_map[self.source_names[name]]].fileno()}"
         with safe_open(path, framework="pt", device="cpu") as handle:
-            original = handle.get_tensor(name)
+            original = handle.get_tensor(self.source_names[name])
             weight = original.to(self.base_dtype).float() if original.is_floating_point() else original.clone()
             # FP32 originals may alias the mapping. A clone gives the returned
             # tensor independent storage and lets that mapping close promptly.

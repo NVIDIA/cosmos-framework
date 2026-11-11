@@ -446,7 +446,7 @@ def test_builder_loads_local_vlm_metadata(tmp_path: Path) -> None:
     assert result.mm_kwargs and result.mm_kwargs["image_grid_thw"].prod() == 4
 
 
-@pytest.mark.parametrize("model_type", ["unbound_text", "qwen2_vl", "qwen3_5_moe"])
+@pytest.mark.parametrize("model_type", ["unbound_text", "unbound_vlm", "qwen3_5_moe"])
 def test_builder_rejects_unsupported_family(tmp_path: Path, model_type: str) -> None:
     (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
     with pytest.raises(ValueError, match="only bound Qwen"):

@@ -56,9 +56,11 @@ _BOUND_TEXT_TYPES = {"llama", "mistral", "gemma", "gemma2"}
 # Families whose checkpoints ship ``Qwen3VLProcessor``: dense Qwen3.5/3.8 (trained through the HF
 # backend) and Qwen3-VL / Qwen3-VL-MoE (trained through the native policy seat, ``model/qwen3_vl.py``;
 # the HF backend still refuses MoE VLMs at ``model/hf.py::_is_moe_vlm``). Other VLM families need
-# their own qualification before they are listed here.
-_VLM_TYPES = {"qwen3_5", "qwen3_vl", "qwen3_vl_moe"}
-_MEDIA_KEYS = {"pixel_values", "pixel_values_videos", "image_grid_thw", "video_grid_thw"}
+# their own qualification before they are listed here. Qwen2/2.5-VL use their
+# native HF processors and the explicit ordered training forward; admission is
+# distinct from any particular checkpoint's full-data campaign status.
+_VLM_TYPES = {"qwen3_5", "qwen3_vl", "qwen3_vl_moe", "qwen2_vl", "qwen2_5_vl"}
+_MEDIA_KEYS = {"pixel_values", "pixel_values_videos", "image_grid_thw", "video_grid_thw", "second_per_grid_ts"}
 # The masking contract string per ``SFTTarget.supervise`` value. The all-assistant string is also the packer-level
 # ``validation_semantics_identity()["masking"]`` (unchanged: it names the rule for rows without the field, so no existing
 # run's resume identity moves); a row's own string travels on ``SFTPolicyInput.masking``, and the field itself is part of
@@ -585,6 +587,16 @@ class QwenSFTDataPacker(DataPacker):
                 raise ValueError(f"Unsupported SFT processor side input {key!r}")
             if not isinstance(value, torch.Tensor) or value.device.type != "cpu":
                 raise ValueError(f"SFT processor side input {key!r} must be a CPU tensor")
+        if "second_per_grid_ts" in processed:
+            intervals = processed["second_per_grid_ts"]
+            grid = processed.get("video_grid_thw")
+            if (
+                grid is None
+                or intervals.ndim != 1
+                or intervals.numel() != len(grid)
+                or not bool(torch.isfinite(intervals).all() and (intervals > 0).all())
+            ):
+                raise ValueError("SFT video temporal intervals must be positive finite values, one per video grid")
         return SFTPolicyInput(
             ids, labels, processed or None, masking=self._row_masking_contract(sample.supervise, sample.opener)
         )
@@ -737,8 +749,11 @@ def build_sft_packer(
     model_type = config.get("model_type")
     if model_type in _VLM_TYPES:
         processor = AutoProcessor.from_pretrained(name_or_path, trust_remote_code=trust_remote_code)
-        if type(processor).__name__ != "Qwen3VLProcessor":
-            raise ValueError("SFT VLM support requires Qwen3VLProcessor")
+        expected = {"qwen2_vl": "Qwen2VLProcessor", "qwen2_5_vl": "Qwen2_5_VLProcessor"}.get(
+            model_type, "Qwen3VLProcessor"
+        )
+        if type(processor).__name__ != expected:
+            raise ValueError(f"SFT {model_type} requires {expected}")
         tokenizer = processor.tokenizer
     elif model_type in _TEXT_TYPES | _BOUND_TEXT_TYPES:
         processor = None

@@ -69,5 +69,10 @@ def make_config():
         ]
     else:
         config.rl.processor_kwargs = {}
-    config.rl.adapters = AdapterConfig(components=groups)
+    if family.name in ("qwen2_vl", "qwen2_5_vl"):
+        config.rl.processor_kwargs["videos_kwargs"]["do_sample_frames"] = True
+    config.rl.adapters = AdapterConfig(
+        components=groups,
+        model_execution="qwen_vl_hf_ordered_v1" if family.name in ("qwen2_vl", "qwen2_5_vl") else "default_v1",
+    )
     return config

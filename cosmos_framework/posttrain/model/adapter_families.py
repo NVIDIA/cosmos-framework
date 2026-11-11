@@ -52,8 +52,8 @@ _FAMILIES = {
     for name, norms in (
         ("qwen3_vl", ("Qwen3VLTextRMSNorm",)),
         ("qwen3_vl_moe", ("Qwen3VLMoeTextRMSNorm",)),
-        ("qwen2_vl", ("Qwen2RMSNorm",)),
-        ("qwen2_5_vl", ("Qwen2RMSNorm",)),
+        ("qwen2_vl", ("Qwen2RMSNorm", "Qwen2VLRMSNorm")),
+        ("qwen2_5_vl", ("Qwen2RMSNorm", "Qwen2_5_VLRMSNorm")),
         ("qwen3_5", ("Qwen3_5RMSNorm",)),
     )
 }

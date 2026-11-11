@@ -22,6 +22,10 @@ def validate_model_execution(net, config, family):
     declared = getattr(getattr(net, "config", None), "cosmos_model_execution", None)
     if declared is not None and declared != config.model_execution:
         raise ValueError("base declares a different model execution profile; preserve its explicit execution contract")
+    if config.model_execution == "qwen_vl_hf_ordered_v1":
+        from cosmos_framework.posttrain.model import qwen_vl_hf_execution
+
+        return qwen_vl_hf_execution.validate(net, config, family)
     if config.model_execution == "default_v1":
         return
     if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):
@@ -104,6 +108,10 @@ def stock_experts_forward(self, hidden_states, topk_scores, expert_indices, num_
 
 def install_model_execution(net, config):
     """Called only after validation and trainability policy, before FSDP."""
+    if config.model_execution == "qwen_vl_hf_ordered_v1":
+        from cosmos_framework.posttrain.model.qwen_vl_hf_execution import install
+
+        return install(net)
     if config.model_execution == "default_v1":
         return
     if config.model_execution in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1"):

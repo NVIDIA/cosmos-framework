@@ -13,6 +13,7 @@ from pathlib import Path
 PROFILE = "qwen3_vl_moe_stock_v1"
 MERGED_WEIGHT_PROFILE = "merged_weight_bf16_v1"
 FACTOR_PROFILE = "qwen3_vl_hf_stock_v1"
+ORDERED_PROFILE = "qwen_vl_hf_ordered_v1"
 
 
 def model_execution_profile(path):
@@ -36,7 +37,7 @@ def model_execution_profile(path):
     bound = resolved.get("model_execution") if isinstance(resolved, dict) else None
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, MERGED_WEIGHT_PROFILE, FACTOR_PROFILE) or bound != declared:
+    if declared not in (PROFILE, MERGED_WEIGHT_PROFILE, FACTOR_PROFILE, ORDERED_PROFILE) or bound != declared:
         raise ValueError("missing, conflicting or unknown model execution profile in config/.materialized; re-export")
     if declared == MERGED_WEIGHT_PROFILE:
         dtype = config.get("dtype", config.get("torch_dtype"))
@@ -78,6 +79,21 @@ def model_execution_profile(path):
                 raise ValueError("new BF16 execution requires its precision-specific deployment contract")
         elif precision or config.get("cosmos_inference_profile") is not None:
             raise ValueError("FP32 equivalence must not acquire BF16 deployment arithmetic")
+    elif declared == ORDERED_PROFILE:
+        if (
+            config.get("model_type") not in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl")
+            or config.get("dtype", config.get("torch_dtype")) != "float32"
+            or identity.get("output_dtype") != "float32"
+            or metadata.get("format") != "cosmos-merged-adapter-v1"
+            or adapter.get("format") != "cosmos-posttrain-adapter-v3"
+            or adapter.get("architecture") != config.get("model_type")
+            or not resolved.get("targets")
+            or metadata.get("deployment_precision")
+            or config.get("cosmos_inference_profile") is not None
+            or adapter.get("dependencies", {}).get("transformers") != "5.8.1"
+            or adapter.get("dependencies", {}).get("torch") != "2.10.0"
+        ):
+            raise ValueError("ordered HF VLM merge requires a committed FP32 Qwen2/2.5/3-VL v3 adapter merge")
     elif declared == FACTOR_PROFILE:
         if (
             config.get("model_type") != "qwen3_vl"
@@ -117,15 +133,22 @@ def validate_loaded_model(model):
     import torch
 
     profile = getattr(model.config, "cosmos_model_execution", None)
-    if profile in (MERGED_WEIGHT_PROFILE, FACTOR_PROFILE):
+    if profile in (MERGED_WEIGHT_PROFILE, FACTOR_PROFILE, ORDERED_PROFILE):
         family = model.config.model_type
         expected = {"qwen3_vl": "Qwen3VLForConditionalGeneration", "qwen3_5": "Qwen3_5ForConditionalGeneration"}
+        if profile == ORDERED_PROFILE:
+            expected = {
+                "qwen2_vl": "Qwen2VLForConditionalGeneration",
+                "qwen2_5_vl": "Qwen2_5_VLForConditionalGeneration",
+                "qwen3_vl": "Qwen3VLForConditionalGeneration",
+            }
         dtype = getattr(model.config, "dtype", None)
         configs = [model.config, model.config.text_config, model.config.vision_config]
         configs.extend(getattr(module, "config", None) for module in model.modules())
         if (
             family not in expected
             or (profile == FACTOR_PROFILE and (family != "qwen3_vl" or dtype != torch.float32))
+            or (profile == ORDERED_PROFILE and dtype != torch.float32)
             or type(model).__name__ != expected[family]
             or type(model).__module__ != f"transformers.models.{family}.modeling_{family}"
             or dtype not in (torch.float32, torch.bfloat16)

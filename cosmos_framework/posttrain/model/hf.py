@@ -311,14 +311,25 @@ class HFModel(nn.Module):
         # (e.g. NemotronH_Nano_VL_V2 RADIO buffers) so load_weights both skip-copies AND
         # tolerates the absence of both classes of key. LLM models get an empty VLM list.
         vlm_skips = tuple(_tensor_names_to_skip_for(hf_config.model_type)) if is_vlm else ()
-        self.load_plan = LoadPlan(skip_patterns=self._tied_output_skip_patterns() + vlm_skips)
+        rename = None
+        if adapter_model_execution == "qwen_vl_hf_ordered_v1":
+            from functools import partial
+
+            from cosmos_framework.posttrain.model.qwen_vl_hf_execution import canonical_weight_name
+
+            rename = partial(canonical_weight_name, hf_config.model_type)
+        self.load_plan = LoadPlan(rename=rename, skip_patterns=self._tied_output_skip_patterns() + vlm_skips)
 
         # Patch Qwen3-VL forward for text-only batches (no pixel_values / image_grid_thw).
         # Every FSDP rank must call visual() each step for all-gather sync; the patch runs a
         # lightweight dummy image and slices it to [0:0] so it contributes no features. Must
         # happen BEFORE setup()/parallelize() so FSDP captures the patched forward. Import is
         # guarded on the qwen3_vl model_type so the LLM path never imports the VLM monkey_patch.
-        if hf_config.model_type == "qwen3_vl" and adapter_model_execution in (
+        if adapter_model_execution == "qwen_vl_hf_ordered_v1":
+            from cosmos_framework.posttrain.model.qwen_vl_hf_execution import install
+
+            install(self.model)
+        elif hf_config.model_type == "qwen3_vl" and adapter_model_execution in (
             "merged_weight_bf16_v1",
             "qwen3_vl_hf_stock_v1",
         ):
@@ -669,7 +680,11 @@ def build_hf_model(
         master_dtype=getattr(torch, precision.master),
         reduce_dtype=getattr(torch, precision.reduce),
         mixed_precision_mode=precision.mode,
-        **({"adapter_model_execution": adapters.model_execution} if new_execution else {}),
+        **(
+            {"adapter_model_execution": adapters.model_execution}
+            if adapters is not None and (new_execution or adapters.model_execution == "qwen_vl_hf_ordered_v1")
+            else {}
+        ),
     )
     if adapters is not None:
         from types import SimpleNamespace
@@ -681,6 +696,10 @@ def build_hf_model(
         if (
             model.is_vlm
             and model.hf_config.model_type not in ("qwen3_vl", "qwen3_5")
+            and not (
+                model.hf_config.model_type in ("qwen2_vl", "qwen2_5_vl")
+                and adapters.model_execution == "qwen_vl_hf_ordered_v1"
+            )
             and pdims is not None
             and pdims.world_size > 1
         ):

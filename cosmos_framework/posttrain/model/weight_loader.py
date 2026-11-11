@@ -154,6 +154,8 @@ def load_weights(
                 key = plan.rename(ckpt_key) if plan.rename else ckpt_key
                 if _skipped(key) or key not in model_sd:
                     continue  # skip-copy matched keys; ignore extra checkpoint keys
+                if key in loaded:
+                    raise ValueError(f"multiple checkpoint tensors resolve to the same model owner: {key!r}")
                 target = model_sd[key]
                 is_dtensor = hasattr(target, "to_local")
                 local_view = target.to_local() if is_dtensor else target

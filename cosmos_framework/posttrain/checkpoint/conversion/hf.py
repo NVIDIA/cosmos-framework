@@ -271,6 +271,13 @@ def config_with_export_dtype(
                 raise ValueError(
                     "merged-weight execution requires dense Qwen3-VL/Qwen3.5, a declared precision and compatible deployment arithmetic"
                 )
+        elif model_execution == "qwen_vl_hf_ordered_v1":
+            if (
+                output_dtype != "float32"
+                or result.get("model_type") not in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl")
+                or execution_profile is not None
+            ):
+                raise ValueError("ordered HF VLM merged execution requires float32 output and stock SDPA")
         elif model_execution == "qwen3_vl_hf_stock_v1":
             if output_dtype != "float32" or result.get("model_type") != "qwen3_vl" or execution_profile is not None:
                 raise ValueError("stock HF factorized Qwen3-VL merged execution requires float32 output")

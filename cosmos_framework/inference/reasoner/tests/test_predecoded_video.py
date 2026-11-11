@@ -24,7 +24,8 @@ def _runtime():
 
 
 @pytest.mark.parametrize("modern", [False, True])
-def test_video_prefix_rope_call_preserves_both_pinned_signatures(modern):
+@pytest.mark.parametrize("temporal", [False, True])
+def test_video_prefix_rope_call_preserves_both_pinned_signatures(modern, temporal):
     class ReachedRope(Exception):
         pass
 
@@ -42,15 +43,33 @@ def test_video_prefix_rope_call_preserves_both_pinned_signatures(modern):
         assert mm_token_type_ids is types
         return old(input_ids, image_grid_thw, video_grid_thw, attention_mask)
 
+    def timed(
+        input_ids,
+        mm_token_type_ids,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        attention_mask=None,
+        second_per_grid_ts=None,
+    ):
+        assert torch.equal(second_per_grid_ts, torch.tensor([0.5]))
+        return new(input_ids, mm_token_type_ids, image_grid_thw, video_grid_thw, attention_mask)
+
     runtime = _runtime()
     runtime.model = SimpleNamespace(
         config=SimpleNamespace(video_token_id=121, vision_end_token_id=119),
-        model=SimpleNamespace(get_rope_index=new if modern else old),
+        model=SimpleNamespace(get_rope_index=timed if temporal else new if modern else old),
     )
     inputs = dict(input_ids=ids, video_grid_thw=grid, attention_mask=mask, mm_token_type_ids=types)
+    if temporal:
+        inputs["second_per_grid_ts"] = torch.tensor([0.5])
     with pytest.raises(ReachedRope):
         runtime._generate_with_video_prefix_cache(inputs, active_key=("video",), capacity=1, generation_kwargs={})
-    if modern:
+    if temporal:
+        inputs.pop("second_per_grid_ts")
+        with pytest.raises(ValueError, match="second_per_grid_ts"):
+            runtime._generate_with_video_prefix_cache(inputs, active_key=("video",), capacity=1, generation_kwargs={})
+        inputs["second_per_grid_ts"] = torch.tensor([0.5])
+    if modern or temporal:
         inputs.pop("mm_token_type_ids")
         with pytest.raises(ValueError, match="processor mm_token_type_ids"):
             runtime._generate_with_video_prefix_cache(inputs, active_key=("video",), capacity=1, generation_kwargs={})
