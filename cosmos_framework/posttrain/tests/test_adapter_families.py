@@ -3,6 +3,7 @@
 """Family bindings through actual HF models and the existing model lifecycle."""
 
 import copy
+import json
 
 import pytest
 import torch
@@ -109,16 +110,27 @@ def test_each_selector_and_component_are_checked_in_text_family(tmp_path):
             resolve_targets(net, AdapterConfig(components=groups))
 
 
-def test_text_family_stock_merged_export(tmp_path):
+@pytest.mark.parametrize("family", ["qwen3", "gemma", "gemma2"])
+def test_text_family_stock_merged_export(tmp_path, family):
     from cosmos_framework.posttrain.checkpoint.tools.adapters import export_merged_adapter
 
-    text_snapshot(tmp_path / "base", "qwen3")
+    text_snapshot(tmp_path / "base", family)
+    if family in ("gemma", "gemma2"):
+        # The qualified public Gemma checkpoints omit this default field and
+        # their safetensors omit the aliased lm_head.weight. Bind the adapter
+        # to those exact source bytes before exercising the public exporter.
+        path = tmp_path / "base" / "config.json"
+        source_config = json.loads(path.read_text())
+        source_config.pop("tie_word_embeddings", None)
+        path.write_text(json.dumps(source_config) + "\n")
+        assert transformers.AutoConfig.from_pretrained(path.parent).tie_word_embeddings
     cfg = AdapterConfig(components=[Component(targets=["model.layers.0.self_attn.q_proj"], rank=2, method="dora")])
     model = build_hf_model(
         HFModelConfig(name_or_path=str(tmp_path / "base"), dtype="float32", attn_impl="sdpa"), adapters=cfg
     )
     save_adapter_artifact(model.net, str(tmp_path / "adapter"))
-    export_merged_adapter(str(tmp_path / "adapter"), str(tmp_path / "base"), str(tmp_path / "merged"))
+    assert export_merged_adapter(str(tmp_path / "adapter"), str(tmp_path / "base"), str(tmp_path / "merged")) == "built"
+    assert export_merged_adapter(str(tmp_path / "adapter"), str(tmp_path / "base"), str(tmp_path / "merged")) == "skipped"
     loaded = transformers.AutoModelForCausalLM.from_pretrained(tmp_path / "merged", dtype=torch.float32)
     assert loaded.get_input_embeddings().weight is loaded.get_output_embeddings().weight
     model.net.eval()

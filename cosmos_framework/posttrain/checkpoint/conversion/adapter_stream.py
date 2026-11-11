@@ -101,10 +101,16 @@ class AdapterTensorSource(Mapping[str, torch.Tensor]):
                     if entry["dtype"].startswith("F") or entry["dtype"] == "BF16"
                     else entry["data_offsets"][1] - entry["data_offsets"][0]
                 )
-        config = json.loads((Path(base) / "config.json").read_text())
+        from transformers import AutoConfig
+
+        # HF configuration files may omit fields equal to architecture defaults.
+        # Gemma/Gemma2 snapshots omit tie_word_embeddings=True and serialize
+        # only the embedding owner. Resolve the same defaults as the stock
+        # loader instead of interpreting an absent JSON field as untied.
+        config = AutoConfig.from_pretrained(base, local_files_only=True)
         self.tied_embedding = (
             adapter_family(self.identity["architecture"]).embedding
-            if config.get("tie_word_embeddings", False)
+            if config.tie_word_embeddings
             else None
         )
         missing = set(architecture) - self.shapes.keys()
