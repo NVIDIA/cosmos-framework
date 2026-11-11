@@ -510,6 +510,13 @@ def merged_export_metadata(
     manifest = artifact_record if artifact_record is not None else json.loads((Path(adapter) / MANIFEST).read_text())
     if manifest.get("kind") != "portable_adapter" or manifest.get("identity") != identity:
         raise ValueError("portable adapter manifest changed during export; use an immutable artifact")
+    model_execution = identity["resolved"].get("model_execution")
+    if output_dtype == "bfloat16" and model_execution in ("qwen3_vl_hf_stock_v1", "qwen_vl_hf_ordered_v1"):
+        raise ValueError(
+            f"{model_execution} defines FP32 merged loading; BF16 export would be rejected by its declared loader. "
+            "Use output_dtype='float32'. BF16 deployment requires a separately supported execution contract; "
+            "do not rewrite an existing artifact's execution identity."
+        )
     result = {
         "format": "cosmos-merged-adapter-v1",
         "adapter_identity": identity,
