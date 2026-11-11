@@ -59,10 +59,12 @@ def _fake_two_ranks(monkeypatch, dp_mean_count: float) -> list:
 
     def fake_all_reduce(tensor, op=None):
         calls.append(op)
-        tensor.fill_(dp_mean_count)
+        if op == dist.ReduceOp.AVG:
+            tensor.fill_(dp_mean_count)
 
     monkeypatch.setattr(dist, "is_initialized", lambda: True)
     monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dist, "get_backend", lambda: "gloo")
     monkeypatch.setattr(dist, "all_reduce", fake_all_reduce)
     return calls
 

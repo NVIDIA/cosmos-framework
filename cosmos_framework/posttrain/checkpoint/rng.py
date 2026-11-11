@@ -7,6 +7,37 @@ from __future__ import annotations
 from typing import Any
 
 
+def validate_exact_rng_state(states: Any, *, device: Any) -> None:
+    """Validate a same-topology checkpoint using private generators only.
+
+    This is opt-in for finite SFT exact resume. Legacy optional-RNG restoration
+    remains available to the older lifecycle contracts.
+    """
+    import random
+
+    import numpy as np
+    import torch
+
+    from cosmos_framework.posttrain.utils.rank_state import select_rank_state
+
+    state = select_rank_state(states, on_world_size_mismatch="raise")
+    if not isinstance(state, dict):
+        raise ValueError("finite SFT exact resume requires rank-complete RNG state")
+    device = torch.device(device)
+    required = {"python", "numpy", "torch"} | ({"cuda"} if device.type == "cuda" else set())
+    if not required.issubset(state):
+        raise ValueError(f"finite SFT RNG state is missing {sorted(required - set(state))}")
+    random.Random().setstate(state["python"])
+    np.random.RandomState().set_state(state["numpy"])
+    for key, generator_device in (("torch", "cpu"), ("cuda", device)):
+        if key == "cuda" and device.type != "cuda":
+            continue
+        value = state[key]
+        if not isinstance(value, torch.Tensor) or value.dtype != torch.uint8 or value.ndim != 1:
+            raise ValueError(f"finite SFT RNG {key} must be a one-dimensional uint8 tensor")
+        torch.Generator(device=generator_device).set_state(value.cpu())
+
+
 def collect_rng_state(cuda_device: Any = None) -> dict[int, dict[str, Any]]:
     """Gather every rank's Python, NumPy, Torch, and optional CUDA RNG state."""
     import random

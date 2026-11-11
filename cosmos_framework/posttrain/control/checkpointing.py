@@ -246,6 +246,8 @@ class CheckpointLifecycle:
         trainer: Any,
         component: str,
         checkpoint: str | None = None,
+        *,
+        before_load: Callable[[dict[str, Any] | None, dict[str, Any] | None], None] | None = None,
     ) -> tuple[int, dict[str, Any] | None] | None:
         """Restore a trainer and one rank-aligned control component from the same generation."""
         selected = checkpoint or self.resume_checkpoint
@@ -253,6 +255,13 @@ class CheckpointLifecycle:
             return None
 
         def load() -> tuple[int, dict[str, Any] | None]:
+            if before_load is not None:
+                # Keep prerequisite validation and restoration under the same
+                # generation lock as the trainer. No model/optimizer tensors
+                # are materialized before the control-state preflight succeeds.
+                state = self.manager.load_component(selected, component)
+                before_load(self.manager.load_component(selected, "trainer"), state)
+                return int(trainer.load(selected)), state
             return int(trainer.load(selected)), self.manager.load_component(selected, component)
 
         value, provenance = self.manager.load_checkpoint(selected, load)

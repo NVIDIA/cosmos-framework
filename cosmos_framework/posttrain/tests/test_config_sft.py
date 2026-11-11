@@ -1026,6 +1026,9 @@ def test_deterministic_knob_reaches_setup(monkeypatch: pytest.MonkeyPatch) -> No
     for deterministic in (False, True):
         state["rl"] = SimpleNamespace(
             task="conversation",
+            training_epochs=None,
+            micro_batch_size=1,
+            grad_accum=1,
             deterministic=deterministic,
             seed=0,
             data=None,

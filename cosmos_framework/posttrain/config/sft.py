@@ -131,6 +131,9 @@ class SFTConfig(HFRunConfig):
     flow_training_prefix: int = 10
     flow_action_dim: int = 7
     micro_batch_size: int = 1
+    # Opt in to a finite corpus contract. max_steps must equal the derived
+    # complete-epoch update count; the final update uses zero-weight padding.
+    training_epochs: int | None = None
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
@@ -182,6 +185,13 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.training_epochs is not None:
+            if type(self.training_epochs) is not int or self.training_epochs < 1:
+                raise ValueError("SFT training_epochs must be a positive integer or None")
+            if self.moe_lbl_coeff:
+                raise ValueError(
+                    "finite SFT epochs require moe_lbl_coeff=0; router auxiliary loss is not padding-masked"
+                )
         if self.task not in ("conversation", "flow_bc"):
             raise ValueError("SFT task must be conversation or flow_bc")
         if self.task == "flow_bc":

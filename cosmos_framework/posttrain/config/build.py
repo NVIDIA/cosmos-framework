@@ -280,7 +280,9 @@ def build_lr_scheduler(optimizer: Any, opt_cfg: OptimizerConfig):
     w = int(getattr(opt_cfg, "warmup_steps", 0) or 0)
     if w <= 0:
         return None
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(1.0, (step + 1) / w))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(1.0, (step + 1) / w))
+    bind_scheduler_resume_identity(scheduler, {"version": 1, "kind": "linear_warmup_constant", "warmup_steps": w})
+    return scheduler
 
 
 def warmup_cosine_factor(

@@ -690,6 +690,12 @@ class LLMTrainer(BaseTrainer):
         # The reduction owns normalize+backprop (TOKEN_SUM: as-is at grad_accum==1, else the
         # chunk SUM recovered via the objective's own divisor; MEAN: /grad_accum).
         denom = metrics.get(OBJECTIVE_WEIGHT_SUM)
+        if (
+            self.objective_identity.get("finite_training_padding") == "zero_weight_v1"
+            and self._accum + 1 == self.grad_accum
+            and self._denom_accum + float(denom or 0.0) <= 0
+        ):
+            raise RuntimeError("finite SFT optimizer window contains only padding; refusing an empty AdamW update")
         reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
         self._accum += 1
         self._denom_accum += float(denom or 0.0)
@@ -1211,6 +1217,7 @@ class LLMTrainer(BaseTrainer):
     # Checkpoint extraction is engine-specific; layout and publication are shared.
     def _trainer_state(self) -> dict[str, Any]:
         from cosmos_framework.posttrain.checkpoint import collect_rng_state
+        from cosmos_framework.posttrain.utils.scheduler import scheduler_resume_identity
 
         rng_state = collect_rng_state()
 
@@ -1237,6 +1244,9 @@ class LLMTrainer(BaseTrainer):
                 # whose schedule rides the optimizer-step clock stamp that name instead. See
                 # `_restore_trainer_state_local`.
                 state["lr_scheduler_clock"] = self._scheduler_clock_name()
+                identity = scheduler_resume_identity(self.lr_scheduler)
+                if identity is not None:
+                    state["scheduler_identity"] = identity
             return state
 
         return run_rank_converged(_state_with_rng, "LLM trainer state serialization")
@@ -1443,7 +1453,9 @@ class LLMTrainer(BaseTrainer):
             raise RuntimeError(f"training resume requires optimizer state in checkpoint {path!r}")
         if trainer_state is None:
             raise RuntimeError(f"training resume requires trainer state in checkpoint {path!r}")
-        self._validate_objective_identity(trainer_state)
+        run_rank_converged(
+            lambda: self._validate_objective_identity(trainer_state), "LLM checkpoint control identity validation"
+        )
 
         net = self._net()
         pristine = self._checkpoint_recorded_pristine_optimizer(trainer_state)
@@ -1722,6 +1734,12 @@ class LLMTrainer(BaseTrainer):
 
     def _validate_objective_identity(self, trainer_state: dict[str, Any]) -> None:
         """Fail before continuation when the checkpoint used different loss semantics."""
+        self._validate_scheduler_resume_contract(trainer_state)
+        if "training_coverage" in self.objective_identity:
+            from cosmos_framework.posttrain.checkpoint.rng import validate_exact_rng_state
+
+            self._parse_update_state(trainer_state)
+            validate_exact_rng_state(trainer_state.get("rng"), device=next(self._net().parameters()).device)
         saved = trainer_state.get("objective_identity")
         if saved is None:
             if self.objective_identity:
@@ -1736,4 +1754,24 @@ class LLMTrainer(BaseTrainer):
                 "checkpoint objective exact-resume identity differs from the configured objective: "
                 f"saved={restored!r}, configured={self.objective_identity!r}. "
                 "Use the original runtime/configuration for exact resume, or a model/adapter warm start for a new run."
+            )
+
+    def _validate_scheduler_resume_contract(self, trainer_state: dict[str, Any]) -> None:
+        from cosmos_framework.posttrain.utils.scheduler import scheduler_resume_identity
+
+        configured = scheduler_resume_identity(self.lr_scheduler)
+        saved = trainer_state.get("scheduler_identity")
+        if configured is None and "scheduler_identity" not in trainer_state:
+            return  # Preserve unbound legacy scheduler behavior.
+        if configured is None or saved is None:
+            raise RuntimeError(
+                "checkpoint scheduler exact-resume identity is missing or incompatible. "
+                "Use the original runtime/configuration for legacy resume, or a model/adapter warm start."
+            )
+        if trainer_state.get("lr_scheduler") is None:
+            raise RuntimeError("checkpoint has a scheduler identity but no scheduler state")
+        if not json_identity_equal(saved, configured, context="LLM scheduler exact-resume identity"):
+            raise RuntimeError(
+                "checkpoint scheduler exact-resume identity differs from the configured schedule: "
+                f"saved={saved!r}, configured={configured!r}"
             )

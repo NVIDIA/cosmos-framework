@@ -84,6 +84,7 @@ def make_objective(
     moe_lbl_coeff: float = 0.0,
     moe_lbl_method: str = "global",
     serve_contract: str = SFT_SERVE_CONTRACT_DEFAULT,
+    allow_empty_training_padding: bool = False,
 ) -> Objective:
     """Bind packer masking semantics to masked causal CE (labels are unshifted).
 
@@ -109,6 +110,10 @@ def make_objective(
     """
     if not isinstance(packer, PackerSemanticsIdentity):
         raise TypeError("SFT packer must declare validation_semantics_identity(), including masking semantics")
+    if type(allow_empty_training_padding) is not bool:
+        raise TypeError("allow_empty_training_padding must be bool")
+    if allow_empty_training_padding and moe_lbl_coeff:
+        raise ValueError("zero-weight training padding cannot mask router auxiliary loss")
     if (
         isinstance(ce_exponent, bool)
         or not isinstance(ce_exponent, (int, float))
@@ -130,6 +135,7 @@ def make_objective(
     identity = normalize_json_dict(
         {
             "algorithm": "sft",
+            **({"finite_training_padding": "zero_weight_v1"} if allow_empty_training_padding else {}),
             "loss": "masked_next_token_cross_entropy_v1",
             "ignore_label_id": _IGNORE_LABEL,
             # The two optional keys appear only when set, so every existing run's identity is unchanged.
@@ -203,7 +209,18 @@ def make_objective(
         # round their denominator through the default float32 collective dtype.
         global_tokens = rank_sum_count(token_count, labels.device)
         if global_tokens == 0:
-            raise ValueError("SFT batch has no globally supervised next-token labels")
+            # Only a declared finite-epoch tail may execute an empty chunk. An
+            # ordinary row with no labels is still an error. Every rank forwards
+            # and backwards so FSDP graph/collective participation is preserved.
+            nonpadding = sum(
+                not (
+                    trajectory.transitions[0].algo_extra.get("training_padding") is True
+                    and trajectory.transitions[0].algo_extra.get("validation_weight") == 0.0
+                )
+                for trajectory in trajectories
+            )
+            if not allow_empty_training_padding or rank_sum_count(nonpadding, labels.device):
+                raise ValueError("SFT batch has no globally supervised next-token labels")
         row_counts = valid.sum(dim=1)  # [B] supervised tokens per row
         if weighted:
             # sum_rows n^(1-e) over the rows with tokens, DP-mean'd in float64 (the row weights are not integers).
@@ -247,9 +264,11 @@ def make_objective(
                     0, rows, per_token
                 )  # [B]
                 counts = row_counts.to(per_token.dtype)  # [B]
-                objective_value = (row_sums / counts.clamp(min=1).pow(ce_exponent) * (counts > 0)).sum() / denominator
+                objective_value = (row_sums / counts.clamp(min=1).pow(ce_exponent) * (counts > 0)).sum() / (
+                    denominator if denominator else 1.0
+                )
             else:
-                objective_value = numerator / denominator
+                objective_value = numerator / (denominator if denominator else 1.0)
             metrics: dict[str, Any] = {
                 "sft_loss": numerator.detach() / max(token_count, 1),
                 "sft_valid_tokens": token_count,

@@ -30,7 +30,7 @@ from cosmos_framework.posttrain.algorithm.primitives.objective import (
 )
 from cosmos_framework.posttrain.model.protocol import SupervisedFlowMatchingPolicy
 from cosmos_framework.posttrain.schema.trajectory import Trajectory
-from cosmos_framework.posttrain.utils.dist import rank_mean_count
+from cosmos_framework.posttrain.utils.dist import rank_mean_count, run_rank_converged
 
 if TYPE_CHECKING:
     import torch
@@ -51,7 +51,11 @@ def make_objective(
     the two ints are recorded in the identity so a resume cannot silently change the loss."""
 
     def fn(model: SupervisedFlowMatchingPolicy, batch: list[Trajectory]) -> tuple[torch.Tensor, dict[str, Any]]:
-        out = model.flow_matching_loss(collate(batch))
+        # Decode/processor failures are local. Converge them before any peer
+        # enters the policy's FSDP collectives; never wrap the collective-bearing
+        # model forward itself in a recoverable preparation transaction.
+        inputs = run_rank_converged(lambda: collate(batch), "flow_bc batch preparation")
+        out = model.flow_matching_loss(inputs)
         masked = int(out.action_mask.float().sum().item())  # the mask arrives in bf16 under the parameter-cast mode
         denom = rank_mean_count(masked, out.loss.device)  # DP-mean supervised count; == masked outside a process group
         if denom <= 0:

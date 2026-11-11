@@ -10,6 +10,7 @@ from typing import Any
 from cosmos_framework.posttrain.config.sft import SFTDatasetConfig
 from cosmos_framework.posttrain.data.datasets.sft import build_sft_dataset
 from cosmos_framework.posttrain.roles.env.cursor import IndexedCursor
+from cosmos_framework.posttrain.roles.env.sft_cursor import FiniteSFTCursor
 from cosmos_framework.posttrain.schema import ObsBundle, Status, Trajectory, Transition
 
 
@@ -23,19 +24,21 @@ class SFTDatasetEnv:
         shuffle: bool = True,
         seed: int = 0,
         training: bool = True,
+        training_epochs: int | None = None,
+        samples_per_update: int = 1,
     ) -> None:
         if type(world_size) is not int or world_size < 1 or type(rank) is not int or not 0 <= rank < world_size:
             raise ValueError("invalid SFT data-parallel coordinates")
         if not len(dataset):
             raise ValueError("SFT dataset is empty")
-        if training and len(dataset) % world_size:
+        if training and training_epochs is None and len(dataset) % world_size:
             raise ValueError("SFT training dataset length must be divisible by the DP world size; no rows are dropped")
         self.dataset: Any = dataset
         self.rank: int = rank
         self.world_size: int = world_size
         self.training: bool = training
         self.source_fingerprint: str = dataset.cursor_fingerprint()
-        self.cursor: IndexedCursor = IndexedCursor(
+        self.cursor: IndexedCursor | FiniteSFTCursor = IndexedCursor(
             dataset,
             shard_index=rank,
             shard_count=world_size,
@@ -44,6 +47,18 @@ class SFTDatasetEnv:
             cursor_resume="strict",
             label="SFT source",
         )
+        if training_epochs is not None:
+            if not training:
+                raise ValueError("training_epochs cannot be applied to a validation source")
+            self.cursor = FiniteSFTCursor(
+                dataset,
+                rank=rank,
+                world_size=world_size,
+                shuffle=shuffle,
+                seed=seed,
+                epochs=training_epochs,
+                samples_per_update=samples_per_update,
+            )
         self._loaded_checkpoint_provenance: dict[str, int | str] | None = None
 
     def _trajectory(self, index: int, *, weight: float | None = None) -> Trajectory:
@@ -72,9 +87,18 @@ class SFTDatasetEnv:
             raise ValueError("SFT sample count must be a positive integer")
         from cosmos_framework.posttrain.utils.dist import run_rank_converged
 
-        return run_rank_converged(
-            lambda: [self._trajectory(self.cursor.next_index()) for _ in range(count)], "SFT training batch"
-        )
+        def draw():
+            rows = []
+            for _ in range(count):
+                index = self.cursor.next_index()
+                weight = float(index is not None) if isinstance(self.cursor, FiniteSFTCursor) else None
+                row = self._trajectory(0 if index is None else index, weight=weight)
+                if index is None:
+                    row.transitions[0].algo_extra["training_padding"] = True
+                rows.append(row)
+            return rows
+
+        return run_rank_converged(draw, "SFT training batch")
 
     def validation_batch_count(self, batch_size: int, max_samples: int | None = None) -> int:
         if type(batch_size) is not int or batch_size < 1:
@@ -124,6 +148,30 @@ class SFTDatasetEnv:
             raise ValueError("SFT checkpoint is missing its data cursor")
         return self.cursor.load_state_dict(local)
 
+    def restore_finite_checkpoint_cursor(self, state: dict[str, Any], trainer_state: dict[str, Any]) -> None:
+        """Restore data before model mutation and bind its position to committed updates."""
+        from cosmos_framework.posttrain.roles.trainer.base import BaseTrainer
+        from cosmos_framework.posttrain.utils.rank_state import state_for_current_rank
+
+        if not isinstance(self.cursor, FiniteSFTCursor):
+            raise ValueError("finite checkpoint preflight requires a finite SFT cursor")
+        BaseTrainer._parse_update_state(trainer_state)
+        local = state_for_current_rank(state)
+        step = trainer_state.get("optimizer_step")
+        if (
+            type(step) is not int
+            or step < 0
+            or trainer_state.get("iter") != step
+            or trainer_state.get("accum") != 0
+            or type(trainer_state.get("n_mini")) is not int
+            or trainer_state.get("n_mini") != 1
+            or trainer_state.get("attempt_id") != step
+        ):
+            raise ValueError("finite SFT checkpoint requires complete optimizer-update boundary counters")
+        if not isinstance(local, dict) or local.get("position") != step * self.cursor.samples_per_update:
+            raise ValueError("finite SFT cursor position differs from the committed optimizer-update clock")
+        self.cursor.load_state_dict(local)
+
     def set_loaded_checkpoint_provenance(self, provenance: dict[str, int | str]) -> None:
         self._loaded_checkpoint_provenance = dict(provenance)
 
@@ -132,7 +180,14 @@ class SFTDatasetEnv:
 
 
 def build_sft_env(
-    config: SFTDatasetConfig, seed: int, *, training: bool = True, rank: int = 0, world_size: int = 1
+    config: SFTDatasetConfig,
+    seed: int,
+    *,
+    training: bool = True,
+    rank: int = 0,
+    world_size: int = 1,
+    training_epochs: int | None = None,
+    samples_per_update: int = 1,
 ) -> SFTDatasetEnv:
     return SFTDatasetEnv(
         build_sft_dataset(config),
@@ -141,4 +196,6 @@ def build_sft_env(
         shuffle=config.shuffle,
         seed=seed,
         training=training,
+        training_epochs=training_epochs,
+        samples_per_update=samples_per_update,
     )

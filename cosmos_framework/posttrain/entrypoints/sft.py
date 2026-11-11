@@ -257,6 +257,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
             moe_lbl_coeff=rl.moe_lbl_coeff,
             moe_lbl_method=rl.moe_lbl_method,
             serve_contract=rl.serve_contract,
+            allow_empty_training_padding=rl.training_epochs is not None,
         )
     objective.identity = {
         **objective.identity,
@@ -265,6 +266,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "grad_accum": rl.grad_accum,
         "dp_world": world_size_or_1(),
         "precision": asdict(resolve_precision(config)),
+        **({"training_coverage": data.cursor.identity} if rl.training_epochs is not None else {}),
     }
     misc.set_random_seed(seed=rl.seed, by_rank=False)
     if rl.adapters is None:
@@ -326,10 +328,25 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     # Exact resume replaces this rank-local stream with the checkpoint's RNG state.
     misc.set_random_seed(seed=rl.seed, by_rank=True)
     if checkpoint.resume_checkpoint:
-        restored = checkpoint.load_trainer_and_component(trainer, "data")
+
+        def preflight(trainer_state, data_state):
+            from cosmos_framework.posttrain.checkpoint.rng import validate_exact_rng_state
+
+            def validate():
+                if not isinstance(trainer_state, dict):
+                    raise ValueError("finite SFT resume requires complete trainer control state")
+                validate_exact_rng_state(trainer_state.get("rng"), device=next(model.net.parameters()).device)
+                data.restore_finite_checkpoint_cursor(data_state, trainer_state)
+
+            run_rank_converged(validate, "finite SFT checkpoint control preflight")
+
+        restored = checkpoint.load_trainer_and_component(
+            trainer, "data", **({"before_load": preflight} if rl.training_epochs is not None else {})
+        )
         if restored is None or restored[1] is None:
             raise ValueError("exact SFT resume requires a data cursor component")
-        run_rank_converged(lambda: data.load_state_dict(restored[1]), "SFT cursor restore")
+        if rl.training_epochs is None:
+            run_rank_converged(lambda: data.load_state_dict(restored[1]), "SFT cursor restore")
         provenance = trainer.loaded_checkpoint_provenance()
         if provenance is not None:
             data.set_loaded_checkpoint_provenance(provenance)
@@ -393,8 +410,24 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
             enable_determinism()
         checkpoint = CheckpointLifecycle.from_config(config, rl)
         coordinates = {"rank": rank_or_0(), "world_size": world_size_or_1()}
-        data = run_rank_converged(lambda: build_sft_env(rl.data, rl.seed, **coordinates), "SFT training source")
+        data = run_rank_converged(
+            lambda: build_sft_env(
+                rl.data,
+                rl.seed,
+                **coordinates,
+                training_epochs=rl.training_epochs,
+                samples_per_update=rl.micro_batch_size * rl.grad_accum,
+            ),
+            "SFT training source",
+        )
         rank_identical(data.source_fingerprint, "SFT training source identity")
+        if rl.training_epochs is not None:
+            expected = data.cursor.updates_per_epoch * rl.training_epochs
+            if rl.max_steps != expected:
+                raise ValueError(
+                    f"finite SFT coverage requires max_steps={expected}, got {rl.max_steps}; "
+                    "derive updates from dataset rows, DP world size, microbatch and accumulation"
+                )
         validation = None
         if rl.validation.enabled:
             validation = run_rank_converged(
