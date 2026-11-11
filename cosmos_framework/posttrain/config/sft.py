@@ -195,8 +195,6 @@ class SFTConfig(HFRunConfig):
         if self.task not in ("conversation", "flow_bc"):
             raise ValueError("SFT task must be conversation or flow_bc")
         if self.task == "flow_bc":
-            if self.grad_accum != 1:
-                raise ValueError("flow_bc SFT currently requires grad_accum=1")
             if self.ce_exponent or self.moe_lbl_coeff or self.mask_think_opener:
                 raise ValueError("conversation loss settings cannot be applied to flow_bc")
             if self.processor_kwargs:

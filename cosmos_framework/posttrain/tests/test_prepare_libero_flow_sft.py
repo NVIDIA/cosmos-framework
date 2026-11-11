@@ -13,7 +13,8 @@ from PIL import Image
 from cosmos_framework.posttrain.scripts.prepare_libero_flow_sft import prepare
 
 
-def test_embedded_images_and_actions_stay_with_their_episode(tmp_path):
+@pytest.mark.parametrize("shards", [1, 3])
+def test_embedded_images_and_actions_stay_with_their_episode(tmp_path, shards):
     source = tmp_path / "source"
     (source / "meta").mkdir(parents=True)
     (source / "data/chunk-000").mkdir(parents=True)
@@ -38,7 +39,11 @@ def test_embedded_images_and_actions_stay_with_their_episode(tmp_path):
                     "observation.images.image2": {"bytes": buffer.getvalue()},
                 }
             )
-    pd.DataFrame(rows).to_parquet(source / "data/chunk-000/file-000.parquet")
+    # A nonselected short episode must not invalidate otherwise valid splits.
+    unselected = dict(rows[-1], episode_index=2, frame_index=0)
+    rows.append(unselected)
+    for index, part in enumerate(np.array_split(np.arange(len(rows)), shards)):
+        pd.DataFrame([rows[int(i)] for i in part]).to_parquet(source / f"data/chunk-000/file-{index:03d}.parquet")
     out = tmp_path / "prepared"
     report = prepare(
         str(source),
@@ -58,3 +63,15 @@ def test_embedded_images_and_actions_stay_with_their_episode(tmp_path):
         np.testing.assert_array_equal(np.asarray(image), np.arange(36, dtype=np.uint8).reshape(4, 3, 3))
     with pytest.raises(FileExistsError):
         prepare(str(source), str(out), training_episodes=[0], validation_episodes=[1], source_revision="fixture")
+
+
+def test_source_episode_order_is_checked_across_shards(tmp_path):
+    from cosmos_framework.posttrain.scripts.prepare_libero_flow_sft import iter_episodes
+
+    paths = []
+    for i, episodes in enumerate([[0, 0, 1], [1, 0]]):
+        path = tmp_path / f"file-{i}.parquet"
+        pd.DataFrame({"episode_index": episodes}).to_parquet(path)
+        paths.append(path)
+    with pytest.raises(ValueError, match="strictly ordered"):
+        list(iter_episodes(paths))

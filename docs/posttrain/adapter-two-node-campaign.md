@@ -19,3 +19,9 @@ Flow collation failures converge across ranks before a collective-bearing model 
 ## Validation so far
 
 Focused CPU tests cover uneven sequence lengths, real/padded mixed batches, globally empty accumulated chunks, exact ID coverage, optimizer parameters and moments, and checkpoint pre-mutation refusal. An independent reviewer additionally exercised actual CPU FSDP2/HSDP meshes (one physical host, Gloo, no CUDA). The report and executable probes are in `review/distributed-change-review.{md,json}` in the campaign directory. These checks do not qualify any GPU, model binding, full dataset, or two-node layout.
+
+## Physical data and accumulated updates
+
+Flow SFT now permits gradient accumulation through the existing TOKEN_SUM reducer. Controlled tests fix each example's time/noise and compare the complete global masked-action objective, gradients, AdamW parameters and moments against two-rank accumulated execution with uneven masks and an incomplete tail. This does not assert that changing microbatch shape preserves a stochastic model's RNG consumption. Exact resume binds the unchanged batch/accumulation configuration and restores rank RNG.
+
+The LIBERO converter streams a single episode across parquet shard boundaries rather than retaining the complete image-bearing dataset in RAM. The v2 preparation identity records source ordering and source-frame count; it rejects nonmonotonic episodes, discontinuous frames, duplicate selected IDs and incomplete source coverage. It writes one action window at a time. Source hashes and an end-of-preparation manifest remain mandatory; a partial output directory is not a usable dataset.

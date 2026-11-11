@@ -13,8 +13,9 @@ equal shards the scale is exactly 1.0, so the single-GPU parity gate stays bitwi
 at least one sample (Isaac's collator needs one, and dispatch hands ranks equal shares), and the count average is
 exact for a power-of-two world size, the only topologies the gate has measured.
 
-Not RL. Two structural constraints: `n_mini == 1` (the forward is stochastic, so the pi_old ahead pass must not run)
-and `grad_accum == 1` (a reference trainer divides the loss by 1 too, keeping a per-step parity comparison exact).
+Not RL. `n_mini == 1`: the forward is stochastic, so the pi_old ahead pass must not run.
+TOKEN_SUM accumulation reconstructs each microbatch's masked sum and divides once
+by the complete update's supervised count. Single-microbatch arithmetic is unchanged.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from cosmos_framework.posttrain.algorithm.primitives.objective import (
 )
 from cosmos_framework.posttrain.model.protocol import SupervisedFlowMatchingPolicy
 from cosmos_framework.posttrain.schema.trajectory import Trajectory
-from cosmos_framework.posttrain.utils.dist import rank_mean_count, run_rank_converged
+from cosmos_framework.posttrain.utils.dist import rank_mean_count, rank_sum_count, run_rank_converged
 
 if TYPE_CHECKING:
     import torch
@@ -45,10 +46,18 @@ _METRIC_ADAPTER = MetricAdapter(
 
 
 def make_objective(
-    collate: Callable[[list[Trajectory]], dict], *, training_prefix: int, action_dim: int, sft_metrics: bool = False
+    collate: Callable[[list[Trajectory]], dict],
+    *,
+    training_prefix: int,
+    action_dim: int,
+    sft_metrics: bool = False,
+    allow_empty_training_padding: bool = False,
 ) -> Objective:
     """`collate` rebuilds the model inputs, including the supervision mask over `[:training_prefix, :action_dim]`;
     the two ints are recorded in the identity so a resume cannot silently change the loss."""
+
+    if type(allow_empty_training_padding) is not bool:
+        raise TypeError("allow_empty_training_padding must be bool")
 
     def fn(model: SupervisedFlowMatchingPolicy, batch: list[Trajectory]) -> tuple[torch.Tensor, dict[str, Any]]:
         # Decode/processor failures are local. Converge them before any peer
@@ -59,8 +68,18 @@ def make_objective(
         masked = int(out.action_mask.float().sum().item())  # the mask arrives in bf16 under the parameter-cast mode
         denom = rank_mean_count(masked, out.loss.device)  # DP-mean supervised count; == masked outside a process group
         if denom <= 0:
-            raise ValueError("flow_bc batch contains no supervised action elements on any rank")
-        loss = out.loss * (masked / denom)  # x/x is exactly 1.0 in IEEE 754: equal shards stay bitwise identical
+            nonpadding = sum(
+                not (
+                    row.transitions[0].algo_extra.get("training_padding") is True
+                    and row.transitions[0].algo_extra.get("validation_weight") == 0.0
+                )
+                for row in batch
+            )
+            if not allow_empty_training_padding or rank_sum_count(nonpadding, out.loss.device):
+                raise ValueError("flow_bc batch contains no supervised action elements on any rank")
+        # A padding-only chunk retains its model graph with a zero gradient. The
+        # trainer rejects a wholly empty update, before AdamW or scheduler steps.
+        loss = out.loss * (masked / (denom if denom > 0 else 1.0))
         metrics = {"flow_bc_loss": float(loss.detach()), "flow_bc_masked_elements": masked, OBJECTIVE_WEIGHT_SUM: denom}
         if sft_metrics:
             metrics["flow_bc_valid_action_count"] = masked
@@ -88,5 +107,10 @@ def make_objective(
         )
         if sft_metrics
         else _METRIC_ADAPTER,
-        identity={"algorithm": "flow_bc", "training_prefix": int(training_prefix), "action_dim": int(action_dim)},
+        identity={
+            "algorithm": "flow_bc",
+            "training_prefix": int(training_prefix),
+            "action_dim": int(action_dim),
+            **({"finite_training_padding": "zero_weight_v1"} if allow_empty_training_padding else {}),
+        },
     )

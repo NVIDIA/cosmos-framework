@@ -236,7 +236,11 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
             lambda: build_flow_sft_packer(select_policy_backend(config).native_spec, rl), "SFT flow processor setup"
         )
         objective = flow_objective(
-            packer, training_prefix=rl.flow_training_prefix, action_dim=rl.flow_action_dim, sft_metrics=True
+            packer,
+            training_prefix=rl.flow_training_prefix,
+            action_dim=rl.flow_action_dim,
+            sft_metrics=True,
+            allow_empty_training_padding=rl.training_epochs is not None,
         )
         objective.identity = {**objective.identity, "preprocessing": packer.validation_semantics_identity()}
     else:
