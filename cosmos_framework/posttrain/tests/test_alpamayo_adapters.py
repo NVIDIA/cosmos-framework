@@ -195,10 +195,12 @@ def test_r1_components_flow_updates_and_reload(tmp_path, method, rs, ac):
 
 
 @pytest.mark.parametrize("method,rs", [("lora", False), ("lora", True), ("dora", False), ("pissa", False)])
-def test_r1_merged_file_precision_reload_and_identity(tmp_path, method, rs):
+@pytest.mark.parametrize("observation_profile", ["front_frames_v1", "physicalai_four_camera_v1"])
+def test_r1_merged_file_precision_reload_and_identity(tmp_path, method, rs, observation_profile):
     from cosmos_framework.posttrain.model.alpamayo.adapter_export import export_merged, load_merged
 
     base, model_config = source(tmp_path)
+    model_config.observation_profile = observation_profile
     policy = build_policy(base, model_config, adapters=config(method, rs), device="cpu")
     with torch.no_grad():
         for parameter in policy.net.parameters():
@@ -207,6 +209,18 @@ def test_r1_merged_file_precision_reload_and_identity(tmp_path, method, rs):
     policy.net.eval()
     portable = tmp_path / "portable"
     save_adapter_artifact(policy.net, str(portable))
+    contract = policy.net._posttrain_adapter_identity["model_contract"]
+    assert contract.get("observation_profile", "front_frames_v1") == observation_profile
+    if observation_profile == "front_frames_v1":
+        assert "observation_profile" not in contract  # Existing portable identity stays byte-compatible.
+    wrong_config = copy.deepcopy(model_config)
+    wrong_config.observation_profile = (
+        "front_frames_v1" if observation_profile == "physicalai_four_camera_v1" else "physicalai_four_camera_v1"
+    )
+    warm = config(method, rs)
+    warm.warm_start = str(portable)
+    with pytest.raises(ValueError, match="compatibility mismatch"):
+        build_policy(base, wrong_config, adapters=warm, device="cpu")
     before = {n: v.clone() for n, v in policy.net.state_dict().items()}
     export_merged(str(portable), base, str(tmp_path / "merged"), processor=model_config.processor_path)
     assert all(torch.equal(v, policy.net.state_dict()[n]) for n, v in before.items())

@@ -215,6 +215,11 @@ def load_base(model_id, config, *, dtype=torch.bfloat16):
             "external": external_identity(),
             "forward": "fresh-differentiable-prefix-noncausal-expert",
             "reasoning_supervision": False,
+            **(
+                {"observation_profile": config.observation_profile}
+                if config.observation_profile != "front_frames_v1"
+                else {}
+            ),
             "min_pixels": config.min_pixels,
             "max_pixels": config.max_pixels,
         },

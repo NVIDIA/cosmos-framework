@@ -16,6 +16,13 @@ from cosmos_framework.posttrain.model.sft_source import register_flow_sft_packer
 
 BUILDER = "cosmos_framework.posttrain.model.alpamayo.sft.build_alpamayo_sft_policy"
 REFERENCE_REVISION = "11a0e01c13a5622377c45ee37d653351453ec43b"
+PHYSICALAI_PROFILE = "physicalai_four_camera_v1"
+PHYSICALAI_CAMERAS = (
+    "camera_cross_left_120fov",
+    "camera_front_wide_120fov",
+    "camera_cross_right_120fov",
+    "camera_front_tele_30fov",
+)
 
 
 @dataclass
@@ -24,8 +31,11 @@ class AlpamayoSFTModelConfig:
     activation_checkpointing: str = "vision"
     min_pixels: int = 163840
     max_pixels: int = 196608
+    observation_profile: str = "front_frames_v1"
 
     def __post_init__(self):
+        if self.observation_profile not in ("front_frames_v1", PHYSICALAI_PROFILE):
+            raise ValueError("Alpamayo observation_profile requires front_frames_v1 or physicalai_four_camera_v1")
         if self.activation_checkpointing not in ("none", "vision", "full"):
             raise ValueError("Alpamayo SFT supports activation_checkpointing=none|vision|full")
         if not self.processor_path or not 0 < self.min_pixels <= self.max_pixels:
@@ -99,7 +109,21 @@ class AlpamayoSFTPacker:
             "max_pixels": self.config.max_pixels,
             "prompt": "official-driving-system-history-with-empty-cot-and-future-start",
             "reasoning_supervision": False,
-            "image_order": "ordered_front_camera_frames",
+            "image_order": "ordered_front_camera_frames"
+            if self.config.observation_profile == "front_frames_v1"
+            else "camera_major_then_timestamp",
+            **(
+                {
+                    "observation_profile": PHYSICALAI_PROFILE,
+                    "camera_order": list(PHYSICALAI_CAMERAS),
+                    "camera_indices": [0, 1, 2, 6],
+                    "frames_per_camera": 4,
+                    "coordinate_frame": "vehicle_at_t0",
+                    "calibration": "source_native_camera_intrinsics_and_sensor_extrinsics",
+                }
+                if self.config.observation_profile == PHYSICALAI_PROFILE
+                else {}
+            ),
             "action_space": self.model_config.action_space_cfg,
         }
 
@@ -117,9 +141,12 @@ class AlpamayoSFTPacker:
         step = rows[0]
         sample = step.obs.representations["flow_sample"]
         obs = sample["observation"]
-        frames = sample["media"].get("front")
-        if not isinstance(frames, list) or not frames:
-            raise ValueError("Alpamayo demonstrations require ordered real front-camera frames")
+        if self.config.observation_profile == PHYSICALAI_PROFILE:
+            frames = physicalai_frames(sample)
+        else:
+            frames = sample["media"].get("front")
+            if not isinstance(frames, list) or not frames:
+                raise ValueError("Alpamayo demonstrations require ordered real front-camera frames")
         images = []
         for path in frames:
             with Image.open(path) as image:
@@ -159,6 +186,61 @@ class AlpamayoSFTPacker:
             "actions": actions,
             "action_mask": mask,
         }
+
+
+def physicalai_frames(sample):
+    """Validate the new native four-camera contract without changing legacy rows."""
+    import numpy as np
+
+    obs, media = sample["observation"], sample["media"]
+    if (
+        set(media) != set(PHYSICALAI_CAMERAS)
+        or obs.get("camera_order") != list(PHYSICALAI_CAMERAS)
+        or obs.get("camera_indices") != [0, 1, 2, 6]
+    ):
+        raise ValueError("PhysicalAI Alpamayo requires exactly camera indices [0,1,2,6] in native order")
+    groups = [media[name] for name in PHYSICALAI_CAMERAS]
+    if any(not isinstance(g, list) or len(g) != 4 or len(set(g)) != 4 for g in groups):
+        raise ValueError("PhysicalAI Alpamayo requires four distinct ordered frames per camera")
+    timestamps = np.asarray(obs.get("frame_timestamps_us"))
+    t0 = obs.get("t0_us")
+    if (
+        timestamps.shape != (4, 4)
+        or not np.issubdtype(timestamps.dtype, np.integer)
+        or np.any(np.diff(timestamps, axis=1) < 0)
+        or np.any(timestamps < 0)
+        or type(t0) is not int
+    ):
+        raise ValueError("PhysicalAI camera timestamps require a nondecreasing nonnegative sequence and integer t0_us")
+    if obs.get("coordinate_frame") != "vehicle_at_t0" or obs.get("trajectory_dt_seconds") != 0.1:
+        raise ValueError("PhysicalAI trajectories require the native vehicle frame at t0 and dt=0.1 seconds")
+    calibration = obs.get("calibration")
+    if (
+        not isinstance(calibration, dict)
+        or set(calibration) != {"camera_intrinsics", "sensor_extrinsics"}
+        or any(not isinstance(v, dict) or not v for v in calibration.values())
+    ):
+        raise ValueError("PhysicalAI observations require source camera intrinsic and extrinsic calibration records")
+    intrinsics = {"width", "height", "cx", "cy", *[f"{side}_poly_{i}" for side in ("bw", "fw") for i in range(5)]}
+    extrinsics = {"qx", "qy", "qz", "qw", "x", "y", "z"}
+    for camera in PHYSICALAI_CAMERAS:
+        for kind, fields in (("camera_intrinsics", intrinsics), ("sensor_extrinsics", extrinsics)):
+            value = calibration[kind].get(camera)
+            if not isinstance(value, dict) or not fields.issubset(value):
+                raise ValueError(f"PhysicalAI calibration missing {kind} fields for {camera}")
+            numbers = np.asarray([value[key] for key in sorted(fields)], dtype=np.float64)
+            if not np.isfinite(numbers).all():
+                raise ValueError(f"PhysicalAI calibration is nonfinite: {kind}/{camera}")
+        intrinsic = calibration["camera_intrinsics"][camera]
+        if any(intrinsic[key] <= 0 or int(intrinsic[key]) != intrinsic[key] for key in ("width", "height")):
+            raise ValueError(f"PhysicalAI camera dimensions must be positive integers: {camera}")
+        extrinsic = calibration["sensor_extrinsics"][camera]
+        if not np.isclose(sum(extrinsic[key] ** 2 for key in ("qx", "qy", "qz", "qw")), 1.0, atol=1e-5, rtol=0):
+            raise ValueError(f"PhysicalAI calibration quaternion must have unit norm: {camera}")
+    requested = t0 + np.arange(-3, 1) * 100_000
+    if np.any(timestamps > requested[None, :]):
+        raise ValueError("PhysicalAI frames must precede their native requested timestamps")
+    return [frame for group in groups for frame in group]
 
 
 @register_flow_sft_packer(BUILDER)

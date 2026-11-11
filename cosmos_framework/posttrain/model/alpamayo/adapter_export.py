@@ -39,7 +39,13 @@ MARKER = "merged_model.json"
 
 def model_configuration(identity, processor):
     contract = identity["model_contract"]
-    return AlpamayoSFTModelConfig(processor, "none", contract["min_pixels"], contract["max_pixels"])
+    return AlpamayoSFTModelConfig(
+        processor,
+        "none",
+        contract["min_pixels"],
+        contract["max_pixels"],
+        contract.get("observation_profile", "front_frames_v1"),
+    )
 
 
 def export_merged(adapter, base, out, *, processor):
