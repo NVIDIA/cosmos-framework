@@ -21,8 +21,15 @@ def test_missing_module_raises_on_first_use_and_names_the_module() -> None:
     missing = optional_import("cosmos_framework_no_such_module_for_test")
     assert isinstance(missing, MissingModule)
     assert not missing
-    with pytest.raises(ModuleNotFoundError, match="cosmos_framework_no_such_module_for_test"):
+    with pytest.raises(AttributeError, match="cosmos_framework_no_such_module_for_test") as raised:
         missing.anything
+    assert isinstance(raised.value.__cause__, ModuleNotFoundError)
+
+
+def test_missing_module_follows_the_attribute_protocol() -> None:
+    missing = optional_import("cosmos_framework_no_such_module_for_test")
+    assert not hasattr(missing, "anything")
+    assert getattr(missing, "anything", None) is None
 
 
 def _import_without_pyarrow(module: str, *extra: str) -> None:
@@ -46,8 +53,8 @@ def test_contract_module_imports_without_pyarrow_and_fails_loudly_on_use() -> No
         f"m = sys.modules['{module}']",
         "assert m.CAMERA_SIDECAR_SCHEMA_VERSION_V1_1 == b'1.1.0'",
         "raised = False",
-        "exec('try:\\n    m.POSE_SCHEMA\\nexcept ModuleNotFoundError:\\n    raised = True')",
-        "assert raised, 'schema access must raise ModuleNotFoundError without pyarrow'",
+        "exec('try:\\n    m.POSE_SCHEMA\\nexcept AttributeError as error:\\n    raised = \"pyarrow\" in str(error)')",
+        "assert raised, 'schema access must raise an AttributeError that names pyarrow'",
     )
 
 

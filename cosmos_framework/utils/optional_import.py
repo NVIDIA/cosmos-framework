@@ -6,9 +6,11 @@
 ``pyarrow`` has no ``win_arm64`` wheel, so a module-scope ``import pyarrow`` makes every module
 that transitively reaches it unimportable on Windows on Arm (RTX Spark), including the
 reasoner config graph. :func:`optional_import` returns the real module where it is installed
-and a stand-in otherwise. The stand-in raises ``ModuleNotFoundError`` with the original reason
-on first attribute access, so code paths that need the dependency fail loudly where they use
-it instead of at import, and every other path keeps working.
+and a stand-in otherwise. The stand-in raises ``AttributeError`` on first attribute access,
+naming the module and chained to the original ``ImportError``, so code paths that need the
+dependency fail loudly where they use it instead of at import, and every other path keeps
+working. ``AttributeError`` is what the attribute protocol expects: ``hasattr`` and
+three-argument ``getattr`` on the stand-in answer instead of raising.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ class MissingModule:
         self._error = error
 
     def __getattr__(self, attr: str) -> Any:
-        raise ModuleNotFoundError(
+        raise AttributeError(
             f"{self._name} is required for this code path but could not be imported ({self._error}). "
             "Install it, or avoid the feature that needs it on this platform."
         ) from self._error
