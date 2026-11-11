@@ -45,6 +45,7 @@ nav:
           - Simulation: skills/cookbooks/cosmos3/simulation/README.md
   - Post-Training:
       - Choose a path: post_training/choose_path.md
+      - Model and algorithm support: post_training/model_algorithm_support.md
       - SFT:
           - SFT recipes: training.md
           - Datasets:
