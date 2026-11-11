@@ -21,6 +21,10 @@ dependencies = [
   "safetensors==0.8.0",
   "numpy==1.26.4",
   "pandas==2.2.3",
+  # Newer Arrow wheels require NumPy2 at import despite their resolver metadata;
+  # the source-bound GR00T processor uses NumPy1.26.
+  "pyarrow==23.0.1",
+  "datasets==4.6.1",
   "pillow==12.2.0",
   "av==18.0.0",
   "qwen-vl-utils==0.0.14",
