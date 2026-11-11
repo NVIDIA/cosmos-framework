@@ -1,12 +1,14 @@
 # Cosmos3 Generator Transfer Examples
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../../../cosmos3-quantization/SKILL.md)
+> **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/generator/transfer/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
+
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
 
 Cosmos3 video **transfer** examples — **Nano** (single GPU) and **Super** (multi-GPU, 32B) — on
 the native PyTorch (Cosmos Framework) path, the Diffusers modular pipeline, and the
 OpenAI-compatible TensorRT-LLM and vLLM-Omni server paths.
-Sample assets under [`assets/`](./assets) cover spatial control signals paired with
+Sample assets under [`assets/`](../assets) cover spatial control signals paired with
 `prompt.json` files:
 
 - **Edge (Canny)** — edge map control plus caption.
@@ -22,7 +24,7 @@ accept multiple unweighted controls. Diffusers also accepts multiple
 precomputed controls without per-hint weights.
 
 Environment setup is centralized in the shared
-[Cosmos3 cookbooks environment setup](../../README.md) guide.
+[Cosmos3 cookbooks environment setup](../../cookbooks/cosmos3/README.md) guide.
 
 ## Transfer Definition
 
@@ -40,14 +42,14 @@ count and geometry come from the control video; see the spec field reference for
 `fps` and `aspect_ratio` are resolved. All examples share `assets/negative_prompt.json`
 for the negative caption.
 
-| Control | Asset folder | Inference input | Generation duration |
-| --- | --- | --- | --- |
-| Edge (Canny) | `assets/edge/` | `control_edge.mp4` + `prompt.json` | 121 frames @ 30 FPS |
-| Blur | `assets/blur/` | `control_blur.mp4` + `prompt.json` | 121 frames @ 30 FPS |
-| Depth | `assets/depth/` | `control_depth.mp4` + `prompt.json` | 121 frames @ 30 FPS |
-| Segmentation | `assets/seg/` | `control_seg.mp4` + `prompt.json` | 121 frames @ 30 FPS |
-| World scenario (WSM) | `assets/wsm/` | `control_wsm.mp4` + `prompt.json` | 100 frames @ 10 FPS |
-| Multi-control | `assets/multi_control/` | `vision_path` + multiple hints (Framework example) | 93 frames @ 16 FPS |
+| Control              | Asset folder            | Inference input                                    | Generation duration |
+| -------------------- | ----------------------- | -------------------------------------------------- | ------------------- |
+| Edge (Canny)         | `assets/edge/`          | `control_edge.mp4` + `prompt.json`                 | 121 frames @ 30 FPS |
+| Blur                 | `assets/blur/`          | `control_blur.mp4` + `prompt.json`                 | 121 frames @ 30 FPS |
+| Depth                | `assets/depth/`         | `control_depth.mp4` + `prompt.json`                | 121 frames @ 30 FPS |
+| Segmentation         | `assets/seg/`           | `control_seg.mp4` + `prompt.json`                  | 121 frames @ 30 FPS |
+| World scenario (WSM) | `assets/wsm/`           | `control_wsm.mp4` + `prompt.json`                  | 100 frames @ 10 FPS |
+| Multi-control        | `assets/multi_control/` | `vision_path` + multiple hints (Framework example) | 93 frames @ 16 FPS  |
 
 Transfer inference is selected automatically when any hint key is present in the
 Framework spec or in vLLM-Omni `extra_params`.
@@ -58,7 +60,7 @@ entirely by `--checkpoint-path`.
 
 ### Quickstart — Single-control transfer
 
-Set up the environment: [Cosmos Framework setup](../../README.md#cosmos-framework).
+Set up the environment: [Cosmos Framework setup](../../cookbooks/cosmos3/README.md#cosmos-framework).
 Run the commands below inside the **cosmos container** (e.g. `pytorch:25.09-py3`) — the same
 environment used to install the venv and run the notebook. The commands mirror the notebook
 exactly: `cd` into the framework repo first, then invoke the venv's Python or torchrun
@@ -106,22 +108,22 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
   --seed 2026
 ```
 
-| | Cosmos3-Nano | Cosmos3-Super |
-|---|---|---|
-| `--checkpoint-path` | `Cosmos3-Nano` | `Cosmos3-Super` |
-| Launcher | `.venv/bin/python` (from framework root) | `.venv/bin/torchrun --nproc-per-node=<N>` (from framework root) |
-| `--parallelism-preset` | `latency` | `latency` |
-| GPUs | 1 | 4+ |
+|                        | Cosmos3-Nano                             | Cosmos3-Super                                                   |
+| ---------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| `--checkpoint-path`    | `Cosmos3-Nano`                           | `Cosmos3-Super`                                                 |
+| Launcher               | `.venv/bin/python` (from framework root) | `.venv/bin/torchrun --nproc-per-node=<N>` (from framework root) |
+| `--parallelism-preset` | `latency`                                | `latency`                                                       |
+| GPUs                   | 1                                        | 4+                                                              |
 
 The input spec sets `prompt_path` and a hint block with `control_path` pointing at the
-checked-in assets under [`assets/`](./assets) via paths relative to [`specs/`](./specs).
+checked-in assets under [`assets/`](../assets) via paths relative to [`specs/`](../specs).
 
 Outputs are written under the directory passed to `-o`, with one subdirectory per sample
 name, e.g. `outputs/Cosmos3-Nano/transfer_edge/vision.mp4`.
 
 ### Notebook (self-contained)
 
-[`run_video_transfer_with_cosmos_framework.ipynb`](./run_video_transfer_with_cosmos_framework.ipynb)
+[`run_video_transfer_with_cosmos_framework.ipynb`](cosmos-framework.md)
 is a self-contained tutorial: it installs all dependencies (system packages, framework
 clone, Python venv via `uv`), authenticates with Hugging Face, and runs all six controls
 with previews.
@@ -145,7 +147,7 @@ Outputs land under `outputs/notebooks/<model>/transfer_<control>/vision.mp4`.
 
 ### Quickstart
 
-Set up the environment: [Diffusers setup](../../README.md#diffusers). Transfer is
+Set up the environment: [Diffusers setup](../../cookbooks/cosmos3/README.md#diffusers). Transfer is
 reachable only through the modular pipeline, which takes precomputed control videos as
 `control_videos={hint: frames}`:
 
@@ -190,11 +192,11 @@ To run **Cosmos3-Super** instead, load the larger checkpoint:
 
 ### Diffusers notebook walkthrough
 
-[`run_video_transfer_with_diffusers.ipynb`](./run_video_transfer_with_diffusers.ipynb) is
+[`run_video_transfer_with_diffusers.ipynb`](diffusers.md) is
 the full tutorial for the Diffusers backend: it provisions a dedicated venv, then runs
 edge, blur, depth, segmentation, and world-scenario-map transfer on Cosmos3-Nano followed
-by the same five controls on Cosmos3-Super. It reads the same [`specs/`](./specs) files and
-reuses the previews from [`preview_helpers.py`](./preview_helpers.py), writing outputs to
+by the same five controls on Cosmos3-Super. It reads the same [`specs/`](../specs) files and
+reuses the previews from [`preview_helpers.py`](../scripts/preview_helpers.py), writing outputs to
 `outputs/notebooks/diffusers/<model>/transfer_<control>/vision.mp4`.
 
 ## Run with TensorRT-LLM
@@ -202,7 +204,7 @@ reuses the previews from [`preview_helpers.py`](./preview_helpers.py), writing o
 ### Quickstart
 
 Set up and launch Nano or Super as described in the shared
-[TensorRT-LLM setup](../../README.md#tensorrt-llm-generator). TensorRT-LLM
+[TensorRT-LLM setup](../../cookbooks/cosmos3/README.md#tensorrt-llm-generator). TensorRT-LLM
 accepts a raw source video as multipart `video_reference` when edge or blur will
 be computed on the server. The checked-in assets are already precomputed
 controls, so this example base64-encodes the control inside its hint and does
@@ -279,7 +281,7 @@ canonical blocking `/v1/videos/sync` route.
 
 ### TensorRT-LLM notebook walkthrough
 
-[`run_video_transfer_with_trt_llm.ipynb`](./run_video_transfer_with_trt_llm.ipynb)
+[`run_video_transfer_with_trt_llm.ipynb`](trt-llm.md)
 runs edge, blur, depth, segmentation, and WSM against an already-running Nano
 or Super server. It reuses the checked-in media and captions, shows the complete
 mode matrix, validates the JSON/base64 control request contract, and previews the
@@ -293,7 +295,7 @@ vLLM-Omni accepts multiple control hints in one request, but does not support
 the per-hint `weight` field available in Cosmos Framework.
 
 Set up the environment and start the server:
-[vLLM-Omni setup](../../README.md#vllm-omni). Transfer controls are available from
+[vLLM-Omni setup](../../cookbooks/cosmos3/README.md#vllm-omni). Transfer controls are available from
 vLLM-Omni `main` and the released `vllm/vllm-omni:cosmos3` container. Check the current
 [Cosmos3-Nano recipe](https://github.com/vllm-project/vllm-omni/blob/main/recipes/cosmos3/Cosmos3-Nano.md)
 before selecting an image. For Docker, run the command from the cookbook root (`.agents/skills`) so
@@ -404,20 +406,20 @@ Key fields:
 
 ### Cookbook entrypoints
 
-- [`run_video_transfer_with_cosmos_framework.ipynb`](./run_video_transfer_with_cosmos_framework.ipynb) —
+- [`run_video_transfer_with_cosmos_framework.ipynb`](cosmos-framework.md) —
   self-contained notebook: §9–§13 Nano single-control, §14–§18 Super single-control, §19 multi-control (Nano). Edit §2, run top-to-bottom.
-- [`run_video_transfer_with_diffusers.ipynb`](./run_video_transfer_with_diffusers.ipynb) —
+- [`run_video_transfer_with_diffusers.ipynb`](diffusers.md) —
   full tutorial for the Diffusers modular pipeline: five single-control transfers on Nano,
   then the same five on Super, driven by the same specs.
-- [`run_video_transfer_with_trt_llm.ipynb`](./run_video_transfer_with_trt_llm.ipynb) —
+- [`run_video_transfer_with_trt_llm.ipynb`](trt-llm.md) —
   five single-control transfers through TensorRT-LLM's synchronous VisualGen API,
   using base64-encoded precomputed controls in JSON `extra_params`.
-- [`run_video_transfer_with_vllm_omni.ipynb`](./run_video_transfer_with_vllm_omni.ipynb) —
+- [`run_video_transfer_with_vllm_omni.ipynb`](vllm-omni.md) —
   full tutorial against an already-running vLLM-Omni server: endpoint checks, repo-local
   control paths, five single-control transfer requests, and compact previews. The API
   also accepts unweighted multi-control requests by including multiple hint blocks in
   `extra_params`.
-- [`specs/`](./specs) — checked-in Framework input JSON per control (paths relative to `specs/`).
+- [`specs/`](../specs) — checked-in Framework input JSON per control (paths relative to `specs/`).
   Shared by both Nano and Super.
 
 ### Troubleshooting
