@@ -34,7 +34,6 @@ dependencies = [
   "av>=17,<18; python_version < '3.11'",
   "av>=18,<19; python_version >= '3.11'",
   "cattrs",
-  "diffusers>=0.39.0",
   "einops",
   "hydra-core",
   "imageio-ffmpeg",
@@ -61,7 +60,21 @@ dependencies = [
 # Backend selection is explicit in wheel metadata. The separate
 # cosmos-framework-reasoner-runtime distribution pins the qualified HF runtime;
 # an extra cannot override the native backend's incompatible Transformers pin.
-native = ["transformers>=4.57.1,<5.0.0"]
+native = ["transformers>=4.57.1,<5.0.0", "diffusers>=0.39.0"]
+# The shared posttrain SFT/flow engine selects its Transformers runtime
+# separately. Generator training retains its existing native pin in [train].
+posttrain = [
+  "attrs",
+  "datasets",
+  "msgpack-numpy",
+  "multi-storage-client[boto3,fsspec]",
+  "pandas",
+  "psutil",
+  "ray",
+  "sentencepiece",
+  "toml",
+  "wandb",
+]
 automl = ["nvidia-automl-core==0.1.0"]
 automl-prompts = ["nvidia-automl-core==0.1.0", "gepa==0.1.2"]
 reasoner-eval = [
@@ -92,6 +105,7 @@ serve = [
 ]
 train = [
   "transformers>=4.57.1,<5.0.0",
+  "diffusers>=0.39.0",
   "aioboto3",
   "aiofiles",
   "aiohttp",
@@ -178,7 +192,7 @@ cosmos-automl = "cosmos_framework.scripts.automl:main"
 cosmos-reasoner-evaluate = "cosmos_framework.evaluation.reasoner.evaluate:main"
 
 [dependency-groups]
-native = ["transformers>=4.57.1,<5.0.0"]
+native = ["transformers>=4.57.1,<5.0.0", "diffusers>=0.39.0"]
 dev = [
   "hatch",
   "pyinstrument",

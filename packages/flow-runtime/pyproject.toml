@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cosmos-framework-flow-runtime"
+version = "1.2.2"
+description = "Pinned Cosmos native physical-model SFT runtime (not the upstream SDK environments)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "cosmos-framework[posttrain]==1.2.2",
+  "cosmos-framework-flow-gr00t==0.1.0+51d4c89",
+  "cosmos-framework-flow-alpamayo==0.1.0+11a0e01",
+  "torch==2.10.0",
+  "torchvision==0.25.0",
+  "torchcodec==0.10.0",
+  "transformers==4.57.6",
+  "diffusers==0.35.1",
+  "safetensors==0.8.0",
+  "numpy==1.26.4",
+  "pandas==2.2.3",
+  "pillow==12.2.0",
+  "av==18.0.0",
+  "qwen-vl-utils==0.0.14",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
