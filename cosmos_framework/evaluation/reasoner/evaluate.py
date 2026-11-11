@@ -26,7 +26,10 @@ import argparse
 import logging
 from pathlib import Path
 
-import toml
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import toml as tomllib  # type: ignore[no-redef]
 
 from cosmos_framework.checkpoint.reasoner import distributed_identity
 from cosmos_framework.evaluation.reasoner.status_barrier import wait_for_status_publishers
@@ -80,8 +83,7 @@ def run_evaluation(args):
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-        with open(config_path) as f:
-            eval_config = toml.load(f)
+        eval_config = tomllib.loads(config_path.read_text(encoding="utf-8"))
 
         # Framework evaluation is data parallel: launch with torchrun and each
         # rank owns one GPU/model replica and one validation shard.
