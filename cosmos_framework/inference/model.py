@@ -290,6 +290,37 @@ def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
+def _resolve_mixed_precision_config(checkpoint_path: Path, override: QuantizationConfig) -> QuantizationConfig:
+    """Resolve omitted step counts from ModelOpt FP8 metadata, preserving explicit zeros.
+
+    Order of precedence:
+
+        1. Explicit override from the config
+        2. ModelOpt FP8 metadata from the checkpoint
+        3. Default values
+    """
+    policy = {}
+    if is_modelopt_fp8_checkpoint(checkpoint_path):
+        config_path = checkpoint_path / "transformer" / "config.json"
+        if config_path.is_file():
+            metadata = json.loads(config_path.read_text(encoding="utf-8"))
+            policy = metadata.get("quantization_config", {}).get("runtime", {}).get("diffusion_step_policy", {})
+            if policy and (policy.get("schema_version") != 1 or policy.get("type") != "first_last_n"):
+                raise ValueError(f"Unsupported diffusion step policy in {config_path}")
+    values = {}
+    for field, key in (("mixed_precision_first_steps", "first_steps"), ("mixed_precision_last_steps", "last_steps")):
+        value = getattr(override, field)
+        if value is None:
+            step = policy.get(key, {})
+            if step and step.get("mode") != "a16":
+                raise ValueError(f"Unsupported {key} precision mode in diffusion step policy")
+            value = step.get("count", 0)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"Invalid {key} count in diffusion step policy: {value!r}")
+        values[field] = value
+    return attrs.evolve(override, **values)
+
+
 def _validate_mixed_precision_load(
     quantization_config: QuantizationConfig, *, modelopt_checkpoint: bool, use_cuda_graphs: bool
 ) -> None:
@@ -699,6 +730,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             compile_config = CompileConfig()
         if quantization_config is None:
             quantization_config = QuantizationConfig()
+        quantization_config = _resolve_mixed_precision_config(checkpoint_path, quantization_config)
         config.parallelism = attrs.asdict(parallelism_config)
         config.compile = attrs.asdict(compile_config)
         config.quantization = attrs.asdict(quantization_config)
