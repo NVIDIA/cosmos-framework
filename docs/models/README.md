@@ -41,7 +41,7 @@ Cosmos3-Super-Text2Image and Cosmos3-Super-Image2Video are task-specialized Cosm
 
 Cosmos3-Nano-Policy-DROID and Cosmos3-Edge-Policy-DROID are post-trained DROID policies: they predict robot actions from camera observations, a task instruction and robot state. A policy server streams actions to a client that drives a simulated or real robot.
 
-- Serve: [DROID policy server](../action_policy_droid_server.md) · [Action notebooks](../../.agents/skills/cookbooks/cosmos3/generator/action/README.md)
+- Serve: [DROID policy server](../action_policy_droid_server.md) · [Action notebooks](../../.agents/skills/cosmos3-inference-action/SKILL.md)
 - Train: [DROID policy](../action_policy_droid_posttrain.md) reproduces Cosmos3-Nano-Policy-DROID from Cosmos3-Nano
 - Other robot recipes: [DROID forward dynamics](../action_fd_droid_posttrain.md) · [LIBERO-10 policy](../action_policy_libero_posttrain.md)
 

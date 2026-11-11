@@ -39,7 +39,7 @@ nav:
           - Deploy with NIM: skills/cookbooks/cosmos3/nim/README.md # the other NIM pages are extra_pages
       - Notebooks:
           - Generation: skills/cosmos3-inference-generate-media/SKILL.md
-          - Action: skills/cookbooks/cosmos3/generator/action/README.md
+          - Action: skills/cosmos3-inference-action/SKILL.md
           - Control-to-video transfer: skills/cookbooks/cosmos3/generator/transfer/README.md
           - Reasoner: skills/cosmos3-inference-reasoning/SKILL.md
           - Simulation: skills/cookbooks/cosmos3/simulation/README.md

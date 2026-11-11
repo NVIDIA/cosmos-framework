@@ -407,4 +407,4 @@ reasoning `input.json` for `assets/robot_153.jpg`, and runs `llm_inference`.
 [`run_with_trt_edge_llm.ipynb`](./trt-edge-llm.md) is a
 command-driven walkthrough (export → engine build → image caption). For
 **Cosmos3-Edge-Policy-DROID** on the same runtime, see
-[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb).
+[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md).
