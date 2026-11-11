@@ -102,6 +102,8 @@ def validated_episodes(
     execution_profile: str = DEFAULT_EXECUTION_PROFILE,
 ) -> tuple[EvaluationEpisode, ...]:
     """Check raw outcomes against the complete source inventory before generic aggregation."""
+    if any("suite" in row and row["suite"] != manifest.suite for row in episodes):
+        raise ValueError("LIBERO evaluation row suite differs from its source manifest")
     cases = [LiberoCase(row["task_id"], row["init_state_id"], manifest.suite) for row in episodes]
     if len(set(cases)) != len(cases) or set(cases) != set(manifest.cases):
         raise ValueError("LIBERO evaluation inventory differs from its complete source manifest")

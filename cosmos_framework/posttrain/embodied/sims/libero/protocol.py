@@ -45,9 +45,10 @@ LIBERO_PROTOCOLS = {
         8, 720, 5, 0.0, True, "terminal-success0-timeout-1-v1", "simulator-zero-seven", "libero-sha256-coordinates-v1"
     ),
 }
-LIBERO_SUITES = tuple(LIBERO_PROTOCOLS)
+LIBERO_SUITES = (*LIBERO_PROTOCOLS, "libero_object", "libero_goal")
 DEFAULT_EXECUTION_PROFILE = "default"
 PI05_SPATIAL_EXECUTION_PROFILE = "rlinf_pi05_spatial_v2"
+PI05_SUITE_EXECUTION_PROFILE = "rlinf_pi05_suites_v1"
 HASH_POLICY_REPLICA_ENV_SEEDS = "libero-sha256-policy-rlinf-replica-env-v1"
 _PI05_SPATIAL_PROTOCOL = LiberoProtocol(
     5,
@@ -63,15 +64,23 @@ _PI05_SPATIAL_PROTOCOL = LiberoProtocol(
     True,
     True,
 )
+# Explicit SFT policy evaluation; the existing Spatial PPO profile is unchanged.
+# Limits follow RLinf's pinned evaluation recipes (Spatial/Object/10) and its
+# Goal environment contract. Every suite uses the same five-action policy chunks.
+_PI05_SUITE_LIMITS = {"libero_spatial": 240, "libero_object": 280, "libero_goal": 320, "libero_10": 520}
 
 
 def execution_protocol(suite: str, profile: str = DEFAULT_EXECUTION_PROFILE) -> LiberoProtocol:
     if suite not in LIBERO_SUITES:
         raise ValueError(f"unsupported LIBERO suite {suite!r}")
-    if profile == DEFAULT_EXECUTION_PROFILE:
+    if profile == DEFAULT_EXECUTION_PROFILE and suite in LIBERO_PROTOCOLS:
         return LIBERO_PROTOCOLS[suite]
     if profile == PI05_SPATIAL_EXECUTION_PROFILE and suite == "libero_spatial":
         return _PI05_SPATIAL_PROTOCOL
+    if profile == PI05_SUITE_EXECUTION_PROFILE:
+        from dataclasses import replace
+
+        return replace(_PI05_SPATIAL_PROTOCOL, max_episode_steps=_PI05_SUITE_LIMITS[suite])
     raise ValueError(f"unsupported LIBERO execution_profile {profile!r} for suite {suite!r}")
 
 

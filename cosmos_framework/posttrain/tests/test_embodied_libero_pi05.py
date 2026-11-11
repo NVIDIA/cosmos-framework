@@ -15,6 +15,7 @@ from cosmos_framework.posttrain.embodied.sims.libero.config import LiberoConfig
 from cosmos_framework.posttrain.embodied.sims.libero.protocol import (
     LIBERO_PROTOCOLS,
     PI05_SPATIAL_EXECUTION_PROFILE,
+    PI05_SUITE_EXECUTION_PROFILE,
     execution_protocol,
     fixed_manifest,
     libero_seed,
@@ -316,3 +317,49 @@ def test_simulator_profile_uses_rlinf_rank_seed(controlled_session, monkeypatch:
             if evaluation is not None:
                 evaluation.close()
             simulator.close()
+
+
+@pytest.mark.parametrize(
+    "suite,limit", [("libero_spatial", 240), ("libero_object", 280), ("libero_goal", 320), ("libero_10", 520)]
+)
+def test_pi05_all_suite_protocol_has_complete_fixed_inventory(tmp_path, suite, limit):
+    protocol = execution_protocol(suite, PI05_SUITE_EXECUTION_PROFILE)
+    assert protocol.max_episode_steps == limit and protocol.execution_horizon == 5
+    assert protocol.reset_steps == 15 and protocol.reset_gripper == -1.0
+    assert protocol.action_transform == "identity"
+    assert protocol.fixed_episode and protocol.parallel_lanes and protocol.last_control_render
+    assert not protocol.stop_on_success
+    for split in ("train", "eval"):
+        fixed_manifest(split, suite, "shared_500").write(tmp_path / f"{split}.json")
+    config = LiberoConfig(
+        suite=suite,
+        execution_profile=PI05_SUITE_EXECUTION_PROFILE,
+        execution_horizon=5,
+        max_episode_steps=limit,
+        eval_profile="shared_500",
+        train_manifest=str(tmp_path / "train.json"),
+        eval_manifest=str(tmp_path / "eval.json"),
+        sim_python=sys.executable,
+    )
+    environment = LiberoEnvironment(config)
+    environment.validate_configuration()
+    shards = [environment.evaluation_cases(rank, 8) for rank in range(8)]
+    cases = [case for shard in shards for case in shard]
+    assert len(cases) == 500
+    assert {(case["task_id"], case["init_state_id"]) for case in cases} == {
+        (task, state) for task in range(10) for state in range(50)
+    }
+    rows = [dict(case, success=False, steps=limit, **{"return": 0.0}) for case in cases]
+    assert len(environment.validate_evaluation(rows)) == 500
+    wrong_suite = "libero_goal" if suite != "libero_goal" else "libero_object"
+    with pytest.raises(ValueError, match="row suite"):
+        environment.validate_evaluation([{**row, "suite": wrong_suite} for row in rows])
+    with pytest.raises(ValueError, match="inventory"):
+        environment.validate_evaluation(rows[:-1])
+    assert config.identity()["protocol"] == protocol.identity()
+    if suite in {"libero_object", "libero_goal"}:
+        with pytest.raises(ValueError, match="execution_profile"):
+            execution_protocol(suite)
+    if suite != "libero_spatial":
+        with pytest.raises(ValueError, match="execution_profile"):
+            execution_protocol(suite, PI05_SPATIAL_EXECUTION_PROFILE)

@@ -13,7 +13,6 @@ from cosmos_framework.posttrain.embodied.sims.libero.adapter import LiberoEnviro
 from cosmos_framework.posttrain.embodied.sims.libero.config import LiberoConfig
 from cosmos_framework.posttrain.embodied.sims.libero.protocol import (
     LIBERO_PROTOCOLS,
-    LIBERO_SUITES,
     LiberoManifest,
     fixed_manifest,
     load_partition,
@@ -42,7 +41,7 @@ def _environment(directory: Path, suite: str, profile: str) -> LiberoEnvironment
     return environment
 
 
-@pytest.mark.parametrize("suite", LIBERO_SUITES)
+@pytest.mark.parametrize("suite", tuple(LIBERO_PROTOCOLS))
 def test_shared_inventory_and_episode_weighted_uneven_shards(tmp_path: Path, suite: str) -> None:
     environment = _environment(tmp_path, suite, "shared_500")
     train, evaluation = load_partition(str(tmp_path / "train.json"), str(tmp_path / "eval.json"))
