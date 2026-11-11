@@ -4,7 +4,7 @@
 version: 1
 prompt_source:
   backend: vllm
-  path: cookbooks/cosmos3/reasoner/run_with_vllm.ipynb
+  path: cosmos3-inference-reasoning/references/vllm.md
   contract: Exact runtime user-prompt strings; NIM media transport and post-response validation remain backend-specific.
 validated_baseline:
   model_variant: super

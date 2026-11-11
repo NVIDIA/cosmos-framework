@@ -6,7 +6,7 @@ Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
 For static checkpoint FP8 export of Edge/Nano/Super video and Super base/distilled
-T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
+T2I/I2V, see the [quantization walkthroughs](../../cosmos3-quantization/SKILL.md). They use the
 local Framework environment below with ModelOpt, datasets, and notebook tooling.
 
 | Backend | Use it for | Used by |
@@ -314,7 +314,7 @@ both out of the request. `Cosmos3-Super-Image2Video-4Step` also declares
 `use_system_prompt` unset. The text-to-image student deploys at 1024x1024, the
 shape `cosmos3-t2i-1gpu.yaml` warms; the image-to-video student deploys at the
 default 720p x 189-frame omni shape and needs no config file. The
-[distilled 4-step reference](../../cosmos3-generate-media/references/distilled-trt-llm.md)
+[distilled 4-step reference](../../cosmos3-inference-generate-media/references/distilled-trt-llm.md)
 runs both against a running server. These students cover text-to-image and
 image-to-video only; use the base checkpoints for text-to-video, video-to-video,
 and synchronized audio.
@@ -424,7 +424,7 @@ trtllm-serve nvidia/Cosmos3-Edge \
 
 The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
-[Reasoner TensorRT-LLM notebook](reasoner/run_with_tensorrt_llm.ipynb) for image
+[Reasoner TensorRT-LLM notebook](../../cosmos3-inference-reasoning/references/tensorrt-llm.md) for image
 and video requests.
 
 ## TensorRT-Edge-LLM
@@ -463,7 +463,7 @@ export ENGINE_DIR="${ENGINE_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/e
 
 Runnable cookbooks:
 
-- Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](reasoner/run_with_trt_edge_llm.ipynb)
+- Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/reasoning`)
 - Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/policy`)
@@ -514,7 +514,7 @@ uv pip install "transformers @ git+https://github.com/huggingface/transformers.g
 ```
 
 See the
-[Reasoner Transformers quickstart](reasoner/README.md#run-with-transformers)
+[Reasoner Transformers quickstart](../../cosmos3-inference-reasoning/references/reasoner-readme.md#run-with-transformers)
 for runnable Nano, Super, and Edge image examples and video input notes.
 
 ## vLLM
@@ -553,7 +553,7 @@ export VLLM_USE_DEEP_GEMM=0
 All Reasoner cookbooks talk to an OpenAI-compatible chat-completions API. After
 [installing vLLM](#vllm), run the commands below from
 `.agents/skills/cookbooks/cosmos3/reasoner` (same working directory as
-[`run_with_vllm.ipynb`](reasoner/run_with_vllm.ipynb)). That sets
+[`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md)). That sets
 `$(dirname "$(pwd)")` to `<cosmos>/.agents/skills/cookbooks/cosmos3`, which matches the
 notebook's `COSMOS3_MEDIA_ROOT`.
 
@@ -570,7 +570,7 @@ vllm serve nvidia/Cosmos3-Nano \
   --port 8000
 ```
 
-**Cosmos3-Super** (four GPUs; default in [`run_with_vllm.ipynb`](reasoner/run_with_vllm.ipynb), port 8001):
+**Cosmos3-Super** (four GPUs; default in [`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md), port 8001):
 
 ```bash
 export COSMOS3_MEDIA_ROOT="$(dirname "$(pwd)")"

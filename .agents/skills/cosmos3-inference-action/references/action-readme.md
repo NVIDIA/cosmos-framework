@@ -2,7 +2,7 @@
 
 > **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/generator/action/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
 
-For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cookbooks/cosmos3/quantization/README.md)
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
 
 Cosmos3-Nano action-generation supports three distinct tasks:
@@ -335,7 +335,7 @@ install, C++ runtime with `-DBUILD_EXPERIMENTAL_MODELS=ON` and
 
 This is separate from workstation [vLLM-Omni](#run-with-vllm-omni) policy
 serving. Multimodal reasoning on the same Edge-LLM runtime is documented in
-[`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/reasoner/run_with_trt_edge_llm.ipynb).
+[`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md).
 
 ### Notebook walkthrough
 

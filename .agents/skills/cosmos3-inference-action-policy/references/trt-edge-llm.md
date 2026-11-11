@@ -7,7 +7,7 @@ build the policy engines with the direct builder, then run
 
 Policy sits under the **Generator / Action** cookbook surface (action chunks),
 not the Reasoner text path. For Edge multimodal reasoning on the same runtime,
-see [`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/reasoner/run_with_trt_edge_llm.ipynb).
+see [`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md).
 
 1. Points at a TensorRT-Edge-LLM v0.11.0 checkout built with
    `-DBUILD_EXPERIMENTAL_MODELS=ON` and `-DENABLE_CUTE_DSL=ALL`, and a Python
@@ -359,7 +359,7 @@ PY
 - Override `POLICY_PROMPT` in the setup cell, or rebuild the concat with your
   own DROID camera videos.
 - Multimodal reasoning on TensorRT-Edge-LLM:
-  [`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/reasoner/run_with_trt_edge_llm.ipynb).
+  [`../../reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md).
 - OpenAI-compatible policy serving on workstation GPUs:
   [`run_policy_with_vllm_omni.ipynb`](./vllm-omni.md).
 - Cosmos Framework policy server:

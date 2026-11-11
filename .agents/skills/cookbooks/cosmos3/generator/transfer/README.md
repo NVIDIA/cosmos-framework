@@ -1,6 +1,6 @@
 # Cosmos3 Generator Transfer Examples
 
-For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../quantization/README.md)
+For Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM-Omni notebooks.
 
 Cosmos3 video **transfer** examples — **Nano** (single GPU) and **Super** (multi-GPU, 32B) — on

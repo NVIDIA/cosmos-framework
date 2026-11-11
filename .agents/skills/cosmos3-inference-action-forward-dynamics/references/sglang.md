@@ -52,7 +52,7 @@ curl http://localhost:30000/v1/models
 To serve Cosmos3-Nano in FP8, you can either:
 
 - Download the prebuilt FP8 checkpoint from Hugging Face: `nvidia/Cosmos3-Nano-FP8`.
-- Quantize a checkpoint yourself by following the [quantization guide](../../cookbooks/cosmos3/quantization/README.md).
+- Quantize a checkpoint yourself by following the [quantization guide](../../cosmos3-quantization/SKILL.md).
 
 To serve the prebuilt checkpoint, pass its Hugging Face ID to `--model-path`:
 
