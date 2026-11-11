@@ -19,7 +19,7 @@ import os
 from cosmos_framework.posttrain.utils.log import info0
 
 
-def enable_determinism() -> None:
+def enable_determinism(*, strict: bool = False) -> None:
     """Set PyTorch's determinism knobs so the loss is bit-exact across reruns on the same GPU and
     torch build. Lifted from `tests/parity_cli._enable_determinism`, which `test_parity_cosmos3.py`
     already relies on for a bit-identical 8B loss.
@@ -30,8 +30,11 @@ def enable_determinism() -> None:
     nothing: the run then LOOKS configured while drifting. The `Raises` guard makes that loud, which
     is why only the launch environment (not a late mutation) reliably reaches the actors.
 
-    `use_deterministic_algorithms(warn_only=True)` is deliberate: a kernel with no deterministic
-    implementation should warn and proceed, not kill the run.
+    The legacy default warns and proceeds when a deterministic implementation is unavailable.
+    ``strict=True`` requires deterministic algorithms and raises instead. In PyTorch 2.10,
+    warning-only mode also permits nondeterministic SDPA FlashAttention backward even when a
+    deterministic backward exists. Strict mode is therefore necessary for controlled continuation
+    checks; it does not promise bitwise equality across different devices or world sizes.
 
     Raises:
         RuntimeError: `CUBLAS_WORKSPACE_CONFIG` was not already set (e.g. inherited from the launch
@@ -56,4 +59,4 @@ def enable_determinism() -> None:
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True, warn_only=not strict)

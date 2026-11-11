@@ -470,6 +470,7 @@ def prepare_adapter_model(
     family: str | None = None,
     fsdp_block_types: tuple[type, ...] | None = None,
     source_identity: dict | None = None,
+    warm_start_tokenizer: Any | None = None,
 ) -> None:
     """Shared loaded-base -> adapter/trainability/artifact seam, before FSDP.
 
@@ -501,7 +502,7 @@ def prepare_adapter_model(
         source_identity=source_identity,
     )
     if config.warm_start:
-        load_adapter_artifact(net, config.warm_start)
+        load_adapter_artifact(net, config.warm_start, compatibility_tokenizer=warm_start_tokenizer)
 
 
 def assert_trainability(net: nn.Module, optimizer: Any = None) -> None:

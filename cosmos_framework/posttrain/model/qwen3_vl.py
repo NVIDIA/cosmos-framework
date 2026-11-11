@@ -775,6 +775,7 @@ def build_qwen3_vl_model(
     adapters: Any = None,
     adapter_resume: bool = False,
     adapter_media_identity: dict | None = None,
+    adapter_warm_start_tokenizer: Any | None = None,
 ) -> Qwen3VLPolicy:
     """Build a native dense/MoE Qwen3-VL policy with model-owned AC and FSDP setup."""
     if not cfg.name_or_path:
@@ -884,6 +885,7 @@ def build_qwen3_vl_model(
             processor=cfg.name_or_path,
             base_dtype=cfg.dtype,
             media=adapter_media_identity or {},
+            warm_start_tokenizer=adapter_warm_start_tokenizer,
             resume=adapter_resume,
             distributed=pdims is not None and int(pdims.world_size) > 1,
             family=resolved_model_type,

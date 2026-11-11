@@ -382,10 +382,26 @@ def read_adapter_snapshot(
     return record, state
 
 
-def load_adapter_artifact(net: torch.nn.Module, directory: str) -> None:
+def load_adapter_artifact(net: torch.nn.Module, directory: str, *, compatibility_tokenizer: Any = None) -> None:
     """Strict warm start after structure creation/base load, before FSDP. No re-init."""
-    identity, state = read_adapter_artifact(directory, expected_identity=net._posttrain_adapter_identity)
-    load_adapter_state(net, identity, state)
+    live_identity = net._posttrain_adapter_identity
+    identity, state = read_adapter_artifact(directory)
+    expected = live_identity
+    if compatibility_tokenizer is not None and identity["media"] != live_identity["media"]:
+        from cosmos_framework.posttrain.data.packer.adapter_media import relocated_warm_start_media
+
+        expected = {
+            **live_identity,
+            "media": relocated_warm_start_media(compatibility_tokenizer, live_identity["media"], identity["media"]),
+        }
+    if identity != expected:
+        differences = sorted(key for key in set(identity) | set(expected) if identity.get(key) != expected.get(key))
+        raise ValueError(
+            f"adapter compatibility mismatch in {differences}; use the recorded base, processor and settings"
+        )
+    # The source-location comparison applies only to this import. New checkpoints
+    # and exports must retain the live identity so resume without warm_start agrees.
+    load_adapter_state(net, live_identity, state)
 
 
 def load_adapter_state(net: torch.nn.Module, identity: dict, state: dict[str, torch.Tensor]) -> None:

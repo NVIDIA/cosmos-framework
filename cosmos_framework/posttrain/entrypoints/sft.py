@@ -271,6 +271,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         "dp_world": world_size_or_1(),
         "precision": asdict(resolve_precision(config)),
         **({"training_coverage": data.cursor.identity} if rl.training_epochs is not None else {}),
+        **({"strict_determinism": "torch_deterministic_algorithms_v1"} if rl.deterministic_strict else {}),
     }
     misc.set_random_seed(seed=rl.seed, by_rank=False)
     if rl.adapters is None:
@@ -279,17 +280,24 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
     else:
         from cosmos_framework.posttrain.model.adapters import assert_trainability, optimizer_groups
 
+        media = {
+            "packer": packer.validation_semantics_identity(),
+            "processor_kwargs": rl.processor_kwargs,
+            "max_length": rl.max_length,
+            "serve_contract": rl.serve_contract,
+        }
+        warm_start_tokenizer = None
+        if rl.adapters.warm_start:
+            if checkpoint.resume_checkpoint:
+                raise ValueError("exact resume and adapter warm_start are mutually exclusive")
+            warm_start_tokenizer = getattr(packer, "tokenizer", None)
         model = build_backbone(
             config,
             native_build_kwargs={
                 "adapters": rl.adapters,
                 "adapter_resume": bool(checkpoint.resume_checkpoint),
-                "adapter_media_identity": {
-                    "packer": packer.validation_semantics_identity(),
-                    "processor_kwargs": rl.processor_kwargs,
-                    "max_length": rl.max_length,
-                    "serve_contract": rl.serve_contract,
-                },
+                "adapter_media_identity": media,
+                **({"adapter_warm_start_tokenizer": warm_start_tokenizer} if warm_start_tokenizer is not None else {}),
             },
         )
         objective.identity = {
@@ -411,7 +419,7 @@ def make_setup(config_path: str, opts: list[str]) -> Any:
         if rl.deterministic:
             from cosmos_framework.posttrain.utils.determinism import enable_determinism
 
-            enable_determinism()
+            enable_determinism(strict=rl.deterministic_strict)
         checkpoint = CheckpointLifecycle.from_config(config, rl)
         coordinates = {"rank": rank_or_0(), "world_size": world_size_or_1()}
         data = run_rank_converged(

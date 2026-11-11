@@ -134,6 +134,9 @@ class SFTConfig(HFRunConfig):
     # Opt in to a finite corpus contract. max_steps must equal the derived
     # complete-epoch update count; the final update uses zero-weight padding.
     training_epochs: int | None = None
+    # Require deterministic kernels instead of the inherited warning-only mode.
+    # Explicitly bound to exact resume; unsupported kernels fail rather than drift.
+    deterministic_strict: bool = False
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
@@ -185,6 +188,10 @@ class SFTConfig(HFRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if type(self.deterministic_strict) is not bool:
+            raise TypeError("SFT deterministic_strict must be bool")
+        if self.deterministic_strict and not self.deterministic:
+            raise ValueError("SFT deterministic_strict requires deterministic=True")
         if self.training_epochs is not None:
             if type(self.training_epochs) is not int or self.training_epochs < 1:
                 raise ValueError("SFT training_epochs must be a positive integer or None")

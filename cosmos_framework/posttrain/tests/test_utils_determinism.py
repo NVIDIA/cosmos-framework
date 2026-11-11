@@ -29,10 +29,11 @@ def _restore_determinism_state(monkeypatch):
     prev_cudnn_deterministic = torch.backends.cudnn.deterministic
     prev_cudnn_benchmark = torch.backends.cudnn.benchmark
     prev_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
+    prev_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     yield
     torch.backends.cudnn.deterministic = prev_cudnn_deterministic
     torch.backends.cudnn.benchmark = prev_cudnn_benchmark
-    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=True)
+    torch.use_deterministic_algorithms(prev_deterministic_algorithms, warn_only=prev_warn_only)
 
 
 @pytest.mark.L0
@@ -70,3 +71,27 @@ def test_deterministic_defaults_off():
     from cosmos_framework.posttrain.config.rl import RunConfig
 
     assert RunConfig().deterministic is False
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("strict", [False, True])
+def test_strict_kernel_policy_is_explicit(monkeypatch, strict):
+    monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    enable_determinism(strict=strict)
+    assert torch.are_deterministic_algorithms_enabled()
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is (not strict)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sft_strict_configuration_keeps_legacy_default():
+    from cosmos_framework.posttrain.config.sft import SFTConfig
+
+    assert SFTConfig(deterministic=True).deterministic_strict is False
+    assert SFTConfig(deterministic=True, deterministic_strict=True).deterministic_strict is True
+    with pytest.raises(ValueError, match="requires deterministic=True"):
+        SFTConfig(deterministic_strict=True)
+    with pytest.raises(TypeError, match="must be bool"):
+        SFTConfig(deterministic=True, deterministic_strict="true")

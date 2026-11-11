@@ -446,6 +446,7 @@ class HFModel(nn.Module):
         adapters=None,
         adapter_resume: bool = False,
         adapter_media_identity: dict | None = None,
+        adapter_warm_start_tokenizer: Any | None = None,
     ) -> None:
         """Run the load-bearing lifecycle: parallelize -> materialize -> tie -> load [-> ckpt].
 
@@ -482,6 +483,7 @@ class HFModel(nn.Module):
                 processor=self.ckpt_path,
                 base_dtype=str(next(self.net.parameters()).dtype).removeprefix("torch."),
                 media=adapter_media_identity or {},
+                warm_start_tokenizer=adapter_warm_start_tokenizer,
                 resume=adapter_resume,
                 distributed=pdims is not None and int(pdims.world_size) > 1,
                 fsdp_block_types=self.shard_plan.block_types,
@@ -636,6 +638,7 @@ def build_hf_model(
     adapters=None,
     adapter_resume: bool = False,
     adapter_media_identity: dict | None = None,
+    adapter_warm_start_tokenizer: Any | None = None,
 ) -> HFModel:
     """Build the HuggingFace model body and run its model-owned FSDP lifecycle.
 
@@ -719,7 +722,11 @@ def build_hf_model(
             adapter_resume,
         )
         model.setup(
-            pdims, adapters=adapters, adapter_resume=adapter_resume, adapter_media_identity=adapter_media_identity
+            pdims,
+            adapters=adapters,
+            adapter_resume=adapter_resume,
+            adapter_media_identity=adapter_media_identity,
+            adapter_warm_start_tokenizer=adapter_warm_start_tokenizer,
         )
     else:
         model.setup(pdims)
