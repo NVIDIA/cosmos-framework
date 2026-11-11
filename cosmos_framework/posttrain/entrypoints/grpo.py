@@ -89,15 +89,14 @@ def _require_native_policy_spec(selection: Any) -> Any:
     spec = selection.native_spec
     if spec is None:
         raise TypeError(
-            "online model_backend='i4' requires config.model=NativePolicyBuildSpec; "
+            "online model_backend='native' requires config.model=NativePolicyBuildSpec; "
             "legacy config.model trees are not online policy build specs"
         )
     return spec
 
 
 def _validate_online_backend(config: Any, rl: Any) -> None:
-    """Validate the generic ``i4 | hf`` online backend before placement or model loading."""
-    from cosmos_framework.utils.lazy_config import instantiate
+    """Validate the generic ``native | hf`` online backend before placement or model loading."""
     from cosmos_framework.posttrain.config.build import (
         select_policy_backend,
         validate_online_policy_backend,
@@ -105,9 +104,10 @@ def _validate_online_backend(config: Any, rl: Any) -> None:
     from cosmos_framework.posttrain.config.model import DataPackerConfig
     from cosmos_framework.posttrain.config.rl import RolloutConfig
     from cosmos_framework.posttrain.data.packer import validate_data_packer_factories
+    from cosmos_framework.utils.lazy_config import instantiate
 
     selection = select_policy_backend(config)
-    native_spec = _require_native_policy_spec(selection) if selection.backend == "i4" else None
+    native_spec = _require_native_policy_spec(selection) if selection.backend == "native" else None
     # Model configs remain inert on the driver. Only the policy worker resolves a builder-owned
     # config, so a generic LazyCall cannot accidentally construct a large target during preflight.
     model_config = selection.model_config
@@ -314,7 +314,6 @@ def build_rollout(config: Any) -> Any:
     """Build the vLLM engine inside its established tensor-parallel group."""
     import torch
 
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import (
         build_vllm_rollout,
         policy_data_packer_build_spec,
@@ -323,6 +322,7 @@ def build_rollout(config: Any) -> Any:
     )
     from cosmos_framework.posttrain.config.model import DataPackerConfig
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
+    from cosmos_framework.utils.lazy_config import instantiate
 
     def prepare() -> tuple[Any, Any, bool, bool, bool, int]:
         rollout_cfg = instantiate(config.rollout)
@@ -393,13 +393,13 @@ def build_objective(rl: Any, model_config: Any, packer: Any) -> Any:
 
 def _build_reward_annotators(config: Any, rl: Any, name_or_path: str) -> tuple[Any, ...]:
     """Build reward annotators, resolving a reward-role packer only when one is consumed."""
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import (
         build_reward_annotators,
         policy_data_packer_build_spec,
         prefix_filter_enabled,
     )
     from cosmos_framework.posttrain.config.model import DataPackerConfig
+    from cosmos_framework.utils.lazy_config import instantiate
 
     packer = None
     if prefix_filter_enabled(rl):
@@ -448,7 +448,7 @@ def reference_build_config(config: Any, model_dir: str) -> Any:
 
     * ``model_backend='qwen3_vl'`` alias (the Ultra launchers): ``config.model_qwen3_vl`` — the spec's
       ``model_id`` is its ``name_or_path`` and the Qwen builder loads ``checkpoint_path or name_or_path``;
-    * generic ``i4`` spec: ``config.model.model_id`` plus the populated path fields of the spec's
+    * generic ``native`` spec: ``config.model.model_id`` plus the populated path fields of the spec's
       family ``model_config`` (``name_or_path`` must equal ``model_id`` when set; ``checkpoint_path``
       may mirror the weights and would otherwise win over ``model_id``).
 
@@ -488,7 +488,6 @@ def build_trainer(
     """
     from types import SimpleNamespace
 
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.config.build import (
         build_lr_scheduler,
         build_native_policy,
@@ -508,11 +507,12 @@ def build_trainer(
     )
     from cosmos_framework.posttrain.utils.artifact_identity import model_artifact_identity
     from cosmos_framework.posttrain.utils.dist import broadcast_from_rank0, run_rank_converged
+    from cosmos_framework.utils.lazy_config import instantiate
 
     checkpoint_lifecycle = CheckpointLifecycle.from_config(config, rl)
     build_profile = ProfileRecord("grpo_build_trainer", progress=True)
 
-    backend = normalize_model_backend(str(getattr(config, "model_backend", "i4")))
+    backend = normalize_model_backend(str(getattr(config, "model_backend", "native")))
     ref_model_dir = getattr(getattr(rl, "ref", None), "model_dir", None)
 
     def require_ref_model_dir() -> None:
@@ -648,7 +648,7 @@ def build_trainer(
         opt,
         # DERIVED, not configured: GRPO retires `rl.grad_accum` (GRPOConfig rejects a non-default
         # value). The trainer's accumulation count IS the micro count, so its existing
-        # accumulate-then-step fires on the last micro call of each mini-batch (spec §5.2).
+        # accumulate-then-step fires on the last micro call of each mini-batch.
         grad_accum=rl.n_micro,
         # Bookkeeping only — the trainer never uses it, but the CHECKPOINT records the batching
         # shape it was written under, so a resume under a different n_mini fails loud instead of
@@ -701,8 +701,6 @@ def make_setup(
     """
 
     def _setup() -> dict:
-        from cosmos_framework.utils.config import load_config
-        from cosmos_framework.utils.lazy_config import instantiate
         from cosmos_framework.posttrain.algorithm.reward import RewardCombiner, resolve_reward_provider_catalog
         from cosmos_framework.posttrain.config.build import effective_model_id
         from cosmos_framework.posttrain.control import ExperienceBuffer
@@ -710,6 +708,8 @@ def make_setup(
         from cosmos_framework.posttrain.roles.reward import RewardWorker
         from cosmos_framework.posttrain.utils.determinism import enable_determinism
         from cosmos_framework.posttrain.utils.dist import run_rank_converged
+        from cosmos_framework.utils.config import load_config
+        from cosmos_framework.utils.lazy_config import instantiate
 
         config = load_config(config_path, ["--", *opts])
         rl = instantiate(config.rl)
@@ -782,11 +782,10 @@ def loop(
     | Iterable[ControllerLifecycleObserver]
     | None = None,
 ) -> dict[str, Any]:
-    # Lifecycle observers (DESIGN §2.6; control/lifecycle.py): the loop emits generic events only —
+    # Lifecycle observers: the loop emits generic events only —
     # train start/end, one train step per optimizer update, one train batch per forward/backward —
     # and the checkpoint coordinator emits the save events. No observers (the default) is a no-op.
     lifecycle = ControllerLifecycleObservers.coerce(observers)
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.control.loop.offload import (
         offload_trainer,
         onload_trainer,
@@ -810,6 +809,7 @@ def loop(
         reportable_metrics,
         start_best_effort,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     rl = instantiate(config.rl)
     data_plane = getattr(getattr(rl, "data_pool", None), "data_plane", "bulk_store")
@@ -1526,7 +1526,6 @@ def run(
         out_dir: Run-attempt output directory.
         build_objective_fn: Objective builder selected by the calling entry.
     """
-    from cosmos_framework.utils.lazy_config import instantiate
     from cosmos_framework.posttrain.algorithm.reward import resolve_reward_provider_catalog
     from cosmos_framework.posttrain.control.bind import bind_check
     from cosmos_framework.posttrain.control.placement import (
@@ -1536,6 +1535,7 @@ def run(
         placement_gpu_count,
         trainer_experience_device_groups,
     )
+    from cosmos_framework.utils.lazy_config import instantiate
 
     app_start_time_ms = round(time.time() * 1000)  # the controller's app start, for the lifecycle observers
     from cosmos_framework.posttrain.control.validation.rollout import validate_rollout_reward_sources

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Local (reference) trainer body + adapter contract (DESIGN §6, §8.2 #6).
+"""Local (reference) trainer body + adapter contract.
 
 Adapter contract: the inner may wrap an existing trainer (delegate train_step) or
 absorb its loss as an objective plugin. The framework shell handles: receive batch
@@ -25,7 +25,7 @@ from cosmos_framework.posttrain.schema.checkpoint import CheckpointComponentPlan
 class LocalTrainer:
     """v0 trainer body sharing a model instance with LocalRollout.
 
-    Discipline (DESIGN §7): trainer/rollout are separate WGs with a weight-transfer
+    Discipline: trainer/rollout are separate WGs with a weight-transfer
     edge between them; they merely *happen* to point at the same `model` in v0, and
     `push_weights()` is a no-op. Do not let "same model" leak past the edge.
     """
@@ -36,15 +36,15 @@ class LocalTrainer:
         # Preserve the descriptive alias used by the local example while satisfying the shared
         # structural trainer contract through ``opt``.
         self.optimizer = optimizer
-        self.objective = objective  # TODO(#2): pluggable objective (PPO/GRPO/DPO/CE + KL + staleness)
+        self.objective = objective  # TODO: pluggable objective (PPO/GRPO/DPO/CE + KL + staleness)
         self._iter = 0
 
     def train(self, batch: list[Trajectory]) -> dict:
         """One training step. v0: compute objective loss, backward, optimizer step.
 
-        TODO(#2): advantage (GAE / GRPO group-norm) on metadata before this; loss in
+        TODO: advantage (GAE / GRPO group-norm) on metadata before this; loss in
         algorithm; staleness correction (TIS) once async.
-        TODO(#6): real FSDP/Megatron mesh; micro-batch / grad-accum.
+        TODO: real FSDP/Megatron mesh; micro-batch / grad-accum.
         """
         raise NotImplementedError("v0 TODO: model.train(); fwd→objective loss→backward→optim.step")
 
@@ -56,7 +56,7 @@ class LocalTrainer:
         return 0.0
 
     def push_weights(self, target: Any = None) -> None:
-        """Weight-transfer edge (DESIGN §8.2 #4). v0: NO-OP (shared instance).
+        """Weight-transfer edge. v0: NO-OP (shared instance).
         TODO(v1+): reshard trainer mesh → rollout mesh over the weight plane; stamp
         weight_version onto produced samples."""
         return None
@@ -70,7 +70,7 @@ class LocalTrainer:
         return self._iter
 
     # framework-shell hooks (kept so the contract is real)
-    def compute_logprob(self, batch: list[Trajectory]) -> Any:  # for ref/teacher (§1.4 hook)
+    def compute_logprob(self, batch: list[Trajectory]) -> Any:  # for ref/teacher (hook)
         raise NotImplementedError("TODO")
 
     def save(
@@ -80,7 +80,7 @@ class LocalTrainer:
         publish: bool = True,
         update_latest: bool = True,
         components: Iterable[str] | CheckpointComponentPlan | None = None,
-    ) -> None: ...  # TODO(#5): DCP / safetensors (FT solution from cosmos-rl)
+    ) -> None: ...  # TODO: DCP / safetensors (FT solution from cosmos-rl)
 
     def load(self, path: str) -> int: ...
 

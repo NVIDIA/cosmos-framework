@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Reproduction of Akash's 8B wallace T2I DPO (wandb nvidia-dir/cosmos3_vfm/20260514100000,
-`wallace_ebs2048_b5000_500iter`, finished; anchors: step500 loss 2.184 / acc 0.902 / margin 48.0).
+"""Reproduction of an 8B wallace T2I DPO reference run
+(`wallace_ebs2048_b5000_500iter`, finished; anchors: step500 loss 2.184 / acc 0.902 / margin 48.0).
 
 Reference setup (from the run's wandb config):
   base   midtraining_v5 8B `t2w_mot_exp406_.../checkpoints/iter_000010000` (DCP, experiments bucket)
-  data   HPDv3 80K offset-jsonl + images.tar (agokul's lustre paths), 720p T=1, cfg_dropout 0.1
+  data   HPDv3 80K offset-jsonl + images.tar (cluster paths), 720p T=1, cfg_dropout 0.1
   ebs    2048 = 32 ranks (8 GB200 nodes x 4) x bs2 x grad_accum 32
   opt    fusedadam lr 5e-6 CONSTANT, betas (0.9, 0.99), wd 1e-4, FULL net (no key subset)
   extras beta 5000, grad clip 1.0 + force_finite, EMA 0.1 (EMA not replicated — eval uses
-         regular weights per Akash's guide), seed 0, guidance 0
+         regular weights per the reference setup), seed 0, guidance 0
 
 Known deltas vs the reference (documented, believed curve-neutral): no EMA branch,
 our env's DistributedSampler-style sharding vs their DataLoader worker sharding (data

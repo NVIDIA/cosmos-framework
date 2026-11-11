@@ -16,7 +16,7 @@
 #
 # Required env at launch: VIDEOPHYSICS_ROOT (read by the experiment Python).
 # The launch script auto-builds the merged Cosmos3-Super Reasoner checkpoint
-# (checkpoints/Cosmos3-Super-Reasoner) on first run and passes it to the model
+# (checkpoints/Cosmos3-Super) on first run and passes it to the model
 # via the model.config.policy.backbone.safetensors_path override.
 #
 # Example launch (from .agents/skills/cookbooks/cosmos3/reasoner/finetune/):

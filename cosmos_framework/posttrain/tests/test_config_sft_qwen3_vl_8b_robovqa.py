@@ -42,7 +42,7 @@ def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def test_recipe_is_one_epoch_of_64_clip_updates(recipe: Any, tmp_path: Path) -> None:
-    assert recipe.model_backend == "i4"
+    assert recipe.model_backend == "native"
     assert (recipe.rl.micro_batch_size, recipe.rl.grad_accum, recipe.rl.max_steps) == (1, 64, 125)
     assert recipe.rl.save_every == recipe.rl.max_steps
     assert recipe.rl.checkpoint_format == "consolidated"

@@ -26,12 +26,87 @@ from cosmos_framework.model.generator.utils.safetensors_loader import (
 )
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("source", ["hf://example/backbone", "example/backbone"])
+def test_oss_language_model_uses_snapshot_loader_for_hub_directories(monkeypatch, source):
+    from cosmos_framework.model.generator.utils import safetensors_loader as module
+    from cosmos_framework.utils import checkpoint_db
+
+    monkeypatch.setattr(module, "INTERNAL", False)
+
+    def reject_file_loader(*args, **kwargs):
+        pytest.fail("A Hub directory must not enter the single-file checkpoint resolver")
+
+    class SnapshotReached(Exception):
+        pass
+
+    def snapshot_loader(self, *, checkpoint_path, **kwargs):
+        assert checkpoint_path == source
+        raise SnapshotReached
+
+    monkeypatch.setattr(checkpoint_db, "download_checkpoint", reject_file_loader)
+    monkeypatch.setattr(module.MultiRankCheckpointLoader, "load_files_parallel", snapshot_loader)
+    with pytest.raises(SnapshotReached):
+        module.load_language_model(torch.nn.Linear(2, 2), source, credential_path=None, parallel_dims=None)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("source", ["hf://example/backbone/model.safetensors", "s3://example-bucket/checkpoint"])
+def test_oss_language_model_preserves_file_and_registry_resolution(monkeypatch, tmp_path, source):
+    from cosmos_framework.model.generator.utils import safetensors_loader as module
+    from cosmos_framework.utils import checkpoint_db
+
+    monkeypatch.setattr(module, "INTERNAL", False)
+    calls = []
+
+    def resolve(uri):
+        calls.append(uri)
+        return str(tmp_path)
+
+    class SnapshotReached(Exception):
+        pass
+
+    def load(self, *, checkpoint_path, **kwargs):
+        assert checkpoint_path == str(tmp_path)
+        raise SnapshotReached
+
+    monkeypatch.setattr(checkpoint_db, "download_checkpoint", resolve)
+    monkeypatch.setattr(module.MultiRankCheckpointLoader, "load_files_parallel", load)
+    with pytest.raises(SnapshotReached):
+        module.load_language_model(torch.nn.Linear(2, 2), source, credential_path=None, parallel_dims=None)
+    assert calls == [checkpoint_db.sanitize_uri(source)]
+
+
 class _StubConfig:
     """Minimal stand-in for an HF config object."""
 
     def __init__(self, **kwargs: Any):
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("source", ["hf://example/backbone", "example/backbone"])
+def test_hub_snapshot_loader_reads_actual_safetensors(monkeypatch, tmp_path, source):
+    from cosmos_framework.model.generator.utils import safetensors_loader as module
+
+    expected = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    save_file({"weight": expected}, str(tmp_path / "model.safetensors"))
+    downloads = []
+
+    def download(uri):
+        downloads.append(uri)
+        return str(tmp_path)
+
+    monkeypatch.setattr(module, "_download_hf_checkpoint", download)
+    tensors, metadata, names = MultiRankCheckpointLoader(None).load_files_parallel(source, None, "cpu")
+    assert downloads == [source]
+    assert names == {"weight"}
+    assert torch.equal(tensors["weight"], expected)
+    assert metadata["weight"][0] == [2, 3]
 
 
 class _StubModel(torch.nn.Module):

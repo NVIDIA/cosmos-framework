@@ -5,8 +5,8 @@ Simulation).
 Each cookbook README links back here for the backend(s) it supports — pick the
 backend you want to run and follow that one section.
 
-For static checkpoint FP8 export of Nano/Super video and Super base/distilled
-T2I/I2V, see the [quantization walkthroughs](quantization/README.md). They use the
+For static checkpoint FP8 export of Edge/Nano/Super video and Super base/distilled
+T2I/I2V, see the [quantization walkthroughs](../../cosmos3-quantization/SKILL.md). They use the
 local Framework environment below with ModelOpt, datasets, and notebook tooling.
 
 | Backend | Use it for | Used by |
@@ -314,7 +314,7 @@ both out of the request. `Cosmos3-Super-Image2Video-4Step` also declares
 `use_system_prompt` unset. The text-to-image student deploys at 1024x1024, the
 shape `cosmos3-t2i-1gpu.yaml` warms; the image-to-video student deploys at the
 default 720p x 189-frame omni shape and needs no config file. The
-[distilled 4-step reference](../../cosmos3-generate-media/references/distilled-trt-llm.md)
+[distilled 4-step reference](../../cosmos3-inference-generate-media/references/distilled-trt-llm.md)
 runs both against a running server. These students cover text-to-image and
 image-to-video only; use the base checkpoints for text-to-video, video-to-video,
 and synchronized audio.
@@ -357,16 +357,31 @@ supports this payload: poll `GET /v1/videos/{id}`, then download it from
 
 ## TensorRT-LLM Reasoner
 
-OpenAI-compatible **reasoning** server for image and video understanding. Run
-TensorRT-LLM in the prebuilt
-[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
-container, or follow the
-[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator) to
-install TensorRT-LLM from source.
+OpenAI-compatible **reasoning** server for image and video understanding.
 Authenticate with Hugging Face before loading gated checkpoints.
 
-Install headless OpenCV in the environment that runs the server. Cosmos3
-Reasoner uses it to process vision inputs:
+**Cosmos3-Nano** and **Cosmos3-Super** run in the prebuilt
+[`nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc22`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release)
+container.
+
+**Cosmos3-Edge** requires TensorRT-LLM >=
+[`v1.4.0rc2`](https://github.com/NVIDIA/TensorRT-LLM/releases/tag/v1.4.0rc2).
+That release includes `Cosmos3EdgeForConditionalGeneration`. `v1.4.0rc1` and
+`release:1.3.0rc22` do not. Run Edge in
+[`nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc2`](https://catalog.ngc.nvidia.com/orgs/nvidia/tensorrt-llm/containers/release/1.4.0rc2/tags).
+
+If that image is not available, build from the
+[TensorRT-LLM Generator source-build instructions](#tensorrt-llm-generator)
+and run this checkout instead of the `git checkout` line in that block. A newer
+`main` commit also includes Edge:
+
+```bash
+git checkout 39a44fab74f4cfc0d4d498be385e746fdd182872
+```
+
+Install headless OpenCV with the same `python` that provides `trtllm-serve`.
+Inside a release container, that is the container's `python`. Cosmos3 Reasoner
+uses OpenCV to process vision inputs:
 
 ```bash
 python -m pip install opencv-python-headless
@@ -374,8 +389,7 @@ python -m pip install opencv-python-headless
 
 ### Start the server
 
-Run one of these commands inside the release container or activated local
-environment.
+**Cosmos3-Nano** and **Cosmos3-Super** — run inside the release container above.
 
 **Cosmos3-Nano** (single GPU, port 8001):
 
@@ -398,11 +412,20 @@ trtllm-serve nvidia/Cosmos3-Super \
   --max_num_tokens 32768
 ```
 
+**Cosmos3-Edge** (single GPU, port 8001) — run inside `release:1.4.0rc2`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+trtllm-serve nvidia/Cosmos3-Edge \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --max_num_tokens 32768
+```
+
 The server exposes `/health` and the OpenAI-compatible API at
 `http://localhost:8001/v1`. See the
-[Reasoner TensorRT-LLM notebook](reasoner/run_with_tensorrt_llm.ipynb) for image
+[Reasoner TensorRT-LLM notebook](../../cosmos3-inference-reasoning/references/tensorrt-llm.md) for image
 and video requests.
-
 
 ## TensorRT-Edge-LLM
 
@@ -440,9 +463,9 @@ export ENGINE_DIR="${ENGINE_DIR:-$HOME/tensorrt-edgellm-workspace/Cosmos3-Edge/e
 
 Runnable cookbooks:
 
-- Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](reasoner/run_with_trt_edge_llm.ipynb)
+- Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/reasoning`)
-- Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](generator/action/run_policy_with_trt_edge_llm.ipynb)
+- Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/policy`)
 
 Upstream references:
@@ -491,7 +514,7 @@ uv pip install "transformers @ git+https://github.com/huggingface/transformers.g
 ```
 
 See the
-[Reasoner Transformers quickstart](reasoner/README.md#run-with-transformers)
+[Reasoner Transformers quickstart](../../cosmos3-inference-reasoning/references/reasoner-readme.md#run-with-transformers)
 for runnable Nano, Super, and Edge image examples and video input notes.
 
 ## vLLM
@@ -530,7 +553,7 @@ export VLLM_USE_DEEP_GEMM=0
 All Reasoner cookbooks talk to an OpenAI-compatible chat-completions API. After
 [installing vLLM](#vllm), run the commands below from
 `.agents/skills/cookbooks/cosmos3/reasoner` (same working directory as
-[`run_with_vllm.ipynb`](reasoner/run_with_vllm.ipynb)). That sets
+[`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md)). That sets
 `$(dirname "$(pwd)")` to `<cosmos>/.agents/skills/cookbooks/cosmos3`, which matches the
 notebook's `COSMOS3_MEDIA_ROOT`.
 
@@ -547,7 +570,7 @@ vllm serve nvidia/Cosmos3-Nano \
   --port 8000
 ```
 
-**Cosmos3-Super** (four GPUs; default in [`run_with_vllm.ipynb`](reasoner/run_with_vllm.ipynb), port 8001):
+**Cosmos3-Super** (four GPUs; default in [`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md), port 8001):
 
 ```bash
 export COSMOS3_MEDIA_ROOT="$(dirname "$(pwd)")"

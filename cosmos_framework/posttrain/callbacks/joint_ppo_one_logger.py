@@ -68,7 +68,7 @@ class JointPPOOneLogger(OneLoggerLifecycleObserver):
         target = recipe.max_steps // self.updates_per_window
         sdk_config = dict(
             enable_for_current_rank=True,
-            one_logger_project="imaginaire4",
+            one_logger_project="cosmos-framework",
             one_logger_run_name=name,
             one_logger_async=_env_bool("ONE_LOGGER_ASYNC", True),
             log_every_n_train_iterations=1,

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Configuration for Nemotron 3 Dense VL text backbone (paired hybrid blocks -> standard layers)."""
+"""Configuration for dense vision-language backbone text backbone (paired hybrid blocks -> standard layers)."""
 
 from transformers.configuration_utils import PretrainedConfig
 

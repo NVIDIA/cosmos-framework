@@ -76,6 +76,7 @@ hf download nvidia/Cosmos3-DROID --repo-type dataset \
 export DATASET_PATH=/path/to/droid_plus_lerobot_640x360_20260412
 
 # Step 2: convert the base checkpoint -> $BASE_CHECKPOINT_PATH
+export BASE_CHECKPOINT_PATH=/path/to/base_checkpoint
 python -m cosmos_framework.scripts.convert_model_to_dcp \
   --checkpoint-path Cosmos3-Nano \
   -o $BASE_CHECKPOINT_PATH
@@ -85,9 +86,13 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 export FILTER_DIR=/path/to/droid_filters
 hf download KarlP/droid keep_ranges_1_0_1.json --local-dir $FILTER_DIR
 
+# URI-keyed filters require their dataset prefix, supplied by you.
+# Set DROID_FILTER_SOURCE_PREFIX as described below before continuing.
+: "${DROID_FILTER_SOURCE_PREFIX:?set the filter URI prefix before the complete episode ID}"
+
 # Step 4: launch. The TOML selects the experiment + scalars; the dataset/action
 # knobs come from the registered experiment.
-export BASE_CHECKPOINT_PATH=/path/to/base_checkpoint
+: "${BASE_CHECKPOINT_PATH:?set BASE_CHECKPOINT_PATH before Step 2}"
 export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
 export NPROC_PER_NODE=8
 # Enable the keep_ranges_1_0_1.json filter via EXTRA_TAIL_OVERRIDES (space-separated Hydra
@@ -111,6 +116,25 @@ set `model.config.parallelism.data_parallel_replicate_degree = <num_nodes>` (int
 The **keep_ranges_1_0_1.json filter** maps each DROID trajectory key to a list of `[start, end]` frame
 ranges; only windows whose start falls inside a kept range are trained on (episodes absent from
 the dict are dropped). To train on the full window set instead, leave `EXTRA_TAIL_OVERRIDES` unset.
+
+For URI-keyed filters, compare a key in your filter JSON with an `episode_id` in your dataset
+metadata. Set `DROID_FILTER_SOURCE_PREFIX` to the URI prefix **before the complete episode ID**;
+do not drop date or other directory components that belong to the ID. For example, if the key is
+`s3://example-bucket/data/day-1/episode-1/recordings/MP4--s3://example-bucket/data/day-1/episode-1/trajectory.h5`
+and the episode ID is `day-1/episode-1`, set:
+
+```shell
+export DROID_FILTER_SOURCE_PREFIX=s3://example-bucket/data
+```
+
+Replace that example with the prefix in your own file; it is not an address to download from.
+Both the `examples/` launcher and the cookbook launcher forward this variable as
+`dataloader_train.dataloader.datasets.droid.dataset.filter_dict_source_prefix`.
+For a direct training command, pass that dataset override yourself. Filters keyed by relative
+episode IDs need no prefix; omit the prefix check above for those files.
+
+The cookbook launcher enables filtering by default. To disable it there, set
+`EXTRA_TAIL_OVERRIDES="dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=False"`.
 
 ## Checkpoints
 

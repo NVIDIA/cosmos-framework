@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""π_old per-token logprob capture in HFRollout (Task 4).
+"""π_old per-token logprob capture in HFRollout.
 
 Asserts `HFRollout.generate` emits `policy_info["rollout_logprobs"]` as a list of floats with one
 entry per completion token — the field the clipped GRPO objective (algorithm/grpo.py) reads as
