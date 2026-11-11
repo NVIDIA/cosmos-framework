@@ -465,7 +465,7 @@ Runnable cookbooks:
 
 - Reasoner: [`reasoner/run_with_trt_edge_llm.ipynb`](../../cosmos3-inference-reasoning/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/reasoning`)
-- Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](generator/action/run_policy_with_trt_edge_llm.ipynb)
+- Policy: [`generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md)
   (engines under `$ENGINE_DIR/policy`)
 
 Upstream references:

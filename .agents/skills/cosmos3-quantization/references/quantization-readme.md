@@ -217,12 +217,12 @@ vllm serve cosmos3-nano-fp8 --served-model-name nvidia/Cosmos3-Nano ...
 vLLM / vLLM-Omni notebook has a **Quantized Checkpoints** section that downloads the FP8
 weights and serves them from a local directory:
 
-| Cookbook                | Notebook(s)                                                                                                                                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Generator · Audiovisual | [`cosmos3-inference-generate-media` · vLLM-Omni](../../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints)                                                                       |
-| Generator · Action      | [`run_fd_with_vllm_omni.ipynb`](../../cookbooks/cosmos3/generator/action/run_fd_with_vllm_omni.ipynb), [`run_id_with_vllm_omni.ipynb`](../../cookbooks/cosmos3/generator/action/run_id_with_vllm_omni.ipynb) |
-| Generator · Transfer    | [`run_video_transfer_with_vllm_omni.ipynb`](../../cosmos3-inference-transfer/references/vllm-omni.md#quantized-checkpoints)                                                                                  |
-| Reasoner                | [`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md)                                                                                                                                |
+| Cookbook                | Notebook(s)                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Generator · Audiovisual | [`cosmos3-inference-generate-media` · vLLM-Omni](../../cosmos3-inference-generate-media/references/vllm-omni.md#quantized-checkpoints)                                                                             |
+| Generator · Action      | [`run_fd_with_vllm_omni.ipynb`](../../cosmos3-inference-action-forward-dynamics/references/vllm-omni.md), [`run_id_with_vllm_omni.ipynb`](../../cosmos3-inference-action-inverse-dynamics/references/vllm-omni.md) |
+| Generator · Transfer    | [`run_video_transfer_with_vllm_omni.ipynb`](../../cosmos3-inference-transfer/references/vllm-omni.md#quantized-checkpoints)                                                                                        |
+| Reasoner                | [`run_with_vllm.ipynb`](../../cosmos3-inference-reasoning/references/vllm.md)                                                                                                                                      |
 
 See the shared [Cosmos3 cookbooks environment setup](../../cookbooks/cosmos3/README.md) for server install and
 launch details ([vLLM](../../cookbooks/cosmos3/README.md#vllm), [vLLM-Omni](../../cookbooks/cosmos3/README.md#vllm-omni)).

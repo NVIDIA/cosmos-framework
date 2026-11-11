@@ -1,0 +1,3 @@
+# The skill is self-contained: the eval CI and the agents' task containers check this tree out without git-lfs, so
+# the sample images, clips and LeRobot example videos (6.6 MB) are stored as plain blobs, exempt from the repository's *.mp4 / *.png / *.jpg LFS rules.
+assets/** -filter -diff -merge -text
