@@ -2,7 +2,7 @@
 
 > **Skill note (not in the source):** this file is the cookbook README `README.md` (retired into this skill from `.agents/skills/cookbooks/cosmos3/reasoner/README.md`, cosmos-framework `main` bbd4a67) copied verbatim; only link targets that pointed at files this migration moved were re-pointed, each one listed in the migration record.
 
-For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cookbooks/cosmos3/quantization/README.md)
+For Edge/Nano/Super static FP8 checkpoints, see the [quantization cookbook](../../cosmos3-quantization/SKILL.md)
 and the **Quantized Checkpoints** section in the vLLM notebook.
 
 Run the Cosmos3 Reasoner (vision-language reasoning over images and video) across
@@ -407,4 +407,4 @@ reasoning `input.json` for `assets/robot_153.jpg`, and runs `llm_inference`.
 [`run_with_trt_edge_llm.ipynb`](./trt-edge-llm.md) is a
 command-driven walkthrough (export → engine build → image caption). For
 **Cosmos3-Edge-Policy-DROID** on the same runtime, see
-[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb).
+[`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md).

@@ -237,7 +237,7 @@ first-frame joint/gripper state and saves the composed image and the validated
 `[32, 8]` action under `examples/outputs/`. It does not execute robot actions.
 
 The [vLLM-Omni policy
-notebook](../generator/action/run_policy_with_vllm_omni.ipynb) uses the same
+notebook](../../../cosmos3-inference-action-policy/references/vllm-omni.md) uses the same
 sample with a different direct-vLLM `/v1/videos` API. Do not copy its payload.
 
 ## Inverse Dynamics
