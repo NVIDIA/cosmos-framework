@@ -4,7 +4,7 @@
 
 LoRA and rsLoRA reuse the native implementation. DoRA adds its row magnitude;
 PiSSA represents the frozen residual as W0 - s B0 A0, retaining W0 unchanged.
-No generic causal-LM wrapper, forward monkey patch, or second training loop.
+No generic causal-LM wrapper or second training loop.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict
 from fnmatch import fnmatchcase
+from types import MethodType
 from typing import Any
 
 import torch
@@ -367,6 +368,15 @@ def _preserve_normalization_output_dtype(module: nn.Module, inputs: tuple, outpu
     return output.to(inputs[0].dtype)
 
 
+def _trainable_layer_norm_forward(self: nn.LayerNorm, input: torch.Tensor) -> torch.Tensor:
+    # CUDA LayerNorm requires matching activation/affine dtypes. Extra norm
+    # parameters are FP32 trainable state, while native vision activations can
+    # be BF16. Compute the norm in FP32 without casting/replacing its parameters,
+    # then preserve the native activation boundary for the following projection.
+    # Calling the class implementation also retains LayerNorm subclass behavior.
+    return type(self).forward(self, input.float()).to(input.dtype)
+
+
 def install_adapters(
     net: nn.Module,
     config: AdapterConfig,
@@ -438,6 +448,8 @@ def install_adapters(
                 from cosmos_framework.posttrain.model.adapter_bf16_execution import install_effective_norm
 
                 install_effective_norm(module)
+            elif isinstance(module, nn.LayerNorm):
+                module.forward = MethodType(_trainable_layer_norm_forward, module)
             else:
                 module.register_forward_hook(_preserve_normalization_output_dtype)
             extra_modules.add(id(module))
