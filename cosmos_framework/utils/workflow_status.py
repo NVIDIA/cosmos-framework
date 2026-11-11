@@ -88,12 +88,9 @@ def monitor_status(name="Cosmos", mode="train", results_dir=None, verbosity=None
                 directory = getattr(args[0], "results_dir", None)
                 config_path = getattr(args[0], "config", None)
                 if not directory and isinstance(config_path, (str, Path)):
-                    try:
-                        import tomllib  # Python 3.11+
-                    except ModuleNotFoundError:  # pragma: no cover - Python 3.10
-                        import toml as tomllib  # type: ignore[no-redef]
+                    import toml
 
-                    directory = tomllib.loads(Path(config_path).read_text(encoding="utf-8")).get("results_dir")
+                    directory = toml.load(config_path).get("results_dir")
             filename = os.environ.get("COSMOS_STATUS_FILE")
             if not filename:
                 filename = str(Path(directory or os.environ.get("COSMOS_RESULTS_DIR", "./results")) / "status.json")

@@ -92,6 +92,113 @@ else:
                     pass
 
 
+# torch.distributed collectives that the gloo shims stage through host memory, and the other
+# tensor collectives, which are only guarded: the Windows gloo build faults on a CUDA tensor in
+# any of them, and a clear error beats an access violation with no Python traceback.
+_GLOO_STAGED_COLLECTIVES = ("all_reduce", "broadcast", "reduce", "all_gather")
+_GLOO_GUARDED_COLLECTIVES = (
+    "all_gather_coalesced",
+    "all_gather_into_tensor",
+    "all_reduce_coalesced",
+    "all_to_all",
+    "all_to_all_single",
+    "gather",
+    "irecv",
+    "isend",
+    "recv",
+    "reduce_scatter",
+    "reduce_scatter_tensor",
+    "scatter",
+    "send",
+)
+
+
+def _shim_gloo_collectives(namespaces, needs_staging) -> list[str]:
+    """Wrap the tensor collectives found on ``namespaces``; return the names wrapped.
+
+    ``needs_staging(tensor)`` says whether a tensor cannot be handed to the backend as is.
+    Split out of :func:`install_gloo_cuda_collective_shims` so the wrappers can be tested
+    without Windows or CUDA.
+    """
+    import functools
+    import inspect
+
+    import torch
+
+    def tensors_in(values):
+        for value in values:
+            if isinstance(value, torch.Tensor):
+                yield value
+            elif isinstance(value, (list, tuple)):
+                yield from (item for item in value if isinstance(item, torch.Tensor))
+
+    def staged(name, fn):
+        """all_reduce / broadcast / reduce: (tensor, ...); all_gather: (tensor_list, tensor, ...)."""
+        signature = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            try:
+                bound = signature.bind(*args, **kwargs)
+            except TypeError:
+                return fn(*args, **kwargs)  # let the collective report the bad call itself
+            call = bound.arguments
+            tensor, tensor_list = call.get("tensor"), call.get("tensor_list")
+            if not isinstance(tensor, torch.Tensor) or not any(
+                needs_staging(t) for t in tensors_in([tensor, tensor_list])
+            ):
+                return fn(*args, **kwargs)
+            # async_op is resolved from the bound call, so a positional True is seen as well.
+            if call.get("async_op", False):
+                raise RuntimeError(
+                    f"torch.distributed.{name}(async_op=True) on a CUDA tensor is not supported on "
+                    "Windows: the gloo backend cannot take CUDA tensors and the host-memory staging "
+                    "is synchronous. Use async_op=False or pass a CPU tensor."
+                )
+            # copy=True keeps the staged tensor distinct from the caller's on every device.
+            host = tensor.detach().to("cpu", copy=True)
+            call["tensor"] = host
+            if tensor_list is None:
+                fn(*bound.args, **bound.kwargs)
+                tensor.copy_(host.to(tensor.device))
+            else:
+                host_list = [t.detach().to("cpu", copy=True) for t in tensor_list]
+                call["tensor_list"] = host_list
+                fn(*bound.args, **bound.kwargs)
+                for dst, src in zip(tensor_list, host_list):
+                    dst.copy_(src.to(dst.device))
+            return None
+
+        return inner
+
+    def guarded(name, fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            if any(needs_staging(t) for t in tensors_in([*args, *kwargs.values()])):
+                raise RuntimeError(
+                    f"torch.distributed.{name} was called with a CUDA tensor. The Windows gloo "
+                    "backend cannot run collectives on CUDA tensors, and only "
+                    f"{', '.join(_GLOO_STAGED_COLLECTIVES)} are staged through host memory. "
+                    "Move the tensor to the CPU first."
+                )
+            return fn(*args, **kwargs)
+
+        return inner
+
+    wrappers = {}
+    for name in (*_GLOO_STAGED_COLLECTIVES, *_GLOO_GUARDED_COLLECTIVES):
+        fn = next((getattr(ns, name) for ns in namespaces if hasattr(ns, name)), None)
+        if fn is None:
+            continue
+        stageable = name in _GLOO_STAGED_COLLECTIVES and "tensor" in inspect.signature(fn).parameters
+        wrappers[name] = staged(name, fn) if stageable else guarded(name, fn)
+    for ns in namespaces:
+        for name, wrapper in wrappers.items():
+            if hasattr(ns, name):
+                setattr(ns, name, wrapper)
+    return list(wrappers)
+
+
 def install_gloo_cuda_collective_shims() -> bool:
     """Make torch.distributed collectives safe for CUDA tensors under gloo.
 
@@ -103,7 +210,14 @@ def install_gloo_cuda_collective_shims() -> bool:
     These wrappers round-trip CUDA tensors through host memory and copy the
     result back in place, preserving the collectives' in-place contract. On a
     single rank the collectives are mathematically no-ops, so the only cost is
-    a small D2H/H2D copy per call.
+    a small D2H/H2D copy per call. ``async_op=True`` cannot be staged this way
+    and raises for a CUDA tensor, as do the other tensor collectives
+    (``_GLOO_GUARDED_COLLECTIVES``), which this repo does not call.
+
+    The wrappers replace the attributes of ``torch.distributed`` and
+    ``torch.distributed.distributed_c10d``, which is how this repo reaches the
+    collectives (``dist.all_reduce(...)``). A name bound earlier with
+    ``from torch.distributed import all_reduce`` keeps the unwrapped function.
 
     Returns True if the shims were installed, False if they were already present
     or the platform does not need them.
@@ -111,47 +225,13 @@ def install_gloo_cuda_collective_shims() -> bool:
     if not WINDOWS:
         return False
 
-    import functools
-
-    import torch
     import torch.distributed as dist
+    from torch.distributed import distributed_c10d
 
     if getattr(dist, "_cosmos_win_gloo_shimmed", False):
         return False
 
-    def _tensor_first(fn):
-        """For all_reduce / broadcast / reduce: signature (tensor, ...)."""
-
-        @functools.wraps(fn)
-        def inner(tensor, *args, **kwargs):
-            if isinstance(tensor, torch.Tensor) and tensor.is_cuda and not kwargs.get("async_op", False):
-                staged = tensor.detach().cpu()
-                fn(staged, *args, **kwargs)
-                tensor.copy_(staged.to(tensor.device))
-                return None
-            return fn(tensor, *args, **kwargs)
-
-        return inner
-
-    def _all_gather(fn):
-        """Signature (tensor_list, tensor, ...)."""
-
-        @functools.wraps(fn)
-        def inner(tensor_list, tensor, *args, **kwargs):
-            if isinstance(tensor, torch.Tensor) and tensor.is_cuda and not kwargs.get("async_op", False):
-                staged_out = [t.detach().cpu() for t in tensor_list]
-                fn(staged_out, tensor.detach().cpu(), *args, **kwargs)
-                for dst, src in zip(tensor_list, staged_out):
-                    dst.copy_(src.to(dst.device))
-                return None
-            return fn(tensor_list, tensor, *args, **kwargs)
-
-        return inner
-
-    dist.all_reduce = _tensor_first(dist.all_reduce)
-    dist.broadcast = _tensor_first(dist.broadcast)
-    dist.reduce = _tensor_first(dist.reduce)
-    dist.all_gather = _all_gather(dist.all_gather)
+    _shim_gloo_collectives((dist, distributed_c10d), needs_staging=lambda tensor: tensor.is_cuda)
     dist._cosmos_win_gloo_shimmed = True
     return True
 
@@ -159,32 +239,56 @@ def install_gloo_cuda_collective_shims() -> bool:
 def link_dir(target: Union[str, os.PathLike], link: Union[str, os.PathLike]) -> str:
     """Point ``link`` at directory ``target``; return the strategy actually used.
 
+    Off Windows this is ``os.symlink`` and nothing else: a failure raises, as it
+    did before this helper existed.
+
     Creating a symlink on Windows needs either Developer Mode or
-    SeCreateSymbolicLinkPrivilege, neither of which is guaranteed. Fall back to a
-    directory junction (no privilege required), then to a plain text pointer file
-    so a convenience alias never aborts a training run.
+    SeCreateSymbolicLinkPrivilege, neither of which is guaranteed. There, fall back
+    to a directory junction (no privilege required), then to a plain text pointer
+    file so a convenience alias never aborts a training run.
 
     Returns one of ``"symlink"``, ``"junction"``, ``"pointer-file"``.
     """
     target_s, link_s = os.fspath(target), os.fspath(link)
+    if not WINDOWS:
+        os.symlink(target_s, link_s, target_is_directory=True)
+        return "symlink"
+
     try:
         os.symlink(target_s, link_s, target_is_directory=True)
         return "symlink"
-    except (OSError, NotImplementedError, AttributeError):
+    except (OSError, NotImplementedError):
         pass
 
-    if WINDOWS:
-        try:
-            import _winapi  # type: ignore[attr-defined]
+    try:
+        import _winapi  # type: ignore[attr-defined]
 
-            _winapi.CreateJunction(target_s, link_s)
-            return "junction"
-        except Exception:
-            pass
+        _winapi.CreateJunction(target_s, link_s)
+        return "junction"
+    except (OSError, ImportError, AttributeError):
+        pass
 
     with open(link_s + ".txt", "w", encoding="utf-8") as handle:
         handle.write(target_s + "\n")
     return "pointer-file"
+
+
+def remove_dir_link(link: Union[str, os.PathLike]) -> None:
+    """Remove what :func:`link_dir` created at ``link``; never delete a directory's contents.
+
+    Off Windows this is ``os.remove`` and nothing else, so a real directory at
+    ``link`` raises as it did before this helper existed. On Windows a junction or
+    a directory symlink may need ``os.rmdir``; that also removes only the link (or
+    an empty directory) and raises on a directory that has contents.
+    """
+    link_s = os.fspath(link)
+    if not WINDOWS:
+        os.remove(link_s)
+        return
+    try:
+        os.remove(link_s)
+    except OSError:
+        os.rmdir(link_s)
 
 
 def attention_implementation(requested: str) -> str:

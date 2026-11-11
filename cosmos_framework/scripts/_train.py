@@ -120,14 +120,11 @@ def train(args: Args) -> None:
         effective_output_dir.mkdir(parents=True, exist_ok=True)
         symlink_path = effective_output_dir / "job"
         if symlink_path.is_symlink() or symlink_path.exists():
-            # A junction/dir link needs rmdir, a symlink-to-file needs remove.
-            try:
-                os.remove(symlink_path)
-            except (IsADirectoryError, PermissionError, OSError):
-                shutil.rmtree(symlink_path, ignore_errors=True)
-        # Creating a symlink on Windows requires Developer Mode or
-        # SeCreateSymbolicLinkPrivilege; neither is guaranteed. link_dir falls
-        # back to a directory junction and then to a pointer file so a
+            # os.remove off Windows; there a junction may need rmdir. Never recursive.
+            win_compat.remove_dir_link(symlink_path)
+        # os.symlink off Windows. Creating a symlink on Windows requires Developer
+        # Mode or SeCreateSymbolicLinkPrivilege; neither is guaranteed. There link_dir
+        # falls back to a directory junction and then to a pointer file so a
         # convenience alias never aborts the run.
         strategy = win_compat.link_dir(job_dir, symlink_path)
         if strategy != "symlink":
