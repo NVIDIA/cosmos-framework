@@ -202,6 +202,17 @@ def test_foreign_prefix_rejected_before_model_execution(monkeypatch):
         "signature": signature(forward),
         "cache_owner": (profile.PROFILE, "installation-one"),
     }
+    native = PosttrainAdapterLinear(
+        torch.nn.Linear(4, 4),
+        AdapterComponentConfig(
+            component="language",
+            targets=["projection"],
+            rank=2,
+            dropout=0.0,
+        ),
+    ).eval()
+    assert type(native.lora_dropout) is torch.nn.Identity
+    model._cosmos_smollm_consistent["adapters"] = [(native, profile._adapter_settings(native))]
     monkeypatch.setattr(profile, "_guard", lambda _: None)
     monkeypatch.setattr(profile, "_ownership", lambda _: ())
     cache = DynamicCache(config=LlamaConfig(num_hidden_layers=1))
@@ -214,6 +225,10 @@ def test_foreign_prefix_rejected_before_model_execution(monkeypatch):
     profile._before_forward(model, (), kwargs)
     fork = copy.deepcopy(cache)
     profile._before_forward(model, (), {**kwargs, "past_key_values": fork})
+    native.lora_dropout = torch.nn.Dropout(0.1).eval()
+    with pytest.raises(ValueError, match="settings changed"):
+        profile._before_forward(model, (), kwargs)
+    native.lora_dropout = torch.nn.Identity()
     model._cosmos_smollm_consistent["cache_owner"] = (profile.PROFILE, "installation-two")
     with pytest.raises(ValueError, match="prefix produced"):
         profile._before_forward(model, (), kwargs)

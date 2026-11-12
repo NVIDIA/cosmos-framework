@@ -128,6 +128,11 @@ def _ownership(model):
     return tuple((n, id(t), t.data_ptr(), t._version, t.dtype, t.device, tuple(t.shape)) for n, t in tensors)
 
 
+def _adapter_settings(module):
+    # Native zero-dropout adapters use nn.Identity, not nn.Dropout(p=0).
+    return module.method, module.execution, module._lora_scale, getattr(module.lora_dropout, "p", 0.0)
+
+
 def _before_forward(model, args, kwargs):
     from transformers.cache_utils import DynamicCache
 
@@ -140,13 +145,8 @@ def _before_forward(model, args, kwargs):
     for name, module, attribute, old, replacement in record["forwards"]:
         if model.get_submodule(name) is not module or getattr(module, attribute) != replacement:
             raise ValueError(f"{PROFILE} module/forward changed: {name}; restore before mutation")
-    for module, method, execution, scale, dropout in record["adapters"]:
-        if (module.method, module.execution, module._lora_scale, module.lora_dropout.p) != (
-            method,
-            execution,
-            scale,
-            dropout,
-        ):
+    for module, settings in record["adapters"]:
+        if _adapter_settings(module) != settings:
             raise ValueError(f"{PROFILE} adapter settings changed; restore and reload")
     call = record["signature"].bind_partial(*args, **kwargs).arguments
     ids, embeds = call.get("input_ids"), call.get("inputs_embeds")
@@ -251,7 +251,7 @@ def install(model, *, identity, adapter_type=None):
     model._cosmos_smollm_consistent = {
         "identity": identity,
         "forwards": forwards,
-        "adapters": [(m, m.method, m.execution, m._lora_scale, m.lora_dropout.p) for _, m in targets],
+        "adapters": [(m, _adapter_settings(m)) for _, m in targets],
         "ownership": _ownership(model),
         "signature": signature(model.forward),
         "cache_owner": (PROFILE, uuid4().hex),
