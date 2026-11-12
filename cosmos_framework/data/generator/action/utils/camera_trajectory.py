@@ -43,6 +43,18 @@ class CameraTrainParams:
     num_frames: int
 
 
+_CAMERA_COMMANDS = frozenset(
+    {"w", "s", "a", "d", "u", "n", "up", "down", "left", "right", "cw", "ccw", "stay", "pano", "orbit"}
+)
+
+
+def _invalid_camera_command(cmd: str) -> ValueError:
+    return ValueError(
+        f"Invalid camera command {cmd!r}: expected '<cmd>-<frames>' with <cmd> one of {sorted(_CAMERA_COMMANDS)}"
+        " (and an optional numeric radius for orbit, 'orbit-<frames>-<radius>')."
+    )
+
+
 def parse_camera_string(
     camera_string: str,
     forward_speed: float = 0.1,  # per frame
@@ -82,7 +94,11 @@ def parse_camera_string(
 
     frame: duration in number of frames
 
-    Multiple trajectories are separated by '|'.
+    Multiple trajectories are separated by '|'; split them with
+    :func:`parse_custom_trajectories` before calling this function.
+
+    Empty entries are skipped. Anything else that is not a known command with an
+    integer frame count raises ``ValueError``.
     """
     commands = [x.strip() for x in camera_string.split(",")]
 
@@ -91,14 +107,19 @@ def parse_camera_string(
     poses = [current_pose.copy()]
 
     for cmd in commands:
-        if "-" not in cmd:
+        if not cmd:
             continue
         parts = cmd.split("-")
         action_type = parts[0].strip()
+        max_fields = 3 if action_type == "orbit" else 2
+        if action_type not in _CAMERA_COMMANDS or not 2 <= len(parts) <= max_fields:
+            raise _invalid_camera_command(cmd)
         try:
             num_frames = int(parts[1].strip())
         except ValueError:
-            continue
+            raise _invalid_camera_command(cmd) from None
+        if action_type in ("pano", "orbit") and num_frames < 1:
+            raise ValueError(f"Camera command {cmd!r}: {action_type} needs at least one frame")
 
         # Local velocity
         trans_vel = np.zeros(3)  # x, y, z
@@ -160,7 +181,7 @@ def parse_camera_string(
                 try:
                     orbit_radius = float(parts[2].strip())
                 except ValueError:
-                    pass
+                    raise _invalid_camera_command(cmd) from None
             dtheta = -2.0 * np.pi / num_frames  # negative => CCW from above
             delta_rot = R.from_euler("xyz", [0.0, dtheta, 0.0]).as_matrix()
             delta_trans = np.array([-orbit_radius * np.sin(dtheta), 0.0, orbit_radius * (1.0 - np.cos(dtheta))])

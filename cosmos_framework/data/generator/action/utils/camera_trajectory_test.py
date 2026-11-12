@@ -58,6 +58,44 @@ def test_parse_camera_string_pano_completes_full_yaw() -> None:
     np.testing.assert_allclose(poses[-1][:3, :3], np.eye(3), atol=1e-9)
 
 
+@pytest.mark.parametrize(
+    "camera_string",
+    [
+        "W-30",  # commands are lower case
+        "forward-30",  # not a command
+        "w30",  # no frame count
+        "w-3o",  # frame count is not an integer
+        "w-30;right-15",  # wrong separator
+        "w-30-5",  # extra field on a command that takes none
+        "right-15|w-15",  # '|' belongs to parse_custom_trajectories
+        "orbit-150-far",  # orbit radius is not a number
+    ],
+)
+def test_parse_camera_string_rejects_malformed_commands(camera_string: str) -> None:
+    # Each of these used to parse to a camera that never moves.
+    with pytest.raises(ValueError, match="Invalid camera command"):
+        parse_camera_string(camera_string)
+
+
+@pytest.mark.parametrize("camera_string", ["pano-0", "orbit-0"])
+def test_parse_camera_string_rejects_a_zero_frame_pano_or_orbit(camera_string: str) -> None:
+    with pytest.raises(ValueError, match="at least one frame"):
+        parse_camera_string(camera_string)
+
+
+def test_parse_camera_string_still_accepts_blank_entries_and_spaces() -> None:
+    # A trailing comma, an empty entry and spaces around '-' are all accepted.
+    np.testing.assert_array_equal(parse_camera_string("w-2, ,right-1,"), parse_camera_string("w-2,right-1"))
+    np.testing.assert_array_equal(parse_camera_string(" w - 2 "), parse_camera_string("w-2"))
+
+
+def test_parse_camera_string_orbit_radius_override() -> None:
+    # Half an orbit puts the camera opposite its start, two radii ahead.
+    poses = parse_camera_string("orbit-4-2.0")
+
+    np.testing.assert_allclose(poses[2][:3, 3], np.array([0.0, 0.0, 4.0]), atol=1e-12)
+
+
 def test_parse_custom_trajectories_splits_on_pipe() -> None:
     trajectories = parse_custom_trajectories("w-2|s-3")
 
