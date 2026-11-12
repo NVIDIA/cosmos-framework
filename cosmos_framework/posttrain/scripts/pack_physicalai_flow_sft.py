@@ -6,10 +6,17 @@ Existing committed clips are read-only inputs. New staging may use one owned
 scratch clip at a time; no migration or deletion of existing datasets is implied.
 Completed shards are reusable; incomplete attempts remain for diagnosis and a
 restart constructs a new shard rather than treating a partial file as complete.
+
+On filesystems without atomic no-replace directory rename, a public shard is a
+relative symlink to its verified payload directory. That payload retains its
+unique ``.incomplete-<uuid>`` staging name but is permanent live data: preserve it
+with the symlink when copying/staging a dataset, or dereference the public shard.
+Do not remove staging directories by name alone; a published shard may own them.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -149,7 +156,22 @@ def write_shard(destination, clips, identities):
     _write_json(temporary / "complete.json", marker)
     verify_shard(temporary, identities)
     fsync_directory(str(temporary))
-    rename_directory_noreplace(str(temporary), str(root))
+    try:
+        rename_directory_noreplace(str(temporary), str(root))
+    except OSError as error:
+        if error.errno != errno.ENOTSUP:
+            raise
+        # Lustre may lack RENAME_NOREPLACE. Publishing a relative directory
+        # symlink is also atomic and refuses *any* existing destination. The
+        # complete, fsynced payload stays at its unique staging name for the
+        # lifetime of the shard. Never replace this with check + os.rename,
+        # which can overwrite a concurrently created empty directory.
+        # Readers already resolve directory references and require complete
+        # content hashes; a crash before publication leaves only unused staging.
+        # Persist the staging directory's *parent entry* before the link can
+        # become visible, then persist publication through the parent below.
+        fsync_directory(str(root.parent))
+        os.symlink(temporary.name, root, target_is_directory=True)
     fsync_directory(str(root.parent))
     return rows_for_shard(root, marker["index_sha256"], index), marker
 

@@ -3,6 +3,7 @@
 """Lossless physical-data representation, identity, failure and fork checks."""
 
 import copy
+import errno
 import hashlib
 import json
 import multiprocessing
@@ -114,6 +115,102 @@ def test_interruption_keeps_partial_and_retry_uses_new_commit(tmp_path, monkeypa
     pack.write_shard(destination, iter(clips), identities)
     assert inventory(partial) == before
     pack.verify_shard(destination, identities)
+
+
+def test_shared_filesystem_atomic_symlink_publication_and_reuse(tmp_path, monkeypatch):
+    _, clips, identities = prepared(tmp_path)
+    root = tmp_path / "packed"
+
+    def unsupported(*args):
+        raise OSError(errno.ENOTSUP, "filesystem lacks RENAME_NOREPLACE")
+
+    monkeypatch.setattr(pack, "rename_directory_noreplace", unsupported)
+    rows, marker = pack.write_shard(root, iter(clips), identities)
+    assert root.is_symlink()
+    payload = root.resolve()
+    assert payload.parent == root.parent and payload.name.startswith(".packed.incomplete-")
+    assert {p.name for p in payload.iterdir()} == {"media.bin", "index.json", "complete.json"}
+    before = inventory(payload)
+    assert pack.verify_shard(root, identities) == (rows, marker)
+    assert pack.write_shard(root, iter(()), identities) == (rows, marker)
+    assert inventory(payload) == before
+    pack.publish_rows(tmp_path / "rows.jsonl", rows)
+    assert len(FlowSFTDataset(str(tmp_path / "rows.jsonl"))) == 2
+
+
+def test_fallback_persists_payload_name_before_publication(tmp_path, monkeypatch):
+    _, clips, identities = prepared(tmp_path)
+    root = tmp_path / "packed"
+    events = []
+    sync, link = pack.fsync_directory, pack.os.symlink
+
+    def unsupported(*args):
+        raise OSError(errno.ENOTSUP, "filesystem lacks RENAME_NOREPLACE")
+
+    def observed_sync(path):
+        sync(path)
+        events.append(("fsync", Path(path)))
+
+    def observed_link(source, target, **kwargs):
+        assert events[-1] == ("fsync", root.parent)
+        assert (root.parent / source / "complete.json").is_file()
+        events.append(("link", Path(target)))
+        return link(source, target, **kwargs)
+
+    monkeypatch.setattr(pack, "rename_directory_noreplace", unsupported)
+    monkeypatch.setattr(pack, "fsync_directory", observed_sync)
+    monkeypatch.setattr(pack.os, "symlink", observed_link)
+    pack.write_shard(root, iter(clips), identities)
+    assert events[-3:] == [("fsync", root.parent), ("link", root), ("fsync", root.parent)]
+
+
+@pytest.mark.parametrize("collision", ["directory", "file", "dangling_symlink"])
+def test_fallback_cannot_replace_a_concurrent_destination(tmp_path, monkeypatch, collision):
+    _, clips, identities = prepared(tmp_path)
+    root = tmp_path / "packed"
+
+    def competing_creator(*args):
+        if collision == "directory":
+            root.mkdir()
+        elif collision == "file":
+            root.write_bytes(b"unrelated")
+        else:
+            root.symlink_to("missing-user-target")
+        raise OSError(errno.ENOTSUP, "filesystem lacks RENAME_NOREPLACE")
+
+    monkeypatch.setattr(pack, "rename_directory_noreplace", competing_creator)
+    with pytest.raises(FileExistsError):
+        pack.write_shard(root, iter(clips), identities)
+    if collision == "directory":
+        assert root.is_dir() and not list(root.iterdir())
+    elif collision == "file":
+        assert root.read_bytes() == b"unrelated"
+    else:
+        assert root.is_symlink() and root.readlink() == Path("missing-user-target")
+
+
+def test_fallback_interruption_preserves_unpublished_payload(tmp_path, monkeypatch):
+    _, clips, identities = prepared(tmp_path)
+    root = tmp_path / "packed"
+    link = pack.os.symlink
+
+    def unsupported(*args):
+        raise OSError(errno.ENOTSUP, "filesystem lacks RENAME_NOREPLACE")
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("interrupted before atomic publication")
+
+    monkeypatch.setattr(pack, "rename_directory_noreplace", unsupported)
+    monkeypatch.setattr(pack.os, "symlink", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        pack.write_shard(root, iter(clips), identities)
+    assert not root.exists()
+    (partial,) = tmp_path.glob(".packed.incomplete-*")
+    before = inventory(partial)
+    monkeypatch.setattr(pack.os, "symlink", link)
+    pack.write_shard(root, iter(clips), identities)
+    assert root.resolve() != partial and inventory(partial) == before
+    pack.verify_shard(root, identities)
 
 
 def test_relative_public_output_is_readable_from_nested_rows_file(tmp_path, monkeypatch):
