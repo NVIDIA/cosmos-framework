@@ -117,9 +117,10 @@ of truth for whether jobs are running.
 
 ### AutoML helper regression checks
 
-From the repository root, using a test environment with `pytest` and `jsonschema`:
+From the repository root, install the shared CPU test requirements:
 
 ```bash
+python -m pip install -r tools/cosmos_workflows/requirements-test.txt
 python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows \
   -o 'python_files=test_*.py *_test.py' tools/cosmos_workflows
 ```

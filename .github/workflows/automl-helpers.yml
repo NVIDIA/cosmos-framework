@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: python -m pip install pytest jsonschema
+      - run: python -m pip install -r tools/cosmos_workflows/requirements-test.txt
       - name: Test execution helpers without GPU dependencies or scheduler access
         run: >-
           python -m pytest -o addopts= --confcutdir=tools/cosmos_workflows
