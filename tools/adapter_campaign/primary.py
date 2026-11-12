@@ -53,10 +53,19 @@ def normalize_primary(root, contract_cell, capture, directory):
         all(receipt["files_sha256"].get(n) == h for n, h in capture_plan["expected_sha256"].items()),
         "capture differs from preserved historical evidence",
     )
-    audit_ref = {
-        "path": "evidence/completed-primary-readonly-audit01.json",
-        "sha256": capture_plan["source_audit_sha256"],
-    }
+    audit_ref = capture_plan.get(
+        "source_audit",
+        {
+            "path": "evidence/completed-primary-readonly-audit01.json",
+            "sha256": capture_plan["source_audit_sha256"],
+        },
+    )
+    require(
+        isinstance(audit_ref, dict)
+        and set(audit_ref) == {"path", "sha256"}
+        and audit_ref["sha256"] == capture_plan["source_audit_sha256"],
+        "raw capture changed its read-only audit anchor",
+    )
     records.append(audit_ref)
     historical = store.json(audit_ref)
     require(historical["returncode"] == 0, "historical read-only audit failed")
