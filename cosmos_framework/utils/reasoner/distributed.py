@@ -3,7 +3,6 @@
 
 # Standard library imports
 import array
-import fcntl
 import math
 import os
 import re
@@ -13,6 +12,15 @@ import time
 from datetime import timedelta
 from functools import partial
 from typing import Dict, Iterable, Optional, Union
+
+# fcntl is POSIX-only. It is used here solely for SIOCGIFADDR/SIOCGIFCONF
+# interface discovery, which is a multi-node Infiniband/Mellanox concern; a
+# single-node Windows run never needs it. Import defensively so the module stays
+# importable, and let the helpers below degrade to "no interfaces found".
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - platform dependent
+    fcntl = None  # type: ignore[assignment]
 
 # Third party imports
 import requests
@@ -263,6 +271,9 @@ def get_ip_address(ifname):
     Returns:
         str or None: The IPv4 address as a string if found, else None.
     """
+    if fcntl is None:
+        # No SIOCGIFADDR equivalent on this platform (single-node only).
+        return None
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         # 0x8915 is SIOCGIFADDR; pack interface name (limited to 15 chars)
@@ -318,6 +329,10 @@ def get_all_ipv4_addresses():
     """
     ip_list = []
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    if fcntl is None:
+        # No SIOCGIFCONF equivalent on this platform (single-node only).
+        return ip_list
 
     # Allocate buffer for maximum number of interfaces.
     max_interfaces = 128

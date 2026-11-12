@@ -38,6 +38,12 @@ if TYPE_CHECKING:
 
 def _set_gpu_cpu_affinity(device: Device) -> None:
     """Prefer GPU-local CPUs within the process's existing allocation."""
+    # os.sched_getaffinity / os.sched_setaffinity are POSIX-only and do not exist on
+    # Windows. Guard before calling: an AttributeError is not an OSError, so it would
+    # escape the caller's handler and abort every entrypoint before training starts.
+    if not (hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity")):
+        log.warning("os.sched_getaffinity/sched_setaffinity are unavailable on this platform; skipping CPU affinity.")
+        return
     allocated_cpus = os.sched_getaffinity(0)
     preferred_cpus = allocated_cpus.intersection(device.get_cpu_affinity())
     if preferred_cpus:
@@ -69,7 +75,7 @@ def init(store: dist.Store | None = None, backend: str | None = None) -> int | N
     try:
         device = Device(local_rank)
         _set_gpu_cpu_affinity(device)
-    except (pynvml.NVMLError, OSError) as e:
+    except (pynvml.NVMLError, OSError, AttributeError) as e:
         log.warning(f"Failed to set device affinity: {e}")
     # Set up distributed communication. CPU checkpoint conversion needs Gloo
     # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.
@@ -92,6 +98,12 @@ def init(store: dist.Store | None = None, backend: str | None = None) -> int | N
             )
         if backend is None:
             backend = "nccl" if os.environ.get("COSMOS_DEVICE", "cuda").lower() == "cuda" else "gloo"
+        # NCCL has no Windows build (torch.distributed.is_nccl_available() is False there).
+        # A process group is still mandatory rather than optional: Trainer.__init__ runs an
+        # unconditional dist.barrier(). Fall back to gloo for collectives while compute stays on CUDA.
+        if sys.platform == "win32" and backend == "nccl":
+            log.warning("NCCL is unavailable on Windows; using the gloo backend instead (compute stays on CUDA).")
+            backend = "gloo"
         if store is not None:
             dist.init_process_group(
                 backend=backend,
@@ -101,7 +113,24 @@ def init(store: dist.Store | None = None, backend: str | None = None) -> int | N
                 timeout=timeout_timedelta,
             )
         else:
+            if sys.platform == "win32":
+                # env:// needs these set even for a single-rank job; there is no torchrun-style
+                # launcher on the native Windows path.
+                os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+                os.environ.setdefault("MASTER_PORT", "29500")
+                os.environ.setdefault("RANK", str(local_rank))
+                os.environ.setdefault("WORLD_SIZE", "1")
             dist.init_process_group(backend=backend, init_method="env://", timeout=timeout_timedelta)
+        if sys.platform == "win32":
+            # The Windows gloo build cannot run collectives on CUDA tensors; it faults with an
+            # access violation. Route them via host memory.
+            from cosmos_framework.utils import win_compat
+
+            if win_compat.install_gloo_cuda_collective_shims():
+                log.warning(
+                    "Installed gloo/CUDA collective shims: torch.distributed collectives will "
+                    "stage CUDA tensors through host memory on this platform."
+                )
         log.critical(
             f"Initialized distributed training with local rank {local_rank} using {backend} with timeout {timeout_seconds}",
             rank0_only=False,
@@ -334,6 +363,18 @@ def parallel_model_wrapper(config_ddp: DDPConfig, model: torch.nn.Module) -> tor
     """
     if dist.is_available() and dist.is_initialized():
         local_rank = int(os.getenv("LOCAL_RANK", 0))
+        # On Windows the only available backend is gloo (NCCL has no Windows build). PyTorch's
+        # DDP reducer runs its gradient allreduce on the CUDA-resident grads, and the Windows
+        # gloo build has no CUDA-aware path for that -- the result is an access violation
+        # (0xC0000005) part way through backward, with no Python traceback. At world_size == 1
+        # the DDP wrapper is pure overhead (there is nothing to reduce), so hand back the bare
+        # module. Guarded on win32 so Linux behaviour is untouched.
+        if sys.platform == "win32" and get_world_size() == 1:
+            log.warning(
+                "Skipping the DDP wrapper: world_size==1 on Windows, where the gloo backend cannot "
+                "allreduce CUDA gradients. Gradients are already rank-local, so this is a no-op."
+            )
+            return model
         try:
             from megatron.core import parallel_state
 

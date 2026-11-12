@@ -15,6 +15,7 @@ dependency on the higher-level dataset code.
 
 from __future__ import annotations
 
+import sys
 import time
 from http.client import IncompleteRead
 from typing import Callable, TypeVar
@@ -27,7 +28,21 @@ from botocore.exceptions import (
 from botocore.exceptions import (
     ReadTimeoutError as BotocoreReadTimeoutError,
 )
-from multistorageclient.types import RetryableError
+
+try:
+    from multistorageclient.types import RetryableError
+except ImportError:  # pragma: no cover - platform dependent
+    if sys.platform != "win32":
+        raise  # a missing multi-storage-client is an installation error everywhere else
+
+    class RetryableError(Exception):  # type: ignore[no-redef]
+        """Stand-in when multi-storage-client is unavailable on Windows.
+
+        Kept in RETRYABLE_EXCEPTIONS so the tuple shape is unchanged; nothing
+        ever raises it because the MSC backend is not registered.
+        """
+
+
 from urllib3.exceptions import ProtocolError as URLLib3ProtocolError
 from urllib3.exceptions import ReadTimeoutError as URLLib3ReadTimeoutError
 from urllib3.exceptions import SSLError as URLLib3SSLError

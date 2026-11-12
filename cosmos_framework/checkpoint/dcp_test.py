@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,10 @@ from cosmos_framework.checkpoint.dcp_distill import DistributedCheckpointer as D
 
 pytestmark = [pytest.mark.level(0), pytest.mark.gpus(0)]
 
+# The capacity check reads os.statvfs, os.sysconf and the /dev/shm mount, none of which exist on
+# Windows, where _check_staging_shared_memory returns before reaching them.
+requires_dev_shm = pytest.mark.skipif(sys.platform == "win32", reason="the /dev/shm staging check is POSIX-only")
+
 
 def test_staging_bytes_count_local_allocations_and_page_rounding() -> None:
     tensor = torch.empty(1025, dtype=torch.float32)  # [1025]
@@ -28,6 +33,7 @@ def test_staging_bytes_count_local_allocations_and_page_rounding() -> None:
     assert checkpoint._staging_shared_memory_bytes(state, 4096) == 5 * 4096
 
 
+@requires_dev_shm
 @pytest.mark.parametrize("checkpointer_type", [checkpoint.DistributedCheckpointer, DistillCheckpointer])
 def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type: type) -> None:
     handler = object.__new__(checkpointer_type)
@@ -41,6 +47,21 @@ def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type
     ):
         handler._checkpoint_async_with_pinned_memory("iter_000000002", state)
     allocate.assert_not_called()
+
+
+def test_staging_check_is_skipped_where_statvfs_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no os.statvfs and no /dev/shm; the check must return instead of raising."""
+    monkeypatch.delattr(checkpoint.os, "statvfs", raising=False)
+    checkpoint._check_staging_shared_memory({"model": (torch.empty(4), "model")})
+
+
+def test_storage_writer_stages_serially_on_windows(tmp_path) -> None:
+    handler = object.__new__(checkpoint.DistributedCheckpointer)
+    handler.save_to_object_store = None
+    with patch.object(checkpoint.sys, "platform", "win32"):
+        assert handler.get_storage_writer(str(tmp_path)).per_thread_copy_ahead == 0
+    with patch.object(checkpoint.sys, "platform", "linux"):
+        assert handler.get_storage_writer(str(tmp_path)).per_thread_copy_ahead > 0
 
 
 def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path: str) -> None:
@@ -108,6 +129,7 @@ def _distributed_capacity_worker(rank: int, rendezvous: str, capacity_store_path
         dist.destroy_process_group()
 
 
+@requires_dev_shm
 def test_staging_capacity_aggregates_local_shards_and_fails_on_all_ranks(tmp_path: Path) -> None:
     torch.multiprocessing.spawn(
         _distributed_capacity_worker,

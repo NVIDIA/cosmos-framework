@@ -52,8 +52,10 @@ load_checkpoint(checkpoint_uri)
 import functools
 import json
 import os
+import posixpath
 import shlex
 import subprocess
+import sys
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -261,7 +263,24 @@ class CheckpointDirHf(_CheckpointHf):
         if self.subdirectory:
             for patterns in [include, exclude]:
                 for i, pattern in enumerate(patterns):
-                    patterns[i] = os.path.join(self.subdirectory, pattern)
+                    # Repository paths use forward slashes on every platform.
+                    patterns[i] = posixpath.join(self.subdirectory, pattern)
+
+        # Windows only. The hf CLI is a Click program, and on Windows Click expands
+        # glob patterns in its own argv, so a bare `*` reaches the CLI as the file
+        # names of the working directory: the first becomes the include pattern and
+        # the rest positional FILENAMEs. Observed there:
+        #     UserWarning: Ignoring `--include` since filenames have been explicitly set.
+        # Only README.md is then fetched, `blobs/` stays empty, and the CLI still
+        # exits 0 returning a valid-looking snapshot path -- so the caller proceeds
+        # on an essentially empty snapshot and fails much later and misleadingly
+        # (e.g. `TypeError: expected str, bytes or os.PathLike object, not NoneType`
+        # out of the tokenizer's `open(vocab_file)`). `--include *` already means
+        # "everything", so drop it there; a subdirectory-scoped pattern is still
+        # passed through. Elsewhere the argument reaches the CLI as written and the
+        # command line is unchanged.
+        if sys.platform == "win32" and include == ["*"]:
+            include = []
 
         cmd_args = [
             self.repository,
