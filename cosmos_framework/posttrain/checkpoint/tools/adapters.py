@@ -27,8 +27,9 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     merged_export_metadata as merged_export_metadata,
 )
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
+from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
 
-DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES)
+DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES, SMOLLM_PROFILE)
 
 
 def validate_merged_export_metadata(
@@ -117,10 +118,18 @@ def export_merged_adapter(
 
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
-    if execution_profile is not None and (execution_profile not in DEPLOYMENT_PROFILES or output_dtype != "bfloat16"):
-        raise ValueError("execution_profile requires a supported BF16 deployment profile and bfloat16 output")
+    if execution_profile is not None:
+        expected_dtype = "float32" if execution_profile == SMOLLM_PROFILE else "bfloat16"
+        if execution_profile not in DEPLOYMENT_PROFILES or output_dtype != expected_dtype:
+            raise ValueError(f"execution_profile requires a supported profile and output_dtype={expected_dtype}")
     record, state = read_adapter_snapshot(adapter)
     identity = record["identity"]
+    if execution_profile == SMOLLM_PROFILE:
+        from cosmos_framework.utils.generator.smollm_consistent import validate_identity
+
+        # Validate before dispatching to a physical-format exporter: a profile
+        # request must never be silently ignored by another family's exporter.
+        validate_identity(identity)
     if output_dtype != "float32" and identity["architecture"] in ("Gr00tN1d7", "alpamayo_r1", "pi05"):
         raise ValueError("native physical merged formats currently require float32; BF16 deployment is HF-only")
     rounded = identity["resolved"].get("model_execution") == "merged_weight_bf16_v1"
@@ -224,7 +233,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--execution-profile",
         choices=DEPLOYMENT_PROFILES,
-        help="BF16 merged inference arithmetic; requires Framework loading, not plain stock HF execution",
+        help="versioned merged inference arithmetic; requires its declared precision and Framework loading",
     )
     args = parser.parse_args(argv)
     if args.merged != bool(args.base) or (args.adapter and not args.merged):

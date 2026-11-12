@@ -16,6 +16,7 @@ from importlib.metadata import version
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CANONICAL  # noqa: F401
 from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_VL_PROFILES
 from cosmos_framework.utils.generator.factorized_inference import PROFILE as FACTORIZED
+from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM
 
 
 @dataclass(frozen=True)
@@ -28,11 +29,11 @@ class PortableAdapterConfig:
     def __post_init__(self):
         if not isinstance(self.directory, str) or not self.directory:
             raise ValueError("portable_adapter.directory must name a complete local portable adapter")
-        if self.execution_profile not in (*QWEN3_VL_PROFILES, FACTORIZED):
-            raise ValueError(f"portable execution_profile must be one of {(*QWEN3_VL_PROFILES, FACTORIZED)!r}")
+        if self.execution_profile not in (*QWEN3_VL_PROFILES, FACTORIZED, SMOLLM):
+            raise ValueError(f"portable execution_profile must be one of {(*QWEN3_VL_PROFILES, FACTORIZED, SMOLLM)!r}")
         if type(self.cache_effective_weights) is not bool:
             raise ValueError("cache_effective_weights must be a boolean")
-        if self.execution_profile == FACTORIZED and self.cache_effective_weights:
+        if self.execution_profile in (FACTORIZED, SMOLLM) and self.cache_effective_weights:
             raise ValueError(
                 "stable factorized inference preserves separate branches; effective-weight cache is unsupported"
             )
@@ -46,7 +47,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     missing-state initialization, training checkpoint or remote-code fallback.
     """
     import torch
-    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
     from cosmos_framework.posttrain.checkpoint.adapters import (
         adapter_configuration,
@@ -56,7 +57,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         snapshot_identity,
     )
     from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, install_adapters, resolve_targets
-    from cosmos_framework.utils.generator import factorized_inference
+    from cosmos_framework.utils.generator import factorized_inference, smollm_consistent
     from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
 
     if not isinstance(config, PortableAdapterConfig):
@@ -74,6 +75,8 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     identity = record["identity"]
     if profile in QWEN3_VL_PROFILES:
         validate_adapter_identity(identity, profile=profile)
+    elif profile == SMOLLM:
+        smollm_consistent.validate_identity(identity)
     else:
         factorized_inference.validate_identity(identity)
     for name, expected in identity["dependencies"].items():
@@ -95,9 +98,11 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         if actual != identity[name]:
             raise ValueError(f"portable {name} identity mismatch; stage the exact recorded immutable snapshot")
     hf_config = AutoConfig.from_pretrained(base_path, local_files_only=True, trust_remote_code=False)
-    if hf_config.model_type != "qwen3_vl" or getattr(hf_config, "quantization_config", None):
-        raise ValueError("public portable loading currently requires an unquantized stock dense Qwen3-VL base")
-    net, info = AutoModelForImageTextToText.from_pretrained(
+    family = "llama" if profile == SMOLLM else "qwen3_vl"
+    if hf_config.model_type != family or getattr(hf_config, "quantization_config", None):
+        raise ValueError(f"{profile} requires an unquantized stock {family} base")
+    auto_class = AutoModelForCausalLM if profile == SMOLLM else AutoModelForImageTextToText
+    net, info = auto_class.from_pretrained(
         base_path,
         config=hf_config,
         dtype=torch.bfloat16,
@@ -111,23 +116,29 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     if problems:
         raise ValueError(f"incomplete portable base model: {problems}; no missing weights may be initialized")
     adapters = adapter_configuration(identity)
-    manifest = resolve_targets(net, adapters, family="qwen3_vl")
-    expected = make_adapter_identity(base_path, processor_path, manifest, identity["media"], base_dtype="bfloat16")
+    manifest = resolve_targets(net, adapters, family=family)
+    expected = make_adapter_identity(
+        base_path, processor_path, manifest, identity["media"], base_dtype="bfloat16", architecture=family
+    )
     if expected != identity:
         differences = sorted(k for k in set(expected) | set(identity) if expected.get(k) != identity.get(k))
         raise ValueError(f"portable compatibility mismatch before injection: {differences}")
-    install_adapters(net, adapters, initialize=False, family="qwen3_vl")
+    install_adapters(net, adapters, initialize=False, family=family)
     net._posttrain_adapter_identity = identity
     load_adapter_state(net, identity, state)
     net.eval()
-    if profile == FACTORIZED:
+    if profile == SMOLLM:
+        net.float()
+        smollm_consistent.install(net, identity=identity, adapter_type=PosttrainAdapterLinear)
+    elif profile == FACTORIZED:
         net.float()  # Explicit deployment precision; installer never replaces owned tensors.
         factorized_inference.install(net, adapter_type=PosttrainAdapterLinear)
     else:
         from cosmos_framework.posttrain.model.adapter_bf16_execution import install_adapter_inference_profile
 
         install_adapter_inference_profile(net, profile, cache_effective_weights=config.cache_effective_weights)
-    processor = AutoProcessor.from_pretrained(processor_path, local_files_only=True, trust_remote_code=False)
+    processor_class = AutoTokenizer if profile == SMOLLM else AutoProcessor
+    processor = processor_class.from_pretrained(processor_path, local_files_only=True, trust_remote_code=False)
     if getattr(processor, "tokenizer", None) is not None:
         processor.tokenizer.padding_side = "left"
     # Detect snapshot edits during construction. The portable tensors themselves

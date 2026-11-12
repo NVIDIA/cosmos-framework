@@ -59,6 +59,7 @@ def test_runtime_rejects_conflicting_precision_before_loading(tmp_path, dtype, a
     _artifact(tmp_path)
     runtime = CosmosFrameworkRuntime.__new__(CosmosFrameworkRuntime)
     runtime.model_path, runtime.dtype, runtime.attn_implementation = str(tmp_path), dtype, attention
+    runtime.device, runtime.device_map = "cpu", "auto"
     with pytest.raises(ValueError, match="requires BF16 residual FP32"):
         runtime._load()
 

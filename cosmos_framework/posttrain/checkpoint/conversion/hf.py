@@ -251,8 +251,13 @@ def config_with_export_dtype(
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
     from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
+    from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
 
-    if execution_profile is not None:
+    if execution_profile == SMOLLM_PROFILE:
+        if output_dtype != "float32" or result.get("model_type") != "llama" or model_execution is not None:
+            raise ValueError("SmolLM consistent inference requires a default-execution FP32 Llama merge")
+        result["cosmos_inference_profile"] = execution_profile
+    elif execution_profile is not None:
         if (
             execution_profile not in ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES)
             or output_dtype != "bfloat16"

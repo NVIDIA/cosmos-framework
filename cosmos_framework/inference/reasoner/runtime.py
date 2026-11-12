@@ -184,6 +184,7 @@ class CosmosFrameworkRuntime:
             install_deployment_profile,
             validate_deployment_environment,
         )
+        from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
 
         profile = deployment_profile(self.model_path)
         if profile:
@@ -201,8 +202,12 @@ class CosmosFrameworkRuntime:
                 raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
             self.dtype, self.attn_implementation = "float32", "sdpa"
         if profile:
-            if self.dtype not in ("bfloat16", "bf16", "auto") or self.attn_implementation not in (None, "sdpa"):
+            accepted = ("float32", "fp32", "auto") if profile == SMOLLM_PROFILE else ("bfloat16", "bf16", "auto")
+            if self.dtype not in accepted or self.attn_implementation not in (None, "sdpa"):
+                if profile == SMOLLM_PROFILE:
+                    raise ValueError(f"{profile} requires FP32 consistent deployment with SDPA")
                 raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
+            self.dtype = "float32" if profile == SMOLLM_PROFILE else "bfloat16"
             self.attn_implementation = "sdpa"
         logger.info(
             "Loading Cosmos Framework model from %s on %s (model_type=%s)",
@@ -220,7 +225,7 @@ class CosmosFrameworkRuntime:
             self.backend = "omni"
             return
 
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
         if self.model_type == "cosmos3_edge":
             # Registers the native Edge config/model with Transformers Auto classes.
@@ -230,9 +235,14 @@ class CosmosFrameworkRuntime:
             )
 
             self.processor = build_cosmos3_edge_processor(self.model_path)
+        elif profile == SMOLLM_PROFILE:
+            self.processor = AutoTokenizer.from_pretrained(
+                self.model_path, local_files_only=True, trust_remote_code=False
+            )
         else:
             self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
 
+        auto_class = AutoModelForCausalLM if profile == SMOLLM_PROFILE else AutoModelForImageTextToText
         device_map: str | dict[str, str]
         if self.device == "cpu":
             device_map = "cpu"
@@ -254,7 +264,7 @@ class CosmosFrameworkRuntime:
         if profile or model_profile:
             # HF can warn and initialize absent tensors even in a completed
             # export. Tagged deployment requires exactly the saved model.
-            loaded, loading_info = AutoModelForImageTextToText.from_pretrained(
+            loaded, loading_info = auto_class.from_pretrained(
                 self.model_path,
                 **model_load_kwargs,
                 output_loading_info=True,
@@ -287,7 +297,18 @@ class CosmosFrameworkRuntime:
         if model_profile:
             validate_loaded_model(self.model)
         if profile:
-            installed = install_deployment_profile(self.model, profile)
+            profile_kwargs = {}
+            if profile == SMOLLM_PROFILE:
+                marker = json.loads((Path(self.model_path) / ".materialized").read_text())
+                profile_kwargs["adapter_identity"] = marker["identity"]["export_metadata"]["adapter_identity"]
+                self.adapter_deployment = {
+                    "kind": "merged_adapter_deployment",
+                    "execution_profile": profile,
+                    "dtype": "float32",
+                    "identity": profile_kwargs["adapter_identity"],
+                    "adapter_weights_sha256": marker["identity"]["export_metadata"]["adapter_weights_sha256"],
+                }
+            installed = install_deployment_profile(self.model, profile, **profile_kwargs)
             logger.info("Installed deployment profile %s on %d modules", profile, len(installed))
         if self.attn_implementation:
             actual_attn = getattr(getattr(self.model, "config", None), "_attn_implementation", None)
@@ -343,11 +364,28 @@ class CosmosFrameworkRuntime:
 
     def restore_factorized_execution(self) -> None:
         """Remove the opt-in FP64 branch profile; keep the loaded FP32 original tensors."""
-        from cosmos_framework.utils.generator.factorized_inference import restore
+        if getattr(self, "portable_adapter", None) is None:
+            raise ValueError(
+                "factorized restoration requires a portable adapter; use restore_inference_execution for a merged model"
+            )
+        self.restore_inference_execution()
 
-        restore(self.model)
+    def restore_inference_execution(self) -> None:
+        """Restore unprofiled FP32 forwards; discard all external prefixes as well."""
+        from cosmos_framework.utils.generator import factorized_inference, smollm_consistent
+
+        previous = getattr(self.model, "_cosmos_deployment_profile", None)
+        if previous == smollm_consistent.PROFILE:
+            smollm_consistent.restore(self.model)
+        elif previous == factorized_inference.PROFILE:
+            factorized_inference.restore(self.model)
+        else:
+            raise ValueError("the active inference profile does not support this restoration operation")
         self._clear_adapter_caches()
-        self.adapter_deployment["execution_profile"] = "factorized_v1"
+        self.adapter_deployment["execution_profile"] = (
+            "factorized_v1" if self.portable_adapter is not None else "stock_fp32"
+        )
+        self.adapter_deployment["restored_from_profile"] = previous
         self.adapter_deployment["restored_original_execution"] = True
 
     def _install_video_feature_cache(self, capacity: int) -> None:
@@ -1005,8 +1043,27 @@ class CosmosFrameworkRuntime:
             cache.popitem(last=False)
         return prepared
 
+    def _prepare_smollm_text(self, conversations):
+        """Native text template, with explicit rejection of visual inputs."""
+        texts = []
+        for conversation in conversations:
+            native = []
+            for message in conversation:
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    if any(not isinstance(item, dict) or item.get("type") != "text" for item in content):
+                        raise ValueError("SmolLM is text-only; image/video inputs cannot be discarded")
+                    content = "\n".join(item["text"] for item in content)
+                if not isinstance(content, str):
+                    raise ValueError("SmolLM message content must be text")
+                native.append({**message, "content": content})
+            texts.append(self.processor.apply_chat_template(native, tokenize=False, add_generation_prompt=True))
+        return self.processor(text=texts, padding=True, return_tensors="pt")
+
     def _prepare_transformers_batch(self, conversations: list[list[dict[str, Any]]]) -> Any:
         """Materialize a true padded multimodal batch through Qwen's GPU reader."""
+        if self.model_type == "llama":
+            return self._prepare_smollm_text(conversations)
         texts = [
             self.processor.apply_chat_template(
                 conversation,
@@ -1041,6 +1098,8 @@ class CosmosFrameworkRuntime:
 
     def _prepare_transformers_inputs(self, conversation: list[dict[str, Any]]) -> Any:
         """Materialize visual inputs through the registered Qwen GPU reader."""
+        if self.model_type == "llama":
+            return self._prepare_smollm_text([conversation])
         text = self.processor.apply_chat_template(
             conversation,
             tokenize=False,
