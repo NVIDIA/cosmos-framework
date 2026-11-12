@@ -98,8 +98,8 @@ class Gr00tSFTPacker:
         import numpy as np
         from gr00t.data.embodiment_tags import EmbodimentTag
         from gr00t.data.types import MessageType, VLAStepData
-        from PIL import Image
 
+        from cosmos_framework.posttrain.data.flow_media import open_flow_image
         from cosmos_framework.posttrain.model.gr00t.packer import action_mask_for
 
         features = []
@@ -122,7 +122,7 @@ class Gr00tSFTPacker:
                 action[:, -1] = (1 - action[:, -1]) / 2
                 images = {}
                 for camera in ("image", "wrist_image"):
-                    with Image.open(sample["media"][camera]) as image:
+                    with open_flow_image(sample["media"][camera]) as image:
                         images[camera] = [np.asarray(image.convert("RGB")).copy()]
                 native = VLAStepData(
                     images=images,

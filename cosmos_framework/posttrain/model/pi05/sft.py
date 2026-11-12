@@ -77,8 +77,8 @@ class Pi05SFTPacker:
     def __call__(self, trajectories):
         import numpy as np
         import torch
-        from PIL import Image
 
+        from cosmos_framework.posttrain.data.flow_media import open_flow_image
         from cosmos_framework.posttrain.model.gr00t.packer import action_mask_for
 
         observations, actions, weights = [], [], []
@@ -87,7 +87,7 @@ class Pi05SFTPacker:
                 sample = step.obs.representations["flow_sample"]
                 observation = dict(sample["observation"])
                 for key in ("image", "wrist_image"):
-                    with Image.open(sample["media"][key]) as image:
+                    with open_flow_image(sample["media"][key]) as image:
                         observation[key] = np.asarray(image.convert("RGB")).copy()
                 observations.append(observation)
                 actions.append(sample["actions"])

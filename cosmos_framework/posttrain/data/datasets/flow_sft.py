@@ -17,8 +17,8 @@ import re
 from array import array
 from pathlib import Path
 
+from cosmos_framework.posttrain.data.flow_media import media_sha256, resolve_media
 from cosmos_framework.posttrain.utils.identity import canonical_json_bytes
-from cosmos_framework.posttrain.utils.object_store import file_sha256
 
 
 def _binary_rows(handle):
@@ -81,7 +81,7 @@ class FlowSFTDataset:
                 for paths in row["media"].values():
                     for p in paths if isinstance(paths, list) else [paths]:
                         if p not in self.media_hashes:
-                            self.media_hashes[p] = file_sha256(p)
+                            self.media_hashes[p] = media_sha256(p)
                 row["media"] = {
                     k: [self.media_hashes[p] for p in v] if isinstance(v, list) else self.media_hashes[v]
                     for k, v in row["media"].items()
@@ -111,7 +111,7 @@ class FlowSFTDataset:
             resolved = []
             for path in sequence:
                 if path not in self._media_resolutions:
-                    self._media_resolutions[path] = str((self.source.parent / path).resolve())
+                    self._media_resolutions[path] = resolve_media(path, self.source.parent)
                 resolved.append(self._media_resolutions[path])
             row["media"][camera] = resolved if isinstance(paths, list) else resolved[0]
 

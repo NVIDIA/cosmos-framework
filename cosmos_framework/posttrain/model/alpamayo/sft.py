@@ -131,7 +131,8 @@ class AlpamayoSFTPacker:
         import numpy as np
         import torch
         from alpamayo_r1.helper import create_message
-        from PIL import Image
+
+        from cosmos_framework.posttrain.data.flow_media import open_flow_image
 
         rows = [t for trajectory in trajectories for t in trajectory.transitions]
         # A single physical demonstration per rank avoids an unqualified padding
@@ -149,7 +150,7 @@ class AlpamayoSFTPacker:
                 raise ValueError("Alpamayo demonstrations require ordered real front-camera frames")
         images = []
         for path in frames:
-            with Image.open(path) as image:
+            with open_flow_image(path) as image:
                 images.append(torch.from_numpy(np.asarray(image.convert("RGB")).copy()).permute(2, 0, 1))
         messages = create_message(torch.stack(images))
         messages[-1]["content"][0]["text"] = "<|cot_start|><|cot_end|><|traj_future_start|>"

@@ -129,11 +129,10 @@ def write_clip(sample, calibration, destination, identity):
     return row, record
 
 
-def prepare_clip(avdi, clip_id, out, *, source_revision, source_files, t0_us=5_100_000):
-    """Prepare one declared clip using the exact public native dataset reader."""
+def clip_identity(avdi, clip_id, *, source_revision, source_files, t0_us=5_100_000):
+    """Resolve the immutable native clip contract before decoding or mutation."""
     import inspect
 
-    import pandas as pd
     from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
 
     if (
@@ -159,7 +158,7 @@ def prepare_clip(avdi, clip_id, out, *, source_revision, source_files, t0_us=5_1
         ):
             raise ValueError(f"PhysicalAI source manifest lacks immutable size/hash: {name}")
         archives[feature] = {"path": name, **item}
-    identity = {
+    return {
         "format": FORMAT,
         "profile": PHYSICALAI_PROFILE,
         "clip_id": clip_id,
@@ -171,6 +170,15 @@ def prepare_clip(avdi, clip_id, out, *, source_revision, source_files, t0_us=5_1
         "source_archives": archives,
         "source_read_mode": "native SDK remote range reads; ZIP CRC validation; source archive hashes are repository-declared, prepared bytes verified",
     }
+
+
+def prepare_clip(avdi, clip_id, out, *, source_revision, source_files, t0_us=5_100_000):
+    """Prepare one declared clip using the exact public native dataset reader."""
+    import pandas as pd
+    from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+
+    identity = clip_identity(avdi, clip_id, source_revision=source_revision, source_files=source_files, t0_us=t0_us)
+    archives = identity["source_archives"]
     destination = Path(out) / "clips" / clip_id
     if destination.exists():
         return verify_clip(destination, identity)
@@ -195,6 +203,11 @@ def main():
     parser.add_argument("--clip-ids", required=True, help="JSON list of declared clip IDs, fixed before processing")
     parser.add_argument("--out", required=True)
     parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--storage", choices=["clips_v1", "packed_v1"], default="clips_v1")
+    parser.add_argument("--clips-per-shard", type=int, default=256)
+    parser.add_argument(
+        "--scratch-dir", help="Owned temporary scratch for one clip per packed producer; failure scratch is preserved"
+    )
     args = parser.parse_args()
     manifest = json.loads(Path(args.source_manifest).read_text())
     clips = json.loads(Path(args.clip_ids).read_text())
@@ -212,9 +225,64 @@ def main():
         split_name="alpamayo_aligned",
         confirm_download_threshold_gb=float("inf"),
     )
+    if args.storage == "packed_v1":
+        if args.scratch_dir is None or not 1 <= args.clips_per_shard <= 256:
+            raise ValueError("packed_v1 requires --scratch-dir and --clips-per-shard in1..256")
+        prepare_packed_clips(avdi, clips, args.out, args.scratch_dir, manifest, args.clips_per_shard)
+        return
     for index, clip in enumerate(clips):
         prepare_clip(avdi, clip, args.out, source_revision=manifest["revision"], source_files=manifest["files"])
         print(json.dumps({"completed": index + 1, "expected": len(clips), "clip_id": clip}), flush=True)
+
+
+def prepare_packed_clips(avdi, clips, out, scratch, manifest, clips_per_shard=256):
+    """Stream future preparation with bounded scratch; never remove existing clips."""
+    import shutil
+    import tempfile
+
+    from cosmos_framework.posttrain.scripts.pack_physicalai_flow_sft import write_shard
+
+    if not 1 <= clips_per_shard <= 256:
+        raise ValueError("packed preparation requires1..256 clips per shard")
+    scratch = Path(scratch)
+    scratch.mkdir(parents=True, exist_ok=True)
+    for start in range(0, len(clips), clips_per_shard):
+        selected = clips[start : start + clips_per_shard]
+        identities = [
+            clip_identity(avdi, clip, source_revision=manifest["revision"], source_files=manifest["files"])
+            for clip in selected
+        ]
+        selection_hash = hashlib.sha256(json.dumps(identities, sort_keys=True).encode()).hexdigest()
+        destination = Path(out) / f"shard-{start // clips_per_shard:06d}-{selection_hash[:16]}"
+
+        def produce():
+            for clip, expected in zip(selected, identities, strict=True):
+                temporary = Path(tempfile.mkdtemp(prefix="cosmos-physicalai-pack-", dir=scratch))
+                _, record = prepare_clip(
+                    avdi, clip, temporary, source_revision=manifest["revision"], source_files=manifest["files"]
+                )
+                if record["identity"] != expected:
+                    raise ValueError("PhysicalAI source changed after resolving packed shard identity")
+                # Cleanup is reached only after the consumer copied and checked
+                # this new scratch clip. GeneratorExit or an exception preserves
+                # the failed scratch; pre-existing datasets are never candidates.
+                yield temporary / "clips" / clip, expected
+                shutil.rmtree(temporary)
+
+        _, marker = write_shard(destination, produce(), identities)
+        print(
+            json.dumps(
+                {
+                    "completed": start + len(selected),
+                    "expected": len(clips),
+                    "storage": "packed_v1",
+                    "shard": str(destination),
+                    "clip_ids": selected,
+                    "commit": marker,
+                }
+            ),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
