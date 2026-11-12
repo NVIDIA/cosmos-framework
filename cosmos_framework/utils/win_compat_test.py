@@ -88,7 +88,6 @@ def test_remove_dir_link_removes_the_link_and_never_a_directory(tmp_path: Path) 
     assert (target / "checkpoint").read_text() == "keep"
 
 
-@posix_only
 def test_remove_dir_link_windows_fallback_is_not_recursive(tmp_path: Path) -> None:
     full, empty = tmp_path / "full", tmp_path / "empty"
     full.mkdir()
