@@ -215,7 +215,7 @@ PY
 
 - Change the prompt or image path in the input-json cell and re-run inference.
 - For **Cosmos3-Edge-Policy-DROID** on TensorRT-Edge-LLM, see
-  [`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cookbooks/cosmos3/generator/action/run_policy_with_trt_edge_llm.ipynb)
+  [`../generator/action/run_policy_with_trt_edge_llm.ipynb`](../../cosmos3-inference-action-policy/references/trt-edge-llm.md)
   (build the runtime with `-DBUILD_EXPERIMENTAL_MODELS=ON`).
 - Prefer an OpenAI-compatible server on workstation GPUs? Use
   [`run_with_vllm.ipynb`](./vllm.md) or
