@@ -731,6 +731,73 @@ def test_stable_provenance_rejects_checkpoint_mutation_during_load(tmp_path: Pat
 
 @pytest.mark.L0
 @pytest.mark.CPU
+@pytest.mark.parametrize("large", [False, True])
+@pytest.mark.parametrize("replace", [False, True])
+@pytest.mark.parametrize("chained", [False, True])
+def test_stable_provenance_binds_symlink_file_target(tmp_path: Path, large: bool, replace: bool, chained: bool) -> None:
+    source = tmp_path / "checkpoints" / "iter_000001"
+    _save_complete_training_checkpoint(source, value=1)
+    target = tmp_path / "weights.pt"
+    (source / "model.pt").replace(target)
+    link = tmp_path / "indirect.pt"
+    if chained:
+        link.symlink_to(target)
+    (source / "model.pt").symlink_to(link if chained else target)
+    size = 2 * 1024 * 1024 if large else 1
+    torch.save({"weight": torch.zeros(size)}, target)
+
+    unchanged, _ = load_with_stable_provenance(str(source), lambda: torch.load(source / "model.pt", weights_only=True))
+    assert torch.equal(unchanged["weight"], torch.zeros(size))
+
+    def mutate_target() -> None:
+        assert torch.load(source / "model.pt", weights_only=True)["weight"][0].item() == 0
+        if replace:
+            successor = tmp_path / "replacement.pt"
+            torch.save({"weight": torch.ones(size)}, successor)
+            successor.replace(target)
+        else:
+            torch.save({"weight": torch.ones(size)}, target)
+        assert torch.load(source / "model.pt", weights_only=True)["weight"][0].item() == 1
+
+    with pytest.raises(RuntimeError, match="checkpoint changed while it was being loaded"):
+        load_with_stable_provenance(str(source), mutate_target)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_stable_provenance_rejects_unwalked_directory_links(tmp_path: Path) -> None:
+    from cosmos_framework.posttrain.checkpoint.provenance import checkpoint_inventory_signature
+
+    source = tmp_path / "checkpoint"
+    source.mkdir()
+    target = tmp_path / "external_model"
+    target.mkdir()
+    (target / "weights").write_bytes(b"not part of os.walk without followlinks")
+    (source / "model").symlink_to(target, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="materialize its files"):
+        checkpoint_inventory_signature(str(source))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("kind", ["dangling", "cycle", "fifo"])
+def test_stable_provenance_rejects_invalid_file_links(tmp_path: Path, kind: str) -> None:
+    from cosmos_framework.posttrain.checkpoint.provenance import checkpoint_inventory_signature
+
+    source = tmp_path / "checkpoint"
+    source.mkdir()
+    target = tmp_path / "target"
+    if kind == "cycle":
+        target.symlink_to(target)
+    elif kind == "fifo":
+        os.mkfifo(target)
+    (source / "model.pt").symlink_to(target)
+    with pytest.raises(RuntimeError, match="materialize a readable immutable regular file"):
+        checkpoint_inventory_signature(str(source))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_latest_dir_pointer_and_fallback(tmp_path):
     root = tmp_path / "checkpoints"
     assert latest_dir(str(root)) is None  # nothing there yet

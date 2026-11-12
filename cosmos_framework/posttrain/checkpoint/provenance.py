@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import stat as stat_types
 from collections.abc import Callable
 from hashlib import sha256
 from typing import Any
@@ -36,6 +37,15 @@ def checkpoint_inventory_signature(
     for directory, dirnames, filenames in os.walk(checkpoint_dir):
         dirnames.sort()
         filenames.sort()
+        # os.walk does not traverse directory links by default. Accepting one
+        # here would certify a component whose payload was never fingerprinted.
+        for dirname in dirnames:
+            path = os.path.join(directory, dirname)
+            if os.path.islink(path):
+                raise RuntimeError(
+                    f"stable checkpoint provenance does not support a symlinked directory: {path!r}; "
+                    "materialize its files in an immutable checkpoint directory before resuming"
+                )
         relative_directory = os.path.relpath(directory, checkpoint_dir)
         digest.update(f"dir\0{relative_directory}\0".encode("utf-8", errors="surrogateescape"))
         for filename in filenames:
@@ -67,6 +77,46 @@ def checkpoint_inventory_signature(
             digest.update(record.encode("utf-8", errors="surrogateescape"))
             if kind == "symlink":
                 digest.update(os.readlink(path).encode("utf-8", errors="surrogateescape"))
+                # A model.pt link can remain unchanged while its target is
+                # replaced or written in place. Bind what the loader reads as
+                # well as the link; do not alter ordinary-file v1 signatures.
+                target = os.path.realpath(path)
+                try:
+                    # No-follow and nonblocking avoid following a link swapped
+                    # after realpath or blocking on an inadmissible FIFO target.
+                    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except OSError as error:
+                    raise RuntimeError(
+                        f"cannot bind checkpoint symlink target: {path!r} -> {target!r}; "
+                        "materialize a readable immutable regular file before resuming"
+                    ) from error
+                with os.fdopen(fd, "rb") as handle:
+                    target_stat = os.fstat(handle.fileno())
+                    if not stat_types.S_ISREG(target_stat.st_mode):
+                        raise RuntimeError(
+                            f"checkpoint symlink target must be a regular file: {path!r} -> {target!r}; "
+                            "materialize a readable immutable regular file before resuming"
+                        )
+                    digest.update(
+                        f"target\0{target}\0{target_stat.st_size}\0".encode("utf-8", errors="surrogateescape")
+                    )
+                    if target_stat.st_size <= 4 * 1024 * 1024:
+                        while chunk := handle.read(1024 * 1024):
+                            digest.update(chunk)
+                    else:
+                        record = (
+                            f"{target_stat.st_dev}\0{target_stat.st_ino}\0"
+                            f"{target_stat.st_mtime_ns}\0{target_stat.st_ctime_ns}\0"
+                        )
+                        digest.update(record.encode("utf-8", errors="surrogateescape"))
+
+                    def identity(info: os.stat_result) -> tuple[int, ...]:
+                        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+                    if identity(os.fstat(handle.fileno())) != identity(target_stat) or identity(
+                        os.stat(target, follow_symlinks=False)
+                    ) != identity(target_stat):
+                        raise RuntimeError(f"checkpoint symlink target changed while fingerprinting: {path!r}")
             elif stat.st_size <= 4 * 1024 * 1024:
                 with open(path, "rb") as handle:
                     while chunk := handle.read(1024 * 1024):
