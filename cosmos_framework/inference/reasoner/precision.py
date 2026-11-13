@@ -21,6 +21,7 @@ from cosmos_framework.utils.generator.bf16_cache_contract import (
     QWEN3_5_PROFILE,
     QWEN3_VL_PROFILES,
 )
+from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
@@ -28,7 +29,7 @@ PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
 def validate_deployment_environment(profile: str | None, device: str, *, device_map: str = "auto") -> None:
     """Fail before allocating weights on an unsupported v2/fast deployment host."""
-    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, *SMOLLM_PROFILES):
+    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, *SMOLLM_PROFILES, GEMMA_PROFILE):
         return  # Preserve the legacy loaders' original validation boundary.
     if device_map not in ("auto", device):
         raise ValueError(f"{profile} requires one rank-local GPU; alternate device maps/offload are unsupported")
@@ -67,8 +68,32 @@ def deployment_profile(path: str) -> str | None:
     bound = precision.get("execution_profile")
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, *PROFILE_FAMILIES, *SMOLLM_PROFILES) or bound != declared:
+    if declared not in (PROFILE, *PROFILE_FAMILIES, *SMOLLM_PROFILES, GEMMA_PROFILE) or bound != declared:
         raise ValueError("missing, conflicting or unknown deployment profile in config/.materialized; re-export")
+    if declared == GEMMA_PROFILE:
+        from cosmos_framework.utils.generator.gemma_sdpa_layout import (
+            EXPORT_EQUIVALENCE,
+            validate_configuration,
+            validate_identity,
+        )
+
+        validate_identity(metadata.get("adapter_identity", {}))
+        validate_configuration(config)
+        if (
+            config.get("model_type") != "gemma"
+            or config.get("dtype", config.get("torch_dtype")) != "float32"
+            or identity.get("output_dtype") != "float32"
+            or precision
+            != {
+                "dtype": "float32",
+                "execution_profile": declared,
+                "weight_conversion": "unchanged_float32_merge",
+                "equivalence": EXPORT_EQUIVALENCE,
+            }
+            or metadata.get("format") != "cosmos-merged-adapter-v1"
+        ):
+            raise ValueError("Gemma contiguous-KV deployment requires its committed FP32 adapter merge/profile")
+        return declared
     if declared in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import validate_identity
 
@@ -163,6 +188,10 @@ def install_deployment_profile(model, profile: str, *, adapter_identity=None) ->
     import torch
     from torch import nn
 
+    if profile == GEMMA_PROFILE:
+        from cosmos_framework.utils.generator.gemma_sdpa_layout import install
+
+        return install(model, identity=adapter_identity or {})
     if profile in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import install
 

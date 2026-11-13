@@ -16,6 +16,7 @@ from importlib.metadata import version
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE as CANONICAL  # noqa: F401
 from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_VL_PROFILES
 from cosmos_framework.utils.generator.factorized_inference import PROFILE as FACTORIZED
+from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
 
@@ -29,13 +30,13 @@ class PortableAdapterConfig:
     def __post_init__(self):
         if not isinstance(self.directory, str) or not self.directory:
             raise ValueError("portable_adapter.directory must name a complete local portable adapter")
-        if self.execution_profile not in (*QWEN3_VL_PROFILES, FACTORIZED, *SMOLLM_PROFILES):
+        if self.execution_profile not in (*QWEN3_VL_PROFILES, FACTORIZED, *SMOLLM_PROFILES, GEMMA_PROFILE):
             raise ValueError(
-                f"portable execution_profile must be one of {(*QWEN3_VL_PROFILES, FACTORIZED, *SMOLLM_PROFILES)!r}"
+                f"portable execution_profile must be one of {(*QWEN3_VL_PROFILES, FACTORIZED, *SMOLLM_PROFILES, GEMMA_PROFILE)!r}"
             )
         if type(self.cache_effective_weights) is not bool:
             raise ValueError("cache_effective_weights must be a boolean")
-        if self.execution_profile in (FACTORIZED, *SMOLLM_PROFILES) and self.cache_effective_weights:
+        if self.execution_profile in (FACTORIZED, *SMOLLM_PROFILES, GEMMA_PROFILE) and self.cache_effective_weights:
             raise ValueError(
                 "stable factorized inference preserves separate branches; effective-weight cache is unsupported"
             )
@@ -59,7 +60,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         snapshot_identity,
     )
     from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, install_adapters, resolve_targets
-    from cosmos_framework.utils.generator import factorized_inference, smollm_consistent
+    from cosmos_framework.utils.generator import factorized_inference, gemma_sdpa_layout, smollm_consistent
     from cosmos_framework.utils.generator.bf16_cache_contract import validate_adapter_identity
 
     if not isinstance(config, PortableAdapterConfig):
@@ -79,6 +80,8 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         validate_adapter_identity(identity, profile=profile)
     elif profile in SMOLLM_PROFILES:
         smollm_consistent.validate_identity(identity, profile=profile)
+    elif profile == GEMMA_PROFILE:
+        gemma_sdpa_layout.validate_identity(identity)
     else:
         factorized_inference.validate_identity(identity)
     for name, expected in identity["dependencies"].items():
@@ -100,10 +103,17 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         if actual != identity[name]:
             raise ValueError(f"portable {name} identity mismatch; stage the exact recorded immutable snapshot")
     hf_config = AutoConfig.from_pretrained(base_path, local_files_only=True, trust_remote_code=False)
-    family = "llama" if profile in SMOLLM_PROFILES else "qwen3_vl"
+    family = "gemma" if profile == GEMMA_PROFILE else ("llama" if profile in SMOLLM_PROFILES else "qwen3_vl")
     if hf_config.model_type != family or getattr(hf_config, "quantization_config", None):
         raise ValueError(f"{profile} requires an unquantized stock {family} base")
-    auto_class = AutoModelForCausalLM if profile in SMOLLM_PROFILES else AutoModelForImageTextToText
+    source_identity = None
+    if profile == GEMMA_PROFILE:
+        from cosmos_framework.posttrain.model.hf_adapter_buffers import buffer_contract, validate_buffer_contract
+
+        gemma_sdpa_layout.validate_configuration(hf_config)
+        validate_buffer_contract(identity, hf_config)
+        source_identity = {**sources, "model_contract": buffer_contract(hf_config)}
+    auto_class = AutoModelForCausalLM if profile in (*SMOLLM_PROFILES, GEMMA_PROFILE) else AutoModelForImageTextToText
     net, info = auto_class.from_pretrained(
         base_path,
         config=hf_config,
@@ -120,11 +130,24 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     adapters = adapter_configuration(identity)
     manifest = resolve_targets(net, adapters, family=family)
     expected = make_adapter_identity(
-        base_path, processor_path, manifest, identity["media"], base_dtype="bfloat16", architecture=family
+        base_path,
+        processor_path,
+        manifest,
+        identity["media"],
+        base_dtype="bfloat16",
+        architecture=family,
+        source_identity=source_identity,
     )
     if expected != identity:
         differences = sorted(k for k in set(expected) | set(identity) if expected.get(k) != identity.get(k))
         raise ValueError(f"portable compatibility mismatch before injection: {differences}")
+    if profile == GEMMA_PROFILE:
+        from cosmos_framework.posttrain.model.hf_adapter_buffers import prepare_adapter_buffers
+
+        # Reuse the training/export contract before injection; promoting a
+        # BF16-rounded nonpersistent scale cannot recover the recorded value.
+        if prepare_adapter_buffers(net) != identity["model_contract"]:
+            raise ValueError("portable Gemma embedding-scale contract changed during construction")
     install_adapters(net, adapters, initialize=False, family=family)
     net._posttrain_adapter_identity = identity
     load_adapter_state(net, identity, state)
@@ -132,6 +155,9 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     if profile in SMOLLM_PROFILES:
         net.float()
         smollm_consistent.install(net, identity=identity, adapter_type=PosttrainAdapterLinear, profile=profile)
+    elif profile == GEMMA_PROFILE:
+        net.float()
+        gemma_sdpa_layout.install(net, identity=identity, adapter_type=PosttrainAdapterLinear)
     elif profile == FACTORIZED:
         net.float()  # Explicit deployment precision; installer never replaces owned tensors.
         factorized_inference.install(net, adapter_type=PosttrainAdapterLinear)
@@ -139,7 +165,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         from cosmos_framework.posttrain.model.adapter_bf16_execution import install_adapter_inference_profile
 
         install_adapter_inference_profile(net, profile, cache_effective_weights=config.cache_effective_weights)
-    processor_class = AutoTokenizer if profile in SMOLLM_PROFILES else AutoProcessor
+    processor_class = AutoTokenizer if profile in (*SMOLLM_PROFILES, GEMMA_PROFILE) else AutoProcessor
     processor = processor_class.from_pretrained(processor_path, local_files_only=True, trust_remote_code=False)
     if getattr(processor, "tokenizer", None) is not None:
         processor.tokenizer.padding_side = "left"

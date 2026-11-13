@@ -27,9 +27,10 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
     merged_export_metadata as merged_export_metadata,
 )
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
+from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES, *SMOLLM_PROFILES)
+DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES, *SMOLLM_PROFILES, GEMMA_PROFILE)
 
 
 def validate_merged_export_metadata(
@@ -119,7 +120,7 @@ def export_merged_adapter(
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     if execution_profile is not None:
-        expected_dtype = "float32" if execution_profile in SMOLLM_PROFILES else "bfloat16"
+        expected_dtype = "float32" if execution_profile in (*SMOLLM_PROFILES, GEMMA_PROFILE) else "bfloat16"
         if execution_profile not in DEPLOYMENT_PROFILES or output_dtype != expected_dtype:
             raise ValueError(f"execution_profile requires a supported profile and output_dtype={expected_dtype}")
     record, state = read_adapter_snapshot(adapter)
@@ -130,6 +131,10 @@ def export_merged_adapter(
         # Validate before dispatching to a physical-format exporter: a profile
         # request must never be silently ignored by another family's exporter.
         validate_identity(identity, profile=execution_profile)
+    if execution_profile == GEMMA_PROFILE:
+        from cosmos_framework.utils.generator.gemma_sdpa_layout import validate_identity
+
+        validate_identity(identity)
     if output_dtype != "float32" and identity["architecture"] in ("Gr00tN1d7", "alpamayo_r1", "pi05"):
         raise ValueError("native physical merged formats currently require float32; BF16 deployment is HF-only")
     rounded = identity["resolved"].get("model_execution") == "merged_weight_bf16_v1"

@@ -184,7 +184,10 @@ class CosmosFrameworkRuntime:
             install_deployment_profile,
             validate_deployment_environment,
         )
+        from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
         from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
+
+        fp32_text_profiles = (*SMOLLM_PROFILES, GEMMA_PROFILE)
 
         profile = deployment_profile(self.model_path)
         if profile:
@@ -202,12 +205,12 @@ class CosmosFrameworkRuntime:
                 raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
             self.dtype, self.attn_implementation = "float32", "sdpa"
         if profile:
-            accepted = ("float32", "fp32", "auto") if profile in SMOLLM_PROFILES else ("bfloat16", "bf16", "auto")
+            accepted = ("float32", "fp32", "auto") if profile in fp32_text_profiles else ("bfloat16", "bf16", "auto")
             if self.dtype not in accepted or self.attn_implementation not in (None, "sdpa"):
-                if profile in SMOLLM_PROFILES:
+                if profile in fp32_text_profiles:
                     raise ValueError(f"{profile} requires FP32 consistent deployment with SDPA")
                 raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
-            self.dtype = "float32" if profile in SMOLLM_PROFILES else "bfloat16"
+            self.dtype = "float32" if profile in fp32_text_profiles else "bfloat16"
             self.attn_implementation = "sdpa"
         logger.info(
             "Loading Cosmos Framework model from %s on %s (model_type=%s)",
@@ -235,14 +238,14 @@ class CosmosFrameworkRuntime:
             )
 
             self.processor = build_cosmos3_edge_processor(self.model_path)
-        elif profile in SMOLLM_PROFILES:
+        elif profile in fp32_text_profiles:
             self.processor = AutoTokenizer.from_pretrained(
                 self.model_path, local_files_only=True, trust_remote_code=False
             )
         else:
             self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
 
-        auto_class = AutoModelForCausalLM if profile in SMOLLM_PROFILES else AutoModelForImageTextToText
+        auto_class = AutoModelForCausalLM if profile in fp32_text_profiles else AutoModelForImageTextToText
         device_map: str | dict[str, str]
         if self.device == "cpu":
             device_map = "cpu"
@@ -298,7 +301,7 @@ class CosmosFrameworkRuntime:
             validate_loaded_model(self.model)
         if profile:
             profile_kwargs = {}
-            if profile in SMOLLM_PROFILES:
+            if profile in fp32_text_profiles:
                 marker = json.loads((Path(self.model_path) / ".materialized").read_text())
                 profile_kwargs["adapter_identity"] = marker["identity"]["export_metadata"]["adapter_identity"]
                 self.adapter_deployment = {
@@ -1052,17 +1055,17 @@ class CosmosFrameworkRuntime:
                 content = message.get("content", "")
                 if isinstance(content, list):
                     if any(not isinstance(item, dict) or item.get("type") != "text" for item in content):
-                        raise ValueError("SmolLM is text-only; image/video inputs cannot be discarded")
+                        raise ValueError("This model is text-only; image/video inputs cannot be discarded")
                     content = "\n".join(item["text"] for item in content)
                 if not isinstance(content, str):
-                    raise ValueError("SmolLM message content must be text")
+                    raise ValueError("Text-model message content must be text")
                 native.append({**message, "content": content})
             texts.append(self.processor.apply_chat_template(native, tokenize=False, add_generation_prompt=True))
         return self.processor(text=texts, padding=True, return_tensors="pt")
 
     def _prepare_transformers_batch(self, conversations: list[list[dict[str, Any]]]) -> Any:
         """Materialize a true padded multimodal batch through Qwen's GPU reader."""
-        if self.model_type == "llama":
+        if self.model_type in ("llama", "gemma"):
             return self._prepare_smollm_text(conversations)
         texts = [
             self.processor.apply_chat_template(
@@ -1098,7 +1101,7 @@ class CosmosFrameworkRuntime:
 
     def _prepare_transformers_inputs(self, conversation: list[dict[str, Any]]) -> Any:
         """Materialize visual inputs through the registered Qwen GPU reader."""
-        if self.model_type == "llama":
+        if self.model_type in ("llama", "gemma"):
             return self._prepare_smollm_text([conversation])
         text = self.processor.apply_chat_template(
             conversation,
