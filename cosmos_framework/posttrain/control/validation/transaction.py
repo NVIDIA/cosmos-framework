@@ -9,13 +9,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from cosmos_framework.posttrain.control.checkpointing import CheckpointCoordinator
+from cosmos_framework.posttrain.control.validation.continuation import ValidationPause
 from cosmos_framework.posttrain.control.validation.lifecycle import ValidationReport, ValidationTrigger
 from cosmos_framework.posttrain.schema.checkpoint import CheckpointComponentPlan
 from cosmos_framework.posttrain.schema.metrics import MetricScalar
 from cosmos_framework.posttrain.utils.entry import resolve_all, resolve_identical
 from cosmos_framework.posttrain.utils.report import Reporter, emit_metric_frame
 
-ValidationEvaluator = Callable[[int, frozenset[ValidationTrigger]], ValidationReport]
+ValidationEvaluator = Callable[[int, frozenset[ValidationTrigger]], ValidationReport | ValidationPause]
 
 
 def evaluate_policy_validation(
@@ -41,6 +42,7 @@ class ValidationTransaction:
     checkpoints: CheckpointCoordinator
     reporters: list[Reporter]
     failed_reporters: set[int]
+    continuation_enabled: bool = False
 
     def pending_step(self) -> int | None:
         """Return the rank-consistent pending model step."""
@@ -104,10 +106,16 @@ class ValidationTransaction:
         model_step: int,
         reasons: frozenset[ValidationTrigger],
         evaluate: ValidationEvaluator,
-    ) -> ValidationReport:
+        *,
+        allow_pause: bool = False,
+    ) -> ValidationReport | ValidationPause:
         if not reasons:
             raise ValueError("validation transaction requires at least one trigger reason")
         report = evaluate(model_step, reasons)
+        if isinstance(report, ValidationPause) and allow_pause:
+            if report.model_step != model_step:
+                raise ValueError("validation pause belongs to a different model step")
+            return report
         if not isinstance(report, ValidationReport):
             raise TypeError(f"validation evaluator returned {type(report).__name__}, expected ValidationReport")
         return report
@@ -132,8 +140,11 @@ class ValidationTransaction:
         reasons: frozenset[ValidationTrigger],
         evaluate: ValidationEvaluator,
         train_metrics: dict[str, int | float | bool | str] | None,
-    ) -> ValidationReport:
-        report = self._evaluate(model_step, reasons, evaluate)
+    ) -> ValidationReport | ValidationPause:
+        report = self._evaluate(model_step, reasons, evaluate, allow_pause=self.continuation_enabled)
+        if isinstance(report, ValidationPause):
+            resolve_all(self.policy.save_validation_continuation(self.checkpoints.path(model_step)))
+            return report
         resolve_all(self.policy.complete_validation(model_step))
         self.checkpoints.persist_validation_completion(model_step)
         self._report(model_step, report, train_metrics)
@@ -145,7 +156,7 @@ class ValidationTransaction:
         reasons: frozenset[ValidationTrigger],
         evaluate: ValidationEvaluator,
         train_metrics: dict[str, int | float | bool | str] | None = None,
-    ) -> ValidationReport:
+    ) -> ValidationReport | ValidationPause:
         """Begin and execute one retry-safe validation transaction."""
         if not reasons:
             raise ValueError("validation transaction requires at least one trigger reason")
@@ -160,7 +171,7 @@ class ValidationTransaction:
         reasons: frozenset[ValidationTrigger],
         evaluate: ValidationEvaluator,
         train_metrics: dict[str, int | float | bool | str] | None = None,
-    ) -> ValidationReport:
+    ) -> ValidationReport | ValidationPause:
         """Finish an already-journaled validation without rewriting its checkpoint first."""
         return self._complete_durable(model_step, reasons, evaluate, train_metrics)
 

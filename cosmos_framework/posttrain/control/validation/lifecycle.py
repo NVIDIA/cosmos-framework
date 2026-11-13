@@ -125,8 +125,9 @@ class ValidationSchedule:
 class ValidationProgress:
     """Checkpointable identity of an interrupted validation phase.
 
-    The finite validation cursor itself is intentionally not checkpointed. Resuming a pending phase
-    restarts that pass deterministically. Completion is made durable before the control plane makes
+    By default, a pending phase restarts its pass deterministically. Opt-in SFT
+    validation continuation stores its finite cursor separately in the trainer's
+    version3 journal. Completion is made durable before the control plane makes
     one best-effort external reporting attempt.
     """
 

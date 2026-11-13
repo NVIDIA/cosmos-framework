@@ -356,6 +356,7 @@ class LLMTrainer(BaseTrainer):
             objective_evaluator
         )
         self.validation_publication = PublicationJournal(self.validation_state)
+        self.validation_continuation: dict[str, Any] | None = None
         # The colocated hand-off is deliberately split in two. Update-only state moves first while
         # policy shards remain on GPU as the direct IPC weight-sync source; the policy moves only
         # after publication. This changes ordering, not transfer volume.
@@ -1216,6 +1217,11 @@ class LLMTrainer(BaseTrainer):
 
     def configure_validation(self, identity: dict[str, Any]) -> None:
         """Bind the live validation identity and restore a compatible pending transaction."""
+        restored = self.validation_state.restored_state
+        if restored is not None and ("continuation" in identity or restored.get("version") == 3):
+            from cosmos_framework.posttrain.control.validation.continuation import validate_checkpoint_progress
+
+            validate_checkpoint_progress({"validation": restored}, identity, self._iter)
         restored_extra = self.validation_state.configure(
             identity,
             resumed_from_checkpoint=self._resumed_from_checkpoint,
@@ -1223,6 +1229,7 @@ class LLMTrainer(BaseTrainer):
             extra_fields_by_version={
                 1: frozenset(),
                 2: frozenset({"publication"}),
+                3: frozenset({"publication", "continuation"}),
             },
         )
         if restored_extra is not None:
@@ -1230,6 +1237,65 @@ class LLMTrainer(BaseTrainer):
                 restored_extra.get("publication"),
                 iteration=self._iter,
             )
+            self.validation_continuation = restored_extra.get("continuation")
+        self._validate_validation_continuation()
+
+    def _validate_validation_continuation(self) -> None:
+        from cosmos_framework.posttrain.control.validation.continuation import validate_progress
+
+        validate_progress(
+            self.validation_continuation,
+            self.validation_state.identity,
+            iteration=self._iter,
+            pending_step=self.validation_state.progress.pending_step,
+        )
+
+    def get_validation_continuation(self, model_step: int) -> dict[str, Any] | None:
+        """Return the rank-complete finite-pass journal without altering live state."""
+        import copy
+
+        self._require_checkpoint_boundary()
+        self._require_validation_enabled()
+        if "continuation" not in self.validation_state.identity:
+            raise RuntimeError("validation continuation is not enabled")
+        if model_step != self._iter or self.validation_state.progress.pending_step != model_step:
+            raise RuntimeError("validation continuation requires the pending optimizer boundary")
+        self._validate_validation_continuation()
+        return copy.deepcopy(self.validation_continuation)
+
+    def validation_continuation_identity(self) -> dict[str, Any]:
+        import copy
+
+        self._require_validation_enabled()
+        return copy.deepcopy(self.validation_state.identity)
+
+    def record_validation_continuation(self, state: dict[str, Any]) -> None:
+        """Stage a completed batch prefix; persistence follows RNG/source restoration."""
+        import copy
+
+        from cosmos_framework.posttrain.control.validation.continuation import validate_progress
+
+        self._require_checkpoint_boundary()
+        pending = self.validation_state.progress.pending_step
+        if pending != self._iter:
+            raise RuntimeError("cannot record validation continuation outside its pending boundary")
+        if not isinstance(state, dict):
+            raise ValueError("validation continuation requires a completed batch-prefix record")
+        validate_progress(state, self.validation_state.identity, iteration=self._iter, pending_step=pending)
+        previous = self.validation_continuation
+        if previous is not None:
+            if state["next_batch"] <= previous["next_batch"]:
+                raise RuntimeError("validation continuation must advance its committed batch prefix")
+            if state["model_step"] != previous["model_step"] or state["layout"] != previous["layout"]:
+                raise RuntimeError("validation continuation cannot replace its committed population")
+            for rank, record in previous["ranks"].items():
+                following = state["ranks"][rank]
+                if (
+                    any(following[key][: previous["next_batch"]] != record[key] for key in ("batches", "batch_metrics"))
+                    or following["duration"] < record["duration"]
+                ):
+                    raise RuntimeError("validation continuation cannot rewrite its committed batch prefix")
+        self.validation_continuation = copy.deepcopy(state)
 
     def _require_validation_enabled(self) -> None:
         self.validation_state.require_enabled("model validation is not enabled/configured on this trainer")
@@ -1265,11 +1331,19 @@ class LLMTrainer(BaseTrainer):
         if model_step != self._iter:
             raise ValueError(f"validation model_step={model_step} does not match trainer iteration {self._iter}")
         self.validation_publication.assert_can_begin()
+        if self.validation_continuation is not None and self.validation_continuation["model_step"] != model_step:
+            self._validate_validation_continuation()
+            self.validation_continuation = None
         self.validation_state.begin(model_step, trigger_reasons, metrics=metrics)
 
     def complete_validation(self, model_step: int) -> None:
         """Move a successful pass into the recoverable checkpoint-publication phase."""
         self._require_validation_enabled()
+        if "continuation" in self.validation_state.identity:
+            self._validate_validation_continuation()
+            state = self.validation_continuation
+            if state is None or state["next_batch"] != state["layout"]["batch_count"]:
+                raise RuntimeError("cannot complete an unfinished finite validation pass")
         self.validation_publication.complete(model_step)
 
     def complete_ephemeral_validation(self, model_step: int) -> None:
@@ -1317,9 +1391,14 @@ class LLMTrainer(BaseTrainer):
                 raise RuntimeError("configure validation before saving a restored LLMTrainer checkpoint")
             if self.validation_state.configured:
                 self.validation_publication.validate_checkpoint_state()
+                self._validate_validation_continuation()
+                continuation = "continuation" in self.validation_state.identity
                 state["validation"] = self.validation_state.state_dict(
-                    version=2,
-                    extra={"publication": self.validation_publication.checkpoint_record()},
+                    version=3 if continuation else 2,
+                    extra={
+                        "publication": self.validation_publication.checkpoint_record(),
+                        **({"continuation": self.validation_continuation} if continuation else {}),
+                    },
                 )
             if self.lr_scheduler is not None:
                 # Persist scheduler progress so resume does not replay warmup.
@@ -1510,6 +1589,20 @@ class LLMTrainer(BaseTrainer):
                 self.checkpoint_manager.iteration_location(path),
             ),
         )
+
+    def save_validation_continuation(self, path: str) -> None:
+        """Atomically persist a partial pass without publishing validation completion."""
+        self._require_checkpoint_boundary()
+        self._validate_validation_continuation()
+        state = self.validation_continuation
+        if (
+            state is None
+            or state["model_step"] != self._iter
+            or state["next_batch"] >= state["layout"]["batch_count"]
+            or self.validation_state.progress.pending_step != self._iter
+        ):
+            raise RuntimeError("validation continuation persistence requires an incomplete pending pass")
+        self.checkpoint_manager.replace_component(path, "trainer", self._trainer_state())
 
     def load(self, path: str) -> int:
         """Restore model, optimizer, and exact trainer state."""

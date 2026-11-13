@@ -82,6 +82,22 @@ class SFTDatasetConfig:
 @dataclass
 class SFTValidationConfig(ValidationScheduleConfig):
     data: SFTDatasetConfig = field(default_factory=lambda: SFTDatasetConfig(shuffle=False))
+    # Operational chunk size, not a reduced validation population. Each invocation
+    # continues the same finite pass from a durable full-checkpoint boundary.
+    continuation_batches: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.continuation_batches is None:
+            return
+        if type(self.continuation_batches) is not int or self.continuation_batches < 1:
+            raise ValueError("validation.continuation_batches must be a positive integer or None")
+        if not self.enabled or not self.save_checkpoint:
+            raise ValueError("validation continuation requires enabled=True and save_checkpoint=True")
+        from cosmos_framework.posttrain.schema.checkpoint import CheckpointComponentPlan
+
+        if not CheckpointComponentPlan.from_value(self.checkpoint_components).is_full:
+            raise ValueError("validation continuation requires full checkpoint components")
 
 
 SFT_LR_SCHEDULE_KINDS = ("constant", "cosine")

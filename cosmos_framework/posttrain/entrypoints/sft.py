@@ -7,11 +7,13 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from functools import partial
 from typing import Any
 
 from cosmos_framework.posttrain.config.sft import SFTConfig, SFTDatasetConfig
+from cosmos_framework.posttrain.control.validation.continuation import ValidationPause
 from cosmos_framework.posttrain.control.validation.lifecycle import ValidationReport, ValidationTrigger
 from cosmos_framework.posttrain.utils.entry import (
     cli_flags,
@@ -353,31 +355,6 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         objective_evaluator=evaluate_sft_batch,
         **({"gradient_window": gradient_window} if gradient_window is not None else {}),
     )
-    # Exact resume replaces this rank-local stream with the checkpoint's RNG state.
-    misc.set_random_seed(seed=rl.seed, by_rank=True)
-    if checkpoint.resume_checkpoint:
-
-        def preflight(trainer_state, data_state):
-            from cosmos_framework.posttrain.checkpoint.rng import validate_exact_rng_state
-
-            def validate():
-                if not isinstance(trainer_state, dict):
-                    raise ValueError("finite SFT resume requires complete trainer control state")
-                validate_exact_rng_state(trainer_state.get("rng"), device=next(model.net.parameters()).device)
-                data.restore_finite_checkpoint_cursor(data_state, trainer_state)
-
-            run_rank_converged(validate, "finite SFT checkpoint control preflight")
-
-        restored = checkpoint.load_trainer_and_component(
-            trainer, "data", **({"before_load": preflight} if rl.training_epochs is not None else {})
-        )
-        if restored is None or restored[1] is None:
-            raise ValueError("exact SFT resume requires a data cursor component")
-        if rl.training_epochs is None:
-            run_rank_converged(lambda: data.load_state_dict(restored[1]), "SFT cursor restore")
-        provenance = trainer.loaded_checkpoint_provenance()
-        if provenance is not None:
-            data.set_loaded_checkpoint_provenance(provenance)
     validation_identity: dict[str, Any] = {"enabled": False}
     if validation is not None:
         validation_identity = {
@@ -393,6 +370,53 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
                 "train_total_steps": rl.max_steps,
             },
         }
+        if rl.validation.continuation_batches is not None:
+            from cosmos_framework.posttrain.control.validation.continuation import PROTOCOL, topology_identity
+
+            validation_identity["continuation"] = {"protocol": PROTOCOL, "topology": topology_identity(model)}
+    # Exact resume replaces this rank-local stream with the checkpoint's RNG state.
+    misc.set_random_seed(seed=rl.seed, by_rank=True)
+    if checkpoint.resume_checkpoint:
+
+        def preflight(trainer_state, data_state):
+            from cosmos_framework.posttrain.checkpoint.rng import validate_exact_rng_state
+
+            def validate():
+                if not isinstance(trainer_state, dict):
+                    raise ValueError("finite SFT resume requires complete trainer control state")
+                saved_validation = trainer_state.get("validation") or {}
+                if rl.validation.continuation_batches is not None or (
+                    isinstance(saved_validation, dict)
+                    and ("continuation" in saved_validation or saved_validation.get("version") == 3)
+                ):
+                    from cosmos_framework.posttrain.control.validation.continuation import validate_checkpoint_progress
+
+                    validate_checkpoint_progress(
+                        trainer_state, validation_identity, trainer._parse_update_state(trainer_state).optimizer_step
+                    )
+                if rl.training_epochs is not None:
+                    validate_exact_rng_state(trainer_state.get("rng"), device=next(model.net.parameters()).device)
+                    data.restore_finite_checkpoint_cursor(data_state, trainer_state)
+
+            run_rank_converged(validate, "finite SFT checkpoint control preflight")
+            if rl.validation.continuation_batches is not None:
+                from cosmos_framework.posttrain.control.validation.continuation import preflight_source_progress
+
+                preflight_source_progress(
+                    trainer_state["validation"]["continuation"],
+                    validation,
+                    batch_size=rl.validation.batch_size,
+                    max_samples=rl.validation.max_samples,
+                )
+
+        restored = checkpoint.load_trainer_and_component(trainer, "data", before_load=preflight)
+        if restored is None or restored[1] is None:
+            raise ValueError("exact SFT resume requires a data cursor component")
+        if rl.training_epochs is None:
+            run_rank_converged(lambda: data.load_state_dict(restored[1]), "SFT cursor restore")
+        provenance = trainer.loaded_checkpoint_provenance()
+        if provenance is not None:
+            data.set_loaded_checkpoint_provenance(provenance)
     trainer.configure_validation(validation_identity)
     return trainer
 
@@ -506,8 +530,13 @@ def train_step(data: Any, policy: Any, rl: SFTConfig) -> dict[str, Any]:
 
 
 def evaluate(
-    units: dict[str, Any], rl: SFTConfig, model_step: int, reasons: frozenset[ValidationTrigger]
-) -> ValidationReport:
+    units: dict[str, Any],
+    rl: SFTConfig,
+    model_step: int,
+    reasons: frozenset[ValidationTrigger],
+    *,
+    should_stop: Callable[[], str | None] | None = None,
+) -> ValidationReport | ValidationPause:
     """Restore held-out source and RNG state, including when decoding or evaluation fails."""
     from cosmos_framework.posttrain.roles.rollout.validation import distributed_validation_rng, seed_validation_rng
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
@@ -517,14 +546,19 @@ def evaluate(
     with distributed_validation_rng("SFT validation"):
         seed_validation_rng(rl.validation.seed)
         try:
-            return _evaluate(units, rl, model_step, reasons)
+            return _evaluate(units, rl, model_step, reasons, should_stop=should_stop)
         finally:
             run_rank_converged(lambda: resolve(source.load_state_dict(state)), "SFT validation source restoration")
 
 
 def _evaluate(
-    units: dict[str, Any], rl: SFTConfig, model_step: int, reasons: frozenset[ValidationTrigger]
-) -> ValidationReport:
+    units: dict[str, Any],
+    rl: SFTConfig,
+    model_step: int,
+    reasons: frozenset[ValidationTrigger],
+    *,
+    should_stop: Callable[[], str | None] | None = None,
+) -> ValidationReport | ValidationPause:
     """Finite held-out pass; counts and token numerators are reduced once across ranks."""
     from cosmos_framework.posttrain.utils.dist import rank_identical, run_rank_converged
     from cosmos_framework.posttrain.utils.rank_state import gather_rank_states
@@ -535,8 +569,64 @@ def _evaluate(
     count = resolve(source.validation_batch_count(rl.validation.batch_size, rl.validation.max_samples))
     rank_identical(count, "SFT validation batch count")
     local = {"numerator": 0.0, "tokens": 0.0, "sequences": 0.0}
-    for index in range(count):
+    limit = rl.validation.continuation_batches
+    begin, duration = 0, 0.0
+    batches, batch_metrics = [], []
+    layout = None
+    if limit is not None:
+        from cosmos_framework.posttrain.checkpoint.rng import restore_rng_state
+        from cosmos_framework.posttrain.utils.rank_state import select_rank_state
+
+        layout = resolve(source.validation_layout(rl.validation.batch_size, rl.validation.max_samples))
+        rank_identical(layout, "SFT validation continuation layout")
+        progress = run_rank_converged(
+            lambda: resolve(policy.get_validation_continuation(model_step)),
+            "SFT validation continuation admission",
+        )
+        if progress is not None:
+
+            def restore() -> None:
+                if progress["layout"] != layout:
+                    raise ValueError("validation continuation finite population differs")
+                if not restore_rng_state(progress["rng"]):
+                    raise ValueError("validation continuation RNG topology differs")
+
+            run_rank_converged(restore, "SFT validation continuation RNG restore")
+            row = select_rank_state(progress["ranks"], on_world_size_mismatch="raise")
+            run_rank_converged(
+                lambda: resolve(source.load_state_dict(row["source_state"])),
+                "SFT validation continuation source restore",
+            )
+            local = {key: row[key] for key in local}
+            begin, duration = progress["next_batch"], row["duration"]
+            batches, batch_metrics = row["batches"], row["batch_metrics"]
+            info0(
+                f"continuing validation from committed batch {begin}/{count}; "
+                "uncommitted work from a failed allocation is excluded and may replay"
+            )
+        else:
+            info0(
+                f"validation starts from committed batch 0/{count}; "
+                "previously uncommitted work, if any, is excluded and may replay"
+            )
+    stop_reason = None
+    following = begin
+    for index in range(begin, count):
         batch = source.get_validation_batch(index, rl.validation.batch_size, rl.validation.max_samples)
+        if limit is not None:
+            from cosmos_framework.posttrain.control.validation.continuation import expected_batch
+            from cosmos_framework.posttrain.utils.dist import rank_or_0
+
+            def validate_batch() -> list[dict[str, Any]]:
+                recorded = [
+                    {"id": item.id, "weight": item.transitions[0].algo_extra.get("validation_weight", 1.0)}
+                    for item in resolve(batch)
+                ]
+                if recorded != expected_batch(layout, rank_or_0(), index):
+                    raise ValueError("validation continuation received unexpected batch IDs/weights")
+                return recorded
+
+            batches.append(run_rank_converged(validate_batch, "SFT validation continuation batch identity"))
         metrics = resolve(policy.evaluate_objective(batch))
 
         def collect() -> None:
@@ -547,10 +637,54 @@ def _evaluate(
             local["numerator"] += loss * tokens
             local["tokens"] += tokens
             local["sequences"] += float(metrics["val/valid_sequence_count"])
+            if limit is not None:
+                batch_metrics.append(
+                    {
+                        "numerator": loss * tokens,
+                        "tokens": tokens,
+                        "sequences": float(metrics["val/valid_sequence_count"]),
+                    }
+                )
 
         run_rank_converged(collect, "SFT held-out metric preparation")
-    local["duration"] = time.monotonic() - started
+        following = index + 1
+        if limit is not None and following < count:
+            from cosmos_framework.posttrain.control.validation.continuation import continuation_stop_reason
+
+            stop_reason = continuation_stop_reason(should_stop)
+            if stop_reason or following - begin >= limit:
+                stop_reason = stop_reason or "validation continuation batch budget"
+                break
+    local["duration"] = duration + time.monotonic() - started
     gathered = gather_rank_states(local, context="SFT held-out totals")
+    if limit is not None and following > begin:
+        from cosmos_framework.posttrain.checkpoint.rng import collect_rng_state
+        from cosmos_framework.posttrain.control.validation.continuation import PROTOCOL, identity_digest
+
+        rank_record = {
+            **local,
+            "batches": batches,
+            "batch_metrics": batch_metrics,
+            "source_state": run_rank_converged(
+                lambda: resolve(source.state_dict()), "SFT validation continuation source capture"
+            ),
+        }
+        ranks = gather_rank_states(rank_record, context="SFT validation continuation rank receipts")
+        identity = resolve(policy.validation_continuation_identity())
+        progress = {
+            "protocol": PROTOCOL,
+            "identity_sha256": identity_digest(identity),
+            "model_step": model_step,
+            "next_batch": following,
+            "layout": layout,
+            "ranks": ranks,
+            "rng": collect_rng_state(),
+        }
+        run_rank_converged(
+            lambda: resolve(policy.record_validation_continuation(progress)), "SFT validation continuation staging"
+        )
+    if limit is not None and following < count:
+        return ValidationPause(model_step, following, count, stop_reason)
     tokens = sum(row["tokens"] for row in gathered.values())
     sequences = sum(row["sequences"] for row in gathered.values())
     if tokens <= 0 or sequences <= 0:
@@ -611,14 +745,21 @@ def loop(units: dict[str, Any], config: Any, run_out_dir: str) -> dict[str, Any]
     failures: set[int] = set()
     start_best_effort(reporters, failed_reporters=failures)
     watch = TerminationWatch()
-    transaction = ValidationTransaction(policy, checkpoints, reporters, failures)
+    transaction = ValidationTransaction(
+        policy,
+        checkpoints,
+        reporters,
+        failures,
+        continuation_enabled=rl.validation.continuation_batches is not None,
+    )
     boundary = ValidationBoundaryCoordinator(
         schedule=ValidationSchedule.from_config(rl.validation),
         total_steps=rl.max_steps,
         transaction=transaction,
-        evaluator=partial(evaluate, units, rl),
+        evaluator=partial(evaluate, units, rl, should_stop=watch.should_stop),
         should_stop=watch.should_stop,
         publication_step=transaction.pending_publication_step,
+        pending_reasons=transaction.pending_reasons if transaction.continuation_enabled else None,
     )
     final_step, final_loss = start, None
     # The clip counters continue from the kept rows of the metrics file (rank 0, the rank that writes it), so the

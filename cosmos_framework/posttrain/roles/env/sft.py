@@ -108,6 +108,16 @@ class SFTDatasetEnv:
         count = min(len(self.dataset), max_samples) if max_samples is not None else len(self.dataset)
         return math.ceil(count / (batch_size * self.world_size))
 
+    def validation_layout(self, batch_size: int, max_samples: int | None = None) -> dict[str, Any]:
+        """Finite index identity without reading or replaying consumed examples."""
+        return {
+            "rows": min(len(self.dataset), max_samples) if max_samples is not None else len(self.dataset),
+            "batch_size": batch_size,
+            "world_size": self.world_size,
+            "batch_count": self.validation_batch_count(batch_size, max_samples),
+            "source_fingerprint": self.source_fingerprint,
+        }
+
     def get_validation_batch(
         self, batch_index: int, batch_size: int, max_samples: int | None = None
     ) -> list[Trajectory]:

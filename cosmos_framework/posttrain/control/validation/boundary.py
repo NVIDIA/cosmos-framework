@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from cosmos_framework.posttrain.control.validation.continuation import ValidationPause
 from cosmos_framework.posttrain.control.validation.lifecycle import (
     ValidationReport,
     ValidationSchedule,
@@ -60,7 +61,7 @@ class ValidationBoundaryCoordinator:
             return ValidationBoundaryOutcome(report=report)
         if checkpoint_plan.is_full:
             report = self.transaction.run(model_step, reasons, self._evaluator(), train_metrics=metrics)
-            return ValidationBoundaryOutcome(report=report)
+            return self._outcome(report)
         if scheduled_checkpoint_due:
             self.transaction.checkpoints.save(model_step, components=checkpoint_plan)
             report = self.transaction.run_ephemeral(model_step, reasons, self._evaluator(), train_metrics=metrics)
@@ -92,6 +93,16 @@ class ValidationBoundaryCoordinator:
         metrics: dict[str, int | float | bool | str],
     ) -> ValidationBoundaryOutcome:
         report = self.transaction.resume(model_step, reasons, self._evaluator(), train_metrics=metrics)
+        return self._outcome(report)
+
+    @staticmethod
+    def _outcome(report: ValidationReport | ValidationPause) -> ValidationBoundaryOutcome:
+        if isinstance(report, ValidationPause):
+            info0(
+                f"validation paused at committed batch {report.next_batch}/{report.batch_count}; "
+                "resume continues this prefix, and only uncommitted work may replay"
+            )
+            return ValidationBoundaryOutcome(preempted=report.reason)
         return ValidationBoundaryOutcome(report=report)
 
     def _run_ephemeral(
@@ -155,7 +166,9 @@ class ValidationBoundaryCoordinator:
         reasons = self.schedule.reasons(0, self.total_steps, fresh_start=not resumed_from_checkpoint)
         if not reasons:
             return ValidationBoundaryOutcome()
-        ephemeral = reasons == frozenset({ValidationTrigger.BEFORE_TRAINING})
+        ephemeral = (
+            reasons == frozenset({ValidationTrigger.BEFORE_TRAINING}) and not self.transaction.continuation_enabled
+        )
         preempted = self.should_stop()
         if preempted:
             if ephemeral:

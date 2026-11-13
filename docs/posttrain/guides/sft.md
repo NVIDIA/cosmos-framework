@@ -335,6 +335,28 @@ copy of the training media under another root is the same row) of a training row
 without an item has only its content hash as identity, which one changed character defeats); a
 whole-source fingerprint check is not enough, since it passes a strict subset of the training file.
 
+For a held-out pass that cannot fit one allocation, opt in with
+`rl.validation.continuation_batches=1000` and `rl.validation.save_checkpoint=True`,
+using full validation checkpoint components. The number limits physical batches
+per invocation; it does not limit the held-out population. The initial pass then
+also creates a full checkpoint at optimizer step zero. Resume normally to finish
+validation before the next training update. This option uses the same SFT/flow
+objective, batch order, masks and RNG behavior as whole-pass evaluation.
+
+Continuation stores ordered batch IDs, per-batch and accumulated numerators and
+denominators, rank-local validation RNG and source state beside the immutable
+model/optimizer checkpoint. A partial pass produces a pause result and no validation
+score. Each committed prefix is consumed once; work lost before the atomic trainer
+state update may replay from the logged committed boundary and is excluded from
+the totals until committed. Completed validation uses the existing publication
+transaction. Exact resume requires the same model, source, preprocessing, precision,
+batching, seed and parameter mesh. The operational chunk size can change; a default
+whole-pass checkpoint cannot be reinterpreted as a continuation checkpoint.
+
+Default validation remains unchanged. The continuation implementation has focused
+CPU lifecycle controls; real two-host native-model qualification is required before
+using it to replace the campaign's frozen whole-pass execution.
+
 On the native Qwen3-VL-MoE seat, `train/grad_norm` varies from run to run because routing in the bf16
 MoE forward is not deterministic. Read it as a per-run diagnostic, not as a quantity to compare
 between two runs.
