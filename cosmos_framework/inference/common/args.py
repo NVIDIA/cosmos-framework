@@ -774,8 +774,8 @@ class QuantizationArgs(ArgsBase):
     quantization_fp8_granularity: QuantizationGranularity
     quantization_include_regex: list[str]
     quantization_exclude_regex: list[str]
-    mixed_precision_first_steps: int
-    mixed_precision_last_steps: int
+    mixed_precision_first_steps: int | None
+    mixed_precision_last_steps: int | None
     mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"]
     mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"]
 
@@ -796,11 +796,12 @@ class QuantizationOverrides(OverridesBase):
     """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
     quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
     """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
-    mixed_precision_first_steps: int = pydantic.Field(default=0, ge=0)
+    mixed_precision_first_steps: int | None = pydantic.Field(default=None, ge=0)
     """ModelOpt FP8 checkpoints only: run the first N diffusion steps with 16-bit
-    activations (W8A16) instead of FP8 activations (W8A8). 0 disables."""
-    mixed_precision_last_steps: int = pydantic.Field(default=0, ge=0)
-    """ModelOpt FP8 checkpoints only: run the last N diffusion steps with W8A16."""
+    activations (W8A16) instead of FP8 activations (W8A8). None inherits the checkpoint policy; 0 disables."""
+    mixed_precision_last_steps: int | None = pydantic.Field(default=None, ge=0)
+    """ModelOpt FP8 checkpoints only: run the last N diffusion steps with W8A16.
+    None inherits the checkpoint policy; 0 disables."""
     mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"] = "high_precision"
     """Understanding-pathway precision when mixed precision is enabled:
     high_precision keeps reasoner linears on W8A16 for every step."""

@@ -472,8 +472,10 @@ For ModelOpt FP8 checkpoints, use their local path as `--checkpoint-path`
 without `--quantization-method`. To run the first and last three denoising
 steps with A16 activations and the middle steps with A8, add
 `--mixed-precision-first-steps 3 --mixed-precision-last-steps 3`.
-The reasoner uses A16 when this schedule is enabled. Set these flags explicitly;
-checkpoint precision-policy metadata is not read. Keep
+The reasoner uses A16 when this schedule is enabled. Omitted step counts inherit the policy in the checkpoint's
+`transformer/config.json`, falling back to 0. CLI values override each count
+independently; set both to 0 to disable the schedule. Mixed precision requires
+`--no-use-cuda-graphs`. Keep
 `--mixed-precision-w8a16-cache none` (the default) when offloading.
 
 Compiled FP8 outputs are not guaranteed to be bit-identical across fresh

@@ -63,12 +63,18 @@ class QuantizationConfig:
     # ``mixed_precision_first_steps`` and last ``mixed_precision_last_steps``
     # denoising steps run generation-path linears with 16-bit activations
     # (W8A16: dequantized FP8 weight + dense GEMM); the middle steps keep the
-    # FP8-activation path (W8A8). Both 0 (default) disables the feature.
-    mixed_precision_first_steps: int = attrs.field(
-        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    # FP8-activation path (W8A8). None inherits the checkpoint policy; both 0 disables.
+    mixed_precision_first_steps: int | None = attrs.field(
+        default=None,
+        validator=attrs.validators.optional(
+            [attrs.validators.instance_of(int), attrs.validators.ge(0)]
+        ),
     )
-    mixed_precision_last_steps: int = attrs.field(
-        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    mixed_precision_last_steps: int | None = attrs.field(
+        default=None,
+        validator=attrs.validators.optional(
+            [attrs.validators.instance_of(int), attrs.validators.ge(0)]
+        ),
     )
 
     # Reasoner-path (understanding pathway) precision, independent of the step
@@ -95,4 +101,4 @@ class QuantizationConfig:
     @property
     def mixed_precision_enabled(self) -> bool:
         """Whether mixed-precision diffusion steps are requested."""
-        return self.mixed_precision_first_steps + self.mixed_precision_last_steps > 0
+        return bool(self.mixed_precision_first_steps or self.mixed_precision_last_steps)
