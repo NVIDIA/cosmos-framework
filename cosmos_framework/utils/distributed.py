@@ -39,8 +39,8 @@ if TYPE_CHECKING:
 def _set_gpu_cpu_affinity(device: Device) -> None:
     """Prefer GPU-local CPUs within the process's existing allocation."""
     # os.sched_getaffinity / os.sched_setaffinity are POSIX-only and do not exist on
-    # Windows. Guard before calling: an AttributeError is not an OSError, so it would
-    # escape the caller's handler and abort every entrypoint before training starts.
+    # Windows. Return before calling them: an AttributeError is not an OSError, so it
+    # would escape the caller's handler and abort every entrypoint before training starts.
     if not (hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity")):
         log.warning("os.sched_getaffinity/sched_setaffinity are unavailable on this platform; skipping CPU affinity.")
         return
@@ -75,7 +75,7 @@ def init(store: dist.Store | None = None, backend: str | None = None) -> int | N
     try:
         device = Device(local_rank)
         _set_gpu_cpu_affinity(device)
-    except (pynvml.NVMLError, OSError, AttributeError) as e:
+    except (pynvml.NVMLError, OSError) as e:
         log.warning(f"Failed to set device affinity: {e}")
     # Set up distributed communication. CPU checkpoint conversion needs Gloo
     # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.

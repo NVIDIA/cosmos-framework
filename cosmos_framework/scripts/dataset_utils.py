@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 # fcntl is POSIX-only; win_compat.flock is a passthrough on Linux and an
 # msvcrt-based equivalent on Windows.
-from cosmos_framework.utils import win_compat as fcntl
+from cosmos_framework.utils import win_compat
 
 DEFAULT_GCS_CREDENTIALS = "credentials/gcp_checkpoint.secret"
 GCS_CREDS_ENV_VAR = "COSMOS_GCP_CHECKPOINT_CREDS"
@@ -200,7 +200,7 @@ def download_from_gcs_uri(
     # Serialize concurrent workers so only one syncs; others wait and reuse.
     # The sentinel file is the source of truth for completeness.
     with open(lock_path, "w") as lock_f:
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        win_compat.flock(lock_f, win_compat.LOCK_EX)
         try:
             if not force_download and complete_marker.exists():
                 logger.info(f"Dataset already exists at {local_dataset_dir}, skipping download")
@@ -211,7 +211,7 @@ def download_from_gcs_uri(
                 _extract_lz4_archives(local_dataset_dir, dataset_name_override=dataset_name_override)
                 complete_marker.touch()
         finally:
-            fcntl.flock(lock_f, fcntl.LOCK_UN)
+            win_compat.flock(lock_f, win_compat.LOCK_UN)
     return local_dataset_dir
 
 

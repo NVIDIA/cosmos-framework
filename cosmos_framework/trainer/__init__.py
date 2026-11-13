@@ -5,6 +5,7 @@ import functools
 import inspect
 import os
 import signal
+import sys
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
 from cosmos_framework.utils.misc import StragglerDetectorV2
+
 
 
 @dataclass
@@ -809,15 +811,12 @@ class ImaginaireTrainer:
                 ):
                     output_batch, loss = model_ddp.training_step(data, iteration)
             self.callbacks.on_after_forward(iteration=iteration)
-            # `.module` only exists when the DDP wrapper was actually applied.
-            # parallel_model_wrapper may hand back the bare module (e.g.
-            # world_size==1 on Windows), so unwrap defensively rather than on
-            # the configured mode alone.
-            model = (
-                model_ddp.module
-                if self.config.trainer.distributed_parallelism == "ddp" and hasattr(model_ddp, "module")
-                else model_ddp
-            )
+            unwrap_ddp = self.config.trainer.distributed_parallelism == "ddp"
+            if sys.platform == "win32":
+                # parallel_model_wrapper hands back the bare module at world_size==1 on
+                # Windows, so `.module` exists only when the DDP wrapper was applied.
+                unwrap_ddp = unwrap_ddp and hasattr(model_ddp, "module")
+            model = model_ddp.module if unwrap_ddp else model_ddp
             self.callbacks.on_before_backward(model, loss, iteration=iteration)
             with self.training_timer("backward"):
                 with self.straggler_detector.profile_section(

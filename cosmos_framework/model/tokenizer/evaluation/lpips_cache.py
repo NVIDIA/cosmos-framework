@@ -17,7 +17,7 @@ import torch
 
 # fcntl is POSIX-only; win_compat.flock is a passthrough on Linux and an
 # msvcrt-based equivalent on Windows.
-from cosmos_framework.utils import win_compat as fcntl
+from cosmos_framework.utils import win_compat
 
 _ModelT = TypeVar("_ModelT")
 _READY_MARKER_PAYLOAD = b"cosmos3-tokenizer-lpips-cache-ready-v1\n"
@@ -119,7 +119,7 @@ def construct_with_shared_cache_warmup(
         lock_stat = os.fstat(descriptor)
         if not stat.S_ISREG(lock_stat.st_mode):
             raise RuntimeError(f"LPIPS cache warmup lock must be a regular file: {lock_path}")
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        win_compat.flock(descriptor, win_compat.LOCK_EX)
         lock_acquired = True
         if not _ready_marker_exists(ready_path, required_cache_filenames):
             model = constructor()
@@ -130,7 +130,7 @@ def construct_with_shared_cache_warmup(
     finally:
         try:
             if lock_acquired:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                win_compat.flock(descriptor, win_compat.LOCK_UN)
         finally:
             os.close(descriptor)
 
