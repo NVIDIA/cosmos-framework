@@ -25,6 +25,53 @@ _SYSTEM_PROMPT_TRANSFER = (
 _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images based on the user's instructions."
 
 
+def validate_generation_mm_token_type_ids(
+    config: PretrainedConfig, input_ids: Optional[torch.Tensor], mm_token_type_ids: Optional[torch.Tensor]
+) -> None:
+    """Validate redundant processor metadata against native placeholder IDs.
+
+    Native Qwen3-VL computes modality masks and RoPE from token IDs and grids.
+    Transformers 5 processors additionally emit text=0/image=1/video=2 metadata;
+    Transformers 4's optional field uses text/video=0 and image=1. Admit these
+    two complete encodings, without changing native modality or RoPE semantics.
+    Do not accept a mixture of the two video encodings within one request.
+    """
+    if mm_token_type_ids is None:
+        return
+    if not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 2:
+        raise ValueError("Native mm_token_type_ids requires explicit two-dimensional input_ids.")
+    if (
+        not isinstance(mm_token_type_ids, torch.Tensor)
+        or mm_token_type_ids.shape != input_ids.shape
+        or mm_token_type_ids.device != input_ids.device
+        or mm_token_type_ids.dtype not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64)
+    ):
+        raise ValueError("Native mm_token_type_ids must be an integer tensor matching input_ids shape and device.")
+    expected = (input_ids == config.image_token_id).to(mm_token_type_ids.dtype)
+    if torch.equal(mm_token_type_ids, expected):
+        return
+    expected = expected + (input_ids == config.video_token_id).to(mm_token_type_ids.dtype) * 2
+    if not torch.equal(mm_token_type_ids, expected):
+        raise ValueError("Native mm_token_type_ids disagrees with the configured image/video placeholder token IDs.")
+
+
+def consume_generation_mm_token_type_ids(
+    config: PretrainedConfig, inputs: Optional[torch.Tensor], model_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Consume only the validated redundant field before generic decoding.
+
+    Validate once on the complete prompt, before GenerationMixin slices cached
+    suffixes or appends text tokens. Transformers 4 does not extend this field
+    during decoding. Keep all other kwargs for the mixin's strict validation,
+    and preserve the caller's mapping and tensors.
+    """
+    if "mm_token_type_ids" not in model_kwargs:
+        return model_kwargs
+    input_ids = inputs if inputs is not None else model_kwargs.get("input_ids")
+    validate_generation_mm_token_type_ids(config, input_ids, model_kwargs["mm_token_type_ids"])
+    return {key: value for key, value in model_kwargs.items() if key != "mm_token_type_ids"}
+
+
 def generation_cache_position(model_inputs: dict[str, Any]) -> torch.Tensor:
     """Retain legacy positions or derive them from the prepared, sliced query.
 

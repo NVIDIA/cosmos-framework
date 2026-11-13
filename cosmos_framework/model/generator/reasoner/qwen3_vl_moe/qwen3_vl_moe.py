@@ -24,7 +24,9 @@ from transformers.utils import TransformersKwargs, is_torchdynamo_compiling
 from transformers.utils.deprecation import deprecate_kwarg
 
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
+    consume_generation_mm_token_type_ids,
     generation_cache_position,
+    validate_generation_mm_token_type_ids,
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     get_image_features as _get_image_features,
@@ -2348,6 +2350,10 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLMoePreTrainedModel, GenerationMi
             last_hidden_state=hidden_states,
         )
 
+    def _prepare_model_inputs(self, inputs=None, bos_token_id=None, model_kwargs=None):
+        model_kwargs = consume_generation_mm_token_type_ids(self.config, inputs, model_kwargs or {})
+        return super()._prepare_model_inputs(inputs, bos_token_id, model_kwargs)
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -2361,9 +2367,12 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLMoePreTrainedModel, GenerationMi
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
+        mm_token_type_ids=None,
         **kwargs,
     ):
         # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
+        # Explicit admission for processor metadata; native masks/RoPE use IDs.
+        validate_generation_mm_token_type_ids(self.config, input_ids, mm_token_type_ids)
 
         model_inputs = super().prepare_inputs_for_generation(
             input_ids,
