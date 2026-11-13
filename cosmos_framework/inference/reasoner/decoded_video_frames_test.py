@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from cosmos_framework.inference.reasoner.decoded_video_frames import (  # noqa: 
     is_decoded_frames,
     process_vision_info,
 )
+
+pytestmark = pytest.mark.L0
 
 _PATCH_SIZE = 16
 _FRAMES = 8
