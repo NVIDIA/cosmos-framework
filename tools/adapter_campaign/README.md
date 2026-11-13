@@ -8,7 +8,10 @@ reviewed contract digest must be supplied to the production verifier.
 Run from the checkout root:
 
 ```bash
-python -m unittest tools.adapter_campaign.test_evidence
+python -m pytest -c /dev/null --noconftest \
+  tools/adapter_campaign/test_evidence.py \
+  tools/adapter_campaign/test_references.py \
+  tools/adapter_campaign/test_recovered.py
 python -m tools.adapter_campaign.contract \
   --root "$CAMPAIGN_ROOT" --inputs "$COMPILE_INPUTS" --out "$CONTRACT"
 python -m tools.adapter_campaign.primary \
@@ -18,6 +21,10 @@ python -m tools.adapter_campaign.references \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --review "$REFERENCE_REVIEW_PATH" --review-sha256 "$REFERENCE_REVIEW_SHA256" \
   --gates-sha256 "$NUMERICAL_GATES_FILE_SHA256" --output "$NEW_REFERENCE_DIRECTORY"
+python -m tools.adapter_campaign.recovered \
+  --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
+  --capture "$RECOVERED_RAW_CAPTURE" --capture-review "$CAPTURE_REVIEW" \
+  --producer-review "$RECOVERED_PRODUCER_REVIEW" --output "$NEW_RECOVERY_DIRECTORY"
 python -m tools.adapter_campaign.evidence \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --contract-sha256 "$REVIEWED_CANONICAL_CONTRACT_DIGEST" \
@@ -45,6 +52,17 @@ step remains a failed prerequisite; later steps and optimizer comparisons are
 not certified. Saved gradients are hash-bound; independent updated Adam tensors
 were not separately saved, so their comparisons are source-enforced rather than
 recomputed by this tool. This producer does not normalize recovery or training.
+
+`recovered.py` adds four gates for the reviewed GSM8K recovery format: full
+schedule, sample coverage, initial/final validation and midpoint continuation.
+It joins the committed original prefix to the verified recovery suffix using
+their original paths and source identities. Discarded original work and replay
+are retained separately from logical coverage. It rejects missing rank owners,
+out-of-range source indices, conflicting identities and substituted reviews.
+Raw capture and producer reviews are required, including their exact dependency
+hashes. Large tensor comparisons rely on the separately reviewed, hash-bound
+remote audit; this tool does not pretend those tensors were downloaded. It does
+not certify a final export, task score or whole campaign from these four gates.
 
 This reference producer additionally requires `producer_reviews` in its gate's
 admission: a mapping from each admitted producer SHA to a nonempty list of exact
