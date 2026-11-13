@@ -441,12 +441,16 @@ re-pinned. The edits are link targets that pointed at a moved file, path anchors
 skill notes, and the regrouping needed to carry four `SKILL.md` bodies into three skills and to split shared files (heading levels,
 16 retitled headings, the sub-skills' frontmatter, nine reference-list items that became table rows, six lines split by sentence,
 re-padded tables); all are listed below. The four family folders keep `post-training/`, the training-only parts of
-`shared/` and `troubleshooting/` and, for Sim-Transfer, `scripts/paibench_local_bundle.py` with its test; all of that stays until the
-post-training pull request.
+`shared/` and `troubleshooting/` and, for Sim-Transfer, `scripts/paibench_local_bundle.py` with its test. Those files moved in the
+change that the next section records, which retires the four family folders.
 
 <!-- rumdl-disable MD060 -->
 
 ### Where each source went
+
+Where this section says that a file under `cosmos3-nano-*` stays, says what such a file still holds, or re-points a link to one, it
+describes the tree at this change's head, and the path and its line numbers are those of that tree; the next section ("Simulation
+post-training") maps each of those files to its present path.
 
 Line numbers in this section are those of the tree at this change's head; source line numbers are those of the file at `45fecab`. A
 line-by-line comparison of every retired or changed source with the tree (whitespace, table padding, heading level and link targets
@@ -1328,5 +1332,760 @@ Also unchanged on purpose:
   code is not on `main`, so the note is not carried.
 - Restated material was moved, not merged: text that says the same thing in other words exists in both the guide and the notebook
   references (for example the vLLM-Omni server start).
+
+<!-- rumdl-enable MD060 -->
+
+## Simulation post-training: the four nested families → `cosmos3-post-train-simulation` and three block skills
+
+Where each file that the previous section left in the four nested skill families (`cosmos3-nano-transfer-auto`,
+`cosmos3-nano-sim-auto`, `cosmos3-nano-sim-bimanual`, `cosmos3-nano-sim-transfer`) went. The sources are those 47 files as that
+change left them: the text of `main` at `45fecab`, with the splits, the re-pointed link targets and the skill notes that the
+previous section records. The four family folders are retired. 38 files moved as files: 30 references, the Sim-Bimanual and
+Sim-Transfer post-training `SKILL.md`, three scripts and three tests (the tests to
+`tests/skills/cosmos3-post-train-simulation-transfer/`). The other nine (the two Auto post-training `SKILL.md` and the
+troubleshooting files of the four families) were assembled into six files: the `SKILL.md` of `cosmos3-post-train-simulation-auto`
+with two overflow references, and one `references/troubleshooting.md` in each block skill. The block skills
+`cosmos3-post-train-simulation-auto`, `cosmos3-post-train-simulation-bimanual` and `cosmos3-post-train-simulation-transfer` hold
+everything the families held, and `cosmos3-post-train-simulation` is a new entry skill that routes to them. The rule was verbatim
+relocation, as in the previous section: nothing in the moved text was corrected. The edits are link targets (169 in the moved and
+assembled files, 105 in files edited in place), the script path in five training commands and in the three tests, 30 heading levels
+and 10 heading titles, the frontmatter of the eight sub-skills that end here, the two Auto reference lists that became table rows,
+skill notes, and re-padded tables; all are listed below.
+
+<!-- rumdl-disable MD060 -->
+
+### Where each source went
+
+Line numbers of the tree are those at this change's head; source line numbers are those of the file as the previous section left it.
+Paths are relative to `.agents/skills/` unless they start with `tests/`, `docs/` or `tools/` or name a file of the repository root.
+A line-by-line comparison of the 41 Markdown sources with the tree (padding, heading level and link targets ignored) finds each of
+their 3384 non-blank lines, except 32 frontmatter lines, 10 headings whose title changed, five command lines whose script path
+changed, 9 skill notes of the previous section that were reworded, five skill notes that a provenance note replaces, and the 18
+lines of the two Auto reference lists (two headings, 16 items); each of these is in a table below. The three scripts are
+byte-identical at their new path. In the three tests, 1 line of the sources is replaced and 21 lines are new (blank lines counted).
+Tables that would be wider than 340 characters when padded are written without column padding; the comment pair around this section
+switches the table-alignment lint rule off for it.
+
+Files that moved as files. Five of them are byte-identical to their source; the two `SKILL.md` are in the next table, run by run.
+
+| Source | Lines | Destination | Lines | Changes |
+| --- | --- | --- | --- | --- |
+| `cosmos3-nano-transfer-auto/post-training/references/data-contract.md` | L1-233 | `cosmos3-post-train-simulation-auto/references/data-contract.md` | L1-233 | 8 link targets re-pointed |
+| `cosmos3-nano-transfer-auto/shared/framework-runtime.md` | L1-55 | `cosmos3-post-train-simulation-auto/references/runtime.md` | L1-55 | byte-identical |
+| `cosmos3-nano-sim-auto/post-training/references/checkpoint-preparation.md` | L1-40 | `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoint-preparation.md` | L1-40 | 2 link targets re-pointed |
+| `cosmos3-nano-sim-auto/post-training/references/checkpoints.md` | L1-83 | `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoints.md` | L1-83 | 1 link target re-pointed |
+| `cosmos3-nano-sim-auto/shared/data-contract.md` | L1-74 | `cosmos3-post-train-simulation-auto/references/sim-auto-data.md` | L1-74 | 5 link targets re-pointed |
+| `cosmos3-nano-sim-auto/shared/model-contract.md` | L1-36 | `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md` | L1-36 | 4 link targets re-pointed |
+| `cosmos3-nano-sim-auto/post-training/references/parameter-guide.md` | L1-40 | `cosmos3-post-train-simulation-auto/references/sim-auto-parameters.md` | L1-40 | 3 link targets re-pointed |
+| `cosmos3-nano-sim-auto/post-training/references/canonical-recipe.md` | L1-74 | `cosmos3-post-train-simulation-auto/references/sim-auto-recipe.md` | L1-74 | 4 link targets re-pointed |
+| `cosmos3-nano-sim-auto/post-training/references/runtime.md` | L1-92 | `cosmos3-post-train-simulation-auto/references/sim-auto-runtime.md` | L1-92 | 3 link targets re-pointed |
+| `cosmos3-nano-sim-auto/post-training/references/smoke.md` | L1-69 | `cosmos3-post-train-simulation-auto/references/sim-auto-smoke.md` | L1-69 | 3 link targets re-pointed |
+| `cosmos3-nano-transfer-auto/shared/reference-scene.md` | L1-98 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L1-98 | 5 link targets re-pointed |
+| `cosmos3-nano-transfer-auto/post-training/references/parameter-guide.md` | L1-38 | `cosmos3-post-train-simulation-auto/references/transfer-auto-parameters.md` | L1-38 | 2 link targets re-pointed |
+| `cosmos3-nano-transfer-auto/post-training/references/canonical-recipe.md` | L1-158 | `cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md` | L1-158 | 2 link targets re-pointed |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L1-273 | `cosmos3-post-train-simulation-bimanual/SKILL.md` | L1-327 | 10 link targets re-pointed; 4 table lines re-padded; edited in place: new frontmatter and new sections around the carried body (next table) |
+| `cosmos3-nano-sim-bimanual/post-training/references/canonical-recipe.md` | L1-182 | `cosmos3-post-train-simulation-bimanual/references/canonical-recipe.md` | L1-182 | 1 link target re-pointed |
+| `cosmos3-nano-sim-bimanual/post-training/references/caption-guide.md` | L1-72 | `cosmos3-post-train-simulation-bimanual/references/caption-guide.md` | L1-72 | 1 link target re-pointed |
+| `cosmos3-nano-sim-bimanual/post-training/references/checkpoint-and-resume.md` | L1-91 | `cosmos3-post-train-simulation-bimanual/references/checkpoint-and-resume.md` | L1-91 | 2 link targets re-pointed |
+| `cosmos3-nano-sim-bimanual/post-training/references/data-contract.md` | L1-188 | `cosmos3-post-train-simulation-bimanual/references/data-contract.md` | L1-188 | 6 link targets re-pointed |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L1-54 | `cosmos3-post-train-simulation-bimanual/references/environment.md` | L1-54 | 3 link targets re-pointed; 1 skill note of the previous section reworded; 5 table lines re-padded |
+| `cosmos3-nano-sim-bimanual/post-training/references/multinode-launcher.md` | L1-36 | `cosmos3-post-train-simulation-bimanual/references/multinode-launcher.md` | L1-36 | 1 link target re-pointed |
+| `cosmos3-nano-sim-bimanual/post-training/references/parameter-guide.md` | L1-25 | `cosmos3-post-train-simulation-bimanual/references/parameter-guide.md` | L1-25 | byte-identical |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L1-246 | `cosmos3-post-train-simulation-transfer/SKILL.md` | L1-319 | 14 link targets re-pointed; 1 command line re-pointed to the new scripts folder; 3 skill notes of the previous section reworded; 4 table lines re-padded; edited in place: new frontmatter and new sections around the carried body (next table) |
+| `cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md` | L1-227 | `cosmos3-post-train-simulation-transfer/references/canonical-recipe.md` | L1-227 | 2 link targets re-pointed |
+| `cosmos3-nano-sim-transfer/post-training/references/caption-manifest.md` | L1-54 | `cosmos3-post-train-simulation-transfer/references/caption-manifest.md` | L1-54 | 1 link target re-pointed |
+| `cosmos3-nano-sim-transfer/post-training/references/checkpoint-and-resume.md` | L1-149 | `cosmos3-post-train-simulation-transfer/references/checkpoint-and-resume.md` | L1-149 | 2 link targets re-pointed |
+| `cosmos3-nano-sim-transfer/shared/data-contract.md` | L1-113 | `cosmos3-post-train-simulation-transfer/references/data-contract.md` | L1-113 | 1 link target re-pointed |
+| `cosmos3-nano-sim-transfer/shared/environment.md` | L1-16 | `cosmos3-post-train-simulation-transfer/references/environment.md` | L1-16 | 2 link targets re-pointed; 1 skill note of the previous section reworded |
+| `cosmos3-nano-sim-transfer/shared/local-dataset.md` | L1-107 | `cosmos3-post-train-simulation-transfer/references/local-dataset.md` | L1-107 | 1 link target re-pointed; 1 command line re-pointed to the new scripts folder; 1 skill note of the previous section reworded |
+| `cosmos3-nano-sim-transfer/post-training/references/local-training.md` | L1-214 | `cosmos3-post-train-simulation-transfer/references/local-training.md` | L1-214 | 5 link targets re-pointed; 1 command line re-pointed to the new scripts folder; 1 skill note of the previous section reworded |
+| `cosmos3-nano-sim-transfer/post-training/references/multinode-training.md` | L1-63 | `cosmos3-post-train-simulation-transfer/references/multinode-training.md` | L1-63 | 1 link target re-pointed |
+| `cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md` | L1-92 | `cosmos3-post-train-simulation-transfer/references/nano-conversion.md` | L1-92 | 2 link targets re-pointed; 2 command lines re-pointed to the new scripts folder; 2 skill notes of the previous section reworded |
+| `cosmos3-nano-sim-transfer/post-training/references/parameter-guide.md` | L1-80 | `cosmos3-post-train-simulation-transfer/references/parameter-guide.md` | L1-80 | 1 link target re-pointed |
+| `cosmos3-nano-sim-transfer/scripts/paibench_local_bundle.py` | L1-517 | `cosmos3-post-train-simulation-transfer/scripts/paibench_local_bundle.py` | L1-517 | byte-identical |
+| `cosmos3-nano-sim-transfer/post-training/scripts/prepare_nano_dcp.py` | L1-307 | `cosmos3-post-train-simulation-transfer/scripts/prepare_nano_dcp.py` | L1-307 | byte-identical |
+| `cosmos3-nano-sim-transfer/post-training/scripts/qa_transfer_stage.py` | L1-133 | `cosmos3-post-train-simulation-transfer/scripts/qa_transfer_stage.py` | L1-133 | byte-identical |
+| `cosmos3-nano-sim-transfer/post-training/scripts/test_nano_conversion.py` | L1-373 | `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py` | L1-377 | 1 line replaced by 5 lines for the new location, 1 skill-note comment among them (table under "Changed lines") |
+| `cosmos3-nano-sim-transfer/scripts/test_paibench_local_bundle.py` | L1-161 | `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L1-169 | 8 lines added for the new location, 3 skill-note comments among them (table under "Changed lines") |
+| `cosmos3-nano-sim-transfer/post-training/scripts/test_qa_transfer_stage.py` | L1-155 | `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py` | L1-163 | 8 lines added for the new location, 3 skill-note comments among them (table under "Changed lines") |
+
+The four post-training `SKILL.md` bodies, run by run. A run is a stretch of source lines that follow each other in the destination;
+blank lines are not counted, and a new line of the destination (a pointer, a new section) ends a run.
+
+| Old post-training `SKILL.md` | Source lines | Content | Now in |
+| --- | --- | --- | --- |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-auto/SKILL.md` L1-13); the old values are under "Removed text" |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L6 | "Post-train Cosmos3-Nano-Transfer-Auto" (the title) | replaced by the heading `## Fine-tune Transfer-Auto` (`cosmos3-post-train-simulation-auto/SKILL.md` L39) |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L8-116 | from `Fine-tune the released Transfer-Auto model on your …`; "Choose your starting point" to "Prepare a local training bundle" (6 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L43-151 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L118-123 | from `The builder copies media and tokenizer resources. …` | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` L7-12 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L125-203 | "Configure the fine-tuning run" to "Reproduce the four training phases" (4 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L155-233 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L205-219 | from `Follow the [curriculum and handoffs](references/canonical-recipe.md):` | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` L16-30 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L221-228 | "References" (heading and 6 list items) | the heading is replaced by `## Reference files` (`cosmos3-post-train-simulation-auto/SKILL.md` L441) and each item's words open a row of its table (L447-449, L463-465); the items are under "Removed text" |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-auto/SKILL.md` L1-13); the old values are under "Removed text" |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L6 | "Post-train Cosmos3-Nano-Sim-Auto" (the title) | replaced by the heading `## Distill Sim-Auto` (`cosmos3-post-train-simulation-auto/SKILL.md` L237) |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L8-28 | from `Start from **Transfer-Auto**, including a Transfer-Auto model …`; "Choose your starting point"; "What you need" | `cosmos3-post-train-simulation-auto/SKILL.md` L241-261 |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L30-56 | from `The shared [reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)`; "Three stages" | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md` L7-33 |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L58-222 | "Set up the environment" to "Continue training and export" (7 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L265-429 |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L224-239 | from `The reference budget is 4000 **total trainer …` | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md` L37-52 |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L241-252 | "References" (heading and 10 list items) | the heading is replaced by `## Reference files` (`cosmos3-post-train-simulation-auto/SKILL.md` L441) and each item's words open a row of its table (L453-460, L463-464); the items are under "Removed text" |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-bimanual/SKILL.md` L1-12); the old values are under "Removed text" |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L6-11 | "Post-train Cosmos3-Nano-Sim-Bimanual" | `cosmos3-post-train-simulation-bimanual/SKILL.md` L14-19 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L13-27 | "Choose your starting point" | `cosmos3-post-train-simulation-bimanual/SKILL.md` L26-40 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L29-33 | "Set up the environment" | `cosmos3-post-train-simulation-bimanual/SKILL.md` L47-51 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L35 | "Quickstart: train Stage 0" (the heading alone) | `cosmos3-post-train-simulation-bimanual/SKILL.md` L75 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L37-57 | "Activate the Framework environment" | `cosmos3-post-train-simulation-bimanual/SKILL.md` L53-73 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L59-264 | "1. Prepare and validate training data" to "Export and check inference" (7 headings) | `cosmos3-post-train-simulation-bimanual/SKILL.md` L77-282 |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L266-273 | "References" | `cosmos3-post-train-simulation-bimanual/SKILL.md` L298-305 |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-transfer/SKILL.md` L1-13); the old values are under "Removed text" |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L6-12 | "Post-train Cosmos3-Nano-Sim-Transfer" | `cosmos3-post-train-simulation-transfer/SKILL.md` L15-21 |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L14-20 | "Choose your starting point" | `cosmos3-post-train-simulation-transfer/SKILL.md` L34-40 |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L22-232 | "Set up the environment" to "Run inference from your trained checkpoint" (11 headings) | `cosmos3-post-train-simulation-transfer/SKILL.md` L56-266 |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L234 | "References" (the heading) | replaced by the heading `## Reference files` (`cosmos3-post-train-simulation-transfer/SKILL.md` L278) |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | L236-246 | from `- [Framework environment setup](../../cosmos3-inference-simulation-transfer/references/setup.md)` | `cosmos3-post-train-simulation-transfer/SKILL.md` L299-309 |
+
+The troubleshooting files. Each block skill has one `references/troubleshooting.md`: the body of the old troubleshooting `SKILL.md`,
+then its playbook or symptom guide under its own heading; in the Auto file the Transfer-Auto material comes first, then the Sim-Auto
+material. What the previous section moved out of these files (the inference symptoms) is in the inference skills'
+`references/troubleshooting.md`, as recorded there.
+
+| Old troubleshooting file | Source lines | Content | Now in |
+| --- | --- | --- | --- |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` | L1-4 | frontmatter `name` and `description` | dropped: the assembled reference has no frontmatter; the old values are under "Removed text" |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` | L6 | "Troubleshoot Cosmos3-Nano-Transfer-Auto" (the heading alone) | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L5 |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` | L8 | skill note of the previous section | replaced by the provenance note of the assembled file (`cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3); old wording under "Skill notes" |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` | L10-19 | from `` `cosmos3-nano-transfer-auto` generates driving videos and optional LiDAR … ``; "References" | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L7-16 |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` | L1 | "cosmos3-nano-transfer-auto: common problems and checks" (the heading alone) | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L18 |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` | L3 | skill note of the previous section | replaced by the provenance note of the assembled file (`cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3); old wording under "Skill notes" |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` | L5-36 | from `Use the [shared contract](../../../cosmos3-inference-simulation-auto/references/model-contract.md),`; "Storage read errors while training"; "Training resumes with wrong iteration/LR/EMA or wrong checkpoint" | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L20-51 |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` | L1-4 | frontmatter `name` and `description` | dropped: the assembled reference has no frontmatter; the old values are under "Removed text" |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` | L6 | "Troubleshoot Cosmos3-Nano-Sim-Auto" (the heading alone) | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L53 |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` | L8 | skill note of the previous section | replaced by the provenance note of the assembled file (`cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3); old wording under "Skill notes" |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` | L10-27 | from `\| Symptom \| First checks`; "References" | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L55-72 |
+| `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | L1-4 | frontmatter `name` and `description` | dropped: the assembled reference has no frontmatter; the old values are under "Removed text" |
+| `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | L6 | "Troubleshoot Cosmos3-Nano-Sim-Bimanual" (the heading alone) | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L1 |
+| `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | L8-88 | "Find the symptom" to "References" (5 headings) | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L5-85 |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` | L1-59 | "Failure playbook" to "Checkpoint failures" (6 headings) | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L87-145 |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` | L1-4 | frontmatter `name` and `description` | dropped: the assembled reference has no frontmatter; the old values are under "Removed text" |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` | L6 | "Troubleshoot Cosmos3-Nano-Sim-Transfer" (the heading alone) | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L1 |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` | L8 | skill note of the previous section | replaced by the provenance note of the assembled file (`cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L3); old wording under "Skill notes" |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` | L10-42 | from `\| Symptom \| Reference \|`; "Training state"; "References" | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L5-37 |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` | L1-3 | "Common failures" | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L39-41 |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` | L5 | skill note of the previous section | replaced by the provenance note of the assembled file (`cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L3); old wording under "Skill notes" |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` | L7-15 | "Training state" | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L43-51 |
+
+### The old `SKILL.md` bodies
+
+The two Auto bodies are the sections `## Fine-tune Transfer-Auto` and `## Distill Sim-Auto` of one `SKILL.md` (475 lines). Their
+headings are one level down; the two titles that the bodies shared ("Choose your starting point", "Set up the environment") carry
+the model name; and the two old titles are replaced by the section titles. Five blocks that did not fit the 500-line limit moved
+whole into the overflow references `references/transfer-auto-training-notes.md` and `references/sim-auto-training-notes.md` (five
+sections; the runs are in the table above), each behind a one-line pointer in `SKILL.md` (four pointers, because two of the Sim-Auto
+blocks followed each other). The Sim-Auto part still opens with the rule that the student starts from a Transfer-Auto checkpoint
+(L241-244, source L8-11).
+
+The Sim-Bimanual and Sim-Transfer bodies were edited in place (327 and 319 lines). In both, "Set up the environment" is one level
+down under a new `## Prerequisites`, and `## References` is `## Reference files` with the source list kept under it. In the
+Sim-Bimanual body one block changed place: "Activate the Framework environment" (source L37-57) closes "Prerequisites" (L53-73)
+instead of opening "Quickstart: train Stage 0". No block of the Sim-Transfer body or of the two Auto bodies changed its order. The
+section "Run inference from your trained checkpoint", which the previous section moved into the Sim-Transfer body, is carried with
+it.
+
+Headings that changed (30 by level only, 10 in their title). In an assembled troubleshooting reference the old titles sit one or two
+levels down so that the file has one first-level heading.
+
+| Source                                                                         | Old heading                                                           | New heading                                                             | In                                                                          | Change |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------ |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L6                         | `# Post-train Cosmos3-Nano-Transfer-Auto`                             | `## Fine-tune Transfer-Auto`                                            | `cosmos3-post-train-simulation-auto/SKILL.md` L39                           | title  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L16                        | `## Choose your starting point`                                       | `### Choose your starting point (Transfer-Auto)`                        | `cosmos3-post-train-simulation-auto/SKILL.md` L51                           | title  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L25                        | `## Set up the environment`                                           | `### Set up the environment (Transfer-Auto)`                            | `cosmos3-post-train-simulation-auto/SKILL.md` L60                           | title  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L36                        | `## Quickstart: fine-tune the released model`                         | `### Quickstart: fine-tune the released model`                          | `cosmos3-post-train-simulation-auto/SKILL.md` L71                           | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L38                        | `### Activate the Framework environment`                              | `#### Activate the Framework environment`                               | `cosmos3-post-train-simulation-auto/SKILL.md` L73                           | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L60                        | `### Prepare the released model`                                      | `#### Prepare the released model`                                       | `cosmos3-post-train-simulation-auto/SKILL.md` L95                           | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L83                        | `### Prepare a local training bundle`                                 | `#### Prepare a local training bundle`                                  | `cosmos3-post-train-simulation-auto/SKILL.md` L118                          | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L125                       | `### Configure the fine-tuning run`                                   | `#### Configure the fine-tuning run`                                    | `cosmos3-post-train-simulation-auto/SKILL.md` L155                          | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L150                       | `### Launch and monitor`                                              | `#### Launch and monitor`                                               | `cosmos3-post-train-simulation-auto/SKILL.md` L180                          | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L182                       | `## Export and check inference`                                       | `### Export and check inference`                                        | `cosmos3-post-train-simulation-auto/SKILL.md` L212                          | level  |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L203                       | `## Reproduce the four training phases`                               | `### Reproduce the four training phases`                                | `cosmos3-post-train-simulation-auto/SKILL.md` L233                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L6                              | `# Post-train Cosmos3-Nano-Sim-Auto`                                  | `## Distill Sim-Auto`                                                   | `cosmos3-post-train-simulation-auto/SKILL.md` L237                          | title  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L13                             | `## Choose your starting point`                                       | `### Choose your starting point (Sim-Auto)`                             | `cosmos3-post-train-simulation-auto/SKILL.md` L246                          | title  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L23                             | `## What you need`                                                    | `### What you need`                                                     | `cosmos3-post-train-simulation-auto/SKILL.md` L256                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L58                             | `## Set up the environment`                                           | `### Set up the environment (Sim-Auto)`                                 | `cosmos3-post-train-simulation-auto/SKILL.md` L265                          | title  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L65                             | `## Quickstart: train Stage 1`                                        | `### Quickstart: train Stage 1`                                         | `cosmos3-post-train-simulation-auto/SKILL.md` L272                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L67                             | `### 1. Activate the Framework environment`                           | `#### 1. Activate the Framework environment`                            | `cosmos3-post-train-simulation-auto/SKILL.md` L274                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L80                             | `### 2. Prepare the Transfer-Auto initializer and local data`         | `#### 2. Prepare the Transfer-Auto initializer and local data`          | `cosmos3-post-train-simulation-auto/SKILL.md` L287                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L120                            | `### 3. Select and resolve Stage 1`                                   | `#### 3. Select and resolve Stage 1`                                    | `cosmos3-post-train-simulation-auto/SKILL.md` L327                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L168                            | `### 4. Check the configuration and launch training`                  | `#### 4. Check the configuration and launch training`                   | `cosmos3-post-train-simulation-auto/SKILL.md` L375                          | level  |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L206                            | `## Continue training and export`                                     | `### Continue training and export`                                      | `cosmos3-post-train-simulation-auto/SKILL.md` L413                          | level  |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` L6                       | `# Troubleshoot Cosmos3-Nano-Transfer-Auto`                           | `## Troubleshoot Cosmos3-Nano-Transfer-Auto`                            | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L5       | level  |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` L16                      | `## References`                                                       | `### References (Transfer-Auto)`                                        | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L13      | title  |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` L1    | `# cosmos3-nano-transfer-auto: common problems and checks`            | `### cosmos3-nano-transfer-auto: common problems and checks`            | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L18      | level  |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` L9    | `## Storage read errors while training`                               | `#### Storage read errors while training`                               | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L24      | level  |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` L23   | `## Training resumes with wrong iteration/LR/EMA or wrong checkpoint` | `#### Training resumes with wrong iteration/LR/EMA or wrong checkpoint` | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L38      | level  |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` L6                            | `# Troubleshoot Cosmos3-Nano-Sim-Auto`                                | `## Troubleshoot Cosmos3-Nano-Sim-Auto`                                 | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L53      | level  |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` L21                           | `## References`                                                       | `### References (Sim-Auto)`                                             | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L66      | title  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L1  | `# Failure playbook`                                                  | `## Failure playbook`                                                   | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L87  | level  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L8  | `## Launcher or allocation failure`                                   | `### Launcher or allocation failure`                                    | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L94  | level  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L20 | `## Training configuration failure`                                   | `### Training configuration failure`                                    | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L106 | level  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L28 | `## Data failures`                                                    | `### Data failures`                                                     | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L114 | level  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L34 | `## Training failures`                                                | `### Training failures`                                                 | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L120 | level  |
+| `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L43 | `## Checkpoint failures`                                              | `### Checkpoint failures`                                               | `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L129 | level  |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` L1  | `# Common failures`                                                   | `## Common failures`                                                    | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L39  | level  |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` L7  | `## Training state`                                                   | `### Training state`                                                    | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L43  | level  |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` L29                         | `## Set up the environment`                                           | `### Set up the environment`                                            | `cosmos3-post-train-simulation-bimanual/SKILL.md` L47                       | level  |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` L266                        | `## References`                                                       | `## Reference files`                                                    | `cosmos3-post-train-simulation-bimanual/SKILL.md` L298                      | title  |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` L22                         | `## Set up the environment`                                           | `### Set up the environment`                                            | `cosmos3-post-train-simulation-transfer/SKILL.md` L56                       | level  |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` L234                        | `## References`                                                       | `## Reference files`                                                    | `cosmos3-post-train-simulation-transfer/SKILL.md` L278                      | title  |
+
+### Removed text
+
+The frontmatter of the eight sub-skills that end here. The four post-training sub-skills are replaced by the new skills, which have
+their own frontmatter; the four troubleshooting sub-skills are references now and have none. Four of the eight descriptions are
+carried word for word; the last column says where.
+
+| Retired sub-skill file | `name` | `description` | Where it went |
+| --- | --- | --- | --- |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | `cosmos3-nano-transfer-auto-post-training` | `Fine-tune the released Cosmos3-Nano-Transfer-Auto model on paired driving data in Cosmos Framework, or run the four-phase training curriculum from Cosmos3-Nano.` | description carried word for word as a paragraph of `cosmos3-post-train-simulation-auto/SKILL.md` (L41); name not carried |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` | `cosmos3-nano-transfer-auto-troubleshooting` | `Diagnose cosmos3-nano-transfer-auto failures, including distorted side/rear views, WSM alignment, caption mismatch, unexpected frame counts, missing LiDAR, out-of-memory errors, and checkpoint or resume failures. Use for focused checks and recovery, not automatic input remapping, retraining, causal Sim-Auto debugging, or quality certification.` | description not carried; name not carried |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | `cosmos3-nano-sim-auto-post-training` | `Distill Cosmos3-Nano-Transfer-Auto into Cosmos3-Nano-Sim-Auto using customer RGB, WSM, captions and LiDAR in Cosmos Framework. Covers TF, TF-dCM, SF-DMD, checkpoint handoffs, resume and student export.` | description carried word for word as a paragraph of `cosmos3-post-train-simulation-auto/SKILL.md` (L239); name not carried |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` | `cosmos3-nano-sim-auto-troubleshooting` | `Diagnose Cosmos3-Nano-Sim-Auto input, causal inference, distillation, checkpoint and export failures in Cosmos Framework. Check camera mapping, captions, rolling metadata and stage-state handoffs without silently changing the recipe.` | description not carried; name not carried |
+| `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | `cosmos3-nano-sim-bimanual-post-training` | `Train Cosmos3 Nano Sim Bimanual from Cosmos3-Nano with Cosmos Framework's four native stage TOMLs and a local training bundle. Covers data preparation, initialization, training, checkpoint handoffs, resume and student export.` | description carried word for word as the opening sentences of the new `description` (`cosmos3-post-train-simulation-bimanual/SKILL.md` L4-5); name not carried |
+| `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | `cosmos3-nano-sim-bimanual-troubleshooting` | `Diagnose Cosmos3 Nano Sim Bimanual setup, data, training, checkpoint, inference, and evaluation failures by locating the first broken product contract. Use when a supported workflow fails, produces invalid media, or cannot be reproduced.` | description not carried; name not carried |
+| `cosmos3-nano-sim-transfer/post-training/SKILL.md` | `cosmos3-nano-sim-transfer-post-training` | `Prepare aligned spatial controls, RGB targets and captions for Cosmos3-Nano-Sim-Transfer; run native Cosmos Framework Stage 0–3 training with local assets; resume full-state checkpoints; pass selected EMA to inference.` | description carried word for word as a paragraph of `cosmos3-post-train-simulation-transfer/SKILL.md` (L23); name not carried |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` | `cosmos3-nano-sim-transfer-troubleshooting` | `Diagnose Cosmos3-Nano-Sim-Transfer setup, checkpoint loading, media alignment, training-state and output failures in an existing workflow.` | description not carried; name not carried |
+
+The two "References" lists of the Auto bodies (16 items under two headings). Each item's words open the row of its file in the new
+"Reference files" table of the Auto `SKILL.md` (L441), where they are text and no longer a link; two rows serve an item of both
+lists, which had the same words and the same target.
+
+| Source                                                   | List item                                                                                                             | Row of "Reference files"                                                     |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L223 | `- [Framework environment and model assets](../../cosmos3-inference-simulation-auto/references/framework-runtime.md)` | L463, `../cosmos3-inference-simulation-auto/references/framework-runtime.md` |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L224 | `- [Training data contract and bundle layout](references/data-contract.md)`                                           | L449, `references/data-contract.md`                                          |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L225 | `- [Parameter guide](references/parameter-guide.md)`                                                                  | L448, `references/transfer-auto-parameters.md`                               |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L226 | `- [Shared Auto reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)`              | L464, `../cosmos3-inference-simulation-auto/references/reference-scene.md`   |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L227 | `- [Camera and WSM input checks](../../cosmos3-inference-simulation-auto/references/input-preparation.md)`            | L465, `../cosmos3-inference-simulation-auto/references/input-preparation.md` |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` L228 | `- [Four-phase training recipe and checkpoint handoffs](references/canonical-recipe.md)`                              | L447, `references/transfer-auto-recipe.md`                                   |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L243      | `- [Model and checkpoint contract](../shared/model-contract.md)`                                                      | L460, `references/sim-auto-model-contract.md`                                |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L244      | `- [Framework environment and model assets](../../cosmos3-inference-simulation-auto/references/framework-runtime.md)` | L463, `../cosmos3-inference-simulation-auto/references/framework-runtime.md` |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L245      | `- [Shared Auto reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)`              | L464, `../cosmos3-inference-simulation-auto/references/reference-scene.md`   |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L246      | `- [Training data and camera mappings](../shared/data-contract.md)`                                                   | L459, `references/sim-auto-data.md`                                          |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L247      | `- [Checkpoint and tokenizer preparation](references/checkpoint-preparation.md)`                                      | L455, `references/sim-auto-checkpoint-preparation.md`                        |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L248      | `- [Three-stage training recipe](references/canonical-recipe.md)`                                                     | L453, `references/sim-auto-recipe.md`                                        |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L249      | `- [Parameter guide](references/parameter-guide.md)`                                                                  | L454, `references/sim-auto-parameters.md`                                    |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L250      | `- [Stage configuration and training launch](references/runtime.md)`                                                  | L457, `references/sim-auto-runtime.md`                                       |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L251      | `- [Short training, save and resume checks](references/smoke.md)`                                                     | L458, `references/sim-auto-smoke.md`                                         |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` L252      | `- [Checkpoint handoffs, resume and student export](references/checkpoints.md)`                                       | L456, `references/sim-auto-checkpoints.md`                                   |
+
+Nothing else was dropped. The other source lines that no longer exist as written are the five skill notes that a provenance note
+replaces and the nine that were reworded (both under "Skill notes"), the headings in the table under "The old `SKILL.md` bodies" and
+the lines under "Changed lines that are not link targets".
+
+### Changed lines that are not link targets
+
+Every line whose text changed, other than a link target, a heading (above) or a skill note (below). A value in code type is a line
+of the file (old: as the previous section left it; new: at this change's head), without its leading indentation and its table
+padding; for a long line, the part that changed with a few words around it, the rest marked "…". A line that also carries a
+re-pointed link is counted under "Link targets re-pointed" as well.
+
+Training commands of the Sim-Transfer post-train skill (file paths relative to `cosmos3-post-train-simulation-transfer/`).
+`SIM_TRANSFER_SKILL` is the inference skill folder, so the commands address the scripts from `FRAMEWORK_DIR`; each line carries a
+`# Skill note (not in the source): ...` comment on the line above, reworded for the new folder.
+
+| File | Where | Old | New |
+| --- | --- | --- | --- |
+| `SKILL.md` | L138, fenced `bash` block in "1. Bind local resources" | `STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/qa_transfer_stage.py"` | `STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-post-train-simulation-transfer/scripts/qa_transfer_stage.py"` |
+| `references/local-dataset.md` | L21, fenced `bash` block in "Build the example2 bundle" | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/scripts/paibench_local_bundle.py" prepare-custom \` | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-post-train-simulation-transfer/scripts/paibench_local_bundle.py" prepare-custom \` |
+| `references/local-training.md` | L42, fenced `bash` block in "Prepare local assets" | `STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/qa_transfer_stage.py"` | `STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-post-train-simulation-transfer/scripts/qa_transfer_stage.py"` |
+| `references/nano-conversion.md` | L30, fenced `bash` block in "Prepare the converter" | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/prepare_nano_dcp.py" check-env \` | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-post-train-simulation-transfer/scripts/prepare_nano_dcp.py" check-env \` |
+| `references/nano-conversion.md` | L48, fenced `bash` block in "Download and convert" | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/prepare_nano_dcp.py" convert \` | `python "$FRAMEWORK_DIR/.agents/skills/cosmos3-post-train-simulation-transfer/scripts/prepare_nano_dcp.py" convert \` |
+
+Tests in `tests/skills/cosmos3-post-train-simulation-transfer/`. Each test locates the script it tests from the repository root,
+because it no longer sits next to it. No test method and no assertion changed: `test_nano_conversion.py` has 16 test methods and 37
+assertions (34 `self.assert...` calls and 3 `assert` statements, besides 5 assertions on mock objects) before and after,
+`test_paibench_local_bundle.py` has 3 test methods and 14 assertions before and after and `test_qa_transfer_stage.py` has 5 test
+methods and 22 assertions before and after.
+
+| File | Where | Old | New |
+| --- | --- | --- | --- |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py` | L18-22 (source L18) | `SCRIPT = Path(__file__).resolve().with_name("prepare_nano_dcp.py")` | `# Skill note (not in the source): this test moved out of the skill folder, so the script is located from the repository root; the source line was SCRIPT = Path(__file__).resolve().with_name("prepare_nano_dcp.py").`<br>`SCRIPT = (`<br>`Path(__file__).resolve().parents[3]`<br>`/ ".agents/skills/cosmos3-post-train-simulation-transfer/scripts/prepare_nano_dcp.py"`<br>`)` |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L10-11 (added before source L9) | (no such lines) | `# Skill note (not in the source): added for the sys.path entry below.`<br>`import sys` |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L18-21 (added before source L14) | (no such lines) | `# Skill note (not in the source): added; this test moved out of the skill folder, so the folder of the script it imports is put on the import path. In the source the test was next to paibench_local_bundle.py and the import below needed no path entry.`<br>`SCRIPTS = Path(__file__).resolve().parents[3] / ".agents/skills/cosmos3-post-train-simulation-transfer/scripts"`<br>`# Skill note (not in the source): added; puts the folder named by SCRIPTS on the import path, so that the import below finds the script. The source had no such line.`<br>`sys.path.insert(0, str(SCRIPTS))` |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py` | L10-11 (added before source L9) | (no such lines) | `# Skill note (not in the source): added for the sys.path entry below.`<br>`import sys` |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py` | L17-20 (added before source L13) | (no such lines) | `# Skill note (not in the source): added; this test moved out of the skill folder, so the folder of the script it imports is put on the import path. In the source the test was next to qa_transfer_stage.py and the import below needed no path entry.`<br>`SCRIPTS = Path(__file__).resolve().parents[3] / ".agents/skills/cosmos3-post-train-simulation-transfer/scripts"`<br>`# Skill note (not in the source): added; puts the folder named by SCRIPTS on the import path, so that the import below finds the script. The source had no such line.`<br>`sys.path.insert(0, str(SCRIPTS))` |
+
+The four inference skills (edited in place). The `description` of each names the post-train skill where it had a stand-in, and the
+sentences that named a retired sub-skill name its successor.
+
+| File | Where | Old | New |
+| --- | --- | --- | --- |
+| `cosmos3-inference-simulation-auto/SKILL.md` | L11, frontmatter `description` | `Sim-Auto (use that model's post-training skill), Sim-Bimanual or Sim-Transfer inference, or control-to-video` | `Sim-Auto (use cosmos3-post-train-simulation-auto), Sim-Bimanual or Sim-Transfer inference, or control-to-video` |
+| `cosmos3-inference-simulation-auto/SKILL.md` | L398, prose in "Troubleshooting" | `… resume and distillation symptoms stay with the [Transfer-Auto](../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md) and [Sim-Auto](../cosmos3-nano-sim-auto/troubleshooting/SKILL.md) troubleshooting skills.` | `… resume and distillation symptoms are in the troubleshooting reference of the Auto post-train skill: [Transfer-Auto](../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto) and [Sim-Auto](../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto).` |
+| `cosmos3-inference-simulation-auto/SKILL.md` | L454, table row in "Related skills" | `` \| `../cosmos3-nano-transfer-auto/post-training/SKILL.md`, `../cosmos3-nano-sim-auto/post-training/SKILL.md` \| The Transfer-Auto and Sim-Auto post-training skills \| `` | `` \| `../cosmos3-post-train-simulation-auto/SKILL.md` \| Transfer-Auto and Sim-Auto post-training: fine-tune Transfer-Auto, distill Sim-Auto \| `` |
+| `cosmos3-inference-simulation-bimanual/SKILL.md` | L10, frontmatter `description` | `distilling the model (use the Sim-Bimanual post-training skill), for choosing robot actions (the model predicts video` | `distilling the model (use cosmos3-post-train-simulation-bimanual), for choosing robot actions (the model predicts video` |
+| `cosmos3-inference-simulation-transfer/SKILL.md` | L10, frontmatter `description` | `distillation or inference from a checkpoint you trained (use the Sim-Transfer post-training skill), not for` | `distillation or inference from a checkpoint you trained (use cosmos3-post-train-simulation-transfer), not for` |
+| `cosmos3-inference-simulation-transfer/SKILL.md` | L423, prose in "Troubleshooting" | `[Sim-Transfer troubleshooting skill](../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md#training-state).` | `[troubleshooting reference of the Sim-Transfer post-training skill](../cosmos3-post-train-simulation-transfer/references/troubleshooting.md#training-state).` |
+| `cosmos3-inference-simulation-transfer/SKILL.md` | L471, table row in "Related skills" | `` \| `../cosmos3-nano-sim-transfer/post-training/SKILL.md` \| The Sim-Transfer post-training skill: training, distillation, inference from your trained checkpoint \| `` | `` \| `../cosmos3-post-train-simulation-transfer/SKILL.md` \| The Sim-Transfer post-training skill: training, distillation, inference from your trained checkpoint \| `` |
+| `cosmos3-inference-simulation/SKILL.md` | L11-12, frontmatter `description` | `(cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training (each model's`<br>`post-training skill).` | `(cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training`<br>`(cosmos3-post-train-simulation).` |
+| `cosmos3-inference-simulation/SKILL.md` | L124-126, prose in "Post-training" | `Post-training is outside this skill and its three blocks. Each model has its own post-training skill:` | `Post-training is outside this skill and its three blocks. Its entry skill is`<br>`[cosmos3-post-train-simulation](../cosmos3-post-train-simulation/SKILL.md); it routes to the post-training skill of`<br>`each model (Transfer-Auto and Sim-Auto are two sections of one skill):` |
+
+Other files:
+
+| File                 | Where                    | Old                                                                                                                                        | New                                                                                                                                   |
+| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/README.md`     | L70, list item in "TODO" | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-nano-transfer-auto-post-training`. `` | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-post-train-simulation-auto`. ``  |
+| `tools/docs/nav.yml` | L64, navigation entry    | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md`     | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md` |
+| `tools/docs/nav.yml` | L67, navigation entry    | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md`     | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md` |
+
+Whitespace only (no word changed): 49 lines of 10 tables in 9 files were re-padded to the repository's aligned table style after a
+link target or a path changed length.
+
+| File                                                               | Lines              | What                                                                 |
+| ------------------------------------------------------------------ | ------------------ | -------------------------------------------------------------------- |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                      | L53-56             | 4 lines of the table in "Choose your starting point (Transfer-Auto)" |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                      | L248-249, L251     | 3 lines of the table in "Choose your starting point (Sim-Auto)"      |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md` | L55-56, L60        | 3 lines of the table in "Troubleshoot Cosmos3-Nano-Sim-Auto"         |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                  | L28-31             | 4 lines of the table in "Choose your starting point"                 |
+| `cosmos3-post-train-simulation-bimanual/references/environment.md` | L40-42, L44-45     | 5 lines of the table in "Bind resources for the requested task"      |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                  | L36-39             | 4 lines of the table in "Choose your starting point"                 |
+| `cosmos3-inference-simulation-auto/SKILL.md`                       | L445-453           | 9 lines of the table in "Related skills"                             |
+| `cosmos3-inference-simulation-auto/references/troubleshooting.md`  | L131-134, L136-137 | 6 lines of the table in "Sim-Auto"                                   |
+| `cosmos3-inference-simulation-transfer/SKILL.md`                   | L466-470, L472-475 | 9 lines of the table in "Related skills"                             |
+| `cosmos3-inference-simulation/references/simulation-readme.md`     | L74-75             | 2 lines of the table in "Run and post-train with agent skills"       |
+
+### Link targets re-pointed
+
+`old` is the target as the file had it before this change, `new` the target in the tree; a pair that occurs more than once in a file
+is counted (×n), and a pair that differs only in a kept anchor is listed once without the anchor. Link text is unchanged, except on
+the lines listed under "Changed lines that are not link targets" and in the reworded skill notes (under "Skill notes"). 169 links in
+36 files of this change: 66 name the same file as before from the new location of the linking file, and 103 name a file that this
+change moved (9 of these are anchors inside an assembled file, where the link used to cross files). 105 links in 41 files edited in
+place: 92 in 35 files of the four inference skills and 13 in 6 other files; each named a file of the four families.
+
+Files of this change:
+
+| File                                                                               | Links re-pointed | Distinct pairs |
+| ---------------------------------------------------------------------------------- | ---------------: | -------------: |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                      |               31 |             21 |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`    |                2 |              2 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`         |                4 |              4 |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                 |               11 |              7 |
+| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`             |               14 |             12 |
+| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`             |                9 |              6 |
+| `cosmos3-post-train-simulation-auto/references/data-contract.md`                   |                8 |              7 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoint-preparation.md` |                2 |              2 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoints.md`            |                1 |              1 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-data.md`                   |                5 |              4 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`         |                4 |              4 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-parameters.md`             |                3 |              3 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-recipe.md`                 |                4 |              4 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-runtime.md`                |                3 |              3 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-smoke.md`                  |                3 |              3 |
+| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` |                5 |              5 |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-parameters.md`        |                2 |              2 |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md`            |                2 |              2 |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                                  |               10 |              7 |
+| `cosmos3-post-train-simulation-bimanual/references/canonical-recipe.md`            |                1 |              1 |
+| `cosmos3-post-train-simulation-bimanual/references/caption-guide.md`               |                1 |              1 |
+| `cosmos3-post-train-simulation-bimanual/references/checkpoint-and-resume.md`       |                2 |              2 |
+| `cosmos3-post-train-simulation-bimanual/references/data-contract.md`               |                6 |              6 |
+| `cosmos3-post-train-simulation-bimanual/references/environment.md`                 |                3 |              3 |
+| `cosmos3-post-train-simulation-bimanual/references/multinode-launcher.md`          |                1 |              1 |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                  |               14 |              6 |
+| `cosmos3-post-train-simulation-transfer/references/canonical-recipe.md`            |                2 |              2 |
+| `cosmos3-post-train-simulation-transfer/references/caption-manifest.md`            |                1 |              1 |
+| `cosmos3-post-train-simulation-transfer/references/checkpoint-and-resume.md`       |                2 |              2 |
+| `cosmos3-post-train-simulation-transfer/references/data-contract.md`               |                1 |              1 |
+| `cosmos3-post-train-simulation-transfer/references/environment.md`                 |                2 |              2 |
+| `cosmos3-post-train-simulation-transfer/references/local-dataset.md`               |                1 |              1 |
+| `cosmos3-post-train-simulation-transfer/references/local-training.md`              |                5 |              4 |
+| `cosmos3-post-train-simulation-transfer/references/multinode-training.md`          |                1 |              1 |
+| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`             |                2 |              2 |
+| `cosmos3-post-train-simulation-transfer/references/parameter-guide.md`             |                1 |              1 |
+
+Files edited in place (the four inference skills, then the docs):
+
+| File                                                                       | Links re-pointed | Distinct pairs |
+| -------------------------------------------------------------------------- | ---------------: | -------------: |
+| `cosmos3-inference-simulation-auto/SKILL.md`                               |                6 |              5 |
+| `cosmos3-inference-simulation-auto/references/auto-readme.md`              |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/camera-identities.md`        |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/caption-guide.md`            |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/caption-policy.md`           |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/framework-runtime.md`        |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/generate-wsm.md`             |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/input-and-execution.md`      |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/input-preparation.md`        |                4 |              3 |
+| `cosmos3-inference-simulation-auto/references/model-contract.md`           |                7 |              5 |
+| `cosmos3-inference-simulation-auto/references/reference-scene.md`          |                3 |              2 |
+| `cosmos3-inference-simulation-auto/references/sim-auto-inputs.md`          |                2 |              2 |
+| `cosmos3-inference-simulation-auto/references/start-here-and-sampling.md`  |                1 |              1 |
+| `cosmos3-inference-simulation-auto/references/troubleshooting.md`          |                5 |              5 |
+| `cosmos3-inference-simulation-auto/scripts/wsm/docs/scenario-to-rds-hq.md` |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/SKILL.md`                           |                4 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/bimanual-guide.md`       |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/evaluation.md`           |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/input-contract.md`       |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/model-contract.md`       |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/prompt-guide.md`         |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/quick-start.md`          |                1 |              1 |
+| `cosmos3-inference-simulation-bimanual/references/troubleshooting.md`      |                3 |              2 |
+| `cosmos3-inference-simulation-transfer/SKILL.md`                           |                4 |              3 |
+| `cosmos3-inference-simulation-transfer/references/caption-guide.md`        |                4 |              2 |
+| `cosmos3-inference-simulation-transfer/references/environment.md`          |                2 |              2 |
+| `cosmos3-inference-simulation-transfer/references/hf-sample.md`            |                2 |              2 |
+| `cosmos3-inference-simulation-transfer/references/model-contract.md`       |                5 |              4 |
+| `cosmos3-inference-simulation-transfer/references/overview.md`             |                3 |              2 |
+| `cosmos3-inference-simulation-transfer/references/prompt-guide.md`         |                1 |              1 |
+| `cosmos3-inference-simulation-transfer/references/quick-start.md`          |                2 |              2 |
+| `cosmos3-inference-simulation-transfer/references/setup.md`                |                9 |              4 |
+| `cosmos3-inference-simulation-transfer/references/troubleshooting.md`      |                3 |              2 |
+| `cosmos3-inference-simulation/SKILL.md`                                    |                4 |              4 |
+| `cosmos3-inference-simulation/references/simulation-readme.md`             |                4 |              4 |
+| `README.md`                                                                |                2 |              2 |
+| `docs/inference_sim_auto.md`                                               |                2 |              2 |
+| `docs/models/README.md`                                                    |                3 |              2 |
+| `docs/post_training/choose_path.md`                                        |                2 |              2 |
+| `docs/training_sim_auto.md`                                                |                2 |              2 |
+| `docs/training_transfer_auto.md`                                           |                2 |              2 |
+
+The distinct `old` → `new` pairs of each file of this change:
+
+- `cosmos3-post-train-simulation-auto/SKILL.md`: `../../cosmos3-inference-simulation-auto/SKILL.md` → `../cosmos3-inference-simulation-auto/SKILL.md` (×4); `../../cosmos3-nano-sim-auto/post-training/SKILL.md` → `#distill-sim-auto`; `../../../../docs/setup.md` → `../../../docs/setup.md` (×2); `../../cosmos3-inference-simulation-auto/references/framework-runtime.md` → `../cosmos3-inference-simulation-auto/references/framework-runtime.md` (×4); `../../../../cosmos_framework/configs/simulation/common/transfer_auto_recipes.py` → `../../../cosmos_framework/configs/simulation/common/transfer_auto_recipes.py`; `../../../../cosmos_framework/configs/simulation/experiment/auto/transfer_auto.py` → `../../../cosmos_framework/configs/simulation/experiment/auto/transfer_auto.py`; `references/parameter-guide.md` → `references/transfer-auto-parameters.md` (×2); `../../cosmos3-inference-simulation-auto/references/reference-scene.md` → `../cosmos3-inference-simulation-auto/references/reference-scene.md` (×2); `../../cosmos3-inference-simulation-auto/references/caption-policy.md` → `../cosmos3-inference-simulation-auto/references/caption-policy.md`; `../../cosmos3-inference-simulation-auto/references/input-preparation.md` → `../cosmos3-inference-simulation-auto/references/input-preparation.md`; `../shared/reference-scene.md` → `references/training-bundle-and-short-check.md`; `../shared/framework-runtime.md` → `references/runtime.md`; `../shared/model-contract.md` → `references/sim-auto-model-contract.md`; `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `#fine-tune-transfer-auto`; `references/checkpoint-preparation.md` → `references/sim-auto-checkpoint-preparation.md`; `references/canonical-recipe.md` → `references/sim-auto-recipe.md`; `references/parameter-guide.md` → `references/sim-auto-parameters.md`; `references/runtime.md` → `references/sim-auto-runtime.md`; `references/smoke.md` → `references/sim-auto-smoke.md` (×2); `../../cosmos3-nano-transfer-auto/shared/reference-scene.md` → `references/training-bundle-and-short-check.md`; `references/checkpoints.md` → `references/sim-auto-checkpoints.md`
+- `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`: `../shared/reference-scene.md` → `training-bundle-and-short-check.md`; `references/canonical-recipe.md` → `transfer-auto-recipe.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`: `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../SKILL.md`; `../shared/data-contract.md` → `sim-auto-data.md`; `../../cosmos3-nano-transfer-auto/shared/reference-scene.md` → `training-bundle-and-short-check.md`; `references/checkpoints.md` → `sim-auto-checkpoints.md`
+- `cosmos3-post-train-simulation-auto/references/troubleshooting.md`: `references/symptom-guide.md` → `#cosmos3-nano-transfer-auto-common-problems-and-checks` (×2); `../../../cosmos3-inference-simulation-auto/references/model-contract.md` → `../../cosmos3-inference-simulation-auto/references/model-contract.md`; `../../../cosmos3-inference-simulation-auto/references/input-and-execution.md` → `../../cosmos3-inference-simulation-auto/references/input-and-execution.md`; `../../post-training/references/canonical-recipe.md` → `transfer-auto-recipe.md`; `../shared/data-contract.md` → `sim-auto-data.md` (×2); `../post-training/references/checkpoints.md` → `sim-auto-checkpoints.md` (×2); `../post-training/references/smoke.md` → `sim-auto-smoke.md` (×2)
+- `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`: `../post-training/SKILL.md` → `../SKILL.md`; `../post-training/references/multinode-launcher.md` → `multinode-launcher.md` (×2); `references/failure-playbook.md#launcher-or-allocation-failure` → `#launcher-or-allocation-failure`; `../post-training/references/checkpoint-and-resume.md` → `checkpoint-and-resume.md` (×2); `../shared/release-workflow.md` → `environment.md`; `references/failure-playbook.md` → `#failure-playbook`; `../post-training/references/canonical-recipe.md` → `canonical-recipe.md`; `../SKILL.md` → `#find-the-symptom`; `../../../cosmos3-inference-simulation-bimanual/references/troubleshooting.md` → `../../cosmos3-inference-simulation-bimanual/references/troubleshooting.md`; `../../post-training/references/multinode-launcher.md` → `multinode-launcher.md`; `../../post-training/references/canonical-recipe.md` → `canonical-recipe.md`; `../../post-training/references/checkpoint-and-resume.md` → `checkpoint-and-resume.md`
+- `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`: `../post-training/references/checkpoint-and-resume.md` → `checkpoint-and-resume.md` (×2); `../post-training/references/local-training.md` → `local-training.md` (×2); `../post-training/references/canonical-recipe.md` → `canonical-recipe.md` (×2); `references/failure-playbook.md` → `#common-failures`; `../SKILL.md` → `#training-state`; `../../post-training/references/local-training.md` → `local-training.md`
+- `cosmos3-post-train-simulation-auto/references/data-contract.md`: `../../../cosmos3-inference-simulation-auto/scripts/wsm/README.md` → `../../cosmos3-inference-simulation-auto/scripts/wsm/README.md`; `../../../cosmos3-inference-simulation-auto/scripts/wsm/skills/scenario-to-rds-hq/SKILL.md` → `../../cosmos3-inference-simulation-auto/scripts/wsm/skills/scenario-to-rds-hq/SKILL.md`; `../../../cosmos3-inference-simulation-auto/references/wsm-conventions.md` → `../../cosmos3-inference-simulation-auto/references/wsm-conventions.md`; `../../../cosmos3-inference-simulation-auto/references/reference-scene.md` → `../../cosmos3-inference-simulation-auto/references/reference-scene.md` (×2); `../../../cosmos3-inference-simulation-auto/references/input-preparation.md` → `../../cosmos3-inference-simulation-auto/references/input-preparation.md`; `../../../cosmos3-inference-simulation-auto/references/caption-policy.md` → `../../cosmos3-inference-simulation-auto/references/caption-policy.md`; `../../../cosmos3-inference-simulation-auto/references/camera-identities.md` → `../../cosmos3-inference-simulation-auto/references/camera-identities.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoint-preparation.md`: `../../../cosmos3-inference-simulation-auto/references/framework-runtime.md` → `../../cosmos3-inference-simulation-auto/references/framework-runtime.md`; `smoke.md` → `sim-auto-smoke.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-checkpoints.md`: `../../../cosmos3-inference-simulation-auto/SKILL.md` → `../../cosmos3-inference-simulation-auto/SKILL.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-data.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `data-contract.md` (×2); `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../SKILL.md`; `../post-training/references/runtime.md` → `sim-auto-runtime.md`; `../../cosmos3-nano-transfer-auto/shared/reference-scene.md` → `training-bundle-and-short-check.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`: `../post-training/references/checkpoint-preparation.md` → `sim-auto-checkpoint-preparation.md`; `../post-training/references/checkpoints.md` → `sim-auto-checkpoints.md`; `../post-training/SKILL.md` → `../SKILL.md#distill-sim-auto`; `../troubleshooting/SKILL.md` → `troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-parameters.md`: `canonical-recipe.md` → `sim-auto-recipe.md`; `checkpoints.md` → `sim-auto-checkpoints.md`; `runtime.md` → `sim-auto-runtime.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-recipe.md`: `../../shared/data-contract.md` → `sim-auto-data.md`; `checkpoints.md` → `sim-auto-checkpoints.md`; `runtime.md` → `sim-auto-runtime.md`; `smoke.md` → `sim-auto-smoke.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-runtime.md`: `../../../cosmos3-inference-simulation-auto/references/framework-runtime.md` → `../../cosmos3-inference-simulation-auto/references/framework-runtime.md`; `checkpoint-preparation.md` → `sim-auto-checkpoint-preparation.md`; `../../shared/data-contract.md` → `sim-auto-data.md`
+- `cosmos3-post-train-simulation-auto/references/sim-auto-smoke.md`: `../../shared/data-contract.md` → `sim-auto-data.md`; `runtime.md` → `sim-auto-runtime.md`; `checkpoints.md` → `sim-auto-checkpoints.md`
+- `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`: `../post-training/SKILL.md` → `../SKILL.md`; `framework-runtime.md` → `runtime.md`; `../../cosmos3-nano-sim-auto/shared/data-contract.md` → `sim-auto-data.md`; `../../cosmos3-nano-sim-auto/post-training/references/runtime.md` → `sim-auto-runtime.md`; `../../cosmos3-nano-sim-auto/post-training/references/smoke.md` → `sim-auto-smoke.md`
+- `cosmos3-post-train-simulation-auto/references/transfer-auto-parameters.md`: `canonical-recipe.md` → `transfer-auto-recipe.md`; `../../../../../docs/training.md` → `../../../../docs/training.md`
+- `cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md`: `../SKILL.md` → `../SKILL.md#fine-tune-transfer-auto`; `parameter-guide.md` → `transfer-auto-parameters.md`
+- `cosmos3-post-train-simulation-bimanual/SKILL.md`: `../../cosmos3-inference-simulation-bimanual/SKILL.md` → `../cosmos3-inference-simulation-bimanual/SKILL.md` (×2); `../../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py` → `../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py`; `../../../../docs/bimanual_data_preflight.md` → `../../../docs/bimanual_data_preflight.md`; `../../../../docs/setup.md` → `../../../docs/setup.md`; `../shared/release-workflow.md` → `references/environment.md` (×2); `../../../../docs/training.md` → `../../../docs/training.md`; `../../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md` → `../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md` (×2)
+- `cosmos3-post-train-simulation-bimanual/references/canonical-recipe.md`: `../../../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py` → `../../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py`
+- `cosmos3-post-train-simulation-bimanual/references/caption-guide.md`: `../../../cosmos3-inference-simulation-bimanual/references/prompt-guide.md` → `../../cosmos3-inference-simulation-bimanual/references/prompt-guide.md`
+- `cosmos3-post-train-simulation-bimanual/references/checkpoint-and-resume.md`: `../../../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py` → `../../../../cosmos_framework/configs/simulation/common/bimanual_profiles.py`; `../../../cosmos3-inference-simulation-bimanual/SKILL.md` → `../../cosmos3-inference-simulation-bimanual/SKILL.md`
+- `cosmos3-post-train-simulation-bimanual/references/data-contract.md`: `../../../../../cosmos_framework/data/generator/local_simulation/bimanual_config.py` → `../../../../cosmos_framework/data/generator/local_simulation/bimanual_config.py`; `../../../cosmos3-inference-simulation-bimanual/references/prompt-guide.md` → `../../cosmos3-inference-simulation-bimanual/references/prompt-guide.md`; `../../../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md` → `../../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md`; `../../../../../docs/bimanual_data_preflight.md` → `../../../../docs/bimanual_data_preflight.md`; `../../../cosmos3-inference-simulation-bimanual/SKILL.md` → `../../cosmos3-inference-simulation-bimanual/SKILL.md`; `../../../cosmos3-inference-simulation-bimanual/references/input-contract.md` → `../../cosmos3-inference-simulation-bimanual/references/input-contract.md`
+- `cosmos3-post-train-simulation-bimanual/references/environment.md`: `../post-training/SKILL.md` → `../SKILL.md`; `../post-training/references/checkpoint-and-resume.md` → `checkpoint-and-resume.md`; `../post-training/references/multinode-launcher.md` → `multinode-launcher.md`
+- `cosmos3-post-train-simulation-bimanual/references/multinode-launcher.md`: `../../../../../docs/training.md` → `../../../../docs/training.md`
+- `cosmos3-post-train-simulation-transfer/SKILL.md`: `../../cosmos3-inference-simulation-transfer/SKILL.md` → `../cosmos3-inference-simulation-transfer/SKILL.md` (×2); `../../cosmos3-inference-simulation-transfer/references/setup.md` → `../cosmos3-inference-simulation-transfer/references/setup.md` (×2); `../../cosmos3-inference-simulation-transfer/references/caption-guide.md` → `../cosmos3-inference-simulation-transfer/references/caption-guide.md` (×2); `../shared/data-contract.md` → `references/data-contract.md` (×2); `../shared/local-dataset.md` → `references/local-dataset.md` (×4); `../../cosmos3-inference-simulation-transfer/references/hf-sample.md` → `../cosmos3-inference-simulation-transfer/references/hf-sample.md` (×2)
+- `cosmos3-post-train-simulation-transfer/references/canonical-recipe.md`: `../../../cosmos3-inference-simulation-transfer/references/model-contract.md` → `../../cosmos3-inference-simulation-transfer/references/model-contract.md`; `../../shared/local-dataset.md` → `local-dataset.md`
+- `cosmos3-post-train-simulation-transfer/references/caption-manifest.md`: `../../shared/local-dataset.md` → `local-dataset.md`
+- `cosmos3-post-train-simulation-transfer/references/checkpoint-and-resume.md`: `../../../../../docs/setup.md` → `../../../../docs/setup.md`; `../../../cosmos3-inference-simulation-transfer/references/output.md` → `../../cosmos3-inference-simulation-transfer/references/output.md`
+- `cosmos3-post-train-simulation-transfer/references/data-contract.md`: `../post-training/references/local-training.md` → `local-training.md`
+- `cosmos3-post-train-simulation-transfer/references/environment.md`: `../post-training/references/nano-conversion.md` → `nano-conversion.md`; `../post-training/references/multinode-training.md` → `multinode-training.md`
+- `cosmos3-post-train-simulation-transfer/references/local-dataset.md`: `../post-training/references/local-training.md` → `local-training.md`
+- `cosmos3-post-train-simulation-transfer/references/local-training.md`: `../../../cosmos3-inference-simulation-transfer/references/setup.md` → `../../cosmos3-inference-simulation-transfer/references/setup.md`; `../../../cosmos3-inference-simulation-transfer/references/hf-sample.md` → `../../cosmos3-inference-simulation-transfer/references/hf-sample.md`; `../../shared/local-dataset.md` → `local-dataset.md` (×2); `../../shared/data-contract.md` → `data-contract.md`
+- `cosmos3-post-train-simulation-transfer/references/multinode-training.md`: `../../../cosmos3-inference-simulation-transfer/references/environment.md` → `../../cosmos3-inference-simulation-transfer/references/environment.md`
+- `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`: `../../../cosmos3-inference-simulation-transfer/references/setup.md` → `../../cosmos3-inference-simulation-transfer/references/setup.md`; `../../../cosmos3-inference-simulation-transfer/references/environment.md` → `../../cosmos3-inference-simulation-transfer/references/environment.md`
+- `cosmos3-post-train-simulation-transfer/references/parameter-guide.md`: `../../shared/data-contract.md` → `data-contract.md`
+
+The distinct `old` → `new` pairs of each file edited in place:
+
+- `cosmos3-inference-simulation-auto/SKILL.md`: `../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../cosmos3-post-train-simulation-auto/SKILL.md`; `../cosmos3-nano-sim-auto/post-training/SKILL.md` → `../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto` (×2); `../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` → `../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto`; `../cosmos3-nano-sim-auto/troubleshooting/SKILL.md` → `../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto`; `../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`
+- `cosmos3-inference-simulation-auto/references/auto-readme.md`: `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`
+- `cosmos3-inference-simulation-auto/references/camera-identities.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md`
+- `cosmos3-inference-simulation-auto/references/caption-guide.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md`
+- `cosmos3-inference-simulation-auto/references/caption-policy.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md`
+- `cosmos3-inference-simulation-auto/references/framework-runtime.md`: `../../cosmos3-nano-transfer-auto/shared/framework-runtime.md` → `../../cosmos3-post-train-simulation-auto/references/runtime.md`
+- `cosmos3-inference-simulation-auto/references/generate-wsm.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md`
+- `cosmos3-inference-simulation-auto/references/input-and-execution.md`: `../../cosmos3-nano-transfer-auto/shared/framework-runtime.md` → `../../cosmos3-post-train-simulation-auto/references/runtime.md`
+- `cosmos3-inference-simulation-auto/references/input-preparation.md`: `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md`; `../../cosmos3-nano-sim-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto` (×2); `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`
+- `cosmos3-inference-simulation-auto/references/model-contract.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md` (×2); `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto` (×2); `../../cosmos3-nano-transfer-auto/post-training/references/canonical-recipe.md` → `../../cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md`; `../../cosmos3-nano-sim-auto/shared/model-contract.md` → `../../cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`; `../../cosmos3-nano-sim-auto/shared/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/sim-auto-data.md`
+- `cosmos3-inference-simulation-auto/references/reference-scene.md`: `../../cosmos3-nano-transfer-auto/shared/reference-scene.md` → `../../cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`; `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md` (×2)
+- `cosmos3-inference-simulation-auto/references/sim-auto-inputs.md`: `../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/data-contract.md`; `../../cosmos3-nano-sim-auto/shared/data-contract.md` → `../../cosmos3-post-train-simulation-auto/references/sim-auto-data.md`
+- `cosmos3-inference-simulation-auto/references/start-here-and-sampling.md`: `../../cosmos3-nano-sim-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`
+- `cosmos3-inference-simulation-auto/references/troubleshooting.md`: `../../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` → `../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto`; `../../cosmos3-nano-sim-auto/troubleshooting/SKILL.md` → `../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto`; `../../cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` → `../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#cosmos3-nano-transfer-auto-common-problems-and-checks`; `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `../../cosmos3-nano-sim-auto/post-training/references/checkpoints.md` → `../../cosmos3-post-train-simulation-auto/references/sim-auto-checkpoints.md`
+- `cosmos3-inference-simulation-auto/scripts/wsm/docs/scenario-to-rds-hq.md`: `../../../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md` → `../../../../cosmos3-post-train-simulation-auto/references/data-contract.md`
+- `cosmos3-inference-simulation-bimanual/SKILL.md`: `../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../cosmos3-post-train-simulation-bimanual/SKILL.md` (×4)
+- `cosmos3-inference-simulation-bimanual/references/bimanual-guide.md`: `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/SKILL.md`
+- `cosmos3-inference-simulation-bimanual/references/evaluation.md`: `../../cosmos3-nano-sim-bimanual/shared/release-workflow.md` → `../../cosmos3-post-train-simulation-bimanual/references/environment.md`
+- `cosmos3-inference-simulation-bimanual/references/input-contract.md`: `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/references/data-contract.md`
+- `cosmos3-inference-simulation-bimanual/references/model-contract.md`: `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/SKILL.md`
+- `cosmos3-inference-simulation-bimanual/references/prompt-guide.md`: `../../cosmos3-nano-sim-bimanual/post-training/references/caption-guide.md` → `../../cosmos3-post-train-simulation-bimanual/references/caption-guide.md`
+- `cosmos3-inference-simulation-bimanual/references/quick-start.md`: `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/SKILL.md`
+- `cosmos3-inference-simulation-bimanual/references/troubleshooting.md`: `../../cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`; `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/SKILL.md` (×2)
+- `cosmos3-inference-simulation-transfer/SKILL.md`: `../cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../cosmos3-post-train-simulation-transfer/SKILL.md` (×2); `../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` → `../cosmos3-post-train-simulation-transfer/references/troubleshooting.md`; `../cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md` → `../cosmos3-post-train-simulation-transfer/references/canonical-recipe.md`
+- `cosmos3-inference-simulation-transfer/references/caption-guide.md`: `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md` (×2); `../../cosmos3-nano-sim-transfer/post-training/references/caption-manifest.md` → `../../cosmos3-post-train-simulation-transfer/references/caption-manifest.md` (×2)
+- `cosmos3-inference-simulation-transfer/references/environment.md`: `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md`; `../../cosmos3-nano-sim-transfer/shared/environment.md` → `../../cosmos3-post-train-simulation-transfer/references/environment.md`
+- `cosmos3-inference-simulation-transfer/references/hf-sample.md`: `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md`; `../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md` → `../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md`
+- `cosmos3-inference-simulation-transfer/references/model-contract.md`: `../../cosmos3-nano-sim-transfer/shared/data-contract.md` → `../../cosmos3-post-train-simulation-transfer/references/data-contract.md` (×2); `../../cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-transfer/SKILL.md`; `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md`; `../../cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md` → `../../cosmos3-post-train-simulation-transfer/references/canonical-recipe.md`
+- `cosmos3-inference-simulation-transfer/references/overview.md`: `../../cosmos3-nano-sim-transfer/post-training/references/local-training.md` → `../../cosmos3-post-train-simulation-transfer/references/local-training.md` (×2); `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md`
+- `cosmos3-inference-simulation-transfer/references/prompt-guide.md`: `../../cosmos3-nano-sim-transfer/shared/data-contract.md` → `../../cosmos3-post-train-simulation-transfer/references/data-contract.md`
+- `cosmos3-inference-simulation-transfer/references/quick-start.md`: `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md`; `../../cosmos3-nano-sim-transfer/post-training/references/local-training.md` → `../../cosmos3-post-train-simulation-transfer/references/local-training.md`
+- `cosmos3-inference-simulation-transfer/references/setup.md`: `../../cosmos3-nano-sim-transfer/post-training/references/multinode-training.md` → `../../cosmos3-post-train-simulation-transfer/references/multinode-training.md` (×2); `../../cosmos3-nano-sim-transfer/post-training/references/nano-conversion.md` → `../../cosmos3-post-train-simulation-transfer/references/nano-conversion.md` (×3); `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md` (×3); `../../cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-transfer/SKILL.md`
+- `cosmos3-inference-simulation-transfer/references/troubleshooting.md`: `../../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` → `../../cosmos3-post-train-simulation-transfer/references/troubleshooting.md`; `../../cosmos3-nano-sim-transfer/shared/local-dataset.md` → `../../cosmos3-post-train-simulation-transfer/references/local-dataset.md` (×2)
+- `cosmos3-inference-simulation/SKILL.md`: `../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../cosmos3-post-train-simulation-bimanual/SKILL.md`; `../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `../cosmos3-nano-sim-auto/post-training/SKILL.md` → `../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`; `../cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../cosmos3-post-train-simulation-transfer/SKILL.md`
+- `cosmos3-inference-simulation/references/simulation-readme.md`: `../../cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-bimanual/SKILL.md`; `../../cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `../../cosmos3-nano-sim-auto/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`; `../../cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../../cosmos3-post-train-simulation-transfer/SKILL.md`
+- `README.md`: `./.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md` → `./.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `./.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md` → `./.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`
+- `docs/inference_sim_auto.md`: `../.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `../.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`
+- `docs/models/README.md`: `../../.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md` (×2); `../../.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../../.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md`
+- `docs/post_training/choose_path.md`: `../../.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md` → `../../.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md`; `../../.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md` → `../../.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md`
+- `docs/training_sim_auto.md`: `../.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto`; `../.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto`
+- `docs/training_transfer_auto.md`: `../.agents/skills/cosmos3-nano-transfer-auto/shared/reference-scene.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`; `../.agents/skills/cosmos3-nano-transfer-auto/shared/framework-runtime.md` → `../.agents/skills/cosmos3-post-train-simulation-auto/references/runtime.md`
+
+Targets written with an anchor: 12 links to the old Transfer-Auto post-training `SKILL.md` end in `#fine-tune-transfer-auto` and 11
+links to the old Sim-Auto one in `#distill-sim-auto` (a link that carried an anchor of its own keeps that anchor, which is still a
+heading of the merged file). 2 links between the two Auto bodies are anchors in the merged `SKILL.md`, and 7 links between the
+pieces of an assembled troubleshooting reference are anchors in that file: the Sim-Bimanual playbook's link to the main
+troubleshooting steps is `#find-the-symptom`, and the Sim-Transfer playbook's is `#training-state`. The inference skills link the
+training half of troubleshooting in the post-train skills (2 links of the Sim-Transfer inference skill end in
+`references/troubleshooting.md#training-state`). The link "environment requirements" of the Sim-Bimanual inference skill's
+`references/evaluation.md` keeps the moved page as its target, `cosmos3-post-train-simulation-bimanual/references/environment.md`.
+
+### Skill notes
+
+The four post-train skills and the three tests hold 28 notes marked `Skill note (not in the source)` in 19 files: 12 added by this
+change, 9 of the previous section that were reworded so that they are true for the new layout, 3 whose link target alone changed,
+and 4 carried unchanged. 16 are blockquotes in Markdown and 12 are code comments. Text that is new as a whole (frontmatter, new
+sections, the entry skill) is not marked line by line; it is under "New text".
+
+| File                                                                                | Added         | Reworded        | Link target only | Unchanged |
+| ----------------------------------------------------------------------------------- | ------------- | --------------- | ---------------- | --------- |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3            | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3            | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3            | —               | —                | —         |
+| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`              | L3            | —               | L92              | L13       |
+| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`              | L3            | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/references/data-contract.md`                    | —             | —               | L170             | —         |
+| `cosmos3-post-train-simulation-auto/references/runtime.md`                          | —             | —               | —                | L3        |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-model-contract.md`          | —             | —               | —                | L11       |
+| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md`  | —             | —               | —                | L3        |
+| `cosmos3-post-train-simulation-bimanual/references/data-contract.md`                | —             | —               | L147             | —         |
+| `cosmos3-post-train-simulation-bimanual/references/environment.md`                  | —             | L3              | —                | —         |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                                   | —             | L64, L137, L243 | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/environment.md`                  | —             | L3              | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/local-dataset.md`                | —             | L20             | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/local-training.md`               | —             | L41             | —                | —         |
+| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md`              | —             | L29, L47        | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py`       | L18           | —               | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L10, L18, L20 | —               | —                | —         |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L10, L17, L19 | —               | —                | —         |
+
+Notes added:
+
+| File                                                                                | Line | Form                                    | Opening words                                                                                    |
+| ----------------------------------------------------------------------------------- | ---- | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3   | provenance note after the first heading | `these blocks are from the body of the Transfer-Auto post-training skill that …`                 |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3   | provenance note after the first heading | `these blocks are from the body of the Sim-Auto post-training skill that …`                      |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3   | provenance note after the first heading | `this file holds what the Transfer-Auto and Sim-Auto troubleshooting skills say about …`         |
+| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`              | L3   | provenance note after the first heading | `this file is the training side of the Sim-Bimanual troubleshooting sub-skill, assembled …`      |
+| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`              | L3   | provenance note after the first heading | `this file holds the training-state part of the Sim-Transfer troubleshooting sub-skill, moved …` |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py`       | L18  | code comment above the changed lines    | `this test moved out of the skill folder, so the script is …`                                    |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L10  | code comment above the changed lines    | `added for the sys.path entry below.`                                                            |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L18  | code comment above the changed lines    | `added; this test moved out of the skill folder, so the folder …`                                |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | L20  | code comment above the changed lines    | `added; puts the folder named by SCRIPTS on the import path, so …`                               |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L10  | code comment above the changed lines    | `added for the sys.path entry below.`                                                            |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L17  | code comment above the changed lines    | `added; this test moved out of the skill folder, so the folder …`                                |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | L19  | code comment above the changed lines    | `added; puts the folder named by SCRIPTS on the import path, so …`                               |
+
+Notes of the previous section that a provenance note replaces. The assembled troubleshooting references carry one note each, which
+says what the file holds and where the inference half is; it takes over what these five notes said.
+
+| Source | Old note | Replaced by |
+| --- | --- | --- |
+| `cosmos3-nano-transfer-auto/troubleshooting/SKILL.md` L8 | `> **Skill note (not in the source):** the inference checks of this skill (video timing or dimension problems, side/rear failures and the inference sections of the symptom guide) and its two stage-neutral sections ("Collect one failing example" and "Diagnose, correct, verify") moved to [Auto inference troubleshooting](../../cosmos3-inference-simulation-auto/references/troubleshooting.md#transfer-auto); training, checkpoint and resume symptoms stay here, in the symptom guide.` | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3 |
+| `cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md` L3 | `> **Skill note (not in the source):** the inference sections of this guide (side/rear morphing; weather/road intent; frame count; LiDAR; import error, OOM or distributed failure) moved to [Auto inference troubleshooting](../../../cosmos3-inference-simulation-auto/references/troubleshooting.md#transfer-auto).` | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3 |
+| `cosmos3-nano-sim-auto/troubleshooting/SKILL.md` L8 | `> **Skill note (not in the source):** the inference rows of the table below (side/rear geometry; short output or caption transition; missing metadata / HF load rejected; CFG or sampler behavior; LiDAR) and the stage-neutral text around it (what to collect for one failing example; preserving inputs, applying the smallest correction and reporting) moved to [Auto inference troubleshooting](../../cosmos3-inference-simulation-auto/references/troubleshooting.md#sim-auto); the training rows and the reader-error rule stay here.` | `cosmos3-post-train-simulation-auto/references/troubleshooting.md` L3 |
+| `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` L8 | `> **Skill note (not in the source):** the opening guidance, the Runtime, Model and runtime, Media and data and Inference sections of this skill, their failure-table rows and the support-request paragraph that closed "Training state" are in the Sim-Transfer inference skill's [troubleshooting reference](../../cosmos3-inference-simulation-transfer/references/troubleshooting.md). This file keeps "Training state".` | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L3 |
+| `cosmos3-nano-sim-transfer/troubleshooting/references/failure-playbook.md` L5 | `> **Skill note (not in the source):** the "Runtime, input and inference" rows are in the Sim-Transfer inference skill's [troubleshooting reference](../../../cosmos3-inference-simulation-transfer/references/troubleshooting.md#runtime-input-and-inference).` | `cosmos3-post-train-simulation-transfer/references/troubleshooting.md` L3 |
+
+Notes of the previous section that were reworded, in the files of this change (9). A long note is shown from its first to its last
+changed word.
+
+| File | Line | Old | New |
+| --- | --- | --- | --- |
+| `cosmos3-post-train-simulation-bimanual/references/environment.md` | L3 | ``` > **Skill note (not in the source):** the sentences of this file that apply to inference or to both stages are now, verbatim, in the [Prerequisites](../../cosmos3-inference-simulation-bimanual/SKILL.md#prerequisites) of the Sim-Bimanual inference skill: running from the Framework root, the `uv==0.11.29` lock check with `UV_CACHE_DIR`, the CUDA and GPU-count checks with their commands, the FFmpeg and NPP note, and the credential, `HF_TOKEN` and Pyxis rule. The training setup, the sentence that names both installs (it keeps its clause on the inference-only install) and the per-task resource table stay here. ``` | ``` > **Skill note (not in the source):** this file is the environment and workflow reference that the Sim-Bimanual training and inference skills shared (cosmos-framework `main` 45fecab). Its sentences that apply to inference, or to inference and training alike, are, verbatim, in the [Prerequisites](../../cosmos3-inference-simulation-bimanual/SKILL.md#prerequisites) of the Sim-Bimanual inference skill: running from the Framework root, the `uv==0.11.29` lock check with `UV_CACHE_DIR`, the CUDA and GPU-count checks with their commands, the FFmpeg and NPP note, and the credential, `HF_TOKEN` and Pyxis rule. The training setup, the sentence that names both installs (it keeps its clause on the inference-only install) and the per-task resource table are in this file. ``` |
+| `cosmos3-post-train-simulation-transfer/SKILL.md` | L64 | `` > **Skill note (not in the source):** the setup guide sets `SIM_TRANSFER_SKILL` to the Sim-Transfer inference skill folder, which holds the sample-preparation script. The commands of this skill address its own scripts from `FRAMEWORK_DIR`. `` | `` > **Skill note (not in the source):** "this skill bundle" in the sentence above was the folder of the Sim-Transfer skill family in the source. The setup guide sets `SIM_TRANSFER_SKILL` to the Sim-Transfer inference skill folder (`.agents/skills/cosmos3-inference-simulation-transfer` under `FRAMEWORK_DIR`), which holds the sample-preparation script; keep that value, not the folder of this skill. The commands of this skill address its own scripts (`scripts/qa_transfer_stage.py`, `scripts/prepare_nano_dcp.py` and `scripts/paibench_local_bundle.py`) from `FRAMEWORK_DIR`, under `.agents/skills/cosmos3-post-train-simulation-transfer`. `` |
+| `cosmos3-post-train-simulation-transfer/SKILL.md` | L137 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the Sim-Transfer inference skill folder, so this script, which is in the scripts folder of this skill, is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".` |
+| `cosmos3-post-train-simulation-transfer/SKILL.md` | L243 | ``` … of [1. Select the matched inference checkpoint](../../cosmos3-inference-simulation-transfer/SKILL.md#1-select-the-matched-inference-checkpoint), which defines `SIM_TRANSFER_RESOURCE_OVERRIDES` ("the HF resource overrides") and the checkpoint argument array that the block below replaces, and it precedes the generation commands of that skill. ``` | ``` … of [1. Select the matched inference checkpoint](../cosmos3-inference-simulation-transfer/SKILL.md#1-select-the-matched-inference-checkpoint), which defines `SIM_TRANSFER_RESOURCE_OVERRIDES` ("the HF resource overrides") and the checkpoint argument array that the block below replaces, and it precedes [2. Prepare the example2 controls and prompt](../cosmos3-inference-simulation-transfer/SKILL.md#2-prepare-the-example2-controls-and-prompt) and the generation commands of that skill. ``` |
+| `cosmos3-post-train-simulation-transfer/references/environment.md` | L3 | `> **Skill note (not in the source):** the system requirements and the sections "Complete the CUDA 13.0 environment" and "Diagnostics and common failures" of this file are in the Sim-Transfer inference skill's [environment reference](../../cosmos3-inference-simulation-transfer/references/environment.md). This file keeps the training-only parts. "The Conda installation above" in "Tokenizer …` | `> **Skill note (not in the source):** this file keeps the training-only parts of the Sim-Transfer environment reference: the sentence on Nano conversion that ended its first paragraph and the section "Tokenizer compilation". The system requirements and the sections "Complete the CUDA 13.0 environment" and "Diagnostics and common failures" are in the Sim-Transfer inference skill's [environment reference](../../cosmos3-inference-simulation-transfer/references/environment.md). "The Conda installation above" in "Tokenizer …` |
+| `cosmos3-post-train-simulation-transfer/references/local-dataset.md` | L20 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/scripts/paibench_local_bundle.py".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the Sim-Transfer inference skill folder, so this script, which is in the scripts folder of this skill, is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/scripts/paibench_local_bundle.py".` |
+| `cosmos3-post-train-simulation-transfer/references/local-training.md` | L41 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the Sim-Transfer inference skill folder, so this script, which is in the scripts folder of this skill, is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".` |
+| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md` | L29 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the Sim-Transfer inference skill folder, so this script, which is in the scripts folder of this skill, is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".` |
+| `cosmos3-post-train-simulation-transfer/references/nano-conversion.md` | L47 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the Sim-Transfer inference skill folder, so this script, which is in the scripts folder of this skill, is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/prepare_nano_dcp.py".` |
+
+Notes of the previous section that were reworded, in the inference skills (7): each said that training text stays in an old family
+folder and now names the post-train skill.
+
+| File | Line | Old | New |
+| --- | --- | --- | --- |
+| `cosmos3-inference-simulation-auto/references/framework-runtime.md` | L3 | `> **Skill note (not in the source):** the training-only parts of this page (the paragraph on the training allocation and output root, training memory, checkpoint memory, training components) are in the [Transfer-Auto shared environment page](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md).` | ``` > **Skill note (not in the source):** the training-only parts of this page (the paragraph on the training allocation and output root, training memory, checkpoint memory, training components) are in the [training half of this page](../../cosmos3-post-train-simulation-auto/references/runtime.md) in the Auto post-train skill (`cosmos3-post-train-simulation-auto`). ``` |
+| `cosmos3-inference-simulation-auto/references/reference-scene.md` | L3 | `> **Skill note (not in the source):** the two training sections of this page ("Prepare the training bundle" and "Short training check") are in the [Transfer-Auto shared reference-scene page](../../cosmos3-nano-transfer-auto/shared/reference-scene.md).` | ``` > **Skill note (not in the source):** the two training sections of this page ("Prepare the training bundle" and "Short training check") are in the [training bundle and short check](../../cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md) reference of the Auto post-train skill (`cosmos3-post-train-simulation-auto`). ``` |
+| `cosmos3-inference-simulation-auto/references/troubleshooting.md` | L3 | `… and distillation symptoms are in the [Transfer-Auto troubleshooting skill](../../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md) and the [Sim-Auto troubleshooting skill](../../cosmos3-nano-sim-auto/troubleshooting/SKILL.md). "The symptom guide" named below is the Transfer-Auto symptom sections of this file together with the training sections of the [Transfer-Auto symptom guide](../../cosmos3-nano-transfer-auto/troubleshooting/references/symptom-guide.md); "the inference reference" is [Framework requests and sampling](input-and-execution.md).` | ``` … and distillation symptoms are in the troubleshooting reference of the Auto post-train skill (`cosmos3-post-train-simulation-auto`): [Transfer-Auto](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto) and [Sim-Auto](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto). "The symptom guide" named below is the Transfer-Auto symptom sections of this file together with the training sections of the [Transfer-Auto symptom guide](../../cosmos3-post-train-simulation-auto/references/troubleshooting.md#cosmos3-nano-transfer-auto-common-problems-and-checks) in that reference; "the inference reference" is [Framework requests and sampling](input-and-execution.md). ``` |
+| `cosmos3-inference-simulation-bimanual/references/input-contract.md` | L3 | `… bundle part of that data contract stays with [the Sim-Bimanual post-training skill](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md).` | `… bundle part of that data contract is the [data contract](../../cosmos3-post-train-simulation-bimanual/references/data-contract.md) of the Sim-Bimanual post-training skill.` |
+| `cosmos3-inference-simulation-bimanual/references/troubleshooting.md` | L3 | `… checkpoint symptoms (procedures 3 to 5) stay in [the Sim-Bimanual troubleshooting sub-skill](../../cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md).` | `… checkpoint symptoms (procedures 3 to 5) are in the [troubleshooting reference](../../cosmos3-post-train-simulation-bimanual/references/troubleshooting.md) of the Sim-Bimanual post-training skill.` |
+| `cosmos3-inference-simulation-transfer/references/setup.md` | L22 | `# Skill note (not in the source): SIM_TRANSFER_SKILL is now the folder of this skill. The source value was "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer".` | `# Skill note (not in the source): SIM_TRANSFER_SKILL is the folder of this skill, the Sim-Transfer inference skill. The source value was the folder of the Sim-Transfer skill family (its inference, post-training and troubleshooting sub-skills) under "$FRAMEWORK_DIR/.agents/skills". The training commands address the scripts of the Sim-Transfer post-training skill from FRAMEWORK_DIR.` |
+| `cosmos3-inference-simulation-transfer/references/troubleshooting.md` | L3 | `… Inference sections of the Sim-Transfer troubleshooting skill, the matching rows of its failure playbook, and the support-request paragraph that closed "Training state" in the source (here under "Support request"). "Training state" is in the [Sim-Transfer troubleshooting skill](../../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md#training-state).` | ``` … Inference sections of the Sim-Transfer troubleshooting sub-skill (cosmos-framework `main` 45fecab), the matching rows of its failure playbook, and the support-request paragraph that closed "Training state" in the source (here under "Support request"). "Training state" and its failure rows are in the Sim-Transfer post-training skill's [troubleshooting reference](../../cosmos3-post-train-simulation-transfer/references/troubleshooting.md#training-state). ``` |
+
+Notes whose link target alone changed (7, counted under "Link targets re-pointed"):
+`cosmos3-post-train-simulation-bimanual/references/troubleshooting.md` L92;
+`cosmos3-post-train-simulation-auto/references/data-contract.md` L170;
+`cosmos3-post-train-simulation-bimanual/references/data-contract.md` L147;
+`cosmos3-inference-simulation-auto/references/camera-identities.md` L3;
+`cosmos3-inference-simulation-auto/references/model-contract.md` L91; `cosmos3-inference-simulation-transfer/SKILL.md` L141;
+`cosmos3-inference-simulation-transfer/references/environment.md` L21.
+
+### New text
+
+The entry skill `cosmos3-post-train-simulation/SKILL.md` is new as a whole (139 lines; `description` of 923 characters; no `eval/`,
+no references). It runs no command: its sections are "When to use this skill", "Route to a block skill", "What the blocks share",
+"What differs between the blocks", "Try the released checkpoints first" and "Related skills". It states only what other skills
+state: each of its statements rests on text of the three block skills, of `cosmos3-inference-simulation` or of
+`cosmos3-post-training` (a sentence, a table row, a heading or a command). It links `cosmos3-inference-simulation/SKILL.md`,
+`cosmos3-post-train-simulation-auto/SKILL.md`, `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`,
+`cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md`,
+`cosmos3-post-train-simulation-auto/references/troubleshooting.md`, `cosmos3-post-train-simulation-bimanual/SKILL.md`,
+`cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`, `cosmos3-post-train-simulation-transfer/SKILL.md` and
+`cosmos3-post-train-simulation-transfer/references/troubleshooting.md`.
+
+New lines in the files that carry source text (190 non-blank lines). Every other non-blank line of these files is a source line
+(tables above) or one of the three descriptions carried as a paragraph ("Removed text"). The new descriptions are 930 (Auto), 920
+(Sim-Bimanual) and 929 (Sim-Transfer) characters long. The "Prerequisites" section of the Sim-Transfer `SKILL.md` quotes four
+passages (five sentences) of its references in quotation marks (L47-54); they stay in the references as well. The "Prerequisites"
+paragraph of the Auto `SKILL.md` (L37) quotes two phrases of its `references/runtime.md` (L46-47 and L50-51) in the same way.
+
+| File                                                                            | Lines    | What                                                                                              |
+| ------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L1-13    | frontmatter: `name: cosmos3-post-train-simulation-auto` and a `description` of 930 characters     |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L15-19   | title "Cosmos3 Simulation Post-Training: Auto (Transfer-Auto and Sim-Auto)": heading and 2 lines  |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L21-24   | section "When to use this skill": heading and 2 lines                                             |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L26-33   | section "Starting points": heading and a table of 4 rows                                          |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L35-37   | section "Prerequisites": heading and 1 line                                                       |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L153     | one-line pointer to the block moved to `references/transfer-auto-training-notes.md`               |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L235     | one-line pointer to the block moved to `references/transfer-auto-training-notes.md`               |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L263     | one-line pointer to the block moved to `references/sim-auto-training-notes.md`                    |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L431     | one-line pointer to the block moved to `references/sim-auto-training-notes.md`                    |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L433-435 | section "Run inference with your checkpoint": heading and 1 line                                  |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L437-439 | section "Troubleshooting": heading and 1 line                                                     |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L441-465 | section "Reference files": heading, 1 line and a table of 19 rows                                 |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                   | L467-475 | section "Related skills": heading and a table of 5 rows                                           |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` | L1-3     | title "Transfer-Auto fine-tuning notes": heading and the provenance note                          |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` | L5       | heading "After packaging the bundle" alone, over carried text                                     |
+| `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` | L14      | heading "Reproduce the four training phases" alone, over carried text                             |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`      | L1-3     | title "Sim-Auto distillation notes": heading and the provenance note                              |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`      | L5       | heading "Data instructions" alone, over carried text                                              |
+| `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`      | L35      | heading "Training budget, stage weights, monitoring and records" alone, over carried text         |
+| `cosmos3-post-train-simulation-auto/references/troubleshooting.md`              | L1-3     | title "Troubleshoot Auto post-training": heading and the provenance note                          |
+| `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`          | L3       | provenance skill note                                                                             |
+| `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`          | L3       | provenance skill note                                                                             |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L1-12    | frontmatter: `name: cosmos3-post-train-simulation-bimanual` and a `description` of 920 characters |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L21-24   | section "When to use this skill": heading and 2 lines                                             |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L42-45   | section "Prerequisites": heading and 2 lines                                                      |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L284-288 | section "Run inference with your checkpoint": heading and 3 lines                                 |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L290-296 | section "Troubleshooting": heading and 5 lines                                                    |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L307-316 | table ("File", "When to read it") of 8 rows                                                       |
+| `cosmos3-post-train-simulation-bimanual/SKILL.md`                               | L318-327 | section "Related skills": heading and a table of 6 rows                                           |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L1-13    | frontmatter: `name: cosmos3-post-train-simulation-transfer` and a `description` of 929 characters |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L25-32   | section "When to use this skill": heading and 6 lines                                             |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L42-54   | section "Prerequisites": heading and 10 lines                                                     |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L268-276 | section "Troubleshooting": heading and 7 lines                                                    |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L280-297 | table ("File", "Read it when") of 14 rows, then 1 line                                            |
+| `cosmos3-post-train-simulation-transfer/SKILL.md`                               | L311-319 | section "Related skills": heading and a table of 5 rows                                           |
+
+New files without a source: the entry `SKILL.md`; `eval/eval.config` in each of the three block skills; and the four
+`.claude/skills/cosmos3-post-train-simulation*` symlinks.
+
+### Infrastructure and tests
+
+- No workflow or configuration file changed: none of the 9 files under `.github/workflows/`, `.github/skill-eval.yml`,
+  `.pytest.toml`, `.pre-commit-config.yaml` or `.gitattributes` names an old family, a post-train skill or one of the moved tests.
+- `.claude/skills/` gains four symlinks, each to `../../.agents/skills/<name>`: `cosmos3-post-train-simulation`,
+  `cosmos3-post-train-simulation-auto`, `cosmos3-post-train-simulation-bimanual` and `cosmos3-post-train-simulation-transfer`. The
+  old families had none.
+- The three tests moved with the scripts they test. No CI job ran them before this change and none runs them now: no workflow names
+  them, and a repository-wide `pytest` run collects only files named `*_test.py` (`.pytest.toml`), which these are not. Run by hand
+  they pass: `test_nano_conversion.py` 16 tests (standard library only), `test_paibench_local_bundle.py` 3 tests (with the Framework
+  importable) and `test_qa_transfer_stage.py` 5 tests (with `hydra` importable, as in the Framework environment).
+- Three triggers differ for a change limited to these tests, and no job runs the three tests either way: `validate-cookbooks.yml`
+  starts, because its path filter holds `tests/skills/**`; the push trigger of `docs.yml` no longer starts, because its path filter
+  holds `.agents/skills/**` and nothing under `tests/` (on a pull request that workflow has no path filter); and the changed-path
+  check of `gpu-tests.yml`, which exempts `.agents/*` and `*.md`, no longer exempts them, so its GPU jobs run.
+- The skill evaluation selects a skill by its `eval/eval.config` (`.github/scripts/skill_eval/run_matrix.py`), and
+  `.github/skill-eval.yml` names none of the skills of this change: the three block skills each have a config and the entry skill, a
+  router, has none.
+- `.agents/skills/` held 31 `SKILL.md` files before this change and holds 27: the eight sub-skill files are gone and the four
+  post-train skills are new. The docs site's skills table is built from the `SKILL.md` files under `.agents/skills/`
+  (`tools/docs/stage.py`) and follows.
+
+| Test                                                                                | Source                                                                      | Test methods | CI job before | CI job now |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------ | ------------- | ---------- |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_nano_conversion.py`       | `cosmos3-nano-sim-transfer/post-training/scripts/test_nano_conversion.py`   | 16           | none          | none       |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | `cosmos3-nano-sim-transfer/scripts/test_paibench_local_bundle.py`           | 3            | none          | none       |
+| `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | `cosmos3-nano-sim-transfer/post-training/scripts/test_qa_transfer_stage.py` | 5            | none          | none       |
+
+### Eval drafts
+
+Each block skill has a drafted `eval/eval.config`: 10 cases in all (Auto 4, Sim-Bimanual 3, Sim-Transfer 3). None was run. The three
+files have the same top level: `credentials` [`HF_TOKEN`], `gpus` 1, and a budget of 90 minutes and 3,000,000 tokens that is not
+measured. No case launches training: 8 of the 10 prompts say so in words, `auto-bundle-timestamped-captions` asks only for a
+training bundle and `nano-conversion-preflight` only for the converter's environment check; each case stops at a bundle build, a
+data check, a conversion or a dry run. Every case has the assertion that the documented workflow ran without errors on the first
+attempt.
+
+| Skill                                    | Case                               | Assertions | File checks | Steps that the case names                                                                                                                                                        |
+| ---------------------------------------- | ---------------------------------- | ---------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cosmos3-post-train-simulation-auto`     | `auto-bundle-timestamped-captions` | 6          | 5           | `framework setup`; `scene + tokenizer download`; `caption selection (index copy)`; `bundle build`; `inspect + summarize`                                                         |
+| `cosmos3-post-train-simulation-auto`     | `transfer-auto-finetune-dryrun`    | 6          | 7           | `framework setup`; `checkpoint download + conversion`; `scene download + bundle build`; `configure + dry run`; `short-check settings + dry run`; `summarize`                     |
+| `cosmos3-post-train-simulation-auto`     | `transfer-auto-phase1-dryrun`      | 6          | 4           | `framework setup`; `Cosmos3-Nano download + conversion`; `scene download + bundle build + VAE bindings`; `phase 1 dry run`; `summarize`                                          |
+| `cosmos3-post-train-simulation-auto`     | `sim-auto-stage1-dryrun`           | 6          | 5           | `framework setup`; `teacher snapshot + scene download`; `bundle build + initializer conversion`; `stage selection + overrides`; `dry run`; `summarize`                           |
+| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stage0`          | 6          | 6           | `framework training environment`; `example download + checksum + extract`; `static bundle check`; `Stage 0 materialization`; `verify + summarize`                                |
+| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stages1-3`       | 6          | 8           | `framework training environment`; `example download + checksum + extract`; `Stage 1 materialization`; `Stage 2 materialization`; `Stage 3 materialization`; `verify + summarize` |
+| `cosmos3-post-train-simulation-bimanual` | `stage0-initializer-dryrun`        | 6          | 4           | `framework training environment`; `example bundle download + bind`; `Cosmos3-Nano + VAE download`; `DCP conversion + file checks`; `Stage 0 dry run`; `verify + summarize`       |
+| `cosmos3-post-train-simulation-transfer` | `example2-training-bundle`         | 6          | 6           | `framework setup`; `example2 download + training row`; `tokenizer + bundle build`; `verify + summarize`                                                                          |
+| `cosmos3-post-train-simulation-transfer` | `nano-conversion-preflight`        | 5          | 3           | `framework setup`; `converter and runtime check`; `verify + summarize`                                                                                                           |
+| `cosmos3-post-train-simulation-transfer` | `stage0-resolve-dryrun`            | 6          | 3           | `framework setup`; `example2 bundle`; `Nano conversion or blocker analysis`; `Stage 0 arguments + dry run`; `verify + summarize`                                                 |
+
+### Known and deliberately unchanged
+
+Defects and oddities of the sources that were carried word for word (not corrected in this change):
+
+- Auto `SKILL.md`: the Sim-Auto Quickstart has four numbered steps and its step 3 says "in step 5" (L347); the Transfer-Auto
+  Quickstart converts the released checkpoint with `prepare_sim_auto_checkpoint` (L108), a name the source explains at L115-116. The
+  sentence at L99-100 sends the reader to "Model snapshots" in the inference skill's `references/framework-runtime.md` for the RGB
+  VAE and the text tokenizer; the previous section split that page, and the lines that name the two sources are now under "Training
+  components" in `references/runtime.md` (L46-47 and L50-51), which the "Prerequisites" paragraph (L37) quotes.
+  `references/sim-auto-training-notes.md` L52 says "MR". `references/troubleshooting.md` keeps the model identifier as a heading
+  (L18).
+- Sim-Bimanual: `references/multinode-launcher.md` L13 says "Replace only the main tutorial's `TRAIN` array", and `SKILL.md` has no
+  such array. `SKILL.md` gives the launch of Stages 1 to 3 as prose ("Repeat the config check and launch with this TOML", L247), not
+  as commands. `SKILL.md` L170 exports `IMAGINAIRE_OUTPUT_ROOT` from `BIMANUAL_OUTPUT_ROOT`, a variable that no file sets.
+- Sim-Transfer: `SKILL.md` L59 calls `SIM_TRANSFER_SKILL` "the absolute location of this skill bundle", while the setup reference of
+  the inference skill sets it to the inference skill folder (`cosmos3-inference-simulation-transfer/references/setup.md` L23; the
+  note at L64 of `SKILL.md` says so). The guard `: "${SIM_TRANSFER_SKILL:?Set the absolute skill bundle location}"` stays in three
+  blocks (`SKILL.md` L77, `references/local-training.md` L25 and `references/nano-conversion.md` L20), although no command of the
+  skill expands the variable. `references/environment.md` L5 says that Nano conversion keeps a separately pinned checkout, and
+  `references/nano-conversion.md` L12 says that no separate checkout is needed. `references/local-dataset.md` reads
+  `SIM_TRANSFER_OUTPUT` (first at L19), which the inference skill's `references/hf-sample.md` sets (L30).
+  `references/troubleshooting.md` has two headings titled "Training state" (L9 and L43); the anchor `#training-state`, which the
+  inference skill links, is the first. The sources have no export step for Sim-Transfer, so the skill has no export section.
+
+Also unchanged on purpose:
+
+- Restated material was moved, not merged. Examples: the 14 lines from L332 of the Auto `SKILL.md` are also L31-44 of its
+  `references/sim-auto-data.md`; the Transfer-Auto download command is in both parts of that `SKILL.md` (L105 and L295); the 15
+  lines from L127 of the Sim-Transfer `SKILL.md` are also L31-45 of its `references/local-training.md`; and the `mujoco==3.10.0`
+  requirement is in the Sim-Bimanual `SKILL.md` (L69) and in its `references/environment.md` (L17).
+- Outside this record, 24 lines in 12 files of the two Auto skills still contain an old family name. None is a path that must
+  resolve: 5 are skill notes of the previous section that quote the former location of the negative prompt ("this was …"), 2 name
+  the retired inference sub-skills (a provenance sentence and a link text of the source), and the others are the lower-case model
+  identifier in carried text, in the export flag `--cosmos3-nano-sim-auto`, in headings and in the anchors built from headings (for
+  example `#troubleshoot-cosmos3-nano-transfer-auto`).
+- Link text in the docs is unchanged: `README.md` L83 and L84 still say "Transfer-Auto training skill" and "Sim-Auto training skill"
+  and now point at the two sections of one skill. The two post-training entries of `tools/docs/nav.yml` (L64 and L67) stay links to
+  the file on `main`, as before; the navigation has no entry for the post-train entry skill. The hand-written skills table of
+  `README.md` (L152-159) is untouched: it has 6 rows and none for a Simulation skill.
+- The evaluator's static check scores the three post-train block skills 100 and reports nothing for them. It scores the two entry
+  skills 85, because a router has no `eval/eval.config`, and the inference skills 100 (Auto), 95 (Sim-Bimanual, the backticked
+  Hugging Face path named in the previous section) and 100 (Sim-Transfer), the scores that the previous section records.
+- The descriptions of the four old troubleshooting sub-skills are dropped with their frontmatter ("Removed text"); their wording is
+  in no `description` of the new skills.
 
 <!-- rumdl-enable MD060 -->

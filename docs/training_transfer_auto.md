@@ -162,11 +162,11 @@ These variables name complete iteration-root checkpoints, not model-only files.
 ## Shortened smoke and recovery
 
 For a concrete single-node starting point, use the
-[reference-scene short check](../.agents/skills/cosmos3-nano-transfer-auto/shared/reference-scene.md#short-training-check):
+[reference-scene short check](../.agents/skills/cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md#short-training-check):
 four H200 GPUs, CP=2/FSDP=2, 21 aligned RGB frames and synchronous checkpointing.
 CP=4/FSDP=1 does not shard model/optimizer state. These short-check settings do
 not establish memory requirements for the full curriculum.
-See [checkpoint memory](../.agents/skills/cosmos3-nano-transfer-auto/shared/framework-runtime.md#checkpoint-memory)
+See [checkpoint memory](../.agents/skills/cosmos3-post-train-simulation-auto/references/runtime.md#checkpoint-memory)
 for host RAM and `/dev/shm` requirements before enabling async saves.
 
 Shorten **native** `trainer.max_iter` and `checkpoint.save_iter` overrides. Keep

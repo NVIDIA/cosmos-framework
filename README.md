@@ -80,8 +80,8 @@ Users may adjust the GPU count to match their model and underlying hardware arch
 
 ### Transfer-Auto and Sim-Auto
 
-- **Cosmos3-Nano-Transfer-Auto:** Start from **Cosmos3-Nano** to reproduce the training curriculum, or directly fine-tune the **released Transfer-Auto checkpoint** on your own data. See the [Transfer-Auto training skill](./.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md) for both paths.
-- **Cosmos3-Nano-Sim-Auto:** For domain or sensor adaptation, fine-tune Transfer-Auto first, then distill that adapted checkpoint through **TF → TF-dCM → SF-DMD**. See the [Sim-Auto training skill](./.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md) and [training guide](./docs/training_sim_auto.md).
+- **Cosmos3-Nano-Transfer-Auto:** Start from **Cosmos3-Nano** to reproduce the training curriculum, or directly fine-tune the **released Transfer-Auto checkpoint** on your own data. See the [Transfer-Auto training skill](./.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto) for both paths.
+- **Cosmos3-Nano-Sim-Auto:** For domain or sensor adaptation, fine-tune Transfer-Auto first, then distill that adapted checkpoint through **TF → TF-dCM → SF-DMD**. See the [Sim-Auto training skill](./.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto) and [training guide](./docs/training_sim_auto.md).
 
 We recommend completing adaptation before distillation, rather than applying ordinary supervised fine-tuning (SFT) to the released distilled Sim-Auto checkpoint, to preserve its few-step generation behavior. The released Sim-Auto checkpoint can be used directly for [inference](./docs/inference_sim_auto.md).
 

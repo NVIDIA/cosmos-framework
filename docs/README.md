@@ -67,7 +67,7 @@ To stop deploying, set `DOCS_DEPLOY` to `false`; the site stays as last deployed
 - Before the first public deploy: confirm NVIDIA web compliance for the site (cookie consent and analytics, as on the Cosmos Cookbook site) and where the docs should be hosted.
 - Restructure `docs/` so directories mirror the site hierarchy. This needs the upstream sync destination for `docs/posttrain` changed to `docs/post_training/rl/`, about 140 inbound references updated, and redirects.
 - Unify heading levels and writing style across existing pages, and write a style guide.
-- Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-nano-transfer-auto-post-training`.
+- Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-post-train-simulation-auto`.
 - AI Q&A assistant (researched separately).
 - Troubleshooting index, glossary and release notes.
 - Weekly external link check that does not block merges.

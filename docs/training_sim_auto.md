@@ -2,7 +2,7 @@
 
 Start from **Cosmos3-Nano-Transfer-Auto**, either the released checkpoint or a
 compatible checkpoint you have fine-tuned on your own domain or sensor rig.
-For adaptation, follow the [Transfer-Auto training skill](../.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md)
+For adaptation, follow the [Transfer-Auto training skill](../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto)
 first, then use that adapted checkpoint for **TF → TF-dCM → SF-DMD** below.
 
 We recommend completing adaptation before distillation, rather than applying
@@ -12,7 +12,7 @@ does not start directly from Cosmos3-Nano. Use the released Sim-Auto checkpoint
 directly for [inference](inference_sim_auto.md) when no adaptation is needed.
 
 All stages use synchronized camera RGB/WSM and paired measured-LiDAR/HD-map
-inputs. Prepare your own data with the [Sim-Auto training skill](../.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md).
+inputs. Prepare your own data with the [Sim-Auto training skill](../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 A small example bundle is useful for checking execution, not for establishing
 training quality.
 
