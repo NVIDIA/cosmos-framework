@@ -564,6 +564,48 @@ def test_load_skill_plans_puts_the_canary_first_unless_disabled(checkout: Path):
     )
 
 
+def test_multi_gpu_skills_get_the_multi_gpu_runner_label(checkout: Path, tmp_path: Path):
+    # the eval.config's top-level `gpus` is read into the plan; absent, zero, one or a non-integer never routes
+    path = rm.eval_config_path(checkout, SKILL)
+    data = json.loads(path.read_text())
+    assert rm.load_skill_plan(checkout, SKILL).gpus == 0
+    for value, expected in ((4, 4), (1, 1), (0, 0), (True, 0), ("4", 0), (-2, 0)):
+        path.write_text(json.dumps({**data, "gpus": value}))
+        assert rm.load_skill_plan(checkout, SKILL).gpus == expected
+    path.write_text(json.dumps({**data, "gpus": 4}))
+    plans = rm.load_skill_plans(checkout, [SKILL])
+    assert rm.multi_gpu_skills(plans) == frozenset({SKILL})  # the canary has no `gpus` above 1
+    cells = rm.build_cells(plans, ["claude"])
+    base = "backends: [claude]\nimage: i\ndashboard: http://d\nlauncher: l\nworkdir: w\nserial_backends: []\n"
+    config_path = tmp_path / "c.yml"
+    config_path.write_text(base)
+    config = rm.load_config(config_path)
+    assert config.multi_gpu_runner_label is None  # no default: without the key nothing is routed
+    assert rm.runs_on("claude", config, multi_gpu=True) == ["self-hosted", "cosmos-skill-eval", "h100"]
+    config_path.write_text(base + "multi_gpu_runner_label: four-gpu\n")
+    config = rm.load_config(config_path)
+    assert rm.runs_on("claude", config) == ["self-hosted", "cosmos-skill-eval", "h100"]
+    assert rm.runs_on("claude", config, multi_gpu=True) == ["self-hosted", "cosmos-skill-eval", "h100", "four-gpu"]
+    entries = rm.matrix_entries(cells, canary=False, config=config, multi_gpu=rm.multi_gpu_skills(plans))
+    assert [json.loads(entry["runs_on"])[-1] for entry in entries] == ["four-gpu", "four-gpu"]
+    assert [json.loads(e["runs_on"])[-1] for e in rm.matrix_entries(cells, canary=False, config=config)] == ["h100"] * 2
+    canary = rm.matrix_entries(cells, canary=True, config=config, multi_gpu=frozenset({CANARY}))
+    assert [json.loads(entry["runs_on"])[-1] for entry in canary] == ["h100"]  # the canary is never routed
+    # a label already in the list is not repeated (the serial label and the multi-GPU label may be the same runner)
+    config_path.write_text(
+        base.replace("serial_backends: []", "serial_backends: [claude]") + "multi_gpu_runner_label: cursor-serial\n"
+    )
+    config = rm.load_config(config_path)
+    assert rm.runs_on("claude", config, multi_gpu=True) == ["self-hosted", "cosmos-skill-eval", "h100", "cursor-serial"]
+    for bad in ("multi_gpu_runner_label: [a]\n", 'multi_gpu_runner_label: ""\n'):
+        config_path.write_text(base + bad)
+        with pytest.raises(rm.OrchestrationError, match="multi_gpu_runner_label"):
+            rm.load_config(config_path)
+    # the repository's config names the label of its four-GPU runner
+    live = rm.load_config(Path(__file__).resolve().parents[3] / "skill-eval.yml")
+    assert live.multi_gpu_runner_label == "cursor-serial"
+
+
 def test_load_skill_plan_tolerates_bad_json(checkout: Path):
     rm.eval_config_path(checkout, SKILL).write_text("{not json")
     plan = rm.load_skill_plan(checkout, SKILL)
