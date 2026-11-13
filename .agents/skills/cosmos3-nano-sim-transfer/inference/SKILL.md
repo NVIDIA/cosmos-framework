@@ -99,6 +99,12 @@ canvas (832 × 480 for `example2`) **before** computing edge or blur controls.
 Computing controls at source resolution and then resizing the maps can produce
 suboptimal generation quality. The prepared requests use the correct order.
 
+**Blur preset order:** `preset_blur_strength` blurs in its named order,
+`very_low` < `low` < `medium` < `high` < `very_high`, at the 480-tier canvas.
+Earlier releases had `very_low`/`low` and `high`/`very_high` swapped, so blur
+controls for those four presets differ from runs made before this change;
+`none` and `medium` are unchanged.
+
 The native pipeline resizes RGB with antialiased bicubic, depth with antialiased
 bilinear and segmentation with nearest neighbor. It computes edge and blur from
 resized RGB during inference, as training does. Training samples transform
