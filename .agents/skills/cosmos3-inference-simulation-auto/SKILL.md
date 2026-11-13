@@ -228,6 +228,16 @@ Readiness, from section 2: "The HTTP port opens only after the weights are loade
 
 Reference: [`references/generate-wsm.md`](references/generate-wsm.md) (the WSM notebook, converted 1:1). Run its sections in order: "1. Environment and inputs", "2. Render controls", "3. Check the rendered views", "4. Prepare or review per-view captions", optionally "5. Optional: render same-scene LiDAR controls", then "6. Generate RGB or joint RGB/LiDAR", which hands the exported request to the native reference of either model.
 
+> **Skill note (not in the source):** in a container the renderer README's EGL check can print `Mesa llvmpipe` instead of failing. The `libegl1` package registers only the Mesa vendor, so EGL silently renders in software, and the README applies its NVIDIA vendor file only when `eglInitialize` fails. In a container, write that vendor file before the check, in `scripts/wsm` after the README's install, and keep the variable exported in the shell that runs the check and the render; the check must then name NVIDIA and your GPU:
+
+```bash
+# Skill note (not in the source): the README's NVIDIA vendor file, applied before its EGL check.
+cat > nvidia-egl.json <<'JSON'
+{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}
+JSON
+export __EGL_VENDOR_LIBRARY_FILENAMES="$PWD/nvidia-egl.json"
+```
+
 "The published HF daytime sample contains already-rendered WSM videos, not raw RDS-HQ inputs; use it directly in the inference notebooks if you only want to try the models." The renderer is the standalone package in `scripts/wsm` (its own [README](scripts/wsm/README.md)); "Convert your own source with the [RDS-HQ schema](scripts/wsm/docs/rds-hq.md) and [conversion skill](scripts/wsm/skills/scenario-to-rds-hq/SKILL.md)." Section 1 sets `AUTO_RDS_HQ_ROOT`, `AUTO_RDS_HQ_CLIP` and `WSM_PYTHON` "before running the configuration cell"; "This notebook supports **F-theta scenes, supported Auto camera keys, and 30 Hz poses**." Inspect the rendered controls with [WSM control checks](references/wsm-conventions.md).
 
 ## Sim-Auto
