@@ -20,5 +20,5 @@ Use the framework CLI for batch jobs, Ray Serve for an online framework endpoint
 
 - The CLI and Ray Serve both take `--parallelism-preset`. `latency` (the default) splits each sample across GPUs with context parallelism; on several GPUs also pass `--dp-shard-size=1`. `throughput` shards the model across all GPUs and runs a batch.
 - Generator modes differ by path. Cosmos3-Edge cannot generate audio, and TensorRT-LLM serves it for text-to-image, text-to-video and image-to-video only. The Cosmos3 NIM does not generate audio.
-- Transfer-Auto, Sim-Auto, Sim-Transfer and Sim-Bimanual run on Cosmos Framework and vLLM-Omni; see the [Simulation notebooks](../../.agents/skills/cookbooks/cosmos3/simulation/README.md).
+- Transfer-Auto, Sim-Auto, Sim-Transfer and Sim-Bimanual run on Cosmos Framework and vLLM-Omni; see the [Simulation notebooks](../../.agents/skills/cosmos3-inference-simulation/SKILL.md).
 - NIM authenticates with an NGC API key instead of a Hugging Face token. In the Cosmos3 NIM, `NIM_MODEL_VARIANT` selects `nano` or `super`, `edge` for the Reasoner, or one of the Generator specialists `edge-droid` (experimental), `nano-droid`, `super-t2i`, `super-t2i-4step`, `super-i2v` and `super-i2v-4step`.
