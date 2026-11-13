@@ -229,25 +229,37 @@ class MetropolisEventVerification(VideoBaseDataset):
         """
         Evaluate predictions against ground truth.
 
+        Unparseable answers remain abstentions: they count as false negatives
+        for their ground-truth class, without adding an abstention class to the
+        macro average. Valid Predictions reports parse coverage separately.
+
+        This abstention-penalized macro-F1 is not directly comparable with
+        earlier evaluator output that excluded unparseable answers. Alignment
+        with the historical VANTAGE Table 2 treatment is not established.
+
         Returns:
-            pd.DataFrame: Evaluation results. Top-level `macro_f1` key is the
-            primary rollup (matches VANTAGE paper Table 2); the full sklearn
-            classification_report is retained under `--`-flattened keys.
+            pd.DataFrame: Evaluation results. Top-level `macro_f1` is the
+            abstention-aware rollup. Per-class, macro, and weighted sklearn
+            metrics are retained under `--`-flattened keys; an in-label-only
+            micro average is excluded when some predictions abstain. Overall
+            accuracy is computed from all scored rows.
         """
         data = load(eval_file)
 
         predictions = []
         ground_truths = []
+        valid_predictions = 0
+        invalid_answer = '__invalid__'
 
         for _, row in data.iterrows():
             pred = row.get('prediction', '')
             gt_row = self._lookup_gt_row(row)
             if gt_row is None:
                 gt = row.get('answer')
-                if pd.isna(gt):
-                    continue
             else:
                 gt = gt_row['answer']
+            if pd.isna(gt):
+                continue
 
             pred_answer = self._extract_answer(pred)
 
@@ -256,22 +268,34 @@ class MetropolisEventVerification(VideoBaseDataset):
                 and (pred_answer.strip().lower() in ['yes', 'no'])
             ):
                 predictions.append(pred_answer.strip().lower())
-                ground_truths.append(str(gt).strip().lower())
+                valid_predictions += 1
+            else:
+                predictions.append(invalid_answer)
+            ground_truths.append(str(gt).strip().lower())
 
         if len(predictions) == 0:
-            print("Warning: No valid predictions found!")
+            print("Warning: No ground-truth samples found!")
             return pd.DataFrame([{
                 'macro_f1': None,
                 'Valid Predictions': 0,
                 'Total Samples': len(data),
             }])
 
-        from sklearn.metrics import classification_report
-        report = classification_report(ground_truths, predictions, output_dict=True)
+        from sklearn.metrics import accuracy_score, classification_report
+        labels = sorted(set(ground_truths) | (set(predictions) - {invalid_answer}))
+        report = classification_report(
+            ground_truths, predictions, labels=labels, output_dict=True,
+            zero_division=0,
+        )
+        # With abstentions, sklearn's micro average only covers predictions in
+        # the selected labels and can be mistaken for all-row accuracy.
+        if invalid_answer in predictions:
+            report.pop('micro avg', None)
+        report['accuracy'] = accuracy_score(ground_truths, predictions)
         macro_f1 = float(report.get('macro avg', {}).get('f1-score', 0.0))
         summary = {
             'macro_f1': macro_f1,
-            "Valid Predictions": len(predictions),
+            "Valid Predictions": valid_predictions,
             'Total Samples': len(data),
             **flatten_dict(report),
         }
