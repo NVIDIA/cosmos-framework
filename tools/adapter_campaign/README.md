@@ -11,7 +11,9 @@ Run from the checkout root:
 python -m pytest -c /dev/null --noconftest \
   tools/adapter_campaign/test_evidence.py \
   tools/adapter_campaign/test_references.py \
-  tools/adapter_campaign/test_recovered.py
+  tools/adapter_campaign/test_recovered.py \
+  tools/adapter_campaign/test_segmented.py \
+  tools/adapter_campaign/test_inline_midpoint.py
 python -m tools.adapter_campaign.contract \
   --root "$CAMPAIGN_ROOT" --inputs "$COMPILE_INPUTS" --out "$CONTRACT"
 python -m tools.adapter_campaign.primary \
@@ -25,6 +27,10 @@ python -m tools.adapter_campaign.recovered \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --capture "$RECOVERED_RAW_CAPTURE" --capture-review "$CAPTURE_REVIEW" \
   --producer-review "$RECOVERED_PRODUCER_REVIEW" --output "$NEW_RECOVERY_DIRECTORY"
+python -m tools.adapter_campaign.inline_midpoint \
+  --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
+  --audit-review "$INLINE_PRIMARY_AUDIT" \
+  --producer-review "$INLINE_PRODUCER_REVIEW" --output "$NEW_INLINE_DIRECTORY"
 python -m tools.adapter_campaign.evidence \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --contract-sha256 "$REVIEWED_CANONICAL_CONTRACT_DIGEST" \
@@ -71,6 +77,26 @@ dataset, token-denominator and rank-ownership validators without relabeling the
 older two-phase recovery schema. Its CLI requires `--audit-review` and
 `--producer-review`; candidate integration and atomic activation remain separate
 reviewed operations. Only the same four training/continuation gates are emitted.
+
+`inline_midpoint.py` normalizes the distinct `full-text-cell-v1` inline replay:
+the complete primary and its three-update midpoint restart ran in the same
+two-host allocation. It revalidates the existing three primary prerequisites,
+then emits only `mid_epoch_continuation`. It requires an independently reviewed
+capture with complete DCP inventories, local midpoint/control tensors, and
+remote hashes proving byte-identical subsequent snapshots on every rank. It
+compares the actual saved/restored optimizer, scheduler, cursor, RNG and parameter
+state on CPU. Model/optimizer DCP shards remain remote hash-bound objects; this
+does not perform a new full-model checkpoint load. Historical source/wheel/image
+and sample coverage retain their original identity; diagnostic replay adds no
+primary training rows. Other recovery formats and nonidentical snapshot proofs
+need their own admitted evidence producer. Numerical thresholds are unchanged.
+
+The inline producer requires exact `producer_reviews` admission and matching
+hashes for its dependencies and the actual capture review. The output directory
+must be new. It neither updates an active index nor certifies deployment, tasks,
+controlled worker loss, or the complete campaign. Its trusted pickle controls
+require a compatible CPU Torch/NumPy environment; receipt-only aggregation still
+uses the existing standard-library verifier.
 
 This reference producer additionally requires `producer_reviews` in its gate's
 admission: a mapping from each admitted producer SHA to a nonempty list of exact
