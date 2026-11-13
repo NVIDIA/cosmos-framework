@@ -40,16 +40,15 @@ from cosmos_framework.data.generator.action.utils.unified_action_schema import (
     RIGHT_WRIST_POSE,
     UNIFIED_ACTION_DIM,
 )
-
-# Per-sample camera-to-source-stream mapping, carried from the source through the
-# augmentation chain. A sidecar's rows are stamped with the source stream ID, which a
-# discovering source cannot recover from the camera name: it binds a row's own streams
-# to generic view slots, so the slot a stream lands in varies from sample to sample.
 from cosmos_framework.utils.optional_import import optional_import
 
 pa = optional_import("pyarrow")
 pq = optional_import("pyarrow.parquet")
 
+# Per-sample camera-to-source-stream mapping, carried from the source through the
+# augmentation chain. A sidecar's rows are stamped with the source stream ID, which a
+# discovering source cannot recover from the camera name: it binds a row's own streams
+# to generic view slots, so the slot a stream lands in varies from sample to sample.
 SOURCE_STREAM_ID_KEY = "_camera_source_stream_id"
 # Per-sample ``CameraActionSlots`` of a ``unified_wrist_slots`` source, carried through the
 # augmentation chain like ``SOURCE_STREAM_ID_KEY``: which unified_v1 block each camera's pose
