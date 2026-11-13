@@ -15,7 +15,7 @@ import json
 import re
 from pathlib import Path
 
-from .evidence import Store, digest, read_json, require, same
+from .evidence import Store, digest, producer_reviews, read_json, require, same
 
 REQUIRED_DEPLOYMENTS = {"REQUIRED", "REQUIRED_LEGACY_APPROXIMATION_CHECK", "REQUIRED_PRECISION_MATCHED_MERGE_CHECK"}
 EXCLUDED_DEPLOYMENTS = {"EXPLICITLY_REJECTED", "LEGACY_REJECTED_NOT_A_PASS", "UNADMITTED_PROFILE_COMBINATION"}
@@ -200,7 +200,10 @@ def compile_contract(root, *, inventory, deployment, gates, admissions, protocol
         def add(name, assertions, *, final=False, profile=None, anchor=False, pending=None):
             category = name.split(":", 1)[0]
             allowed = admission["gates"].get(category, {"producers": [], "sources": []})
-            require(set(allowed) == {"producers", "sources"}, "unsupported admission fields")
+            require(
+                {"producers", "sources"} <= set(allowed) <= {"producers", "sources", "producer_reviews"},
+                "unsupported admission fields",
+            )
             requirement = {
                 "id": name,
                 "admission": "REQUIRED",
@@ -224,6 +227,12 @@ def compile_contract(root, *, inventory, deployment, gates, admissions, protocol
                 requirement["checkpoint_anchor"] = {"document": "measurement", "pointer": "/checkpoint"}
             if pending:
                 requirement["pending_admission"] = pending
+            if "producer_reviews" in allowed:
+                requirement["producer_reviews"] = allowed["producer_reviews"]
+                require(allowed["producers"], "review admission has no producer")
+                for producer in allowed["producers"]:
+                    for ref in producer_reviews(requirement, producer):
+                        store.bytes(ref)
             requirements.append(requirement)
 
         missing_assets = [key for key in ("base_identity", "processor_identity") if not binding.get(key)]

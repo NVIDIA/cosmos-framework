@@ -149,6 +149,42 @@ class ReceiptTests(unittest.TestCase):
         self.assertTrue(result["synthetic"])
         self.assertEqual(result["summary"]["all_required_checks_executed"], 1)
 
+    def test_review_anchor_is_owned_by_contract_and_bound_to_provenance(self):
+        review = self.write("independent-review.json", {"status": "reviewed synthetic fixture"})
+        requirement = self.contract["cells"][0]["requirements"][0]
+        requirement["producer_reviews"] = {"b" * 64: [review]}
+        self.index["contract_sha256"] = digest(self.contract)
+        with self.assertRaisesRegex(EvidenceError, "omits its independently admitted review"):
+            self.result()
+
+        def attach(receipt):
+            receipt["supporting_evidence"] = [review]
+
+        self.change_receipt("training", attach)
+        with self.assertRaisesRegex(EvidenceError, "not bound to raw provenance"):
+            self.result()
+
+        def bind(receipt):
+            ref = receipt["documents"]["provenance"]
+            provenance = read_json((self.root / ref["path"]).read_bytes())
+            provenance["supporting_evidence"] = [review]
+            receipt["documents"]["provenance"] = self.write(ref["path"], provenance)
+
+        self.change_receipt("training", bind)
+        self.assertEqual(self.result()["summary"]["fully_passing_qualification"], 1)
+        replacement = self.write("replacement-review.json", {"status": "rehashed replacement"})
+        requirement["producer_reviews"] = {"b" * 64: [replacement]}
+        self.index["contract_sha256"] = digest(self.contract)
+        with self.assertRaisesRegex(EvidenceError, "omits its independently admitted review"):
+            self.result()
+
+    def test_review_for_another_producer_is_rejected(self):
+        requirement = self.contract["cells"][0]["requirements"][0]
+        requirement["producer_reviews"] = {"c" * 64: [self.write("other-review.json", {"synthetic": True})]}
+        self.index["contract_sha256"] = digest(self.contract)
+        with self.assertRaisesRegex(EvidenceError, "exactly the admitted producers"):
+            self.result()
+
     def test_synthetic_is_rejected_by_production_entrypoint(self):
         with self.assertRaisesRegex(EvidenceError, "test-only"):
             aggregate(self.contract, self.index, self.root)

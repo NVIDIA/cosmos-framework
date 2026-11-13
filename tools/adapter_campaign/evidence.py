@@ -48,6 +48,27 @@ def same(actual, expected):
     return actual == expected
 
 
+def producer_reviews(requirement, producer):
+    """Optional exact review anchors owned by the independently sealed contract."""
+    if "producer_reviews" not in requirement:
+        return []
+    mapping = requirement["producer_reviews"]
+    require(isinstance(mapping, dict) and mapping, "empty producer review admissions")
+    require(set(mapping) == set(requirement["producers"]), "reviews must cover exactly the admitted producers")
+    for key, references in mapping.items():
+        require(re.fullmatch(r"[0-9a-f]{64}", key) is not None, "invalid reviewed producer digest")
+        require(isinstance(references, list) and references, "producer has no admitted review")
+        require(len({digest(ref) for ref in references}) == len(references), "duplicate admitted review")
+        for ref in references:
+            require(isinstance(ref, dict) and set(ref) == {"path", "sha256"}, "invalid admitted review reference")
+            require(isinstance(ref["path"], str) and isinstance(ref["sha256"], str), "invalid review path/digest")
+            path = Path(ref["path"])
+            require(not path.is_absolute() and ".." not in path.parts, "review path escapes evidence root")
+            require(re.fullmatch(r"[0-9a-f]{64}", ref["sha256"]) is not None, "invalid review digest")
+    require(producer in mapping, "unadmitted review producer")
+    return mapping[producer]
+
+
 def _pairs(pairs):
     result = {}
     for name, value in pairs:
@@ -271,6 +292,10 @@ def check_receipt(store, reference, requirement, identity, contract, final_check
         )
     for ref in supporting:
         store.bytes(ref)
+    reviews = producer_reviews(requirement, receipt["producer_sha256"])
+    if reviews:
+        require(any(ref in supporting for ref in reviews), "receipt omits its independently admitted review")
+        require(same(provenance.get("supporting_evidence"), supporting), "review is not bound to raw provenance")
     checks = [predicate(clause, documents) for clause in requirement["assertions"]]
     require(checks, "a required gate cannot pass without contract assertions")
     observed = "PASS" if all(checks) else "FAIL"

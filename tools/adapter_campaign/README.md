@@ -14,6 +14,10 @@ python -m tools.adapter_campaign.contract \
 python -m tools.adapter_campaign.primary \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --capture "$RAW_PRIMARY_CAPTURE" --output "$NEW_RECEIPT_DIRECTORY"
+python -m tools.adapter_campaign.references \
+  --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
+  --review "$REFERENCE_REVIEW_PATH" --review-sha256 "$REFERENCE_REVIEW_SHA256" \
+  --gates-sha256 "$NUMERICAL_GATES_FILE_SHA256" --output "$NEW_REFERENCE_DIRECTORY"
 python -m tools.adapter_campaign.evidence \
   --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" \
   --contract-sha256 "$REVIEWED_CANONICAL_CONTRACT_DIGEST" \
@@ -32,6 +36,23 @@ source-pinned exhaustive iterator, preprocessing census and global counts; it
 does not claim per-example validation runtime traces. Recovery, checkpoint,
 artifact, deployment, task, simulator and resource receipts require separately
 reviewed producers.
+
+`references.py` normalizes the reviewed `text_micro_reduce_v3` receipt schema.
+It binds original distributed primary, oracle, installed source, raw capture and
+global token denominators. Three completed comparisons must include uneven
+lengths and an incomplete tail. A numerical failure before the next optimizer
+step remains a failed prerequisite; later steps and optimizer comparisons are
+not certified. Saved gradients are hash-bound; independent updated Adam tensors
+were not separately saved, so their comparisons are source-enforced rather than
+recomputed by this tool. This producer does not normalize recovery or training.
+
+This reference producer additionally requires `producer_reviews` in its gate's
+admission: a mapping from each admitted producer SHA to a nonempty list of exact
+`{"path": "relative/review.json", "sha256": "..."}` review references. The
+compiler validates those files and the verifier requires an admitted review in
+the receipt's provenance-bound supporting evidence. A caller-provided digest
+alone cannot replace the independently admitted review. Other existing producers
+retain their original admission format.
 
 The verifier distinguishes checks executed, completed training, all required
 checks executed, fully passing qualification, failures and external/dependency/
