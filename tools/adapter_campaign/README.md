@@ -64,6 +64,14 @@ hashes. Large tensor comparisons rely on the separately reviewed, hash-bound
 remote audit; this tool does not pretend those tensors were downloaded. It does
 not certify a final export, task score or whole campaign from these four gates.
 
+`segmented.py` admits the separately reviewed Mistral LoRA/FSDP2 four-phase
+lineage. It validates the original source payloads, five checkpoint generations,
+all rank coverage streams and the separate midpoint replay. It reuses the
+dataset, token-denominator and rank-ownership validators without relabeling the
+older two-phase recovery schema. Its CLI requires `--audit-review` and
+`--producer-review`; candidate integration and atomic activation remain separate
+reviewed operations. Only the same four training/continuation gates are emitted.
+
 This reference producer additionally requires `producer_reviews` in its gate's
 admission: a mapping from each admitted producer SHA to a nonempty list of exact
 `{"path": "relative/review.json", "sha256": "..."}` review references. The
