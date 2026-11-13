@@ -41,13 +41,15 @@ sudo apt-get install -y ffmpeg
 
 On macOS with Homebrew, use `brew install ffmpeg`. Verify that both `ffmpeg -version` and `ffprobe -version` work.
 
-> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Check `ffmpeg -version`; if it is older than 5.1, put a newer `ffmpeg` first on `PATH` in the shell that runs the client, for example the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0`, with which the repository's cookbook checks run these helpers (`ffprobe` from the distribution package is enough):
+> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Run the block below in the shell that runs the client, right after the install above: it looks for the option and, when the installed FFmpeg lacks it, puts the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0` first on `PATH`, the version the repository's cookbook checks run these helpers with (`ffprobe` from the distribution package is enough):
 
 ```bash
-# Skill note (not in the source): FFmpeg 7.0.2 from imageio-ffmpeg, first on PATH for the client.
-python -m pip install imageio-ffmpeg==0.6.0
-mkdir -p "$PWD/ffmpeg7" && ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$PWD/ffmpeg7/ffmpeg"
-export PATH="$PWD/ffmpeg7:$PATH"
+# Skill note (not in the source): adds FFmpeg 7.0.2 from imageio-ffmpeg when the installed FFmpeg has no -fps_mode.
+if ! ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- '-fps_mode'; then
+  python -m pip install imageio-ffmpeg==0.6.0
+  mkdir -p "$PWD/ffmpeg7" && ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$PWD/ffmpeg7/ffmpeg"
+  export PATH="$PWD/ffmpeg7:$PATH"
+fi
 ```
 
 **Inputs:** The examples use the shared daytime sample published with Transfer-Auto under `assets/sample_data`: one scene with seven synchronized cameras, each with an RGB recording, a WSM control, and a caption. Step 3 downloads the files these examples need, about 100 MiB, into the Hugging Face cache and checks them against the sample's `SHA256SUMS`. To use a copy you already have, set `AUTO_SAMPLE_ROOT` to its `sample_data` folder.

@@ -56,6 +56,13 @@ Framework checkout, `uv` and checkpoint download: `../cosmos3-setup/SKILL.md` an
 - **vLLM-Omni and SGLang:** a server host with Docker and the NVIDIA Container Toolkit (images `vllm/vllm-omni:cosmos3` and `lmsysorg/sglang:dev`); a client with Python 3.10 or newer, the `pip install` line of the reference's section 1, and FFmpeg with FFprobe. SGLang opens inputs by path, so "the cookbook checkout, including the output folder this notebook writes, must be on the server host or on a filesystem it shares with this notebook, at one absolute path".
 - **WSM renderer:** your own RDS-HQ scene, and the renderer installed "following [WSM setup](scripts/wsm/README.md#install) and its NVIDIA EGL instructions. The renderer needs a graphics-capable NVIDIA driver; the notebook kernel needs NumPy, IPython and FFmpeg/FFprobe."
 
+> **Skill note (not in the source):** the Cosmos Framework runs decode the conditioning videos through TorchCodec, which needs the FFmpeg shared libraries that the setup guide's system-package line installs. Without them inference stops with an error such as `libavutil.so.56: cannot open shared object file`. On Debian or Ubuntu, as root:
+
+```bash
+# Skill note (not in the source): the FFmpeg shared libraries for TorchCodec.
+apt-get update && apt-get install -y --no-install-recommends ffmpeg
+```
+
 ## Transfer-Auto
 
 Cosmos3-Nano-Transfer-Auto, the bidirectional model: the Cosmos Framework path first, then the two served backends and WSM rendering for your own scene.
@@ -228,7 +235,7 @@ Readiness, from section 2: "The HTTP port opens only after the weights are loade
 
 Reference: [`references/generate-wsm.md`](references/generate-wsm.md) (the WSM notebook, converted 1:1). Run its sections in order: "1. Environment and inputs", "2. Render controls", "3. Check the rendered views", "4. Prepare or review per-view captions", optionally "5. Optional: render same-scene LiDAR controls", then "6. Generate RGB or joint RGB/LiDAR", which hands the exported request to the native reference of either model.
 
-> **Skill note (not in the source):** in a container the renderer README's EGL check can print `Mesa llvmpipe` instead of failing. The `libegl1` package registers only the Mesa vendor, so EGL silently renders in software, and the README applies its NVIDIA vendor file only when `eglInitialize` fails. In a container, write that vendor file before the check, in `scripts/wsm` after the README's install, and keep the variable exported in the shell that runs the check and the render; the check must then name NVIDIA and your GPU:
+> **Skill note (not in the source):** in a container the renderer README's EGL check can print `Mesa llvmpipe` instead of failing. The `libegl1` package registers only the Mesa vendor, so EGL silently renders in software, and the README applies its NVIDIA vendor file only when `eglInitialize` fails. In a container, write that vendor file before the check, in `scripts/wsm` after the README's install (as root without `sudo`, run its `apt-get` lines without it), and keep the variable exported in the shell that runs the check and the render; the check must then name NVIDIA and your GPU:
 
 ```bash
 # Skill note (not in the source): the README's NVIDIA vendor file, applied before its EGL check.
