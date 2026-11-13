@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.L0
+
 _SOURCE = Path(__file__).with_name("native_kernels.py")
 
 

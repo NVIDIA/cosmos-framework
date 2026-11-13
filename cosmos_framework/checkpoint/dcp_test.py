@@ -57,12 +57,14 @@ def test_insufficient_capacity_stops_before_staging_allocation(checkpointer_type
     allocate.assert_not_called()
 
 
+@pytest.mark.L0
 def test_staging_check_is_skipped_where_statvfs_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows has no os.statvfs and no /dev/shm; the check must return instead of raising."""
     monkeypatch.delattr(checkpoint.os, "statvfs", raising=False)
     checkpoint._check_staging_shared_memory({"model": (torch.empty(4), "model")})
 
 
+@pytest.mark.L0
 def test_storage_writer_stages_serially_on_windows(tmp_path) -> None:
     handler = object.__new__(checkpoint.DistributedCheckpointer)
     handler.save_to_object_store = None

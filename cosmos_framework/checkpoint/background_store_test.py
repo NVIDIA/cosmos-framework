@@ -3,7 +3,11 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from cosmos_framework.checkpoint import background_store
+
+pytestmark = pytest.mark.L0
 
 
 def test_tcpstore_disables_libuv_only_on_windows() -> None:

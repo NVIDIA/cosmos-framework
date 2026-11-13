@@ -8,6 +8,8 @@ import pytest
 from cosmos_framework.utils import checkpoint_db
 from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 
+pytestmark = pytest.mark.L0
+
 
 def _hf_download_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str, **fields) -> list[str]:
     """Return the arguments ``CheckpointDirHf`` hands to the hf CLI on ``platform``."""
