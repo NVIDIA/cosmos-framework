@@ -2273,6 +2273,16 @@ class OmniSampleOverrides(
                 defaults_key = "multiview"
             defaults = _load_modality_defaults(defaults_key)
         overrides = self.model_dump(exclude_none=True)
+        if (
+            self.defaults_file is None
+            and "negative_prompt_file" in overrides
+            and "negative_prompt" not in overrides
+            and defaults.get("negative_prompt") is not None
+        ):
+            # The built-in presets carry their caption file already loaded as ``negative_prompt``. Left in,
+            # it would stop ``_build_transfer_data`` from reading the sample's own ``negative_prompt_file``,
+            # so the sample's file would be dropped without a warning. Copy: the presets are cached.
+            defaults = {k: v for k, v in defaults.items() if k != "negative_prompt"}
         shift_configured = "shift" in overrides or defaults.get("shift") is not None
         user_fields = frozenset(overrides)
         merged_data = _deep_merge(defaults, overrides)
