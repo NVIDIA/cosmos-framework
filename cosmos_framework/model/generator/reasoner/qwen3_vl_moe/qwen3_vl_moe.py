@@ -24,6 +24,9 @@ from transformers.utils import TransformersKwargs, is_torchdynamo_compiling
 from transformers.utils.deprecation import deprecate_kwarg
 
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
+    generation_cache_position,
+)
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     get_image_features as _get_image_features,
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
@@ -2377,7 +2380,9 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLMoePreTrainedModel, GenerationMi
             **kwargs,
         )
 
-        # Qwen3VLMoe position_ids are prepareed with rope_deltas in forward
+        cache_position = generation_cache_position(model_inputs)
+
+        # Qwen3VLMoe position_ids are prepared with rope_deltas in forward
         model_inputs["position_ids"] = None
 
         if cache_position[0] != 0:

@@ -10,6 +10,7 @@ lifecycle hooks for native activation checkpointing, FSDP, materialization, and 
 from __future__ import annotations
 
 import importlib
+import inspect
 import re
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from cosmos_framework.posttrain.config.model import Qwen3VLModelConfig
 
 _SUPPORTED_MODEL_TYPES: frozenset[str] = frozenset({"qwen3_vl", "qwen3_vl_moe"})
+# Transformers 4 takes positions; Transformers 5 takes the current query length.
+_CACHE_MASK_USES_QUERY_LENGTH = "query_length" in inspect.signature(Cache.get_mask_sizes).parameters
 _NATIVE_BACKBONE_IDENTITIES: frozenset[tuple[str, str]] = frozenset(
     {
         ("cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl", "Qwen3VLModel"),
@@ -397,13 +400,13 @@ def _qwen3_vl_causal_mask(
     position_ids: torch.Tensor | None = None,
     **kwargs: Any,
 ) -> torch.Tensor | None:  # returns [B,1,N_q,N_kv] or None
-    """Create the native Qwen3-VL eager mask without Transformers-version registry coupling."""
+    """Create eager/offset-SDPA masks without Transformers-version registry coupling."""
     del position_ids, kwargs
     if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 4:
         return attention_mask  # [B,1,N_q,N_kv]
-    if getattr(config, "_attn_implementation", "eager") != "eager":
-        # Non-eager attention (flash or native kernels) is causal internally. Policy batches are right padded, so valid
-        # queries never attend a future padding key; padded query outputs are masked from the loss.
+    implementation = getattr(config, "_attn_implementation", "eager")
+    if implementation not in ("eager", "sdpa"):
+        # Flash/native kernels own their causal alignment. Policy batches are right padded.
         return None
     from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import eager_mask
 
@@ -413,7 +416,20 @@ def _qwen3_vl_causal_mask(
     if past_key_values is None:
         kv_length, kv_offset = input_embeds.shape[1], 0
     else:
-        kv_length, kv_offset = past_key_values.get_mask_sizes(cache_position, 0)
+        query = input_embeds.shape[1] if _CACHE_MASK_USES_QUERY_LENGTH else cache_position
+        kv_length, kv_offset = past_key_values.get_mask_sizes(query, 0)
+    if implementation == "sdpa" and kv_length == input_embeds.shape[1] and kv_offset == 0:
+        # Preserve the existing uncached, right-padded SFT path: valid queries cannot see
+        # padding keys and padded query outputs are excluded from the objective. Left
+        # padding or internal holes require an explicit key mask, even without a prefix.
+        # Compiled callers cannot specialize on mask values; retain the explicit mask.
+        if attention_mask is None or (
+            not is_torchdynamo_compiling() and not (attention_mask[:, 1:] & ~attention_mask[:, :-1]).any()
+        ):
+            return None
+    # SDPA's implicit causal triangle is upper-left aligned. A multi-token suffix
+    # after a cached prefix needs absolute query positions, not that triangle.
+    # Explicit masking also excludes padding/unwritten static-cache keys on decode.
     return eager_mask(
         batch_size=input_embeds.shape[0],
         cache_position=cache_position,

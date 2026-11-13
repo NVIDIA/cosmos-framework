@@ -42,6 +42,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 # Import masking functions from utils for compatibility
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     create_causal_mask,
+    generation_cache_position,
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     get_image_features as _get_image_features,
@@ -1370,7 +1371,9 @@ class Qwen3VLForConditionalGeneration(Qwen3VLPreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        # Qwen3VL position_ids are prepareed with rope_deltas in forward
+        cache_position = generation_cache_position(model_inputs)
+
+        # Qwen3VL position_ids are prepared with rope_deltas in forward
         model_inputs["position_ids"] = None
 
         if cache_position[0] != 0:

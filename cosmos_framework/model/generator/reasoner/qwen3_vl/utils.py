@@ -25,6 +25,27 @@ _SYSTEM_PROMPT_TRANSFER = (
 _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images based on the user's instructions."
 
 
+def generation_cache_position(model_inputs: dict[str, Any]) -> torch.Tensor:
+    """Retain legacy positions or derive them from the prepared, sliced query.
+
+    Transformers 5 no longer supplies ``cache_position`` for local model classes.
+    Native multimodal RoPE and media reuse still need it. Run this *after* the
+    generation mixin slices inputs, including an ``inputs_embeds`` first step;
+    using the original prompt length would advance the cache incorrectly.
+    Explicit Transformers 4 positions remain authoritative and unchanged.
+    """
+    position = model_inputs.get("cache_position")
+    if position is None:
+        query = model_inputs.get("inputs_embeds")
+        if query is None:
+            query = model_inputs["input_ids"]
+        cache = model_inputs.get("past_key_values")
+        seen = cache.get_seq_length() if cache is not None else 0
+        position = torch.arange(query.shape[1], device=query.device, dtype=torch.long) + seen
+        model_inputs["cache_position"] = position
+    return position
+
+
 def tokenize_caption(
     caption: str,
     tokenizer: PreTrainedTokenizerBase,
@@ -425,8 +446,10 @@ def get_rope_index(
         position_ids = attention_mask.long().cumsum(-1) - 1  # [B,N]
         position_ids.masked_fill_(attention_mask == 0, 1)
         position_ids = position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)  # [3,B,N]
-        max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]  # [B,1]
-        mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]  # [B,1]
+        # Padding positions use a harmless sentinel for RoPE, not a real token
+        # index. Taking their maximum advances a one-token padded prefix by an
+        # extra position during cached decoding. Count only actual text tokens.
+        mrope_position_deltas = attention_mask.long().sum(-1, keepdim=True) - attention_mask.shape[-1]  # [B,1]
     else:
         position_ids = (
             torch.arange(input_ids.shape[1], device=input_ids.device).view(1, 1, -1).expand(3, input_ids.shape[0], -1)

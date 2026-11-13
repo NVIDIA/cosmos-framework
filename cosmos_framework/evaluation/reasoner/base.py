@@ -71,6 +71,14 @@ class BaseEvaluator(ABC):
         """
         log_workflow_status({"progress": message}, component_name=COMPONENT_NAME)
 
+    def create_runtime(self, model_path: str, **kwargs: Any) -> CosmosFrameworkRuntime:
+        """Construct a runtime while sharing the evaluator's preprocessing and scoring.
+
+        Native policy evaluators may override this construction seam. The default
+        retains the public portable/merged Framework runtime and its admission checks.
+        """
+        return CosmosFrameworkRuntime(model_path, **kwargs)
+
     def load_model(self) -> Tuple[Any, Any]:
         """Load the model and processor with common logic."""
         log.info("Loading model and processor...")
@@ -109,7 +117,7 @@ class BaseEvaluator(ABC):
         else:
             raise ValueError(f"Unsupported evaluation video decoder: {decoder_name}")
 
-        model = CosmosFrameworkRuntime(
+        model = self.create_runtime(
             self.model_config.get("model_name"),
             config_file=self.model_config.get("config_file"),
             export_dir=self.model_config.get("export_dir"),

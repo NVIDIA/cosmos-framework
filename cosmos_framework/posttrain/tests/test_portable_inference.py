@@ -162,6 +162,74 @@ def test_evaluator_rejects_invalid_letter_budget(value):
         Evaluator({"evaluation": {"letter_max_tokens": value}})
 
 
+@pytest.mark.parametrize("override", [False, True])
+def test_evaluator_runtime_seam_preserves_loader_and_preprocessing_arguments(monkeypatch, override):
+    from types import SimpleNamespace
+
+    from cosmos_framework.evaluation.reasoner import base
+    from cosmos_framework.inference.reasoner import framework_torchcodec_video as video
+
+    class Evaluator(base.BaseEvaluator):
+        def make_tasks(self, *args):
+            pass
+
+        def save(self, *args):
+            pass
+
+        def compute_metrics(self, *args):
+            pass
+
+        def aggregate_metrics_if_all_shards_present(self, *args):
+            pass
+
+    calls = []
+    processor = object()
+    runtime = SimpleNamespace(processor=processor)
+
+    def create(model_path, **kwargs):
+        calls.append((model_path, kwargs))
+        return runtime
+
+    monkeypatch.setattr(base, "CosmosFrameworkRuntime", create)
+    decoder_calls = []
+    monkeypatch.setattr(video, "FrameworkTorchCodecVideoPreprocessor", lambda **kw: decoder_calls.append(kw))
+    adapter = {"directory": "portable", "execution_profile": "declared_profile"}
+    evaluator = Evaluator(
+        {
+            "model": {
+                "model_name": "immutable-base",
+                "dtype": "float32",
+                "attn_implementation": "sdpa",
+                "portable_adapter": adapter,
+            },
+            "vision": {"video_decoder": "torchcodec-cuda-on-demand", "num_frames": 4},
+        }
+    )
+    evaluator._send_status_callback = lambda *args: None
+    if override:
+        evaluator.create_runtime = create
+        monkeypatch.setattr(base, "CosmosFrameworkRuntime", lambda *a, **kw: pytest.fail("unexpected default loader"))
+    assert evaluator.load_model() == (runtime, processor)
+    assert calls == [
+        (
+            "immutable-base",
+            {
+                "config_file": None,
+                "export_dir": None,
+                "vit_checkpoint_path": None,
+                "enable_lora": False,
+                "base_model_path": None,
+                "dtype": "float32",
+                "device_map": "auto",
+                "attn_implementation": "sdpa",
+                "portable_adapter": adapter,
+            },
+        )
+    ]
+    assert decoder_calls[0]["num_frames"] == 4
+    assert evaluator.model_config["portable_adapter"] is adapter
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="public profiles require A100")
 @pytest.mark.parametrize("profile", [*QWEN3_VL_PROFILES, stable.PROFILE])
 def test_public_loader_strict_identity_ownership_and_restoration(tmp_path, monkeypatch, profile):
