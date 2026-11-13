@@ -4,7 +4,7 @@
    It prepares the locked environment, selects and validates one manifest row,
    checks media access, generates video, and inspects the result.
 2. For a fresh four-stage build, use the
-   [post-training tutorial](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md).
+   [post-training tutorial](../../cosmos3-post-train-simulation-bimanual/SKILL.md).
    It prepares Nano-to-DCP weights and a completed local bundle, launches the
    native Framework TOMLs, checks save/resume, and follows Stage 0 through
    Stage 3 handoffs.

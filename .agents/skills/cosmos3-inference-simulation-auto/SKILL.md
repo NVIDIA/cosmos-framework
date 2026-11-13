@@ -8,7 +8,7 @@ description: >
   scene. Use when the user asks "run Transfer-Auto", "run Sim-Auto", "generate multi-camera driving video from WSM
   controls", "generate cameras and LiDAR together", "serve Transfer-Auto or Sim-Auto with vLLM-Omni or SGLang", "check
   my camera rig, controls or captions" or "render WSM for my scene". Not for fine-tuning Transfer-Auto or distilling
-  Sim-Auto (use that model's post-training skill), Sim-Bimanual or Sim-Transfer inference, or control-to-video
+  Sim-Auto (use cosmos3-post-train-simulation-auto), Sim-Bimanual or Sim-Transfer inference, or control-to-video
   transfer with Cosmos3-Nano or Cosmos3-Super.
 ---
 
@@ -74,7 +74,7 @@ The released model is optimized for the reference camera rig. You can try a
 custom rig, but expect reduced quality as camera placement, viewing direction,
 FOV and lens projection diverge. Choose between
 [retargeting WSM to the reference rig and retaining your own rig](references/input-preparation.md#choose-reference-rig-or-custom-rig-generation);
-the latter may require [post-training](../cosmos3-nano-transfer-auto/post-training/SKILL.md#quickstart-fine-tune-the-released-model).
+the latter may require [post-training](../cosmos3-post-train-simulation-auto/SKILL.md#quickstart-fine-tune-the-released-model).
 
 Before the first run, read [Start here](references/start-here-and-sampling.md#start-here-transfer-auto): try the reference scene first, choose and match your cameras, prepare camera-local captions, then generate, inspect and tune.
 
@@ -259,7 +259,7 @@ Before the first run, read [Start here](references/start-here-and-sampling.md#st
 
 1. Follow [Framework setup](references/framework-runtime.md).
    Set `SIM_AUTO_HF` to the downloaded student directory, or a complete student
-   export from [distillation](../cosmos3-nano-sim-auto/post-training/SKILL.md).
+   export from [distillation](../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 2. Follow [input preparation](references/sim-auto-inputs.md). Both Auto models share
    the [reference scene](references/reference-scene.md#get-the-scene);
    download the [sample](https://huggingface.co/nvidia/Cosmos3-Nano-Transfer-Auto/tree/main/assets/sample_data)
@@ -395,11 +395,11 @@ Apply the row's [validation checklist](../cosmos3-inference-simulation/reference
 
 ## Troubleshooting
 
-Inference symptoms of both models, with how to collect one failing example and report it: [`references/troubleshooting.md`](references/troubleshooting.md) ([Transfer-Auto](references/troubleshooting.md#transfer-auto), [Sim-Auto](references/troubleshooting.md#sim-auto)). Served requests: [vLLM-Omni troubleshooting](references/transfer-auto-guide.md#vllm-omni-troubleshooting) in the guide and the "Next steps" section of each served reference. Environment, CUDA, import and container failures: `../cosmos3-env-troubleshoot/SKILL.md`. Training, checkpoint, resume and distillation symptoms stay with the [Transfer-Auto](../cosmos3-nano-transfer-auto/troubleshooting/SKILL.md) and [Sim-Auto](../cosmos3-nano-sim-auto/troubleshooting/SKILL.md) troubleshooting skills.
+Inference symptoms of both models, with how to collect one failing example and report it: [`references/troubleshooting.md`](references/troubleshooting.md) ([Transfer-Auto](references/troubleshooting.md#transfer-auto), [Sim-Auto](references/troubleshooting.md#sim-auto)). Served requests: [vLLM-Omni troubleshooting](references/transfer-auto-guide.md#vllm-omni-troubleshooting) in the guide and the "Next steps" section of each served reference. Environment, CUDA, import and container failures: `../cosmos3-env-troubleshoot/SKILL.md`. Training, checkpoint, resume and distillation symptoms are in the troubleshooting reference of the Auto post-train skill: [Transfer-Auto](../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-transfer-auto) and [Sim-Auto](../cosmos3-post-train-simulation-auto/references/troubleshooting.md#troubleshoot-cosmos3-nano-sim-auto).
 
 ## Adapt the model
 
-To adapt to your own rig or data, fine-tune Transfer-Auto with the [Transfer-Auto post-training skill](../cosmos3-nano-transfer-auto/post-training/SKILL.md), then distill it into a Sim-Auto student with the [Sim-Auto post-training skill](../cosmos3-nano-sim-auto/post-training/SKILL.md).
+To adapt to your own rig or data, fine-tune Transfer-Auto with the [Transfer-Auto post-training skill](../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto), then distill it into a Sim-Auto student with the [Sim-Auto post-training skill](../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 
 ## Reference files
 
@@ -442,13 +442,13 @@ Every file under `references/`, `assets/` and `scripts/helpers`, and the entry p
 
 ## Related skills
 
-| Skill                                                                                                     | When to use                                                                                  |
-| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `../cosmos3-inference-simulation/SKILL.md`                                                                | Entry skill of the Simulation row: model chooser, shared prerequisites, validation checklist |
-| `../cosmos3-inference-simulation-bimanual/SKILL.md`                                                       | Sim-Bimanual inference                                                                       |
-| `../cosmos3-inference-simulation-transfer/SKILL.md`                                                       | Sim-Transfer inference                                                                       |
-| `../cosmos3-inference-transfer/SKILL.md`                                                                  | Control-to-video transfer with Cosmos3-Nano or Cosmos3-Super                                 |
-| `../cosmos3-setup/SKILL.md`                                                                               | Framework installation and checkpoint download                                               |
-| `../cosmos3-inference/SKILL.md`                                                                           | Framework-native inference reference: arguments and parallelism                              |
-| `../cosmos3-env-troubleshoot/SKILL.md`                                                                    | CUDA, import, container and download failures                                                |
-| `../cosmos3-nano-transfer-auto/post-training/SKILL.md`, `../cosmos3-nano-sim-auto/post-training/SKILL.md` | The Transfer-Auto and Sim-Auto post-training skills                                          |
+| Skill                                               | When to use                                                                                  |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `../cosmos3-inference-simulation/SKILL.md`          | Entry skill of the Simulation row: model chooser, shared prerequisites, validation checklist |
+| `../cosmos3-inference-simulation-bimanual/SKILL.md` | Sim-Bimanual inference                                                                       |
+| `../cosmos3-inference-simulation-transfer/SKILL.md` | Sim-Transfer inference                                                                       |
+| `../cosmos3-inference-transfer/SKILL.md`            | Control-to-video transfer with Cosmos3-Nano or Cosmos3-Super                                 |
+| `../cosmos3-setup/SKILL.md`                         | Framework installation and checkpoint download                                               |
+| `../cosmos3-inference/SKILL.md`                     | Framework-native inference reference: arguments and parallelism                              |
+| `../cosmos3-env-troubleshoot/SKILL.md`              | CUDA, import, container and download failures                                                |
+| `../cosmos3-post-train-simulation-auto/SKILL.md`    | Transfer-Auto and Sim-Auto post-training: fine-tune Transfer-Auto, distill Sim-Auto          |

@@ -74,4 +74,4 @@ initial-scene-only prompt. Keep this policy fixed across checkpoints and save
 the exact prompt with every output.
 
 For training captions, continue with the
-[caption guide](../../cosmos3-nano-sim-bimanual/post-training/references/caption-guide.md).
+[caption guide](../../cosmos3-post-train-simulation-bimanual/references/caption-guide.md).

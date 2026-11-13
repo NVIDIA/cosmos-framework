@@ -75,7 +75,7 @@ selected by the input trajectory, independently of the prediction chunk size.
 Framework provides four `sim_bimanual_stage*.toml` files under
 `examples/toml/sft_config/`. They select native local-bundle registrations from
 `cosmos_framework.configs.simulation.experiment.bimanual.stages`. Follow the
-[post-training tutorial](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md) for exact names, resource
+[post-training tutorial](../../cosmos3-post-train-simulation-bimanual/SKILL.md) for exact names, resource
 bindings and commands. The native builder uses the Cosmos3-Nano initializer and the
 user's own checkpoint chain, starts fresh optimization state at each new stage,
 and restores complete state for same-run resume. Do not substitute inference

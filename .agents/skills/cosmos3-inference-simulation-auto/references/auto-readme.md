@@ -65,7 +65,7 @@ and [Sim-Auto skill](../SKILL.md#sim-auto) for model-specific guidance.
 Use explicit `camera_key` values that match the physical views. Keep calibration,
 RGB, WSM, captions and LiDAR synchronized, using the model's expected timing and
 WSM 4.0.1 rendering. For data and rig adaptation, follow the
-[Transfer-Auto post-training skill](../../cosmos3-nano-transfer-auto/post-training/SKILL.md).
+[Transfer-Auto post-training skill](../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto).
 
 ## Rendering WSM from your own scene
 

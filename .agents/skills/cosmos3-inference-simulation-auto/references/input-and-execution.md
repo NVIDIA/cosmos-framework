@@ -154,7 +154,7 @@ saved outputs: a denoising speedup need not produce the same end-to-end speedup.
 Training also stores gradients, optimizer state and backward activations, and
 distillation can hold additional networks. An inference allocation is therefore
 not a training-memory recommendation. Use the separate
-[training memory guidance](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md#training-memory).
+[training memory guidance](../../cosmos3-post-train-simulation-auto/references/runtime.md#training-memory).
 
 ### Resolution and aspect ratio
 

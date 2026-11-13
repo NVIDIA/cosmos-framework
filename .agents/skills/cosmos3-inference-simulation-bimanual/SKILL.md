@@ -7,7 +7,7 @@ description: >
   evaluation. Use when the user asks "run Sim-Bimanual inference", "generate a bimanual robot video from an action
   trajectory", "run the AgiBot or mixed-action example", "serve Cosmos3-Nano-Sim-Bimanual with vLLM-Omni or SGLang",
   "run inference with my Sim-Bimanual Stage 3 student" or "score a rollout against held-out video". Not for training or
-  distilling the model (use the Sim-Bimanual post-training skill), for choosing robot actions (the model predicts video
+  distilling the model (use cosmos3-post-train-simulation-bimanual), for choosing robot actions (the model predicts video
   only) or for the Auto and Sim-Transfer Simulation models.
 ---
 
@@ -333,7 +333,7 @@ flicker, identity changes and agreement with the actions.
 
 #### Use your own Stage 3 checkpoint
 
-First [export the Stage 3 student](../cosmos3-nano-sim-bimanual/post-training/SKILL.md#export-and-check-inference)
+First [export the Stage 3 student](../cosmos3-post-train-simulation-bimanual/SKILL.md#export-and-check-inference)
 from its saved resolved config, selecting regular or EMA weights explicitly.
 Set `CHECKPOINT_DIR` to that complete export and choose a new `OUTPUT_DIR`.
 
@@ -430,11 +430,11 @@ Start with the [troubleshooting reference](references/troubleshooting.md): its s
 for runtime and access, input validation, generation and evaluation. For environment problems shared by all models,
 use [cosmos3-env-troubleshoot](../cosmos3-env-troubleshoot/SKILL.md). Launch, training-progress and checkpoint symptoms
 are not covered here: the opening note of the troubleshooting reference links their procedures, and training itself is
-the [Sim-Bimanual post-training skill](../cosmos3-nano-sim-bimanual/post-training/SKILL.md).
+the [Sim-Bimanual post-training skill](../cosmos3-post-train-simulation-bimanual/SKILL.md).
 
 ## Adapt the model
 
-To train or distill the model on your own data, use the [Sim-Bimanual post-training skill](../cosmos3-nano-sim-bimanual/post-training/SKILL.md).
+To train or distill the model on your own data, use the [Sim-Bimanual post-training skill](../cosmos3-post-train-simulation-bimanual/SKILL.md).
 
 ## Reference files
 
@@ -470,7 +470,7 @@ To train or distill the model on your own data, use the [Sim-Bimanual post-train
 | [cosmos3-inference-simulation](../cosmos3-inference-simulation/SKILL.md)                   | Entry skill of the Simulation models: model chooser, shared prerequisites, validation checklist                   |
 | [cosmos3-inference-simulation-auto](../cosmos3-inference-simulation-auto/SKILL.md)         | Transfer-Auto and Sim-Auto: multi-camera driving video                                                            |
 | [cosmos3-inference-simulation-transfer](../cosmos3-inference-simulation-transfer/SKILL.md) | Sim-Transfer: 480p video from a caption and one control video                                                     |
-| [Sim-Bimanual post-training skill](../cosmos3-nano-sim-bimanual/post-training/SKILL.md)    | Training and distillation of this model, and the export of a Stage 3 student                                      |
+| [Sim-Bimanual post-training skill](../cosmos3-post-train-simulation-bimanual/SKILL.md)     | Training and distillation of this model, and the export of a Stage 3 student                                      |
 | [cosmos3-setup](../cosmos3-setup/SKILL.md)                                                 | Framework installation, environment setup, checkpoint download                                                    |
 | [cosmos3-inference](../cosmos3-inference/SKILL.md)                                         | Framework inference in general: offline batch generation, parallelism options, input formats, sampling parameters |
 | [cosmos3-env-troubleshoot](../cosmos3-env-troubleshoot/SKILL.md)                           | Environment, installation and runtime errors                                                                      |

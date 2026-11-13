@@ -12,13 +12,13 @@ The native local data loader uses PyAV, TorchCodec, Transformers and FFmpeg
 shared libraries. Install FFmpeg 8 for TorchCodec 0.10, including `ffmpeg` and
 `ffprobe` for media preparation.
 Download the text tokenizer from the [Nano model repository](https://huggingface.co/nvidia/Cosmos3-Nano/tree/e59a53c25979a090fa8706c9acc0c254a6e89b92/text_tokenizer)
-as described in [bundle preparation](../../cosmos3-nano-sim-transfer/shared/local-dataset.md).
+as described in [bundle preparation](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md).
 
 `nvidia-smi` reports the driver's supported CUDA level; `torch.version.cuda`
 reports PyTorch's runtime. The driver must support that runtime. The version
 strings can differ without requiring a CUDA reinstall.
 
-> **Skill note (not in the source):** in the source, a sentence on Nano conversion ends the first paragraph and the section "Tokenizer compilation" follows "Complete the CUDA 13.0 environment". Both are training-only and are in the Sim-Transfer post-training skill's [environment reference](../../cosmos3-nano-sim-transfer/shared/environment.md).
+> **Skill note (not in the source):** in the source, a sentence on Nano conversion ends the first paragraph and the section "Tokenizer compilation" follows "Complete the CUDA 13.0 environment". Both are training-only and are in the Sim-Transfer post-training skill's [environment reference](../../cosmos3-post-train-simulation-transfer/references/environment.md).
 
 ## Complete the CUDA 13.0 environment
 

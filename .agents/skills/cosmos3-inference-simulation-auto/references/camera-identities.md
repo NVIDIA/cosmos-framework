@@ -1,6 +1,6 @@
 # Camera identities
 
-> **Skill note (not in the source):** this is the "Camera identities" section of the Transfer-Auto [training-data contract](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md), moved here because inference reads the identity table; "these training pairs" and "the training index" below refer to that contract.
+> **Skill note (not in the source):** this is the "Camera identities" section of the Transfer-Auto [training-data contract](../../cosmos3-post-train-simulation-auto/references/data-contract.md), moved here because inference reads the identity table; "these training pairs" and "the training index" below refer to that contract.
 
 When adapting to your own rig, keep its calibrated viewpoints and render WSM
 aligned with the recorded RGB, including the same crop and projection. Skip
