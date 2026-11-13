@@ -13,6 +13,8 @@ import torch.distributed as dist
 
 from cosmos_framework.utils import log, win_compat  # noqa: F401  log: imported before sys.platform is patched
 
+pytestmark = pytest.mark.L0
+
 posix_only = pytest.mark.skipif(win_compat.WINDOWS, reason="exercises the POSIX primitives")
 
 
@@ -69,6 +71,20 @@ def test_link_dir_falls_back_to_a_junction_then_a_pointer_file_on_windows(tmp_pa
         winapi.CreateJunction = _no_symlink_privilege
         assert win_compat.link_dir(target, tmp_path / "b") == "pointer-file"
     assert (tmp_path / "b.txt").read_text(encoding="utf-8") == f"{target}\n"
+
+
+def test_link_dir_removes_a_stale_pointer_file_once_a_link_can_be_made(tmp_path: Path) -> None:
+    old_target, target = tmp_path / "old", tmp_path / "target"
+    target.mkdir()
+    (tmp_path / "job.txt").write_text(f"{old_target}\n", encoding="utf-8")
+    winapi = types.SimpleNamespace(CreateJunction=lambda src, dst: None)
+    with (
+        patch.object(win_compat, "WINDOWS", True),
+        patch.object(win_compat.os, "symlink", _no_symlink_privilege),
+        patch.dict(sys.modules, {"_winapi": winapi}),
+    ):
+        assert win_compat.link_dir(target, tmp_path / "job") == "junction"
+    assert not (tmp_path / "job.txt").exists()
 
 
 @posix_only

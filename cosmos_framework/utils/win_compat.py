@@ -245,7 +245,9 @@ def link_dir(target: Union[str, os.PathLike], link: Union[str, os.PathLike]) -> 
     Creating a symlink on Windows needs either Developer Mode or
     SeCreateSymbolicLinkPrivilege, neither of which is guaranteed. There, fall back
     to a directory junction (no privilege required), then to a plain text pointer
-    file so a convenience alias never aborts a training run.
+    file (``<link>.txt``) so a convenience alias never aborts a training run. A
+    symlink or junction removes the pointer file an earlier run left behind, so the
+    two never name different targets.
 
     Returns one of ``"symlink"``, ``"junction"``, ``"pointer-file"``.
     """
@@ -254,8 +256,10 @@ def link_dir(target: Union[str, os.PathLike], link: Union[str, os.PathLike]) -> 
         os.symlink(target_s, link_s, target_is_directory=True)
         return "symlink"
 
+    pointer_file = link_s + ".txt"
     try:
         os.symlink(target_s, link_s, target_is_directory=True)
+        _remove_if_present(pointer_file)
         return "symlink"
     except (OSError, NotImplementedError):
         pass
@@ -264,13 +268,21 @@ def link_dir(target: Union[str, os.PathLike], link: Union[str, os.PathLike]) -> 
         import _winapi  # type: ignore[attr-defined]
 
         _winapi.CreateJunction(target_s, link_s)
+        _remove_if_present(pointer_file)
         return "junction"
     except (OSError, ImportError, AttributeError):
         pass
 
-    with open(link_s + ".txt", "w", encoding="utf-8") as handle:
+    with open(pointer_file, "w", encoding="utf-8") as handle:
         handle.write(target_s + "\n")
     return "pointer-file"
+
+
+def _remove_if_present(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def remove_dir_link(link: Union[str, os.PathLike]) -> None:
