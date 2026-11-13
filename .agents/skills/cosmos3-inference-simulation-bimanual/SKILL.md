@@ -395,6 +395,8 @@ Apply the four points of the Simulation checklist,
 below. The served references check their own outputs: "6. Validate and view" in the
 [vLLM-Omni reference](references/vllm-omni.md), "6. Verify and view the output" in the [SGLang reference](references/sglang.md).
 
+> **Skill note (not in the source):** step 6 calls the `ffprobe` command-line tool, which the "FFmpeg shared libraries" prerequisite does not include. Check with `command -v ffprobe`; if it is missing (`ffprobe: command not found`, exit status 127), install the FFmpeg command-line tools before step 6 (`apt-get install -y ffmpeg` on Debian or Ubuntu).
+
 ### 6. Verify outputs and hand off
 
 1. Check the sample's `sample_outputs.json` for success and its generated MP4.
