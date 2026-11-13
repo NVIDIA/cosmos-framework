@@ -41,6 +41,9 @@ class BaseEvaluator(ABC):
         self.processor = None
         self.model_config = config.get("model", {})
         self.eval_config = config.get("evaluation", {})
+        self.letter_max_tokens = self.eval_config.get("letter_max_tokens", 10)
+        if type(self.letter_max_tokens) is not int or self.letter_max_tokens <= 0:
+            raise ValueError("evaluation.letter_max_tokens must be a positive integer")
         self.gen_config = config.get("generation", {})
         self.vision_config = dict(config.get("vision", {}))
         # Accept both the public Cosmos spelling and qwen-vl-utils' legacy alias,
@@ -166,7 +169,9 @@ class BaseEvaluator(ABC):
         generation_config = dict(self.gen_config)
         generation_config.setdefault("seed", self.eval_config.get("seed", 1))
         if answer_type == "letter":
-            generation_config["max_tokens"] = min(int(generation_config.get("max_tokens", 10)), 10)
+            generation_config["max_tokens"] = min(
+                int(generation_config.get("max_tokens", self.letter_max_tokens)), self.letter_max_tokens
+            )
             generation_config["temperature"] = 0.0
 
         log.info(f"Generating outputs for {len(inputs)} tasks using Cosmos Framework...")

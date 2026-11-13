@@ -51,6 +51,15 @@ python -m cosmos_framework.inference.reasoner.generate \
 python -m cosmos_framework.evaluation.reasoner.evaluate --config evaluation.toml
 ```
 
+Answer-letter evaluation retains its default ten-token cap and greedy decoding.
+To execute an explicitly frozen 32-token evaluation budget, set both
+`generation.max_tokens = 32` and `evaluation.letter_max_tokens = 32` in the
+evaluator configuration. The effective limit is the smaller of these values;
+freeform evaluation ignores the letter cap. `letter_max_tokens` must be a
+positive integer. Deployment provenance records the settings actually passed
+to generation. This opt-in setting does not change the historical ten-token
+scores below or qualify new model outputs.
+
 The earlier [portable_adapter.toml](../../examples/reasoner/portable_adapter.toml)
 preserves the legacy canonical configuration and the stable-factorized variant.
 

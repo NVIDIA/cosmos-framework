@@ -81,7 +81,27 @@ def test_runtime_cache_invalidation_tracks_sources_and_clear():
     assert runtime.adapter_deployment["state_modified_since_load"]
 
 
-def test_evaluator_records_executed_generation_settings(tmp_path):
+@pytest.mark.parametrize(
+    ("letter_cap", "generation", "answer_type", "expected"),
+    [
+        (
+            None,
+            {"max_tokens": 32, "temperature": 0.7, "seed": 99},
+            "letter",
+            {"max_tokens": 10, "temperature": 0.0, "seed": 99},
+        ),
+        (
+            32,
+            {"max_tokens": 32, "temperature": 0.7, "seed": 99},
+            "letter",
+            {"max_tokens": 32, "temperature": 0.0, "seed": 99},
+        ),
+        (32, {"max_tokens": 8}, "letter", {"max_tokens": 8, "temperature": 0.0, "seed": 1}),
+        (32, {}, "letter", {"max_tokens": 32, "temperature": 0.0, "seed": 1}),
+        (32, {"max_tokens": 64, "temperature": 0.7}, "freeform", {"max_tokens": 64, "temperature": 0.7, "seed": 1}),
+    ],
+)
+def test_evaluator_records_executed_generation_settings(tmp_path, letter_cap, generation, answer_type, expected):
     from types import SimpleNamespace
 
     from cosmos_framework.evaluation.reasoner.base import BaseEvaluator
@@ -99,7 +119,10 @@ def test_evaluator_records_executed_generation_settings(tmp_path):
         def aggregate_metrics_if_all_shards_present(self, *args):
             pass
 
-    evaluator = Evaluator({"generation": {"max_tokens": 32, "temperature": 0.7, "seed": 99}, "evaluation": {"seed": 1}})
+    config = {"generation": generation, "evaluation": {"seed": 1}}
+    if letter_cap is not None:
+        config["evaluation"]["letter_max_tokens"] = letter_cap
+    evaluator = Evaluator(config)
     evaluator._send_status_callback = lambda *args: None
     evaluator._adapter_deployment_path = tmp_path / "deployment.json"
     runtime = SimpleNamespace(adapter_deployment={})
@@ -110,14 +133,33 @@ def test_evaluator_records_executed_generation_settings(tmp_path):
 
     runtime.generate_tasks = generate_tasks
     evaluator.model = runtime
-    evaluator.run_model_inference([{}], [{}], answer_type="letter")
+    evaluator.run_model_inference([{}], [{}], answer_type=answer_type)
     import json
 
-    assert json.loads(evaluator._adapter_deployment_path.read_text())["effective_generation"] == {
-        "max_tokens": 10,
-        "temperature": 0.0,
-        "seed": 99,
-    }
+    assert json.loads(evaluator._adapter_deployment_path.read_text())["effective_generation"] == expected
+    assert evaluator.gen_config == generation
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 32.0, "32", None])
+def test_evaluator_rejects_invalid_letter_budget(value):
+    from cosmos_framework.evaluation.reasoner.base import BaseEvaluator
+
+    # Exercise construction before any model or decoder is loaded.
+    class Evaluator(BaseEvaluator):
+        def make_tasks(self, *args):
+            pass
+
+        def save(self, *args):
+            pass
+
+        def compute_metrics(self, *args):
+            pass
+
+        def aggregate_metrics_if_all_shards_present(self, *args):
+            pass
+
+    with pytest.raises(ValueError, match="evaluation.letter_max_tokens"):
+        Evaluator({"evaluation": {"letter_max_tokens": value}})
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="public profiles require A100")
