@@ -30,6 +30,7 @@ data_parallel_replicate_degree  = 1
 [model.compile]
 enabled                         = true                   # was [model.parallelism].use_torch_compile
 compile_dynamic                 = true
+compiled_region                 = "all"
 
 [model.activation_checkpointing]
 mode                = "full"
