@@ -21,14 +21,14 @@ from cosmos_framework.utils.generator.bf16_cache_contract import (
     QWEN3_5_PROFILE,
     QWEN3_VL_PROFILES,
 )
-from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
+from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
 PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
 
 def validate_deployment_environment(profile: str | None, device: str, *, device_map: str = "auto") -> None:
     """Fail before allocating weights on an unsupported v2/fast deployment host."""
-    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, SMOLLM_PROFILE):
+    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, *SMOLLM_PROFILES):
         return  # Preserve the legacy loaders' original validation boundary.
     if device_map not in ("auto", device):
         raise ValueError(f"{profile} requires one rank-local GPU; alternate device maps/offload are unsupported")
@@ -67,12 +67,12 @@ def deployment_profile(path: str) -> str | None:
     bound = precision.get("execution_profile")
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, *PROFILE_FAMILIES, SMOLLM_PROFILE) or bound != declared:
+    if declared not in (PROFILE, *PROFILE_FAMILIES, *SMOLLM_PROFILES) or bound != declared:
         raise ValueError("missing, conflicting or unknown deployment profile in config/.materialized; re-export")
-    if declared == SMOLLM_PROFILE:
+    if declared in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import validate_identity
 
-        validate_identity(metadata.get("adapter_identity", {}))
+        validate_identity(metadata.get("adapter_identity", {}), profile=declared)
         if (
             config.get("model_type") != "llama"
             or config.get("dtype", config.get("torch_dtype")) != "float32"
@@ -80,7 +80,7 @@ def deployment_profile(path: str) -> str | None:
             or precision
             != {
                 "dtype": "float32",
-                "execution_profile": SMOLLM_PROFILE,
+                "execution_profile": declared,
                 "weight_conversion": "unchanged_float32_merge",
                 "equivalence": "versioned_fp64_reduction_inference_requires_qualification",
             }
@@ -163,10 +163,10 @@ def install_deployment_profile(model, profile: str, *, adapter_identity=None) ->
     import torch
     from torch import nn
 
-    if profile == SMOLLM_PROFILE:
+    if profile in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import install
 
-        return install(model, identity=adapter_identity or {})
+        return install(model, identity=adapter_identity or {}, profile=profile)
     if profile == QWEN3_5_PROFILE:
         from cosmos_framework.utils.generator.qwen3_5_cache import install
 

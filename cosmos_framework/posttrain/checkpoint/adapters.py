@@ -534,14 +534,14 @@ def merged_export_metadata(
         }
     elif output_dtype != "float32":
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
-    from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
+    from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-    if execution_profile == SMOLLM_PROFILE:
+    if execution_profile in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import validate_identity
 
-        validate_identity(identity)
+        validate_identity(identity, profile=execution_profile)
         if output_dtype != "float32":
-            raise ValueError(f"{SMOLLM_PROFILE} requires float32 export")
+            raise ValueError(f"{execution_profile} requires float32 export")
         result["deployment_precision"] = {
             "dtype": "float32",
             "execution_profile": execution_profile,

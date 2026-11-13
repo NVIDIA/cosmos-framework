@@ -17,10 +17,14 @@ import torch
 from torch.nn import functional as F
 
 PROFILE = "smollm_fp32_consistent_v1"
+FIXED_MMA_PROFILE = "smollm_fp32_fixed_mma_v2"
+PROFILES = (PROFILE, FIXED_MMA_PROFILE)
 BASE_SHA256 = "377bf183dd7e0f58651d83d0eff98c88f2d3ccea1a009874a805eebfa56f6e29"
 
 
-def validate_identity(identity):
+def validate_identity(identity, *, profile=PROFILE):
+    if profile not in PROFILES:
+        raise ValueError(f"unknown SmolLM execution profile: {profile!r}")
     resolved = identity.get("resolved", {})
     if (
         identity.get("format") != "cosmos-posttrain-adapter-v1"
@@ -37,7 +41,7 @@ def validate_identity(identity):
         or identity.get("dependencies", {}).get("torch") != "2.10.0"
         or identity.get("dependencies", {}).get("transformers") != "5.8.1"
     ):
-        raise ValueError(f"{PROFILE} requires the recorded SmolLM2-135M v1 factorized adapter/base identity")
+        raise ValueError(f"{profile} requires the recorded SmolLM2-135M v1 factorized adapter/base identity")
 
 
 def _guard(module):
@@ -66,19 +70,42 @@ def _linear(module, inputs):
 
 def _adapter(module, inputs):
     _guard(module)
+    return _adapter_result(module, inputs, _double_linear)
+
+
+def _double_linear(inputs, weight, bias=None):
+    return F.linear(inputs, weight.double(), None if bias is None else bias.double())
+
+
+def _fixed_linear(module, inputs):
+    from cosmos_framework.utils.generator.smollm_fixed_mma import linear
+
+    _guard(module)
+    return linear(inputs, module.weight, module.bias).to(inputs.dtype)
+
+
+def _fixed_adapter(module, inputs):
+    from cosmos_framework.utils.generator.smollm_fixed_mma import linear
+
+    _guard(module)
+    return _adapter_result(module, inputs, linear)
+
+
+def _adapter_result(module, inputs, linear):
+    """Shared factorized algebra; profiles differ only in projection reduction."""
     # Dropout is disabled by eval, including independently configured dropout.
     x, a, b = inputs.double(), module.lora_A.weight.double(), module.lora_B.weight.double()
-    base = F.linear(x, module.weight.double(), None if module.bias is None else module.bias.double())
-    delta = F.linear(F.linear(x, a), b) * module._lora_scale
+    base = linear(x, module.weight, module.bias)
+    delta = linear(linear(x, a), b) * module._lora_scale
     if module.method == "pissa":
-        initial = F.linear(F.linear(x, module.initial_A.double()), module.initial_B.double()) * module._lora_scale
+        initial = linear(linear(x, module.initial_A), module.initial_B) * module._lora_scale
         result = base + (delta - initial)
     elif module.method == "dora":
         direction = module.weight.double() + module._lora_scale * (b @ a)
         ratio = module.magnitude.double() / direction.norm(dim=1).clamp_min(torch.finfo(torch.float64).tiny)
         # The bias is not normalized. The dense direction only defines the row
         # norm; it is never used as a dense effective-weight forward.
-        result = base + (ratio - 1) * F.linear(x, module.weight.double(), None) + ratio * delta
+        result = base + (ratio - 1) * linear(x, module.weight) + ratio * delta
     elif module.method == "lora":
         result = base + delta
     else:
@@ -182,11 +209,13 @@ def _after_forward(model, args, kwargs, output):
             cache._cosmos_smollm_owner = record["cache_owner"]
 
 
-def install(model, *, identity, adapter_type=None):
+def install(model, *, identity, adapter_type=None, profile=PROFILE):
     """Prevalidate the complete model, then replace forwards without owning state."""
     from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM, LlamaRMSNorm
 
-    validate_identity(identity)
+    validate_identity(identity, profile=profile)
+    if profile == FIXED_MMA_PROFILE and version("triton") != "3.6.0":
+        raise ValueError(f"{profile} requires Triton 3.6.0")
     if (
         type(model) is not LlamaForCausalLM
         or model.training
@@ -214,7 +243,7 @@ def install(model, *, identity, adapter_type=None):
     if model.get_input_embeddings().weight is not model.get_output_embeddings().weight:
         raise ValueError(f"{PROFILE} requires the original tied embedding/output weight")
     installed = getattr(model, "_cosmos_deployment_profile", None)
-    if installed not in (None, PROFILE):
+    if installed not in (None, profile):
         raise ValueError("conflicting deployment profile; restore it before installing a different profile")
     parameters = list(model.parameters())
     devices = {p.device for p in parameters}
@@ -242,31 +271,37 @@ def install(model, *, identity, adapter_type=None):
     for name, module in model.named_modules():
         if id(module) in descendants:
             continue
-        function = {torch.nn.Linear: _linear, LlamaRMSNorm: _norm, LlamaAttention: _attention}.get(type(module))
+        function = {
+            torch.nn.Linear: _fixed_linear if profile == FIXED_MMA_PROFILE else _linear,
+            LlamaRMSNorm: _norm,
+            LlamaAttention: _attention,
+        }.get(type(module))
         if adapter_type is not None and type(module) is adapter_type:
-            function = _adapter
+            function = _fixed_adapter if profile == FIXED_MMA_PROFILE else _adapter
         if function is not None:
             attribute = "_old_forward" if hasattr(module, "_hf_hook") else "forward"
             forwards.append((name, module, attribute, getattr(module, attribute), MethodType(function, module)))
     model._cosmos_smollm_consistent = {
         "identity": identity,
+        "profile": profile,
         "forwards": forwards,
         "adapters": [(m, _adapter_settings(m)) for _, m in targets],
         "ownership": _ownership(model),
         "signature": signature(model.forward),
-        "cache_owner": (PROFILE, uuid4().hex),
+        "cache_owner": (profile, uuid4().hex),
     }
     for _, module, attribute, _, replacement in forwards:
         setattr(module, attribute, replacement)
     model._cosmos_smollm_consistent["hook"] = model.register_forward_pre_hook(_before_forward, with_kwargs=True)
     model._cosmos_smollm_consistent["output_hook"] = model.register_forward_hook(_after_forward, with_kwargs=True)
-    model._cosmos_deployment_profile = PROFILE
+    model._cosmos_deployment_profile = profile
     return [r[0] for r in forwards]
 
 
 def restore(model):
     record = getattr(model, "_cosmos_smollm_consistent", None)
-    if record is None or getattr(model, "_cosmos_deployment_profile", None) != PROFILE:
+    installed = getattr(model, "_cosmos_deployment_profile", None)
+    if record is None or installed not in PROFILES or record.get("profile", PROFILE) != installed:
         raise ValueError(f"{PROFILE} is not installed; refusing to restore another profile")
     # Fail before making a partial restoration if another owner changed a module.
     if any(model.get_submodule(n) is not m or getattr(m, a) != new for n, m, a, _, new in record["forwards"]):

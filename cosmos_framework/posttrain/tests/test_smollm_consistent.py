@@ -68,12 +68,13 @@ def test_separate_branches_follow_independent_double_reference(method, rslora, m
         assert torch.equal(tensor, owned[name][1])
 
 
-def test_identity_and_configuration_are_bounded():
+@pytest.mark.parametrize("execution_profile", profile.PROFILES)
+def test_identity_and_configuration_are_bounded(execution_profile):
     good = identity()
-    profile.validate_identity(good)
-    PortableAdapterConfig("adapter", profile.PROFILE)
+    profile.validate_identity(good, profile=execution_profile)
+    PortableAdapterConfig("adapter", execution_profile)
     with pytest.raises(ValueError, match="cache"):
-        PortableAdapterConfig("adapter", profile.PROFILE, cache_effective_weights=True)
+        PortableAdapterConfig("adapter", execution_profile, cache_effective_weights=True)
     for field, bad in [
         ("base_storage_dtype", "float32"),
         ("architecture", "qwen3_vl"),
@@ -82,33 +83,38 @@ def test_identity_and_configuration_are_bounded():
         value = copy.deepcopy(good)
         value[field] = bad
         with pytest.raises(ValueError, match="recorded Smol"):
-            profile.validate_identity(value)
+            profile.validate_identity(value, profile=execution_profile)
     value = copy.deepcopy(good)
     value["base"]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="recorded Smol"):
-        profile.validate_identity(value)
+        profile.validate_identity(value, profile=execution_profile)
 
 
-def test_export_metadata_and_public_profile_are_consistent(tmp_path):
+@pytest.mark.parametrize("execution_profile", profile.PROFILES)
+def test_export_metadata_and_public_profile_are_consistent(tmp_path, execution_profile):
     from cosmos_framework.inference.reasoner.precision import deployment_profile
     from cosmos_framework.posttrain.checkpoint.adapters import merged_export_metadata
 
     record = {"kind": "portable_adapter", "identity": identity(), "weights_sha256": "a" * 64}
     metadata = merged_export_metadata(
-        "unused", record["identity"], artifact_record=record, output_dtype="float32", execution_profile=profile.PROFILE
+        "unused",
+        record["identity"],
+        artifact_record=record,
+        output_dtype="float32",
+        execution_profile=execution_profile,
     )
-    config = config_with_export_dtype({"model_type": "llama"}, "float32", execution_profile=profile.PROFILE)
+    config = config_with_export_dtype({"model_type": "llama"}, "float32", execution_profile=execution_profile)
     marker = {"identity": {"output_dtype": "float32", "export_metadata": metadata}}
     (tmp_path / "config.json").write_text(json.dumps(config))
     (tmp_path / ".materialized").write_text(json.dumps(marker))
-    assert deployment_profile(str(tmp_path)) == profile.PROFILE
+    assert deployment_profile(str(tmp_path)) == execution_profile
     with pytest.raises(ValueError, match="float32"):
         merged_export_metadata(
             "unused",
             record["identity"],
             artifact_record=record,
             output_dtype="bfloat16",
-            execution_profile=profile.PROFILE,
+            execution_profile=execution_profile,
         )
     config.pop("cosmos_inference_profile")
     (tmp_path / "config.json").write_text(json.dumps(config))
@@ -145,7 +151,8 @@ def test_norm_and_projection_round_at_fp32_boundary(monkeypatch):
         assert torch.equal(result[:, -1:], forward(module, x[:, -1:]))
 
 
-def test_portable_loader_binds_llama_identity_before_injection(monkeypatch):
+@pytest.mark.parametrize("execution_profile", profile.PROFILES)
+def test_portable_loader_binds_llama_identity_before_injection(monkeypatch, execution_profile):
     from cosmos_framework.posttrain.checkpoint import adapters as artifacts
     from cosmos_framework.posttrain.model import adapters
     from cosmos_framework.utils.generator.portable_adapters import load_portable_model
@@ -169,11 +176,14 @@ def test_portable_loader_binds_llama_identity_before_injection(monkeypatch):
 
     monkeypatch.setattr(artifacts, "make_adapter_identity", verify)
     with pytest.raises(RuntimeError, match="exact llama identity"):
-        load_portable_model("base", PortableAdapterConfig("adapter", profile.PROFILE), dtype="float32", device="cuda:0")
+        load_portable_model(
+            "base", PortableAdapterConfig("adapter", execution_profile), dtype="float32", device="cuda:0"
+        )
 
 
 @pytest.mark.parametrize("architecture", ["Gr00tN1d7", "alpamayo_r1", "pi05"])
-def test_physical_export_cannot_ignore_smol_profile(monkeypatch, tmp_path, architecture):
+@pytest.mark.parametrize("execution_profile", profile.PROFILES)
+def test_physical_export_cannot_ignore_smol_profile(monkeypatch, tmp_path, architecture, execution_profile):
     from cosmos_framework.posttrain.checkpoint.tools import adapters
 
     foreign = identity()
@@ -181,7 +191,7 @@ def test_physical_export_cannot_ignore_smol_profile(monkeypatch, tmp_path, archi
     monkeypatch.setattr(adapters, "read_adapter_snapshot", lambda _: ({"identity": foreign}, {}))
     output = tmp_path / "export"
     with pytest.raises(ValueError, match="recorded Smol"):
-        adapters.export_merged_adapter("adapter", "base", str(output), execution_profile=profile.PROFILE)
+        adapters.export_merged_adapter("adapter", "base", str(output), execution_profile=execution_profile)
     assert not output.exists()
 
 
@@ -232,3 +242,77 @@ def test_foreign_prefix_rejected_before_model_execution(monkeypatch):
     model._cosmos_smollm_consistent["cache_owner"] = (profile.PROFILE, "installation-two")
     with pytest.raises(ValueError, match="prefix produced"):
         profile._before_forward(model, (), kwargs)
+
+
+def test_cross_version_export_declarations_rejected(tmp_path):
+    from cosmos_framework.inference.reasoner.precision import deployment_profile
+    from cosmos_framework.posttrain.checkpoint.adapters import merged_export_metadata
+
+    record = {"kind": "portable_adapter", "identity": identity(), "weights_sha256": "a" * 64}
+    metadata = merged_export_metadata(
+        "unused", record["identity"], artifact_record=record, execution_profile=profile.PROFILE
+    )
+    config = config_with_export_dtype({"model_type": "llama"}, "float32", execution_profile=profile.FIXED_MMA_PROFILE)
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    (tmp_path / ".materialized").write_text(
+        json.dumps({"identity": {"output_dtype": "float32", "export_metadata": metadata}})
+    )
+    with pytest.raises(ValueError, match="conflicting"):
+        deployment_profile(str(tmp_path))
+
+
+@pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
+@pytest.mark.parametrize("rslora", [False, True])
+def test_fixed_mma_uses_same_separate_factor_algebra(method, rslora, monkeypatch):
+    from cosmos_framework.utils.generator import smollm_fixed_mma
+
+    monkeypatch.setattr(profile, "_guard", lambda module: None)
+    torch.manual_seed(313)
+    layer = PosttrainAdapterLinear(
+        torch.nn.Linear(7, 5, bias=True),
+        AdapterComponentConfig(
+            component="language",
+            targets=["projection"],
+            method=method,
+            rank=3,
+            alpha=7,
+            use_rslora=rslora,
+            initialization="svd" if method == "pissa" else "default",
+        ),
+    ).eval()
+    with torch.no_grad():
+        layer.lora_B.weight.add_(0.02)
+        if method == "dora":
+            layer.magnitude.mul_(1.03)
+    before = {n: (id(t), t.clone()) for n, t in layer.state_dict(keep_vars=True).items()}
+    calls = []
+
+    def independent_projection(x, weight, bias=None):
+        calls.append(tuple(weight.shape))
+        return F.linear(x.double(), weight.double(), None if bias is None else bias.double())
+
+    monkeypatch.setattr(smollm_fixed_mma, "linear", independent_projection)
+    x = torch.randn(1, 19, 7)
+    actual = profile._fixed_adapter(layer, x)
+    torch.testing.assert_close(actual, profile._adapter(layer, x), atol=0, rtol=0)
+    assert (3, 7) in calls and (5, 3) in calls  # both separate low-rank branches actually execute
+    assert calls.count((5, 3)) == (2 if method == "pissa" else 1)
+    for name, tensor in layer.state_dict(keep_vars=True).items():
+        assert id(tensor) == before[name][0] and torch.equal(tensor, before[name][1])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires actual A100 fixed MMA execution")
+def test_fixed_mma_preserves_rows_across_split_and_tail():
+    from cosmos_framework.utils.generator.smollm_fixed_mma import linear
+
+    if torch.cuda.get_device_capability(0) != (8, 0):
+        pytest.skip("profile is restricted to SM80")
+    torch.manual_seed(313)
+    x = torch.randn(1, 47, 37, device="cuda")
+    w = torch.randn(33, 37, device="cuda")
+    b = torch.randn(33, device="cuda")
+    with torch.no_grad():
+        whole = linear(x, w, b)
+        chunks = torch.cat([linear(x[:, :17], w, b), linear(x[:, 17:31], w, b), linear(x[:, 31:], w, b)], dim=1)
+        assert torch.equal(whole, chunks)
+        torch.testing.assert_close(whole, F.linear(x.double(), w.double(), b.double()), atol=1e-12, rtol=1e-12)

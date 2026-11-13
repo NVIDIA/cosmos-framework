@@ -81,3 +81,31 @@ FP64 attention can allocate a substantially larger working set than fused FP32
 attention. The full 1,319-row GSM8K comparison uses the same reused held-out
 questions and capped decoding protocol as the original final checkpoint; it is
 not a new untouched test or a statistically robust method ranking.
+
+## Fixed projection reduction, version 2
+
+`smollm_fp32_fixed_mma_v2` is a separately named inference execution profile for
+the same pinned base, factorized artifacts, public loaders and FP32 boundaries.
+It replaces projection GEMMs with one A100 FP64 MMA schedule: 16 rows, 32 output
+columns and 32 reduction elements per tile, four warps, one stage, and disabled
+floating-point fusion. Every row follows the same reduction tiles regardless of
+prefill length or a split prefix. RMSNorm, attention, RoPE, masks and cache updates
+retain the version-1 implementation. It requires Triton 3.6.0 and retains separate
+base, low-rank and initial PiSSA branches; it creates no derived weight cache.
+
+Use `smollm_fp32_fixed_mma_v2` in the portable `execution_profile` or the export
+command above, with a new output directory. Never edit an existing export's
+profile tag. Config and transaction declarations must agree, and a populated
+version-1 prefix cannot be reused by version 2. Restoration and the other
+precision, checkpoint, hardware and inference-only restrictions above apply.
+
+The original version-1 final LoRA/FSDP checkpoint fails the preserved split-prefix
+mean-error gate at the 2K case (`4.40152e-6 > 2e-6`). The fixed-tile diagnostic
+passes all 34 frozen cases in portable, fresh portable reload and merged runs
+(job `38480714`), with unchanged gates and tensors. That run used the original
+installed package plus explicitly hashed experimental code; it is **not**
+qualification of this production integration. Installed version-2 execution and
+its complete matched 1,319-question evaluation remain required. The diagnostic
+peaked at about 13.56 GB CUDA allocation; weights occupied 539,903,488 bytes for
+portable and 538,060,288 bytes for merged. These resource results are separate
+from task quality and do not establish a speedup.

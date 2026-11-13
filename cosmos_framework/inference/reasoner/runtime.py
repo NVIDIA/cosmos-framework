@@ -184,7 +184,7 @@ class CosmosFrameworkRuntime:
             install_deployment_profile,
             validate_deployment_environment,
         )
-        from cosmos_framework.utils.generator.smollm_consistent import PROFILE as SMOLLM_PROFILE
+        from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
         profile = deployment_profile(self.model_path)
         if profile:
@@ -202,12 +202,12 @@ class CosmosFrameworkRuntime:
                 raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
             self.dtype, self.attn_implementation = "float32", "sdpa"
         if profile:
-            accepted = ("float32", "fp32", "auto") if profile == SMOLLM_PROFILE else ("bfloat16", "bf16", "auto")
+            accepted = ("float32", "fp32", "auto") if profile in SMOLLM_PROFILES else ("bfloat16", "bf16", "auto")
             if self.dtype not in accepted or self.attn_implementation not in (None, "sdpa"):
-                if profile == SMOLLM_PROFILE:
+                if profile in SMOLLM_PROFILES:
                     raise ValueError(f"{profile} requires FP32 consistent deployment with SDPA")
                 raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
-            self.dtype = "float32" if profile == SMOLLM_PROFILE else "bfloat16"
+            self.dtype = "float32" if profile in SMOLLM_PROFILES else "bfloat16"
             self.attn_implementation = "sdpa"
         logger.info(
             "Loading Cosmos Framework model from %s on %s (model_type=%s)",
@@ -235,14 +235,14 @@ class CosmosFrameworkRuntime:
             )
 
             self.processor = build_cosmos3_edge_processor(self.model_path)
-        elif profile == SMOLLM_PROFILE:
+        elif profile in SMOLLM_PROFILES:
             self.processor = AutoTokenizer.from_pretrained(
                 self.model_path, local_files_only=True, trust_remote_code=False
             )
         else:
             self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
 
-        auto_class = AutoModelForCausalLM if profile == SMOLLM_PROFILE else AutoModelForImageTextToText
+        auto_class = AutoModelForCausalLM if profile in SMOLLM_PROFILES else AutoModelForImageTextToText
         device_map: str | dict[str, str]
         if self.device == "cpu":
             device_map = "cpu"
@@ -298,7 +298,7 @@ class CosmosFrameworkRuntime:
             validate_loaded_model(self.model)
         if profile:
             profile_kwargs = {}
-            if profile == SMOLLM_PROFILE:
+            if profile in SMOLLM_PROFILES:
                 marker = json.loads((Path(self.model_path) / ".materialized").read_text())
                 profile_kwargs["adapter_identity"] = marker["identity"]["export_metadata"]["adapter_identity"]
                 self.adapter_deployment = {
@@ -375,7 +375,7 @@ class CosmosFrameworkRuntime:
         from cosmos_framework.utils.generator import factorized_inference, smollm_consistent
 
         previous = getattr(self.model, "_cosmos_deployment_profile", None)
-        if previous == smollm_consistent.PROFILE:
+        if previous in smollm_consistent.PROFILES:
             smollm_consistent.restore(self.model)
         elif previous == factorized_inference.PROFILE:
             factorized_inference.restore(self.model)
