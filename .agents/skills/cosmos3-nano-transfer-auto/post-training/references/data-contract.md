@@ -25,9 +25,9 @@ The folders organize your source files; the index below is the native builder's
 input. The Framework builder packages existing media and tokenizer resources.
 It does not render WSM, generate captions or synthesize measured LiDAR.
 
-To render controls from your scenarios, follow the [WSM README](../../../cookbooks/cosmos3/simulation/auto/wsm/README.md) and
-[conversion skill](../../../cookbooks/cosmos3/simulation/auto/wsm/skills/scenario-to-rds-hq/SKILL.md), with the
-[renderer checks](../../inference/references/wsm-conventions.md#renderer-evidence-and-geometry).
+To render controls from your scenarios, follow the [WSM README](../../../cosmos3-inference-simulation-auto/scripts/wsm/README.md) and
+[conversion skill](../../../cosmos3-inference-simulation-auto/scripts/wsm/skills/scenario-to-rds-hq/SKILL.md), with the
+[renderer checks](../../../cosmos3-inference-simulation-auto/references/wsm-conventions.md#renderer-evidence-and-geometry).
 You need map geometry, object tracks, ego poses, signal states and calibrated
 sensor projections/timing. RGB and measured LiDAR recordings alone do not supply
 those annotations. Prepare HD-map range controls separately on the matched LiDAR
@@ -77,7 +77,7 @@ intensity member; occupied rays receive unit intensity in preprocessing.
 Use a consistent clip ID matching the index, and actual camera-clock source IDs
 (0,3,6,... for aligned regular 30/10 Hz data). Do not renumber missing sweeps
 as if they were present. Use the projection described below, not arbitrary image
-indices. The [reference scene](../../shared/reference-scene.md) shows the concrete
+indices. The [reference scene](../../../cosmos3-inference-simulation-auto/references/reference-scene.md) shows the concrete
 filenames and native index, with an HF download and checksum instructions.
 
 Run `cosmos_framework.data.generator.local_simulation.auto_bundle` as shown in
@@ -105,7 +105,7 @@ Never split adjacent overlapping clips from the same drive across train and vali
 Use WSM v4.0.1 conventions (renderer selector `version=v4`), including signal
 state/front/back, lane markings and projection. Inspect synchronized control/RGB overlays using
 the same crop and resize. The
-[input-checking guide](../../inference/references/input-preparation.md)
+[input-checking guide](../../../cosmos3-inference-simulation-auto/references/input-preparation.md)
 covers camera geometry and renderer checks for both training and inference.
 
 ## Training captions
@@ -113,7 +113,7 @@ covers camera geometry and renderer checks for both training and inference.
 Prefer timestamped descriptions of each camera's scene and its progression.
 This is the format used in our training data; matching it reduces the
 caption-format gap during post-training. Single-paragraph captions also work.
-The [reference scene](../../shared/reference-scene.md#choose-a-caption-style)
+The [reference scene](../../../cosmos3-inference-simulation-auto/references/reference-scene.md#choose-a-caption-style)
 provides both `captions/` and `captions_with_timestamp/`, with instructions for
 selecting the latter in the training index before building the bundle.
 
@@ -148,7 +148,7 @@ For example, real blue cars on a dry daytime road must not acquire white paint
 and rainy-night captions solely from a requested augmentation. A new weather or
 appearance condition requires corresponding target data, not just edited labels.
 
-Keep the [caption style aligned with inference](../../shared/caption-policy.md#keep-training-and-inference-captions-aligned):
+Keep the [caption style aligned with inference](../../../cosmos3-inference-simulation-auto/references/caption-policy.md#keep-training-and-inference-captions-aligned):
 prefer timestamped, camera-local descriptions and consistent appearances/motion
 across views. The grounding rules above still apply to every training target.
 
@@ -167,40 +167,7 @@ or weather. Use the paired recording/metadata rather than inventing those proper
 
 ## Camera identities
 
-When adapting to your own rig, keep its calibrated viewpoints and render WSM
-aligned with the recorded RGB, including the same crop and projection. Skip
-reference-rig retargeting for these training pairs: it changes control viewpoints
-without transforming RGB targets. See the
-[reference-rig versus custom-rig workflow](../../inference/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation).
-
-For your own rig, use [Camera Rig Explorer](../../../cookbooks/cosmos3/simulation/auto/wsm/docs/camera-rig/guide.md)
-and the [nearest-camera mapping workflow](../../inference/references/input-preparation.md#use-camera-rig-explorer-for-your-own-rig)
-before building the training index. Keep that mapping consistent with inference.
-Source filenames can remain your own; associate their paths with the chosen
-supported camera keys in the index. The native bundle builder accepts supported,
-unique keys; it does not create new view embeddings for arbitrary sensor names.
-
-Keep these learned identities even when dropping or reordering views:
-
-| ID  | Camera key                    |
-| --- | ----------------------------- |
-| 0   | `camera_front_wide_120fov`    |
-| 1   | `camera_cross_right_120fov`   |
-| 2   | `camera_rear_right_70fov`     |
-| 3   | `camera_rear_tele_30fov`      |
-| 4   | `camera_rear_left_70fov`      |
-| 5   | `camera_cross_left_120fov`    |
-| 6   | `camera_front_tele_30fov`     |
-| 7   | `camera_front_fisheye_200fov` |
-| 8   | `camera_left_fisheye_200fov`  |
-| 9   | `camera_right_fisheye_200fov` |
-| 10  | `camera_rear_fisheye_200fov`  |
-
-LiDAR uses sensor identity 11. An index within a selected subset is not the learned
-sensor ID. For example, front-wide/rear-left/front-tele retain IDs 0/4/6.
-Nominal camera names are not full calibration. Compare direction, FOV and lens
-projection before assigning a custom camera. Render controls with the same
-calibration as the recorded RGB.
+> **Skill note (not in the source):** this section (rig adaptation rules and the learned camera-ID table) moved to [camera identities](../../../cosmos3-inference-simulation-auto/references/camera-identities.md).
 
 ## Time and spatial alignment
 

@@ -1,6 +1,6 @@
 # Resolve and launch a Sim-Auto stage
 
-Use the [shared environment](../../../cosmos3-nano-transfer-auto/shared/framework-runtime.md)
+Use the [shared environment](../../../cosmos3-inference-simulation-auto/references/framework-runtime.md)
 and [prepared assets](checkpoint-preparation.md). Run from the Framework repository
 root using the native Python experiment entry point, not generic RGB SFT TOML recipes.
 

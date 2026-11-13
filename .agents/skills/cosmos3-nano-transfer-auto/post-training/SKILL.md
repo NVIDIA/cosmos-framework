@@ -19,14 +19,14 @@ no access to the original training dataset is required.
 | ----------------------------- | --------------------------------- | --------------------------------------------------------------------------- |
 | Adapt to your data            | Released Transfer-Auto checkpoint | [Fine-tuning Quickstart](#quickstart-fine-tune-the-released-model)          |
 | Reproduce the training phases | Cosmos3-Nano checkpoint           | [Four-phase curriculum](#reproduce-the-four-training-phases)                |
-| Generate a driving scene      | Released Transfer-Auto checkpoint | [Inference](../inference/SKILL.md)                                          |
+| Generate a driving scene      | Released Transfer-Auto checkpoint | [Inference](../../cosmos3-inference-simulation-auto/SKILL.md#transfer-auto) |
 | Build a streaming simulator   | Your Transfer-Auto checkpoint     | [Sim-Auto distillation](../../cosmos3-nano-sim-auto/post-training/SKILL.md) |
 
 ## Set up the environment
 
 Follow the [Framework setup guide](../../../../docs/setup.md)
 for installation in your selected checkout, then apply the additional
-[Auto requirements](../shared/framework-runtime.md). Reuse a working Framework environment.
+[Auto requirements](../../cosmos3-inference-simulation-auto/references/framework-runtime.md). Reuse a working Framework environment.
 
 The commands use the native
 [four-phase recipes](../../../../cosmos_framework/configs/simulation/common/transfer_auto_recipes.py)
@@ -53,7 +53,7 @@ entry=(
 Read the [data contract](references/data-contract.md) for sensor meaning and the
 [parameter guide](references/parameter-guide.md) before changing training settings.
 Keep user assets outside the repository. The
-[reference scene](../shared/reference-scene.md) provides an HF download,
+[reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md) provides an HF download,
 the `daytime_scene` assets and a shared native training index. Use it as a format
 reference, then prepare a diverse corpus of your own recordings.
 
@@ -62,7 +62,7 @@ reference, then prepare a diverse corpus of your own recordings.
 Set `TRANSFER_AUTO_HF` to a local snapshot directory, `TRANSFER_AUTO_REVISION`
 to its selected immutable revision, and `TRANSFER_AUTO_DCP` to a new conversion
 directory. Obtain the matching RGB VAE and text tokenizer from the
-[model assets guide](../shared/framework-runtime.md#model-snapshots).
+[model assets guide](../../cosmos3-inference-simulation-auto/references/framework-runtime.md#model-snapshots).
 Set `VIDEO_VAE` to the matched Wan2.2 VAE file and `LOCAL_QWEN_TOKENIZER`
 to the matching local text tokenizer directory for data preparation.
 
@@ -86,19 +86,19 @@ Store scene descriptions in the caption files, without model-facing headers.
 The native training transforms add the camera-rig/current-view direction and FOV
 description and the task-specific control instruction during formatting and
 tokenization. You do not need to add either manually; see
-[automatic prefixes](../shared/caption-policy.md#caption-text-and-automatic-prefixes).
+[automatic prefixes](../../cosmos3-inference-simulation-auto/references/caption-policy.md#caption-text-and-automatic-prefixes).
 
 1. Prepare synchronized RGB and WSM, camera-local target-grounded captions,
    measured LiDAR and HD-map range controls. Prefer
    [timestamped captions](references/data-contract.md#training-captions) to match
    the training format; paragraph captions remain supported.
 2. Check camera identity and alignment with
-   [input preparation](../inference/references/input-preparation.md). Do not use
+   [input preparation](../../cosmos3-inference-simulation-auto/references/input-preparation.md). Do not use
    fictional inference appearance assignments as training labels.
 3. Create the [JSONL training index](references/data-contract.md#local-training-index),
    or use `$AUTO_SAMPLE_ROOT/training-index.jsonl` from the reference scene.
    That index selects paragraph captions; follow
-   [caption selection](../shared/reference-scene.md#choose-a-caption-style)
+   [caption selection](../../cosmos3-inference-simulation-auto/references/reference-scene.md#choose-a-caption-style)
    to select the timestamped alternative before packaging.
    Set `AUTO_INDEX`, `LOCAL_QWEN_TOKENIZER` and a new `AUTO_BUNDLE` directory.
 4. Package the selected physical cameras. This list matches the seven-camera example:
@@ -198,7 +198,7 @@ python -m cosmos_framework.scripts.export_model \
 This is the joint final-model export, not a separate-sensor intermediate export.
 `--no-vit` creates a generation-only artifact. Keep tokenizer assets complete and
 remove machine-specific paths from export metadata before sharing. Use the
-[inference skill](../inference/SKILL.md) on a fixed held-out scene.
+[inference skill](../../cosmos3-inference-simulation-auto/SKILL.md#transfer-auto) on a fixed held-out scene.
 
 ## Reproduce the four training phases
 
@@ -220,9 +220,9 @@ including the current time. Phases 3 and 4 both use 10% whole-LiDAR dropout.
 
 ## References
 
-- [Framework environment and model assets](../shared/framework-runtime.md)
+- [Framework environment and model assets](../../cosmos3-inference-simulation-auto/references/framework-runtime.md)
 - [Training data contract and bundle layout](references/data-contract.md)
 - [Parameter guide](references/parameter-guide.md)
-- [Shared Auto reference scene](../shared/reference-scene.md)
-- [Camera and WSM input checks](../inference/references/input-preparation.md)
+- [Shared Auto reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)
+- [Camera and WSM input checks](../../cosmos3-inference-simulation-auto/references/input-preparation.md)
 - [Four-phase training recipe and checkpoint handoffs](references/canonical-recipe.md)

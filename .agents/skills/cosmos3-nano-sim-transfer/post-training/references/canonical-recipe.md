@@ -7,7 +7,7 @@ Stage 0 and pass your selected EMA outputs between stages.
 Use the [Framework walkthrough](local-training.md) to run these stages, the
 [parameter guide](parameter-guide.md) to plan changes, and the
 [checkpoint guide](checkpoint-and-resume.md) for handoffs and resume. Preserve
-the [shared input contract](../../shared/model-contract.md). The reference
+the [shared input contract](../../../cosmos3-inference-simulation-transfer/references/model-contract.md). The reference
 settings below are starting values for task-specific tuning.
 
 ## Four steps, with different roles for the teacher

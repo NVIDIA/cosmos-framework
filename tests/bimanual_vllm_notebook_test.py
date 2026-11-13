@@ -5,6 +5,9 @@
 import ast
 import json
 import shlex
+
+# Skill note (not in the source): added for the sys.path entry below.
+import sys
 from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,13 +18,20 @@ from PIL import Image
 
 NOTEBOOK = (
     Path(__file__).resolve().parents[1]
-    / ".agents/skills/cookbooks/cosmos3/simulation/bimanual/run_bimanual_with_vllm_omni.ipynb"
+    # Skill note (not in the source): the notebook is now the converted reference references/vllm-omni.md of the Bimanual inference skill; this was ".agents/skills/cookbooks/cosmos3/simulation/bimanual/run_bimanual_with_vllm_omni.ipynb".
+    / ".agents/skills/cosmos3-inference-simulation-bimanual/references/vllm-omni.md"
 )
+# Skill note (not in the source): added; tests/skills holds reference_cells.py, the shared loader that reads a converted reference as notebook-shaped cells (every fenced python block is one code cell, the rest is Markdown).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "skills"))
+
+# Skill note (not in the source): added with the sys.path entry above.
+from reference_cells import reference_notebook
 
 
 @pytest.fixture
 def notebook():
-    contents = json.loads(NOTEBOOK.read_text())
+    # Skill note (not in the source): this was json.loads(NOTEBOOK.read_text()).
+    contents = reference_notebook(NOTEBOOK)
     cells = ["".join(cell["source"]) for cell in contents["cells"] if cell["cell_type"] == "code"]
     functions = []
     for cell in cells:
@@ -69,7 +79,8 @@ def inputs(count=8, fps=30):
 
 
 def test_validation_server_keeps_the_guardrail_gate_in_the_stage_config():
-    contents = json.loads(NOTEBOOK.read_text())
+    # Skill note (not in the source): this was json.loads(NOTEBOOK.read_text()).
+    contents = reference_notebook(NOTEBOOK)
     blocks = [
         block.split("```", 1)[0]
         for cell in contents["cells"]

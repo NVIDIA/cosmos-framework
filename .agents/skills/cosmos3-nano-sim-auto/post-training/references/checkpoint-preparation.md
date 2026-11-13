@@ -1,6 +1,6 @@
 # Prepare the teacher and tokenizer assets
 
-Follow the [shared setup](../../../cosmos3-nano-transfer-auto/shared/framework-runtime.md).
+Follow the [shared setup](../../../cosmos3-inference-simulation-auto/references/framework-runtime.md).
 Use a complete, revision-pinned **Cosmos3-Nano-Transfer-Auto** snapshot or your
 compatible adapted Transfer-Auto export. Keep assets outside the code checkout.
 

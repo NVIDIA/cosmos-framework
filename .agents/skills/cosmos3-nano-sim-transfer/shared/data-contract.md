@@ -2,7 +2,7 @@
 
 Sim-Transfer learns RGB generation from an aligned **control video, target RGB
 video and caption for the same interval**. Start with the Hugging Face
-[`example2` assets](hf-sample.md) and build the native local dataset using
+[`example2` assets](../../cosmos3-inference-simulation-transfer/references/hf-sample.md) and build the native local dataset using
 [dataset preparation](local-dataset.md). The HF sample supplies source videos
 and prompts; local preparation creates the training bundle and length index.
 
@@ -45,8 +45,8 @@ default.
 For `example2`, use `example2_upsampled_prompt.json` directly as the structured
 annotation and its `temporal_caption` as the dense branch. The separate
 `example2_prompt.txt` is the source prompt, not that dense branch. For new clips,
-the [captioning guide](../post-training/references/caption-guide.md) writes `caption.json`
-and a matching dense `caption.txt`. See the [prompt guide](prompt-guide.md).
+the [captioning guide](../../cosmos3-inference-simulation-transfer/references/caption-guide.md) writes `caption.json`
+and a matching dense `caption.txt`. See the [prompt guide](../../cosmos3-inference-simulation-transfer/references/prompt-guide.md).
 
 The locally created JSONL row uses this format:
 

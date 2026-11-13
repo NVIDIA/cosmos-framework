@@ -7,8 +7,8 @@ describes that full interval.
 
 ## Build the example2 bundle
 
-Complete [setup](setup.md) and
-[download and prepare example2](hf-sample.md#download-and-prepare-example2).
+Complete [setup](../../cosmos3-inference-simulation-transfer/references/setup.md) and
+[download and prepare example2](../../cosmos3-inference-simulation-transfer/references/hf-sample.md#download-and-prepare-example2).
 The HF sample contains media and prompts. Build the manifest, sample index and
 tokenizer resources required by Framework's `LocalSimulationDataset`:
 
@@ -17,7 +17,8 @@ export SIM_TRANSFER_TOKENIZER_SNAPSHOT="$(hf download nvidia/Cosmos3-Nano \
   --revision e59a53c25979a090fa8706c9acc0c254a6e89b92 --include 'text_tokenizer/*')"
 export SIM_TRANSFER_TEXT_TOKENIZER="$SIM_TRANSFER_TOKENIZER_SNAPSHOT/text_tokenizer"
 export SIM_TRANSFER_TRAINING_BUNDLE="$SIM_TRANSFER_OUTPUT/training-bundle"
-python "$SIM_TRANSFER_SKILL/scripts/paibench_local_bundle.py" prepare-custom \
+# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/scripts/paibench_local_bundle.py".
+python "$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/scripts/paibench_local_bundle.py" prepare-custom \
   --manifest "$SIM_TRANSFER_OUTPUT/training.jsonl" \
   --tokenizer "$SIM_TRANSFER_TEXT_TOKENIZER" \
   --output "$SIM_TRANSFER_TRAINING_BUNDLE" \
@@ -74,7 +75,7 @@ held-out recordings for model development.
 
 ## Prepare your own examples
 
-Use the [captioning guide](../post-training/references/caption-guide.md) to produce a
+Use the [captioning guide](../../cosmos3-inference-simulation-transfer/references/caption-guide.md) to produce a
 structured caption with a nonempty `temporal_caption`. Each training-input row
 names one RGB clip, its optional depth and segmentation controls, and its
 structured caption. The example2 row demonstrates this format:

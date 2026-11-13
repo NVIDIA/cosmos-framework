@@ -14,7 +14,7 @@ See the [model and checkpoint contract](../shared/model-contract.md).
 
 | Goal                      | Start with                                                   | Follow                                                                   |
 | ------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| Generate now              | Released Sim-Auto student; no training needed                | [Inference](../inference/SKILL.md)                                       |
+| Generate now              | Released Sim-Auto student; no training needed                | [Inference](../../cosmos3-inference-simulation-auto/SKILL.md#sim-auto)   |
 | Train your simulator      | Compatible Transfer-Auto checkpoint, not plain Cosmos3-Nano  | [Stage 1 Quickstart](#quickstart-train-stage-1)                          |
 | Adapt to your data or rig | Post-train Transfer-Auto first, then distill that checkpoint | [Transfer-Auto](../../cosmos3-nano-transfer-auto/post-training/SKILL.md) |
 
@@ -24,10 +24,10 @@ Ordinary SFT of the final distilled student is not the workflow documented here.
 
 - The complete Transfer-Auto snapshot and matched text, RGB and LiDAR tokenizers.
 - Your own paired recordings, controls and captions in a validated local bundle.
-- The [shared environment](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md).
+- The [shared environment](../../cosmos3-inference-simulation-auto/references/framework-runtime.md).
 - An allocation sized for the selected topology, and new output directories.
 
-The shared [reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md)
+The shared [reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)
 provides an HF download of `daytime_scene` and its native training index.
 It is a format example, not a training corpus. Use
 [Transfer-Auto data preparation](../../cosmos3-nano-transfer-auto/post-training/SKILL.md#prepare-a-local-training-bundle)
@@ -42,7 +42,7 @@ Keep caption files as scene descriptions only. The native training transforms
 add the camera-rig/current-view direction and FOV description and the joint
 WSM/HD-map task instruction automatically during formatting and tokenization.
 Do not duplicate either in your labels; see
-[automatic prefixes](../../cosmos3-nano-transfer-auto/shared/caption-policy.md#caption-text-and-automatic-prefixes).
+[automatic prefixes](../../cosmos3-inference-simulation-auto/references/caption-policy.md#caption-text-and-automatic-prefixes).
 
 ## Three stages
 
@@ -59,7 +59,7 @@ teacher. That network is not part of the inference artifact.
 
 Follow the [Framework setup guide](../../../../docs/setup.md)
 for installation in your selected checkout, then check the additional
-[Auto requirements](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md).
+[Auto requirements](../../cosmos3-inference-simulation-auto/references/framework-runtime.md).
 Reuse a working Framework environment.
 
 ## Quickstart: train Stage 1
@@ -219,7 +219,7 @@ Change that selection to `STAGE=3` and repeat steps 3 and 4. Check both student 
 updates in `phase_metrics.jsonl`, not just total iteration progress. Follow
 [checkpoint acceptance and export](references/checkpoints.md#export-the-student)
 to export the **regular Stage 3 student**, then run
-[inference](../inference/SKILL.md) on held-out controls.
+[inference](../../cosmos3-inference-simulation-auto/SKILL.md#sim-auto) on held-out controls.
 
 The reference budget is 4000 **total trainer iterations per stage**. Stage 3 alternates
 one student update with five critic updates: 4000 iterations give 667 student and
@@ -241,8 +241,8 @@ MR, logs or model export.
 ## References
 
 - [Model and checkpoint contract](../shared/model-contract.md)
-- [Framework environment and model assets](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md)
-- [Shared Auto reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md)
+- [Framework environment and model assets](../../cosmos3-inference-simulation-auto/references/framework-runtime.md)
+- [Shared Auto reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)
 - [Training data and camera mappings](../shared/data-contract.md)
 - [Checkpoint and tokenizer preparation](references/checkpoint-preparation.md)
 - [Three-stage training recipe](references/canonical-recipe.md)
