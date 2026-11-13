@@ -564,7 +564,7 @@ def test_load_skill_plans_puts_the_canary_first_unless_disabled(checkout: Path):
     )
 
 
-def test_multi_gpu_skills_get_the_multi_gpu_runner_label(checkout: Path, tmp_path: Path):
+def test_multi_gpu_cases_get_the_multi_gpu_runner_label(checkout: Path, tmp_path: Path):
     # the eval.config's top-level `gpus` is read into the plan; absent, zero, one or a non-integer never routes
     path = rm.eval_config_path(checkout, SKILL)
     data = json.loads(path.read_text())
@@ -572,9 +572,22 @@ def test_multi_gpu_skills_get_the_multi_gpu_runner_label(checkout: Path, tmp_pat
     for value, expected in ((4, 4), (1, 1), (0, 0), (True, 0), ("4", 0), (-2, 0)):
         path.write_text(json.dumps({**data, "gpus": value}))
         assert rm.load_skill_plan(checkout, SKILL).gpus == expected
+    # skill-wide count above 1: every case of the skill is a multi-GPU case
     path.write_text(json.dumps({**data, "gpus": 4}))
     plans = rm.load_skill_plans(checkout, [SKILL])
-    assert rm.multi_gpu_skills(plans) == frozenset({SKILL})  # the canary has no `gpus` above 1
+    assert rm.multi_gpu_cases(plans) == frozenset({(SKILL, "hello"), (SKILL, "world")})  # never the canary
+    # a case's own `gpus` wins over the skill-wide value, in both directions; a bad value falls back to the skill's
+    evals = [{**entry, **({"gpus": 4} if entry["id"] == "hello" else {})} for entry in data["evals"]]
+    path.write_text(json.dumps({**data, "gpus": 1, "evals": evals}))
+    plan = rm.load_skill_plan(checkout, SKILL)
+    assert (plan.gpus, plan.case_gpus, plan.gpus_for("hello"), plan.gpus_for("world")) == (1, {"hello": 4}, 4, 1)
+    evals = [{**entry, **({"gpus": 1} if entry["id"] == "world" else {"gpus": "x"})} for entry in data["evals"]]
+    path.write_text(json.dumps({**data, "gpus": 4, "evals": evals}))
+    plan = rm.load_skill_plan(checkout, SKILL)
+    assert (plan.gpus_for("hello"), plan.gpus_for("world")) == (4, 1)
+    plans = rm.load_skill_plans(checkout, [SKILL])
+    multi = rm.multi_gpu_cases(plans)
+    assert multi == frozenset({(SKILL, "hello")})
     cells = rm.build_cells(plans, ["claude"])
     base = "backends: [claude]\nimage: i\ndashboard: http://d\nlauncher: l\nworkdir: w\nserial_backends: []\n"
     config_path = tmp_path / "c.yml"
@@ -586,10 +599,13 @@ def test_multi_gpu_skills_get_the_multi_gpu_runner_label(checkout: Path, tmp_pat
     config = rm.load_config(config_path)
     assert rm.runs_on("claude", config) == ["self-hosted", "cosmos-skill-eval", "h100"]
     assert rm.runs_on("claude", config, multi_gpu=True) == ["self-hosted", "cosmos-skill-eval", "h100", "four-gpu"]
-    entries = rm.matrix_entries(cells, canary=False, config=config, multi_gpu=rm.multi_gpu_skills(plans))
-    assert [json.loads(entry["runs_on"])[-1] for entry in entries] == ["four-gpu", "four-gpu"]
+    entries = rm.matrix_entries(cells, canary=False, config=config, multi_gpu=multi)
+    assert [(entry["case"], json.loads(entry["runs_on"])[-1]) for entry in entries] == [
+        ("hello", "four-gpu"),  # the four-GPU case waits for the multi-GPU runner
+        ("world", "h100"),  # the one-GPU case of the same skill runs anywhere
+    ]
     assert [json.loads(e["runs_on"])[-1] for e in rm.matrix_entries(cells, canary=False, config=config)] == ["h100"] * 2
-    canary = rm.matrix_entries(cells, canary=True, config=config, multi_gpu=frozenset({CANARY}))
+    canary = rm.matrix_entries(cells, canary=True, config=config, multi_gpu=frozenset({(CANARY, "smoke-hello")}))
     assert [json.loads(entry["runs_on"])[-1] for entry in canary] == ["h100"]  # the canary is never routed
     # a label already in the list is not repeated (the serial label and the multi-GPU label may be the same runner)
     config_path.write_text(
