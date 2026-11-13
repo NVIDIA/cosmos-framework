@@ -39,6 +39,28 @@ artifact dependency identity are checked before model mutation. The historical
 prepared-environment results keep their original identities; they do not prove
 dependency resolution for this installation route.
 
+For the evaluator's explicit `vision.decoder_device = "cuda"` path, select
+`packages/reasoner-runtime/requirements-cu128-video.txt` **instead of**
+`requirements-cu128.txt` in the same clean-install command. This variant pins
+TorchCodec `0.10.0+cu128` and NPP `12.4.1.87`; it keeps the same framework,
+Transformers 5.8.1 and PyTorch 2.10.0 dependency split. The CPU platform file
+cannot provide CUDA video decoding. Do not combine the two platform files or
+add the native/train extras to the reasoner environment.
+
+The CUDA video variant retains TorchCodec's default FFmpeg CUDA backend and
+the configured frame sampling, timestamps and processor resize settings. It
+does not enable the separate beta decoder or fall back to CPU decoding.
+FFmpeg shared libraries, compatible NVIDIA drivers and GPU video-decode
+support remain host prerequisites. The shared framework loader discovers the
+installed NPP library without clearing `LD_LIBRARY_PATH`.
+
+Before loading models for an evaluation campaign, decode its frozen videos
+through the selected public preprocessing path and record frame indices,
+timestamps, RGB content, actual decoder device and processor outputs. A CUDA
+tensor allocation alone does not verify CUDA video decoding. CUDA decoder
+qualification and any CPU/CUDA pixel differences belong to the new runtime's
+evidence; historical CPU-decoder model results retain their original identity.
+
 `CosmosFrameworkRuntime` accepts a local immutable base snapshot and
 `portable_adapter={"directory": ..., "execution_profile": ...}`. The same
 dictionary is `[model.portable_adapter]` in the reasoner evaluator TOML. A public

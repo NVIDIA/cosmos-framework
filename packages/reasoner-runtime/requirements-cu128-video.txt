@@ -1,0 +1,10 @@
+# Linux x86_64 / CPython 3.12 / CUDA 12.8 video-decoding platform.
+# Select this file INSTEAD OF requirements-cu128.txt; both pin different decoders.
+# Install alongside both locally built wheels with dependency resolution enabled.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchcodec @ https://download.pytorch.org/whl/cu128/torchcodec-0.10.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=5ecb4aeb61b4f14f30ceed11ce892308f38232d82eee64605ae19583c51a8e72
+# Match the framework's cu128 group. The shared TorchCodec loader discovers NPP
+# through distribution metadata without replacing the host library search path.
+nvidia-npp-cu12==12.4.1.87
