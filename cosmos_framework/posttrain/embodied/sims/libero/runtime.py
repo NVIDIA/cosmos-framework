@@ -324,7 +324,10 @@ class LiberoChunkSession:
 
     def _open_env(self, lane: int, bddl: str, language: str) -> Any:
         """Create the lane's environment; a subclass may borrow another owner's simulator."""
-        from libero.libero.envs import OffScreenRenderEnv
+        from cosmos_framework.posttrain.embodied.sims.libero.renderer import vendor_renderer_import
+
+        with vendor_renderer_import():
+            from libero.libero.envs import OffScreenRenderEnv
 
         return OffScreenRenderEnv(
             bddl_file_name=bddl,
@@ -458,6 +461,21 @@ class LiberoChunkSession:
                 "return": self._returns[lane],
                 "episode_id": f"{self.session_id}:{lane + self.lane_offset}:{self._episodes[lane]}",
             }
+            from cosmos_framework.posttrain.embodied.sims.libero.renderer import (
+                PROFILE_ENV,
+                UUID_PROFILE,
+                renderer_identity,
+            )
+
+            if os.environ.get(PROFILE_ENV) == UUID_PROFILE:
+                binding = (
+                    self._vector.get_env_attr("renderer_binding", id=[lane])[0]
+                    if self._vector is not None
+                    else renderer_identity()
+                )
+                if binding.get("profile") != UUID_PROFILE:
+                    raise SimProtocolError("LIBERO episode has no admitted renderer binding")
+                episode["renderer_binding"] = binding
             if self._auto_reset and reset:
                 self._reset(lane)
         return ChunkResult(

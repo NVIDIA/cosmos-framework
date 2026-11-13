@@ -10,9 +10,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from libero.libero.envs.venv import BaseVectorEnv, CloudpickleWrapper, EnvWorker, SubprocEnvWorker, _worker
 
 from cosmos_framework.posttrain.embodied.sim import SimProtocolError
+from cosmos_framework.posttrain.embodied.sims.libero.renderer import vendor_renderer_import
+
+with vendor_renderer_import():
+    from libero.libero.envs.venv import BaseVectorEnv, CloudpickleWrapper, EnvWorker, SubprocEnvWorker, _worker
 
 CAMERAS = ("agentview_image", "robot0_eye_in_hand_image")
 LaneSnapshot = tuple[
@@ -46,7 +49,8 @@ class LiberoLane:
         return self
 
     def _open(self, bddl: str):
-        from libero.libero.envs import OffScreenRenderEnv
+        with vendor_renderer_import():
+            from libero.libero.envs import OffScreenRenderEnv
 
         return OffScreenRenderEnv(
             bddl_file_name=bddl,
@@ -56,6 +60,12 @@ class LiberoLane:
             ignore_done=True,
             horizon=100000,
         )
+
+    @property
+    def renderer_binding(self) -> dict:
+        from cosmos_framework.posttrain.embodied.sims.libero.renderer import renderer_identity
+
+        return renderer_identity()
 
     def reset(self) -> dict:
         request = self.reset_request
@@ -127,6 +137,12 @@ class LiberoLane:
                 env.close()
 
 
+def _run_libero_worker(*args):
+    # A framework-owned spawn target imports this module (and validates the
+    # renderer) before unpickling vendor arguments in the fresh interpreter.
+    return _worker(*args)
+
+
 class SpawnLiberoWorker(SubprocEnvWorker):
     """Keep vendor RPCs, with explicit spawn and bounded ownership of the child."""
 
@@ -136,7 +152,7 @@ class SpawnLiberoWorker(SubprocEnvWorker):
         self.parent_remote, self.child_remote = context.Pipe()
         self.share_memory, self.buffer = False, None
         self.process = context.Process(
-            target=_worker,
+            target=_run_libero_worker,
             args=(self.parent_remote, self.child_remote, CloudpickleWrapper(factory), None),
             daemon=True,
         )

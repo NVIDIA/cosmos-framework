@@ -7,6 +7,34 @@ data collection and evaluation all run the *same* loop, so wiring it once wires 
 locally. This document is the task-oriented version of it. Read them together; where they
 disagree, the code is right.
 
+### LIBERO renderer device binding
+
+For the supported `robosuite==1.4.1` simulator environment, opt in to
+`COSMOS_LIBERO_RENDERER_PROFILE=egl_uuid_v1` in a dedicated, fresh simulator
+process before importing LIBERO or robosuite. Set `CUDA_VISIBLE_DEVICES` to the
+complete UUID of the assigned NVIDIA GPU:
+
+```bash
+export COSMOS_LIBERO_RENDERER_PROFILE=egl_uuid_v1
+export CUDA_VISIBLE_DEVICES=GPU-<complete-assigned-GPU-UUID>
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+```
+
+The profile matches that UUID against EGL's persistent device identity before
+creating a context. It does not assume CUDA, NVML and EGL indices agree. Omit
+`MUJOCO_EGL_DEVICE_ID`; an explicitly supplied value must match the resolved EGL
+index. Numeric, abbreviated, MIG and multiple-device CUDA visibility are not
+supported by this profile. Start a new simulator process to change the profile
+or device. The default renderer path remains available without the opt-in.
+
+The framework applies the binding in directly owned and spawned LIBERO workers.
+Completed episode records include `renderer_binding` with the admitted UUID,
+NVML index and EGL index. Record this execution identity alongside the simulator
+environment and task protocol; it does not replace model or task identity. This
+profile fixes device selection and does not promise bitwise image identity across
+different GPUs or graphics drivers.
+
 ---
 
 ## 0. The ownership boundary
