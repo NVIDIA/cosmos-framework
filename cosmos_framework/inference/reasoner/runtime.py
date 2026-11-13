@@ -1061,7 +1061,9 @@ class CosmosFrameworkRuntime:
                     raise ValueError("Text-model message content must be text")
                 native.append({**message, "content": content})
             texts.append(self.processor.apply_chat_template(native, tokenize=False, add_generation_prompt=True))
-        return self.processor(text=texts, padding=True, return_tensors="pt")
+        # The native chat template owns special tokens (including Gemma's BOS).
+        # Match apply_chat_template(tokenize=True) when padding the rendered text.
+        return self.processor(text=texts, padding=True, return_tensors="pt", add_special_tokens=False)
 
     def _prepare_transformers_batch(self, conversations: list[list[dict[str, Any]]]) -> Any:
         """Materialize a true padded multimodal batch through Qwen's GPU reader."""

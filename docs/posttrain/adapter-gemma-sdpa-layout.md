@@ -15,6 +15,13 @@ low-rank branches and persistent single-head KV cache unchanged. Parameters,
 tying, processor assets and merged tensor values remain unchanged. Plain stock
 loading does not install this inference behavior.
 
+Public text preparation uses the tokenizer's native chat template, including its
+special tokens, exactly once. In particular, the rendered Gemma template already
+contains BOS; the subsequent padded tokenization disables automatic special-token
+insertion. This matches direct `apply_chat_template(tokenize=True)` inputs without
+changing the prompt, model weights or attention profile. Historical results keep
+their recorded token IDs and implementation revision.
+
 Admission requires the exact recorded base and processor, factorized adapter
 identity, Torch 2.10.0, Transformers 5.8.1, FP32, SDPA, one A100, batch one and
 eager evaluation without autograd, autocast, TF32, graphs, offload or alternate

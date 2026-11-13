@@ -17,6 +17,7 @@ from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 
 def _runtime():
     runtime = CosmosFrameworkRuntime.__new__(CosmosFrameworkRuntime)
+    runtime.model_type = "qwen3_vl"
     runtime.processor = SimpleNamespace(video_processor=Qwen3VLVideoProcessor())
     runtime._video_feature_cache_active_key = None
     runtime._video_processor_cache_capacity = 0

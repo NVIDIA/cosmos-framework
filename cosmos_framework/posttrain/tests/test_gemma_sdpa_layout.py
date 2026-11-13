@@ -468,7 +468,7 @@ def test_public_text_preparation_uses_native_template_without_visual_reader():
         runtime, conversations
     )
     value = CosmosFrameworkRuntime._prepare_transformers_inputs(runtime, [{"role": "user", "content": "question"}])
-    assert value == {"text": ["native text"], "padding": True, "return_tensors": "pt"}
+    assert value == {"text": ["native text"], "padding": True, "return_tensors": "pt", "add_special_tokens": False}
     assert calls == [([{"role": "user", "content": "question"}], {"tokenize": False, "add_generation_prompt": True})]
     with pytest.raises(ValueError, match="text-only"):
         CosmosFrameworkRuntime._prepare_transformers_inputs(runtime, [{"role": "user", "content": [{"type": "video"}]}])
