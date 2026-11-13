@@ -50,6 +50,12 @@ Follow the [Framework setup guide](../../../docs/setup.md),
 then check the additional [Bimanual requirements](references/environment.md#cosmos-framework).
 Reuse a working Framework environment.
 
+> **Skill note (not in the source):** the Bimanual requirements give the install command of the training environment. Run it from the root of the Framework checkout as it is written there; it runs the pinned uv through `uvx`, so it works with any uv on the host (the setup guide's `uv self update 0.11.29` is refused when a package manager installed uv):
+
+```bash
+uvx --from 'uv==0.11.29' uv sync --locked --python 3.13 --group cu130-train --extra train --extra guardrail
+```
+
 ### Activate the Framework environment
 
 Use a dedicated Framework checkout, Python 3.13, the documented CUDA/FFmpeg
@@ -91,7 +97,18 @@ inputs and paired GT videos show the relationship to inference, while the
 training bundle retains raw robot actions rather than already-normalized
 inference sidecars.
 
-> **Skill note (not in the source):** before following that README, install what its commands and the two checks below need and do not state: `zstd` (the extraction calls `unzstd`; without it `tar` stops with `unzstd: Cannot exec`) and the FFmpeg shared libraries named under "Activate the Framework environment" (the `--materialize` check decodes video through TorchCodec; without them it stops with an error such as `libavutil.so.56: cannot open shared object file`). On Debian or Ubuntu: `apt-get update && apt-get install -y --no-install-recommends zstd ffmpeg`. Download the README's two patterns with one `hf download` call each (`--include 'examples/training/*'`, then `--include 'assets/training/agibot/**'`, same `--local-dir`): what one call does with two patterns depends on the `hf` version (the Framework environment's keeps only the last of two `--include` flags, a newer one rejects two patterns after one flag), and a missing `examples/training/SHA256SUMS` is the sign.
+> **Skill note (not in the source):** two steps come before that README's commands, because they and the two checks below need things the README does not state. First install `zstd` (the extraction calls `unzstd`; without it `tar` stops with `unzstd: Cannot exec`) and the FFmpeg shared libraries named under "Activate the Framework environment" (the `--materialize` check decodes video through TorchCodec; without them it stops with an error such as `libavutil.so.56: cannot open shared object file`). On Debian or Ubuntu, as root:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends zstd ffmpeg
+```
+
+> **Skill note (not in the source):** then download the README's two patterns with one `hf download` call each, into the folder the README uses. What one call does with two patterns depends on the `hf` version (the Framework environment's keeps only the last of two `--include` flags, a newer one rejects two patterns after one flag); a missing `examples/training/SHA256SUMS` is the sign. Continue with the README's checksum and extraction commands.
+
+```bash
+hf download nvidia/Cosmos3-Nano-Sim-Bimanual --include 'examples/training/*' --local-dir Cosmos3-Nano-Sim-Bimanual
+hf download nvidia/Cosmos3-Nano-Sim-Bimanual --include 'assets/training/agibot/**' --local-dir Cosmos3-Nano-Sim-Bimanual
+```
 
 Prepare data using the [local bundle layout](references/data-contract.md#user-owned-local-bundle),
 [action schema](../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md) and
