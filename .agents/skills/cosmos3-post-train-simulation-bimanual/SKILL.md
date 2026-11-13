@@ -91,6 +91,8 @@ inputs and paired GT videos show the relationship to inference, while the
 training bundle retains raw robot actions rather than already-normalized
 inference sidecars.
 
+> **Skill note (not in the source):** that README and the two checks below need three things that are easy to miss. With the `hf` command of the Framework environment a repeated `--include` keeps only the last pattern, so `examples/training/SHA256SUMS` is not downloaded: give both patterns to one `--include` (`--include 'examples/training/*' 'assets/training/agibot/**'`). The extraction calls `unzstd`: check with `command -v unzstd`; if it is missing, `tar` stops with `unzstd: Cannot exec` (`apt-get install -y zstd` on Debian or Ubuntu). The `--materialize` check decodes video through TorchCodec and needs the FFmpeg shared libraries named under "Activate the Framework environment": if it stops with an error such as `libavutil.so.56: cannot open shared object file`, install them (`apt-get install -y --no-install-recommends ffmpeg` on Debian or Ubuntu).
+
 Prepare data using the [local bundle layout](references/data-contract.md#user-owned-local-bundle),
 [action schema](../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md) and
 [caption guide](references/caption-guide.md):
