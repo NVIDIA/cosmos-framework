@@ -40,6 +40,15 @@ sudo apt-get install -y ffmpeg
 
 On macOS with Homebrew, use `brew install ffmpeg`. Verify that both `ffmpeg -version` and `ffprobe -version` work.
 
+> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Check `ffmpeg -version`; if it is older than 5.1, put a newer `ffmpeg` first on `PATH` in the shell that runs the client, for example the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0`, with which the repository's cookbook checks run these helpers (`ffprobe` from the distribution package is enough):
+
+```bash
+# Skill note (not in the source): FFmpeg 7.0.2 from imageio-ffmpeg, first on PATH for the client.
+python -m pip install imageio-ffmpeg==0.6.0
+mkdir -p "$PWD/ffmpeg7" && ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$PWD/ffmpeg7/ffmpeg"
+export PATH="$PWD/ffmpeg7:$PATH"
+```
+
 **Inputs:** The examples use the shared daytime sample published with the model under `assets/sample_data`: one scene with seven synchronized cameras, each with an RGB recording, a WSM control, and a caption. Step 3 downloads the files these examples need, about 100 MiB, into the Hugging Face cache and checks them against the sample's `SHA256SUMS`. To use a copy you already have, set `AUTO_SAMPLE_ROOT` to its `sample_data` folder.
 
 The joint preparation cell converts the published `daytime_scene/lidar/control.tar` to a local `prepared/lidar_control.safetensors` file for vLLM-Omni. Native Framework reads the archive directly; no converted tensor or duplicate media is bundled. See the [format notes](../assets/daytime_scene/README.md).
@@ -85,6 +94,8 @@ The container reuses the host Hugging Face cache and listens on all container in
 | `-p 127.0.0.1:8000:8000`, `--host 0.0.0.0`                                   | Exposes the container server on host loopback port 8000. Use the port-forwarding instructions above for a remote notebook.                                                                                   |
 
 The command uses one GPU. For two GPUs, change Docker's GPU selection to `--gpus all` and add `--cfg-parallel-size 2`. For more, also set `--ulysses-degree`; for example, `--cfg-parallel-size 2 --ulysses-degree 2` uses four GPUs. Raise both timeouts above the measured request time on your hardware.
+
+> **Skill note (not in the source):** measured on H100 NVL 95 GB: with the one-GPU launch the published WSM request (201 frames, 35 steps) did not finish within the two 1800-second timeouts (HTTP 504 at step 31 of 35); in the two-GPU form it took 1127 s. On GPUs of that class use the two-GPU form from the start: `--gpus all` in place of `--gpus '"device=0"'`, and `--cfg-parallel-size 2` added to the `vllm serve` options.
 
 ## 3. Set up the client
 

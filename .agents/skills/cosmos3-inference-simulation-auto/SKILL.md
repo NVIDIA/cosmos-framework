@@ -127,6 +127,8 @@ files. See [automatic prefixes](references/caption-policy.md#caption-text-and-au
 
 From the Framework root, inside your GPU allocation:
 
+> **Skill note (not in the source):** measured on four H100 NVL 95 GB: the command below at 720p (297 frames, seven cameras and LiDAR, 35 steps) samples at about 265 s per step, about 2 h 35 min in all, and uses about 91 GB per GPU. Start it in the background and follow its log. `--resolution 480` in place of `--resolution 720` lowers both.
+
 ```bash
 export COSMOS_INTERNAL=0 COSMOS_TRAINING=0
 # Skill note (not in the source): the negative prompt is now this skill's assets/negative-prompt.txt; this was .agents/skills/cosmos3-nano-transfer-auto/inference/assets/negative-prompt.txt.
@@ -190,6 +192,8 @@ docker run --rm --gpus '"device=0"' --ipc=host \
     --no-guardrails \
     --host 0.0.0.0 --port 8000 --init-timeout 1800
 ```
+
+> **Skill note (not in the source):** measured on H100 NVL 95 GB: with the one-GPU launch the published WSM request (201 frames, 35 steps) did not finish within the two 1800-second timeouts (HTTP 504 at step 31 of 35); in the two-GPU form it took 1127 s. On GPUs of that class use the two-GPU form from the start: `--gpus all` in place of `--gpus '"device=0"'`, and `--cfg-parallel-size 2` added to the `vllm serve` options.
 
 Readiness, from "Verify the server": "Wait for the server to finish starting, then confirm that it serves the Transfer-Auto model. The cell polls for up to 30 minutes, so you can run it while the server is still loading." The guide: "When startup finishes, `curl http://127.0.0.1:8000/v1/models` must return the served model before you submit generation requests." "Both requests upload their files, so the notebook can run on any host that reaches the server."
 
