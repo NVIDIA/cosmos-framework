@@ -95,11 +95,71 @@ rank, alpha, dropout, initialization and LR/decay under the shared
 [adapter rules](adapters.md). No adapter math or optimizer is duplicated here.
 
 `rl.task="flow_bc"` requires the registered native packer and staged JSONL data.
-Token packing/loss-mask knobs and gradient accumulation are refused for this
-initial action profile. Validation masks padding at the action-element level and
+Conversation token-packing/loss-mask knobs do not apply. Gradient accumulation
+normalizes by the complete update's valid action elements. Validation masks padding at the action-element level and
 reports `valid_action_count`; it never calls action elements language tokens.
 Episode, row and media overlap between training and validation fails explicitly.
 The third π0.5 view remains masked as in the native LIBERO processor.
+
+### Opt-in Pi0.5 gradient reduction policy
+
+`rl.gradient_policy="fp64_owned_shard_window_v1"` selects a versioned training
+reduction policy for native Pi0.5 adapter SFT. The default `null` retains the
+existing training arithmetic and checkpoint identity. This policy leaves the
+native mixed-precision forward, local autograd derivatives, low-rank adapter
+branches and frozen base tensors unchanged. It sums each FP32 trainable owner's
+gradients across ranks in FP64, accumulates the complete optimizer window in
+owned FP64 shard buffers, and divides once by the global integer count of valid
+action elements. It casts the normalized result to FP32, computes a unique-owner
+FP64 global norm (accounting for HSDP replicas once), and applies one FP32 clipping
+coefficient before ordinary AdamW. Padding ranks still execute the native graph
+with zero loss weight; a window containing only padding is rejected.
+
+The initial admission is four ranks using FSDP2 with four shards, or HSDP with two
+shards and two replicas. Native Pi0.5 retains Transformers 4.57.6. The policy checks
+the exact Torch 2.10 reducer source hashes before using public FSDP reduction
+hooks. It requires FP32 trainable leaves, AdamW, positive finite gradient clipping
+and finite-gradient checks. Autocast, CPU offload, no-sync accumulation, foreign
+reduction hooks, changed optimizer ownership and other world sizes are rejected.
+Activation checkpointing remains the native `none` or `full` option.
+Nonfinite derivatives or a nonfinite final FP32 cast use the trainer's existing
+`skip`/`fail_stop` behavior. Early numerical rejection discards the remaining
+microbatches in that update; it does not poison model ownership. Structural or
+reducer failures require restoration from a complete checkpoint.
+
+With the model/processor/data environment variables above, the configuration for
+a four-GPU qualification run is:
+
+```bash
+"$SFT_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=4 \
+  -m cosmos_framework.posttrain.entrypoints.sft \
+  --config=cosmos_framework/posttrain/configs/sft_pi05_adapters.py -- \
+  rl.gradient_policy=fp64_owned_shard_window_v1 \
+  rl.grad_accum=8 rl.optimizer.grad_clip_norm=1.0 \
+  model.parallelism.dp_replicate=1 model.parallelism.dp_shard=4
+```
+
+For HSDP set both `model.parallelism.dp_replicate=2` and
+`model.parallelism.dp_shard=2`. A two-host run uses the existing torchrun rendezvous
+with two GPUs per host; four ranks on one host do not establish two-host coverage.
+The usual finite-epoch data and checkpoint settings remain unchanged.
+
+Only committed optimizer boundaries are resumable. The existing full checkpoint
+records the policy identity, global owner shapes/aliases, topology, microbatch
+count, reducer source hashes and completed-update clock. The production identity
+uses `integration="public_sft_v1"`; historical diagnostic checkpoints retain
+their earlier schema and are not silently reinterpreted. Missing policy state,
+partial windows, clock disagreement and a different policy/configuration fail
+exact resume. A compatible portable adapter can instead initialize a fresh run
+through `rl.adapters.warm_start`; it does not restore the old optimizer or cursor.
+Portable and merged inference formats are unchanged by this training-only policy.
+
+The production integration currently has CPU arithmetic, construction-order,
+ownership and checkpoint-lifecycle coverage. The preceding diagnostic mechanism
+passed two consecutive real Pi0.5 updates and restart on four ranks under both
+layouts. Those records are not installed-production qualification. A real
+incomplete-tail update, installed two-host checks and controlled-failure recovery
+remain required before admitting this policy to the full campaign.
 
 ## Checkpoint and export contracts
 

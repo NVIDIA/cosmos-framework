@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -137,6 +138,9 @@ class SFTConfig(HFRunConfig):
     # Require deterministic kernels instead of the inherited warning-only mode.
     # Explicitly bound to exact resume; unsupported kernels fail rather than drift.
     deterministic_strict: bool = False
+    # Explicit change to gradient reduction/accumulation, not model forward.
+    # None retains the existing reducer and checkpoint identity unchanged.
+    gradient_policy: str | None = None
     max_length: int = 4096
     processor_kwargs: dict[str, Any] = field(default_factory=dict)
     # The objective-level knobs the Cosmos post-training recipe of the Qwen3-VL-MoE backbone sets and the SFT seat
@@ -201,6 +205,15 @@ class SFTConfig(HFRunConfig):
                 )
         if self.task not in ("conversation", "flow_bc"):
             raise ValueError("SFT task must be conversation or flow_bc")
+        if self.gradient_policy not in (None, "fp64_owned_shard_window_v1"):
+            raise ValueError("SFT gradient_policy must be None or fp64_owned_shard_window_v1")
+        if self.gradient_policy is not None:
+            if self.task != "flow_bc" or self.adapters is None:
+                raise ValueError("fp64_owned_shard_window_v1 requires native Pi0.5 flow adapter SFT")
+            if self.optimizer.name != "adamw" or not self.optimizer.force_finite_grads:
+                raise ValueError("fp64_owned_shard_window_v1 requires AdamW and finite-gradient checks")
+            if not math.isfinite(self.optimizer.grad_clip_norm) or self.optimizer.grad_clip_norm <= 0:
+                raise ValueError("fp64_owned_shard_window_v1 requires positive finite gradient clipping")
         if self.task == "flow_bc":
             if self.ce_exponent or self.moe_lbl_coeff or self.mask_think_opener:
                 raise ValueError("conversation loss settings cannot be applied to flow_bc")

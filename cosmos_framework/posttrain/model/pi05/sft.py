@@ -170,7 +170,15 @@ class Pi05SFTPolicy:
 
 
 def build_pi05_sft_policy(
-    model_id, config, pdims=None, *, adapters=None, adapter_resume=False, adapter_media_identity=None, device="cuda"
+    model_id,
+    config,
+    pdims=None,
+    *,
+    adapters=None,
+    adapter_resume=False,
+    adapter_media_identity=None,
+    device="cuda",
+    gradient_policy=None,
 ):
     import torch
     from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
@@ -195,6 +203,16 @@ def build_pi05_sft_policy(
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
 
     config.__post_init__()
+    if gradient_policy is not None:
+        from cosmos_framework.posttrain.roles.trainer.gradient_window import PROFILE
+
+        if (
+            gradient_policy != PROFILE
+            or pdims is None
+            or pdims.world_size != 4
+            or (pdims.dp_shard, pdims.dp_replicate) not in ((4, 1), (2, 2))
+        ):
+            raise ValueError("Pi0.5 owned FP64 gradients require fp64_owned_shard_window_v1 on FSDP4 or HSDP2x2")
     require_sft_runtime()
     if adapters is None:
         raise ValueError("pi05 offline SFT currently requires explicit adapters; use the existing PPO seat for PPO")
@@ -239,6 +257,39 @@ def build_pi05_sft_policy(
             checkpoint_wrapper_fn=partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT),
             check_fn=lambda module: isinstance(module, (Pi05GemmaDecoderLayer, SiglipEncoderLayer)),
         )
-    parallelize(net, ShardPlan(blocks, None, torch.float32), pdims)
+    parallelize(net, ShardPlan(blocks, None, torch.float64 if gradient_policy is not None else torch.float32), pdims)
     assert_trainability(net)
-    return Pi05SFTPolicy(net, Pi05Processor(native))
+    policy = Pi05SFTPolicy(net, Pi05Processor(native))
+    if gradient_policy is not None:
+        from dataclasses import replace
+
+        policy.precision = replace(policy.precision, reduce="float64")
+    return policy
+
+
+def build_gradient_window(policy, optimizer, rl):
+    """Install after adapter/shard registration and final optimizer ownership."""
+    from cosmos_framework.posttrain.model.adapters import assert_trainability
+    from cosmos_framework.posttrain.model.pi05.modeling import Pi05Model
+    from cosmos_framework.posttrain.roles.trainer.gradient_window import PROFILE, install_fsdp
+    from cosmos_framework.posttrain.utils.dist import run_rank_converged
+
+    def admit():
+        if (
+            rl.gradient_policy != PROFILE
+            or not isinstance(policy, Pi05SFTPolicy)
+            or not isinstance(policy.net, Pi05Model)
+        ):
+            raise ValueError("owned FP64 gradient policy requires the native Pi0.5 SFT model")
+        if rl.task != "flow_bc" or rl.adapters is None:
+            raise ValueError("owned FP64 gradient policy requires flow adapter SFT")
+        if (
+            policy.precision.reduce != "float64"
+            or policy.precision.mode != "fsdp"
+            or policy.precision.param is not None
+        ):
+            raise ValueError("Pi0.5 gradient policy requires native compute and registered FP64 reduction")
+        assert_trainability(policy.net, optimizer)
+
+    run_rank_converged(admit, "Pi0.5 owned gradient-policy model admission")
+    return install_fsdp(policy.net, optimizer, microbatches=rl.grad_accum)

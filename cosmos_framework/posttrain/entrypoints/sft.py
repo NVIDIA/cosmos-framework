@@ -108,6 +108,15 @@ def validate_config_structure(config: Any) -> SFTConfig:
     # ``SFTConfig.__post_init__`` judges ``mask_think_opener=True`` by the typed ``serve_contract`` field for every source
     # of the value (the recipe variant, a YAML, a ``--`` override).
     rl.__post_init__()
+    if rl.gradient_policy is not None:
+        from cosmos_framework.posttrain.config.build import resolve_policy_parallelism, select_policy_backend
+        from cosmos_framework.posttrain.model.pi05.sft import BUILDER
+
+        selection = select_policy_backend(config)
+        if selection.native_spec is None or selection.native_spec.builder != BUILDER:
+            raise ValueError("fp64_owned_shard_window_v1 is supported only by native Pi0.5 adapter SFT")
+        if resolve_policy_parallelism(config, 4) not in ((1, 4), (2, 2)):
+            raise ValueError("fp64_owned_shard_window_v1 requires FSDP4 or HSDP2x2")
     if rl.task == "flow_bc":
         from cosmos_framework.posttrain.config.build import select_policy_backend
         from cosmos_framework.posttrain.model.sft_source import native_sft_task
@@ -297,6 +306,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
                 "adapters": rl.adapters,
                 "adapter_resume": bool(checkpoint.resume_checkpoint),
                 "adapter_media_identity": media,
+                **({"gradient_policy": rl.gradient_policy} if rl.gradient_policy is not None else {}),
                 **({"adapter_warm_start_tokenizer": warm_start_tokenizer} if warm_start_tokenizer is not None else {}),
             },
         )
@@ -309,6 +319,11 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
             model.net, rl.optimizer, parameter_groups=optimizer_groups(model.net, rl.optimizer.lr)
         )
         assert_trainability(model.net, optimizer)
+    gradient_window = None
+    if rl.gradient_policy is not None:
+        from cosmos_framework.posttrain.model.pi05.sft import build_gradient_window
+
+        gradient_window = build_gradient_window(model, optimizer, rl)
     if rl.task == "flow_bc":
         objective.identity = {**objective.identity, "precision": asdict(model.precision)}
     groups = []
@@ -336,6 +351,7 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         checkpoint_manager=checkpoint.manager,
         validation_state=ValidationState(),
         objective_evaluator=evaluate_sft_batch,
+        **({"gradient_window": gradient_window} if gradient_window is not None else {}),
     )
     # Exact resume replaces this rank-local stream with the checkpoint's RNG state.
     misc.set_random_seed(seed=rl.seed, by_rank=True)

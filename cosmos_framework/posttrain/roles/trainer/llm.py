@@ -58,6 +58,7 @@ from cosmos_framework.posttrain.utils.residency import HostOffload, make_offload
 if TYPE_CHECKING:
     from cosmos_framework.posttrain.checkpoint.store import CheckpointStore
     from cosmos_framework.posttrain.comm.weight_transfer import WeightPayload, WeightWitnessSpec
+    from cosmos_framework.posttrain.roles.trainer.gradient_window import OwnedGradientWindow
 
 
 def concat_batches(batches: list) -> list:
@@ -261,6 +262,7 @@ class LLMTrainer(BaseTrainer):
         validation_normalizer: Callable[[dict], dict] = normalize_rollout_validation_identity,
         validation_state: ValidationState | None = None,
         objective_evaluator: Callable[[Any, Objective, list[Trajectory]], dict[str, Any]] | None = None,
+        gradient_window: OwnedGradientWindow | None = None,
     ) -> None:
         from cosmos_framework.posttrain.callbacks.base import CallbackList
 
@@ -284,6 +286,19 @@ class LLMTrainer(BaseTrainer):
                 "rl.routing_replay applies to sparse-MoE policies only"
             )
         identity = dict(objective.identity)
+        self.gradient_window = gradient_window
+        if gradient_window is not None:
+            if objective.reduction is not Reduction.TOKEN_SUM or objective.identity.get("algorithm") != "flow_bc":
+                raise ValueError("owned gradient windows require the native flow TOKEN_SUM objective")
+            if n_mini != 1 or skip_zero_grad or not force_finite_grads or not require_gradients:
+                raise ValueError(
+                    "owned gradient windows require one mini-batch, finite/owned gradients and ordinary AdamW updates"
+                )
+            if not math.isfinite(max_grad_norm) or max_grad_norm <= 0 or grad_accum != gradient_window.microbatches:
+                raise ValueError("owned gradient window clipping/accumulation contract differs")
+            if gradient_window.completed_updates != 0 or gradient_window.phase != "idle":
+                raise ValueError("construct the trainer before using its owned gradient window")
+            identity["gradient_policy"] = gradient_window.identity()
         if self.forward_replay is not None:
             # Pinned versus natural dispatch changes every gradient: the source and WHAT is pinned
             # (block count, top-k; model-owned) ride in the exact-resume identity next to the loss
@@ -640,6 +655,20 @@ class LLMTrainer(BaseTrainer):
         self._forward_determinism_checked = rank_any(compared)
 
     def train(self, batch: list[Trajectory]) -> dict[str, Any]:
+        """Run the existing update body; invalidate an interrupted owned policy."""
+        try:
+            return self._train_microbatch(batch)
+        except BaseException as cause:
+            if self.gradient_window is not None:
+                from cosmos_framework.posttrain.roles.trainer.base import NonFiniteUpdateError
+
+                if isinstance(cause, NonFiniteUpdateError):
+                    self.gradient_window.abort()
+                else:
+                    self.gradient_window.invalidate(cause)
+            raise
+
+    def _train_microbatch(self, batch: list[Trajectory]) -> dict[str, Any]:
         """Objective → backward → (deferred normalize) → clip → step, one call per micro-batch.
 
         Args:
@@ -681,6 +710,8 @@ class LLMTrainer(BaseTrainer):
         # objective's `old_for`. No ahead pass ⇒ cache mode stays "off" ⇒ the objective falls back to
         # `cur.detach()`, which is exact at n_mini == 1 and is the pre-change behaviour everywhere else.
         self._begin_update_attempt()
+        if self.gradient_window is not None:
+            self.gradient_window.prepare_update(self._accum)
         loss, metrics = self.objective(self.model, batch)
         self._replay_pinned(active=bool(batch))
         metrics.update(self._replay_metrics())
@@ -696,13 +727,23 @@ class LLMTrainer(BaseTrainer):
             and self._denom_accum + float(denom or 0.0) <= 0
         ):
             raise RuntimeError("finite SFT optimizer window contains only padding; refusing an empty AdamW update")
-        reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
+        if self.gradient_window is None:
+            reduce_backward(loss, self.objective.reduction, self.grad_accum, denom)
+        else:
+            from cosmos_framework.posttrain.roles.trainer.gradient_window import NonFiniteGradientWindowError
+
+            try:
+                self.gradient_window.backward(loss, metrics)
+            except NonFiniteGradientWindowError:
+                return self._skip_nonfinite(metrics, "nonfinite_gradient")
         self._accum += 1
         self._denom_accum += float(denom or 0.0)
         if self._accum == self.grad_accum:
             # Reject the whole window rather than corrupt optimizer moments.
             params = [parameter for parameter in net.parameters() if parameter.grad is not None]
-            if self.grad_accum > 1 and self.objective.reduction is Reduction.TOKEN_SUM:
+            if self.gradient_window is not None:
+                self.gradient_window.validate_normalization(self._denom_accum)
+            elif self.grad_accum > 1 and self.objective.reduction is Reduction.TOKEN_SUM:
                 # ONE division by the window's divisor: Σ_j DPmean(n_j) == DPmean(Σ_j n_j) (the mean
                 # is linear over the chunk index), so no extra collective. Only an exactly empty
                 # window substitutes one; positive fractional DP means remain unchanged (§3.5).
@@ -718,7 +759,12 @@ class LLMTrainer(BaseTrainer):
             zero_gradient = False
             if self.max_grad_norm > 0 or self.skip_zero_grad:
                 max_norm = self.max_grad_norm if self.max_grad_norm > 0 else float("inf")
-                total_norm = torch.nn.utils.clip_grad_norm_(params, max_norm)  # []
+                policy_clip = None
+                if self.gradient_window is None:
+                    total_norm = torch.nn.utils.clip_grad_norm_(params, max_norm)  # []
+                else:
+                    policy_clip = self.gradient_window.clip_global(max_norm)
+                    total_norm = policy_clip["norm"]
                 if not all_ranks_tensor_finite(total_norm):
                     return self._skip_nonfinite(metrics, "nonfinite_gradient")
                 to_local = getattr(total_norm, "to_local", None)
@@ -731,7 +777,11 @@ class LLMTrainer(BaseTrainer):
                     # ``clip_grad_norm_`` applied to every gradient, and ``train/grad_clipped`` = 1.0 exactly when that
                     # factor is below 1.0. So a norm inside the 1e-6 band below ``max_grad_norm`` counts as clipped, as
                     # its gradients were scaled.
-                    clip_coef = min(1.0, self.max_grad_norm / (float(detached_norm) + 1e-6))
+                    clip_coef = (
+                        float(policy_clip["coefficient"])
+                        if policy_clip is not None
+                        else min(1.0, self.max_grad_norm / (float(detached_norm) + 1e-6))
+                    )
                     metrics["train/grad_clip_coef"] = clip_coef
                     metrics["train/grad_clipped"] = 1.0 if clip_coef < 1.0 else 0.0
                 if self.skip_zero_grad:
@@ -779,6 +829,28 @@ class LLMTrainer(BaseTrainer):
             metrics = self._reduce_metrics(metrics)
             metrics.update(self._outcome_metrics("accumulating"))
         return metrics
+
+    def _skip_nonfinite(self, metrics, reason):
+        if self.gradient_window is not None:
+            self.gradient_window.abort()
+        return super()._skip_nonfinite(metrics, reason)
+
+    def abort_update_window(self) -> None:
+        """Discard uncommitted gradient buffers without clearing update poison."""
+        if self.gradient_window is not None and self._partial_update_error is None:
+            self.gradient_window.abort()
+        super().abort_update_window()
+
+    def _commit_update(self) -> None:
+        if self.gradient_window is not None:
+
+            def finish_window():
+                if self.gradient_window.completed_updates != self._iter:
+                    raise RuntimeError("gradient window and optimizer clocks disagree before commit")
+                self.gradient_window.finish_step()
+
+            self._run_partial_update_stage(stage="post_optimizer_step", action=finish_window)
+        super()._commit_update()
 
     def _advance_batch_clock(self) -> None:
         """Advance the scheduler after one consumed mini-batch attempt."""
@@ -965,6 +1037,8 @@ class LLMTrainer(BaseTrainer):
         """
         if self._offload.offloaded:
             raise RuntimeError("prepare_weight_sync requires the policy to be resident; call onload() first")
+        if self.gradient_window is not None:
+            raise RuntimeError("owned FP64 gradient windows do not support trainer offload/weight-sync residency")
         if self._update_offload.offloaded:
             return 0.0
         if self._accum != 0:
@@ -988,6 +1062,8 @@ class LLMTrainer(BaseTrainer):
         Returns:
             MiB of total trainer state parked on the host by this hand-off.
         """
+        if self.gradient_window is not None:
+            raise RuntimeError("owned FP64 gradient windows do not support trainer offload")
         if self._offload.offloaded:
             return 0.0
         profile = ProfileRecord("trainer_offload")
@@ -1010,6 +1086,12 @@ class LLMTrainer(BaseTrainer):
 
     def onload(self) -> float:
         """Restore policy first, then its update-only state. Returns total MiB moved."""
+        if self.gradient_window is not None:
+            # Checkpoint save/load invokes onload even when nothing was parked.
+            # Keep that idempotent no-op; actual residency changes are refused.
+            if self._offload.offloaded or self._update_offload.offloaded:
+                raise RuntimeError("owned FP64 gradient windows do not support trainer onload from host state")
+            return 0.0
         policy_mib = self._offload.onload()
         update_mib = self._update_offload.onload()
         self._parked_update_mib = 0.0
@@ -1227,6 +1309,10 @@ class LLMTrainer(BaseTrainer):
                 "rng": rng_state,
                 "objective_identity": dict(self.objective_identity),
             }
+            if self.gradient_window is not None:
+                gradient_state = self.gradient_window.state_dict()
+                self.gradient_window.validate_checkpoint_state(gradient_state, self._iter)
+                state["gradient_policy_state"] = gradient_state
             if self.validation_state.restored_state is not None and not self.validation_state.configured:
                 raise RuntimeError("configure validation before saving a restored LLMTrainer checkpoint")
             if self.validation_state.configured:
@@ -1730,10 +1816,20 @@ class LLMTrainer(BaseTrainer):
             for _ in range(scheduler_ticks):
                 self.lr_scheduler.step()
         self.validation_state.defer_restore(trainer_state.get("validation"))
+        if self.gradient_window is not None:
+            self.gradient_window.load_state_dict(trainer_state["gradient_policy_state"])
         return resumed
 
     def _validate_objective_identity(self, trainer_state: dict[str, Any]) -> None:
         """Fail before continuation when the checkpoint used different loss semantics."""
+        if self.gradient_window is not None:
+            self.gradient_window.validate_checkpoint_state(
+                trainer_state.get("gradient_policy_state"), trainer_state.get("optimizer_step")
+            )
+        elif "gradient_policy_state" in trainer_state:
+            raise ValueError(
+                "checkpoint requires its original gradient policy; select it for resume or explicitly warm start"
+            )
         self._validate_scheduler_resume_contract(trainer_state)
         if "training_coverage" in self.objective_identity:
             from cosmos_framework.posttrain.checkpoint.rng import validate_exact_rng_state
