@@ -1,0 +1,1306 @@
+{
+ "_about": "Every number in the tables of the Sim-Bimanual skill README and result tables, recomputed by tools/make_results.py from the eval_fidelity.py summaries. Means over episodes, std with ddof = 1.",
+ "_record": "manifests/RECORD.md and the per-phase run record (command, revision, GPU, wall time, peak memory) of this run",
+ "_measured_on": "1x NVIDIA GB300; checkpoint a9e3adf6235f56f0082be7a96e497348c286c472; framework 86e3528d791446ac9928bfff8432951b23d8bf47 (main; inference code unchanged)",
+ "speed_and_memory": {
+  "rollouts_timed": 40,
+  "generation_window_s": {
+   "min": 48.0,
+   "max": 62.0,
+   "mean": 51.05
+  },
+  "frames_per_second_mean": 17.649363369245837,
+  "peak_torch_memory_gb": {
+   "allocated": 39.95,
+   "reserved": 47.94
+  },
+  "peak_gpu_mib_nvidia_smi": {
+   "cosmos3_nano_simulation_humanoid_heldout": 49967,
+   "cosmos3_nano_simulation_humanoid_heldout_swap20": 49973
+  },
+  "wall_s_by_run": {
+   "matched_task600_10": 509,
+   "matched_task596_10": 506,
+   "swap20_20": 1070
+  },
+  "published_agibot_001_example": {
+   "name": "agibot_001 (seed 2026)",
+   "frames": 901,
+   "fps": 30,
+   "size": "640x352",
+   "wall_s_incl_load": 80,
+   "peak_gpu_mib_nvidia_smi": 43234
+  }
+ },
+ "fidelity_checkpoint_frames_20_heldout_episodes": {
+  "matched_actions": {
+   "psnr": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 24.8794,
+      "std": 2.171
+     },
+     {
+      "mean": 18.651,
+      "std": 1.9793
+     },
+     {
+      "mean": 19.4216,
+      "std": 1.8901
+     },
+     {
+      "mean": 20.1571,
+      "std": 1.938
+     },
+     {
+      "mean": 18.721,
+      "std": 2.0763
+     },
+     {
+      "mean": 17.5713,
+      "std": 2.0626
+     }
+    ]
+   },
+   "ssim": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.8931,
+      "std": 0.0232
+     },
+     {
+      "mean": 0.8034,
+      "std": 0.0458
+     },
+     {
+      "mean": 0.7909,
+      "std": 0.0376
+     },
+     {
+      "mean": 0.7758,
+      "std": 0.0583
+     },
+     {
+      "mean": 0.7232,
+      "std": 0.0852
+     },
+     {
+      "mean": 0.6805,
+      "std": 0.0818
+     }
+    ]
+   },
+   "lpips": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.0763,
+      "std": 0.0177
+     },
+     {
+      "mean": 0.165,
+      "std": 0.0404
+     },
+     {
+      "mean": 0.1661,
+      "std": 0.0327
+     },
+     {
+      "mean": 0.1584,
+      "std": 0.0378
+     },
+     {
+      "mean": 0.2025,
+      "std": 0.0405
+     },
+     {
+      "mean": 0.2606,
+      "std": 0.0527
+     }
+    ]
+   }
+  },
+  "frozen_first_frame_control": {
+   "psnr": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 34.5985,
+      "std": 8.1976
+     },
+     {
+      "mean": 23.1764,
+      "std": 9.2499
+     },
+     {
+      "mean": 16.7544,
+      "std": 2.3713
+     },
+     {
+      "mean": 15.4629,
+      "std": 2.2742
+     },
+     {
+      "mean": 13.7343,
+      "std": 2.1766
+     },
+     {
+      "mean": 12.8573,
+      "std": 1.9982
+     }
+    ]
+   },
+   "ssim": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.9449,
+      "std": 0.0461
+     },
+     {
+      "mean": 0.8453,
+      "std": 0.0975
+     },
+     {
+      "mean": 0.7924,
+      "std": 0.0702
+     },
+     {
+      "mean": 0.7411,
+      "std": 0.0779
+     },
+     {
+      "mean": 0.6519,
+      "std": 0.1083
+     },
+     {
+      "mean": 0.604,
+      "std": 0.0898
+     }
+    ]
+   },
+   "lpips": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.042,
+      "std": 0.0406
+     },
+     {
+      "mean": 0.1359,
+      "std": 0.094
+     },
+     {
+      "mean": 0.2011,
+      "std": 0.0809
+     },
+     {
+      "mean": 0.2513,
+      "std": 0.0894
+     },
+     {
+      "mean": 0.3588,
+      "std": 0.0958
+     },
+     {
+      "mean": 0.4257,
+      "std": 0.0887
+     }
+    ]
+   }
+  },
+  "wrong_actions_same_20_episodes_control": {
+   "psnr": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 22.8277,
+      "std": 3.5718
+     },
+     {
+      "mean": 15.9123,
+      "std": 2.095
+     },
+     {
+      "mean": 14.5543,
+      "std": 1.6685
+     },
+     {
+      "mean": 14.881,
+      "std": 2.1578
+     },
+     {
+      "mean": 13.3703,
+      "std": 1.4749
+     },
+     {
+      "mean": 12.7342,
+      "std": 1.4489
+     }
+    ]
+   },
+   "ssim": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.8678,
+      "std": 0.0429
+     },
+     {
+      "mean": 0.7323,
+      "std": 0.0634
+     },
+     {
+      "mean": 0.7077,
+      "std": 0.0586
+     },
+     {
+      "mean": 0.6794,
+      "std": 0.0968
+     },
+     {
+      "mean": 0.6024,
+      "std": 0.0958
+     },
+     {
+      "mean": 0.5557,
+      "std": 0.0856
+     }
+    ]
+   },
+   "lpips": {
+    "frames": [
+     30,
+     60,
+     120,
+     240,
+     480,
+     900
+    ],
+    "values": [
+     {
+      "mean": 0.1018,
+      "std": 0.0455
+     },
+     {
+      "mean": 0.2562,
+      "std": 0.0675
+     },
+     {
+      "mean": 0.2945,
+      "std": 0.0619
+     },
+     {
+      "mean": 0.3177,
+      "std": 0.0839
+     },
+     {
+      "mean": 0.4133,
+      "std": 0.0807
+     },
+     {
+      "mean": 0.4799,
+      "std": 0.0733
+     }
+    ]
+   }
+  },
+  "per_task_matched_rows": {
+   "task_600_10": {
+    "psnr": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 25.881,
+       "std": 2.409
+      },
+      {
+       "mean": 18.7495,
+       "std": 2.3371
+      },
+      {
+       "mean": 19.3984,
+       "std": 1.8962
+      },
+      {
+       "mean": 20.594,
+       "std": 2.4874
+      },
+      {
+       "mean": 19.7065,
+       "std": 2.3828
+      },
+      {
+       "mean": 18.2947,
+       "std": 2.6397
+      }
+     ]
+    },
+    "ssim": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 0.8992,
+       "std": 0.0251
+      },
+      {
+       "mean": 0.8078,
+       "std": 0.0583
+      },
+      {
+       "mean": 0.7973,
+       "std": 0.0405
+      },
+      {
+       "mean": 0.8073,
+       "std": 0.0546
+      },
+      {
+       "mean": 0.7929,
+       "std": 0.0551
+      },
+      {
+       "mean": 0.7394,
+       "std": 0.0695
+      }
+     ]
+    },
+    "lpips": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 0.0783,
+       "std": 0.0178
+      },
+      {
+       "mean": 0.1721,
+       "std": 0.0486
+      },
+      {
+       "mean": 0.1715,
+       "std": 0.0337
+      },
+      {
+       "mean": 0.1583,
+       "std": 0.0431
+      },
+      {
+       "mean": 0.1937,
+       "std": 0.0374
+      },
+      {
+       "mean": 0.2568,
+       "std": 0.0636
+      }
+     ]
+    }
+   },
+   "task_596_10": {
+    "psnr": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 23.8777,
+       "std": 1.3846
+      },
+      {
+       "mean": 18.5525,
+       "std": 1.6694
+      },
+      {
+       "mean": 19.4448,
+       "std": 1.9862
+      },
+      {
+       "mean": 19.7203,
+       "std": 1.1481
+      },
+      {
+       "mean": 17.7354,
+       "std": 1.1247
+      },
+      {
+       "mean": 16.8479,
+       "std": 0.9223
+      }
+     ]
+    },
+    "ssim": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 0.887,
+       "std": 0.0205
+      },
+      {
+       "mean": 0.799,
+       "std": 0.0313
+      },
+      {
+       "mean": 0.7844,
+       "std": 0.0354
+      },
+      {
+       "mean": 0.7443,
+       "std": 0.0445
+      },
+      {
+       "mean": 0.6535,
+       "std": 0.0386
+      },
+      {
+       "mean": 0.6216,
+       "std": 0.04
+      }
+     ]
+    },
+    "lpips": {
+     "frames": [
+      30,
+      60,
+      120,
+      240,
+      480,
+      900
+     ],
+     "values": [
+      {
+       "mean": 0.0743,
+       "std": 0.0184
+      },
+      {
+       "mean": 0.158,
+       "std": 0.0313
+      },
+      {
+       "mean": 0.1607,
+       "std": 0.0325
+      },
+      {
+       "mean": 0.1584,
+       "std": 0.034
+      },
+      {
+       "mean": 0.2112,
+       "std": 0.0434
+      },
+      {
+       "mean": 0.2644,
+       "std": 0.0422
+      }
+     ]
+    }
+   }
+  }
+ },
+ "fidelity_window_means": {
+  "matched_20_episodes": {
+   "psnr": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 21.1524,
+      "std": 1.318
+     },
+     {
+      "mean": 19.0726,
+      "std": 2.0588
+     },
+     {
+      "mean": 17.6669,
+      "std": 2.0571
+     },
+     {
+      "mean": 19.2955,
+      "std": 1.5838
+     }
+    ]
+   },
+   "ssim": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.8039,
+      "std": 0.0388
+     },
+     {
+      "mean": 0.7301,
+      "std": 0.0844
+     },
+     {
+      "mean": 0.6886,
+      "std": 0.0917
+     },
+     {
+      "mean": 0.7408,
+      "std": 0.0684
+     }
+    ]
+   },
+   "lpips": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.1483,
+      "std": 0.0271
+     },
+     {
+      "mean": 0.1961,
+      "std": 0.0398
+     },
+     {
+      "mean": 0.2488,
+      "std": 0.0487
+     },
+     {
+      "mean": 0.1978,
+      "std": 0.0349
+     }
+    ]
+   }
+  },
+  "matched_task_600_10": {
+   "psnr": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 21.5487,
+      "std": 1.561
+     },
+     {
+      "mean": 20.271,
+      "std": 2.0969
+     },
+     {
+      "mean": 19.0109,
+      "std": 1.9866
+     },
+     {
+      "mean": 20.2755,
+      "std": 1.6183
+     }
+    ]
+   },
+   "ssim": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.8235,
+      "std": 0.0403
+     },
+     {
+      "mean": 0.7994,
+      "std": 0.0539
+     },
+     {
+      "mean": 0.7669,
+      "std": 0.0525
+     },
+     {
+      "mean": 0.7966,
+      "std": 0.0459
+     }
+    ]
+   },
+   "lpips": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.1489,
+      "std": 0.0306
+     },
+     {
+      "mean": 0.1859,
+      "std": 0.0388
+     },
+     {
+      "mean": 0.2286,
+      "std": 0.0476
+     },
+     {
+      "mean": 0.1878,
+      "std": 0.0357
+     }
+    ]
+   }
+  },
+  "matched_task_596_10": {
+   "psnr": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 20.756,
+      "std": 0.9389
+     },
+     {
+      "mean": 17.8742,
+      "std": 1.1662
+     },
+     {
+      "mean": 16.3229,
+      "std": 0.9863
+     },
+     {
+      "mean": 18.3155,
+      "std": 0.7363
+     }
+    ]
+   },
+   "ssim": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.7842,
+      "std": 0.0264
+     },
+     {
+      "mean": 0.6608,
+      "std": 0.0382
+     },
+     {
+      "mean": 0.6102,
+      "std": 0.0372
+     },
+     {
+      "mean": 0.685,
+      "std": 0.0291
+     }
+    ]
+   },
+   "lpips": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.1476,
+      "std": 0.0246
+     },
+     {
+      "mean": 0.2063,
+      "std": 0.04
+     },
+     {
+      "mean": 0.2691,
+      "std": 0.0428
+     },
+     {
+      "mean": 0.2077,
+      "std": 0.0329
+     }
+    ]
+   }
+  },
+  "frozen_first_frame_20": {
+   "psnr": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 20.0279,
+      "std": 3.2034
+     },
+     {
+      "mean": 13.9242,
+      "std": 2.0908
+     },
+     {
+      "mean": 12.9131,
+      "std": 1.9966
+     },
+     {
+      "mean": 15.6187,
+      "std": 2.2906
+     }
+    ]
+   },
+   "ssim": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.7985,
+      "std": 0.0636
+     },
+     {
+      "mean": 0.6623,
+      "std": 0.1028
+     },
+     {
+      "mean": 0.6102,
+      "std": 0.1054
+     },
+     {
+      "mean": 0.6903,
+      "std": 0.0839
+     }
+    ]
+   },
+   "lpips": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.194,
+      "std": 0.0701
+     },
+     {
+      "mean": 0.3473,
+      "std": 0.0939
+     },
+     {
+      "mean": 0.4173,
+      "std": 0.0879
+     },
+     {
+      "mean": 0.3196,
+      "std": 0.0787
+     }
+    ]
+   }
+  },
+  "wrong_actions_same_20_episodes": {
+   "psnr": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 16.8068,
+      "std": 1.7343
+     },
+     {
+      "mean": 13.6692,
+      "std": 1.3367
+     },
+     {
+      "mean": 12.545,
+      "std": 1.1699
+     },
+     {
+      "mean": 14.3384,
+      "std": 1.2002
+     }
+    ]
+   },
+   "ssim": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.7278,
+      "std": 0.0619
+     },
+     {
+      "mean": 0.6132,
+      "std": 0.088
+     },
+     {
+      "mean": 0.5481,
+      "std": 0.085
+     },
+     {
+      "mean": 0.6296,
+      "std": 0.0723
+     }
+    ]
+   },
+   "lpips": {
+    "windows": [
+     "0-300",
+     "300-600",
+     "600-end",
+     "overall"
+    ],
+    "values": [
+     {
+      "mean": 0.2672,
+      "std": 0.0579
+     },
+     {
+      "mean": 0.3981,
+      "std": 0.0663
+     },
+     {
+      "mean": 0.4945,
+      "std": 0.0543
+     },
+     {
+      "mean": 0.3867,
+      "std": 0.0481
+     }
+    ]
+   }
+  },
+  "swap_per_task_rows": {
+   "frame_episode_task_600_10": {
+    "psnr": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 17.4941,
+       "std": 2.1715
+      },
+      {
+       "mean": 14.453,
+       "std": 1.2276
+      },
+      {
+       "mean": 13.246,
+       "std": 1.2159
+      },
+      {
+       "mean": 15.0624,
+       "std": 1.2804
+      }
+     ]
+    },
+    "ssim": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 0.7604,
+       "std": 0.0671
+      },
+      {
+       "mean": 0.6856,
+       "std": 0.0529
+      },
+      {
+       "mean": 0.6218,
+       "std": 0.0523
+      },
+      {
+       "mean": 0.6892,
+       "std": 0.0506
+      }
+     ]
+    },
+    "lpips": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 0.2514,
+       "std": 0.0647
+      },
+      {
+       "mean": 0.383,
+       "std": 0.0585
+      },
+      {
+       "mean": 0.5028,
+       "std": 0.0599
+      },
+      {
+       "mean": 0.3792,
+       "std": 0.0497
+      }
+     ]
+    }
+   },
+   "frame_episode_task_596_10": {
+    "psnr": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 16.1195,
+       "std": 0.7643
+      },
+      {
+       "mean": 12.8854,
+       "std": 0.9485
+      },
+      {
+       "mean": 11.8441,
+       "std": 0.5649
+      },
+      {
+       "mean": 13.6144,
+       "std": 0.4866
+      }
+     ]
+    },
+    "ssim": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 0.6951,
+       "std": 0.0347
+      },
+      {
+       "mean": 0.5408,
+       "std": 0.0438
+      },
+      {
+       "mean": 0.4745,
+       "std": 0.0217
+      },
+      {
+       "mean": 0.57,
+       "std": 0.0243
+      }
+     ]
+    },
+    "lpips": {
+     "windows": [
+      "0-300",
+      "300-600",
+      "600-end",
+      "overall"
+     ],
+     "values": [
+      {
+       "mean": 0.283,
+       "std": 0.0483
+      },
+      {
+       "mean": 0.4132,
+       "std": 0.0732
+      },
+      {
+       "mean": 0.4862,
+       "std": 0.0499
+      },
+      {
+       "mean": 0.3942,
+       "std": 0.0478
+      }
+     ]
+    }
+   }
+  }
+ },
+ "derived_in_README_prose": {
+  "working_run_rule": {
+   "matched_overall_psnr": 19.295486086485944,
+   "frozen_overall_psnr": 15.618704372283204,
+   "swap_overall_psnr": 14.338362598117396,
+   "matched_beats_frozen_per_frame_mean_psnr_first_frame": 88,
+   "matched_beats_frozen_at_every_frame_from": 88,
+   "matched_minus_frozen_paired_overall_psnr_db": {
+    "mean": 3.6767817142027424,
+    "min": 0.8274967880278474,
+    "max": 5.77474980259327,
+    "episodes_better": 20,
+    "of": 20
+   },
+   "matched_minus_swap_paired_overall_psnr_db": {
+    "mean": 4.957123488368549,
+    "min": 3.4562194311880194,
+    "max": 7.8846954278220345,
+    "episodes_better": 20,
+    "of": 20
+   },
+   "matched_beats_swap_overall": true,
+   "recipe_rule": "matched beats frozen from about frame 60 and beats the action swap overall; reported as measured, not tuned"
+  },
+  "frame0_alignment_PSNR_dB": {
+   "chosen": [
+    "top"
+   ],
+   "chosen_range": [
+    32.9,
+    36.73
+   ],
+   "other_crops_range": [
+    16.2,
+    23.35
+   ],
+   "example_task600_ep815362": {
+    "top": 35.5466,
+    "center": 21.2522,
+    "bottom": 18.5669
+   }
+  }
+ },
+ "conversion_gate": {
+  "normalisation": {
+   "stats_artifact": "cosmos3_nano_sim_bimanual_action_sources/ae695e2c643a5626b3c3564f00705aa3a83ab0da7640549c7340db71172594b0.json",
+   "stats_sha256": "ae695e2c643a5626b3c3564f00705aa3a83ab0da7640549c7340db71172594b0",
+   "pose_convention": "backward_chunk_anchored_16f",
+   "gripper_width_m": 0.12,
+   "schema_contract_sha256": "bb69c3678ea0a17e0685933606b44d5b9fe946d1f657fa945d7b4dce321723df"
+  },
+  "A_loader_oracle": {
+   "records": [
+    {
+     "identity": "agibot_robot_example_000",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 811,
+     "camera_pose_rows": 89,
+     "pass": true
+    },
+    {
+     "identity": "agibot_robot_example_001",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 677,
+     "camera_pose_rows": 223,
+     "pass": true
+    },
+    {
+     "identity": "agibot_robot_example_002",
+     "hardware": "robotiq",
+     "max_abs_diff_valid": 0.0,
+     "exact_zeros_elsewhere": true,
+     "agibotworld_rows": 771,
+     "camera_pose_rows": 129,
+     "pass": true
+    }
+   ],
+   "pass": true
+  },
+  "B_published_sidecars": {
+   "sidecars": [
+    {
+     "name": "001",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 838,
+     "camera_pose_rows": 62,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.1920928955078125e-07,
+     "openness_min": 0.009411782026290894,
+     "openness_max": 0.9999999403953552
+    },
+    {
+     "name": "006",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 871,
+     "camera_pose_rows": 29,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.7881393432617188e-07,
+     "openness_min": 0.0,
+     "openness_max": 0.9999999403953552
+    },
+    {
+     "name": "034",
+     "shape": [
+      900,
+      59
+     ],
+     "action_space": "normalized_unified_v1",
+     "agibotworld_rows": 857,
+     "camera_pose_rows": 43,
+     "exact_zeros_outside_domain_mask": true,
+     "rot6d_unit_norm_max_dev": 1.1920928955078125e-07,
+     "openness_min": 0.06431373953819275,
+     "openness_max": 0.9999999403953552
+    }
+   ],
+   "first_frame_rmse_bundle_vs_published": {
+    "001": [
+     73.4,
+     73.2,
+     76.3
+    ],
+    "006": [
+     81.7,
+     85.0,
+     95.0
+    ],
+    "034": [
+     91.4,
+     88.8,
+     95.8
+    ]
+   },
+   "pass": true
+  },
+  "pass": true
+ },
+ "checkpoint_download": {
+  "size_on_disk_gb": 30,
+  "revision": "a9e3adf6235f56f0082be7a96e497348c286c472"
+ }
+}
