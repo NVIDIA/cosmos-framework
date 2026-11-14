@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import contextlib
+import contextvars
 import glob
 import hashlib
 import itertools
@@ -1201,6 +1202,18 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
     return merged
 
 
+_LAUNCH_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar("_LAUNCH_DIR", default=None)
+
+
+def current_launch_dir() -> Path:
+    """The folder the current spec file was loaded from, or the current folder outside spec loading.
+
+    Spec files are validated inside a chdir to their own folder; this keeps the folder the run was in
+    just before that chdir available to validators that need it.
+    """
+    return _LAUNCH_DIR.get() or Path.cwd()
+
+
 def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, Any]) -> list[_PydanticModelT]:
     """Load arguments from a json/jsonl/yaml file.
 
@@ -1219,6 +1232,17 @@ def _from_file(cls: type[_PydanticModelT], path: Path, override_data: dict[str, 
     # Validate data
     # Input paths are relative to the file path
     path = path.expanduser().absolute()
+    launch_token = _LAUNCH_DIR.set(Path.cwd())
+    try:
+        objs = _validate_in_spec_dir(cls, path, data_list, override_data)
+    finally:
+        _LAUNCH_DIR.reset(launch_token)
+    return objs
+
+
+def _validate_in_spec_dir(
+    cls: type[_PydanticModelT], path: Path, data_list: list[Any], override_data: dict[str, Any]
+) -> list[_PydanticModelT]:
     with contextlib.chdir(path.parent):
         objs: list[_PydanticModelT] = []
         for i, data in enumerate(data_list):

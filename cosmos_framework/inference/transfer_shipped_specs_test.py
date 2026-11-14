@@ -70,8 +70,8 @@ def test_cookbook_transfer_spec_builds_without_ignored_setting_warnings(
         stand_in.touch()
         overrides.vision_path = str(stand_in)
     warnings = _record_warnings(monkeypatch)
-    # The cookbook runs from the repository root, so the spec's relative negative_prompt_file does not
-    # resolve; it must not be needed, because the defaults already supply the negative caption.
+    # The spec's relative negative_prompt_file is resolved against the spec's folder when the spec is read;
+    # its caption is still not used, because the defaults already supply the negative caption.
     monkeypatch.chdir(tmp_path)
     overrides.output_dir = tmp_path / "out"
     overrides.download(overrides.output_dir / "inputs")

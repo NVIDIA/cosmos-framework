@@ -111,21 +111,27 @@ single-host recipes to distributed Ray execution. Start with the
 [Posttrain documentation](./docs/posttrain/index.md) or follow the
 [step-by-step container run guide](./docs/posttrain/howto/run-posttrain.md).
 
-The repository has two SFT paths. Use the main [Training](./docs/training.md) path for Cosmos3
-generator, reasoner, and policy recipes built on the framework's native configuration, checkpoint,
-and distributed-training stack. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Hugging
-Face-based models outside the Cosmos3 recipes. It currently supports Qwen text models, dense
-Qwen3.5/3.8 multimodal models, and Qwen3-VL/Qwen3-VL-MoE, with a common Hugging Face foundation for
-extending support to additional compatible models.
+See the [model and algorithm support matrix](./docs/post_training/model_algorithm_support.md)
+for supported combinations and reference recipes marked **R**. Support includes reusable training
+cores that may still need configuration, launch scripts or data wiring.
 
-| Algorithm    | Description                                                         | Guide                                                                                                                      |
-| ------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| DPO          | Offline preference optimization                                     | [DPO](./docs/posttrain/guides/dpo.md)                                                                                      |
-| GRPO         | Group-relative online policy optimization                           | [GRPO](./docs/posttrain/guides/grpo.md)                                                                                    |
-| PPO          | Actor-critic policy optimization, including embodied-agent training | [PPO](./docs/posttrain/guides/ppo.md) · [Embodied PPO examples](./docs/posttrain/howto/run-posttrain.md#8-embodied-ppo)    |
-| OPD          | On-policy distillation from a teacher model                         | [OPD](./docs/posttrain/guides/opd.md)                                                                                      |
-| DiffusionNFT | Online reinforcement learning for diffusion generators              | [DiffusionNFT](./docs/posttrain/guides/nft.md)                                                                             |
-| SFT          | Supervised fine-tuning                                              | —                                                                                                                          |
+For an unlisted combination, start from the closest linked example and adapt its model/data
+wiring. Many compatible models can reuse the existing objective and trainer. Follow the
+[adaptation steps and customization guides](./docs/post_training/model_algorithm_support.md#adding-or-qualifying-another-combination)
+for model inputs, datasets, objectives, rewards and simulators.
+
+For SFT, use the main [Training](./docs/training.md) path for Cosmos3 generator, reasoner and
+policy recipes. Use [Posttrain SFT](./docs/posttrain/guides/sft.md) for Qwen and compatible
+Hugging Face models; the matrix explains model-specific training scope and adaptation needs.
+
+| Algorithm    | Description                                                         | Guide                                                                                                                   |
+| ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| DPO          | Offline preference optimization                                     | [DPO](./docs/posttrain/guides/dpo.md)                                                                                   |
+| GRPO         | Group-relative online policy optimization                           | [GRPO](./docs/posttrain/guides/grpo.md)                                                                                 |
+| PPO          | Actor-critic policy optimization, including embodied-agent training | [PPO](./docs/posttrain/guides/ppo.md) · [Embodied PPO examples](./docs/posttrain/howto/run-posttrain.md#8-embodied-ppo) |
+| OPD          | On-policy distillation from a teacher model                         | [OPD](./docs/posttrain/guides/opd.md)                                                                                   |
+| DiffusionNFT | Online reinforcement learning for diffusion generators              | [DiffusionNFT](./docs/posttrain/guides/nft.md)                                                                          |
+| SFT          | Supervised fine-tuning                                              | [Model-specific SFT paths](./docs/post_training/model_algorithm_support.md#supervised-training)                         |
 
 Model integrations include Cosmos3, GR00T-N1.7, π0.5, Alpamayo through AlpaGym, Qwen and
 Qwen-VL families, and general Hugging Face text and vision-language backends. Algorithm support

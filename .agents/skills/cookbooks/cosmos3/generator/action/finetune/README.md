@@ -299,7 +299,7 @@ python -m cosmos_framework.scripts.export_model \
     -o "$RUN_DIR/model"
 ```
 
-Use the exported `$RUN_DIR/model` with the [Cosmos3-Nano-Policy-DROID inference cookbook](../run_policy_with_cosmos_framework.md).
+Use the exported `$RUN_DIR/model` with the [Cosmos3-Nano-Policy-DROID inference cookbook](../../../../../cosmos3-inference-action-policy/references/cosmos-framework.md).
 
 ## Convert to Diffusers
 
