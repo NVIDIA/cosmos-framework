@@ -39,6 +39,8 @@ and optimizer state. CP=4/FSDP=1 leaves that state unsharded and is not an
 equivalent memory-saving layout. These degrees describe overlapping meshes,
 not two dimensions that must always multiply to the GPU count.
 
+> **Skill note (not in the source):** measured on four H100 NVL 95 GB: at CP=2 and FSDP=2 this check runs out of GPU memory in the forward pass of the first update on all four processes (`torch.OutOfMemoryError` with 85.4 GiB allocated by PyTorch per GPU; no loss printed, no checkpoint written). With FSDP=4 and nothing else changed it passes: losses 0.5182 and 0.5027, a synchronous save of 117 s, 283 s for the whole launch, and a peak of about 95.0 GB of 95.8 GB per GPU in `nvidia-smi`, which includes memory the allocator holds in reserve. The block below therefore selects FSDP=4 by itself when the smallest GPU has less than 140 GB and keeps FSDP=2 otherwise. GPUs smaller than 95 GB are not measured.
+
 After constructing the fine-tuning `settings` array, append:
 
 ```bash
@@ -55,6 +57,8 @@ settings+=(
   model.config.parallelism.context_parallel_shard_degree=2
   model.config.parallelism.data_parallel_shard_degree=2
 )
+# Skill note (not in the source): FSDP=4 on GPUs with less than 140 GB each; appended last, it replaces the 2 above.
+if [ "$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | sort -n | head -1)" -lt 140000 ]; then settings+=(model.config.parallelism.data_parallel_shard_degree=4); fi
 python -m cosmos_framework.scripts.train_experiment \
   "${entry[@]}" --dryrun -- "${settings[@]}"
 torchrun --standalone --nproc-per-node=4 \
@@ -68,6 +72,15 @@ memory on your allocation. The save is synchronous; see
 [checkpoint memory](runtime.md#checkpoint-memory) before enabling
 asynchronous saves. Require finite losses, a completed checkpoint, and a
 successful same-run reload before treating the check as passed.
+
+> **Skill note (not in the source):** the same-run reload is the launch command once more, with the same `job.name`, `IMAGINAIRE_OUTPUT_ROOT` and `settings`. The run then finds its own `checkpoints/latest_checkpoint.txt` and restores that checkpoint with its training state in place of the converted weights; the saved iteration already equals `trainer.max_iter`, so it ends without another update or save. Measured on four H100 NVL 95 GB with FSDP=4: 66 s, about 52 GB per GPU. The three lines that the `grep` below prints are the evidence of a successful reload.
+
+```bash
+torchrun --standalone --nproc-per-node=4 -m cosmos_framework.scripts.train_experiment "${entry[@]}" -- "${settings[@]}" \
+  > "${IMAGINAIRE_OUTPUT_ROOT:?}/${AUTO_RUN_NAME:?}.reload.log" 2>&1
+grep -E 'Resuming ckpt .*iter_000000002 \(same-job, local\)|Loaded checkpoint from .*iter_000000002 \(same-job, local\) in iteration 2|Done with training' \
+  "$IMAGINAIRE_OUTPUT_ROOT/$AUTO_RUN_NAME.reload.log"
+```
 
 For **Sim-Auto Stage 1 TF**, first apply the
 [bundle camera-map overrides](sim-auto-data.md#preserve-your-bundles-camera-mappings).
@@ -90,6 +103,8 @@ settings+=("${sample_overrides[@]}")
 
 Apply this after constructing `settings` and before the first dry run.
 These are reduced data settings, not changes to the published training recipe.
+
+> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
 For Sim-Auto allocation and all three stages, follow the
 [bounded train/save/resume guide](sim-auto-smoke.md).
 Do not overwrite the original full-run config.
