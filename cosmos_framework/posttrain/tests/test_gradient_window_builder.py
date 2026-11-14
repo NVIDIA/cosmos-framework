@@ -206,7 +206,7 @@ def test_public_sft_constructs_final_optimizer_then_policy_then_trainer(monkeypa
     monkeypatch.setattr(build, "build_sft_lr_scheduler", lambda *a: None)
     monkeypatch.setattr(adapters, "optimizer_groups", lambda *a: "groups")
     monkeypatch.setattr(adapters, "assert_trainability", lambda *a: events.append("trainability"))
-    monkeypatch.setattr(pi05, "build_gradient_window", install)
+    monkeypatch.setattr(sft_source, "flow_sft_gradient_window_factory", lambda spec: install)
     monkeypatch.setattr(llm, "LLMTrainer", trainer)
     build_trainer(
         SimpleNamespace(),

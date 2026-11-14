@@ -424,6 +424,7 @@ def test_public_configuration_is_opt_in():
 
 @pytest.mark.parametrize("foreign", ["hf", "alpamayo", "gr00t", "qwen3_vl"])
 def test_public_structure_rejects_other_families(monkeypatch, foreign):
+    # Even GR00T's unregistered build_policy alias is not an admitted SFT builder.
     from cosmos_framework.posttrain.config import build as builders
     from cosmos_framework.posttrain.entrypoints import sft
     from cosmos_framework.utils import lazy_config
@@ -440,5 +441,5 @@ def test_public_structure_rejects_other_families(monkeypatch, foreign):
         ),
     )
     root = SimpleNamespace(grid=SimpleNamespace(backend="local", grouping="single"), rl=config())
-    with pytest.raises(ValueError, match="native Pi0.5"):
+    with pytest.raises(ValueError, match="gradient-window factory"):
         sft.validate_config_structure(root)

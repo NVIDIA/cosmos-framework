@@ -8,7 +8,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from cosmos_framework.posttrain.model.sft_source import register_flow_sft_packer, register_native_sft_source
+from cosmos_framework.posttrain.model.sft_source import (
+    register_flow_sft_gradient_window,
+    register_flow_sft_packer,
+    register_native_sft_source,
+)
 
 BUILDER = "cosmos_framework.posttrain.model.gr00t.sft.build_gr00t_sft_policy"
 REFERENCE_REVISION = "51d4c89f72fda44cbf77285c6a8114b52676b8a1"
@@ -157,3 +161,10 @@ def build_gr00t_sft_policy(model_id, config, pdims=None, **kwargs):
     from cosmos_framework.posttrain.model.gr00t.sft_policy import build_policy
 
     return build_policy(model_id, config, pdims, **kwargs)
+
+
+@register_flow_sft_gradient_window(BUILDER)
+def build_gradient_window(policy, optimizer, rl):
+    from cosmos_framework.posttrain.model.gr00t.sft_policy import build_gradient_window as install
+
+    return install(policy, optimizer, rl)

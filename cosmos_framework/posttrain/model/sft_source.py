@@ -25,6 +25,43 @@ after the family's own checks (model type, sidecars); no model or processor is c
 
 _RESOLVERS: dict[str, SFTSourceResolver] = {}
 _FLOW_PACKERS: dict[str, Callable] = {}
+_FLOW_GRADIENT_WINDOWS: dict[str, Callable] = {}
+
+
+def register_flow_sft_gradient_window(builder: str):
+    """Register the family's optional post-optimizer gradient-policy admission.
+
+    The factory receives the constructed native policy, final optimizer and SFT
+    configuration. It installs the shared owned-shard policy; it does not own a
+    training loop or change the family's native objective/forward.
+    """
+
+    def register(factory):
+        if builder in _FLOW_GRADIENT_WINDOWS and _FLOW_GRADIENT_WINDOWS[builder] is not factory:
+            raise ValueError(f"a flow SFT gradient-window factory is already registered for {builder!r}")
+        _FLOW_GRADIENT_WINDOWS[builder] = factory
+        return factory
+
+    return register
+
+
+def flow_sft_gradient_window_factory(spec: NativePolicyBuildSpec | None):
+    """Resolve a declared native factory without importing another family.
+
+    Configuration preflight has already resolved the model source. Import only
+    its dependency-light builder module, leaving heavyweight model admission to
+    the factory after materialization and final optimizer construction.
+    """
+    if spec is not None:
+        try:
+            importlib.import_module(spec.builder.rsplit(".", 1)[0])
+        except ImportError as error:
+            raise ValueError(
+                f"native flow SFT builder {spec.builder!r} has no available gradient-window factory"
+            ) from error
+        if spec.builder in _FLOW_PACKERS and spec.builder in _FLOW_GRADIENT_WINDOWS:
+            return _FLOW_GRADIENT_WINDOWS[spec.builder]
+    raise ValueError("owned FP64 gradients require a native flow SFT builder with a registered gradient-window factory")
 
 
 def register_flow_sft_packer(builder: str):

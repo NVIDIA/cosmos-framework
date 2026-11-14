@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Opt-in FP64 numerator accumulation over owned native FSDP gradient shards.
 
-The Pi0.5 SFT builder declares FP64 reduction before registration. Installation
+Registered native flow SFT builders declare FP64 reduction before registration. Installation
 follows final optimizer construction and precedes any backward. Public FSDP
 setters own mutations; private fields are read only under exact Torch source
 admission. The native model, autograd, optimizer and checkpoint transactions
@@ -542,7 +542,7 @@ class OwnedGradientWindow:
 def install_fsdp(model, optimizer, *, microbatches):
     """Admit exact native owner order, then mutate only documented FSDP setters.
 
-    The Pi0.5 builder must already use reduce_dtype=float64. The trainer records
+    The native flow builder must already use reduce_dtype=float64. The trainer records
     identity() in its existing checkpoint contract. Private reducer layout reads
     are deliberately gated to the inspected Torch2.10 implementation.
     """

@@ -225,7 +225,7 @@ class SFTConfig(HFRunConfig):
             raise ValueError("SFT gradient_policy must be None or fp64_owned_shard_window_v1")
         if self.gradient_policy is not None:
             if self.task != "flow_bc" or self.adapters is None:
-                raise ValueError("fp64_owned_shard_window_v1 requires native Pi0.5 flow adapter SFT")
+                raise ValueError("fp64_owned_shard_window_v1 requires a supported native flow adapter SFT model")
             if self.optimizer.name != "adamw" or not self.optimizer.force_finite_grads:
                 raise ValueError("fp64_owned_shard_window_v1 requires AdamW and finite-gradient checks")
             if not math.isfinite(self.optimizer.grad_clip_norm) or self.optimizer.grad_clip_norm <= 0:

@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cosmos_framework.posttrain.model.sft_source import register_flow_sft_packer, register_native_sft_source
+from cosmos_framework.posttrain.model.sft_source import (
+    register_flow_sft_gradient_window,
+    register_flow_sft_packer,
+    register_native_sft_source,
+)
 
 BUILDER = "cosmos_framework.posttrain.model.pi05.sft.build_pi05_sft_policy"
 
@@ -267,6 +271,7 @@ def build_pi05_sft_policy(
     return policy
 
 
+@register_flow_sft_gradient_window(BUILDER)
 def build_gradient_window(policy, optimizer, rl):
     """Install after adapter/shard registration and final optimizer ownership."""
     from cosmos_framework.posttrain.model.adapters import assert_trainability

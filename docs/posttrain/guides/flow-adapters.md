@@ -101,10 +101,10 @@ reports `valid_action_count`; it never calls action elements language tokens.
 Episode, row and media overlap between training and validation fails explicitly.
 The third π0.5 view remains masked as in the native LIBERO processor.
 
-### Opt-in Pi0.5 gradient reduction policy
+### Opt-in owned-shard gradient reduction policy
 
 `rl.gradient_policy="fp64_owned_shard_window_v1"` selects a versioned training
-reduction policy for native Pi0.5 adapter SFT. The default `null` retains the
+reduction policy for native Pi0.5 and full GR00T-N1.7 adapter SFT. The default `null` retains the
 existing training arithmetic and checkpoint identity. This policy leaves the
 native mixed-precision forward, local autograd derivatives, low-rank adapter
 branches and frozen base tensors unchanged. It sums each FP32 trainable owner's
@@ -116,12 +116,16 @@ coefficient before ordinary AdamW. Padding ranks still execute the native graph
 with zero loss weight; a window containing only padding is rejected.
 
 The initial admission is four ranks using FSDP2 with four shards, or HSDP with two
-shards and two replicas. Native Pi0.5 retains Transformers 4.57.6. The policy checks
+shards and two replicas. Both native families retain Transformers 4.57.6. The policy checks
 the exact Torch 2.10 reducer source hashes before using public FSDP reduction
 hooks. It requires FP32 trainable leaves, AdamW, positive finite gradient clipping
-and finite-gradient checks. Autocast, CPU offload, no-sync accumulation, foreign
+and finite-gradient checks. An outer autocast context covering backward, CPU offload, no-sync accumulation, foreign
 reduction hooks, changed optimizer ownership and other world sizes are rejected.
 Activation checkpointing remains the native `none` or `full` option.
+GR00T retains its checkpoint-owned FP32 storage and BF16-autocast forward; its
+backward and gradient-policy boundary execute outside that forward-only context.
+Each family declares the reduction dtype before FSDP registration, then validates
+its native model and the final optimizer owners through the existing SFT factory.
 Nonfinite derivatives or a nonfinite final FP32 cast use the trainer's existing
 `skip`/`fail_stop` behavior. Early numerical rejection discards the remaining
 microbatches in that update; it does not poison model ownership. Structural or
@@ -143,6 +147,10 @@ For HSDP set both `model.parallelism.dp_replicate=2` and
 `model.parallelism.dp_shard=2`. A two-host run uses the existing torchrun rendezvous
 with two GPUs per host; four ranks on one host do not establish two-host coverage.
 The usual finite-epoch data and checkpoint settings remain unchanged.
+For GR00T, use `sft_gr00t_adapters.py` with the same explicit gradient-policy and
+mesh overrides and its required `SFT_MODEL_PATH`, `SFT_BACKBONE_PATH`, and data
+settings. This selects a new training trajectory; it does not reinterpret a
+legacy GR00T checkpoint as having used FP64 gradient accumulation.
 
 Only committed optimizer boundaries are resumable. The existing full checkpoint
 records the policy identity, global owner shapes/aliases, topology, microbatch
@@ -154,12 +162,28 @@ exact resume. A compatible portable adapter can instead initialize a fresh run
 through `rl.adapters.warm_start`; it does not restore the old optimizer or cursor.
 Portable and merged inference formats are unchanged by this training-only policy.
 
-The production integration currently has CPU arithmetic, construction-order,
-ownership and checkpoint-lifecycle coverage. The preceding diagnostic mechanism
-passed two consecutive real Pi0.5 updates and restart on four ranks under both
-layouts. Those records are not installed-production qualification. A real
-incomplete-tail update, installed two-host checks and controlled-failure recovery
-remain required before admitting this policy to the full campaign.
+The installed Pi0.5 controls at revision `67b5e0c` cover the mixed and rsPiSSA
+recipes on two physical hosts under both layouts: three independent-reference
+updates, six primary updates, update-3 continuation, portable warm start, and
+controlled worker-loss recovery. Their 65-row population includes a masked tail;
+this is bounded correctness evidence, not a full LIBERO schedule or task score.
+See the [campaign provenance](../adapter-two-node-campaign.md).
+
+The GR00T extension reuses that reducer and trainer. Its CPU tests cover model-owned
+construction, optimizer ownership, a real small stochastic GR00T graph with full
+activation replay, independent action-weighted gradients, DCP continuation and
+portable warm start. Saved derivatives from the failed mixed FSDP control reproduce
+the original FP32 discrepancy; the FP64 projection agrees with an independent
+`math.fsum` reference. Installed two-host GR00T qualification remains pending.
+The original FSDP failures and passing legacy HSDP controls retain their original
+identities; no existing campaign cell is cleared by enabling this flag.
+
+FP64 communication doubles gradient payload bytes relative to FP32. The policy
+retains eight bytes per local trainable element for accumulated numerators, a
+four-byte FP32 gradient template, and transient packed FP64 capture buffers.
+HSDP stores each replica's owned shards. Actual peak memory, communication cost
+and throughput must be measured on each qualified recipe; this policy does not
+claim a training speedup.
 
 ## Checkpoint and export contracts
 

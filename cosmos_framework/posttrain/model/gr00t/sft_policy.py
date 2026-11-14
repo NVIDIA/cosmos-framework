@@ -199,7 +199,15 @@ def load_base(model_id, config):
 
 
 def build_policy(
-    model_id, config, pdims=None, *, adapters=None, adapter_resume=False, adapter_media_identity=None, device="cuda"
+    model_id,
+    config,
+    pdims=None,
+    *,
+    adapters=None,
+    adapter_resume=False,
+    adapter_media_identity=None,
+    device="cuda",
+    gradient_policy=None,
 ):
     from gr00t.model.modules.dit import BasicTransformerBlock
     from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
@@ -219,6 +227,16 @@ def build_policy(
     from cosmos_framework.posttrain.utils.dist import run_rank_converged
 
     config.__post_init__()
+    if gradient_policy is not None:
+        from cosmos_framework.posttrain.roles.trainer.gradient_window import PROFILE
+
+        if (
+            gradient_policy != PROFILE
+            or pdims is None
+            or pdims.world_size != 4
+            or (pdims.dp_shard, pdims.dp_replicate) not in ((4, 1), (2, 2))
+        ):
+            raise ValueError("GR00T owned FP64 gradients require fp64_owned_shard_window_v1 on FSDP4 or HSDP2x2")
     if adapters is None:
         raise ValueError("GR00T full SFT requires explicit adapter components")
     validate_adapter_parallelism(pdims)
@@ -247,6 +265,36 @@ def build_policy(
             checkpoint_wrapper_fn=partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT),
             check_fn=lambda m: isinstance(m, blocks),
         )
-    parallelize(net, ShardPlan(blocks, None, torch.float32), pdims)
+    parallelize(net, ShardPlan(blocks, None, torch.float64 if gradient_policy is not None else torch.float32), pdims)
     assert_trainability(net)
-    return Gr00tSFTPolicy(net)
+    policy = Gr00tSFTPolicy(net)
+    if gradient_policy is not None:
+        from dataclasses import replace
+
+        policy.precision = replace(policy.precision, reduce="float64")
+    return policy
+
+
+def build_gradient_window(policy, optimizer, rl):
+    """Admit the native BF16-autocast forward and final FP32 trainable owners."""
+    from dataclasses import replace
+
+    from cosmos_framework.posttrain.model.adapters import assert_trainability
+    from cosmos_framework.posttrain.roles.trainer.gradient_window import PROFILE, install_fsdp
+    from cosmos_framework.posttrain.utils.dist import run_rank_converged
+
+    def admit():
+        if (
+            rl.gradient_policy != PROFILE
+            or not isinstance(policy, Gr00tSFTPolicy)
+            or not isinstance(policy.net, Gr00tSFTNet)
+        ):
+            raise ValueError("owned FP64 gradient policy requires the native GR00T full SFT model")
+        if rl.task != "flow_bc" or rl.adapters is None:
+            raise ValueError("owned FP64 gradient policy requires flow adapter SFT")
+        if policy.autocast is not True or policy.precision != replace(OFFICIAL_PRECISION, reduce="float64"):
+            raise ValueError("GR00T gradient policy requires native BF16 autocast and registered FP64 reduction")
+        assert_trainability(policy.net, optimizer)
+
+    run_rank_converged(admit, "GR00T owned gradient-policy model admission")
+    return install_fsdp(policy.net, optimizer, microbatches=rl.grad_accum)

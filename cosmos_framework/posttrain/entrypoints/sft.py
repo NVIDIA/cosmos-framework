@@ -112,11 +112,10 @@ def validate_config_structure(config: Any) -> SFTConfig:
     rl.__post_init__()
     if rl.gradient_policy is not None:
         from cosmos_framework.posttrain.config.build import resolve_policy_parallelism, select_policy_backend
-        from cosmos_framework.posttrain.model.pi05.sft import BUILDER
+        from cosmos_framework.posttrain.model.sft_source import flow_sft_gradient_window_factory
 
         selection = select_policy_backend(config)
-        if selection.native_spec is None or selection.native_spec.builder != BUILDER:
-            raise ValueError("fp64_owned_shard_window_v1 is supported only by native Pi0.5 adapter SFT")
+        flow_sft_gradient_window_factory(selection.native_spec)
         if resolve_policy_parallelism(config, 4) not in ((1, 4), (2, 2)):
             raise ValueError("fp64_owned_shard_window_v1 requires FSDP4 or HSDP2x2")
     if rl.task == "flow_bc":
@@ -323,8 +322,10 @@ def build_trainer(config: Any, rl: SFTConfig, data: Any, validation: Any | None,
         assert_trainability(model.net, optimizer)
     gradient_window = None
     if rl.gradient_policy is not None:
-        from cosmos_framework.posttrain.model.pi05.sft import build_gradient_window
+        from cosmos_framework.posttrain.config.build import select_policy_backend
+        from cosmos_framework.posttrain.model.sft_source import flow_sft_gradient_window_factory
 
+        build_gradient_window = flow_sft_gradient_window_factory(select_policy_backend(config).native_spec)
         gradient_window = build_gradient_window(model, optimizer, rl)
     if rl.task == "flow_bc":
         objective.identity = {**objective.identity, "precision": asdict(model.precision)}
