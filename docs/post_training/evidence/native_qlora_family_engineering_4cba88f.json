@@ -18683,6 +18683,129 @@
         "complete_host_samples": 1511,
         "scope": "Independent receipt/metadata/lifetime/live-postload fingerprint and raw-sample replay; no second full DCP tensor comparison."
       }
+    },
+    "38544411": {
+      "family": "alpamayo",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 481,
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99",
+      "scope": "Current native02 observation-only inference on both unchanged native64ea selected update-512 unmerged artifacts. Two real development rows per policy; no new training, export or full-development evaluation. Exact model-output comparisons were executed on-node, not independently recreated from downloaded tensors.",
+      "protocol_sha256": "c431922cdcab600a415406391e340cca69b9b622e89b7245bca1dcf1d7546376",
+      "payload_manifest_sha256": "5d36720ac00daae4b84eda5a60836cb7df468cf7c9a19d4b67d8abff5f194057",
+      "observation_qualification_pass": true,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-observation-38544411-readout-v1.json",
+        "sha256": "dafe208fdb5c1a1c811ae77ca433060a06708dee238201656295861751456f60"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-observation-38544411-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-observation-38544411-receipts-v1.tar.gz",
+        "archive_sha256": "5c73ac3bcd090778959a6dd3b02090b0feeab05c679ab20583719444ebf5f9f2",
+        "inventory_sha256": "fd9c0182c82e8dcccf881425ab2354e3a59e195464dbb2f553c39070afddcc87",
+        "files_verified": 24,
+        "terminal_release_sha256": "cea7cbd3859f494d03e35499170336bee5ce9a543c8de4a4a6c700d7745eee95"
+      },
+      "prepared_inputs_and_outputs": {
+        "rows_per_mode": 2,
+        "evaluation_seed": 123,
+        "processed_tokens_per_row": 3008,
+        "image_slots_per_row": 16,
+        "image_grid_shape": [
+          16,
+          3
+        ],
+        "trajectory_shape": [
+          1,
+          64,
+          3
+        ],
+        "future_fields_removed": [
+          "actions",
+          "observation.ego_future_rot"
+        ],
+        "prepared_token_and_history_inputs_exact": true,
+        "sampled_trajectory_outputs_exact": true,
+        "inputs_and_original_samples_unchanged": true,
+        "rng_and_mixed_module_modes_preserved": "Passed on-node assertions in the hash-bound observer.",
+        "native_prefix_rows_and_metric_reductions_exact": true,
+        "reference_scope": "First two rows from each already qualified native64ea full-256 evaluation; original model/scoring semantics and exposed data identities retained."
+      },
+      "standalone_loading": {
+        "original_base_and_processor_paths_absent": true,
+        "paths_checked_per_mode": 6,
+        "fsw_and_fs11_aliases_checked": true,
+        "quantizer_imports_blocked": true,
+        "actual_mountinfo_retained": true,
+        "source_artifacts_reexported": false
+      },
+      "results": [
+        {
+          "mode": "bf16_lora",
+          "passed": true,
+          "artifact_manifest_sha256": "6a89e375ada0cd2931a16758cae5de22538badd332ba75618801cadd02f9d87d",
+          "observation_receipt_sha256": "158660041acab9fa73ccd10293b51dc898059ccbf5301f712743463b3d555107",
+          "evaluation_sha256": "24339e371a47ed3947a5a112e3c375ce5d5795029ece9d119b071140f38d5b46",
+          "diagnostic_seconds": 8.796032685990212,
+          "native_phase_file_sha256": "1fd40dd998e2399dba27f54a47378ff1175f609a2ef26b863e1bd1a964b1e7fa",
+          "mountinfo_sha256": "f67ccbf2fb1e3dc89af46f56496fd3fef0bbe3735d46064b5e56f75515990e65"
+        },
+        {
+          "mode": "nf4_lora",
+          "passed": true,
+          "artifact_manifest_sha256": "3e5f64aeae091bdd39170468fc285ebfdaafa56a281eef39f748e5a31be79f77",
+          "observation_receipt_sha256": "827d1eb17c995088f71fa366e4df7d1b419793ec50644f3372b988d9526e2872",
+          "evaluation_sha256": "ab7efcf1e545affd01711d583bc45d79dc20e5769a24781b8cb931dc0ae2a4eb",
+          "diagnostic_seconds": 8.783277724985965,
+          "native_phase_file_sha256": "36a96e1e87b7ef1a4a621b1d78bb21bf2c5653450575d7ed5feaaa97dc4145e0",
+          "mountinfo_sha256": "2c54d92bf2b3042349c365dd46f6dd8075a38d9feb054f3da86e2c17d5a9095b"
+        }
+      ],
+      "runtime": {
+        "actual_cpu_affinity": [
+          14,
+          15,
+          22,
+          23,
+          26,
+          27,
+          28,
+          29,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139
+        ],
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "uuid": "77308eab-c813-5725-ca4b-77e281050e4e"
+        },
+        "node": "batch-block4-1039",
+        "slurm_job": "38544411",
+        "source": {
+          "code_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+          "manifest_sha256": "c4da337957c127151aa5a3e7f2e5b1fc483f395502c13db48d16a7fc4647e36c",
+          "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99"
+        },
+        "versions": {
+          "diffusers": "0.35.1",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "measurement_scope": "Input/output fidelity gate. Native allocated/reserved peaks and cumulative native-process host high-water marks are retained in raw phase records; this is not sampled whole-process memory qualification or a matched deployment-latency benchmark. Native evaluator clocks include the appended observation diagnostic and are not corrected by subtraction.",
+      "limits": [
+        "No new task-quality or useful-adaptation result; both original selected 512-update policies retain their adverse development results.",
+        "No merged-export, generic context-length, closed-loop, real-world driving or inference-acceleration claim.",
+        "Earlier portable observation checks, full-256 standalone reloads and mature training recovery remain separately bound evidence."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -18837,6 +18960,11 @@
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-receipts-v1.tar.gz",
       "sha256": "f62e6ebae55ff5e0ccfc09c0a5ca45c540e6338407f7004e13e7d5c97a45ca1c",
       "scope": "106 terminal Alpamayo02 load-lifetime receipts plus inventory; raw telemetry and small metadata, no trained model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-observation-38544411-receipts-v1.tar.gz",
+      "sha256": "5c73ac3bcd090778959a6dd3b02090b0feeab05c679ab20583719444ebf5f9f2",
+      "scope": "24 terminal observation-only standalone reload receipts plus inventory, including both actual mount namespaces; no model or optimizer tensor payloads."
     }
   ],
   "fixed_development_targets": {

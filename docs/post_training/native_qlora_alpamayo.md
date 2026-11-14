@@ -199,9 +199,10 @@ outputs after unmerged reload. Full-model CUDA qualification now also preserves
 both selected NF4/BF16 update-512 policies exactly on all 256 development rows and
 two controlled trajectory probes (`38530040`/`38531953`, export/inference build
 `64ea823`). Build `26bc60f` additionally passed observation-only portable-input
-and evaluation-cache correctness checks on two engineering rows. Observation-only
-checks on standalone unmerged artifacts remain separate. The failed BF16
-merged-conversion result below remains unchanged.
+and evaluation-cache correctness checks on two engineering rows. Build `02f93ba`
+subsequently passed observation-only input/output checks on two development rows
+for each unchanged selected standalone unmerged artifact (`38544411`). The failed
+BF16 merged-conversion result below remains unchanged.
 
 On the qualified export build, use the original model/task settings, including
 adapter seed 17 for the selected policy (the recipe default is 42):
@@ -280,7 +281,11 @@ on `26bc60f` also preserve exact token/history inputs and seeded trajectories on
 two rows for each precision mode after loading the original `4cba88f` portable
 policy. Each row has 3,008 processed tokens and 16 image slots; removing future
 actions/rotations produces the same `[1,64,3]` trajectory. This does not establish
-standalone-unmerged observation parity, closed-loop quality or deployment latency.
+closed-loop quality or deployment latency. A separate `02f93ba` check now also
+preserves those exact prepared inputs and trajectories on two development rows
+for each selected standalone unmerged policy, with original base/processor paths
+absent and quantizer imports blocked. It reuses the existing `64ea823` artifacts;
+it does not re-export them or repeat their full development evaluation.
 
 For the first full-model conversion check, the prospectively fixed budgets are:
 controlled normalized flow velocity RMSE ≤0.01 and maximum absolute error ≤0.05;
@@ -737,3 +742,21 @@ nine generic CUDA cases; a separate correction records that this load-only gate
 executed none. The earlier `26bc60f` CUDA, source-refusal and fresh-artifact checks
 remain separate evidence. This gate does not add mature 384→512 recovery,
 trajectory-quality or deployment-performance qualification.
+
+Observation-only standalone prediction subsequently passed on build `02f93ba`
+in allocation `38544411` (**481 GPU-seconds**). Both selected NF4/BF16 update-512
+unmerged policies loaded in fresh processes without access to their original
+base or processor directories and with quantizer imports blocked. Each native
+evaluation preserved the first two rows and metric reductions from its earlier
+full-256 reference. Removing future actions and rotations then preserved exact
+token/history inputs and seeded `[1,64,3]` trajectories on those rows, each with
+3,008 processed tokens and 16 image slots. On-node assertions also checked input
+immutability, RNG and mixed module modes.
+
+The 24 hash-listed receipts plus inventory retain both actual mount namespaces,
+artifact identities and terminal allocation release. This closes the selected
+observation-only deployment path on these inputs. Native phase allocator records
+remain separate from whole-process memory qualification; evaluation clocks include
+the diagnostic and establish no serving-speed improvement. There was no training,
+re-export or full-development rescore, and the original policies' adverse quality
+results remain unchanged.
