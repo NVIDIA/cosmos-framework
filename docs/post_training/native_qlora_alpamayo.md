@@ -193,10 +193,10 @@ inference artifact, not four-bit inference or a resumable training checkpoint.
 Its commit manifest, strict native loader and original training identity remain
 separate from merged export. Tiny native Alpamayo CPU flow tests preserve exact
 outputs after unmerged reload. Full-model CUDA qualification now also preserves
-the selected NF4 update-512 policy exactly on all 256 development rows and two
-controlled trajectory probes (`38530040`, export/inference build `64ea823`).
-The selected BF16 policy and current-build observation-only path require their
-own checks. The failed BF16 merged-conversion result below remains unchanged.
+both selected NF4/BF16 update-512 policies exactly on all 256 development rows and
+two controlled trajectory probes (`38530040`/`38531953`, export/inference build
+`64ea823`). Current-build observation-only and evaluation-cache checks remain
+pending. The failed BF16 merged-conversion result below remains unchanged.
 
 On the qualified export build, use the original model/task settings, including
 adapter seed 17 for the selected policy (the recipe default is 42):
