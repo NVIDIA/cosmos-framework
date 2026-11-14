@@ -106,8 +106,8 @@ use the same entrypoints; dense export is explicitly unavailable for this additi
 CPU optimizer/scheduler, augmentation and alias contracts are covered. A100 job `38509993`
 also passed ten real updates, exact fresh checkpoint/portable scores, update-5-to-10 recovery,
 frozen-source and optimizer-membership checks, eight shared CUDA cases, and fresh reload of
-the earlier NF4 artifact. These checks establish lifecycle behavior; the separate 300-update
-practical comparison is still required for this control's task quality and performance.
+the earlier NF4 artifact. These lifecycle checks are distinct from the completed
+300-update development comparison below.
 
 The [prospective selected-candidate comparison](evidence/native_qlora_gr00t_selected_official_comparison.json)
 binds the retained LR `1e-5` NF4 candidate and its complete paired-seed study to
@@ -118,15 +118,48 @@ The selected comparison requires all three official seeds, keeps the matched
 BF16 LoRA comparison separate, and retains the original target and quality guards.
 It does not establish equal-compute superiority or independent confirmation.
 
-The first practical control (seed 17, `38546671`) completed all 300 updates and
-three fresh 160-row portable evaluations. Its normalized action MSE moved from
-0.0550447 to 0.145805, 0.124720 and 0.0982088 at updates 100, 200 and 300. It never
-reached the unchanged shared 0.0495613 target, and all seven decoded action-axis
-MAEs worsened against its own source. All updates applied; 285 were clipped and
-none skipped. Fresh evaluation seed 123 reproduced the resident endpoint exactly;
-456/789 yielded 0.0931000/0.0934837 as noise diagnostics, not additional training
-seeds. This is a negative single-seed development result, not the completed
-three-seed practical comparison or evidence isolating augmentation.
+All three practical-control seeds completed 300 updates and three fresh 160-row
+portable evaluations each. All updates applied, primary fresh scores exactly
+matched resident endpoints, and every decoded action-axis MAE worsened against
+its own frozen source. These are negative whole-recipe results, not an isolated
+test of augmentation. The historical seed-17 result and all failed attempts remain
+in the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
+| Official control seed / job | MSE at 300 | Fixed target | Complete case through owned-step release (s) | Complete host samples |
+|---|---:|---|---:|---:|
+| 17 / `38546671` | 0.09820884 | unreached | 1,096.554 | 768/768 |
+| 42 / `38552199` | 0.10274918 | unreached | 1,109.778 | 782/782 |
+| 123 / `38553000` | 0.11324241 | unreached | 1,095.880 | 779/779 |
+
+The full-panel analysis (`38553548`) validated all nine selected cells and all
+three official cells before computing the unchanged 10,000-draw paired
+seed/task/episode analysis. NF4's equal-seed/task/episode mean MSE is 0.04412088.
+
+| Reference | Reference mean MSE | NF4 relative change | One-sided 95% upper regression bound |
+|---|---:|---:|---:|
+| Matched BF16 LoRA + head | 0.04512450 | -2.224% | +9.532% |
+| Matched BF16 head-only | 0.04406531 | +0.126% | +12.159% |
+| Separate official head recipe | 0.10473348 | -57.873% | -47.785% |
+
+The primary **5% preservation guard fails** against matched BF16 LoRA despite
+the favorable mean. Improvement over the weaker practical control does not
+replace this comparison. Three seeds and ten exposed task clusters do not
+establish independent confirmation, and the three-seed rollout-preservation
+claim remains unverified. Fixed 300-update endpoints are not equal training
+compute. Additional sampling-noise seeds are diagnostics, not training seeds.
+
+Independent replay of all 1,920 endpoint rows reproduced the three comparisons
+exactly. Descriptive slices show variation in both seeds and tasks: NF4 changes
+against BF16 LoRA are -2.12%, -8.11% and +3.26% for seeds 17, 42 and 123.
+Five of ten task means worsen; the largest are the top-drawer task (+30.59%)
+and the next-to-ramekin task (+18.12%). These slices neither identify a coding
+defect nor justify removing examples or changing the acceptance procedure.
+
+The original first target crossings remain: NF4/BF16 LoRA at updates 200/200
+for seed 17, 100/100 for seed 42, and 300/100 for seed 123. Every selected arm
+attained the target; every official arm remained unreached. Original clocks
+and their placement/order limitations are retained separately; no pooled new
+timing block or demonstrated NF4 time-to-quality advantage is inferred.
 
 The missing matched head-only seed-42 case (`38547636`) completed all 300
 updates and fresh 160-row evaluations, but **failed its enclosing completion
@@ -166,9 +199,9 @@ host collections were complete. The allocation consumed 3,384 GPU-seconds.
 
 These are point results with original clocks. The separately allocated correctness
 gate below overlapped the final BF16 LoRA arm on a different node; this asymmetric
-overlap remains a timing limitation. The predefined grouped analysis still waits
-for both remaining official-control seeds. No partial-panel confidence interval,
-independent confirmation or recipe-level superiority follows from this block.
+overlap remains a timing limitation. The completed grouped analysis above retains
+this block without reconstructing clocks. It supplies development uncertainty,
+not independent confirmation or recipe-level superiority.
 
 The bounded GR00T profile `38549122` measured duplicate backbone work between
 native flow-loss and sampled-action evaluation on two exposed rows per arm.
@@ -242,9 +275,13 @@ source /durable/venvs/cosmos-native-action/native-action-env.sh
 The initial native strategy is one CUDA process, BF16-capable hardware, no FSDP/DTensor/TP/PP/CP,
 no gradient accumulation and no compilation. Only configurations with completed accelerator and
 task evidence can be described as qualified. Other embodiments, model revisions and online PPO
-are outside this initial integration. The starter below uses 100 updates and LR `1e-4`;
-the selected development comparison uses the explicit 300-update/LR `1e-5` overrides
-in the first-target stopping section below. These are different recipes.
+are outside this initial integration. The starter below uses 100 updates and LR `1e-5`;
+the selected development comparison uses the explicit 300-update settings
+in the first-target stopping section below. These are different recipes. Commit
+`40dcf52` changes only the starter LR after the completed paired study; it does not
+promote the failed quality guard or alter the separate official control. Reproduce
+historical `1e-4` starter runs with `rl.optimizer.lr=1e-4`; resume must retain the
+original resolved optimizer settings and compatible source build.
 
 ```bash
 export IMAGINAIRE_OUTPUT_ROOT=/durable/path/gr00t-runs

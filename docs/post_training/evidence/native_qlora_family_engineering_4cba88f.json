@@ -20908,6 +20908,474 @@
         "Read-only original v11 raw/phase replay, JSON numerical/counter/source proof replay; full model/optimizer state parity is the retained on-node assertion, not independent tensor reload. Original FAILED allocation/absent acceptance preserved; no clocks spliced or failure reclassified.",
         "Any continuation has separate actual clocks and whole-host acceptance; the original failed gate remains failed."
       ]
+    },
+    "38552199": {
+      "family": "gr00t",
+      "implementation_revision": "699869a89a176e640d8c842921adf4eaafe66161",
+      "wheel_sha256": "9e9d3dfb325ba59a93ff6a13ad680f15dbef0ebb82e796b6e47505a9be37a199",
+      "scientific_protocol_sha256": "a7f98d474ad440c2d3433ccb04c3a590b5c2c9b7ef6f1d2b7f143baa47b6762c",
+      "measurement_protocol_sha256": "209c2a95b30a76306500dcbd651973854eeac7a8bd922081ec2d99326f571695",
+      "selected_comparison_sha256": "44c6d33ab5de4416af41468cc7cc847712378b4ce351a1b0a4b75744c3163080",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 1120,
+      "seed": 42,
+      "scope": "One predeclared official699 head-only practical control, batch1/300updates, FP32 source/head storage with BF16 autocast, native train augmentation and unfused HF optimizer. Not matched quantization isolation, independent confirmation or published large-batch replication.",
+      "acceptance_sha256": "aad8fda35978308ee7a7600bddfe40c03273d9233011e352469051bb6a65590c",
+      "development_result_sha256": "4dc83244c5a0708f522c8e045f3d0421da143d3f925b4fed3f213893ded080a7",
+      "technical_pass": true,
+      "quality_target_attained": false,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38552199-readout-v1.json",
+        "sha256": "3e0ecb3ee64721947ee42b24a19f0c8d614b4a6d57a46887f1d97da1b2128710"
+      },
+      "independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38552199-alpa-peer-v1.json",
+        "sha256": "153d3c4c0b57a041ccdcf6f5e70bda2119917caf4924a8a60a24a2ed2d7d8a76",
+        "scope": "All74 raw files, strict whole/per-stage host+ownedGPU observations, exact full160 primary and seven ordered score trees, source/processor/scorer bindings, clocks and terminal release. No independent tensor re-deserialization or partial-panel statistics."
+      },
+      "raw_receipts": {
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38552199-receipts-v1.tar.gz",
+        "archive_sha256": "be197d6f1041168ce3d464b665005fb9fca542b2ad9a7f533d721167fe1f3fb2",
+        "inventory_sha256": "62e0343bdd981adbae9a9418c407da30781b20560c7dd204ab992d0fbc713d9b",
+        "files_verified": 74,
+        "terminal_release_sha256": "5b22c48aeb0d7b6d325f41ffa2acb4f1fee8e54d95eb7bdf47b27aeee8688872"
+      },
+      "native_training": {
+        "applied_updates": 300,
+        "all_applied": true,
+        "masked_elements_per_example": 70,
+        "trainable_fp32_head_parameters": 537,
+        "lora_factors": 0
+      },
+      "normalized_action_mse_history": [
+        {
+          "step": 0,
+          "value": 0.05504474296234548
+        },
+        {
+          "step": 100,
+          "value": 0.1859816466484751
+        },
+        {
+          "step": 200,
+          "value": 0.17207136177590915
+        },
+        {
+          "step": 300,
+          "value": 0.10274917860116277
+        }
+      ],
+      "all_seven_decoded_action_axis_maes_worsened_vs_own_source": true,
+      "target": {
+        "attained": false,
+        "baseline": 0.05506814191766483,
+        "metric": "normalized_action_mse",
+        "native_seconds": null,
+        "preflight_inclusive_seconds": null,
+        "step": null,
+        "threshold": 0.049561327725898344
+      },
+      "fresh_portable": {
+        "rows_per_evaluation": 160,
+        "primary_noise_seed": 123,
+        "primary_rows_and_metrics_exact": true,
+        "normalized_action_mse_by_noise_seed": {
+          "123": 0.10274917860116277,
+          "456": 0.09786936101104532,
+          "789": 0.1028523380522217
+        },
+        "diagnostic_noise_seeds_are_not_training_seeds": true
+      },
+      "clocks": {
+        "complete_case_seconds": 1109.778422373347,
+        "first_target_publication_seconds": null,
+        "owned_step_cleanup_seconds": 6.888985304161906,
+        "scope": "Host before srun through owned-step release; target clock ends at native verified checkpoint publication. Queue waiting is excluded.",
+        "unreached": true,
+        "native_workflow_seconds": 537.4469175767154,
+        "inner_outer_workflow_seconds": 1100.9125487180427,
+        "steady_update_mean_seconds_101_300": 0.3800806737598032
+      },
+      "runtime": {
+        "code": "699869a89a176e640d8c842921adf4eaafe66161",
+        "cpu_affinity": [
+          6,
+          7,
+          12,
+          13,
+          14,
+          15,
+          28,
+          29,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          154,
+          155
+        ],
+        "cpu_numa_nodes": {
+          "12": [
+            "node0"
+          ],
+          "13": [
+            "node0"
+          ],
+          "132": [
+            "node0"
+          ],
+          "133": [
+            "node0"
+          ],
+          "134": [
+            "node0"
+          ],
+          "135": [
+            "node0"
+          ],
+          "136": [
+            "node0"
+          ],
+          "137": [
+            "node0"
+          ],
+          "14": [
+            "node0"
+          ],
+          "15": [
+            "node0"
+          ],
+          "154": [
+            "node1"
+          ],
+          "155": [
+            "node1"
+          ],
+          "28": [
+            "node1"
+          ],
+          "29": [
+            "node1"
+          ],
+          "6": [
+            "node0"
+          ],
+          "7": [
+            "node0"
+          ]
+        },
+        "cuda_visible_devices": "0",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "torch_uuid": "fffb395b-89e7-547a-c328-4eeb72cc43da",
+          "uuid": "GPU-fffb395b-89e7-547a-c328-4eeb72cc43da"
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t6-7,12-15,28-29,132-137,154-155",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38552199",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "measurement": {
+        "host_protocol": "proc-identity-state-read-attempts-v11",
+        "raw_samples": 782,
+        "complete_host_samples": 782,
+        "whole_and_all_four_model_stages_passed": true,
+        "owned_gpu_valid": true,
+        "sampled_peaks": {
+          "device_peak_bytes": 41848864768,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 31125728256,
+          "host_rss_sum_peak_bytes": 31662346240,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1026.482293844223,
+          "owned_device_process_peak_bytes": 41074819072,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 782,
+          "sampling_gap_seconds": {
+            "count": 781,
+            "maximum": 3.35540771484375,
+            "mean": 1.314317917854319,
+            "median": 1.2829570770263672,
+            "p95": 1.407651662826538,
+            "sum": 1026.482293844223
+          }
+        },
+        "scope": "Native training/publication/export and three fresh full160 scoring stages; disposable preflight peaks excluded. Sampled lower bounds, no retrospective completion clocks."
+      },
+      "limits": [
+        "Resource-adjusted practical control, not published large-batch/full-horizon replication.",
+        "No new300 mature recovery or fresh endpoint DCP check; inherited6995-to10 remains separate.",
+        "Sampled lower-bound peaks cover recorded monitored intervals; disposable preflight peaks are excluded.",
+        "No tensor-bearing checkpoint files downloaded or independent tensor recomputation claimed.",
+        "Fixed300 is not equal training compute; separate placement/order and observer versions constrain timing comparisons.",
+        "No quality-dependent seed omission; all12 grouped analysis is separate evidence."
+      ]
+    },
+    "38553000": {
+      "family": "gr00t",
+      "implementation_revision": "699869a89a176e640d8c842921adf4eaafe66161",
+      "wheel_sha256": "9e9d3dfb325ba59a93ff6a13ad680f15dbef0ebb82e796b6e47505a9be37a199",
+      "scientific_protocol_sha256": "a7f98d474ad440c2d3433ccb04c3a590b5c2c9b7ef6f1d2b7f143baa47b6762c",
+      "measurement_protocol_sha256": "209c2a95b30a76306500dcbd651973854eeac7a8bd922081ec2d99326f571695",
+      "selected_comparison_sha256": "44c6d33ab5de4416af41468cc7cc847712378b4ce351a1b0a4b75744c3163080",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 1100,
+      "seed": 123,
+      "scope": "One predeclared official699 head-only practical control, batch1/300updates, FP32 source/head storage with BF16 autocast, native train augmentation and unfused HF optimizer. Not matched quantization isolation, independent confirmation or published large-batch replication.",
+      "acceptance_sha256": "c8b80e6fe5cdbdd82b168dd00d76097ac07f74f005dedb43ed4ab57e0910145b",
+      "development_result_sha256": "b5f604315c64126c54d40103d1b1d8ce5db87090e2dc17aea45a60bbf6ee9937",
+      "technical_pass": true,
+      "quality_target_attained": false,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38553000-readout-v1.json",
+        "sha256": "31d83b2245c908fc1ab9e40b88a0cf6fe53ffaf1b3ed0971fcc3b46fb72a32b1"
+      },
+      "independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38553000-alpa-peer-v1.json",
+        "sha256": "488a4c0b7f051c0c85a89fabc24e5d752ae8200c5ae9258cdbeed8fe4ff5f531",
+        "scope": "All74 raw files, strict whole/per-stage host+ownedGPU observations, exact full160 primary and seven ordered score trees, source/processor/scorer bindings, clocks and terminal release. No independent tensor re-deserialization or partial-panel statistics."
+      },
+      "raw_receipts": {
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38553000-receipts-v1.tar.gz",
+        "archive_sha256": "a22ccc34ce8605d909cac28b34dc0b962f93ea8b609214fcfc79a23136808bee",
+        "inventory_sha256": "2ece2b2c1e152a15cc5dbae5ba5205af9e12bbf627dc9e3bf00782d4eb4ff86d",
+        "files_verified": 74,
+        "terminal_release_sha256": "b877e21d8bd62b3c8134bc0407d02c68e1c65235fbfd3a7c79df50861a8f1d9b"
+      },
+      "native_training": {
+        "applied_updates": 300,
+        "all_applied": true,
+        "masked_elements_per_example": 70,
+        "trainable_fp32_head_parameters": 537,
+        "lora_factors": 0
+      },
+      "normalized_action_mse_history": [
+        {
+          "step": 0,
+          "value": 0.05504474296234548
+        },
+        {
+          "step": 100,
+          "value": 0.17874693648091383
+        },
+        {
+          "step": 200,
+          "value": 0.14927576677075455
+        },
+        {
+          "step": 300,
+          "value": 0.11324241401361568
+        }
+      ],
+      "all_seven_decoded_action_axis_maes_worsened_vs_own_source": true,
+      "target": {
+        "attained": false,
+        "baseline": 0.05506814191766483,
+        "metric": "normalized_action_mse",
+        "native_seconds": null,
+        "preflight_inclusive_seconds": null,
+        "step": null,
+        "threshold": 0.049561327725898344
+      },
+      "fresh_portable": {
+        "rows_per_evaluation": 160,
+        "primary_noise_seed": 123,
+        "primary_rows_and_metrics_exact": true,
+        "normalized_action_mse_by_noise_seed": {
+          "123": 0.11324241401361568,
+          "456": 0.11228975295488323,
+          "789": 0.11205277305628572
+        },
+        "diagnostic_noise_seeds_are_not_training_seeds": true
+      },
+      "clocks": {
+        "complete_case_seconds": 1095.8798886250006,
+        "first_target_publication_seconds": null,
+        "owned_step_cleanup_seconds": 5.9741223370074295,
+        "scope": "Host before srun through owned-step release; target clock ends at native verified checkpoint publication. Queue waiting is excluded.",
+        "unreached": true,
+        "native_workflow_seconds": 532.1910362420022,
+        "inner_outer_workflow_seconds": 1087.9761604989762,
+        "steady_update_mean_seconds_101_300": 0.3780438134711585
+      },
+      "runtime": {
+        "code": "699869a89a176e640d8c842921adf4eaafe66161",
+        "cpu_affinity": [
+          2,
+          3,
+          8,
+          9,
+          10,
+          11,
+          20,
+          21,
+          126,
+          127,
+          132,
+          133,
+          134,
+          135,
+          144,
+          145
+        ],
+        "cpu_numa_nodes": {
+          "10": [
+            "node0"
+          ],
+          "11": [
+            "node0"
+          ],
+          "126": [
+            "node7"
+          ],
+          "127": [
+            "node7"
+          ],
+          "132": [
+            "node0"
+          ],
+          "133": [
+            "node0"
+          ],
+          "134": [
+            "node0"
+          ],
+          "135": [
+            "node0"
+          ],
+          "144": [
+            "node1"
+          ],
+          "145": [
+            "node1"
+          ],
+          "2": [
+            "node0"
+          ],
+          "20": [
+            "node1"
+          ],
+          "21": [
+            "node1"
+          ],
+          "3": [
+            "node0"
+          ],
+          "8": [
+            "node0"
+          ],
+          "9": [
+            "node0"
+          ]
+        },
+        "cuda_visible_devices": "0",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "torch_uuid": "33695c6e-7ee8-515b-61e5-94de85a35356",
+          "uuid": "GPU-33695c6e-7ee8-515b-61e5-94de85a35356"
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t2-3,8-11,20-21,126-127,132-135,144-145",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38553000",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "measurement": {
+        "host_protocol": "proc-identity-state-read-attempts-v11",
+        "raw_samples": 779,
+        "complete_host_samples": 779,
+        "whole_and_all_four_model_stages_passed": true,
+        "owned_gpu_valid": true,
+        "sampled_peaks": {
+          "device_peak_bytes": 41848864768,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 31128977408,
+          "host_rss_sum_peak_bytes": 31665426432,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1020.2898488044739,
+          "owned_device_process_peak_bytes": 41074819072,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 779,
+          "sampling_gap_seconds": {
+            "count": 778,
+            "maximum": 4.10627555847168,
+            "mean": 1.3114265408797865,
+            "median": 1.2687736749649048,
+            "p95": 1.428485143184662,
+            "sum": 1020.2898488044739
+          }
+        },
+        "scope": "Native training/publication/export and three fresh full160 scoring stages; disposable preflight peaks excluded. Sampled lower bounds, no retrospective completion clocks."
+      },
+      "limits": [
+        "Resource-adjusted practical control, not published large-batch/full-horizon replication.",
+        "No new300 mature recovery or fresh endpoint DCP check; inherited6995-to10 remains separate.",
+        "Sampled lower-bound peaks cover recorded monitored intervals; disposable preflight peaks are excluded.",
+        "No tensor-bearing checkpoint files downloaded or independent tensor recomputation claimed.",
+        "Fixed300 is not equal training compute; separate placement/order and observer versions constrain timing comparisons.",
+        "No quality-dependent seed omission; all12 grouped analysis is separate evidence."
+      ]
+    },
+    "38553548": {
+      "family": "gr00t",
+      "scope": "CPU-only strict native portable inventory and unchanged all12 development analysis. No training, rescoring, new task outputs or independent confirmation. Entire unused GPU allocation charged.",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 166,
+      "native_reader_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "inputs_sha256": "f2c13cf26fe534767c5ffc6ca57d8da55d8eb25ab044a6f3f479a85c27b2bfb4",
+      "payload_manifest_sha256": "4165e32daeb6fae9d95cb850575eacfdd6b47d3b9a76cc495536318c858b6e2b",
+      "analysis_manifest_sha256": "b9f26d0dc3d784b09ce1a955353112f65ce15d159e811fa520c0e419500e9280",
+      "acceptance_sha256": "f9aea9bd2479275dbd9fd200be26f4295e5ded66027278914b55f6c56d3e90f7",
+      "analysis_complete_sha256": "ddfefb3df553ea6741497c607a016c7a9e2d02fad4ab7f9cf3163e12bc6d57d6",
+      "comparison_sha256": "8583d3a0ebe031a529fb5c4e0a42b5e052bd39b4753e648040ad28310d628fd0",
+      "terminal_release_sha256": "523eda6cd7b866d7b59882da7a756fca6d1ba60bd62da59533e1463a109e95d3",
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full12-analysis-38553548-receipts-v1",
+        "archive_sha256": "bc31d2727d7cdd00083eb2d50ff0035e6054a41d976c43c98fcbcbef35c7dfd1",
+        "inventory_sha256": "bc05ae27022e912fa970181b6d4c08110b2b2c096e0992e91cab8adcd1c3e05c",
+        "verified_files": 52
+      },
+      "outcome": {
+        "child_max_rss_kib": 6978700,
+        "elapsed_seconds": 32.15976814366877,
+        "exit_code": 0,
+        "scope": "CPU artifact-analysis command only; not training, scoring, inference timing or full allocated cost."
+      },
+      "technical_pass": true,
+      "quality_preservation_pass": false,
+      "independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full12-analysis-38553548-independent-replay-v1.json",
+        "sha256": "283496f2235ac3489e3f62effefde352ec74bf9e69b015899f4875aa2d2954af",
+        "scope": "All52 raw receipts and12 original result/resident pairs,1920 native endpoint rows/all metric sum-count reductions,exact360 selected episode cells; unchanged10000/6809 crossed paired bootstrap reproduces allthree results bit-for-bit. No tensors,rescoring,newconfidenceprocedures."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -22584,5 +23052,404 @@
     "semantic_constraint": "Native action head mutates its BatchFeature mapping; retain pre-head raw clones and separately owned call inputs, never post-head features or sampled state/noise.",
     "actual_runtime_gain_demonstrated": false,
     "source_compatibility": "Explicit new family source identity. No historical identity rewrite, bridge, or cross-build resume; old artifacts retain their sealed native loader builds."
+  },
+  "gr00t_completed_selected_official_comparison": {
+    "job": "38553548",
+    "result_path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full12-analysis-38553548-receipts-v1/comparison.json",
+    "result_sha256": "8583d3a0ebe031a529fb5c4e0a42b5e052bd39b4753e648040ad28310d628fd0",
+    "comparison_contract_sha256": "44c6d33ab5de4416af41468cc7cc847712378b4ce351a1b0a4b75744c3163080",
+    "selected_continuation_contract_sha256": "a916046ac45ccff652f5be23fb7d5a9af434fecb2df78189fe640dcd7e13a304",
+    "completed_cells": 12,
+    "selected_cells": 9,
+    "official_cells": 3,
+    "primary_nf4_vs_matched_bf16_lora": {
+      "candidate_equal_seed_task_episode_mse": 0.04412087574778568,
+      "development_offline_guard_met": false,
+      "development_quality_improvement_upper_bound_below_zero": false,
+      "draws": 10000,
+      "episodes_per_task": {
+        "pick up the black bowl between the plate and the ramekin and place it on the plate": 4,
+        "pick up the black bowl from table center and place it on the plate": 4,
+        "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": 4,
+        "pick up the black bowl next to the cookie box and place it on the plate": 4,
+        "pick up the black bowl next to the plate and place it on the plate": 4,
+        "pick up the black bowl next to the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the cookie box and place it on the plate": 4,
+        "pick up the black bowl on the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the stove and place it on the plate": 4,
+        "pick up the black bowl on the wooden cabinet and place it on the plate": 4
+      },
+      "limitation": "Development uncertainty only; three training seeds and ten task clusters may not provide reliable tail coverage. Independent confirmation and closed-loop preservation remain separate requirements.",
+      "method": "paired crossed seed/task resampling with one within-task episode draw per selected task occurrence, shared across all seed indices and both arms; fixed windows averaged first",
+      "predeclared_offline_preservation_margin": 0.05,
+      "reference_equal_seed_task_episode_mse": 0.045124496946754376,
+      "relative_increase": -0.022241160940873028,
+      "relative_increase_upper_one_sided95": 0.09531822408118429,
+      "resampling_seed": 6809,
+      "tasks": 10,
+      "training_seeds": [
+        17,
+        42,
+        123
+      ]
+    },
+    "matched_head_policy_control": {
+      "candidate_equal_seed_task_episode_mse": 0.04412087574778568,
+      "draws": 10000,
+      "episodes_per_task": {
+        "pick up the black bowl between the plate and the ramekin and place it on the plate": 4,
+        "pick up the black bowl from table center and place it on the plate": 4,
+        "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": 4,
+        "pick up the black bowl next to the cookie box and place it on the plate": 4,
+        "pick up the black bowl next to the plate and place it on the plate": 4,
+        "pick up the black bowl next to the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the cookie box and place it on the plate": 4,
+        "pick up the black bowl on the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the stove and place it on the plate": 4,
+        "pick up the black bowl on the wooden cabinet and place it on the plate": 4
+      },
+      "limitation": "Development uncertainty only; three training seeds and ten task clusters may not provide reliable tail coverage. Independent confirmation and closed-loop preservation remain separate requirements.",
+      "method": "paired crossed seed/task resampling with one within-task episode draw per selected task occurrence, shared across all seed indices and both arms; fixed windows averaged first",
+      "reference": "BF16 frozen backbone with shared FP32 head, deterministic transforms and fused AdamW; not the separate official FP32/HF-decay-group/train-augmentation recipe",
+      "reference_equal_seed_task_episode_mse": 0.04406531158590778,
+      "relative_increase": 0.0012609501641573928,
+      "relative_increase_upper_one_sided95": 0.12159357486943184,
+      "resampling_seed": 6809,
+      "tasks": 10,
+      "training_seeds": [
+        17,
+        42,
+        123
+      ]
+    },
+    "nf4_vs_official_head": {
+      "candidate_equal_seed_task_episode_mse": 0.04412087574778568,
+      "development_offline_guard_met": true,
+      "development_quality_improvement": true,
+      "draws": 10000,
+      "episodes_per_task": {
+        "pick up the black bowl between the plate and the ramekin and place it on the plate": 4,
+        "pick up the black bowl from table center and place it on the plate": 4,
+        "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": 4,
+        "pick up the black bowl next to the cookie box and place it on the plate": 4,
+        "pick up the black bowl next to the plate and place it on the plate": 4,
+        "pick up the black bowl next to the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the cookie box and place it on the plate": 4,
+        "pick up the black bowl on the ramekin and place it on the plate": 4,
+        "pick up the black bowl on the stove and place it on the plate": 4,
+        "pick up the black bowl on the wooden cabinet and place it on the plate": 4
+      },
+      "limitation": "Development uncertainty only; three training seeds and ten task clusters may not provide reliable tail coverage. Independent confirmation and closed-loop preservation remain separate requirements.",
+      "method": "paired crossed seed/task resampling with one within-task episode draw per selected task occurrence, shared across all seed indices and both arms; fixed windows averaged first",
+      "predeclared_practical_offline_margin": 0.05,
+      "reference_equal_seed_task_episode_mse": 0.1047334769155298,
+      "relative_increase": -0.5787318721083777,
+      "relative_increase_upper_one_sided95": -0.4778510978340957,
+      "resampling_seed": 6809,
+      "tasks": 10,
+      "training_seeds": [
+        17,
+        42,
+        123
+      ]
+    },
+    "original_comparison": "Unperformed original LR1e4 comparison remains preserved; no identities or outcomes reclassified.",
+    "timing_comparability": "Original clocks retained separately. Seed42 LoRA references came from an interleaved finite study; its missing head arm ran in another allocation. Do not pool these as a new matched timing block. Seed123 uses the prospectively fixed head/NF4/BF16 order and shared placement.",
+    "closed_loop_success_established": false,
+    "independent_confirmation": false,
+    "inference_acceleration_established": false,
+    "scope": "All outcomes are exposed development data. Favorable mean does not pass the original5percent bound. Practical-control improvement does not replace the stronger matched comparator or establish equal-compute superiority. Independent small-row replay reproduced the original procedure; task slices are descriptive and do not change gates or selection.",
+    "independent_review": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full12-analysis-38553548-independent-replay-v1.json",
+      "sha256": "283496f2235ac3489e3f62effefde352ec74bf9e69b015899f4875aa2d2954af",
+      "scope": "All52 raw receipts and12 original result/resident pairs,1920 native endpoint rows/all metric sum-count reductions,exact360 selected episode cells; unchanged10000/6809 crossed paired bootstrap reproduces allthree results bit-for-bit. No tensors,rescoring,newconfidenceprocedures."
+    },
+    "descriptive_seed_slices": [
+      {
+        "first_target_step": {
+          "bf16_frozen": 200,
+          "bf16_lora": 200,
+          "nf4_lora": 200,
+          "official_head": null
+        },
+        "mse": {
+          "bf16_frozen": 0.03983719464291685,
+          "bf16_lora": 0.04244151129986026,
+          "nf4_lora": 0.04154304856035326,
+          "official_head": 0.09820883813181094
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.04282063364970701,
+          "bf16_lora": -0.02116943322680309,
+          "official_head": -0.576992770196545
+        },
+        "seed": 17
+      },
+      {
+        "first_target_step": {
+          "bf16_frozen": 100,
+          "bf16_lora": 100,
+          "nf4_lora": 100,
+          "official_head": null
+        },
+        "mse": {
+          "bf16_frozen": 0.04523234245234302,
+          "bf16_lora": 0.045238251257355186,
+          "nf4_lora": 0.04156897995155305,
+          "official_head": 0.10274917860116277
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.08098989135151913,
+          "bf16_lora": -0.08110992807675244,
+          "official_head": -0.5954324840599492
+        },
+        "seed": 42
+      },
+      {
+        "first_target_step": {
+          "bf16_frozen": 200,
+          "bf16_lora": 100,
+          "nf4_lora": 300,
+          "official_head": null
+        },
+        "mse": {
+          "bf16_frozen": 0.047126397662463466,
+          "bf16_lora": 0.04769372828304767,
+          "nf4_lora": 0.04925059873145073,
+          "official_head": 0.11324241401361568
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.04507454790416143,
+          "bf16_lora": 0.0326430854632187,
+          "official_head": -0.5650869935929739
+        },
+        "seed": 123
+      }
+    ],
+    "descriptive_task_slices": [
+      {
+        "mse": {
+          "bf16_frozen": 0.06266067594267605,
+          "bf16_lora": 0.07163874643987843,
+          "nf4_lora": 0.05993641565686889,
+          "official_head": 0.10707095783381236
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.04347639480141252,
+          "bf16_lora": -0.16335197591474482,
+          "official_head": -0.44021780630843166
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": -0.12175117184433326,
+          "17": -0.005868313912608336,
+          "42": -0.35500395790464856
+        },
+        "task": "pick up the black bowl between the plate and the ramekin and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.0403921909974001,
+          "bf16_lora": 0.04202617846784138,
+          "nf4_lora": 0.03877890169110504,
+          "official_head": 0.10008228591510228
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.03994062382996022,
+          "bf16_lora": -0.07726795285993404,
+          "official_head": -0.6125298164752115
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": -0.2011856005408761,
+          "17": 0.06796382674376455,
+          "42": -0.10229357121458338
+        },
+        "task": "pick up the black bowl from table center and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.02127380525538077,
+          "bf16_lora": 0.02137337762175039,
+          "nf4_lora": 0.02791110384499743,
+          "official_head": 0.11039580401210558
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.3119939526539519,
+          "bf16_lora": 0.30588175341056023,
+          "official_head": -0.7471724211371584
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.9940575715408759,
+          "17": -0.15133896615891307,
+          "42": -0.0023898421088861532
+        },
+        "task": "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.029052169782863485,
+          "bf16_lora": 0.03145875284847404,
+          "nf4_lora": 0.03523233993245022,
+          "official_head": 0.09422293915635065
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.21272662922519925,
+          "bf16_lora": 0.11995348646375925,
+          "official_head": -0.6260747091110503
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.0006220298125951818,
+          "17": -0.10837489501718867,
+          "42": 0.5730520955541729
+        },
+        "task": "pick up the black bowl next to the cookie box and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.04945542922775661,
+          "bf16_lora": 0.05026195437336961,
+          "nf4_lora": 0.045061725901351095,
+          "official_head": 0.14296917298010417
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.08884167815370148,
+          "bf16_lora": -0.10346252024719838,
+          "official_head": -0.6848150901200082
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": -0.21647714387358652,
+          "17": -0.0478441823833442,
+          "42": -0.04271981147396886
+        },
+        "task": "pick up the black bowl next to the plate and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.029699949266034222,
+          "bf16_lora": 0.026212748602431796,
+          "nf4_lora": 0.03096268441239815,
+          "official_head": 0.10122860081139066
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.042516407521545174,
+          "bf16_lora": 0.18120708675036457,
+          "official_head": -0.694131064104226
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.271836800687026,
+          "17": 0.41107963894382005,
+          "42": -0.0019242635162541877
+        },
+        "task": "pick up the black bowl next to the ramekin and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.04172843930400199,
+          "bf16_lora": 0.04186932971102319,
+          "nf4_lora": 0.03932112715251389,
+          "official_head": 0.07672907298519498
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.057689963766682895,
+          "bf16_lora": -0.06086083957151145,
+          "official_head": -0.48753287870295303
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.19898702955058734,
+          "17": 0.021016802688062386,
+          "42": -0.40441121721319706
+        },
+        "task": "pick up the black bowl on the cookie box and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.07297602780495903,
+          "bf16_lora": 0.0703213973458679,
+          "nf4_lora": 0.07581611210923819,
+          "official_head": 0.13854821586892718
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.038918044592256784,
+          "bf16_lora": 0.07813716693292028,
+          "official_head": -0.45278175086019423
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.1560431307636192,
+          "17": 0.010747886472332269,
+          "42": 0.08673388250743486
+        },
+        "task": "pick up the black bowl on the ramekin and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.058012119632968234,
+          "bf16_lora": 0.05912611487299382,
+          "nf4_lora": 0.0608310995800864,
+          "official_head": 0.0982906543250595
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": 0.04859294859338581,
+          "bf16_lora": 0.0288364069033622,
+          "official_head": -0.3811100353558504
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": 0.0878102881758065,
+          "17": -0.059349498870830186,
+          "42": 0.007747598448177184
+        },
+        "task": "pick up the black bowl on the stove and place it on the plate"
+      },
+      {
+        "mse": {
+          "bf16_frozen": 0.035402308645037316,
+          "bf16_lora": 0.03695636918391323,
+          "nf4_lora": 0.027357247196847484,
+          "official_head": 0.07779706526725065
+        },
+        "nf4_relative_to": {
+          "bf16_frozen": -0.22724680271148323,
+          "bf16_lora": -0.2597420200911986,
+          "official_head": -0.6483511671954578
+        },
+        "seed_relative_to_bf16_lora": {
+          "123": -0.2817507024312129,
+          "17": -0.22203669311000285,
+          "42": -0.28263945308654803
+        },
+        "task": "pick up the black bowl on the wooden cabinet and place it on the plate"
+      }
+    ]
+  },
+  "gr00t_starter_lr_correction": {
+    "implementation_revision": "40dcf5281ca84d85aac2cb9e726cf9047ef6263e",
+    "receipt_path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-starter-lr1e5-validation-v1.json",
+    "receipt_sha256": "15a835ea0492728d9e21c20fbf26db11dd62cdc61334655668aa0e3d79ac551f",
+    "validation": {
+      "cpu_tests": "15 passed,53 deselected in6.16s; existing affected config/native-startup/source-inventory cases, CUDA hidden.",
+      "lint": "Ruff check/format and gitdiffcheck pass",
+      "modes": {
+        "bf16_lora": {
+          "factories": "52d262989450c1d41edb2974ece491fd18e0fed91fd67dba3947b8f0010c33c9",
+          "model_identity": "afc85c8aba649f281fa2a0d30d6a717afebb4dcdd30a0094ce740876a7721360",
+          "model_source": "23a1bc924a20aa5ac73809b9ca756c6f5bc8f9c0ed72630231b09874b78d67c6",
+          "parsed_config": "36797db7e359fdbd88e05c429a0f108e0ceb38719fac19ba8a32dfd7a1bf1647",
+          "training_source": "0f5e76f2529c3ca9699cb188a39161b9322aaac65e7595d82095cc969160c9ad"
+        },
+        "nf4_lora": {
+          "factories": "52d262989450c1d41edb2974ece491fd18e0fed91fd67dba3947b8f0010c33c9",
+          "model_identity": "e2b3db4ab48fb07c8d60ddfcad36a96f59cf61e366854ca0200c441b211a3f3f",
+          "model_source": "23a1bc924a20aa5ac73809b9ca756c6f5bc8f9c0ed72630231b09874b78d67c6",
+          "parsed_config": "f1d9616ecf23b56e9a643e685d85dbd74ef883204f23d1988b5b3a20289b9a47",
+          "training_source": "0f5e76f2529c3ca9699cb188a39161b9322aaac65e7595d82095cc969160c9ad"
+        }
+      },
+      "new_default_lr": 1e-05,
+      "new_recipe_sha256": "488b22cdf54b0b03e38fdf6811e19f46e1ab4ef5c6c75ff3896319bfcde67222",
+      "old_recipe_sha256": "288e75bcd2378ab5d056ed105b7c481e711c1035d8969e009bfc8a8f95287992",
+      "parsed_config_equals_old_with_explicit_lr_override": true,
+      "scope": "Starter recipe LR-only correction after completed development panel; no quality promotion, native implementation change or GPU validation.",
+      "test_log_sha256": "5affd0a6a5f5762ba59c951adcc287ad86336483808ad109d5f672d86cb6e13c"
+    },
+    "historical_resume": "Original resolved learning rate and compatible original source build required; old 1e-4 starter runs are reproduced with an explicit lr=1e-4 override.",
+    "quality_promotion": false
   }
 }
