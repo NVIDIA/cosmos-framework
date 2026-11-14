@@ -29,7 +29,7 @@ presence_penalty=0.0
 temperature=0.6
 ```
 
-For video inputs, `run_with_vllm.ipynb` uses the media loader's frame
+For video inputs, [`run_with_vllm.ipynb`](./vllm.md) uses the media loader's frame
 sampling options through `extra_body`:
 
 ```python

@@ -133,7 +133,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-For video requests, the accompanying `run_with_vllm.ipynb` notebook samples
+For video requests, the accompanying [`run_with_vllm.ipynb`](./vllm.md) reference samples
 video frames through vLLM's media loader. If `messages` contains the video
 content for your request, pass the same options via `extra_body` when using
 the OpenAI client:
