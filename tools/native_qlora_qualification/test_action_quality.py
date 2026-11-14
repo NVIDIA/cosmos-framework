@@ -3,6 +3,7 @@
 """Manual sampling/weighting fixtures; these are not real policy-quality results."""
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -227,3 +228,152 @@ def test_missing_attributed_process_memory_blocks_combined_comparison(tmp_path, 
     )
     with pytest.raises(ValueError, match="attributed process-memory"):
         quality.analyze([path], validation=tmp_path / "unused", manifest=tmp_path / "unused")
+
+
+@pytest.fixture
+def continuation_fixture(tmp_path, monkeypatch):
+    """Synthetic ingestion fixtures only: no manufactured model-quality evidence."""
+    groups = {f"{task}-{episode}": (task, episode) for task in ("a", "b") for episode in ("0", "1")}
+    monkeypatch.setattr(quality, "load_groups", lambda *args: groups)
+    target_sha = "e" * 64
+    protocols = {17: "a" * 64, 42: "b" * 64, 123: "c" * 64}
+    contract = {
+        "reused_cases": [],
+        "executed_orders": {"42": ["bf16_frozen"], "123": list(quality.MODES)},
+        "scientific_protocol_sha256": "c" * 64,
+        "target_sha256": target_sha,
+    }
+    paths = []
+    for seed in quality.SEEDS:
+        for mode in quality.MODES:
+            reused = seed == 17 or (seed == 42 and mode != "bf16_frozen")
+            path = tmp_path / f"{mode}-{seed}.json"
+            score_path = tmp_path / f"{mode}-{seed}-score.json"
+            score = {
+                "step": 300,
+                "metrics": {quality.METRIC: 0.04},
+                "rows": [row(identifier, 0.04) for identifier in groups],
+            }
+            score_path.write_text(json.dumps(score))
+            value = {
+                "mode": mode,
+                "seed": seed,
+                "protocol_sha256": protocols[seed] if reused else "c" * 64,
+                "fixed_work": {
+                    "updates": 300,
+                    "history": [
+                        {"step": step, "metrics": {quality.METRIC: loss}}
+                        for step, loss in zip((0, 100, 200, 300), (0.06, 0.05, 0.04, 0.04), strict=True)
+                    ],
+                },
+                "endpoint": {"fresh_portable_exact_primary_parity": True, "resident_score": str(score_path)},
+                "attributed_process_memory_valid": True,
+                "target_sha256": target_sha,
+                "target": {
+                    "metric": quality.METRIC,
+                    "threshold": 0.049561327725898344,
+                    "attained": True,
+                    "step": 200,
+                    "native_seconds": 200.0,
+                    "preflight_inclusive_seconds": 220.0,
+                },
+                "calibration_cost": {"seconds": 10.0},
+                "sampled_memory": {},
+            }
+            path.write_text(json.dumps(value))
+            paths.append(path)
+            if reused:
+                contract["reused_cases"].append(
+                    {
+                        "mode": mode,
+                        "seed": seed,
+                        "protocol_sha256": value["protocol_sha256"],
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                )
+    contract_path = tmp_path / "contract.json"
+    contract_path.write_text(json.dumps(contract))
+    monkeypatch.setattr(quality, "CONTINUATION_CONTRACT_SHA", hashlib.sha256(contract_path.read_bytes()).hexdigest())
+    return paths, {
+        "validation": tmp_path / "unused",
+        "manifest": tmp_path / "unused",
+        "continuation_contract": contract_path,
+    }
+
+
+def test_continuation_preserves_original_evidence_and_the_statistic(continuation_fixture):
+    paths, kwargs = continuation_fixture
+    original_bytes = {path: path.read_bytes() for path in paths}
+    result = quality.analyze(paths, **kwargs)
+    primary = result["primary_nf4_vs_matched_bf16_lora"]
+    assert primary["relative_increase"] == 0
+    assert primary["relative_increase_upper_one_sided95"] == 0
+    assert primary["predeclared_offline_preservation_margin"] == 0.05
+    assert primary["training_seeds"] == [17, 42, 123]
+    assert [r["seed"] for r in result["input_receipts"] if r["reused_completed_arm"]] == [17, 17, 17, 42, 42]
+    assert len({r["original_protocol_sha256"] for r in result["input_receipts"]}) == 3
+    assert not result["independent_confirmation"]["established"]
+    assert not result["closed_loop_preservation"]["established"]
+    assert all(path.read_bytes() == before for path, before in original_bytes.items())
+
+
+def test_continuation_contract_requires_exact_bytes(continuation_fixture):
+    paths, kwargs = continuation_fixture
+    contract = kwargs["continuation_contract"]
+    contract.write_bytes(contract.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="sealed remaining-arm contract"):
+        quality.analyze(paths, **kwargs)
+
+
+def test_continuation_cannot_substitute_a_timing_candidate_for_reused_reference(continuation_fixture):
+    paths, kwargs = continuation_fixture
+    path = next(path for path in paths if path.name == "nf4_lora-42.json")
+    value = json.loads(path.read_text())
+    # Same protocol, step and metrics are insufficient to replace the original
+    # content-bound reference result with another run from the finite study.
+    value["endpoint"]["checkpoint"] = "/synthetic/candidate/iter_000300"
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="admitted original bytes"):
+        quality.analyze(paths, **kwargs)
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "protocol", "target", "crossing", "nonfinite"])
+def test_continuation_rejects_incomplete_or_changed_panel(continuation_fixture, change):
+    paths, kwargs = continuation_fixture
+    if change == "missing":
+        paths = paths[:-1]
+    elif change == "duplicate":
+        paths = paths + [paths[-1]]
+    else:
+        path = paths[-1]  # Newly executed seed123, not a reused hash-bound result.
+        value = json.loads(path.read_text())
+        if change == "protocol":
+            value["protocol_sha256"] = quality.PROTOCOL_SHA
+        elif change == "target":
+            value["target_sha256"] = "wrong"
+        elif change == "crossing":
+            value["target"]["step"] = 300
+        else:
+            value["fixed_work"]["history"][1]["metrics"][quality.METRIC] = float("nan")
+        path.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        quality.analyze(paths, **kwargs)
+
+
+def test_unreached_target_is_retained_and_cannot_acquire_a_clock():
+    run = {
+        "target_sha256": "fixed",
+        "fixed_work": {"history": [{"step": step, "metrics": {quality.METRIC: 0.06}} for step in (0, 100, 200, 300)]},
+        "target": {
+            "metric": quality.METRIC,
+            "threshold": 0.049561327725898344,
+            "attained": False,
+            "step": None,
+            "native_seconds": None,
+            "preflight_inclusive_seconds": None,
+        },
+    }
+    quality.validate_continuation_target(run, "fixed")
+    run["target"]["native_seconds"] = 0.0
+    with pytest.raises(ValueError, match="fabricated target clock"):
+        quality.validate_continuation_target(run, "fixed")

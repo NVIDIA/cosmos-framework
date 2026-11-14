@@ -576,6 +576,18 @@ these bounds. The separate planned rollout comparison uses ten fixed initial sta
 the eight-action profile and must pass actual simulator preflight first. Improvement, preservation,
 and useful adaptation over the source are separate claims; retain all failed trials.
 
+For the selected LR `1e-5` continuation, the existing
+`python -m tools.native_qlora_qualification.action_quality` command accepts
+`--continuation-contract <gr00t-lr-paired-seeds-4cba88f-v2/execution-contract.json>`
+alongside all nine `--run` inputs, `--validation`, `--manifest` and `--output`.
+It requires the sealed contract digest `a916046a…`, preserves the five reused
+results' exact bytes and original protocol identities, and refuses an incomplete
+panel or altered target. The grouping, bootstrap, margins and update-300 endpoint
+are unchanged. Seed 17 remains selection-exposed; seed-42 timing came from
+different execution blocks and cannot become a new matched timing comparison.
+Forty CPU tests and the five actual retained inputs pass this ingestion check;
+they do not supply the four missing training outcomes or a recipe-level result.
+
 Before inspecting dense-conversion outputs, its numerical gates are fixed at maximum absolute
 error 0.02 on the valid 16 × 7 normalized actions and decoded controller commands, plus both
 0.002 absolute and 2% relative masked flow-loss error (relative denominator floor `1e-6`).

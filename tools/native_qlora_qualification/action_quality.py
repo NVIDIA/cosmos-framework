@@ -24,6 +24,7 @@ from tools.native_qlora_qualification.performance import quantile
 PROTOCOL_SHA = "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7"
 MANIFEST_SHA = "c726e37725c2d4be88efb17e8f96b956d018a07db9f72bde1f6825084392dd00"
 VALIDATION_SHA = "0e74e90b82dfe4512c77734783bf0056bde222b49c10677f2ab32c3bb27317ac"
+CONTINUATION_CONTRACT_SHA = "a916046ac45ccff652f5be23fb7d5a9af434fecb2df78189fe640dcd7e13a304"
 SEEDS = (17, 42, 123)
 MODES = ("nf4_lora", "bf16_lora", "bf16_frozen")
 METRIC = "normalized_action_mse"
@@ -242,8 +243,62 @@ def load_groups(validation, manifest):
     return groups
 
 
-def analyze(paths, *, validation, manifest):
+def continuation_admission(path):
+    """Admit the sealed LR1e-5 continuation without rewriting earlier results.
+
+    Five already completed arms are content-bound in this contract. Four new
+    arms retain its prospective learning protocol. In particular, the seed42
+    finite-study *reference* results cannot be replaced with candidate results
+    just because they share a protocol name. This changes ingestion only, not
+    the original grouping, bootstrap, margins or endpoint.
+    """
+    contract, digest = read_json(path)
+    if digest != CONTINUATION_CONTRACT_SHA:
+        raise ValueError("GR00T continuation requires the sealed remaining-arm contract")
+    expected = {
+        (item["mode"], item["seed"]): (item["protocol_sha256"], item["sha256"]) for item in contract["reused_cases"]
+    }
+    for seed, modes in contract["executed_orders"].items():
+        for mode in modes:
+            key = mode, int(seed)
+            if key in expected:
+                raise ValueError("continuation repeats an already completed arm")
+            expected[key] = (contract["scientific_protocol_sha256"], None)
+    if set(expected) != {(mode, seed) for mode in MODES for seed in SEEDS}:
+        raise ValueError("continuation requires the original nine-arm panel")
+    return contract, expected
+
+
+def validate_continuation_target(run, target_sha):
+    """Retain first scheduled crossings and explicit nonattainment, not best MSE."""
+    history = run["fixed_work"]["history"]
+    target = run["target"]
+    if (
+        run["target_sha256"] != target_sha
+        or [row["step"] for row in history] != [0, 100, 200, 300]
+        or target["metric"] != METRIC
+        or target["threshold"] != 0.049561327725898344
+    ):
+        raise ValueError("continuation target or scheduled evaluation inventory changed")
+    values = [row["metrics"][METRIC] for row in history]
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError("continuation scheduled metrics must be finite and nonnegative")
+    crossing = next((row["step"] for row in history if row["metrics"][METRIC] <= target["threshold"]), None)
+    if target["step"] != crossing or target["attained"] is not (crossing is not None):
+        raise ValueError("continuation must retain the first scheduled target crossing")
+    clocks = [target[name] for name in ("native_seconds", "preflight_inclusive_seconds")]
+    if crossing is None:
+        if clocks != [None, None]:
+            raise ValueError("unreached continuation arm has a fabricated target clock")
+    elif any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in clocks):
+        raise ValueError("attained continuation arm requires finite published-checkpoint clocks")
+
+
+def analyze(paths, *, validation, manifest, continuation_contract=None):
     groups = load_groups(validation, manifest)
+    continuation, expected = (
+        (None, None) if continuation_contract is None else continuation_admission(continuation_contract)
+    )
     seen, tables, receipts, run_values = set(), {}, [], {}
     target_hashes = set()
     for path in paths:
@@ -252,14 +307,19 @@ def analyze(paths, *, validation, manifest):
         if key in seen or key not in {(mode, seed) for mode in MODES for seed in SEEDS}:
             raise ValueError("development result has a duplicate or unplanned arm/seed")
         seen.add(key)
+        protocol, retained_digest = (PROTOCOL_SHA, None) if expected is None else expected[key]
         if (
-            run["protocol_sha256"] != PROTOCOL_SHA
+            run["protocol_sha256"] != protocol
             or run["fixed_work"]["updates"] != 300
-            or not run["endpoint"]["fresh_portable_exact_primary_parity"]
+            or run["endpoint"]["fresh_portable_exact_primary_parity"] is not True
         ):
             raise ValueError("development result does not match the frozen completed endpoint")
+        if retained_digest is not None and digest != retained_digest:
+            raise ValueError("continuation reused result differs from the admitted original bytes")
         if run.get("attributed_process_memory_valid") is not True:
             raise ValueError("development comparison requires valid attributed process-memory evidence")
+        if continuation is not None:
+            validate_continuation_target(run, continuation["target_sha256"])
         target_hashes.add(run["target_sha256"])
         score_path = run["endpoint"]["resident_score"]
         score, score_digest = read_json(score_path)
@@ -267,9 +327,11 @@ def analyze(paths, *, validation, manifest):
             raise ValueError("selected endpoint differs from the native recorded history")
         tables[key] = episode_means(score["rows"], groups, expected_count=70)
         run_values[key] = run
-        receipts.append(
-            {"mode": key[0], "seed": key[1], "result_sha256": digest, "resident_score_sha256": score_digest}
-        )
+        receipt = {"mode": key[0], "seed": key[1], "result_sha256": digest, "resident_score_sha256": score_digest}
+        if continuation is not None:
+            receipt["original_protocol_sha256"] = protocol
+            receipt["reused_completed_arm"] = retained_digest is not None
+        receipts.append(receipt)
     if seen != {(mode, seed) for mode in MODES for seed in SEEDS} or len(target_hashes) != 1:
         raise ValueError("analysis requires all nine planned runs sharing one locked target")
     arms = {mode: {seed: tables[mode, seed] for seed in SEEDS} for mode in MODES}
@@ -298,7 +360,7 @@ def analyze(paths, *, validation, manifest):
         for seed in SEEDS
         for mode in MODES
     ]
-    return {
+    result = {
         "format": "cosmos-native-gr00t-development-analysis-v1",
         "scope": "exposed development only",
         "protocol_sha256": PROTOCOL_SHA,
@@ -322,6 +384,19 @@ def analyze(paths, *, validation, manifest):
             "reason": "exposed development episodes and unresolved original-base exposure",
         },
     }
+    if continuation is not None:
+        result.update(
+            format="cosmos-native-gr00t-development-analysis-v2",
+            protocol_sha256=continuation["scientific_protocol_sha256"],
+            continuation_contract_sha256=CONTINUATION_CONTRACT_SHA,
+            scope="Exposed LR1e-5 development continuation; seed17 is selection-exposed. No independent confirmation.",
+            timing_comparability=(
+                "Original clocks retained separately. Seed42 LoRA references came from an interleaved finite study; "
+                "its missing head arm ran in another allocation. Do not pool these as a new matched timing block. "
+                "Seed123 uses the prospectively fixed head/NF4/BF16 order and shared placement."
+            ),
+        )
+    return result
 
 
 def main():
@@ -331,9 +406,21 @@ def main():
     )
     parser.add_argument("--validation", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--continuation-contract",
+        help="Exact sealed LR1e-5 remaining-arm execution-contract.json; earlier result identities stay unchanged",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    write_json_new(Path(args.output), analyze(args.run, validation=args.validation, manifest=args.manifest))
+    write_json_new(
+        Path(args.output),
+        analyze(
+            args.run,
+            validation=args.validation,
+            manifest=args.manifest,
+            continuation_contract=args.continuation_contract,
+        ),
+    )
 
 
 if __name__ == "__main__":
