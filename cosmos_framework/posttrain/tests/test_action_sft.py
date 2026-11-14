@@ -22,6 +22,153 @@ from cosmos_framework.posttrain.roles.trainer.llm import LLMTrainer
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 
+@pytest.fixture
+def runtime_startup(monkeypatch, tmp_path):
+    """Run the native startup and real runtime validator with CUDA launch plumbing replaced."""
+    from cosmos_framework.posttrain.control.checkpointing import CheckpointLifecycle
+    from cosmos_framework.posttrain.entrypoints import action_sft
+    from cosmos_framework.posttrain.model.quantization import family
+    from cosmos_framework.posttrain.utils import determinism, entry, qlora_metrics
+    from cosmos_framework.utils.config import load_config
+
+    calls = []
+    initialized = False
+
+    class ReachedData(Exception):
+        pass
+
+    def initialize(backend):
+        nonlocal initialized
+        assert backend == "nccl" and calls == ["device"]
+        initialized = True
+        calls.append("process_group")
+
+    def prepare(_config):
+        calls.append("data")
+        raise ReachedData
+
+    def lookup(package):
+        assert initialized and calls == ["device", "process_group"]
+        calls.append(package)
+        return "0.49.2"
+
+    def forbidden_factory(*_args, **_kwargs):
+        pytest.fail("no model or data factory may run before runtime admission")
+
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: calls.append("device"))
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: initialized)
+    monkeypatch.setattr(torch.distributed, "init_process_group", initialize)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
+    monkeypatch.setattr(determinism, "enable_determinism", lambda **_kwargs: None)
+    monkeypatch.setattr(entry, "out_dir", lambda _config: str(tmp_path / "run"))
+    monkeypatch.setattr(entry, "dump_resolved", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        entry,
+        "pin_run_attempt",
+        lambda *_args: SimpleNamespace(out_dir=str(tmp_path / "run"), resume_checkpoint=None),
+    )
+    monkeypatch.setattr(CheckpointLifecycle, "from_config", lambda *_args, **_kwargs: SimpleNamespace(manager=None))
+    monkeypatch.setattr(action_sft, "prepare_sources", prepare)
+    monkeypatch.setattr(action_sft, "_factory", forbidden_factory)
+    monkeypatch.setattr(qlora_metrics, "record_qlora_phase", lambda phase, **_kwargs: calls.append(phase))
+    monkeypatch.setattr(family, "version", lookup)
+
+    def run(recipe, mode=None):
+        path = f"cosmos_framework/posttrain/configs/{recipe}.py"
+        opts = ["--"] if mode is None else ["--", f"model.backbone_adaptation.mode={mode}"]
+        config = load_config(path, opts)
+        action_sft.run(config, config_path=path, opts=[])
+
+    return SimpleNamespace(run=run, calls=calls, reached_data=ReachedData, family=family)
+
+
+@pytest.mark.parametrize("recipe", ["sft_alpamayo_qlora", "gr00t_n1d7_libero_qlora"])
+@pytest.mark.parametrize("mode", ["nf4_lora", "nf4_frozen"])
+@pytest.mark.parametrize("installed", [None, "0.48.0"])
+def test_native_startup_rejects_missing_or_wrong_nf4_dependency_before_inputs(
+    runtime_startup, monkeypatch, recipe, mode, installed
+):
+    from importlib.metadata import PackageNotFoundError
+
+    def lookup(package):
+        assert package == "bitsandbytes"
+        assert runtime_startup.calls == ["device", "process_group"]
+        if installed is None:
+            raise PackageNotFoundError(package)
+        return installed
+
+    monkeypatch.setattr(runtime_startup.family, "version", lookup)
+    with pytest.raises(ValueError, match=r"bitsandbytes==0\.49\.2") as error:
+        runtime_startup.run(recipe, mode)
+    assert runtime_startup.calls == ["device", "process_group"]
+    if installed is None:
+        assert "uv pip install --python <runtime-python> bitsandbytes==0.49.2" in str(error.value)
+        assert "docker/posttrain/native_action/README.md" in str(error.value)
+        assert isinstance(error.value.__cause__, PackageNotFoundError)
+
+
+@pytest.mark.parametrize("recipe", ["sft_alpamayo_qlora", "gr00t_n1d7_libero_qlora"])
+@pytest.mark.parametrize("mode", ["nf4_lora", "nf4_frozen", "bf16_lora", "bf16_frozen"])
+def test_native_startup_rejects_missing_bf16_hardware_before_inputs(runtime_startup, monkeypatch, recipe, mode):
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+    monkeypatch.setattr(runtime_startup.family, "version", lambda _package: pytest.fail("hardware must fail first"))
+    with pytest.raises(ValueError, match="BF16 kernels on the framework-owned CUDA device"):
+        runtime_startup.run(recipe, mode)
+    assert runtime_startup.calls == ["device", "process_group"]
+
+
+@pytest.mark.parametrize("recipe", ["sft_alpamayo_qlora", "gr00t_n1d7_libero_qlora"])
+@pytest.mark.parametrize("mode", ["nf4_lora", "nf4_frozen", "bf16_lora", "bf16_frozen"])
+def test_native_startup_checks_only_selected_runtime_before_inputs(runtime_startup, monkeypatch, recipe, mode):
+    if mode.startswith("bf16_"):
+        monkeypatch.setattr(runtime_startup.family, "version", lambda _package: pytest.fail("BF16 must not query bnb"))
+    with pytest.raises(runtime_startup.reached_data):
+        runtime_startup.run(recipe, mode)
+    assert runtime_startup.calls == ["device", "process_group"] + (
+        ["bitsandbytes"] if mode.startswith("nf4_") else []
+    ) + ["data_preparation_begin", "data"]
+
+
+def test_native_official_head_startup_skips_family_quantizer_checks(runtime_startup, monkeypatch):
+    monkeypatch.setattr(runtime_startup.family, "_runtime", lambda *_a, **_k: pytest.fail("official has no adaptation"))
+    with pytest.raises(runtime_startup.reached_data):
+        runtime_startup.run("gr00t_n1d7_libero_official_head")
+    assert runtime_startup.calls == ["device", "process_group", "data_preparation_begin", "data"]
+
+
+def test_invalid_explicit_backbone_mode_never_falls_back_to_dense(monkeypatch):
+    from cosmos_framework.posttrain.entrypoints.action_sft import _preflight_backbone_runtime
+    from cosmos_framework.posttrain.model.quantization import family
+
+    monkeypatch.setattr(family, "_runtime", lambda *_a, **_k: pytest.fail("invalid mode must not select a runtime"))
+    config = SimpleNamespace(model=SimpleNamespace(backbone_adaptation=SimpleNamespace(mode="nf4_typo")))
+    with pytest.raises(ValueError, match="backbone mode"):
+        _preflight_backbone_runtime(config, torch.device("cuda", 0))
+
+
+def test_runtime_preflight_does_not_relabel_unrelated_missing_packages(monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    from cosmos_framework.posttrain.entrypoints.action_sft import _preflight_backbone_runtime
+    from cosmos_framework.posttrain.model.quantization import family
+
+    error = PackageNotFoundError("unrelated-dependency")
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(family, "_runtime", fail)
+    config = SimpleNamespace(model=SimpleNamespace(backbone_adaptation=SimpleNamespace(mode="nf4_lora")))
+    with pytest.raises(PackageNotFoundError) as result:
+        _preflight_backbone_runtime(config, torch.device("cuda", 0))
+    assert result.value is error
+
+
 @pytest.mark.parametrize("mode", ["bf16_frozen", "nf4_frozen"])
 def test_explicit_base_scoring_requires_frozen_policy_and_never_substitutes_missing_artifact(mode):
     from cosmos_framework.posttrain.entrypoints.action_eval import validate_source

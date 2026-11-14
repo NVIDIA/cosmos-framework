@@ -190,6 +190,31 @@ def prepare_sources(config):
     return train, validation
 
 
+def _preflight_backbone_runtime(config, device):
+    """Reject unavailable selected backbone execution before reading data or model weights."""
+    adaptation = getattr(config.model, "backbone_adaptation", None)
+    if adaptation is None:
+        return  # The native official-head path has its own precision/runtime contract.
+    mode = getattr(adaptation, "mode", None)
+    if mode not in {"nf4_lora", "nf4_frozen", "bf16_lora", "bf16_frozen"}:
+        raise ValueError("native action backbone mode must be nf4_lora|nf4_frozen|bf16_lora|bf16_frozen")
+
+    from importlib.metadata import PackageNotFoundError
+
+    from cosmos_framework.posttrain.model.quantization.family import _runtime
+
+    try:
+        _runtime(device, quantized=mode.startswith("nf4_"))
+    except PackageNotFoundError as error:
+        if error.name != "bitsandbytes":
+            raise
+        raise ValueError(
+            "native action NF4 requires bitsandbytes==0.49.2; follow docker/posttrain/native_action/README.md "
+            "for the pinned runtime, or install it with "
+            "`uv pip install --python <runtime-python> bitsandbytes==0.49.2`. No dense fallback is permitted."
+        ) from error
+
+
 def training_identity(config, rl, objective, validation):
     """Bind resolved native configuration, including OmegaConf container leaves."""
     import torch
@@ -272,6 +297,7 @@ def run(config, *, config_path: str, opts: list[str]):
         require_matching_training_source(
             metadata["identity"].get("training_contract"), action_training_source_identity()
         )
+    _preflight_backbone_runtime(config, device)
     record_qlora_phase("data_preparation_begin", reset_peak=True)
     train, validation = prepare_sources(config)
     validate_evaluation_input_reuse(config, rl, validation)

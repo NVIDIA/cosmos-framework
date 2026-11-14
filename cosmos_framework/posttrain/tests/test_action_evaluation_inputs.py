@@ -402,7 +402,10 @@ def test_entrypoints_install_wrapper_before_objective_captures_packer(tmp_path, 
     monkeypatch.delenv("COSMOS_QLORA_METRICS_FILE", raising=False)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "set_device", lambda _: None)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
     monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
     with pytest.raises(ReachedObjective):
         if entrypoint == "train":
             action_sft.run(config, config_path="fixture", opts=[])
