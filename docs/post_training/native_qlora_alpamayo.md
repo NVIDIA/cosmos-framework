@@ -524,9 +524,9 @@ with the later allocation-release proof separate from that archive.
 BF16 recovery's sampled owned-GPU peak was 76.543 GiB and host RSS was 43.740 GiB.
 One membership-transition sample leaves whole-run host PSS incomplete. These are
 recovery measurements, distinct from the original 512-update training peaks;
-they are not a new paired performance comparison. The selected NF4 standalone
-artifact result follows below; BF16 standalone and final-build cache/observation
-checks remain separate work.
+they are not a new paired performance comparison. Both selected standalone
+artifact results follow below; final-build cache/observation checks remain
+separate work.
 
 The earlier NF4 qualification (`38525895`) finished successfully, but Slurm
 retained its allocation after reporting completion. Only that allocation was
@@ -566,6 +566,27 @@ This deployment representation preserves the existing checkpoint's ADE/FDE
 **2.10761/6.38240 m**, including its unmet fixed quality target. It does not repair
 that learning outcome, establish merged-export parity, qualify closed-loop driving
 or demonstrate inference acceleration.
+
+The matched BF16 update-512 policy also passed the same standalone qualification
+(`38531953`, **3,185 GPU-seconds**, normal `COMPLETED` release). Its fresh portable
+and standalone evaluations reproduced all 256 original development rows and
+metrics exactly; controlled inputs, trajectory/flow outputs, all 903 trained
+tensors, 247 effective BF16 matrices and native aliases also matched. Its complete
+51-shard artifact has the same 27,070,952,449-byte indexed size, with the original
+BF16 base and separate LoRA operations. The base and processor paths were absent
+and quantizer imports blocked during fresh standalone loading, as in the NF4 check.
+
+BF16 native export took 354.70 seconds; fresh portable and standalone full scoring
+took 1,094.43 and 1,080.49 seconds. Sampled owned GPU peaks were **31.162/26.939 GiB**
+for export/portable and standalone phases, with sampled host RSS **23.155/3.827 GiB**.
+Both monitored scopes had complete sampled PSS; startup and scheduler release are
+outside those scopes. These are qualification clocks and memory measurements,
+not training or serving benchmarks. A GR00T allocation overlapped on the same
+node with a different GPU and disjoint CPU affinity; node/filesystem interference
+remains possible. All 51 receipt hashes, normal controller release and UTC step
+boundaries are retained separately. This artifact preserves BF16's adverse
+**2.08567/6.35045 m** ADE/FDE and unreached target; it does not turn that result into
+a quality pass or establish merged-export parity.
 
 The paired diagnostic profile (`38523526`, native `4cba88f`, 1,284 GPU-seconds)
 completed 24 updates per arm and traced the last four updates plus the final

@@ -14408,6 +14408,279 @@
           }
         }
       }
+    },
+    "38531953": {
+      "family": "alpamayo",
+      "mode": "bf16_lora",
+      "seed": 17,
+      "slurm_state": "COMPLETED",
+      "native_qualification_passed": true,
+      "allocation_gpu_seconds": 3185,
+      "scope": "Selected original BF512 checkpoint standalone deployment fidelity, not merged export, four-bit serving, recipe quality or inference latency.",
+      "training_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "export_inference_revision": "64ea823db4a7978c387d195bb464879b4f4733d0",
+      "export_inference_wheel_sha256": "f1a3cc7332007881d41e6daef3379d3d08985bc883cebbe21cdc491d18acdaf7",
+      "reference_job": "38518404",
+      "protocol": {
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/alpamayo-unmerged-bf16-production-v2/protocol.json",
+        "sha256": "2ba01865f1312ccf78f0cd08e629f0844ad2ccfb0ab14ce9a8441b371371533a",
+        "payload_manifest_sha256": "d429f3ada0d7f8a6431d2c45db5eaec3ae872ee4e7693429f51f7d922be36a4a",
+        "controlled_indices": [
+          0,
+          255
+        ],
+        "scoring_rows": 256,
+        "evaluation_seed": 123,
+        "atol": 0,
+        "rtol": 0
+      },
+      "acceptance": {
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/bf16_lora/reload/acceptance.json",
+        "sha256": "356ac96017b2518ef34532769c3c745d580d576af3dd380d82c7ce4f4257449c",
+        "artifact_bytes": 27070952449,
+        "artifact_files": 63,
+        "exact247_actual_BF16_effective_weights": true,
+        "exact_all409_heads_and494_factors": true,
+        "exact_controlled_full_outputs": true,
+        "exact_full256_rows_and_metrics": true,
+        "manifest_sha256": "6a89e375ada0cd2931a16758cae5de22538badd332ba75618801cadd02f9d87d",
+        "mode": "bf16_lora",
+        "parameter_aliases": [],
+        "passed": true,
+        "scope": "selected checkpoint deployment fidelity only, not recipe quality, rollout success or inference speed",
+        "standalone_namespace": {
+          "original_source_paths_absent": [
+            "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/resources/models/alpamayo/dd4a24cacefc9a6477a6dfc7354de2443401409d",
+            "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/driving-resources/processor/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+            "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/resources/models/alpamayo/dd4a24cacefc9a6477a6dfc7354de2443401409d",
+            "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-family-adapters-20261030/driving-resources/processor/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+            "/original-source-unavailable/model",
+            "/original-source-unavailable/processor"
+          ],
+          "quantizer_imports_blocked": true
+        },
+        "weight_shards": 51
+      },
+      "artifact": {
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/bf16_lora/export/unmerged",
+        "manifest_sha256": "6a89e375ada0cd2931a16758cae5de22538badd332ba75618801cadd02f9d87d",
+        "weight_shards": 51,
+        "indexed_files": 63,
+        "tensors": 1663,
+        "indexed_payload_and_sidecar_bytes": 27070952449,
+        "bytes_scope": "All manifest-indexed files, excluding the commit manifest itself.",
+        "max_shard_payload_bytes": 536870912,
+        "native_LoRA_factor_tensors": 494,
+        "native_expert_action_tensors": 409,
+        "BF16_effective_base_matrices": 247,
+        "trained_parameter_dtype": "float32",
+        "representation": "Original BF16 effective base with separate exact native LoRA operations; complete trained FP32 auxiliary policy."
+      },
+      "portable_vs_resident": {
+        "acceptance_sha256": "82671441f8a5a3f536ca8573b51be1683a1f70d45fd529fd48883d9bebcc1abb",
+        "exact_resident_rows_and_metrics": true,
+        "passed": true,
+        "rows": 256,
+        "seed": 123
+      },
+      "controlled_capture_sha256": {
+        "portable": "0940ce4e9cc0835cb56682f0ee7152a3dfb687f9ac5436bb65ef9001f44fd2bf",
+        "standalone": "7a1218fa24cc1ba6e0653d9d8220fc9135af5ffc152d5cb8dc4034bec66f6a35"
+      },
+      "full256_evaluation_sha256": {
+        "original_resident": "cf4213e8dd72a83b913594d2b8210c1c630169e32f42e7059595b33e2e291506",
+        "fresh_portable": "17ee3f8a8db072e741fcc4a79b5ee64813ffa5910cd60496f6361817f252cc2a",
+        "fresh_standalone": "fda6d9ac215d0e7ef4669d8692a3306db564c26efb54f79c5073bf7771d0d1be"
+      },
+      "metrics_unchanged": {
+        "loss": 0.2904641438362887,
+        "open_loop_ade_1s_meters": 0.05117387093119419,
+        "open_loop_ade_3s_meters": 0.43625799285837275,
+        "open_loop_ade_6p4s_meters": 2.0856738041020435,
+        "open_loop_fde_1s_meters": 0.13282742926037372,
+        "open_loop_fde_3s_meters": 1.2720891407357158,
+        "open_loop_fde_6p4s_meters": 6.350451150792651
+      },
+      "target_attainment_unchanged": false,
+      "runtime": {
+        "code": "64ea823db4a7978c387d195bb464879b4f4733d0",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "uuid": "GPU-bec9744a-e995-576c-e030-11aecc0e04c3",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145
+        ],
+        "slurm_job": "38531953",
+        "node": "batch-block4-1017",
+        "numa_nodes": [
+          "node0",
+          "node1"
+        ]
+      },
+      "runtime_sha256": "5577c5822eba21ee9a2c5b938cf77bf351add8c919d70256845f1d7e7bc3e34b",
+      "phases": {
+        "export": {
+          "workflow_path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/bf16_lora/export/workflow.json",
+          "workflow_sha256": "40fa41396f49ab5efd8da722833ce4f6bffb1036b64a12367c119f188efe1708",
+          "complete": true,
+          "monitor_alive_at_end": true,
+          "monitor_exit": 0,
+          "stage_seconds": {
+            "portable-capture": 215.81654298165813,
+            "portable-full256-evaluation": 1094.4290250791237,
+            "native-unmerged-export": 354.7036709510721
+          },
+          "sampled_memory": {
+            "device_peak_bytes": 34194259968,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 24283156480,
+            "host_rss_sum_peak_bytes": 24863002624,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1708.6070852279663,
+            "owned_device_process_peak_bytes": 33460060160,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 1314,
+            "sampling_gap_seconds": {
+              "count": 1313,
+              "maximum": 1.5703399181365967,
+              "mean": 1.3013001410723277,
+              "median": 1.2930607795715332,
+              "p95": 1.3626506328582764,
+              "sum": 1708.6070852279663
+            }
+          },
+          "memory_summary_sha256": "304473d8c9171a3bca752923799f221165cb92a61de29c87cf2bc375d229004b",
+          "allocator_peak_bytes_by_subprocess": {
+            "native-unmerged-export": {
+              "peak_allocated_bytes": 27172013056,
+              "peak_reserved_bytes": 27193769984,
+              "sha256": "94cdac1a5af5eb97d10f80f881f9ad5c287d837e193252b0db81a7c1efa9c1e8"
+            },
+            "portable-capture": {
+              "peak_allocated_bytes": 32654131712,
+              "peak_reserved_bytes": 32759611392,
+              "sha256": "c643c31c35026f3f6cf8cb5db23ae43ef03372dc17b88114be8dff1ddeb68186"
+            },
+            "portable-full256-evaluation": {
+              "peak_allocated_bytes": 32654130688,
+              "peak_reserved_bytes": 32759611392,
+              "sha256": "baf81c65f0441e7008edc034d48273a632e2f1aec24902039befac153c759975"
+            }
+          }
+        },
+        "reload": {
+          "workflow_path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/bf16_lora/reload/workflow.json",
+          "workflow_sha256": "53b503d6df999313c18e39c56651d7fa78055b3ed0291ddc0a17b483587675eb",
+          "complete": true,
+          "monitor_alive_at_end": true,
+          "monitor_exit": 0,
+          "stage_seconds": {
+            "unmerged-capture": 187.58085014298558,
+            "native-full256-evaluation": 1080.4892335478216
+          },
+          "sampled_memory": {
+            "device_peak_bytes": 29660217344,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3504365568,
+            "host_rss_sum_peak_bytes": 4109549568,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1351.8856208324432,
+            "owned_device_process_peak_bytes": 28926017536,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 1048,
+            "sampling_gap_seconds": {
+              "count": 1047,
+              "maximum": 1.5284478664398193,
+              "mean": 1.2911992558094014,
+              "median": 1.2872405052185059,
+              "p95": 1.340598392486572,
+              "sum": 1351.8856208324432
+            }
+          },
+          "memory_summary_sha256": "2dae653d0339b33914b39ffc875b4d8881c1ff56582fc46ef468ffcd77025785",
+          "allocator_peak_bytes_by_subprocess": {
+            "native-full256-evaluation": {
+              "peak_allocated_bytes": 28135347200,
+              "peak_reserved_bytes": 28225568768,
+              "sha256": "0e303bf5e5c763e0500b867f33c91f38385dff2f0bc04b7934ca4199cdde0bed"
+            },
+            "unmerged-capture": {
+              "peak_allocated_bytes": 28135348224,
+              "peak_reserved_bytes": 28225568768,
+              "sha256": "f006c2d85b9aed6b629c38229cd740dda143ca1ae60f5940868a2a6be5efc501"
+            }
+          }
+        }
+      },
+      "memory_scope": "Sampled lower bounds with complete hostPSS inside both monitored phase scopes; excludes container startup, some preflight and scheduler release. Per-subprocess allocator peaks are not training peaks. Raw host_peak_rss fields are cumulative process HWM, not per-phase allocations.",
+      "workflow_batch_seconds": 3176.6843910617754,
+      "allocation_sha256": "74054ddbb550330d7e37b975bc5ed90b01a4633d05214a3d4cc2c975c6e90b42",
+      "raw_receipt_archive": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38531953-unmerged-receipts-v1.tar.gz",
+        "sha256": "624d45d0889fa299fdabd0167ba9deba5bf4ae0ec12b6822681b4edc4a9db4e7",
+        "hash_listed_files": 51,
+        "archive_entries_including_inventory": 52,
+        "snapshot": "Terminal scientific/accounting receipts before separate controller-release and UTC accounting receipts."
+      },
+      "receipt_inventory": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38531953-unmerged-receipts-v1/alpamayo-38531953-unmerged-receipts-v1.manifest.json",
+        "sha256": "331f7af4e4ef50cbd156ec45e6b6804336ba2465df1717dc630e30af94b456c2",
+        "all51_file_hashes_independently_verified": true
+      },
+      "allocation_release": {
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/allocation-release-v1.json",
+        "sha256": "a15f7e49bfafe50ca5cc8aec7c882d0e8dabdc96d22d84e13326bb4b8333a117",
+        "proof": "All parent/steps COMPLETED0:0; successful full-user queue excludes owner; controller confirms COMPLETED.",
+        "cancelled": false
+      },
+      "placement_overlap": {
+        "same_node_other_campaign_job": "38532930",
+        "distinct_gpu_uuid_and_disjoint_cpu_affinity_verified_by_paired_timing_owner": true,
+        "limitation": "Node and filesystem interference remains possible; this is artifact qualification, not an isolated timing comparison.",
+        "utc_accounting_receipt": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531953/accounting-time-utc-v1.json",
+        "utc_accounting_sha256": "25b7d673c651032be02354bcfcf36f785658c0d671c8ec2b95fb23a796d25932",
+        "allocation_start_utc": "2026-11-14T10:58:03",
+        "allocation_end_utc": "2026-11-14T11:51:08",
+        "last_step_end_utc": "2026-11-14T11:51:14",
+        "accounting_note": "Raw last-step end is six seconds later than parent allocation end; both retained."
+      },
+      "remaining": [
+        "Final-build source/cache and full-model observation-only qualification",
+        "Original expert-only control and paired-seed development",
+        "Task-quality improvement and fixed-target attainment",
+        "Independent recording-family confirmation",
+        "Merged dense conversion remains separately failed/unqualified where recorded; no inference acceleration claim"
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
