@@ -15,6 +15,10 @@ profile is inference-only and must be explicitly installed by a public loader.
 The separately named fixed-MMA candidate reuses the attention and ownership
 contracts here, with explicit projection/RMSNorm operators from gemma_fixed_mma.
 The original contiguous-K/V profile retains its native projection arithmetic.
+The separately versioned SDPA64 candidate retains fixed-MMA projections and
+FP32 persistent caches, but reduces attention in FP64 before rounding its
+output to FP32. Its attention temporaries and latency require qualification;
+neither prior profile acquires these execution semantics.
 """
 
 import copy
@@ -27,7 +31,8 @@ import torch
 
 PROFILE = "gemma_fp32_sdpa_contiguous_kv_v1"
 FIXED_MMA_PROFILE = "gemma_fp32_fixed_mma_v1"
-PROFILES = (PROFILE, FIXED_MMA_PROFILE)
+SDPA64_PROFILE = "gemma_fp32_fixed_mma_sdpa64_v1"
+PROFILES = (PROFILE, FIXED_MMA_PROFILE, SDPA64_PROFILE)
 BASE_SHA256 = "d69463aaf679e21e544bbd1b77095232ae5b420177f11a4c53a727fc246b5922"
 PROCESSOR_SHA256 = "4931454373d18ead3f0cc4de9953b83eaafc7a47059c623c651233ec572042fa"
 EXPORT_EQUIVALENCE = "versioned_contiguous_kv_sdpa_inference_requires_qualification"
@@ -79,6 +84,8 @@ def export_equivalence(profile):
         return EXPORT_EQUIVALENCE
     if profile == FIXED_MMA_PROFILE:
         return "versioned_fixed_mma_gemma_inference_requires_qualification"
+    if profile == SDPA64_PROFILE:
+        return "versioned_fixed_mma_sdpa64_gemma_inference_requires_qualification"
     raise ValueError(f"unknown Gemma inference profile: {profile!r}")
 
 
@@ -156,6 +163,33 @@ def _attention(module, hidden_states, position_embeddings=None, attention_mask=N
         module, query, key, value, attention_mask, dropout=0.0, scaling=module.scaling, **kwargs
     )
     output = output.reshape(*input_shape, -1).contiguous()
+    return module.o_proj(output), weights
+
+
+def _attention_fp64(
+    module, hidden_states, position_embeddings=None, attention_mask=None, past_key_values=None, **kwargs
+):
+    """Keep native FP32 RoPE/cache order, using FP64 attention temporaries only."""
+    from transformers.models.gemma.modeling_gemma import apply_rotary_pos_emb
+
+    _guard(module)
+    if kwargs.get("output_attentions"):
+        raise ValueError(f"{SDPA64_PROFILE} does not expose attention probabilities")
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, module.head_dim)
+    query = module.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    key = module.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    value = module.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    query, key = apply_rotary_pos_emb(query, key, *position_embeddings)
+    if past_key_values is not None:
+        key, value = past_key_values.update(key, value, module.layer_idx)
+    mask = (
+        attention_mask.double() if attention_mask is not None and attention_mask.is_floating_point() else attention_mask
+    )
+    output, weights = attention_interface(
+        module, query.double(), key.double(), value.double(), mask, dropout=0.0, scaling=module.scaling, **kwargs
+    )
+    output = output.to(hidden_states.dtype).reshape(*input_shape, -1).contiguous()
     return module.o_proj(output), weights
 
 
@@ -297,7 +331,7 @@ def install(model, *, identity, adapter_type=None, profile=PROFILE):
     from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM, GemmaRMSNorm
 
     validate_identity(identity, profile=profile)
-    fixed = profile == FIXED_MMA_PROFILE
+    fixed = profile in (FIXED_MMA_PROFILE, SDPA64_PROFILE)
     if fixed and version("triton") != "3.6.0":
         raise ValueError(f"{profile} requires Triton 3.6.0")
     validate_configuration(model.config)
@@ -363,7 +397,8 @@ def install(model, *, identity, adapter_type=None, profile=PROFILE):
                 getattr(module, "_hf_hook", None), "offload", False
             ):
                 raise ValueError(f"{PROFILE} requires unmodified stock attention without offload: {name}")
-            forwards.append((name, module, attribute, original, MethodType(_attention, module)))
+            attention_forward = _attention_fp64 if profile == SDPA64_PROFILE else _attention
+            forwards.append((name, module, attribute, original, MethodType(attention_forward, module)))
     expected = {f"model.layers.{i}.self_attn" for i in range(model.config.num_hidden_layers)}
     if {row[0] for row in forwards} != expected:
         raise ValueError(f"{PROFILE} requires all native Gemma attention modules")

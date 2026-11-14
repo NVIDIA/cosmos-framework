@@ -189,7 +189,7 @@ def test_explicit_public_config_metadata_and_tag_admission(tmp_path):
 
     selected = profile.FIXED_MMA_PROFILE
     assert PortableAdapterConfig(str(tmp_path), selected).execution_profile == selected
-    with pytest.raises(ValueError, match="separate branches"):
+    with pytest.raises(ValueError, match="effective-weight cache is unsupported"):
         PortableAdapterConfig(str(tmp_path), selected, cache_effective_weights=True)
     record = {"kind": "portable_adapter", "identity": identity(), "weights_sha256": "a" * 64}
     metadata = merged_export_metadata(
@@ -219,7 +219,8 @@ def test_explicit_public_config_metadata_and_tag_admission(tmp_path):
 
 @pytest.mark.parametrize("method", ["lora", "dora", "pissa"])
 @pytest.mark.parametrize("rslora", [False, True])
-def test_public_portable_and_tagged_merged_composition(tmp_path, monkeypatch, cpu_projection, method, rslora):
+@pytest.mark.parametrize("selected", [profile.FIXED_MMA_PROFILE, profile.SDPA64_PROFILE])
+def test_public_portable_and_tagged_merged_composition(tmp_path, monkeypatch, cpu_projection, method, rslora, selected):
     """Real local artifacts/loaders, with only tiny CPU/operator admission patched.
 
     The CPU FP64 projection is a composition fixture, not the A100 MMA kernel.
@@ -303,7 +304,6 @@ def test_public_portable_and_tagged_merged_composition(tmp_path, monkeypatch, cp
         return real_load(*args, **kwargs)
 
     monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", cpu_load)
-    selected = profile.FIXED_MMA_PROFILE
     loaded, _, provenance = load_portable_model(
         str(base),
         PortableAdapterConfig(str(artifact), selected),
