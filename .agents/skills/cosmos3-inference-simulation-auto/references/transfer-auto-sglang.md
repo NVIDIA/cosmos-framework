@@ -39,14 +39,15 @@ sudo apt-get install -y ffmpeg
 
 On macOS with Homebrew, use `brew install ffmpeg`. Verify that both `ffmpeg -version` and `ffprobe -version` work.
 
-> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Run the block below in the shell that runs the client, right after the install above: it looks for the option and, when the installed FFmpeg lacks it, puts the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0` first on `PATH`, the version the repository's cookbook checks run these helpers with (`ffprobe` from the distribution package is enough):
+> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Run the block below right after the install above: it looks for the option and, when the installed FFmpeg lacks it, puts the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0` first on `PATH`, the version the repository's cookbook checks run these helpers with (`ffprobe` from the distribution package is enough). In a Python environment without `pip`, such as one made by `uv venv`, the block installs the package with `uv pip`, run from `/` because uv stops inside the Framework checkout unless it is the pinned 0.11.29. The `PATH` line holds for the current shell only. Where `/usr/local/bin` is writable and holds no `ffmpeg` (root in a container), the block also links that FFmpeg there, ahead of `/usr/bin` on the default `PATH`, so shells and Python processes started later find it; elsewhere, run the block again in the shell that starts the client:
 
 ```bash
 # Skill note (not in the source): adds FFmpeg 7.0.2 from imageio-ffmpeg when the installed FFmpeg has no -fps_mode.
-if ! ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- '-fps_mode'; then
-  python -m pip install imageio-ffmpeg==0.6.0
+if [ -z "$(ffmpeg -hide_banner -h full 2>/dev/null | grep -- '-fps_mode')" ]; then
+  if python -m pip --version >/dev/null 2>&1; then python -m pip install imageio-ffmpeg==0.6.0; else (cd / && uv pip install --python "$(command -v python)" imageio-ffmpeg==0.6.0); fi
   mkdir -p "$PWD/ffmpeg7" && ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$PWD/ffmpeg7/ffmpeg"
   export PATH="$PWD/ffmpeg7:$PATH"
+  if [ -w /usr/local/bin ] && [ ! -e /usr/local/bin/ffmpeg ] && [ -x "$PWD/ffmpeg7/ffmpeg" ]; then ln -sf "$(readlink -f "$PWD/ffmpeg7/ffmpeg")" /usr/local/bin/ffmpeg; fi
 fi
 ```
 

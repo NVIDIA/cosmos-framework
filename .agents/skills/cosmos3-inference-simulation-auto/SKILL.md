@@ -134,7 +134,7 @@ files. See [automatic prefixes](references/caption-policy.md#caption-text-and-au
 
 From the Framework root, inside your GPU allocation:
 
-> **Skill note (not in the source):** measured on four H100 NVL 95 GB: the command below at 720p (297 frames, seven cameras and LiDAR, 35 steps) samples at about 265 s per step, about 2 h 35 min in all, and uses about 91 GB per GPU. Start it in the background and follow its log. `--resolution 480` in place of `--resolution 720` lowers both.
+> **Skill note (not in the source):** measured on four H100 NVL 95 GB: the command below at 720p (297 frames, seven cameras and LiDAR, 35 steps) samples at about 265 s per step, about 2 h 35 min for the 35 steps, and uses about 91 GB per GPU. Start it in the background and follow its log. With `--resolution 480` in place of `--resolution 720` the same request samples at about 111 s per step, about 1 h 5 min of sampling and 1 h 9 min for the whole command (memory not measured).
 
 ```bash
 export COSMOS_INTERNAL=0 COSMOS_TRAINING=0
