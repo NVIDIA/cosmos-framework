@@ -1647,13 +1647,16 @@ sentences that named a retired sub-skill name its successor.
 | `cosmos3-inference-simulation/SKILL.md` | L11-12, frontmatter `description` | `(cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training (each model's`<br>`post-training skill).` | `(cosmos3-inference-action), audiovisual generation (cosmos3-inference-generate-media) or post-training`<br>`(cosmos3-post-train-simulation).` |
 | `cosmos3-inference-simulation/SKILL.md` | L124-126, prose in "Post-training" | `Post-training is outside this skill and its three blocks. Each model has its own post-training skill:` | `Post-training is outside this skill and its three blocks. Its entry skill is`<br>`[cosmos3-post-train-simulation](../cosmos3-post-train-simulation/SKILL.md); it routes to the post-training skill of`<br>`each model (Transfer-Auto and Sim-Auto are two sections of one skill):` |
 
-Other files:
+Other files. The row of `cosmos3-skill-authoring/SKILL.md` is one line that this change adds to the commented `eval.config` schema
+under "Writing eval/eval.config"; the line documents the optional key `shm_size`, and nothing else in that file changed. Two eval
+cases of the Auto post-train skill set that key ("Eval cases").
 
-| File                 | Where                    | Old                                                                                                                                        | New                                                                                                                                   |
-| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/README.md`     | L70, list item in "TODO" | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-nano-transfer-auto-post-training`. `` | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-post-train-simulation-auto`. ``  |
-| `tools/docs/nav.yml` | L64, navigation entry    | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md`     | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md` |
-| `tools/docs/nav.yml` | L67, navigation entry    | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md`     | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md` |
+| File | Where | Old | New |
+| --- | --- | --- | --- |
+| `cosmos3-skill-authoring/SKILL.md` | L225, fenced `jsonc` block in "Writing eval/eval.config" | (no such lines) | `"shm_size": "32gb",                 // optional, per case or global: /dev/shm of the task container (Docker's default is 64 MB); set it for cases that train, whose data-loader workers pass batches through shared memory` |
+| `docs/README.md` | L70, list item in "TODO" | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-nano-transfer-auto-post-training`. `` | `` - Link each page to its matching agent skill, for example `training_transfer_auto.md` to `cosmos3-post-train-simulation-auto`. `` |
+| `tools/docs/nav.yml` | L64, navigation entry | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md` | `- Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md` |
+| `tools/docs/nav.yml` | L67, navigation entry | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md` | `- Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md` |
 
 Whitespace only (no word changed): 49 lines of 10 tables in 9 files were re-padded to the repository's aligned table style after a
 link target or a path changed length.
@@ -2046,27 +2049,34 @@ New files without a source: the entry `SKILL.md`; `eval/eval.config` in each of 
 | `tests/skills/cosmos3-post-train-simulation-transfer/test_paibench_local_bundle.py` | `cosmos3-nano-sim-transfer/scripts/test_paibench_local_bundle.py`           | 3            | none          | none       |
 | `tests/skills/cosmos3-post-train-simulation-transfer/test_qa_transfer_stage.py`     | `cosmos3-nano-sim-transfer/post-training/scripts/test_qa_transfer_stage.py` | 5            | none          | none       |
 
-### Eval drafts
+### Eval cases
 
-Each block skill has a drafted `eval/eval.config`: 10 cases in all (Auto 4, Sim-Bimanual 3, Sim-Transfer 3). None was run. The three
-files have the same top level: `credentials` [`HF_TOKEN`], `gpus` 1, and a budget of 90 minutes and 3,000,000 tokens that is not
-measured. No case launches training: 8 of the 10 prompts say so in words, `auto-bundle-timestamped-captions` asks only for a
-training bundle and `nano-conversion-preflight` only for the converter's environment check; each case stops at a bundle build, a
-data check, a conversion or a dry run. Every case has the assertion that the documented workflow ran without errors on the first
-attempt.
+Each block skill has an `eval/eval.config`: 12 cases in all (Auto 6, Sim-Bimanual 3, Sim-Transfer 3). The three files have the same
+top level: `credentials` [`HF_TOKEN`], `gpus` 1, a `setup` block for the repository checkout, and a budget of 90 minutes and
+3,000,000 tokens. Two cases of the Auto skill launch training for real, `transfer-auto-finetune-short-train` and
+`sim-auto-stage1-short-train`: four processes under `torchrun`, two iterations and a checkpoint saved at iteration 2, followed by
+the check that the skill requires of such a run, in the first case the same-run reload of that checkpoint (L70 of its
+`references/training-bundle-and-short-check.md`) and in the second the fresh-process resume of the same Stage 1 run (L410 of its
+`SKILL.md`). Each of the two sets `"gpus": 4` and `"shm_size": "32gb"` for itself; no other case sets a key besides `id`, `prompt`,
+`expected_outcome`, `assertions`, `checks` and `stages`. No other case launches training: 8 of the other 10 prompts say so in words,
+`auto-bundle-timestamped-captions` asks only for a training bundle and `nano-conversion-preflight` only for the converter's
+environment check; each of these 10 cases stops at a bundle build, a data check, an environment check or a dry run. Every case has
+the assertion that the documented workflow ran without errors on the first attempt.
 
-| Skill                                    | Case                               | Assertions | File checks | Steps that the case names                                                                                                                                                        |
-| ---------------------------------------- | ---------------------------------- | ---------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cosmos3-post-train-simulation-auto`     | `auto-bundle-timestamped-captions` | 6          | 5           | `framework setup`; `scene + tokenizer download`; `caption selection (index copy)`; `bundle build`; `inspect + summarize`                                                         |
-| `cosmos3-post-train-simulation-auto`     | `transfer-auto-finetune-dryrun`    | 6          | 7           | `framework setup`; `checkpoint download + conversion`; `scene download + bundle build`; `configure + dry run`; `short-check settings + dry run`; `summarize`                     |
-| `cosmos3-post-train-simulation-auto`     | `transfer-auto-phase1-dryrun`      | 6          | 4           | `framework setup`; `Cosmos3-Nano download + conversion`; `scene download + bundle build + VAE bindings`; `phase 1 dry run`; `summarize`                                          |
-| `cosmos3-post-train-simulation-auto`     | `sim-auto-stage1-dryrun`           | 6          | 5           | `framework setup`; `teacher snapshot + scene download`; `bundle build + initializer conversion`; `stage selection + overrides`; `dry run`; `summarize`                           |
-| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stage0`          | 6          | 6           | `framework training environment`; `example download + checksum + extract`; `static bundle check`; `Stage 0 materialization`; `verify + summarize`                                |
-| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stages1-3`       | 6          | 8           | `framework training environment`; `example download + checksum + extract`; `Stage 1 materialization`; `Stage 2 materialization`; `Stage 3 materialization`; `verify + summarize` |
-| `cosmos3-post-train-simulation-bimanual` | `stage0-initializer-dryrun`        | 6          | 4           | `framework training environment`; `example bundle download + bind`; `Cosmos3-Nano + VAE download`; `DCP conversion + file checks`; `Stage 0 dry run`; `verify + summarize`       |
-| `cosmos3-post-train-simulation-transfer` | `example2-training-bundle`         | 6          | 6           | `framework setup`; `example2 download + training row`; `tokenizer + bundle build`; `verify + summarize`                                                                          |
-| `cosmos3-post-train-simulation-transfer` | `nano-conversion-preflight`        | 5          | 3           | `framework setup`; `converter and runtime check`; `verify + summarize`                                                                                                           |
-| `cosmos3-post-train-simulation-transfer` | `stage0-resolve-dryrun`            | 6          | 3           | `framework setup`; `example2 bundle`; `Nano conversion or blocker analysis`; `Stage 0 arguments + dry run`; `verify + summarize`                                                 |
+| Skill | Case | Assertions | File checks | Keys of its own | Steps that the case names |
+| --- | --- | --- | --- | --- | --- |
+| `cosmos3-post-train-simulation-auto` | `auto-bundle-timestamped-captions` | 6 | 5 | — | `framework setup`; `scene + tokenizer download`; `caption selection (index copy)`; `bundle build`; `inspect + summarize` |
+| `cosmos3-post-train-simulation-auto` | `transfer-auto-finetune-dryrun` | 6 | 7 | — | `framework setup`; `checkpoint download + conversion`; `scene download + bundle build`; `configure + dry run`; `short-check settings + dry run`; `summarize` |
+| `cosmos3-post-train-simulation-auto` | `transfer-auto-phase1-dryrun` | 6 | 4 | — | `framework setup`; `Cosmos3-Nano download + conversion`; `scene download + bundle build + VAE bindings`; `phase 1 dry run`; `summarize` |
+| `cosmos3-post-train-simulation-auto` | `sim-auto-stage1-dryrun` | 6 | 5 | — | `framework setup`; `teacher snapshot + scene download`; `bundle build + initializer conversion`; `stage selection + overrides`; `dry run`; `summarize` |
+| `cosmos3-post-train-simulation-auto` | `transfer-auto-finetune-short-train` | 6 | 8 | `"gpus": 4`, `"shm_size": "32gb"` | `framework setup`; `checkpoint download + conversion`; `scene download + bundle build`; `configure + short-check settings + dry run`; `short-check launch (4 processes, 2 iterations)`; `same-run reload`; `summarize` |
+| `cosmos3-post-train-simulation-auto` | `sim-auto-stage1-short-train` | 6 | 11 | `"gpus": 4`, `"shm_size": "32gb"` | `framework setup`; `teacher snapshot + scene download`; `bundle build + initializer conversion`; `stage selection + short-run settings + dry run`; `Stage 1 launch (4 processes, 2 updates)`; `fresh-process resume check`; `summarize` |
+| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stage0` | 6 | 6 | — | `framework training environment`; `example download + checksum + extract`; `static bundle check`; `Stage 0 materialization`; `verify + summarize` |
+| `cosmos3-post-train-simulation-bimanual` | `bundle-preflight-stages1-3` | 6 | 8 | — | `framework training environment`; `example download + checksum + extract`; `Stage 1 materialization`; `Stage 2 materialization`; `Stage 3 materialization`; `verify + summarize` |
+| `cosmos3-post-train-simulation-bimanual` | `stage0-initializer-dryrun` | 6 | 4 | — | `framework training environment`; `example bundle download + bind`; `Cosmos3-Nano + VAE download`; `DCP conversion + file checks`; `Stage 0 dry run`; `verify + summarize` |
+| `cosmos3-post-train-simulation-transfer` | `example2-training-bundle` | 6 | 6 | — | `framework setup`; `example2 download + training row`; `tokenizer + bundle build`; `verify + summarize` |
+| `cosmos3-post-train-simulation-transfer` | `nano-conversion-preflight` | 5 | 3 | — | `framework setup`; `converter and runtime check`; `verify + summarize` |
+| `cosmos3-post-train-simulation-transfer` | `stage0-resolve-dryrun` | 6 | 3 | — | `framework setup`; `example2 bundle`; `Nano conversion or blocker analysis`; `Stage 0 arguments + dry run`; `verify + summarize` |
 
 ### Known and deliberately unchanged
 
