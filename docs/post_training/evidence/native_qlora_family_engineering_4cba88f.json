@@ -17760,6 +17760,482 @@
         "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-independent-replay-v1.json",
         "sha256": "922ebd16d89b99559f6321354fb78e9be1e9b8adc126578957ab7deaf277cd25"
       }
+    },
+    "38541673": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 2236,
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99",
+      "scope": "Actual own5to10 GR load correctness in all four modes. Full tensor comparisons are on-node results, not independently recomputed from downloaded weights. No current-build200to300, new quality, speedup, or measured old/new whole-workflow memory drop. CPU GC-disabled regression is separate from ordinary GC in this accelerator run.",
+      "protocol_sha256": "c4dbd45a88394057086fab71faba46662484879dbf7329462d6d19f6c1976bfb",
+      "payload_manifest_sha256": "ba66d320da5a01ff33d2c3e1eb58bbb1af7690bc61d08ec113f9b39749264027",
+      "acceptance_sha256": "2df905dbc86d83fc0bef76d455ad50a779332d43a6af7f93f031d9394f538ca4",
+      "final_qualification_acceptance": true,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-load-lifetime-38541673-readout-v1.json",
+        "sha256": "bf86d25f6c13219624c3ab8065dc6c2b117ac7675a63348354c6a727ffaeada7"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-load-lifetime-38541673-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-load-lifetime-38541673-receipts-v1.tar.gz",
+        "archive_sha256": "71cec113f5559ce38a701c4e9da20f1e82eb9cc189497f2306cf0eb0806d4539",
+        "inventory_sha256": "e1c7eb2f6cdb3fbad84119e8b4fdfea3ccabe95393eb8435a16442e8db9176e2",
+        "files_verified": 197,
+        "raw_samples_replayed": 1500,
+        "terminal_release_sha256": "545d7296d732913727777ecc748332a6fe1238300a7ce67e4e7e0a3bf5ed7124"
+      },
+      "results": [
+        {
+          "acceptance_sha256": "624141fc48b420a06de4588a010af38493ef3b50690f9f6f358a129011adf61c",
+          "evaluation_rows": 20,
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 13123511296,
+            "moment_tensors": 1522,
+            "parameters": 761
+          },
+          "load_receipt_sha256": "e1366a6de033089239dabffdc4928d84f34d97306640a923311e870ffd776608",
+          "metadata": {
+            "factors": 224,
+            "heads": 537,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 112,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 112,
+            "trainable_fp32": 761
+          },
+          "mode": "nf4_lora",
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "postload_both_states_exact": true,
+          "state_and_rows_exact": true,
+          "loads": [
+            {
+              "inventory_live_bytes_before_live_extraction": 0,
+              "inventory_moment_bytes": 13123511296,
+              "inventory_moments_alive_before_live_extraction": 0,
+              "pristine_before_load": true,
+              "step": 5
+            },
+            {
+              "inventory_live_bytes_before_live_extraction": 13123511296,
+              "inventory_moment_bytes": 13123511296,
+              "inventory_moments_alive_before_live_extraction": 1522,
+              "pristine_before_load": false,
+              "step": 5
+            }
+          ],
+          "load_allocator_observations": [
+            {
+              "pristine_before_load": true,
+              "allocated_before_load_bytes": 8481972736,
+              "allocated_after_inventory_extraction_bytes": 21605873664,
+              "allocated_before_live_extraction_bytes": 8481972736,
+              "allocated_after_live_restore_bytes": 21605873664,
+              "peak_allocated_since_native_last_reset_bytes": 28169726464,
+              "peak_reserved_since_native_last_reset_bytes": 29496442880
+            },
+            {
+              "pristine_before_load": false,
+              "allocated_before_load_bytes": 21605873664,
+              "allocated_after_inventory_extraction_bytes": 21605873664,
+              "allocated_before_live_extraction_bytes": 21605873664,
+              "allocated_after_live_restore_bytes": 21605873664,
+              "peak_allocated_since_native_last_reset_bytes": 28169726464,
+              "peak_reserved_since_native_last_reset_bytes": 29496442880
+            }
+          ]
+        },
+        {
+          "acceptance_sha256": "6dfaa05724dfb6a6315e79072d19995ce2e64b4ebe2f9c7d9b0ec7869dca07c9",
+          "evaluation_rows": 20,
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 13123511296,
+            "moment_tensors": 1522,
+            "parameters": 761
+          },
+          "load_receipt_sha256": "23077c46a96a8a0730097f2fb0ac02b3181bc71685e38825f31849ad923fdd0f",
+          "metadata": {
+            "factors": 224,
+            "heads": 537,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 0,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 112,
+            "trainable_fp32": 761
+          },
+          "mode": "bf16_lora",
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "postload_both_states_exact": true,
+          "state_and_rows_exact": true,
+          "loads": [
+            {
+              "inventory_live_bytes_before_live_extraction": 0,
+              "inventory_moment_bytes": 13123511296,
+              "inventory_moments_alive_before_live_extraction": 0,
+              "pristine_before_load": true,
+              "step": 5
+            },
+            {
+              "inventory_live_bytes_before_live_extraction": 13123511296,
+              "inventory_moment_bytes": 13123511296,
+              "inventory_moments_alive_before_live_extraction": 1522,
+              "pristine_before_load": false,
+              "step": 5
+            }
+          ],
+          "load_allocator_observations": [
+            {
+              "pristine_before_load": true,
+              "allocated_before_load_bytes": 9610337792,
+              "allocated_after_inventory_extraction_bytes": 22734238720,
+              "allocated_before_live_extraction_bytes": 9610337792,
+              "allocated_after_live_restore_bytes": 22734238720,
+              "peak_allocated_since_native_last_reset_bytes": 29298091520,
+              "peak_reserved_since_native_last_reset_bytes": 30616322048
+            },
+            {
+              "pristine_before_load": false,
+              "allocated_before_load_bytes": 22734238720,
+              "allocated_after_inventory_extraction_bytes": 22734238720,
+              "allocated_before_live_extraction_bytes": 22734238720,
+              "allocated_after_live_restore_bytes": 22734238720,
+              "peak_allocated_since_native_last_reset_bytes": 29298091520,
+              "peak_reserved_since_native_last_reset_bytes": 30616322048
+            }
+          ]
+        },
+        {
+          "acceptance_sha256": "cfdcd40777696a267f44a057b3ce0f932725ba6a1f1052326410a9eb56aa1735",
+          "evaluation_rows": 20,
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 12964127744,
+            "moment_tensors": 1074,
+            "parameters": 537
+          },
+          "load_receipt_sha256": "0622800bd8ee5c5e93319f7f9b272f5be3dbd1a5c273c9e9aa768591fe9c746b",
+          "metadata": {
+            "factors": 0,
+            "heads": 537,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 112,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 112,
+            "trainable_fp32": 537
+          },
+          "mode": "nf4_frozen",
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "postload_both_states_exact": true,
+          "state_and_rows_exact": true,
+          "loads": [
+            {
+              "inventory_live_bytes_before_live_extraction": 0,
+              "inventory_moment_bytes": 12964127744,
+              "inventory_moments_alive_before_live_extraction": 0,
+              "pristine_before_load": true,
+              "step": 5
+            },
+            {
+              "inventory_live_bytes_before_live_extraction": 12964127744,
+              "inventory_moment_bytes": 12964127744,
+              "inventory_moments_alive_before_live_extraction": 1074,
+              "pristine_before_load": false,
+              "step": 5
+            }
+          ],
+          "load_allocator_observations": [
+            {
+              "pristine_before_load": true,
+              "allocated_before_load_bytes": 8402280960,
+              "allocated_after_inventory_extraction_bytes": 21366683648,
+              "allocated_before_live_extraction_bytes": 8402280960,
+              "allocated_after_live_restore_bytes": 21366683648,
+              "peak_allocated_since_native_last_reset_bytes": 27850844672,
+              "peak_reserved_since_native_last_reset_bytes": 29177675776
+            },
+            {
+              "pristine_before_load": false,
+              "allocated_before_load_bytes": 21366683648,
+              "allocated_after_inventory_extraction_bytes": 21366683648,
+              "allocated_before_live_extraction_bytes": 21366683648,
+              "allocated_after_live_restore_bytes": 21366683648,
+              "peak_allocated_since_native_last_reset_bytes": 27850844672,
+              "peak_reserved_since_native_last_reset_bytes": 29177675776
+            }
+          ]
+        },
+        {
+          "acceptance_sha256": "9545ab569634be05551769c936662b0ca8dc5e7bdd3f01fcf9ec6f6a25097b7e",
+          "evaluation_rows": 20,
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 12964127744,
+            "moment_tensors": 1074,
+            "parameters": 537
+          },
+          "load_receipt_sha256": "53c63386cdf4e97159cc167876e86da6dee911ecf9e3152732298b6b02fb6ee4",
+          "metadata": {
+            "factors": 0,
+            "heads": 537,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 0,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 112,
+            "trainable_fp32": 537
+          },
+          "mode": "bf16_frozen",
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "postload_both_states_exact": true,
+          "state_and_rows_exact": true,
+          "loads": [
+            {
+              "inventory_live_bytes_before_live_extraction": 0,
+              "inventory_moment_bytes": 12964127744,
+              "inventory_moments_alive_before_live_extraction": 0,
+              "pristine_before_load": true,
+              "step": 5
+            },
+            {
+              "inventory_live_bytes_before_live_extraction": 12964127744,
+              "inventory_moment_bytes": 12964127744,
+              "inventory_moments_alive_before_live_extraction": 1074,
+              "pristine_before_load": false,
+              "step": 5
+            }
+          ],
+          "load_allocator_observations": [
+            {
+              "pristine_before_load": true,
+              "allocated_before_load_bytes": 9530646016,
+              "allocated_after_inventory_extraction_bytes": 22495048704,
+              "allocated_before_live_extraction_bytes": 9530646016,
+              "allocated_after_live_restore_bytes": 22495048704,
+              "peak_allocated_since_native_last_reset_bytes": 28979209728,
+              "peak_reserved_since_native_last_reset_bytes": 30297554944
+            },
+            {
+              "pristine_before_load": false,
+              "allocated_before_load_bytes": 22495048704,
+              "allocated_after_inventory_extraction_bytes": 22495048704,
+              "allocated_before_live_extraction_bytes": 22495048704,
+              "allocated_after_live_restore_bytes": 22495048704,
+              "peak_allocated_since_native_last_reset_bytes": 28979209728,
+              "peak_reserved_since_native_last_reset_bytes": 30297554944
+            }
+          ]
+        }
+      ],
+      "memory": {
+        "device_peak_bytes": 35326722048,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 31603009536,
+        "host_rss_sum_peak_bytes": 32143757312,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1980.4113984107971,
+        "owned_device_process_peak_bytes": 34550579200,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1500,
+        "sampling_gap_seconds": {
+          "count": 1499,
+          "maximum": 4.092939138412476,
+          "mean": 1.321155035630952,
+          "median": 1.2792375087738037,
+          "p95": 1.4482582330703735,
+          "sum": 1980.4113984107971
+        }
+      },
+      "memory_gaps": [],
+      "memory_scope": "Sampled main model/lifecycle and on-node audit interval only; excludes earlier container/preflight and later optional retrospective CPU check. Complete observed host samples do not prove unsampled peaks.",
+      "stage_memory_observations": {
+        "bf16_frozen-full": {
+          "complete_host": 128,
+          "positive_owned_gpu": 105,
+          "samples": 128
+        },
+        "bf16_frozen-postload-and-recovery-audit": {
+          "complete_host": 43,
+          "positive_owned_gpu": 0,
+          "samples": 43
+        },
+        "bf16_frozen-resumed": {
+          "complete_host": 144,
+          "positive_owned_gpu": 121,
+          "samples": 144
+        },
+        "bf16_lora-full": {
+          "complete_host": 262,
+          "positive_owned_gpu": 129,
+          "samples": 262
+        },
+        "bf16_lora-postload-and-recovery-audit": {
+          "complete_host": 44,
+          "positive_owned_gpu": 0,
+          "samples": 44
+        },
+        "bf16_lora-resumed": {
+          "complete_host": 146,
+          "positive_owned_gpu": 124,
+          "samples": 146
+        },
+        "nf4_frozen-full": {
+          "complete_host": 136,
+          "positive_owned_gpu": 112,
+          "samples": 136
+        },
+        "nf4_frozen-postload-and-recovery-audit": {
+          "complete_host": 49,
+          "positive_owned_gpu": 0,
+          "samples": 49
+        },
+        "nf4_frozen-resumed": {
+          "complete_host": 140,
+          "positive_owned_gpu": 118,
+          "samples": 140
+        },
+        "nf4_lora-full": {
+          "complete_host": 213,
+          "positive_owned_gpu": 110,
+          "samples": 213
+        },
+        "nf4_lora-postload-and-recovery-audit": {
+          "complete_host": 41,
+          "positive_owned_gpu": 0,
+          "samples": 41
+        },
+        "nf4_lora-resumed": {
+          "complete_host": 154,
+          "positive_owned_gpu": 131,
+          "samples": 154
+        }
+      },
+      "native_allocator": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 32047562240,
+        "allocator_peak_reserved_bytes": 33476837376,
+        "phase_family": "native_action",
+        "phase_semantics": "Adjacent reset-delimited native action intervals; training blocks include multiple updates, ingestion and logging. Nested checkpoint setup/write/verification intervals are disjoint, not additional enclosing checkpoint clocks. Loading includes factory work after model_loading_begin, but excludes earlier process startup. Host RSS/PSS are interval samples, not cumulative VmHWM."
+      },
+      "workflow_seconds": 1985.3848576520104,
+      "runtime": {
+        "allocator": null,
+        "code": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+        "cpu_affinity": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131
+        ],
+        "family": "gr00t",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-229654d6-b30a-f16c-5227-4e790dda67f6"
+        },
+        "node": "batch-block7-01322",
+        "numa_nodes": [
+          "node0",
+          "node1",
+          "node7"
+        ],
+        "slurm_job": "38541673",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "load_observer_scope": "Actual native load twice at the same current-build checkpoint: pristine then materialized optimizer. Weakrefs/scalars only, no peak resets or forced garbage collection. CPU cyclic-GC-disabled regression is separate. This does not measure matched old/new whole-workflow speed or peak-memory improvement.",
+      "old_current_comparison": {
+        "baseline_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "modes": [
+          "nf4_lora",
+          "bf16_lora"
+        ],
+        "boundaries": [
+          5,
+          10
+        ],
+        "model_optimizer_rng_cursor_evaluation_exact": true,
+        "cross_build_resume_supported": false,
+        "metadata_files_modified": false,
+        "frozen_modes_scope": "Own02 uninterrupted/recovered state only; no historical10-update control invented."
+      },
+      "retrospective_38536188": {
+        "observed_date_utc": "2026-11-14",
+        "results": {
+          "bf16_frozen": {
+            "comparison_seconds": 89.90852649998851,
+            "full160_exact": true,
+            "model_optimizer_maxdiff": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "parity_sha256": "927d9830dec1ad9a07686fa7b4ce8fef7d69cc8b2ae759f8dab2634b47049ca9"
+          },
+          "nf4_frozen": {
+            "comparison_seconds": 87.29723311914131,
+            "full160_exact": true,
+            "model_optimizer_maxdiff": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "parity_sha256": "73c08cffad256d00b2793a63ab3e2c28a3d19f60b22c617cf12fe3f6203e2367"
+          }
+        },
+        "execution": {
+          "exit_code": 0,
+          "passed": true,
+          "scope": "Optional retrospective CPU comparison, separate from the already published current-build load gate. No original acceptance or clock is reconstructed.",
+          "seconds": 180.7988017781172,
+          "timed_out": false
+        },
+        "scope": "Fresh CPU-only audit of existing old4c300 outputs. Original38536188 FAILED, missing historical parity JSON, v9 sample819 and clocks remain unchanged.",
+        "original_job_status_unchanged": "FAILED",
+        "historical_sample_819_unchanged": true,
+        "historical_missing_comparison_json_not_reconstructed": true
+      },
+      "staging_incident": {
+        "facts": "Corrected C/native-02f93ba verified. Four C-root objects were mistakenly written; prior absence/overwrite unknown; left in place. Sealed active4c/native bundles verified unaffected.",
+        "receipt_sha256": "5e15adbd9e60772e9704999555063f93c4f926d609763e397b10d07ef47d6cdb"
+      },
+      "reused_earlier_evidence_scope": "Earlier26bc source-refusal, portable compatibility and standalone artifact checks remain separately source-bound; this load-only gate does not rerun or relabel them. No current02 mature200-to300, learning, rollout or Alpamayo qualification is implied."
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -17891,6 +18367,12 @@
       "sha256": "130ac9d36ea70687ef39a5831eecfd045874498d2f864a03149d4cf51343a58c",
       "inventory_sha256": "bffc749145f6b4401127ef934c93fa8264c8e491ed46fc30254cb2f9f478c9ff",
       "scope": "159 terminal frozen-action-head100 native gradient/recovery/update/portable, decision, metadata, raw v10 memory and scheduler/release receipts; no trained tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-load-lifetime-38541673-receipts-v1.tar.gz",
+      "sha256": "71cec113f5559ce38a701c4e9da20f1e82eb9cc189497f2306cf0eb0806d4539",
+      "inventory_sha256": "e1c7eb2f6cdb3fbad84119e8b4fdfea3ccabe95393eb8435a16442e8db9176e2",
+      "scope": "197 terminal02 GR four-mode load/own5-to10, weakref/scalar allocator observations, metadata/control, raw1500v10 samples, separate retrospective old300 comparisons and terminal/staging receipts; no trained model/optimizer tensor payloads."
     }
   ],
   "fixed_development_targets": {

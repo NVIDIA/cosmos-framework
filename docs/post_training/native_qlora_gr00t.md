@@ -171,8 +171,9 @@ before data preparation and model construction; the checkpoint codec checks it a
 before restoring state. Resume older checkpoints with their original qualified build.
 Do not edit metadata to bypass this restriction. Portable inference reload remains a
 separate contract and accepts compatible older artifacts. The guard has 67 passing
-CPU lifecycle tests; current-build full-model accelerator recovery is being qualified
-separately from the retained `4cba88f` recovery evidence.
+CPU lifecycle tests. GR00T full-model five-to-ten recovery subsequently passed on
+`26bc60f` and `02f93ba` within the mode scopes recorded below, separately from the
+retained `4cba88f` mature recovery evidence.
 The current inventory has 28 files: it also binds shared flow-dataset row lookup,
 media decoding and the opt-in evaluator helper. Those execution paths can change
 without changing dataset bytes; the evaluator cache remains off by default.
@@ -719,8 +720,8 @@ were complete; sampled peaks remain lower bounds.
 
 This closes standalone coverage for the actual selected update-200 LoRA checkpoints.
 It preserves native separate adapter arithmetic and is dense-base inference, not a
-merged or four-bit serving result. The historical merged failures and pending
-final-current-build qualification remain unchanged. The
+merged or four-bit serving result. The historical merged failures remain unchanged;
+later GR00T current-build lifecycle checks are recorded separately below. The
 [raw hashes, exact source bindings and phase measurements](evidence/native_qlora_family_engineering_4cba88f.json)
 do not establish new task quality, rollout success or inference acceleration.
 
@@ -845,3 +846,44 @@ were complete, and owned-GPU evidence was valid; sampled peaks remain lower boun
 The old native fresh scorer has no allocator-phase records. Independent receipt
 replay retains the failed decision, native artifacts and exact source bindings in
 the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
+Build `02f93ba` passed the affected GR00T checkpoint-load gate (`38541673`) in all
+four modes: NF4/BF16 LoRA and NF4/BF16 frozen-backbone head training. Each mode
+completed ten updates and exact own-build five-to-ten recovery, including model,
+optimizer, RNG, controls, data cursor and all 20 engineering evaluation rows.
+Both LoRA modes also matched the retained `4cba88f` five/ten-update numerical
+references under the explicit observational metadata bridge. No cross-build
+resume or checkpoint identity rewrite was performed. The frozen-backbone modes
+train 537 FP32 head parameters with zero LoRA factors; they are distinct from QLoRA.
+
+The gate observed each real native load twice, first with a pristine optimizer
+and then with materialized moments. Before live restore, no validation-only
+moment tensor remained alive in the pristine case: 1,522 FP32 CUDA moment tensors
+(12.222 GiB) for each LoRA mode, or 1,074 tensors (12.074 GiB) for each head-only
+mode. The second load retained exactly the optimizer-owned moments. Both restored
+states and the subsequent updates were exact. The observer retained only weak
+references and scalars, preserved native allocator peak counters and did not
+force garbage collection. This establishes the tested lifetime correction, not
+a matched old/new workflow speedup or global peak-memory reduction.
+
+Independent replay verified 197 receipt files and all 1,500 v10 memory samples.
+Observed host-PSS coverage was complete and owned-GPU attribution was valid for
+the monitored main lifecycle/audit interval. Sampled peaks were 32.178 GiB for
+owned GPU processes and 29.433 GiB host PSS; these remain lower bounds and exclude
+earlier preflight and the later optional CPU audit. The instrumented main workflow
+took 1,985.385 seconds; the allocation consumed 2,236 GPU-seconds.
+
+A separate 180.799-second CPU audit on 2026-11-14 compared the existing
+`38536188` head-only 200-to-300 recovery outputs with their original 300-update
+checkpoints. Both modes had exact model, optimizer, controls, RNG, cursor and
+full-160 evaluation results. These newly persisted retrospective proofs do not
+change that allocation's **FAILED** status, its incomplete v9 sample 819, missing
+historical comparison JSON or original clocks. They do not establish current-build
+200-to-300 recovery or new quality/rollout results.
+
+The source-02 staging correction is retained with the evidence: four campaign-root
+objects were mistakenly written before the correctly located native bundle was
+verified. Prior absence or overwrite of those root objects is unknown; they were
+left in place. The sealed active `4cba88f`/native bundles were verified unaffected.
+Exact proof hashes, load allocator observations and these limits are in the
+[family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
