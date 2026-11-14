@@ -153,6 +153,23 @@ all 735 host collections were complete. Its first target publication was at
 update 100, 309.034 seconds after case preparation began. These are new clocks;
 the original failed clock remains unaccepted.
 
+The remaining selected seed-123 block (`38549881`) completed all three 300-update
+arms and three fresh 160-row evaluations per arm. Primary fresh scores matched
+resident update-300 scores exactly, all 900 updates applied, and all 2,393 recorded
+host collections were complete. The allocation consumed 3,384 GPU-seconds.
+
+| Seed-123 arm | MSE at 300 | First target update | Preparation through target publication (s) | Complete case through step release (s) |
+|---|---:|---:|---:|---:|
+| NF4 LoRA + head | 0.04925060 | 300 | 708.684 | 1,218.746 |
+| BF16 LoRA + head | 0.04769373 | 100 | 347.388 | 1,122.945 |
+| Matched BF16 head-only | 0.04712640 | 200 | 444.210 | 1,029.949 |
+
+These are point results with original clocks. The separately allocated correctness
+gate below overlapped the final BF16 LoRA arm on a different node; this asymmetric
+overlap remains a timing limitation. The predefined grouped analysis still waits
+for both remaining official-control seeds. No partial-panel confidence interval,
+independent confirmation or recipe-level superiority follows from this block.
+
 The bounded GR00T profile `38549122` measured duplicate backbone work between
 native flow-loss and sampled-action evaluation on two exposed rows per arm.
 After warmup, that duplicate occupied 20.44% of NF4 and 17.33% of BF16 traced
@@ -162,14 +179,28 @@ projections, not achieved speedups**. The traced calls were 1.64×/1.70× slower
 than their surrounding untraced calls. All five evaluations per arm preserved
 the controlled scores, RNG, modes, frozen weights and prepared inputs.
 
-The next implementation reuses only the raw backbone output within one
-evaluation batch, with independent inputs for both native head calls. The head
+Implementation `47587e0`, with ownership fix `cbc950f`, adds
+`rl.reuse_gr00t_evaluation_backbone=true` for the pinned one-row NF4/BF16 LoRA path.
+It reuses only the raw backbone output within one evaluation batch, with independent
+inputs for both native head calls and a 16 MiB retained-tensor bound. The head
 mutates its input mapping, so reusing already transformed features is incorrect.
-The option remains off pending real-model correctness and matched workflow
-qualification. It benefits both precision arms and does not change learning.
+The option remains off by default pending complete real-model correctness and matched workflow
+qualification. The planned study gives both precision arms the same option and
+requires exact numerical trajectories; an achieved speed benefit remains unmeasured.
 The first profile allocation `38548693` failed before model loading because a
 launcher imported an executable monitor module; its 68 GPU-seconds remain
 recorded separately from the successful diagnostic's 334 GPU-seconds.
+
+The first correctness allocation (`38551713`, 996 GPU-seconds) remains **FAILED**.
+Before its diagnostic comparator failed on a Transformers `BatchFeature` mapping,
+NF4 OFF/ON states at updates 5 and 10 matched exactly; its own enabled 5-to-10
+recovery matched model/optimizer, RNG, cursor, controls and subsequent updates.
+Fresh DCP and portable evaluation matched all 20 engineering rows. Reuse retained
+2,214,696 bytes and recorded 60 hits/60 misses over the uninterrupted validations.
+All 702 recorded host collections were complete. These retained subproofs do not
+establish the uncompleted arithmetic/failure diagnostic, BF16, standalone export,
+Alpamayo regression or overall acceptance. A narrow qualification-helper repair
+must preserve this failure and use separately identified continuation evidence.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
