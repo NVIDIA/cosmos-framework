@@ -128,6 +128,11 @@ class BaseEvaluator(ABC):
             device_map=self.model_config.get("device_map", "auto"),
             attn_implementation=self.model_config.get("attn_implementation"),
             portable_adapter=self.model_config.get("portable_adapter"),
+            **(
+                {"base_execution_profile": self.model_config["base_execution_profile"]}
+                if "base_execution_profile" in self.model_config
+                else {}
+            ),
         )
         processor = model.processor
 
@@ -244,7 +249,8 @@ class BaseEvaluator(ABC):
             # The runtime records precisely the settings supplied to generation,
             # including letter-answer limits and the effective seed. Initial
             # configuration alone is not the executed decoding contract.
-            deployment_path.write_text(json.dumps(self.model.adapter_deployment, indent=2) + "\n")
+            deployment = getattr(self.model, "adapter_deployment", None) or getattr(self.model, "base_deployment", None)
+            deployment_path.write_text(json.dumps(deployment, indent=2) + "\n")
         log.info(f"Finished Framework generation. Received {len(all_outputs)} outputs in {inference_time:.1f}s.")
         cache_stats = getattr(self.model, "video_cache_stats", lambda: {})()
         if cache_stats:
@@ -304,11 +310,15 @@ class BaseEvaluator(ABC):
             results_output_dir = results_dir / Path(model_name).name / answer_type
 
         results_output_dir.mkdir(parents=True, exist_ok=True)
-        if getattr(self.model, "adapter_deployment", None) is not None:
-            deployment = dict(self.model.adapter_deployment)
+        runtime_deployment = getattr(self.model, "adapter_deployment", None) or getattr(
+            self.model, "base_deployment", None
+        )
+        if runtime_deployment is not None:
+            deployment = dict(runtime_deployment)
             deployment["effective_media_preprocessing"] = self.vision_config
             deployment["requested_generation"] = self.gen_config
-            self._adapter_deployment_path = results_output_dir / f"adapter-deployment-shard{shard_id}.json"
+            kind = "base" if getattr(self.model, "base_deployment", None) is not None else "adapter"
+            self._adapter_deployment_path = results_output_dir / f"{kind}-deployment-shard{shard_id}.json"
             self._adapter_deployment_path.write_text(json.dumps(deployment, indent=2) + "\n")
         rank, world_size, _ = distributed_identity()
         marker_dir = None

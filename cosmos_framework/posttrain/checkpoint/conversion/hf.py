@@ -39,6 +39,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 from cosmos_framework.posttrain.utils.log import logger
+from cosmos_framework.utils.hf_snapshot import SIDECAR_DIRS, SIDECAR_FILES
 
 if TYPE_CHECKING:
     import torch
@@ -85,22 +86,7 @@ def required_file_present(directory: str, name: str) -> bool:
 # base's set: files the base has are copied verbatim (over what save_pretrained re-serialized), files the base lacks
 # are removed (chat_template.jinja shadows tokenizer_config.json's chat_template on load, processor_config.json shadows
 # preprocessor_config.json). config.json, the shards and the index are NOT sidecars.
-SIDECAR_FILES = (
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "chat_template.json",
-    "chat_template.jinja",
-    "merges.txt",
-    "vocab.json",
-    "special_tokens_map.json",
-    "added_tokens.json",
-    "tokenizer.model",
-    "preprocessor_config.json",
-    "video_preprocessor_config.json",
-    "processor_config.json",
-    "generation_config.json",
-)
-SIDECAR_DIRS = ("additional_chat_templates",)
+
 # Compatibility files that may be overlaid onto an already-materialized export. Unlike sync_sidecars, this includes
 # config.json and never removes a file the base lacks; it serves existing exports without changing their weight layout.
 COMPATIBILITY_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json")

@@ -33,6 +33,7 @@ PROFILE = "gemma_fp32_sdpa_contiguous_kv_v1"
 FIXED_MMA_PROFILE = "gemma_fp32_fixed_mma_v1"
 SDPA64_PROFILE = "gemma_fp32_fixed_mma_sdpa64_v1"
 PROFILES = (PROFILE, FIXED_MMA_PROFILE, SDPA64_PROFILE)
+BASE_FORMAT = "cosmos-unadapted-gemma-deployment-v1"
 BASE_SHA256 = "d69463aaf679e21e544bbd1b77095232ae5b420177f11a4c53a727fc246b5922"
 PROCESSOR_SHA256 = "4931454373d18ead3f0cc4de9953b83eaafc7a47059c623c651233ec572042fa"
 EXPORT_EQUIVALENCE = "versioned_contiguous_kv_sdpa_inference_requires_qualification"
@@ -112,6 +113,35 @@ def validate_identity(identity, *, profile=PROFILE):
         or identity.get("dependencies", {}).get("transformers") != "5.8.1"
     ):
         raise ValueError(f"{profile} requires the recorded Gemma1-2B base/processor and factorized adapter identity")
+
+
+def validate_base_identity(identity, *, profile):
+    """Admit the unadapted control separately; never manufacture adapter targets."""
+    if (
+        profile != SDPA64_PROFILE
+        or set(identity)
+        != {
+            "format",
+            "architecture",
+            "base_storage_dtype",
+            "base",
+            "processor",
+            "model_contract",
+            "dependencies",
+            "execution_profile",
+            "dtype",
+        }
+        or identity.get("format") != BASE_FORMAT
+        or identity.get("architecture") != "gemma"
+        or identity.get("execution_profile") != profile
+        or identity.get("dtype") != "float32"
+        or identity.get("base_storage_dtype") != "bfloat16"
+        or identity.get("base", {}).get("sha256") != BASE_SHA256
+        or identity.get("processor", {}).get("sha256") != PROCESSOR_SHA256
+        or identity.get("model_contract") != BUFFER_CONTRACT
+        or identity.get("dependencies") != {"torch": "2.10.0", "transformers": "5.8.1", "triton": "3.6.0"}
+    ):
+        raise ValueError(f"{profile} requires the exact unadapted Gemma1 base/processor and FP32 deployment identity")
 
 
 def _guard(module):
@@ -247,6 +277,10 @@ def _check_wrappers(model, record):
 
 
 def _check_owned(model, record):
+    if record["identity"].get("format") == BASE_FORMAT and getattr(model, "_cosmos_unadapted_state_invalidated", False):
+        raise ValueError(
+            "unadapted base may have untracked writes; reload the immutable base before forward/prefix reuse"
+        )
     if _ownership(model) != record["ownership"]:
         raise ValueError(f"{PROFILE} tensors changed; restore and reload before model/prefix reuse")
     if model.config._attn_implementation != "sdpa" or _configuration(model.config) != record["configuration"]:
@@ -330,7 +364,15 @@ def install(model, *, identity, adapter_type=None, profile=PROFILE):
     """Prevalidate all placement, then install only the selected inference operators."""
     from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM, GemmaRMSNorm
 
-    validate_identity(identity, profile=profile)
+    unadapted = identity.get("format") == BASE_FORMAT
+    if unadapted:
+        validate_base_identity(identity, profile=profile)
+        if getattr(model, "_cosmos_unadapted_state_invalidated", False):
+            raise ValueError("unadapted base may have untracked writes; reload before profile installation")
+        if adapter_type is not None or any(hasattr(m, "lora_A") for m in model.modules()):
+            raise ValueError("unadapted base deployment cannot contain adapters")
+    else:
+        validate_identity(identity, profile=profile)
     fixed = profile in (FIXED_MMA_PROFILE, SDPA64_PROFILE)
     if fixed and version("triton") != "3.6.0":
         raise ValueError(f"{profile} requires Triton 3.6.0")

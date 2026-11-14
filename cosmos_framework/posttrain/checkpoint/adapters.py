@@ -23,11 +23,11 @@ import torch
 from safetensors.torch import load as load_safetensors
 from safetensors.torch import save_file
 
-from cosmos_framework.posttrain.checkpoint.conversion.hf import SIDECAR_DIRS, SIDECAR_FILES
 from cosmos_framework.posttrain.checkpoint.io import atomic_write_json, fsync_directory, rename_directory_noreplace
 from cosmos_framework.posttrain.config.adapters import AdapterComponentConfig
 from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear, canonical_name
 from cosmos_framework.posttrain.utils.object_store import file_sha256
+from cosmos_framework.utils.hf_snapshot import snapshot_identity  # re-export the existing public API
 
 FORMAT = "cosmos-posttrain-adapter-v1"
 DENSE_FORMAT = "cosmos-posttrain-adapter-v2"
@@ -75,37 +75,6 @@ def adapter_configuration(identity: dict):
             for row in sorted(extras, key=lambda row: (order[row["name"].rsplit(".", 1)[0]], row["name"]))
         ],
     )
-
-
-def snapshot_identity(directory: str, *, weights: bool) -> dict[str, Any]:
-    """Hash actual bytes, including every weight shard; same-size substitutions fail.
-
-    Local immutable HF snapshots are the first supported identity contract. A Hub
-    branch name or object-store URI must be staged before training/export.
-    """
-    root = Path(directory)
-    if not root.is_dir() or not (root / "config.json").is_file():
-        raise ValueError(
-            f"adapter identity requires a complete local HF snapshot: {directory!r}; stage a pinned revision first"
-        )
-    names = {"config.json"} | {n for n in SIDECAR_FILES if (root / n).is_file()}
-    for directory_name in SIDECAR_DIRS:
-        if (root / directory_name).is_dir():
-            names.update(str(p.relative_to(root)) for p in (root / directory_name).rglob("*") if p.is_file())
-    if weights:
-        index = root / "model.safetensors.index.json"
-        if index.is_file():
-            names.add(index.name)
-            shards = set(json.loads(index.read_text())["weight_map"].values())
-        else:
-            shards = {"model.safetensors"}
-        for name in shards:
-            if Path(name).is_absolute() or ".." in Path(name).parts or not (root / name).is_file():
-                raise ValueError(f"base snapshot has a missing/invalid weight shard: {name!r}")
-        names.update(shards)
-    files = {name: file_sha256(str(root / name)) for name in sorted(names)}
-    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
-    return {"sha256": digest, "files": files}
 
 
 def make_adapter_identity(

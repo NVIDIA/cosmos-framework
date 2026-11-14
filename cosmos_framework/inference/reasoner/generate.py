@@ -34,7 +34,8 @@ def main():
         answers, losses = runtime.generate_tasks(
             config["tasks"], generation_config=config.get("generation"), vision_config=config.get("vision")
         )
-        json.dump({"answers": answers, "losses": losses, "deployment": runtime.adapter_deployment}, output, indent=2)
+        deployment = runtime.adapter_deployment or getattr(runtime, "base_deployment", None)
+        json.dump({"answers": answers, "losses": losses, "deployment": deployment}, output, indent=2)
         output.write("\n")
 
 

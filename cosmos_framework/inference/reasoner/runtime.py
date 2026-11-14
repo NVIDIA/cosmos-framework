@@ -103,6 +103,7 @@ class CosmosFrameworkRuntime:
         device_map: str = "auto",
         attn_implementation: str | None = None,
         portable_adapter: dict[str, Any] | None = None,
+        base_execution_profile: str | None = None,
     ) -> None:
         import torch
 
@@ -114,7 +115,20 @@ class CosmosFrameworkRuntime:
             self.device = "cpu"
         self.portable_adapter = None
         self.adapter_deployment = None
+        self.base_deployment = None
+        self.base_execution_profile = base_execution_profile
         self._adapter_cache_signature = None
+        if base_execution_profile is not None:
+            from cosmos_framework.utils.generator.gemma_sdpa_layout import SDPA64_PROFILE
+
+            if base_execution_profile != SDPA64_PROFILE:
+                raise ValueError(f"unsupported base_execution_profile: {base_execution_profile!r}")
+            if portable_adapter is not None or any(
+                (config_file, export_dir, vit_checkpoint_path, enable_lora, base_model_path)
+            ):
+                raise ValueError("base_execution_profile requires only the immutable unadapted model_path")
+            if device_map not in ("auto", self.device):
+                raise ValueError("base_execution_profile requires one rank-local GPU without offload")
         if portable_adapter is not None:
             from cosmos_framework.utils.generator.portable_adapters import PortableAdapterConfig
 
@@ -127,7 +141,7 @@ class CosmosFrameworkRuntime:
                 raise ValueError("portable_adapter requires one rank-local GPU; device maps/offload are unsupported")
         self.model_path = (
             str(model_path)
-            if self.portable_adapter
+            if self.portable_adapter or base_execution_profile is not None
             else ensure_evaluation_checkpoint(
                 model_path,
                 enable_lora=enable_lora,
@@ -165,6 +179,18 @@ class CosmosFrameworkRuntime:
         self._load()
 
     def _load(self) -> None:
+        if getattr(self, "base_execution_profile", None) is not None:
+            from cosmos_framework.inference.reasoner.base_deployment import load_base_model
+
+            self.model, self.processor, self.base_deployment = load_base_model(
+                self.model_path,
+                profile=self.base_execution_profile,
+                dtype=self.dtype,
+                device=self.device,
+                attn_implementation=self.attn_implementation,
+            )
+            self.backend = "transformers"
+            return
         if getattr(self, "portable_adapter", None) is not None:
             from cosmos_framework.utils.generator.portable_adapters import load_portable_model
 
@@ -343,12 +369,19 @@ class CosmosFrameworkRuntime:
             # be observed (.data/fused optimizers). Do not keep claiming that
             # current execution is bound to the unchanged serialized payload.
             self.adapter_deployment["state_modified_since_load"] = True
+        if getattr(self, "base_deployment", None) is not None:
+            self.base_deployment["state_modified_since_load"] = True
+            # An immutable base has no derived adapter weights to refresh.
+            # Version-bypassing writes also invalidate caller-owned KV caches;
+            # require a fresh load instead of blessing changed base tensors.
+            self.model._cosmos_unadapted_state_invalidated = True
         self._clear_adapter_caches()
 
     def _clear_adapter_caches(self) -> None:
-        from cosmos_framework.utils.generator.portable_adapters import clear_derived_weights
+        if getattr(self, "base_deployment", None) is None:
+            from cosmos_framework.utils.generator.portable_adapters import clear_derived_weights
 
-        clear_derived_weights(self.model)
+            clear_derived_weights(self.model)
         for name in ("_video_feature_cache", "_video_processor_cache", "_video_input_cache", "_video_prefix_cache"):
             getattr(self, name, {}).clear()
         self._adapter_cache_signature = None
@@ -375,21 +408,22 @@ class CosmosFrameworkRuntime:
 
     def restore_inference_execution(self) -> None:
         """Restore unprofiled FP32 forwards; discard all external prefixes as well."""
-        from cosmos_framework.utils.generator import factorized_inference, smollm_consistent
+        from cosmos_framework.utils.generator import factorized_inference, gemma_sdpa_layout, smollm_consistent
 
         previous = getattr(self.model, "_cosmos_deployment_profile", None)
         if previous in smollm_consistent.PROFILES:
             smollm_consistent.restore(self.model)
         elif previous == factorized_inference.PROFILE:
             factorized_inference.restore(self.model)
+        elif previous in gemma_sdpa_layout.PROFILES:
+            gemma_sdpa_layout.restore(self.model)
         else:
             raise ValueError("the active inference profile does not support this restoration operation")
         self._clear_adapter_caches()
-        self.adapter_deployment["execution_profile"] = (
-            "factorized_v1" if self.portable_adapter is not None else "stock_fp32"
-        )
-        self.adapter_deployment["restored_from_profile"] = previous
-        self.adapter_deployment["restored_original_execution"] = True
+        deployment = self.adapter_deployment if self.adapter_deployment is not None else self.base_deployment
+        deployment["execution_profile"] = "factorized_v1" if self.portable_adapter is not None else "stock_fp32"
+        deployment["restored_from_profile"] = previous
+        deployment["restored_original_execution"] = True
 
     def _install_video_feature_cache(self, capacity: int) -> None:
         """Install an opt-in rank-local cache around the deterministic VLM encoder."""
@@ -1177,6 +1211,9 @@ class CosmosFrameworkRuntime:
         if getattr(self, "adapter_deployment", None) is not None:
             self.adapter_deployment["effective_generation"] = copy.deepcopy(generation_config)
             self.adapter_deployment["effective_media_preprocessing"] = copy.deepcopy(vision_config)
+        if getattr(self, "base_deployment", None) is not None:
+            self.base_deployment["effective_generation"] = copy.deepcopy(generation_config)
+            self.base_deployment["effective_media_preprocessing"] = copy.deepcopy(vision_config)
         if self.backend == "omni":
             return self._generate_omni(tasks, generation_config, vision_config)
         return self._generate_transformers(tasks, generation_config, vision_config)

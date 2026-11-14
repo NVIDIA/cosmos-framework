@@ -1,0 +1,16 @@
+# Stage the exact immutable snapshot; use the pinned reasoner-runtime environment.
+# Single A100 SM80, FP32 weights/KV, explicit FP64 attention temporaries, batch one.
+# python -m cosmos_framework.inference.reasoner.generate --config examples/reasoner/gemma_unadapted_sdpa64.toml --output answer.json
+[model]
+model_name = "/models/unsloth/gemma-2b-it/5ae754dee0b5cbf7f7fb39a7731aefa6b7987c2d"
+dtype = "float32"
+attn_implementation = "sdpa"
+base_execution_profile = "gemma_fp32_fixed_mma_sdpa64_v1"
+
+[generation]
+max_tokens = 32
+temperature = 0.0
+seed = 42
+
+[[tasks]]
+question = "Explain how to compare two fractions with different denominators."
