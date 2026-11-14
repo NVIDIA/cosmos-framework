@@ -14,7 +14,18 @@ from pathlib import Path
 def validate_source(config, *, checkpoint, dense, base, unmerged=False):
     if bool(checkpoint) == bool(base) or ((dense or unmerged) and base) or (dense and unmerged):
         raise ValueError("choose exactly one committed checkpoint or explicit frozen --base")
-    if base and config.model.backbone_adaptation.mode not in {"bf16_frozen", "nf4_frozen"}:
+    if not base:
+        return
+    adaptation = getattr(config.model, "backbone_adaptation", None)
+    if getattr(config, "policy_factory", None) == "cosmos_framework.posttrain.model.gr00t.official_head.build_policy":
+        from cosmos_framework.posttrain.config.gr00t_official import OFFICIAL_HEAD_PROFILE
+
+        if adaptation is not None or getattr(config.rl, "optimizer_profile", None) != OFFICIAL_HEAD_PROFILE:
+            raise ValueError(
+                "official GR00T base evaluation requires its explicit head profile and no backbone adaptation"
+            )
+        return
+    if getattr(adaptation, "mode", None) not in {"bf16_frozen", "nf4_frozen"}:
         raise ValueError("base evaluation requires bf16_frozen or nf4_frozen; adapters require an artifact")
 
 

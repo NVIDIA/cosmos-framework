@@ -487,6 +487,7 @@ admitted `gr00t-development-v1` JSONL files and these overrides in **each** arm:
 ```text
 rl.optimizer.lr=1e-5 rl.optimizer.weight_decay=1e-5 rl.optimizer.grad_clip_norm=1.0
 rl.max_steps=300 rl.evaluation_every=100 rl.save_every=100 rl.seed=17
+rl.keep_model_last=0 rl.keep_optim_last=0
 model.backbone_adaptation.rank=32 model.backbone_adaptation.alpha=64
 model.backbone_adaptation.seed=17
 rl.target_metric=normalized_action_mse rl.target_threshold=0.049561327725898344
@@ -496,6 +497,9 @@ rl.target_direction=min rl.stop_on_target=false
 The numeric target is bound to that cohort and its recorded frozen-source scoring;
 it is not a universal target for other data. Select `nf4_lora`, `bf16_lora` or
 `bf16_frozen` explicitly. No optimizer-precision change is included.
+Keep both retention settings at zero to preserve the update-200 optimizer and
+control state for mature recovery after update 300. The local default otherwise
+retains only the latest optimizer checkpoint.
 
 Before either LoRA candidate runs, use native `action_eval --base` with `mode=bf16_frozen` and
 `rl.evaluation_seed=123` on the locked validation cohort. Freeze the offline action-quality target

@@ -189,6 +189,58 @@ def test_explicit_base_scoring_requires_frozen_policy_and_never_substitutes_miss
         validate_source(native, checkpoint=None, dense=False, base=True)
 
 
+def test_actual_official_head_recipe_base_evaluation_passes_source_admission(monkeypatch):
+    from cosmos_framework.posttrain.entrypoints import action_eval
+    from cosmos_framework.utils.config import load_config
+
+    native = load_config("cosmos_framework/posttrain/configs/gr00t_n1d7_libero_official_head.py", ["--"])
+    assert native.model.backbone_adaptation is None
+    action_eval.validate_source(native, checkpoint=None, dense=False, base=True)
+    # Execute the native CLI path through its real config/source validation. The
+    # CPU fixture must reach CUDA admission instead of dereferencing a missing mode.
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    with pytest.raises(ValueError, match="single-process CUDA torchrun"):
+        action_eval.run(native, checkpoint=None, output="/must-not-be-created", base=True)
+
+
+@pytest.mark.parametrize("change", ["adaptation", "profile", "unknown_factory", "matched_without_adaptation"])
+def test_official_base_scoring_never_defaults_malformed_source_to_another_recipe(change):
+    from cosmos_framework.posttrain.config.gr00t_bc import Gr00tBackboneAdaptation
+    from cosmos_framework.posttrain.entrypoints.action_eval import validate_source
+    from cosmos_framework.utils.config import load_config
+
+    native = load_config("cosmos_framework/posttrain/configs/gr00t_n1d7_libero_official_head.py", ["--"])
+    if change == "adaptation":
+        native.model.backbone_adaptation = Gr00tBackboneAdaptation(mode="bf16_frozen")
+    elif change == "profile":
+        native.rl.optimizer_profile = "native_fused_all_v1"
+    elif change == "unknown_factory":
+        native.policy_factory = "unsupported.family.build_policy"
+    else:
+        native.policy_factory = "cosmos_framework.posttrain.model.gr00t.action_sft.build_policy"
+    with pytest.raises(ValueError, match="explicit head profile|bf16_frozen or nf4_frozen"):
+        validate_source(native, checkpoint=None, dense=False, base=True)
+
+
+@pytest.mark.parametrize(
+    "checkpoint,dense,base,unmerged",
+    [
+        ("/committed", False, True, False),
+        (None, True, True, False),
+        (None, False, True, True),
+        (None, False, False, False),
+        ("/committed", True, False, True),
+    ],
+)
+def test_actual_official_base_still_requires_one_explicit_source(checkpoint, dense, base, unmerged):
+    from cosmos_framework.posttrain.entrypoints.action_eval import validate_source
+    from cosmos_framework.utils.config import load_config
+
+    native = load_config("cosmos_framework/posttrain/configs/gr00t_n1d7_libero_official_head.py", ["--"])
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_source(native, checkpoint=checkpoint, dense=dense, base=base, unmerged=unmerged)
+
+
 @pytest.mark.parametrize("recipe", ["sft_alpamayo_qlora", "gr00t_n1d7_libero_qlora"])
 def test_actual_native_recipe_training_identity_is_finite_json_and_binds_optimizer(recipe, monkeypatch):
     """CLI construction retains ListConfig leaves inside instantiated dataclasses."""
