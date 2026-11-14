@@ -39,6 +39,7 @@ REAPED_THREAD_METHOD = "proc-identity-state-read-attempts-v7"
 METHOD = "proc-identity-state-read-attempts-v8"
 TEARDOWN_METHOD = "proc-identity-state-read-attempts-v9"
 MEMBERSHIP_RETRY_METHOD = "proc-identity-state-read-attempts-v10"
+LARGE_TEARDOWN_METHOD = "proc-identity-state-read-attempts-v11"
 IDENTITY_SEMANTICS = "pid_start_pidfd_owned_ancestry"
 THREAD_MM_PROTOCOL = "proc-live-thread-shared-mm-v1"
 MAX_TASK_ENTRIES = 4096
@@ -49,16 +50,22 @@ EXIT_WAIT_RETRY_RESERVE_SECONDS = 0.25
 TEARDOWN_COLLECTION_SECONDS = 4.0
 MEMBERSHIP_RETRY_COLLECTION_SECONDS = 4.5
 TEARDOWN_EXIT_WAIT_MILLISECONDS = 3500
+LARGE_TEARDOWN_COLLECTION_SECONDS = 13.5
+LARGE_TEARDOWN_EXIT_WAIT_MILLISECONDS = 12000
 
 
 def _collection_seconds(method: str) -> float:
     """Versioned acquisition budgets never upgrade historical observations."""
+    if method == LARGE_TEARDOWN_METHOD:
+        return LARGE_TEARDOWN_COLLECTION_SECONDS
     if method == MEMBERSHIP_RETRY_METHOD:
         return MEMBERSHIP_RETRY_COLLECTION_SECONDS
     return TEARDOWN_COLLECTION_SECONDS if method == TEARDOWN_METHOD else MAX_COLLECTION_SECONDS
 
 
 def _exit_wait_milliseconds(method: str) -> int:
+    if method == LARGE_TEARDOWN_METHOD:
+        return LARGE_TEARDOWN_EXIT_WAIT_MILLISECONDS
     return (
         TEARDOWN_EXIT_WAIT_MILLISECONDS
         if method in (TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD)
@@ -307,7 +314,7 @@ def _validate_unbound_recoveries(receipt: dict) -> tuple[float | None, set[int]]
         return None, set()
     start = receipt.get("collection_begin_monotonic_seconds")
     if (
-        receipt["protocol"] not in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD)
+        receipt["protocol"] not in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD, LARGE_TEARDOWN_METHOD)
         or not isinstance(proofs, dict)
         or not proofs
         or type(start) not in (float, int)
@@ -773,6 +780,7 @@ def _validate_exit_wait(record: dict, *, method: str, collection_start: float) -
             METHOD,
             TEARDOWN_METHOD,
             MEMBERSHIP_RETRY_METHOD,
+            LARGE_TEARDOWN_METHOD,
         )
         or not isinstance(wait, dict)
         or set(wait) != {"initial_poll", "deadline_monotonic_seconds", "retry_reserve_seconds"}
@@ -804,11 +812,19 @@ def _validate_thread_exit_waits(attempt: dict, *, method: str, collection_start:
         METHOD,
         TEARDOWN_METHOD,
         MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
     ):
         raise ValueError("thread exit wait cannot be relabeled as an older method")
     if not isinstance(waits, dict) or not set(waits) <= set(attempt["processes"]):
         raise ValueError("invalid thread exit wait ownership")
-    if method not in (THREAD_WAIT_METHOD, REAPED_THREAD_METHOD, METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD):
+    if method not in (
+        THREAD_WAIT_METHOD,
+        REAPED_THREAD_METHOD,
+        METHOD,
+        TEARDOWN_METHOD,
+        MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
+    ):
         return
     for pid, final in attempt["post_discovery_polls"].items():
         wait = waits.get(pid)
@@ -858,6 +874,7 @@ def summarize_collection(receipt: dict) -> dict:
         METHOD,
         TEARDOWN_METHOD,
         MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
     ):
         raise ValueError("unsupported host collection protocol")
     owner_is_identity = method not in (
@@ -869,6 +886,7 @@ def summarize_collection(receipt: dict) -> dict:
         METHOD,
         TEARDOWN_METHOD,
         MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
     )
     if not owner_is_identity:
         if receipt.get("identity_semantics") != IDENTITY_SEMANTICS:
@@ -885,6 +903,7 @@ def summarize_collection(receipt: dict) -> dict:
         METHOD,
         TEARDOWN_METHOD,
         MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
     )
     if final_polls_required and receipt.get("uid_semantics") != "proc_inode_owner":
         raise ValueError("missing proc inode ownership semantics")
@@ -1030,6 +1049,7 @@ def summarize_collection(receipt: dict) -> dict:
                     METHOD,
                     TEARDOWN_METHOD,
                     MEMBERSHIP_RETRY_METHOD,
+                    LARGE_TEARDOWN_METHOD,
                 ):
                     raise ValueError("live-thread evidence cannot be relabeled as an older method")
                 try:
@@ -1049,6 +1069,7 @@ def summarize_collection(receipt: dict) -> dict:
                             METHOD,
                             TEARDOWN_METHOD,
                             MEMBERSHIP_RETRY_METHOD,
+                            LARGE_TEARDOWN_METHOD,
                         ):
                             raise ValueError("historical live-thread method retains failed read")
                         values = _thread_mm_memory(
@@ -1057,7 +1078,13 @@ def summarize_collection(receipt: dict) -> dict:
                             discovery_after=attempt["discovery_after"][pid],
                             released_poll=final_polls[pid],
                             allow_discovery_enoent=method
-                            in (REAPED_THREAD_METHOD, METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD),
+                            in (
+                                REAPED_THREAD_METHOD,
+                                METHOD,
+                                TEARDOWN_METHOD,
+                                MEMBERSHIP_RETRY_METHOD,
+                                LARGE_TEARDOWN_METHOD,
+                            ),
                             collection_seconds=_collection_seconds(method),
                         )
                         errors, changed = [], True
@@ -1092,7 +1119,7 @@ def summarize_collection(receipt: dict) -> dict:
     ):
         hard_errors.append("unbound_recovery_collection_deadline_exceeded")
     if (
-        method in (TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD)
+        method in (TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD, LARGE_TEARDOWN_METHOD)
         and published is not None
         and _receipt_valid(published)
         and published["end_monotonic_seconds"] > first_start + _collection_seconds(method)
@@ -1129,6 +1156,7 @@ def _validate_sample(sample: dict) -> dict:
         METHOD,
         TEARDOWN_METHOD,
         MEMBERSHIP_RETRY_METHOD,
+        LARGE_TEARDOWN_METHOD,
     ):
         raise ValueError("unsupported host memory method")
     receipt = sample.get("host_collection", {})
@@ -1169,8 +1197,10 @@ class HostSampler:
     collection. This bounds requested waits, not OS scheduling or /proc I/O; an
     overrun stays incomplete. V10 retains the same 3.5-second wait and allows
     4.5 seconds for acquisition, leaving time for a fresh membership/read pass
-    after a slow exit-time rollup. The stage-lock deadline remains five seconds.
-    V1–V8 retain their original 350 ms / 750 ms limits; v9 stays four seconds.
+    after a slow exit-time rollup. V11 permits a 12-second same-PIDFD wait
+    within 13.5 seconds, coordinated with a 15-second stage-lock deadline.
+    V1–V8 retain their original 350 ms / 750 ms limits; v9 stays four seconds
+    and v10 stays 4.5 seconds with its original 3.5-second exit wait.
     A longer acquisition holds the coordinated stage lock and may delay the
     next stage; both timing arms must include that cost. A successful retry
     observes the later state, never reconstructs a peak in the unreadable interval.
@@ -1186,6 +1216,7 @@ class HostSampler:
             METHOD,
             TEARDOWN_METHOD,
             MEMBERSHIP_RETRY_METHOD,
+            LARGE_TEARDOWN_METHOD,
         ):
             raise ValueError("unsupported host acquisition method")
         self.method = method
@@ -1349,7 +1380,7 @@ class HostSampler:
             "max_attempts": MAX_ATTEMPTS,
             "max_collection_seconds": _collection_seconds(self.method),
         }
-        if self.method in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD):
+        if self.method in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD, LARGE_TEARDOWN_METHOD):
             recoveries = self._recover_unbound(started)
             if recoveries:
                 receipt.update(unbound_recoveries=recoveries, collection_begin_monotonic_seconds=started)
@@ -1373,6 +1404,7 @@ class HostSampler:
                     METHOD,
                     TEARDOWN_METHOD,
                     MEMBERSHIP_RETRY_METHOD,
+                    LARGE_TEARDOWN_METHOD,
                 ) and _thread_mm_eligible(record):
                     record["thread_mm"] = _thread_mm(
                         pid, self.tracked[pid]["fd"], started + _collection_seconds(self.method)
@@ -1390,7 +1422,14 @@ class HostSampler:
                 final_polls[str(pid)] = initial
                 if (
                     self.method
-                    in (THREAD_WAIT_METHOD, REAPED_THREAD_METHOD, METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD)
+                    in (
+                        THREAD_WAIT_METHOD,
+                        REAPED_THREAD_METHOD,
+                        METHOD,
+                        TEARDOWN_METHOD,
+                        MEMBERSHIP_RETRY_METHOD,
+                        LARGE_TEARDOWN_METHOD,
+                    )
                     and len(receipt["attempts"]) < MAX_ATTEMPTS - 1
                     and _released(initial) is False
                     and _thread_exit_wait_eligible(
@@ -1438,7 +1477,7 @@ class HostSampler:
             "stage": receipt["attempts"][0]["stage_before"].get("value", "unreadable"),
         }
         record.update(derived)
-        if self.method in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD):
+        if self.method in (METHOD, TEARDOWN_METHOD, MEMBERSHIP_RETRY_METHOD, LARGE_TEARDOWN_METHOD):
             for item in self.tracked.values():
                 if item["fd"] is None:
                     item.setdefault("failed_sample_end", time.monotonic())

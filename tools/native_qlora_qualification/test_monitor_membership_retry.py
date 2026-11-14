@@ -51,7 +51,8 @@ def test_budgets_and_stage_lock_keep_all_historical_policies():
     assert host._collection_seconds(host.MEMBERSHIP_RETRY_METHOD) == 4.5
     for method in (host.TEARDOWN_METHOD, host.MEMBERSHIP_RETRY_METHOD):
         assert host._exit_wait_milliseconds(method) == 3500
-    assert monitor_stage.LOCK_TIMEOUT_SECONDS == 5.0
+    assert monitor_stage.LEGACY_LOCK_TIMEOUT_SECONDS == 5.0
+    assert monitor_stage.LOCK_TIMEOUT_SECONDS == 15.0
 
 
 def child(script=None):

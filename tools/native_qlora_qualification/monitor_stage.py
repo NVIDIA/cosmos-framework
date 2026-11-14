@@ -4,6 +4,10 @@
 
 This prevents new samples from spanning stage transitions. It does not change
 how memory receipts are classified, recover failed reads, or repair old rows.
+The prospective v11 collector may acquire host/device observations for 13.5
+seconds; publishers allow 15 seconds and record the actual wait. Historical
+receipts are unchanged. Blocking syscalls can still overrun; an observed sample
+hold overrun fails before publication rather than claiming complete coverage.
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 PROTOCOL = "cosmos.native-qlora-stage-lock.v1"
-LOCK_TIMEOUT_SECONDS = 5.0
+LEGACY_LOCK_TIMEOUT_SECONDS = 5.0
+LOCK_TIMEOUT_SECONDS = 15.0
 
 
 def _paths(marker: Path) -> tuple[Path, Path, bytes]:
@@ -33,7 +38,7 @@ def _paths(marker: Path) -> tuple[Path, Path, bytes]:
 @contextmanager
 def _locked(marker: Path, *, exclusive: bool, timeout: float):
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not 0 < timeout <= LOCK_TIMEOUT_SECONDS:
-        raise ValueError("stage lock timeout must be positive and at most five seconds")
+        raise ValueError("stage lock timeout must be positive and at most fifteen seconds")
     marker, lock, expected = _paths(marker)
     fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
     started = time.monotonic()
@@ -57,15 +62,22 @@ def _locked(marker: Path, *, exclusive: bool, timeout: float):
             or os.read(fd, len(expected) + 1) != expected
         ):
             raise ValueError("stage lock identity or protocol differs")
-        yield {
+        receipt = {
             "protocol": PROTOCOL,
             "mode": "publication" if exclusive else "sample",
             "wait_seconds": acquired - started,
+            "timeout_seconds": timeout,
             "acquired_monotonic_seconds": acquired,
         }
+        yield receipt
         current = lock.stat(follow_symlinks=False)
         if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
             raise ValueError("stage lock was replaced while held")
+        if not exclusive:
+            finished = time.monotonic()
+            receipt.update(finished_monotonic_seconds=finished, hold_seconds=finished - acquired)
+            if finished - acquired > LOCK_TIMEOUT_SECONDS:
+                raise TimeoutError("stage sample hold exceeded fifteen-second deadline")
     finally:
         # Closing also releases a held flock on exceptions or process exit.
         os.close(fd)

@@ -121,7 +121,7 @@ def test_timeout_never_changes_stage(marker):
         cleanup(child)
 
 
-@pytest.mark.parametrize("timeout", [0, -1, 6, True, float("nan"), float("inf")])
+@pytest.mark.parametrize("timeout", [0, -1, 16, True, float("nan"), float("inf")])
 def test_invalid_timeouts_fail(marker, timeout):
     with pytest.raises(ValueError):
         with stage.sample_stage(marker, timeout=timeout):

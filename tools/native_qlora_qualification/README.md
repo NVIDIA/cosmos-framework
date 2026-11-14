@@ -203,18 +203,20 @@ Version 5 permits a fresh whole collection after a failed live-thread `ESRCH` re
 
 Version 7 additionally permits recollection when final discovery returns exactly `ENOENT` after the held-thread proof already recorded the same zombie leader identity, provided the same held process pidfd subsequently proves release within the original deadline and retry reserve. The failed interval still contributes no memory. A missing earlier identity, permission error, changed birth/thread group, exec transition or unproven release remains incomplete. The [version 7 target CPU proof](../../docs/post_training/evidence/native_qlora_collector_v7_bed3d03.json) passed all 132 tests without skips on Linux `5.15.0-1032-oracle`, including four actual-process properties. The release fixtures use controlled thread-read `ESRCH`; child exit, reap, discovery `ENOENT` and held-pidfd release are real. All seven historical incomplete rows remain incomplete. This new allocation took 166 seconds with 16 CPUs (2,656 allocated CPU-seconds) and no GPU. It does not qualify complete full-model shutdown telemetry. The completed version 6 evidence and its separate costs, and all historical version 1–6 classifications, are retained.
 
-The current monitor CLI selects version 10: a 4.5-second acquisition budget with
-the same maximum 3.5-second PIDFD exit wait as version 9. This leaves more time for
-a new complete membership/read pass after a slow exit-time `/proc` read. Actual
-release proof and a fresh complete observation remain mandatory; live unreadable
-processes and deadline overruns remain incomplete. The five-second stage-lock
-deadline is unchanged. Blocking kernel reads can still overrun these budgets, so
-this is not a hard real-time guarantee. Acquisition can delay the next stage;
-include that cost in all measured arms. Historical version 9 retains its original
-four-second budget, including the retained failed sample from job `38536188`.
-The CPU tests distinguish an injected slow-read fixture with real PIDFDs from an
-optional actual 8-GiB process teardown (`COSMOS_RUN_LARGE_EXIT_TEST=1`); neither
-establishes complete telemetry for a future full-model run.
+The current monitor CLI selects version 11: a 13.5-second acquisition budget with
+a maximum 12-second wait on the same held PIDFD. Coordinated stage publication
+allows 15 seconds and records its requested timeout and actual wait. Actual
+release proof and a fresh complete membership/read observation remain mandatory;
+live unreadable processes and deadline overruns remain incomplete. Blocking
+kernel reads can still overrun these budgets, so this is not a hard real-time
+guarantee. Acquisition can delay the next stage; include that cost in all measured
+arms. Historical version 9 retains its four-second acquisition budget and version
+10 its 4.5-second budget, both with a maximum 3.5-second exit wait. Their failed
+samples, including jobs `38536188`, `38540661` and `38543002`, remain incomplete.
+A successful retry observes the later state and cannot recover a peak during the
+unreadable interval. CPU tests distinguish controlled read/latency fixtures with
+real PIDFDs from actual large-memory process teardown; neither establishes
+complete telemetry for a future full-model run.
 
 ### Checkpointed dequantization experiment
 
