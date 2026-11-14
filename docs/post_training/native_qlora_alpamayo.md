@@ -159,7 +159,31 @@ parameter and requires the same recorded quantized base. It is not a complete
 standalone BF16 policy export. Applying adapters to the original BF16 backbone is
 a different numerical model. A fresh native portable/checkpoint evaluation uses
 `posttrain.entrypoints.action_eval` with `--config`, `--checkpoint`, `--output`
-and the same model/data overrides.
+and the same model/data overrides. Outputs live at
+`IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/<run_ts>`; `completion.json`
+records the committed `checkpoint` and automatically published `portable` paths.
+For the selected command above, activate its recorded compatible build and evaluate
+the portable policy in a fresh process:
+
+```bash
+ALPAMAYO_RUN=/durable/path/alpamayo-development/qualification/alpamayo-development-v1/nf4_lora-seed17/development
+ALPAMAYO_ARTIFACT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["portable"])' "$ALPAMAYO_RUN/completion.json")"
+torchrun --standalone --nproc-per-node=1 \
+  -m cosmos_framework.posttrain.entrypoints.action_eval \
+  --config cosmos_framework/posttrain/configs/sft_alpamayo_qlora.py \
+  --checkpoint "$ALPAMAYO_ARTIFACT" --output /durable/path/alpamayo-fresh-evaluation -- \
+  model.checkpoint_path=/staged/Alpamayo-R1-10B-dd4a24c \
+  model.processor_path=/staged/Qwen3-VL-8B-processor-0c351dd \
+  model.backbone_adaptation.mode=nf4_lora \
+  model.backbone_adaptation.rank=32 model.backbone_adaptation.alpha=64 \
+  model.backbone_adaptation.dropout=0 model.backbone_adaptation.seed=17 \
+  model.train_action_head=true model.activation_checkpointing=full model.inference_steps=10 \
+  data.validation_path=/data/alpamayo-development-v1/alpamayo-validation.jsonl \
+  rl.seed=17 rl.evaluation_seed=123 rl.evaluation_max_samples=0
+```
+
+Use the `checkpoint` field instead for DCP reload. Choose a new evaluation output
+directory and preserve the artifact's mode, adapter seed and task settings.
 
 From `cbe368d`, exact resume also binds 25 explicit training/recovery source files.
 Changed sources or a legacy checkpoint without this contract fail before data/model
@@ -168,11 +192,13 @@ older resumable checkpoints; do not rewrite their identities. Compatible portabl
 inference reload remains independent of this training-only check. Build `26bc60f`
 passed full-model source-refusal and exact ten-update recovery checks in both
 precision modes, separately from the retained `4cba88f` mature recovery below.
-The current inventory extends this to 28 files by binding shared flow-dataset
-row lookup, media decoding, and the evaluation-input reuse implementation.
+The current inventory extends this to 29 files by binding shared flow-dataset
+row lookup, media decoding, and both families' evaluation-reuse implementations.
 Dataset-content identity alone does not identify that execution. Earlier 25-file
 contracts require the original build and remain
 unchanged; compatible portable inference is still separate.
+The GR00T task-identity change in `cbc950f` does not change Alpamayo's model identity;
+the shared training-source change still requires own-build Alpamayo resume.
 
 The separate `posttrain.checkpoint.tools.export_family_dense` command reconstructs
 `dequantize(Q(W)) + (alpha/rank) BA` with FP32 accumulation. Specify

@@ -98,7 +98,10 @@ control, not a replacement for matched BF16 LoRA or the already frozen developme
 Use the normal training command below with `--config
 cosmos_framework/posttrain/configs/gr00t_n1d7_libero_official_head.py`, replace the
 `model.backbone_adaptation.*` overrides with `data.backbone_path=/staged/Cosmos-Reason2-2B-metadata`,
-and retain the dataset overrides. Native checkpoint/recovery and complete head-artifact reload
+retain the dataset overrides, and replace the starter horizon/cadence with
+`rl.max_steps=300 rl.evaluation_every=100 rl.save_every=100`.
+Set `rl.keep_model_last=0 rl.keep_optim_last=0` to retain the intermediate checkpoints
+used in the recorded comparison. Native checkpoint/recovery and complete head-artifact reload
 use the same entrypoints; dense export is explicitly unavailable for this additional control.
 CPU optimizer/scheduler, augmentation and alias contracts are covered. A100 job `38509993`
 also passed ten real updates, exact fresh checkpoint/portable scores, update-5-to-10 recovery,
@@ -208,7 +211,9 @@ source /durable/venvs/cosmos-native-action/native-action-env.sh
 The initial native strategy is one CUDA process, BF16-capable hardware, no FSDP/DTensor/TP/PP/CP,
 no gradient accumulation and no compilation. Only configurations with completed accelerator and
 task evidence can be described as qualified. Other embodiments, model revisions and online PPO
-are outside this initial integration.
+are outside this initial integration. The starter below uses 100 updates and LR `1e-4`;
+the selected development comparison uses the explicit 300-update/LR `1e-5` overrides
+in the first-target stopping section below. These are different recipes.
 
 ```bash
 export IMAGINAIRE_OUTPUT_ROOT=/durable/path/gr00t-runs
@@ -236,6 +241,9 @@ validation traversal and leaves the training cursor unchanged, including when sc
 Each claimed target is checked after checkpoint publication/readback. Set target metric/threshold
 before measuring outcomes; no target is inferred from candidate performance. Resumed runs explicitly
 report process-only timing and do not reconstruct missing uninterrupted clocks.
+Outputs live at `IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/<run_ts>`;
+the resolved run's `completion.json` records its committed `checkpoint` and `portable` paths.
+Portable publication is part of native completion, not a separate adapter-only export step.
 
 For a deliberate recovery check, keep `rl.max_steps` fixed and first set `rl.pause_after_step=50`.
 Rerun against the same native run identity with `rl.pause_after_step=0` and `rl.resume=auto`.
@@ -252,11 +260,17 @@ separate contract and accepts compatible older artifacts. The guard has 67 passi
 CPU lifecycle tests. GR00T full-model five-to-ten recovery subsequently passed on
 `26bc60f` and `02f93ba` within the mode scopes recorded below, separately from the
 retained `4cba88f` mature recovery evidence.
-The current inventory has 28 files: it also binds shared flow-dataset row lookup,
-media decoding and the opt-in evaluator helper. Those execution paths can change
-without changing dataset bytes; the evaluator cache remains off by default.
+The current inventory has 29 files: it also binds shared flow-dataset row lookup,
+media decoding and both opt-in evaluator helpers. Those execution paths can change
+without changing dataset bytes; evaluator reuse remains off by default.
 Earlier 25-file contracts still require their original build; they are not rewritten
 or upgraded during resume. This extension does not bind portable inference to training code.
+
+`cbc950f` changes the GR00T task implementation identity, including with reuse disabled.
+Historical GR00T checkpoints, portable policies and standalone artifacts therefore require
+their recorded compatible loaders; the examples and qualified results below do not imply
+cross-build compatibility with `cbc950f`. Its own artifact qualification is separate.
+Never edit source-identity metadata to force an older policy through the new loader.
 
 Every checkpoint/portable policy includes all trained action-head/projector tensors alongside LoRA,
 with source, model, quantization, processor/statistics, embodiment, action settings, resolved targets,
@@ -288,9 +302,9 @@ by default; a larger individual tensor gets its own shard). The commit-last mani
 and file digests, processor, embodiment, normalization statistics and backbone-tokenizer metadata.
 
 ```bash
-# Set these to the exact installed build identities, not guessed values.
-export COSMOS_TRAINING_CODE_REVISION=<40-character-code-revision>
-export COSMOS_TRAINING_WHEEL_SHA256=<64-character-wheel-sha256>
+# First create and activate the exact build provenance using the source-profile guide.
+: "${COSMOS_TRAINING_CODE_REVISION:?Set this from the actual build provenance}"
+: "${COSMOS_TRAINING_WHEEL_SHA256:?Set this from the actual wheel digest}"
 torchrun --standalone --nproc-per-node=1 \
   -m cosmos_framework.posttrain.checkpoint.tools.export_family_dense \
   --config cosmos_framework/posttrain/configs/gr00t_n1d7_libero_qlora.py \
@@ -312,7 +326,9 @@ torchrun --standalone --nproc-per-node=1 \
   rl.evaluation_seed=123 data.validation_path=/prepared/gr00t/validation.jsonl
 ```
 
-The example uses the selected seed-17 NF4 update-200 artifact; use `bf16_lora` in both
+The [native action source-profile guide](../../docker/posttrain/native_action/README.md)
+contains the wheel-build and provenance-export commands. The example uses the selected
+seed-17 NF4 update-200 artifact and its recorded compatible exporter/loader; use `bf16_lora` in both
 commands for its BF16 control. Preserve the original mode, rank/alpha/dropout/adapter
 seed and task configuration.
 Source training metadata is preserved; the exporter build is recorded separately.

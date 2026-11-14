@@ -6,7 +6,7 @@ quantization/artifact machinery through native task objectives. Their model vers
 runtime pins, task metrics and qualification evidence are separate from this Qwen recipe;
 Qwen results do not establish support for either family.
 
-This path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. The current implementation is sealed `09e99c3`, with accepted current-build recovery/reload checks and scoped effective-base BF16 dense-export evidence. Completed resident-evaluation timing and update-250-to-300 recovery belong to `dadfc89`; historical results do not authorize cross-build resume. Quality preservation, quality improvement and a QLoRA time-to-target advantage remain unestablished.
+This path trains native LoRA adapters on a frozen NF4 language base through `cosmos_framework.posttrain.entrypoints.sft`. Sealed `02f93ba` has accepted own-build recovery/reload checks. Effective-base BF16 merge evidence belongs to `09e99c3`, with bounded shard packing and fresh reload additionally qualified on `26bc60f`. Completed resident-evaluation timing and update-250-to-300 recovery belong to `dadfc89`; historical results do not authorize cross-build resume. Quality preservation, quality improvement and a QLoRA time-to-target advantage remain unestablished.
 
 The historical cache/prefetch recipe reduced the median trial mean for NF4 update time by **42.7%** across three paired trials while preserving the original final adapter/optimizer state and held-out score rows exactly. Both optimized precision arms completed 300 updates, fresh-process reload checks and frozen/trained 256-row evaluations.
 
