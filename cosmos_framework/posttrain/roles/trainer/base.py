@@ -670,8 +670,19 @@ class BaseTrainer(ABC):
         and builds `param_groups_master` lazily inside `step()`. Reading only the per-parameter
         dictionary would call a stepped FusedAdam pristine.
         """
+        # Optimizer.state is a defaultdict: a read such as state[parameter]
+        # creates an empty entry even before Adam's first update. Inspection
+        # must not suppress the pristine marker and make a later DCP restore
+        # request moments that the checkpoint never contained. Only empty
+        # mappings for parameters actually owned by this optimizer are benign;
+        # initialized step=0 state, foreign keys and unknown state remain strict.
         if self.opt.state:
-            return False
+            owners = {id(parameter) for group in self.opt.param_groups for parameter in group["params"]}
+            if any(
+                id(parameter) not in owners or not isinstance(value, Mapping) or bool(value)
+                for parameter, value in self.opt.state.items()
+            ):
+                return False
         if any("step" in group for group in self.opt.param_groups):
             return False
         return getattr(self.opt, "param_groups_master", None) is None

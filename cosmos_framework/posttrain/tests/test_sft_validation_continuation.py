@@ -93,6 +93,7 @@ def _runtime(
     checkpoint_format: str = "consolidated",
     *,
     stateful_validation: bool = False,
+    inspect_optimizer: bool = False,
 ):
     import torch.distributed as dist
 
@@ -193,6 +194,11 @@ def _runtime(
     if checkpoint:
         trainer.load(checkpoint)
         data.load_state_dict(manager.load_component(checkpoint, "data"))
+    # Match a public audit's benign optimizer inspection before the initial
+    # validation checkpoint. Empty defaultdict entries are not Adam moments.
+    if inspect_optimizer:
+        for parameter in net.parameters():
+            trainer.opt.state[parameter]
     identity = {
         "enabled": True,
         "source_fingerprint": held.source_fingerprint,
@@ -235,7 +241,9 @@ def _one_allocation(data_dir: str, output: str, chunk: int | None, checkpoint_fo
     )
     reporting.make_reporters = lambda *a, **kw: [reporter]
     termination.TerminationWatch = lambda: SimpleNamespace(should_stop=lambda: None)
-    config, units, trainer, consumed, _ = _runtime(Path(data_dir), Path(output), chunk, checkpoint_format)
+    config, units, trainer, consumed, _ = _runtime(
+        Path(data_dir), Path(output), chunk, checkpoint_format, inspect_optimizer=True
+    )
     result = loop(units, config, output)
     trainer.finalize_checkpoints()
     Path(output).mkdir(exist_ok=True, parents=True)
@@ -694,7 +702,9 @@ def _distributed_worker(rank: int, rendezvous: str, directory: str, layout: str)
                         report=lambda metrics, *, step: reports.append((step, copy.deepcopy(metrics))),
                     )
                 ]
-                config, units, trainer, consumed, _ = _runtime(root / "data", root / label, chunk, "dcp")
+                config, units, trainer, consumed, _ = _runtime(
+                    root / "data", root / label, chunk, "dcp", inspect_optimizer=True
+                )
                 result = loop(units, config, str(root / label))
                 trainer.finalize_checkpoints()
                 consumed_all.extend(consumed)

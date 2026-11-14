@@ -90,6 +90,9 @@ def test_public_flow_loop_preserves_complete_action_weighted_validation_and_next
             if checkpoint:
                 trainer.load(checkpoint)
                 data.load_state_dict(manager.load_component(checkpoint, "data"))
+            # Native campaign observers inspect each owner's state at attach.
+            for parameter in policy.net.parameters():
+                trainer.opt.state[parameter]
             identity = {
                 "enabled": True,
                 "source_fingerprint": held.source_fingerprint,
