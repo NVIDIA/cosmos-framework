@@ -19468,6 +19468,128 @@
         "weight_shards": 32,
         "scope": "Independent small-logit equality and tensor/index/packing constraints; no second full-weight/model computation."
       }
+    },
+    "38547636": {
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "allocated_gpu_seconds": 1168,
+      "native_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "scope": "Missing selected BF16 head-only seed42 control; native300 and fresh160 completed, complete-case release acceptance failed. Not an accepted timing cell.",
+      "mode": "bf16_frozen",
+      "seed": 42,
+      "native_and_reload_pass": true,
+      "all_updates_applied": 300,
+      "fresh_primary_rows_exact": true,
+      "history": [
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.04916228426215635,
+            "action_mae_gripper_environment_units": 0.1372063398733735,
+            "action_mae_pitch_environment_units": 0.016093830139640716,
+            "action_mae_roll_environment_units": 0.008225875696466987,
+            "action_mae_x_environment_units": 0.053972841933195764,
+            "action_mae_y_environment_units": 0.0449414604387712,
+            "action_mae_yaw_environment_units": 0.009601551121868425,
+            "action_mae_z_environment_units": 0.07409409063177787,
+            "loss": 0.128999243787257,
+            "normalized_action_mse": 0.05506814191766483
+          },
+          "step": 0
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.04623065205151966,
+            "action_mae_gripper_environment_units": 0.1119474371522665,
+            "action_mae_pitch_environment_units": 0.01625574957194311,
+            "action_mae_roll_environment_units": 0.009068832913902189,
+            "action_mae_x_environment_units": 0.05709331062222416,
+            "action_mae_y_environment_units": 0.04715353441529877,
+            "action_mae_yaw_environment_units": 0.009982288271044092,
+            "action_mae_z_environment_units": 0.07211341141395873,
+            "loss": 0.10859151356125948,
+            "normalized_action_mse": 0.047075285300213314
+          },
+          "step": 100
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.04587937438104339,
+            "action_mae_gripper_environment_units": 0.08774938698858023,
+            "action_mae_pitch_environment_units": 0.017112772490045943,
+            "action_mae_roll_environment_units": 0.00938733315151925,
+            "action_mae_x_environment_units": 0.05890013903967992,
+            "action_mae_y_environment_units": 0.05062140812306487,
+            "action_mae_yaw_environment_units": 0.009773546940371615,
+            "action_mae_z_environment_units": 0.08761103393404206,
+            "loss": 0.10179629835110973,
+            "normalized_action_mse": 0.04130372669830519
+          },
+          "step": 200
+        },
+        {
+          "metrics": {
+            "action_mae_environment_units": 0.046879756630771915,
+            "action_mae_gripper_environment_units": 0.09560093898326158,
+            "action_mae_pitch_environment_units": 0.018750125762045787,
+            "action_mae_roll_environment_units": 0.009781024430611645,
+            "action_mae_x_environment_units": 0.06264774756137609,
+            "action_mae_y_environment_units": 0.05112380426993769,
+            "action_mae_yaw_environment_units": 0.011084873483076192,
+            "action_mae_z_environment_units": 0.07916978192509434,
+            "loss": 0.10128374471969437,
+            "normalized_action_mse": 0.04523234245234302
+          },
+          "step": 300
+        }
+      ],
+      "fresh160_metrics": {
+        "123": {
+          "action_mae_environment_units": 0.046879756630771915,
+          "action_mae_gripper_environment_units": 0.09560093898326158,
+          "action_mae_pitch_environment_units": 0.018750125762045787,
+          "action_mae_roll_environment_units": 0.009781024430611645,
+          "action_mae_x_environment_units": 0.06264774756137609,
+          "action_mae_y_environment_units": 0.05112380426993769,
+          "action_mae_yaw_environment_units": 0.011084873483076192,
+          "action_mae_z_environment_units": 0.07916978192509434,
+          "loss": 0.10128374471969437,
+          "normalized_action_mse": 0.04523234245234302
+        },
+        "456": {
+          "action_mae_environment_units": 0.04771327703799382,
+          "action_mae_gripper_environment_units": 0.10042944170534611,
+          "action_mae_pitch_environment_units": 0.018452959363491533,
+          "action_mae_roll_environment_units": 0.009748437749980658,
+          "action_mae_x_environment_units": 0.06386242727413391,
+          "action_mae_y_environment_units": 0.05070586194483006,
+          "action_mae_yaw_environment_units": 0.01101544412034692,
+          "action_mae_z_environment_units": 0.07977836710782736,
+          "loss": 0.11060183822337422,
+          "normalized_action_mse": 0.04643944101125401
+        },
+        "789": {
+          "action_mae_environment_units": 0.044588168352791405,
+          "action_mae_gripper_environment_units": 0.08184552427381277,
+          "action_mae_pitch_environment_units": 0.01822801614962511,
+          "action_mae_roll_environment_units": 0.009879401187722152,
+          "action_mae_x_environment_units": 0.06277108965187388,
+          "action_mae_y_environment_units": 0.05073106109041019,
+          "action_mae_yaw_environment_units": 0.01045931009253259,
+          "action_mae_z_environment_units": 0.07820277602356306,
+          "loss": 0.10007404619900626,
+          "normalized_action_mse": 0.040307309102000935
+        }
+      },
+      "memory_scope": "All738 observed host samples complete and owned-GPU attribution valid; sampled lower bounds do not repair missing enclosing acceptance.",
+      "failure": "One scontrol step query timed out after10.013959646s; the former helper immediately raised instead of retrying within its180-second deadline. No final release proof/acceptance was published.",
+      "original_failed_release_sha256": "683b579883f1fcd7312c4956f0a7b04f743b63edf216c323e8ca42b5e8c1fb28",
+      "later_terminal_release_sha256": "f1a6ddd4aabc99aecceb88dd4e6d8ebf4476ab21834e80ec0845e969e7092914",
+      "later_release_does_not_repair_clock": true,
+      "raw_archive_sha256": "3c752046baad9efee2b807e7be207633e5dfc679a790e69b7b8188c1555e591a",
+      "retained_readout": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-remaining-38547636-failed-readout-v1.json",
+      "readout_sha256": "9334b3ed557dfc613983562d3c31ec95f07b0a79b79714c745abf5761bb7d3e8",
+      "independent_raw_review_sha256": "453f28176132c4136937556c08b0e99d0cffda83edaca606c0c74a790f467648",
+      "quality_limits": "Exposed development seed42 endpoint; no partial paired-panel confidence interval or release claim."
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -19812,7 +19934,7 @@
     },
     "supervised_action_elements": 70,
     "input_semantic_check": "Native content fingerprint exactly matches original real rows after content-preserving local media remapping. State/action values and image bytes were not substituted.",
-    "processor_geometry_basis": "All 1,440 admitted rows have two 256\u00d7256 RGB images, 8D state, and 10\u00d77 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
+    "processor_geometry_basis": "All 1,440 admitted rows have two 256×256 RGB images, 8D state, and 10×7 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
     "cuda_initialized": false,
     "model_weights_loaded": false,
     "processor_elapsed_seconds": 9.134169723838568,
@@ -20957,7 +21079,7 @@
       "bf16_lora": "38543002"
     },
     "incremental_gpu_seconds": 5771,
-    "source": "4cba88f; only LR1e-4\u21921e-5 changes from original128 comparisons;512 schedule remains paused128",
+    "source": "4cba88f; only LR1e-4→1e-5 changes from original128 comparisons;512 schedule remains paused128",
     "quality": {
       "bf16_lora": {
         "metrics": {
@@ -21064,5 +21186,37 @@
       "sha256": "bafc449647c690b5c4cbb0a56d80fd64e362d3aaa842cb2439912697bba19992",
       "scope": "Read-only replay of all4387 original samples; NF/BF gaps stay incomplete. Same-birth held PIDFD3500ms waits expired with ESRCH/empty VM fields and stateR. Positive exit observations straddle the4.5s acquisition deadline; raw evidence does not prove exact remote exit duration or a namespace/parser cause. No observer policy change or historical repair."
     }
+  },
+  "gr00t_release_query_measurement_repair": {
+    "scope": "Future-only measurement repair. Native, scientific protocols, selected comparison, targets, horizons, optimizer precision, task weighting and confidence procedures unchanged. Original failed run and old sealed measurement versions remain unchanged.",
+    "behavior": "Retry only explicit TimeoutExpired responses within the same180-second deadline from srun return, retain all raw queries and monotonic bounds, ignore partial timed-out output and require a final exact step absence plus matching live parent. Completed ambiguous/foreign replies fail immediately. Cleanup stays in producer clock.",
+    "selected": {
+      "payload": "gr00t-lr-paired-seeds-4cba88f-v3",
+      "native": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "parent_execution_sha256": "a916046ac45ccff652f5be23fb7d5a9af434fecb2df78189fe640dcd7e13a304",
+      "execution_sha256": "d4a54ef2ab8047900b397f3478863ec6d886897957d92f957de7d45a7632d0fb",
+      "amendment_sha256": "3cb734e800d8527114f44341a0abf2a97335197066e7fc033ed51dc2f5a9c580",
+      "manifest_sha256": "5cbe7b7a5d44e612eb2c9795e8b360c28f24dae8b7f062e273bb45aa8e64aab0",
+      "archive_sha256": "8f9e8e4fd413cb39dab638e0d31c297ebb622741f614f03b52e7778635e37760",
+      "cpu_cases": 112,
+      "peer_cases_subset": 37,
+      "root_cases_subset": 83,
+      "admission_guard_cases": 43,
+      "scope": "One clean head42 repeat, then original123 three arms only after accepted predecessor and fresh authorization guards. No old/new clock splice; five retained cells are not repeated."
+    },
+    "official": {
+      "payload": "gr00t-official-development-699869a-v9",
+      "native": "699869a89a176e640d8c842921adf4eaafe66161",
+      "measurement_sha256": "209c2a95b30a76306500dcbd651973854eeac7a8bd922081ec2d99326f571695",
+      "amendment_sha256": "5bb7f953b7d07bedc7ab781b2c98a0a4a5268ddbfd0a6c59cf04e6e3af67fbe2",
+      "manifest_sha256": "66c93bd60495ceadd5b83873df9714e8d1a27b2b5b629f69ace3907929ae5b8b",
+      "archive_sha256": "f4d7deb59d4b11228d4aa083565ea04e0b0dc1b5e907c6d924ea8cab19cf5f54",
+      "staging_sha256": "8ac0d57f656f08d0627cf547b693a35791288c067e1cde292c8b106ec5728930",
+      "cpu_cases": 102,
+      "peer_cases_subset": 24,
+      "prior_cpu_packaging_failures": 5,
+      "scope": "Only remaining42/123 after completed selected123; original17/v7 untouched. A missing copied fixture, wrong shell-test filename and observer import-path setup were corrected before sealing; attempt01 retained. No GPU admission or task outcome from preparation."
+    },
+    "reviewability": "Exact helpers, tests, amendments and failed histories are included in sealed retained campaign payloads. CPU case counts overlap and are not additive; no accelerator result follows from these tests."
   }
 }

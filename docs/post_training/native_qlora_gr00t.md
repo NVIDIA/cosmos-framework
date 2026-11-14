@@ -125,6 +125,22 @@ none skipped. Fresh evaluation seed 123 reproduced the resident endpoint exactly
 seeds. This is a negative single-seed development result, not the completed
 three-seed practical comparison or evidence isolating augmentation.
 
+The missing matched head-only seed-42 case (`38547636`) completed all 300
+updates and fresh 160-row evaluations, but **failed its enclosing completion
+check**. Its final MSE was 0.04523234 and its first target crossing was update
+100; all 738 observed host collections were complete. One Slurm status query
+timed out after ten seconds, and the former release helper stopped immediately.
+Its later verified release cannot recreate the original completion clock.
+
+The [prospective measurement repair](evidence/native_qlora_family_engineering_4cba88f.json)
+retries explicit query timeouts within the same 180-second deadline, retaining
+every query and requiring final exact step absence plus matching parent ownership.
+Partial output and ambiguous completed replies cannot establish release. The
+clean head-42 repeat and remaining selected/official seeds retain their native
+builds, objectives, settings, target and statistical procedure. Original failed
+results and costs remain recorded; the repair itself supplies no quality or
+performance result.
+
 Strict v11 memory acceptance passed across the whole observed workflow and all
 four model stages: all 768 host samples were complete and owned-GPU attribution
 was valid. Sampled peaks were 38.254 GiB owned GPU memory and 29.019 GiB host PSS;
