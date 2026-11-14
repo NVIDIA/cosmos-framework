@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Gradient finite-check semantics; CUDA cases exercise the actual foreach kernels."""
+"""Public gradient-finiteness edge cases, immutability and recovery semantics."""
 
 from __future__ import annotations
 
@@ -17,15 +17,8 @@ import torch
 from cosmos_framework.posttrain.roles.trainer import finite
 
 DTYPES = (torch.float16, torch.bfloat16, torch.float32, torch.float64)
-QUALIFIED_TORCH_REVISIONS = (
-    "449b1768410104d3ed79d3bcfe4ba1d65c7f22c0",
-    "70d99e998b4955e0049d13a98d77ae1b14db1f45",
-)
-CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires actual CUDA foreach kernels")
-QUALIFIED_CUDA = pytest.mark.skipif(
-    not torch.cuda.is_available() or getattr(torch.version, "git_version", None) not in QUALIFIED_TORCH_REVISIONS,
-    reason="requires a qualified PyTorch source revision and actual CUDA foreach kernels",
-)
+CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires actual CUDA kernels")
+DEVICES = [pytest.param("cpu", marks=pytest.mark.CPU), pytest.param("cuda", marks=[pytest.mark.GPU, CUDA])]
 
 
 def _bytes(tensor: torch.Tensor) -> torch.Tensor:
@@ -61,105 +54,57 @@ def _edge_gradients(dtype, device, fault):
     return gradients
 
 
-def _check_read_only_flags(gradients):
+def _check_read_only_gradients(gradients):
     before = [(_bytes(tensor), tensor._version, tensor.stride(), tensor.data_ptr()) for tensor in gradients]
     rng = torch.get_rng_state().clone()
     cuda_rng = {tensor.device: torch.cuda.get_rng_state(tensor.device) for tensor in gradients if tensor.is_cuda}
-    flags = finite._gradient_finite_flags_by_device(gradients)
-    expected = finite._finite_flags_by_device(gradients)
-    assert set(flags) == set(expected)
-    for device in flags:
-        assert bool(flags[device]) == bool(expected[device])
-        assert not flags[device].requires_grad
-    for tensor, (values, version, stride, pointer) in zip(gradients, before):
+    result = finite.all_ranks_gradients_finite(
+        [SimpleNamespace(grad=gradient) for gradient in gradients], require_gradients=True
+    )
+    for tensor, (values, version, stride, pointer) in zip(gradients, before, strict=True):
         assert torch.equal(_bytes(tensor), values)
         assert tensor._version == version
         assert tensor.stride() == stride and tensor.data_ptr() == pointer
     assert torch.equal(torch.get_rng_state(), rng)
     for device, state in cuda_rng.items():
         assert torch.equal(torch.cuda.get_rng_state(device), state)
-    return flags
+    return result
 
 
 @pytest.mark.L0
-@pytest.mark.CPU
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("fault", ("finite", "nan", "positive_inf", "negative_inf"))
-def test_cpu_gradient_path_keeps_elementwise_semantics(dtype, fault, monkeypatch):
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("CPU gradients must retain the existing elementwise path")
+def test_gradient_finiteness_edges_and_immutability(device, dtype, fault):
+    assert _check_read_only_gradients(_edge_gradients(dtype, device, fault)) is (fault == "finite")
 
-    monkeypatch.setattr(torch, "_foreach_norm", unexpected)
-    flags = _check_read_only_flags(_edge_gradients(dtype, "cpu", fault))
-    assert bool(flags[torch.device("cpu")]) is (fault == "finite")
+
+@pytest.mark.L0
+@pytest.mark.parametrize("device", DEVICES)
+def test_mixed_dtype_view_and_subclass_gradients(device):
+    class TensorSubclass(torch.Tensor):
+        pass
+
+    gradients = [torch.full((3,), 1.0, dtype=dtype, device=device) for dtype in DTYPES]
+    gradients += [torch.empty(0, device=device), torch.ones(3, 5, device=device).t()]
+    complex_gradient = torch.tensor([1.0 + 1.0j, 2.0 + 0.0j], device=device)
+    gradients += [complex_gradient, torch._neg_view(torch.ones(4, device=device))]
+    gradients += [torch.ones(3, device=device).as_subclass(TensorSubclass)]
+    assert _check_read_only_gradients(gradients)
+    complex_gradient[0] = complex(1.0, float("inf"))
+    assert not _check_read_only_gradients(gradients)
 
 
 @pytest.mark.L0
 @pytest.mark.CPU
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("fault", ("finite", "nan", "positive_inf", "negative_inf"))
-def test_grouped_reduction_contract_with_cpu_norms(dtype, fault, monkeypatch):
-    # Exercise grouping/immutability on CPU without presenting this as CUDA
-    # qualification; the separately marked tests below use actual CUDA kernels.
-    monkeypatch.setattr(torch.version, "git_version", QUALIFIED_TORCH_REVISIONS[0])
-    monkeypatch.setattr(finite, "_foreach_finite_eligible", lambda _tensor: True)
-    flags = _check_read_only_flags(_edge_gradients(dtype, "cpu", fault))
-    assert bool(flags[torch.device("cpu")]) is (fault == "finite")
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-@pytest.mark.parametrize("revision", QUALIFIED_TORCH_REVISIONS)
-@pytest.mark.parametrize("fault", ("finite", "nan"))
-def test_qualified_source_revisions_retain_grouped_dispatch(revision, fault, monkeypatch):
-    # This exercises dispatch and CPU arithmetic, not new accelerator qualification.
-    monkeypatch.setattr(torch.version, "git_version", revision)
-    monkeypatch.setattr(finite, "_foreach_finite_eligible", lambda _tensor: True)
-    original = torch._foreach_norm
-    calls = []
-
-    def observed(tensors, order):
-        calls.append((len(tensors), order))
-        return original(tensors, order)
-
-    monkeypatch.setattr(torch, "_foreach_norm", observed)
-    flags = _check_read_only_flags(_edge_gradients(torch.float32, "cpu", fault))
-    assert bool(flags[torch.device("cpu")]) is (fault == "finite")
-    assert calls == [(3, float("inf"))]
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-@pytest.mark.parametrize(
-    "revision", (None, "", "unqualified-torch-2.13-source", QUALIFIED_TORCH_REVISIONS[0] + "-dirty")
-)
-@pytest.mark.parametrize("fault", ("finite", "nan", "negative_inf"))
-def test_unqualified_source_uses_original_predicate_before_grouping(revision, fault, monkeypatch):
-    if revision is None:
-        monkeypatch.delattr(torch.version, "git_version")
-    else:
-        monkeypatch.setattr(torch.version, "git_version", revision)
-
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("unqualified builds must not select or execute grouped CUDA reductions")
-
-    monkeypatch.setattr(finite, "_foreach_finite_eligible", unexpected)
-    monkeypatch.setattr(torch, "_foreach_norm", unexpected)
-    flags = _check_read_only_flags(_edge_gradients(torch.float64, "cpu", fault))
-    assert bool(flags[torch.device("cpu")]) is (fault == "finite")
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-def test_empty_missing_nonfloating_and_tensor_wrapper_semantics(monkeypatch):
+def test_empty_missing_nonfloating_and_tensor_wrapper_semantics():
     assert finite.all_ranks_gradients_finite([])
     assert not finite.all_ranks_gradients_finite([], require_gradients=True)
     empty = torch.nn.Parameter(torch.empty(0))
     empty.grad = torch.empty_like(empty)
     assert finite.all_ranks_gradients_finite([empty], require_gradients=True)
-    assert not finite._foreach_finite_eligible(empty.grad)
-    assert finite._gradient_finite_flags_by_device([torch.ones(2, dtype=torch.int64)]) == {}
-    assert finite._gradient_finite_flags_by_device([torch.ones(2, dtype=torch.bool)]) == {}
+    assert _check_read_only_gradients([torch.ones(2, dtype=torch.int64)])
+    assert _check_read_only_gradients([torch.ones(2, dtype=torch.bool)])
 
     class LocalGradient:
         def to_local(self):
@@ -180,22 +125,8 @@ def test_unsupported_layouts_delegate_without_conversion(monkeypatch):
         return {}
 
     monkeypatch.setattr(finite, "_finite_flags_by_device", existing)
-    assert finite._gradient_finite_flags_by_device([sparse]) == {}
+    assert finite.all_ranks_gradients_finite([SimpleNamespace(grad=sparse)], require_gradients=True)
     assert len(observed) == 1 and observed[0] is sparse
-
-
-@pytest.mark.L0
-@pytest.mark.CPU
-def test_only_gradient_checks_use_the_new_reduction(monkeypatch):
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("loss/model/optimizer checks must retain the original reducer")
-
-    monkeypatch.setattr(finite, "_gradient_finite_flags_by_device", unexpected)
-    assert finite.all_ranks_tensor_finite(torch.tensor(1.0))
-    assert not finite.all_ranks_tensors_finite({"nested": [torch.tensor(float("nan"))]})
-    net = torch.nn.Linear(2, 1)
-    optimizer = torch.optim.AdamW(net.parameters())
-    assert finite.all_ranks_model_optimizer_finite(net, optimizer)
 
 
 def _consensus_worker(rank, rendezvous, output):
@@ -233,110 +164,12 @@ def test_two_rank_rejection_missing_and_placement_consensus(tmp_path):
 
 
 @pytest.mark.L0
-@pytest.mark.GPU
-@QUALIFIED_CUDA
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("fault", ("finite", "nan", "positive_inf", "negative_inf"))
-def test_cuda_foreach_edges_and_input_immutability(dtype, fault, monkeypatch):
-    original = torch._foreach_norm
-    calls = []
-
-    def observed(tensors, order):
-        calls.append((len(tensors), order, tensors[0].dtype))
-        return original(tensors, order)
-
-    monkeypatch.setattr(torch, "_foreach_norm", observed)
-    flags = _check_read_only_flags(_edge_gradients(dtype, "cuda", fault))
-    assert bool(next(iter(flags.values()))) is (fault == "finite")
-    assert calls == [(3, float("inf"), dtype)]
-
-
-@pytest.mark.L0
-@pytest.mark.GPU
-@QUALIFIED_CUDA
-@pytest.mark.parametrize("dtype", DTYPES)
-def test_cuda_nonfinite_survives_warp_block_and_chunk_boundaries(dtype):
-    # Exercise both sides of warp, 512-thread block and 65536-element foreach
-    # chunk boundaries, including a short tail after two complete chunks.
-    gradient = torch.ones(131073, device="cuda", dtype=dtype)
-    for index in (0, 1, 31, 32, 511, 512, 65535, 65536, 65537, 131071, 131072):
-        for value in (float("nan"), float("inf"), -float("inf")):
-            gradient[index] = value
-            flags = _check_read_only_flags([gradient])
-            assert not bool(next(iter(flags.values()))), (dtype, index, value)
-        gradient[index] = 1.0
-    assert bool(next(iter(_check_read_only_flags([gradient]).values())))
-
-
-@pytest.mark.L0
-@pytest.mark.GPU
-@QUALIFIED_CUDA
-def test_cuda_mixed_groups_fallback_and_multiple_foreach_launches(monkeypatch):
-    class TensorSubclass(torch.Tensor):
-        pass
-
-    gradients = [torch.full((3,), 1.0, dtype=dtype, device="cuda") for dtype in DTYPES]
-    gradients[0].requires_grad_(True)
-    gradients += [torch.ones(7, device="cuda") for _ in range(405)]
-    gradients += [torch.empty(0, device="cuda"), torch.ones(3, 5, device="cuda").t()]
-    complex_gradient = torch.tensor([1.0 + 1.0j, 2.0 + 0.0j], device="cuda")
-    gradients += [complex_gradient]
-    gradients += [torch._neg_view(torch.ones(4, device="cuda"))]
-    gradients += [torch.ones(3, device="cuda").as_subclass(TensorSubclass)]
-    assert all(not finite._foreach_finite_eligible(tensor) for tensor in gradients[-5:])
-    original = torch._foreach_norm
-    calls = []
-
-    def observed(tensors, order):
-        calls.append((len(tensors), tensors[0].dtype))
-        return original(tensors, order)
-
-    monkeypatch.setattr(torch, "_foreach_norm", observed)
-    flags = _check_read_only_flags(gradients)
-    assert bool(next(iter(flags.values())))
-    assert sorted(count for count, _dtype in calls) == [1, 1, 1, 406]
-    gradients[402][0] = float("nan")
-    assert not bool(next(iter(_check_read_only_flags(gradients).values())))
-    gradients[402][0] = 1.0
-    complex_gradient[0] = complex(1.0, float("inf"))
-    assert not bool(next(iter(_check_read_only_flags(gradients).values())))
-
-
-@pytest.mark.L0
-@pytest.mark.GPU
-@CUDA
-def test_cuda_unqualified_source_uses_unchanged_elementwise_predicate(monkeypatch):
-    monkeypatch.setattr(torch.version, "git_version", "unqualified-source")
-
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("unqualified CUDA builds must retain the elementwise predicate")
-
-    monkeypatch.setattr(torch, "_foreach_norm", unexpected)
-    for fault in ("finite", "nan", "positive_inf", "negative_inf"):
-        flags = _check_read_only_flags(_edge_gradients(torch.float32, "cuda", fault))
-        assert bool(next(iter(flags.values()))) is (fault == "finite")
-
-
-@pytest.mark.L0
-@pytest.mark.parametrize(
-    "device",
-    [pytest.param("cpu", marks=pytest.mark.CPU), pytest.param("cuda", marks=[pytest.mark.GPU, QUALIFIED_CUDA])],
-)
-def test_native_multiupdate_and_recovery_equal_elementwise(device, tmp_path, monkeypatch):
+@pytest.mark.parametrize("device", DEVICES)
+def test_native_multiupdate_and_recovery(device, tmp_path):
     from cosmos_framework.posttrain.algorithm.primitives.objective import Objective, Reduction
     from cosmos_framework.posttrain.roles.trainer import LLMTrainer
 
-    new_check = finite._gradient_finite_flags_by_device
-    if device == "cpu":
-        # CPU validates native lifecycle with real CPU foreach reductions; only
-        # the separately marked CUDA case qualifies accelerator execution.
-        monkeypatch.setattr(torch.version, "git_version", QUALIFIED_TORCH_REVISIONS[0])
-        monkeypatch.setattr(finite, "_foreach_finite_eligible", lambda _tensor: True)
-
-    def run(grouped, resume):
-        monkeypatch.setattr(
-            finite, "_gradient_finite_flags_by_device", new_check if grouped else finite._finite_flags_by_device
-        )
+    def run(resume):
         random.seed(62)
         np.random.seed(62)
         torch.manual_seed(62)
@@ -372,7 +205,7 @@ def test_native_multiupdate_and_recovery_equal_elementwise(device, tmp_path, mon
         for microstep in range(10):
             trainer.train([])
             if resume and microstep == 5:
-                path = tmp_path / f"resume-{grouped}"
+                path = tmp_path / "resume"
                 trainer.save(str(path))
                 model, optimizer, scheduler, trainer = build()
                 assert trainer.load(str(path)) == 3
@@ -385,6 +218,4 @@ def test_native_multiupdate_and_recovery_equal_elementwise(device, tmp_path, mon
             "cuda_rng": torch.cuda.get_rng_state() if device == "cuda" else None,
         }
 
-    reference = run(False, False)
-    for candidate in (run(True, False), run(True, True)):
-        _assert_exact(candidate, reference)
+    _assert_exact(run(True), run(False))

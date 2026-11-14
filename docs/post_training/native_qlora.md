@@ -24,12 +24,12 @@ The initial candidate is `Qwen/Qwen3-VL-8B-Instruct` at revision `0c351dd01ed87e
 
 Use uv `0.11.29` and Python 3.12. The [posttrain environment](../../docker/posttrain/environment/pyproject.toml) and its [lock](../../docker/posttrain/environment/uv.lock) select Torch `2.11.0+cu128`, Transformers `5.8.1`, and bitsandbytes `0.49.2`. The x86-64 selection uses CPU TorchCodec `0.11.0+cpu`; the host also needs working FFmpeg libraries for video decoding.
 
-The current shared trainer enables its grouped CUDA gradient-finiteness predicate only
-for the qualified PyTorch source revisions `449b1768410104d3ed79d3bcfe4ba1d65c7f22c0`
-(2.10.0) and `70d99e998b4955e0049d13a98d77ae1b14db1f45` (2.11.0).
-Other or unidentified builds retain the original elementwise predicate; gradient
-precision, placement and trainability are unchanged. This guard does not qualify
-an otherwise unsupported model/runtime combination or revise historical timing results.
+The shared trainer retains the original elementwise gradient-finiteness checks.
+The grouped CUDA candidate passed correctness tests but missed the GR00T study's
+predeclared complete-workflow improvement gate and was removed from the default
+implementation. Its historical CUDA and timing evidence remains in the
+[GR00T qualification record](native_qlora_gr00t.md). This decision changes neither
+the selected Qwen numerical trajectory nor its historical qualification results.
 
 From the reviewed checkout, choose a new absolute work directory and build the environment:
 
