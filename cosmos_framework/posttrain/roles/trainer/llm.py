@@ -1773,6 +1773,11 @@ class LLMTrainer(BaseTrainer):
             if self._checkpoint_recorded_pristine_optimizer(trainer_state):
                 optimizer_target = {**optimizer_target, "state": {}}
             validate_dcp_target_inventory(path, "optim", optimizer_target)
+        # A pristine optimizer's inventory extraction creates temporary moments.
+        # The guard clears optimizer.state, but this dictionary still owns those
+        # tensors. Release it before restoring the live moments, especially when
+        # the adapter view includes a large trained action head.
+        del optimizer_target
         model_state = get_model_state_dict(codec.view)
         validate_dcp_target_inventory(path, "model", model_state)
         if not self.checkpoint_manager.load_dcp_component(path, "model", model_state):

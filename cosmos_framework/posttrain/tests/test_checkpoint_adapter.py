@@ -9,6 +9,7 @@ import os
 import random
 import subprocess
 import sys
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -125,6 +126,56 @@ def test_adapter_dcp_resume_matches_uninterrupted_run_and_preserves_base(tmp_pat
     metadata = read_adapter_metadata(str(checkpoint), require_resume=True)
     assert set(metadata["parameters"]) == set(expected)
     assert source.onload() == 0.0
+
+
+@pytest.mark.parametrize("live_optimizer_initialized", [False, True])
+def test_resume_releases_inventory_only_optimizer_moments_before_live_restore(
+    tmp_path: Path, monkeypatch, live_optimizer_initialized: bool
+) -> None:
+    """Inventory validation must not retain a second complete Adam state during restore."""
+    from torch.distributed.checkpoint import state_dict
+
+    source = _trainer()
+    source.train([None])
+    checkpoint = _save(source, tmp_path)
+    restored = _trainer()
+    if live_optimizer_initialized:
+        restored.train([None])
+        restored.train([None])
+    extract = state_dict.get_optimizer_state_dict
+    inventory_moments = []
+    calls = 0
+
+    def observe_extraction(*args, **kwargs):
+        nonlocal calls
+        if calls == 1 and not live_optimizer_initialized:
+            assert inventory_moments and all(ref() is None for ref in inventory_moments), (
+                "inventory-only moments survived pristine rollback and overlap live restore"
+            )
+        result = extract(*args, **kwargs)
+        if calls == 1 and live_optimizer_initialized:
+            live = {id(value) for state in result["state"].values() for value in state.values()}
+            assert all(ref() is not None and id(ref()) in live for ref in inventory_moments)
+        if calls == 0:
+            inventory_moments.extend(
+                weakref.ref(value)
+                for state in result["state"].values()
+                for name, value in state.items()
+                if name in {"exp_avg", "exp_avg_sq"}
+            )
+            assert inventory_moments
+        calls += 1
+        return result
+
+    monkeypatch.setattr(state_dict, "get_optimizer_state_dict", observe_extraction)
+    assert restored.load(str(checkpoint)) == 1
+    assert calls >= 2
+    for key, state in restored.opt.state_dict()["state"].items():
+        for name, value in state.items():
+            torch.testing.assert_close(value, source.opt.state_dict()["state"][key][name], rtol=0, atol=0)
+    expected = _parameters(source)
+    for name, parameter in _parameters(restored).items():
+        torch.testing.assert_close(parameter, expected[name], rtol=0, atol=0)
 
 
 def test_model_only_artifact_carries_metadata_and_reloads(tmp_path: Path) -> None:
