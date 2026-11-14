@@ -206,24 +206,26 @@ export COSMOS_TRAINING_CODE_REVISION=64ea823db4a7978c387d195bb464879b4f4733d0
 export COSMOS_TRAINING_WHEEL_SHA256=f1a3cc7332007881d41e6daef3379d3d08985bc883cebbe21cdc491d18acdaf7
 recipe=cosmos_framework/posttrain/configs/sft_alpamayo_qlora.py
 common=(
-  --override model.checkpoint_path=/staged/Alpamayo-R1-10B-dd4a24c
-  --override model.processor_path=/staged/Qwen3-VL-8B-processor-0c351dd
-  --override model.backbone_adaptation.mode=nf4_lora
-  --override model.backbone_adaptation.rank=32
-  --override model.backbone_adaptation.alpha=64
-  --override model.backbone_adaptation.seed=17
-  --override rl.seed=17 --override rl.evaluation_seed=123
+  model.checkpoint_path=/staged/Alpamayo-R1-10B-dd4a24c
+  model.processor_path=/staged/Qwen3-VL-8B-processor-0c351dd
+  model.backbone_adaptation.mode=nf4_lora
+  model.backbone_adaptation.rank=32
+  model.backbone_adaptation.alpha=64
+  model.backbone_adaptation.seed=17
+  rl.seed=17 rl.evaluation_seed=123
 )
+export_args=()
+for setting in "${common[@]}"; do export_args+=(--override "$setting"); done
 torchrun --standalone --nproc-per-node=1 \
   -m cosmos_framework.posttrain.checkpoint.tools.export_family_dense \
   --config "$recipe" --checkpoint /durable/portable/iter_000512 \
   --output /durable/new-unmerged-policy --unmerged \
-  --max-shard-size-bytes 536870912 "${common[@]}"
+  --max-shard-size-bytes 536870912 "${export_args[@]}"
 torchrun --standalone --nproc-per-node=1 \
   -m cosmos_framework.posttrain.entrypoints.action_eval \
   --config "$recipe" --checkpoint /durable/new-unmerged-policy \
-  --output /durable/new-unmerged-evaluation --unmerged "${common[@]}" \
-  --override data.validation_path=/data/validation.jsonl
+  --output /durable/new-unmerged-evaluation --unmerged -- "${common[@]}" \
+  data.validation_path=/data/validation.jsonl
 ```
 
 The inference loader uses the artifact's verified processor/config sidecars and
