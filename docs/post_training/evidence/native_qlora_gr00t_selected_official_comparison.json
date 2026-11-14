@@ -1,0 +1,78 @@
+{
+  "analysis_implementation_revision": "e3678a5",
+  "analysis_sha256": "25efdb2b154d60af508f4faff95761b1379e1e114b8d0d2bf29c3afb398b45b4",
+  "candidate": "Selected ordinary rank32/alpha64 NF4 LoRA plus FP32 native heads, constant LR1e-5 and fused FP32 AdamW; exact nine-cell continuation ingestion, five retained reports and four missing arms, original identities preserved.",
+  "created_utc": "2026-11-14T18:54:42.833356+00:00",
+  "execution_authorization": {
+    "cost": "Charge failed38546021(156GPU-s), all three new official allocations, five reused candidate/control reports and four missing matched arms separately; inherited calibration charged once.",
+    "cpus_each": 16,
+    "gpu_each": 1,
+    "host_memory_gib": 128,
+    "official_runs_total": 3,
+    "routing": "Unchanged configured account/partitions/QoS/constraints; at most2 owned pending/running jobs.",
+    "seeds": [
+      17,
+      42,
+      123
+    ],
+    "sequence": "Corrected17, missing matched42head and123 three-arm continuation, then official42 and123, subject to fresh storage/ownership and released predecessors.",
+    "stop": "Infrastructure/correctness/nonfinite failures stop the affected chain for diagnosis. No quality-dependent seed omission, one-arm horizon extension, automatic retry or additional rollouts.",
+    "wall_limit_each_seconds": 10800
+  },
+  "format": "gr00t-selected-official-comparison-v1",
+  "limits": "Selection-exposed development data; ten task clusters and three training seeds may have inadequate precision. Original quality failures, missing independent provenance and modest GR memory benefit remain open.",
+  "original_comparison_status": "Unperformed complete comparison; no original LR1e4 repetitions admitted, no historical pass/fail reclassification.",
+  "original_matched_protocol_sha256": "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7",
+  "original_official_protocol_sha256": "a7f98d474ad440c2d3433ccb04c3a590b5c2c9b7ef6f1d2b7f143baa47b6762c",
+  "prospective_status": "Frozen before any official-head development quality outcome. Job38546021 failed schema admission before initial validation or an optimizer update; v7 corrected submission is held until this record is bound.",
+  "rationale": "The original official comparison names the superseded LR1e-4 nine-arm protocol. Its seed17 failure remains preserved; repeating that failed recipe cannot replace the selected LR1e-5 candidate or the strong matched BF16 control. Bind the selected continuation prospectively without rewriting any original run identity.",
+  "reference": "Existing source699 official FP32/head-only/native train augmentation/state-dropout0.2/unfused HF AdamW/cosine15warmup LR1e-4 recipe. Exactly original a7f98 native settings, data, target, cadence and artifacts; only failed absent-vs-null wrapper check repaired.",
+  "scope": "Exposed LIBERO-spatial development practical whole-recipe comparison, separate from the matched NF4/BF16 LoRA study and independent confirmation.",
+  "selected_continuation_contract_sha256": "a916046ac45ccff652f5be23fb7d5a9af434fecb2df78189fe640dcd7e13a304",
+  "selected_learning_protocol_sha256": "4a06bffda03744616d993def30e2e6de0f21b407de5f3bfe940a9a191cc5bac2",
+  "statistics": {
+    "bootstrap_draws": 10000,
+    "bootstrap_seed": 6809,
+    "closed_loop_loss_guard_pp": 2.0,
+    "improvement": "One-sided95 upper relative MSE change below0.",
+    "joint_claim": "Offline MSE cannot establish rollout preservation or recipe release; existing2pp closed-loop guard and useful adaptation over source remain required.",
+    "no_partial_recipe_ci": true,
+    "noninferiority_upper_one_sided95_max": 0.05,
+    "paired_seeds": true,
+    "primary_endpoint": 300,
+    "resampling": "Crossed seed/task draws; a single within-task episode draw per task occurrence shared across all seeds and both arms. Same existing implementation; no resampling-unit change.",
+    "statistic": "NF4/official relative MSE change; equal seed, equal task, equal episode means after averaging fixed windows."
+  },
+  "strong_matched_control": "Selected BF16 LoRA LR1e-5 remains the quantizer-isolation control. The separately selected BF16 head-only LR1e-5 arm remains retained. No per-seed comparator selection or substitution.",
+  "target": {
+    "direction": "min",
+    "metric": "normalized_action_mse",
+    "receipt_sha256": "eff946f62dbdc9c57f61ac96f03f13640baaf5bee4695d9fd1381830b95e4534",
+    "rule": "First scheduled crossing after checkpoint publication/readback; retain unreached by300. No interpolation, arm-specific extension or attainer-only average.",
+    "threshold": 0.049561327725898344
+  },
+  "timing": "Report actual native process, preparation-inclusive target publication, cold full case and final export/reload costs separately. Original retained seed42 references are not a new matched timing block. Separate official allocations and ordering remain confounds; fixed300 is not equal compute. No superiority from point timing or retrospective clocks.",
+  "training_seeds": [
+    17,
+    42,
+    123
+  ],
+  "work": {
+    "evaluation_seed": 123,
+    "evaluation_steps": [
+      0,
+      100,
+      200,
+      300
+    ],
+    "final_diagnostic_noise_seeds": [
+      123,
+      456,
+      789
+    ],
+    "no_extra_search": true,
+    "updates_per_arm": 300,
+    "valid_action_elements_per_row": 70,
+    "validation_rows": 160
+  }
+}

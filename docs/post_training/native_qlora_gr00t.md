@@ -106,6 +106,15 @@ frozen-source and optimizer-membership checks, eight shared CUDA cases, and fres
 the earlier NF4 artifact. These checks establish lifecycle behavior; the separate 300-update
 practical comparison is still required for this control's task quality and performance.
 
+The [prospective selected-candidate comparison](evidence/native_qlora_gr00t_selected_official_comparison.json)
+binds the retained LR `1e-5` NF4 candidate and its complete paired-seed study to
+this separate official control, before any official development quality result.
+The original practical-analysis plan named the failed LR `1e-4` study; that
+complete comparison remains unperformed. Its identities and failures are retained.
+The selected comparison requires all three official seeds, keeps the matched
+BF16 LoRA comparison separate, and retains the original target and quality guards.
+It does not establish equal-compute superiority or independent confirmation.
+
 This is not a reproduction of the published LIBERO training benchmark. The pinned
 [upstream Spatial recipe](https://github.com/NVIDIA/Isaac-GR00T/blob/51d4c89f72fda44cbf77285c6a8114b52676b8a1/examples/LIBERO/README.md#fine-tune-libero-spatial)
 uses eight GPUs, global batch 640 and 20,000 updates from the generic
