@@ -16779,6 +16779,521 @@
           "lora_factors": 224
         }
       }
+    },
+    "38537242": {
+      "family": "alpamayo",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 3947,
+      "implementation_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "wheel_sha256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1",
+      "scope": "Build26bc single-device native LoRA correctness in both NF4/BF16 modes on two engineering rows; selected512 training remains4c. No new recipe-quality, runtime-promotion, deployment-latency or whole-host-memory claim. Later checkpoint-loading fixes require separate accelerator evidence.",
+      "protocol_sha256": "a1527022e02835385b022870bcd3ea6283ac4312f1f4b6f9e5c8d5fe9f3bb60b",
+      "payload_manifest_sha256": "1acbc28c9e14dec822a3770794dbc99ad573dbf6a90abbcdc728529e9f5e3783",
+      "acceptance_sha256": "e0fefebc6ac70031d24011fcf715418a05209631122f5a02e89faa351d0c5ce6",
+      "final_qualification_acceptance": true,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-final-build-38537242-readout-v1.json",
+        "sha256": "8f51fe1b6cb3ff97e9c6f819b2f84136452e660533652d81ca7fab02fdc15bfc"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-final-build-38537242-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-final-build-38537242-receipts-v1.tar.gz",
+        "archive_sha256": "5c35b21b92e4182401d9a3328ec08f59f7461ab30143a6cb7bf77af2b1d0e8b2",
+        "inventory_sha256": "120975b6cb7e8b9ec8a4113da98e6575fdc01ea561270558266afb0c562bc9eb",
+        "files_verified": 182,
+        "raw_samples_replayed": 2831,
+        "terminal_release_sha256": "74b5b2ffab1053b850b63ff8da485e07c561a252351ee85b84e6c4c583e9fb55",
+        "tensor_payloads_included": false
+      },
+      "cuda": {
+        "cases": 9,
+        "junit_sha256": "035fdf8425aea25f5693c1e03e715a541230ec843f0d8bab9ecd30300b9c79f4",
+        "passed": true,
+        "skipped": 0
+      },
+      "old_current_comparison": {
+        "baseline_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "each_mode_boundaries": [
+          5,
+          10
+        ],
+        "model_optimizer_rng_cursor_evaluation_exact": true,
+        "cross_build_resume_supported": false,
+        "metadata_files_modified": false,
+        "scope": "Actual on-node full comparisons; downloaded controls/metrics replay does not independently reload trained tensor payloads."
+      },
+      "results": [
+        {
+          "cache_observations": {
+            "clone_seconds": 0.08022095635533333,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 6,
+            "identity_seconds": 0.6485991021618247,
+            "misses": 6,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          },
+          "early_source_refusal": {
+            "native_entrypoint": "/run/output/negative-source/cosmos_framework/posttrain/entrypoints/action_sft.py",
+            "native_error": "native action checkpoint training implementation differs: roles/trainer/finite.py. Resume with the original qualified source build and runtime. Cross-build exact resume requires separate qualification; do not edit checkpoint identities. Portable inference reload remains supported independently.",
+            "native_phase_records": [],
+            "no_updates_or_checkpoints_created": true,
+            "passed": true
+          },
+          "fresh_reload": {
+            "checkpoint": {
+              "evaluation_sha256": "324f12ff3040a5f08644ed73f879693874d7e2fe993b4b003a473ea2b8821726",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            },
+            "legacy4c-portable": {
+              "evaluation_sha256": "623817282397b37e253b20284e8bb3e68f12a583f0b356dee20ec7d37dab64c3",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            },
+            "portable": {
+              "evaluation_sha256": "8da9f4c5e5fec7488f22e311dc4f441cf10ec127fcf7151a5d5430d7932aaa1f",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            }
+          },
+          "metadata": {
+            "factors": 494,
+            "heads": 409,
+            "optimizer_membership_exact": true,
+            "portable_complete_and_optimizer_none": true,
+            "quantized_targets": 247,
+            "source_files": 28,
+            "source_files_match_exact26bc": true,
+            "targets": 247,
+            "trainable_fp32": 903
+          },
+          "mode": "nf4_lora",
+          "observation_only": {
+            "build": {
+              "COSMOS_TRAINING_CODE_REVISION": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+              "COSMOS_TRAINING_WHEEL_SHA256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1"
+            },
+            "diagnostic_seconds": 8.360246111638844,
+            "observation_helper_sha256": "c771a190aa914daf61975b552be5802aafc77f43aed35ad4a9d9573505eb1b85",
+            "observer_sha256": "a07f80359c4d04faed2af88a0ac83e8785682e6a3fcf310ac8fae4753bc6b221",
+            "original_evaluation_sha256": "3125ce4eeaa5d80522a0bea95de0edb7305894faf788a49487551b4ef67e0893",
+            "passed": true,
+            "rows": [
+              {
+                "future_actions_and_rotations_absent": true,
+                "id": "physicalai-0251886b-1b95-43ff-b5a7-dc6140e8096a-5100000",
+                "image_grid_shape": [
+                  16,
+                  3
+                ],
+                "input_trees_and_original_samples_unchanged": true,
+                "inputs_exact": true,
+                "output_shape": [
+                  1,
+                  64,
+                  3
+                ],
+                "processed_tokens": [
+                  1,
+                  3008
+                ],
+                "seed": 123,
+                "trajectory_exact": true
+              },
+              {
+                "future_actions_and_rotations_absent": true,
+                "id": "physicalai-144f01a4-5540-4df3-8835-22cd568b0226-5100000",
+                "image_grid_shape": [
+                  16,
+                  3
+                ],
+                "input_trees_and_original_samples_unchanged": true,
+                "inputs_exact": true,
+                "output_shape": [
+                  1,
+                  64,
+                  3
+                ],
+                "processed_tokens": [
+                  1,
+                  3008
+                ],
+                "seed": 123,
+                "trajectory_exact": true
+              }
+            ],
+            "scope": "Same loaded old4c portable policy; original native fresh scores unchanged. Diagnostic cost separate; controlled engineering parity, not latency, closed-loop success or safety."
+          },
+          "recovery_rng_data_and_evaluation_exact": true,
+          "reported_on_node_old_current_exact_boundaries": [
+            5,
+            10
+          ],
+          "reported_on_node_same_build_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "same_build_cache_off_on": {
+            "10": {
+              "allowed_observational_differences": [
+                "identity.training_contract.evaluation_input_reuse.enabled"
+              ],
+              "cross_configuration_resume_supported": false,
+              "metadata_files_modified": false,
+              "model_optimizer_controls_rng_cursor_evaluation_exact": true,
+              "passed": true
+            },
+            "5": {
+              "allowed_observational_differences": [
+                "identity.training_contract.evaluation_input_reuse.enabled"
+              ],
+              "cross_configuration_resume_supported": false,
+              "metadata_files_modified": false,
+              "model_optimizer_controls_rng_cursor_evaluation_exact": true,
+              "passed": true
+            }
+          }
+        },
+        {
+          "cache_observations": {
+            "clone_seconds": 0.10441129561513662,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 6,
+            "identity_seconds": 0.8869964573532343,
+            "misses": 6,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          },
+          "early_source_refusal": {
+            "native_entrypoint": "/run/output/negative-source/cosmos_framework/posttrain/entrypoints/action_sft.py",
+            "native_error": "native action checkpoint training implementation differs: roles/trainer/finite.py. Resume with the original qualified source build and runtime. Cross-build exact resume requires separate qualification; do not edit checkpoint identities. Portable inference reload remains supported independently.",
+            "native_phase_records": [],
+            "no_updates_or_checkpoints_created": true,
+            "passed": true
+          },
+          "fresh_reload": {
+            "checkpoint": {
+              "evaluation_sha256": "04aa0bbdf1409f636176015bfa2a5d381e223241699e46a9f506fc6fd6af1979",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            },
+            "legacy4c-portable": {
+              "evaluation_sha256": "b62152f63d250641a11a00cd660c4fe8c8124e815afae79314f4d5d534c4d8e8",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            },
+            "portable": {
+              "evaluation_sha256": "50fdb79f1551e240144a87ec75bfaa96e3bd376677740e95805673f8efcd0826",
+              "metrics_and_rows_exact": true,
+              "rows": 2
+            }
+          },
+          "metadata": {
+            "factors": 494,
+            "heads": 409,
+            "optimizer_membership_exact": true,
+            "portable_complete_and_optimizer_none": true,
+            "quantized_targets": 0,
+            "source_files": 28,
+            "source_files_match_exact26bc": true,
+            "targets": 247,
+            "trainable_fp32": 903
+          },
+          "mode": "bf16_lora",
+          "observation_only": {
+            "build": {
+              "COSMOS_TRAINING_CODE_REVISION": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+              "COSMOS_TRAINING_WHEEL_SHA256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1"
+            },
+            "diagnostic_seconds": 8.254453006200492,
+            "observation_helper_sha256": "c771a190aa914daf61975b552be5802aafc77f43aed35ad4a9d9573505eb1b85",
+            "observer_sha256": "a07f80359c4d04faed2af88a0ac83e8785682e6a3fcf310ac8fae4753bc6b221",
+            "original_evaluation_sha256": "365cc9dd765a933db8efdee6e5dc6573df60aaedcd8f248eac8b79bece6ca13f",
+            "passed": true,
+            "rows": [
+              {
+                "future_actions_and_rotations_absent": true,
+                "id": "physicalai-0251886b-1b95-43ff-b5a7-dc6140e8096a-5100000",
+                "image_grid_shape": [
+                  16,
+                  3
+                ],
+                "input_trees_and_original_samples_unchanged": true,
+                "inputs_exact": true,
+                "output_shape": [
+                  1,
+                  64,
+                  3
+                ],
+                "processed_tokens": [
+                  1,
+                  3008
+                ],
+                "seed": 123,
+                "trajectory_exact": true
+              },
+              {
+                "future_actions_and_rotations_absent": true,
+                "id": "physicalai-144f01a4-5540-4df3-8835-22cd568b0226-5100000",
+                "image_grid_shape": [
+                  16,
+                  3
+                ],
+                "input_trees_and_original_samples_unchanged": true,
+                "inputs_exact": true,
+                "output_shape": [
+                  1,
+                  64,
+                  3
+                ],
+                "processed_tokens": [
+                  1,
+                  3008
+                ],
+                "seed": 123,
+                "trajectory_exact": true
+              }
+            ],
+            "scope": "Same loaded old4c portable policy; original native fresh scores unchanged. Diagnostic cost separate; controlled engineering parity, not latency, closed-loop success or safety."
+          },
+          "recovery_rng_data_and_evaluation_exact": true,
+          "reported_on_node_old_current_exact_boundaries": [
+            5,
+            10
+          ],
+          "reported_on_node_same_build_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "same_build_cache_off_on": {
+            "10": {
+              "allowed_observational_differences": [
+                "identity.training_contract.evaluation_input_reuse.enabled"
+              ],
+              "cross_configuration_resume_supported": false,
+              "metadata_files_modified": false,
+              "model_optimizer_controls_rng_cursor_evaluation_exact": true,
+              "passed": true
+            },
+            "5": {
+              "allowed_observational_differences": [
+                "identity.training_contract.evaluation_input_reuse.enabled"
+              ],
+              "cross_configuration_resume_supported": false,
+              "metadata_files_modified": false,
+              "model_optimizer_controls_rng_cursor_evaluation_exact": true,
+              "passed": true
+            }
+          }
+        }
+      ],
+      "memory": {
+        "device_peak_bytes": 82984501248,
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 53863930880,
+        "host_rss_sum_peak_bytes": 54399401984,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 3874.3304693698883,
+        "owned_device_process_peak_bytes": 82185289728,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 2831,
+        "sampling_gap_seconds": {
+          "count": 2830,
+          "maximum": 7.001100540161133,
+          "mean": 1.3690213672685119,
+          "median": 1.3222695589065552,
+          "p95": 1.569167399406433,
+          "sum": 3874.3304693698883
+        }
+      },
+      "memory_gaps": [
+        {
+          "errors": [
+            "live_or_unknown_memory_unreadable",
+            "unproven_live_thread_memory"
+          ],
+          "index": 225,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "nf4_lora-full"
+        },
+        {
+          "errors": [
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 540,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "nf4_lora-cached"
+        },
+        {
+          "errors": [
+            "collection_deadline_exceeded",
+            "live_or_unknown_memory_unreadable",
+            "unproven_live_thread_memory"
+          ],
+          "index": 914,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "nf4_lora-resumed"
+        },
+        {
+          "errors": [
+            "collection_deadline_exceeded",
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 1617,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "bf16_lora-full"
+        },
+        {
+          "errors": [
+            "collection_deadline_exceeded",
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 2001,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "bf16_lora-cached"
+        },
+        {
+          "errors": [
+            "live_or_unknown_memory_unreadable",
+            "membership_transition_retry_exhausted"
+          ],
+          "index": 2371,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "bf16_lora-resumed"
+        }
+      ],
+      "stage_memory_observations": {
+        "CUDA-original-predicate-edges-recovery": {
+          "complete_host": 25,
+          "positive_owned_gpu": 6,
+          "samples": 25
+        },
+        "bf16_lora-cached": {
+          "complete_host": 402,
+          "positive_owned_gpu": 236,
+          "samples": 403
+        },
+        "bf16_lora-checkpoint-reload": {
+          "complete_host": 115,
+          "positive_owned_gpu": 105,
+          "samples": 115
+        },
+        "bf16_lora-full": {
+          "complete_host": 392,
+          "positive_owned_gpu": 244,
+          "samples": 393
+        },
+        "bf16_lora-legacy4c-portable-reload": {
+          "complete_host": 141,
+          "positive_owned_gpu": 125,
+          "samples": 141
+        },
+        "bf16_lora-portable-reload": {
+          "complete_host": 130,
+          "positive_owned_gpu": 120,
+          "samples": 130
+        },
+        "bf16_lora-resumed": {
+          "complete_host": 258,
+          "positive_owned_gpu": 175,
+          "samples": 259
+        },
+        "bf16_lora-source-refusal": {
+          "complete_host": 28,
+          "positive_owned_gpu": 3,
+          "samples": 28
+        },
+        "nf4_lora-cached": {
+          "complete_host": 346,
+          "positive_owned_gpu": 187,
+          "samples": 347
+        },
+        "nf4_lora-checkpoint-reload": {
+          "complete_host": 104,
+          "positive_owned_gpu": 93,
+          "samples": 104
+        },
+        "nf4_lora-full": {
+          "complete_host": 317,
+          "positive_owned_gpu": 188,
+          "samples": 318
+        },
+        "nf4_lora-legacy4c-portable-reload": {
+          "complete_host": 133,
+          "positive_owned_gpu": 117,
+          "samples": 133
+        },
+        "nf4_lora-portable-reload": {
+          "complete_host": 125,
+          "positive_owned_gpu": 116,
+          "samples": 125
+        },
+        "nf4_lora-resumed": {
+          "complete_host": 279,
+          "positive_owned_gpu": 183,
+          "samples": 280
+        },
+        "nf4_lora-source-refusal": {
+          "complete_host": 30,
+          "positive_owned_gpu": 2,
+          "samples": 30
+        }
+      },
+      "memory_scope": "Original v9 per-required-model-stage positive GPU plus complete-host observation guard passed. Six incomplete samples remain; whole-host PSS is false and peaks are sampled lower bounds. Gate does not establish comparative memory benefit or runtime promotion.",
+      "workflow_seconds": 3880.7791831074283,
+      "runtime": {
+        "allocator": "expandable_segments:True",
+        "code": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+        "cpu_affinity": [
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          124,
+          125,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151
+        ],
+        "family": "alpamayo",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-e4397610-a6f9-8896-ec28-d4b9e9e33300"
+        },
+        "node": "batch-block4-2071",
+        "numa_nodes": [
+          "node1",
+          "node7"
+        ],
+        "slurm_job": "38537242",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "independent_root_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-final-build-38537242-root-review.json",
+        "sha256": "074269c47e52d7c114c93cb967bcde25f16cd3d29f946c9d625802d6174204fe"
+      }
     }
   },
   "read_only_head_memory_diagnostic": {

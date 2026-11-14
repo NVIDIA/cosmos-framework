@@ -165,9 +165,9 @@ From `cbe368d`, exact resume also binds 25 explicit training/recovery source fil
 Changed sources or a legacy checkpoint without this contract fail before data/model
 construction and before state restoration. Use the original qualified build for
 older resumable checkpoints; do not rewrite their identities. Compatible portable
-inference reload remains independent of this training-only check. CPU lifecycle
-coverage passed; full-model checks of the new build remain separate from the
-retained `4cba88f` recovery results below.
+inference reload remains independent of this training-only check. Build `26bc60f`
+passed full-model source-refusal and exact ten-update recovery checks in both
+precision modes, separately from the retained `4cba88f` mature recovery below.
 The current inventory extends this to 28 files by binding shared flow-dataset
 row lookup, media decoding, and the evaluation-input reuse implementation.
 Dataset-content identity alone does not identify that execution. Earlier 25-file
@@ -198,8 +198,10 @@ separate from merged export. Tiny native Alpamayo CPU flow tests preserve exact
 outputs after unmerged reload. Full-model CUDA qualification now also preserves
 both selected NF4/BF16 update-512 policies exactly on all 256 development rows and
 two controlled trajectory probes (`38530040`/`38531953`, export/inference build
-`64ea823`). Current-build observation-only and evaluation-cache checks remain
-pending. The failed BF16 merged-conversion result below remains unchanged.
+`64ea823`). Build `26bc60f` additionally passed observation-only portable-input
+and evaluation-cache correctness checks on two engineering rows. Observation-only
+checks on standalone unmerged artifacts remain separate. The failed BF16
+merged-conversion result below remains unchanged.
 
 On the qualified export build, use the original model/task settings, including
 adapter seed 17 for the selected policy (the recipe default is 42):
@@ -273,9 +275,12 @@ lines with `model.alpamayo.dense.build_dense_policy(config, artifact,
 device=device, output=output, unmerged=True)`; preparation and sampling stay the
 same. CPU tests use the actual pinned processor, history tokenizer and native
 sampler: deleting future labels preserves prepared tensors and controlled
-trajectories exactly, without mutating inputs or caller RNG. Full-model
-observation-only artifact checks remain part of the final-build qualification;
-this API does not establish closed-loop quality or deployment latency.
+trajectories exactly, without mutating inputs or caller RNG. Full-model checks
+on `26bc60f` also preserve exact token/history inputs and seeded trajectories on
+two rows for each precision mode after loading the original `4cba88f` portable
+policy. Each row has 3,008 processed tokens and 16 image slots; removing future
+actions/rotations produces the same `[1,64,3]` trajectory. This does not establish
+standalone-unmerged observation parity, closed-loop quality or deployment latency.
 
 For the first full-model conversion check, the prospectively fixed budgets are:
 controlled normalized flow velocity RMSE ≤0.01 and maximum absolute error ≤0.05;
@@ -616,8 +621,12 @@ host-PSS flags. Commit `81c9913` implements default-off, one-row CPU preparation
 reuse with a fixed 128-MiB retained limit, local-media/settings mutation checks,
 separate tensor ownership and cleanup on failure. Thirty focused CPU cases
 include native evaluation, committed recovery and the actual pinned processor.
-Full-model accelerator checks and a matched uninstrumented workflow comparison
-in both precision arms remain required before promotion.
+Build `26bc60f` passed full-model cache-off/on checks in both precision arms:
+all ten numerical updates, checkpoints at 5/10, native task metrics, and own
+5-to-10 recovery agree exactly. Each arm recorded six hits/six misses and a
+70,829,184-byte retained peak. These correctness checks do not establish a
+speedup; a matched uninstrumented workflow comparison remains required before
+promotion, and the option remains off by default.
 
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
@@ -650,3 +659,17 @@ These clocks are descriptive, not an isolated runtime or time-to-quality gain.
 The 50 hash-listed terminal receipts plus inventory preserve all failed targets
 and raw release/accounting observations. Further paired seeds and independent
 recording families remain necessary for recipe-quality claims.
+
+The build-`26bc60f` gate (`38537242`, 3,947 GPU-seconds) completed both native
+LoRA modes, cache-off/on state checks, source-mismatch refusal before loading,
+own committed-update recovery, and fresh checkpoint/current-portable/legacy-portable
+task reloads. All 903 FP32 trainables (409 expert/projection parameters plus 494
+adapter factors) match the optimizer inventory; the 28-file training contract
+matches that sealed source. Nine actual CUDA finiteness/recovery cases passed.
+The 182 hash-listed receipts plus inventory preserve these comparisons and
+the two-row observation-only checks. All model stages have valid GPU and host
+observations, but six of 2,831 whole-run samples have incomplete host PSS; the
+aggregate is explicitly incomplete and sampled peaks remain lower bounds.
+This is build-specific correctness evidence, not new quality, deployment-speed
+or cache-performance qualification. Later checkpoint-loading changes require
+their own accelerator check; the selected 512-update results remain on `4cba88f`.
