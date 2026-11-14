@@ -34,7 +34,32 @@ def raw():
 
 
 def state():
-    return reuse.EvaluationBackboneReuse(SimpleNamespace(gr00t=nn.Linear(1, 1).eval()))
+    model = nn.Linear(1, 1).eval()
+    return reuse.EvaluationBackboneReuse(SimpleNamespace(gr00t=model)), model
+
+
+def test_reuse_does_not_keep_model_alive_when_policy_is_released_with_gc_disabled():
+    import gc
+    import weakref
+
+    from cosmos_framework.posttrain.model.gr00t.policy import Gr00tN1d7TrainPolicy
+
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        policy = object.__new__(Gr00tN1d7TrainPolicy)
+        policy.gr00t = policy.net = nn.Linear(2, 2).eval()
+        owner = weakref.ref(policy.gr00t)
+        cache = policy._evaluation_backbone_reuse = reuse.EvaluationBackboneReuse(policy)
+        del policy
+        assert owner() is None
+        with torch.no_grad(), pytest.raises(RuntimeError, match="owner has been released"):
+            with cache.batch_scope(batch()):
+                pytest.fail("released native model cannot be used")
+        assert not cache.active and cache.inputs is cache.raw is None
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 @pytest.mark.parametrize("mode", ["nf4_lora", "bf16_lora", "nf4_frozen", "bf16_frozen", "unknown", None])
@@ -87,7 +112,7 @@ def test_unsupported_standalone_loading_fails_before_cuda_or_model(monkeypatch, 
 
 @pytest.mark.parametrize("change", ["dtype", "mask", "key", "grad"])
 def test_unsupported_raw_outputs_fail_instead_of_caching(change):
-    cache = state()
+    cache, _model = state()
     with pytest.raises(ValueError):
         with torch.no_grad(), cache.batch_scope(batch()):
             prepared, value = inputs(), raw()
@@ -105,7 +130,7 @@ def test_unsupported_raw_outputs_fail_instead_of_caching(change):
 
 
 def test_raw_storage_and_both_head_mappings_have_independent_ownership():
-    cache = state()
+    cache, _model = state()
     prepared, original = inputs(), raw()
     with torch.no_grad(), cache.batch_scope(batch()):
         rng = torch.random.get_rng_state().clone()
@@ -125,7 +150,7 @@ def test_raw_storage_and_both_head_mappings_have_independent_ownership():
 @pytest.mark.parametrize("key", reuse.INPUT_KEYS)
 @pytest.mark.parametrize("change", ["value", "dtype", "shape"])
 def test_actual_prepared_input_changes_fail_and_clear_cache(key, change):
-    cache = state()
+    cache, _model = state()
     with pytest.raises(ValueError, match="prepared backbone inputs (differ|require)"):
         with torch.no_grad(), cache.batch_scope(batch()):
             before = inputs()
@@ -143,7 +168,7 @@ def test_actual_prepared_input_changes_fail_and_clear_cache(key, change):
 
 
 def test_backbone_inplace_input_mutation_is_rejected():
-    cache = state()
+    cache, _model = state()
     with pytest.raises(ValueError, match="mutated its prepared input"):
         with torch.no_grad(), cache.batch_scope(batch()):
             value = inputs()
@@ -155,7 +180,7 @@ def test_backbone_inplace_input_mutation_is_rejected():
 
 @pytest.mark.parametrize("phase", ["before_loss", "after_loss", "after_prediction"])
 def test_any_native_failure_clears_state_without_consuming_rng(phase):
-    cache = state()
+    cache, _model = state()
     rng = torch.random.get_rng_state().clone()
     with pytest.raises(LookupError, match="native failure"):
         with torch.no_grad(), cache.batch_scope(batch()):
@@ -172,9 +197,9 @@ def test_any_native_failure_clears_state_without_consuming_rng(phase):
 
 @pytest.mark.parametrize("violation", ["grad", "train", "nest", "missing_prediction", "prediction_first"])
 def test_scope_is_no_grad_eval_only_and_requires_exact_call_order(violation):
-    cache = state()
+    cache, _model = state()
     if violation == "train":
-        cache.policy.gr00t.train()
+        _model.train()
     with pytest.raises(RuntimeError):
         with nullcontext() if violation == "grad" else torch.no_grad(), cache.batch_scope(batch()):
             if violation == "nest":
@@ -191,7 +216,7 @@ def test_scope_is_no_grad_eval_only_and_requires_exact_call_order(violation):
 
 @pytest.mark.parametrize("phase", ["inputs", "raw"])
 def test_cap_is_checked_before_retaining_oversized_storage(monkeypatch, phase):
-    cache = state()
+    cache, _model = state()
     limit = sum(x.numel() * x.element_size() for x in inputs().values())
     monkeypatch.setattr(reuse, "MAX_RETAINED_BYTES", limit - 1 if phase == "inputs" else limit)
     with pytest.raises(ValueError, match="exceed 16 MiB"):
@@ -250,7 +275,7 @@ def test_actual_pinned_head_loss_and_sampler_match_with_raw_reuse():
             data={k: v.clone() for k, v in action.items() if not sample or k not in {"action", "action_mask"}}
         )
 
-    cache = state()
+    cache, _model = state()
     rng = torch.random.get_rng_state().clone()
     with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
         original_mapping = BatchFeature(data=raw())

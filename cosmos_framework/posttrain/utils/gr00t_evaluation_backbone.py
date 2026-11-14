@@ -8,6 +8,7 @@ Both calls still use the model's actual prepare_input and native action head.
 
 from __future__ import annotations
 
+import weakref
 from contextlib import contextmanager, nullcontext
 
 MAX_RETAINED_BYTES = 16 * 1024**2
@@ -91,7 +92,7 @@ class EvaluationBackboneReuse:
     """Own only raw clones between the loss and sampled prediction of one row."""
 
     def __init__(self, policy):
-        self.policy = policy
+        self._model = weakref.ref(policy.gr00t)
         self.active = False
         self.inputs = self.raw = None
         self.calls = 0
@@ -100,7 +101,10 @@ class EvaluationBackboneReuse:
     def require_evaluation(self):
         import torch
 
-        if not self.active or torch.is_grad_enabled() or any(m.training for m in self.policy.gr00t.modules()):
+        model = self._model()
+        if model is None:
+            raise RuntimeError("GR00T evaluation backbone reuse owner has been released")
+        if not self.active or torch.is_grad_enabled() or any(m.training for m in model.modules()):
             raise RuntimeError("GR00T raw backbone reuse is only valid inside a no-grad evaluation batch")
 
     @contextmanager
