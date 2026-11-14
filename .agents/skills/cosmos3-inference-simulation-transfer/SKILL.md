@@ -7,7 +7,7 @@ description: >
   and the 600-frame example1 long rollout. Use when the user asks "run Sim-Transfer inference", "generate a video from
   a depth, edge, blur or segmentation control with Cosmos3-Nano-Sim-Transfer", "run the Sim-Transfer long rollout",
   "serve Sim-Transfer with vLLM-Omni or SGLang" or "make Sim-Transfer inference faster". Not for training,
-  distillation or inference from a checkpoint you trained (use the Sim-Transfer post-training skill), not for
+  distillation or inference from a checkpoint you trained (use cosmos3-post-train-simulation-transfer), not for
   Cosmos3-Nano or Cosmos3-Super transfer (cosmos3-inference-transfer), not for Sim-Bimanual or the Auto models (start
   at cosmos3-inference-simulation).
 ---
@@ -138,7 +138,7 @@ These overrides select the downloaded HF tokenizer and VAE.
 directory with its own configuration; the export already contains its selected
 weights and needs no EMA flag.
 
-> **Skill note (not in the source):** the Stage 3 DCP route that followed here in the source (a checkpoint from your own training run) is the section [Run inference from your trained checkpoint](../cosmos3-nano-sim-transfer/post-training/SKILL.md#run-inference-from-your-trained-checkpoint) of the Sim-Transfer post-training skill. Its block reads variables of the training shell and replaces only the checkpoint argument array above.
+> **Skill note (not in the source):** the Stage 3 DCP route that followed here in the source (a checkpoint from your own training run) is the section [Run inference from your trained checkpoint](../cosmos3-post-train-simulation-transfer/SKILL.md#run-inference-from-your-trained-checkpoint) of the Sim-Transfer post-training skill. Its block reads variables of the training shell and replaces only the checkpoint argument array above.
 
 ### 2. Prepare the example2 controls and prompt
 
@@ -420,12 +420,12 @@ runtime, media and data, inference), the failure table and what to include in a 
 [`references/environment.md`](references/environment.md) has the environment diagnostics and their failure table. For
 CUDA, import, container and server failures that are not specific to this model, use
 `../cosmos3-env-troubleshoot/SKILL.md`. Training-state symptoms are in the
-[Sim-Transfer troubleshooting skill](../cosmos3-nano-sim-transfer/troubleshooting/SKILL.md#training-state).
+[troubleshooting reference of the Sim-Transfer post-training skill](../cosmos3-post-train-simulation-transfer/references/troubleshooting.md#training-state).
 
 ## Adapt the model
 
 To train or distill your own Sim-Transfer checkpoint and run inference from it, use the
-[Sim-Transfer post-training skill](../cosmos3-nano-sim-transfer/post-training/SKILL.md).
+[Sim-Transfer post-training skill](../cosmos3-post-train-simulation-transfer/SKILL.md).
 
 ## Reference files
 
@@ -454,7 +454,7 @@ The reference list of the source skill, carried over:
 
 - [Framework environment setup](references/setup.md)
 - [Hugging Face examples](references/hf-sample.md)
-- [Training method and checkpoint stages](../cosmos3-nano-sim-transfer/post-training/references/canonical-recipe.md)
+- [Training method and checkpoint stages](../cosmos3-post-train-simulation-transfer/references/canonical-recipe.md)
 - [Prompt guide](references/prompt-guide.md)
 - [Caption preparation and review](references/caption-guide.md)
 - [Output files](references/output.md)
@@ -463,13 +463,13 @@ The reference list of the source skill, carried over:
 
 ## Related skills
 
-| Skill                                                 | When to use                                                                                          |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `../cosmos3-inference-simulation/SKILL.md`            | Entry skill of the Simulation row: model chooser, shared prerequisites, validation checklist         |
-| `../cosmos3-inference-simulation-auto/SKILL.md`       | Transfer-Auto and Sim-Auto inference                                                                 |
-| `../cosmos3-inference-simulation-bimanual/SKILL.md`   | Sim-Bimanual inference                                                                               |
-| `../cosmos3-nano-sim-transfer/post-training/SKILL.md` | The Sim-Transfer post-training skill: training, distillation, inference from your trained checkpoint |
-| `../cosmos3-setup/SKILL.md`                           | Framework checkout and environment                                                                   |
-| `../cosmos3-env-troubleshoot/SKILL.md`                | CUDA, import, container and server failures                                                          |
-| `../cosmos3-inference/SKILL.md`                       | Framework-native inference reference (arguments of `cosmos_framework.scripts.inference`)             |
-| `../cosmos3-inference-transfer/SKILL.md`              | Control-to-video transfer with Cosmos3-Nano or Cosmos3-Super                                         |
+| Skill                                                | When to use                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `../cosmos3-inference-simulation/SKILL.md`           | Entry skill of the Simulation row: model chooser, shared prerequisites, validation checklist         |
+| `../cosmos3-inference-simulation-auto/SKILL.md`      | Transfer-Auto and Sim-Auto inference                                                                 |
+| `../cosmos3-inference-simulation-bimanual/SKILL.md`  | Sim-Bimanual inference                                                                               |
+| `../cosmos3-post-train-simulation-transfer/SKILL.md` | The Sim-Transfer post-training skill: training, distillation, inference from your trained checkpoint |
+| `../cosmos3-setup/SKILL.md`                          | Framework checkout and environment                                                                   |
+| `../cosmos3-env-troubleshoot/SKILL.md`               | CUDA, import, container and server failures                                                          |
+| `../cosmos3-inference/SKILL.md`                      | Framework-native inference reference (arguments of `cosmos_framework.scripts.inference`)             |
+| `../cosmos3-inference-transfer/SKILL.md`             | Control-to-video transfer with Cosmos3-Nano or Cosmos3-Super                                         |

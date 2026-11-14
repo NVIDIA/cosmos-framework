@@ -45,7 +45,7 @@ Report contradictions and suggested corrections without invoking a rewrite.
 An existing `captions.json` is a camera-to-body mapping, not an inference request.
 Check the release reader and resolved text before packaging sidecars.
 
-For training labels, follow [target-grounded captions](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions)
+For training labels, follow [target-grounded captions](../../cosmos3-post-train-simulation-auto/references/data-contract.md#training-captions)
 instead. Plausible appearance assignment for future generated RGB must not become
 invented descriptions of unchanged real RGB training targets.
 

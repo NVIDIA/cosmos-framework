@@ -10,8 +10,8 @@ The released model is optimized for the reference camera rig; a custom rig can
 produce degraded results even with valid camera IDs. The shared
 [rig guide](../.agents/skills/cosmos3-inference-simulation-auto/references/input-preparation.md#choose-reference-rig-or-custom-rig-generation)
 explains reference-rig WSM retargeting and custom-rig trials. Retargeted controls
-need matching initial RGB. For adaptation, [post-train Transfer-Auto](../.agents/skills/cosmos3-nano-transfer-auto/post-training/SKILL.md)
-on your rig's paired data, then [distill it into Sim-Auto](../.agents/skills/cosmos3-nano-sim-auto/post-training/SKILL.md).
+need matching initial RGB. For adaptation, [post-train Transfer-Auto](../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto)
+on your rig's paired data, then [distill it into Sim-Auto](../.agents/skills/cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 
 For a custom rig, use [Camera Rig Explorer](../.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/docs/camera-rig/guide.md) and the
 [shared mapping and caption workflow](../.agents/skills/cosmos3-inference-simulation-auto/references/start-here-and-sampling.md#start-here-sim-auto).

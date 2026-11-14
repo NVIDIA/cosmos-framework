@@ -1,6 +1,6 @@
 # Environment and model assets
 
-> **Skill note (not in the source):** the training-only parts of this page (the paragraph on the training allocation and output root, training memory, checkpoint memory, training components) are in the [Transfer-Auto shared environment page](../../cosmos3-nano-transfer-auto/shared/framework-runtime.md).
+> **Skill note (not in the source):** the training-only parts of this page (the paragraph on the training allocation and output root, training memory, checkpoint memory, training components) are in the [training half of this page](../../cosmos3-post-train-simulation-auto/references/runtime.md) in the Auto post-train skill (`cosmos3-post-train-simulation-auto`).
 
 Run from a Cosmos Framework checkout containing `docs/training_transfer_auto.md`,
 `docs/training_sim_auto.md` and `cosmos_framework/scripts/train_experiment.py`.

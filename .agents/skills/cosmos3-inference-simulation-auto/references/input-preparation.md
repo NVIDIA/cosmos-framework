@@ -49,9 +49,9 @@ Choose based on the camera viewpoints you need in the generated output:
   render WSM for those cameras. Use the [Camera Rig Explorer workflow](#use-camera-rig-explorer-for-your-own-rig)
   below to choose the closest supported identities, considering direction, FOV,
   projection, position and overlap. Inspect the generated result in every view. If quality remains insufficient after
-  checking alignment and inputs, [post-train Transfer-Auto](../../cosmos3-nano-transfer-auto/post-training/SKILL.md#quickstart-fine-tune-the-released-model)
+  checking alignment and inputs, [post-train Transfer-Auto](../../cosmos3-post-train-simulation-auto/SKILL.md#quickstart-fine-tune-the-released-model)
   on your paired recordings. For streaming generation, then
-  [distill the adapted Transfer-Auto checkpoint into Sim-Auto](../../cosmos3-nano-sim-auto/post-training/SKILL.md).
+  [distill the adapted Transfer-Auto checkpoint into Sim-Auto](../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
   Ordinary SFT of the released distilled student is not the recommended adaptation path.
 
 Retargeting requires scene geometry, annotations and verified vehicle poses;
@@ -117,8 +117,8 @@ supporting files kept alongside it. Nothing needs to be uploaded.
    Use the identity table for embedding IDs, not the viewer's display numbers.
 4. Test a short synchronized scene and inspect every view and overlap.
    For substantial rig differences, adapt
-   [Transfer-Auto](../../cosmos3-nano-transfer-auto/post-training/SKILL.md) on paired data first; if you need
-   streaming generation, then [distill the adapted model into Sim-Auto](../../cosmos3-nano-sim-auto/post-training/SKILL.md).
+   [Transfer-Auto](../../cosmos3-post-train-simulation-auto/SKILL.md#fine-tune-transfer-auto) on paired data first; if you need
+   streaming generation, then [distill the adapted model into Sim-Auto](../../cosmos3-post-train-simulation-auto/SKILL.md#distill-sim-auto).
 
 ## 3. Check controls and synchronization
 

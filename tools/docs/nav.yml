@@ -61,10 +61,10 @@ nav:
           - Sim-Auto: training_sim_auto.md
           - Sim-Transfer:
               - "Stage 0: teacher": training_sim_transfer_stage0.md
-              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-transfer/post-training/SKILL.md
+              - Stages 1-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-transfer/SKILL.md
           - Sim-Bimanual:
               - Check training data: bimanual_data_preflight.md
-              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-nano-sim-bimanual/post-training/SKILL.md
+              - Stages 0-3 ↗: https://github.com/NVIDIA/cosmos-framework/blob/main/.agents/skills/cosmos3-post-train-simulation-bimanual/SKILL.md
           - Super four-step (DMD2): skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md
       - RL:
           - Overview: posttrain/index.md

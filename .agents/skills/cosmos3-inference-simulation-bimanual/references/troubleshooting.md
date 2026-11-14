@@ -1,6 +1,6 @@
 # Sim-Bimanual inference troubleshooting
 
-> **Skill note (not in the source):** this file holds the setup, input, generation and evaluation parts of the Sim-Bimanual troubleshooting sub-skill, moved verbatim (cosmos-framework `main` 45fecab): the opening guidance, the symptom rows, procedures 1, 2, 6 and 7 and "Return to the workflow" of its SKILL.md, then the matching sections of its failure playbook. Section numbers are the source's. Only link targets were re-pointed. Launch, training-progress and checkpoint symptoms (procedures 3 to 5) stay in [the Sim-Bimanual troubleshooting sub-skill](../../cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md).
+> **Skill note (not in the source):** this file holds the setup, input, generation and evaluation parts of the Sim-Bimanual troubleshooting sub-skill, moved verbatim (cosmos-framework `main` 45fecab): the opening guidance, the symptom rows, procedures 1, 2, 6 and 7 and "Return to the workflow" of its SKILL.md, then the matching sections of its failure playbook. Section numbers are the source's. Only link targets were re-pointed. Launch, training-progress and checkpoint symptoms (procedures 3 to 5) are in the [troubleshooting reference](../../cosmos3-post-train-simulation-bimanual/references/troubleshooting.md) of the Sim-Bimanual post-training skill.
 
 Find the first broken boundary in setup, data preparation, training,
 checkpoint loading, generation, or scoring. Start with the cheapest check that
@@ -81,7 +81,7 @@ can distinguish the bounded causes. Preserve the
    Continue with finite tensors, aligned times, grounded captions, and disjoint
    episodes.
    For a local training bundle, follow the native
-   [data preparation and short training check](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md#1-prepare-and-validate-training-data).
+   [data preparation and short training check](../../cosmos3-post-train-simulation-bimanual/SKILL.md#1-prepare-and-validate-training-data).
 
 ## 6. Check generation
 
@@ -129,7 +129,7 @@ can distinguish the bounded causes. Preserve the
 ## Return to the workflow
 
 1. Record the symptom, root cause, correction, and checks rerun.
-2. Return training to [post-training](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md),
+2. Return training to [post-training](../../cosmos3-post-train-simulation-bimanual/SKILL.md),
    generation to [inference](../SKILL.md),
    and scoring to [evaluation](evaluation.md).
 3. State whether existing outputs remain comparable.

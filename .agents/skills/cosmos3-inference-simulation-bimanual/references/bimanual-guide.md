@@ -163,7 +163,7 @@ are not fixed model limits.
 ## Adapt the model
 
 To train on another supported data source, follow the
-[Bimanual post-training Skill](../../cosmos3-nano-sim-bimanual/post-training/SKILL.md).
+[Bimanual post-training Skill](../../cosmos3-post-train-simulation-bimanual/SKILL.md).
 Framework expects a completed local training bundle containing its manifest,
 samples, local resources, and tokenizer files.
 

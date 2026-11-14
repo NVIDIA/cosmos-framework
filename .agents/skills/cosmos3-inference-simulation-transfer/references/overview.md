@@ -11,10 +11,10 @@ the 93:7 caption recipe.
 Use `example1` for [long-rollout depth or segmentation inference](../SKILL.md#run-example1-long-rollout).
 Its 600-frame source is preserved at 30 FPS.
 
-- [Run Stage 0–3 with local data](../../cosmos3-nano-sim-transfer/post-training/references/local-training.md), including Nano conversion, checkpoint handoffs and resume.
-- [Extend training](../../cosmos3-nano-sim-transfer/post-training/references/local-training.md#framework-training-entry-points) with the native recipes and your own checkpoints.
+- [Run Stage 0–3 with local data](../../cosmos3-post-train-simulation-transfer/references/local-training.md), including Nano conversion, checkpoint handoffs and resume.
+- [Extend training](../../cosmos3-post-train-simulation-transfer/references/local-training.md#framework-training-entry-points) with the native recipes and your own checkpoints.
 - [Write prompts and prepare captions](prompt-guide.md) for the target RGB.
-- [Prepare a dataset](../../cosmos3-nano-sim-transfer/shared/local-dataset.md) with aligned RGB, controls and captions.
+- [Prepare a dataset](../../cosmos3-post-train-simulation-transfer/references/local-dataset.md) with aligned RGB, controls and captions.
 - [Generate a video with an existing model](../SKILL.md).
 - [Diagnose a loading or output problem](troubleshooting.md).
 
