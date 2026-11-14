@@ -202,10 +202,19 @@ def validate_adapter_tensor_inventory(path: str, metadata: Mapping[str, Any]) ->
 
 def validate_dcp_target_inventory(path: str, component: str, state: dict[str, Any]) -> None:
     """Compare a parameter-only load target to every saved DCP entry without reading tensors."""
+    import torch
     from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
+    from torch.utils._pytree import tree_map
 
+    # The pinned planner's recursive traversal can retain flattened dictionaries
+    # in reference cycles until cyclic GC. Inventory needs only shapes/dtypes;
+    # never give those temporary planners real model or optimizer storage.
+    inventory_state = tree_map(
+        lambda value: torch.empty_like(value, device="meta") if isinstance(value, torch.Tensor) else value,
+        state,
+    )
     planner = DefaultSavePlanner()
-    planner.set_up_planner(state, is_coordinator=True)
+    planner.set_up_planner(inventory_state, is_coordinator=True)
     expected = {}
     for item in planner.create_local_plan().items:
         tensor = item.tensor_data

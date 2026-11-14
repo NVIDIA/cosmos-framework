@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import os
 import random
 import subprocess
@@ -128,11 +129,23 @@ def test_adapter_dcp_resume_matches_uninterrupted_run_and_preserves_base(tmp_pat
     assert source.onload() == 0.0
 
 
+@pytest.fixture
+def _disabled_cyclic_gc():
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
+@pytest.mark.usefixtures("_disabled_cyclic_gc")
 @pytest.mark.parametrize("live_optimizer_initialized", [False, True])
 def test_resume_releases_inventory_only_optimizer_moments_before_live_restore(
     tmp_path: Path, monkeypatch, live_optimizer_initialized: bool
 ) -> None:
-    """Inventory validation must not retain a second complete Adam state during restore."""
+    """Release inventory moments without relying on GC of DCP's traversal closures."""
     from torch.distributed.checkpoint import state_dict
 
     source = _trainer()
