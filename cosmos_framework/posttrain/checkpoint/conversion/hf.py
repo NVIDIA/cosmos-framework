@@ -251,12 +251,12 @@ def config_with_export_dtype(
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
     from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
-    from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
+    from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
     from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-    if execution_profile == GEMMA_PROFILE:
+    if execution_profile in GEMMA_PROFILES:
         if output_dtype != "float32" or result.get("model_type") != "gemma" or model_execution is not None:
-            raise ValueError("Gemma contiguous-KV inference requires a default-execution FP32 Gemma1 merge")
+            raise ValueError("Gemma inference profiles require a default-execution FP32 Gemma1 merge")
         result["cosmos_inference_profile"] = execution_profile
     elif execution_profile in SMOLLM_PROFILES:
         if output_dtype != "float32" or result.get("model_type") != "llama" or model_execution is not None:

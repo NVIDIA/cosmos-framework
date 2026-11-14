@@ -58,3 +58,45 @@ strict full-versus-cached and merge gates merely because that large error is
 removed. Keep original failures, candidate numerical outcomes, task quality
 and resource measurements separate. No full task or GPU pass is claimed by
 the CPU contract tests.
+
+## Experimental fixed-MMA projection and normalization profile
+
+`gemma_fp32_fixed_mma_v1` is a separate, unqualified inference candidate for
+the same exact Gemma1 binding. The recorded full-versus-cached traces first
+diverge in layer-0 low-rank/base projections or RMSNorm. Identical retained
+projection operands produce different FP32 outputs as the sequence shape
+changes. Correcting K/V layout alone leaves those differences unchanged.
+
+The new profile reuses the existing A100 fixed FP64-MMA projection kernel.
+Every token row uses the same reduction tiles; native linear outputs and the
+separate factorized adapter result round to FP32. LoRA/rsLoRA, DoRA and PiSSA
+retain their low-rank branches, magnitude parameters and saved initial factors.
+DoRA's dense direction only computes its normalization magnitude; it is not
+used as an effective-weight forward. Parameters and persistent caches remain
+FP32, with no derived-weight cache or parameter replacement.
+
+Gemma RMSNorm uses FP64 transients for mean-square and inverse-square-root
+reduction, then rounds the normalized activation to FP32 before its original
+FP32 `1 + weight` multiplication. The canonical FP32 embedding scale is
+unchanged. Attention continues through the existing contiguous-K/V FP32 SDPA
+implementation: masks, native RoPE, cache storage and attention arithmetic are
+not switched. The additional fixed-MMA dependency is Triton 3.6.0.
+
+Select this candidate explicitly in `portable_adapter.execution_profile`, or
+export a separate artifact with
+`--execution-profile=gemma_fp32_fixed_mma_v1 --output-dtype=float32`.
+The public loader validates the distinct profile/transaction identity and its
+single-A100, batch-one, eager inference contract. Plain Hugging Face loading
+does not install these operators. Training, autograd, autocast, offload,
+effective-weight caching and foreign/alternate cache implementations are
+rejected. Restore the current installation before changing profiles; rebuild
+its prefixes afterward.
+
+This is a new execution oracle. It does not reinterpret `factorized_v1` or the
+earlier contiguous-K/V profile. Their original numerical failures and task
+scores remain attached to their own revisions. CPU algebra and lifecycle tests
+do not qualify real-model deployment. Qualification must retain the original
+34 inputs, independently fixed operator/input controls, numerical thresholds,
+paired task comparisons and measurements of first-use cost, latency, transient
+memory and KV storage. No GPU, task-quality or performance pass is claimed for
+this candidate before those checks execute.

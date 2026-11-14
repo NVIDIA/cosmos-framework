@@ -184,10 +184,10 @@ class CosmosFrameworkRuntime:
             install_deployment_profile,
             validate_deployment_environment,
         )
-        from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILE as GEMMA_PROFILE
+        from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
         from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-        fp32_text_profiles = (*SMOLLM_PROFILES, GEMMA_PROFILE)
+        fp32_text_profiles = (*SMOLLM_PROFILES, *GEMMA_PROFILES)
 
         profile = deployment_profile(self.model_path)
         if profile:

@@ -537,15 +537,15 @@ def merged_export_metadata(
     from cosmos_framework.utils.generator import gemma_sdpa_layout
     from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-    if execution_profile == gemma_sdpa_layout.PROFILE:
-        gemma_sdpa_layout.validate_identity(identity)
+    if execution_profile in gemma_sdpa_layout.PROFILES:
+        gemma_sdpa_layout.validate_identity(identity, profile=execution_profile)
         if output_dtype != "float32":
             raise ValueError(f"{execution_profile} requires float32 export")
         result["deployment_precision"] = {
             "dtype": "float32",
             "execution_profile": execution_profile,
             "weight_conversion": "unchanged_float32_merge",
-            "equivalence": gemma_sdpa_layout.EXPORT_EQUIVALENCE,
+            "equivalence": gemma_sdpa_layout.export_equivalence(execution_profile),
         }
         return result
     if execution_profile in SMOLLM_PROFILES:

@@ -11,6 +11,10 @@ shape-independent arithmetic or turn legacy cache/merge failures into passes.
 
 No parameter, buffer, adapter branch, or serialized tensor is replaced. This
 profile is inference-only and must be explicitly installed by a public loader.
+
+The separately named fixed-MMA candidate reuses the attention and ownership
+contracts here, with explicit projection/RMSNorm operators from gemma_fixed_mma.
+The original contiguous-K/V profile retains its native projection arithmetic.
 """
 
 import copy
@@ -22,6 +26,8 @@ from uuid import uuid4
 import torch
 
 PROFILE = "gemma_fp32_sdpa_contiguous_kv_v1"
+FIXED_MMA_PROFILE = "gemma_fp32_fixed_mma_v1"
+PROFILES = (PROFILE, FIXED_MMA_PROFILE)
 BASE_SHA256 = "d69463aaf679e21e544bbd1b77095232ae5b420177f11a4c53a727fc246b5922"
 PROCESSOR_SHA256 = "4931454373d18ead3f0cc4de9953b83eaafc7a47059c623c651233ec572042fa"
 EXPORT_EQUIVALENCE = "versioned_contiguous_kv_sdpa_inference_requires_qualification"
@@ -68,8 +74,17 @@ def validate_configuration(config):
         raise ValueError(f"{PROFILE} requires the recorded ordinary full-attention cache configuration")
 
 
-def validate_identity(identity):
+def export_equivalence(profile):
+    if profile == PROFILE:
+        return EXPORT_EQUIVALENCE
+    if profile == FIXED_MMA_PROFILE:
+        return "versioned_fixed_mma_gemma_inference_requires_qualification"
+    raise ValueError(f"unknown Gemma inference profile: {profile!r}")
+
+
+def validate_identity(identity, *, profile=PROFILE):
     """Pin this candidate to the recorded Gemma1 base and factorized contract."""
+    export_equivalence(profile)
     resolved = identity.get("resolved", {})
     targets = resolved.get("targets", [])
     if (
@@ -89,7 +104,7 @@ def validate_identity(identity):
         or identity.get("dependencies", {}).get("torch") != "2.10.0"
         or identity.get("dependencies", {}).get("transformers") != "5.8.1"
     ):
-        raise ValueError(f"{PROFILE} requires the recorded Gemma1-2B base/processor and factorized adapter identity")
+        raise ValueError(f"{profile} requires the recorded Gemma1-2B base/processor and factorized adapter identity")
 
 
 def _guard(module):
@@ -155,7 +170,16 @@ def _ownership(model):
 
 
 def _adapter_settings(module):
-    return module.method, module.execution, module._lora_scale, getattr(module.lora_dropout, "p", 0.0), module.forward
+    return (
+        module.method,
+        module.execution,
+        module._lora_rank,
+        module._lora_alpha,
+        module._lora_use_rslora,
+        module._lora_scale,
+        getattr(module.lora_dropout, "p", 0.0),
+        module.forward,
+    )
 
 
 def _attention_settings(module):
@@ -193,7 +217,7 @@ def _check_owned(model, record):
         raise ValueError(f"{PROFILE} tensors changed; restore and reload before model/prefix reuse")
     if model.config._attn_implementation != "sdpa" or _configuration(model.config) != record["configuration"]:
         raise ValueError(f"{PROFILE} configuration changed; restore and reload")
-    if getattr(model, "_cosmos_deployment_profile", None) != PROFILE:
+    if getattr(model, "_cosmos_deployment_profile", None) != record["profile"]:
         raise ValueError(f"{PROFILE} conflicts with the active deployment profile")
     _check_wrappers(model, record)
     for module, settings in record["attention_settings"]:
@@ -205,6 +229,9 @@ def _check_owned(model, record):
     for module, settings in record["adapters"]:
         if _adapter_settings(module) != settings:
             raise ValueError(f"{PROFILE} adapter settings changed; restore and reload")
+    for module, epsilon in record["norm_settings"]:
+        if module.eps != epsilon:
+            raise ValueError(f"{record['profile']} normalization settings changed; restore and reload")
 
 
 def _before_forward(model, args, kwargs):
@@ -265,11 +292,14 @@ def _validate_device(model):
         raise ValueError(f"{PROFILE} requires FP32 parameters on one A100, constructed outside inference_mode")
 
 
-def install(model, *, identity, adapter_type=None):
-    """Prevalidate all placement, then replace attention forwards without state."""
-    from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM
+def install(model, *, identity, adapter_type=None, profile=PROFILE):
+    """Prevalidate all placement, then install only the selected inference operators."""
+    from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM, GemmaRMSNorm
 
-    validate_identity(identity)
+    validate_identity(identity, profile=profile)
+    fixed = profile == FIXED_MMA_PROFILE
+    if fixed and version("triton") != "3.6.0":
+        raise ValueError(f"{profile} requires Triton 3.6.0")
     validate_configuration(model.config)
     if (
         type(model) is not GemmaForCausalLM
@@ -291,7 +321,7 @@ def install(model, *, identity, adapter_type=None):
     ):
         raise ValueError(f"{PROFILE} requires the artifact's canonical FP32 embedding-scale buffer")
     installed = getattr(model, "_cosmos_deployment_profile", None)
-    if installed not in (None, PROFILE):
+    if installed not in (None, profile):
         raise ValueError("conflicting deployment profile; restore before installation")
     _validate_device(model)
     if installed:
@@ -308,6 +338,22 @@ def install(model, *, identity, adapter_type=None):
             raise ValueError(f"{PROFILE} requires native factorized adapters")
         if any(getattr(m, "_cosmos_effective_weight_cache", None) is not None for _, m in targets):
             raise ValueError(f"{PROFILE} preserves separate branches; effective-weight caches are unsupported")
+        if fixed:
+            declared = {row["name"]: row["settings"] for row in identity["resolved"]["targets"]}
+            for name, module in targets:
+                settings = declared[name]
+                actual = {
+                    "method": module.method,
+                    "execution": module.execution,
+                    "rank": module._lora_rank,
+                    "alpha": module._lora_alpha,
+                    "use_rslora": module._lora_use_rslora,
+                    "dropout": getattr(module.lora_dropout, "p", 0.0),
+                }
+                if module.method not in ("lora", "dora", "pissa") or any(
+                    settings[key] != value for key, value in actual.items() if key in settings
+                ):
+                    raise ValueError(f"{profile} adapter settings differ from the declared artifact: {name}")
     forwards = []
     for name, module in model.named_modules():
         if type(module) is GemmaAttention:
@@ -321,19 +367,58 @@ def install(model, *, identity, adapter_type=None):
     expected = {f"model.layers.{i}.self_attn" for i in range(model.config.num_hidden_layers)}
     if {row[0] for row in forwards} != expected:
         raise ValueError(f"{PROFILE} requires all native Gemma attention modules")
+    attention_settings = [(row[1], _attention_settings(row[1])) for row in forwards]
+    norm_settings = []
+    if fixed:
+        from cosmos_framework.utils.generator import gemma_fixed_mma
+
+        # Adapter children remain separate state owners, but their enclosing
+        # factorized forward explicitly calls the shared low-rank algebra.
+        descendants = {id(child) for _, module in targets for child in module.modules() if child is not module}
+        operators = []
+        for name, module in model.named_modules():
+            if id(module) in descendants:
+                continue
+            function = {torch.nn.Linear: gemma_fixed_mma.linear, GemmaRMSNorm: gemma_fixed_mma.norm}.get(type(module))
+            if adapter_type is not None and type(module) is adapter_type:
+                function = gemma_fixed_mma.adapter
+            if function is None:
+                continue
+            attribute = "_old_forward" if hasattr(module, "_hf_hook") else "forward"
+            original = getattr(module, attribute)
+            if getattr(original, "__func__", None) is not type(module).forward or getattr(
+                getattr(module, "_hf_hook", None), "offload", False
+            ):
+                raise ValueError(f"{profile} requires unmodified native operators without offload: {name}")
+            if type(module) is GemmaRMSNorm:
+                if module.eps != model.config.rms_norm_eps:
+                    raise ValueError(f"{profile} requires the recorded Gemma RMSNorm epsilon")
+                norm_settings.append((module, module.eps))
+            operators.append((name, module, attribute, original, MethodType(function, module)))
+        expected_operators = {"lm_head", "model.norm"}
+        for index in range(model.config.num_hidden_layers):
+            prefix = f"model.layers.{index}."
+            expected_operators.update(prefix + "self_attn." + name for name in ("q_proj", "k_proj", "v_proj", "o_proj"))
+            expected_operators.update(prefix + "mlp." + name for name in ("gate_proj", "up_proj", "down_proj"))
+            expected_operators.update(prefix + name for name in ("input_layernorm", "post_attention_layernorm"))
+        if {row[0] for row in operators} != expected_operators:
+            raise ValueError(f"{profile} requires all native Gemma projection and normalization operators")
+        forwards.extend(operators)
     record = {
         "identity": copy.deepcopy(identity),
+        "profile": profile,
         "forwards": forwards,
-        "adapters": [(module, _adapter_settings(module)) for _, module in targets],
-        "attention_settings": [(row[1], _attention_settings(row[1])) for row in forwards],
+        "attention_settings": attention_settings,
+        "norm_settings": norm_settings,
         "ownership": _ownership(model),
         "configuration": _configuration(model.config),
         "signature": signature(model.forward),
-        "cache_owner": (PROFILE, uuid4().hex),
+        "cache_owner": (profile, uuid4().hex),
     }
     model._cosmos_gemma_sdpa_layout = record
     for _, module, attribute, _, replacement in forwards:
         setattr(module, attribute, replacement)
+    record["adapters"] = [(module, _adapter_settings(module)) for _, module in targets]
     # Accelerate owns the outer forward when this profile replaces _old_forward.
     # Neither that wrapper nor its hook may change unnoticed during cache reuse.
     record["wrappers"] = [
@@ -341,13 +426,17 @@ def install(model, *, identity, adapter_type=None):
     ]
     record["hook"] = model.register_forward_pre_hook(_before_forward, with_kwargs=True)
     record["output_hook"] = model.register_forward_hook(_after_forward, with_kwargs=True)
-    model._cosmos_deployment_profile = PROFILE
+    model._cosmos_deployment_profile = profile
     return [row[0] for row in forwards]
 
 
 def restore(model):
     record = getattr(model, "_cosmos_gemma_sdpa_layout", None)
-    if record is None or getattr(model, "_cosmos_deployment_profile", None) != PROFILE:
+    if (
+        record is None
+        or record.get("profile") not in PROFILES
+        or getattr(model, "_cosmos_deployment_profile", None) != record["profile"]
+    ):
         raise ValueError(f"{PROFILE} is not installed; refusing to restore another profile")
     _check_wrappers(model, record)
     if any(model.get_submodule(n) is not m or getattr(m, a) != new for n, m, a, _, new in record["forwards"]):
