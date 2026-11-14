@@ -18432,6 +18432,257 @@
         "hash_listed_files": 43,
         "trained_tensor_payloads_downloaded": false
       }
+    },
+    "38543454": {
+      "family": "alpamayo",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 2109,
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99",
+      "scope": "Actual own5to10 Alpamayo load correctness in both LoRA modes. Full tensor comparisons are on-node results, not independently recomputed from downloaded weights. No current-build384to512, new quality, speedup, or measured old/new whole-workflow memory drop. CPU GC-disabled regression is separate from ordinary GC in this accelerator run.",
+      "protocol_sha256": "c4dbd45a88394057086fab71faba46662484879dbf7329462d6d19f6c1976bfb",
+      "payload_manifest_sha256": "ba66d320da5a01ff33d2c3e1eb58bbb1af7690bc61d08ec113f9b39749264027",
+      "acceptance_sha256": "ca0472fb9247eac55367d0eadac1fdf0c724df51f897bd405b1f4fa27aa30e58",
+      "final_qualification_acceptance": true,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-readout-v1.json",
+        "sha256": "a7da2f04eaee72814f9c5a068c3c8b4e916dc2d9ac5c319a81681bc8181233b3"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-receipts-v1.tar.gz",
+        "archive_sha256": "f62e6ebae55ff5e0ccfc09c0a5ca45c540e6338407f7004e13e7d5c97a45ca1c",
+        "inventory_sha256": "035806991c441f30b3634bab6720f834600fea9383fa9db7b5b59af5faccd2e1",
+        "files_verified": 106,
+        "raw_samples_replayed": 1514,
+        "terminal_release_sha256": "6357e76861ea654f2ac9329e12fb618f2426b493ea0e591460ddc3a6c602207f"
+      },
+      "results": [
+        {
+          "mode": "nf4_lora",
+          "state_and_two_rows_exact": true,
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "both_actual_postload_states_exact": true,
+          "metadata": {
+            "auxiliary_parameters": 409,
+            "factors": 494,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 247,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 247,
+            "trainable_fp32": 903
+          },
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 18926313488,
+            "moment_tensors": 1806,
+            "parameters": 903
+          },
+          "pristine_inventory_refs_alive_before_extraction": 0,
+          "materialized_owned_refs_alive_before_extraction": 1806,
+          "load_receipt_sha256": "80903103d605e0c0329dee6c5d9101509dbf532a6a753965960aa7dc01571587",
+          "acceptance_sha256": "fd40a0c1a8d247bef2feba8975b3eb4244a939a3e8de33f53e96afc4a8eb0f81"
+        },
+        {
+          "mode": "bf16_lora",
+          "state_and_two_rows_exact": true,
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "both_actual_postload_states_exact": true,
+          "metadata": {
+            "auxiliary_parameters": 409,
+            "factors": 494,
+            "portable_complete_optimizer_none": true,
+            "quantized_targets": 0,
+            "source_files": 28,
+            "source_files_match02": true,
+            "targets": 247,
+            "trainable_fp32": 903
+          },
+          "inventory": {
+            "both_actual_cuda_loads": true,
+            "moment_bytes": 18926313488,
+            "moment_tensors": 1806,
+            "parameters": 903
+          },
+          "pristine_inventory_refs_alive_before_extraction": 0,
+          "materialized_owned_refs_alive_before_extraction": 1806,
+          "load_receipt_sha256": "c4b0c760d9685c6a8c1b6c940410ba1439e41712721c8f69e58b008bf4e8a941",
+          "acceptance_sha256": "38501b6a4f101ab0ef79c74ca631578d914b541cfb048542cdf05e3f316fc088"
+        }
+      ],
+      "old_current_comparison": {
+        "baseline_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "modes": [
+          "nf4_lora",
+          "bf16_lora"
+        ],
+        "boundaries": [
+          5,
+          10
+        ],
+        "model_optimizer_rng_cursor_evaluation_exact": true,
+        "cross_build_resume_supported": false,
+        "metadata_files_modified": false
+      },
+      "load_observer_scope": "Actual own committed5 loaded twice: pristine then materialized optimizer; weakrefs/scalars only, ordinary accelerator GC and no peak reset. Separate CPU GC-disabled regression is not relabeled as this GPU observation.",
+      "memory": {
+        "device_peak_bytes": 82659442688,
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 52722611200,
+        "host_rss_sum_peak_bytes": 53248999424,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 2029.9749774932861,
+        "owned_device_process_peak_bytes": 81860231168,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1514,
+        "sampling_gap_seconds": {
+          "count": 1513,
+          "maximum": 5.513051509857178,
+          "mean": 1.3416886830755361,
+          "median": 1.2975735664367676,
+          "p95": 1.47548246383667,
+          "sum": 2029.9749774932861
+        }
+      },
+      "memory_gaps": [
+        {
+          "errors": [
+            "collection_deadline_exceeded",
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 581,
+          "method": "proc-identity-state-read-attempts-v10",
+          "stage": "nf4_lora-resumed"
+        },
+        {
+          "errors": [
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 995,
+          "method": "proc-identity-state-read-attempts-v10",
+          "stage": "bf16_lora-full"
+        },
+        {
+          "errors": [
+            "live_or_unknown_memory_unreadable"
+          ],
+          "index": 1405,
+          "method": "proc-identity-state-read-attempts-v10",
+          "stage": "bf16_lora-resumed"
+        }
+      ],
+      "memory_scope": "Sampled main model/lifecycle and on-node audit interval only; excludes earlier container/preflight. Complete observed host samples do not prove unsampled peaks.",
+      "stage_memory_observations": {
+        "bf16_lora-full": {
+          "complete_host": 455,
+          "positive_owned_gpu": 296,
+          "samples": 456
+        },
+        "bf16_lora-postload-and-recovery-audit": {
+          "complete_host": 92,
+          "positive_owned_gpu": 0,
+          "samples": 92
+        },
+        "bf16_lora-resumed": {
+          "complete_host": 277,
+          "positive_owned_gpu": 250,
+          "samples": 278
+        },
+        "nf4_lora-full": {
+          "complete_host": 349,
+          "positive_owned_gpu": 193,
+          "samples": 349
+        },
+        "nf4_lora-postload-and-recovery-audit": {
+          "complete_host": 89,
+          "positive_owned_gpu": 0,
+          "samples": 89
+        },
+        "nf4_lora-resumed": {
+          "complete_host": 249,
+          "positive_owned_gpu": 222,
+          "samples": 250
+        }
+      },
+      "native_allocator": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 79466941440,
+        "allocator_peak_reserved_bytes": 80645980160,
+        "phase_family": "native_action"
+      },
+      "workflow_seconds": 2033.393281958066,
+      "runtime": {
+        "allocator": "expandable_segments:True",
+        "code": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+        "cpu_affinity": [
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157
+        ],
+        "family": "alpamayo",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-5b146356-4515-c0c6-0127-0c7cadaa0f2d"
+        },
+        "node": "batch-block4-1051",
+        "numa_nodes": [
+          "node1"
+        ],
+        "slurm_job": "38543454",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "admission_description_correction": {
+        "generic_cuda_cases_executed_in_this_gate": 0,
+        "scope": "Retained admission description corrected separately; sealed02 runner does not call inherited CUDA helper definitions. Historical26bc cases remain separate.",
+        "sha256": "9d0d0c280d47acdbe97c9007814689a65d22ef80f57fcdb3358d3f9198a663a3"
+      },
+      "staging_incident": {
+        "facts": "Corrected C/native-02f93ba verified. Four C-root objects were mistakenly written; prior absence/overwrite unknown; left in place. Sealed active4c/native bundles verified unaffected.",
+        "receipt_sha256": "5e15adbd9e60772e9704999555063f93c4f926d609763e397b10d07ef47d6cdb"
+      },
+      "reused_earlier_evidence_scope": "Earlier26bc source-refusal, generic CUDA cases, fresh reload/portable compatibility and standalone artifact checks remain separately bound. This02 load-only gate does not rerun those cases, establish current-build384-to512 recovery, or change selected4c quality results.",
+      "root_independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-root-review-v1.json",
+        "sha256": "c3b68c68d42989593e693325e711af8bfbbfdfc1f70d21cfcf8210df2c4c1571",
+        "verified_files": 106,
+        "raw_v10_samples_validated": 1514,
+        "complete_host_samples": 1511,
+        "scope": "Independent receipt/metadata/lifetime/live-postload fingerprint and raw-sample replay; no second full DCP tensor comparison."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -18581,6 +18832,11 @@
       "sha256": "1c04b5ef7ca1015d09b385e5a196f89d7f653fe9a01a1f6fac23991bf9e437bc",
       "inventory_sha256": "57b110c746cf63dd3a13ae638e00c1e370e2f5703483c533ebf13ce22395eeeb",
       "scope": "43 raw terminal 38543002 control/metadata/task/telemetry/clock files plus inventory; no trained tensor payloads; original failed state retained."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-load-lifetime-38543454-receipts-v1.tar.gz",
+      "sha256": "f62e6ebae55ff5e0ccfc09c0a5ca45c540e6338407f7004e13e7d5c97a45ca1c",
+      "scope": "106 terminal Alpamayo02 load-lifetime receipts plus inventory; raw telemetry and small metadata, no trained model/optimizer tensor payloads."
     }
   ],
   "fixed_development_targets": {

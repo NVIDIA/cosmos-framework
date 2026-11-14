@@ -710,3 +710,30 @@ study. Total allocation cost was **5,771 GPU-seconds**, including both failures.
 The existing evidence JSON retains 42 NF4 and 43 BF16 hash-listed raw files,
 immutable failed clocks, the dated NF4 analysis and independent numerical and
 telemetry reviews.
+
+The later optimizer-loading fix in build `02f93ba` passed its own Alpamayo gate
+(`38543454`, **2,109 GPU-seconds**). Both NF4/BF16 LoRA modes completed ten native
+updates, matched the retained `4cba88f` states at updates 5 and 10, and recovered
+exactly from their own update-5 checkpoints to update 10. Model and optimizer
+tensors, RNG, data cursor and both engineering evaluation rows matched. All 903
+FP32 trainables and 28 bound training-source files were verified. This is exact
+recovery within the new build, not permission to resume an old checkpoint on
+changed training code.
+
+Each actual recovery loaded the checkpoint twice. With a pristine optimizer,
+none of the **1,806 temporary moment tensors (18,926,313,488 bytes)** remained
+alive before live optimizer extraction; with an already materialized optimizer,
+those tensors remained owned by the optimizer. Both post-load states matched
+the committed source. These observations used weak references and ordinary GPU
+process garbage collection; the separate CPU regression disables cyclic GC.
+They establish the storage-lifetime fix, not a matched whole-workflow peak-memory
+or speed improvement.
+
+The 106 hash-listed receipts plus inventory retain all comparisons and 1,514 raw
+v10 memory samples. Three host observations were incomplete, so whole-run host
+PSS remains incomplete; each model stage had valid owned-GPU coverage and at
+least one complete host sample. The original admission description incorrectly mentioned
+nine generic CUDA cases; a separate correction records that this load-only gate
+executed none. The earlier `26bc60f` CUDA, source-refusal and fresh-artifact checks
+remain separate evidence. This gate does not add mature 384→512 recovery,
+trajectory-quality or deployment-performance qualification.
