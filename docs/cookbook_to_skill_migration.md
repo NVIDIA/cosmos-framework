@@ -599,19 +599,19 @@ lines and where it is now; "stays" means the same file, at the line numbers give
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L1-7 | "Environment and resources"; "Cosmos Framework" | stays (now L1-9) |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L8 | one line, split by sentence | `Run from the Framework root.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `Training uses Python 3.13,` → stays |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L9-10 | from `` the matched `cu130-train`/`cu128-train` group and the `train` … `` | stays (now L11-12) |
-| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L11-14 | from `The root lockfile is generated and checked …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L94-97 |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L11-14 | from `The root lockfile is generated and checked …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L96-99 |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L15 | one line, split by sentence | `without changing the locked environment.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `The training example also includes the` → stays |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L16-30 | from `` `guardrail` extra. Its install command is ``; "Hardware and allocation checks" | stays (now L14-28) |
-| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L32 | from `Run CUDA and GPU-count checks inside the …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L102 |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L32 | from `Run CUDA and GPU-count checks inside the …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L104 |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L33 | one line, split by sentence | `submission host.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `The training example launches eight processes with FSDP shard` → stays |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L34 | one line, split by sentence | `8 and CP 4.` → stays; `The inference example launches one process.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `Check memory for the` → `cosmos3-inference-simulation-bimanual/SKILL.md` |
-| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L35 | from `selected sample and layout.` | `cosmos3-inference-simulation-bimanual/SKILL.md` L104 |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L35 | from `selected sample and layout.` | `cosmos3-inference-simulation-bimanual/SKILL.md` L106 |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L36 | from `Multi-node workers need NCCL connectivity and the …` | stays (now L32) |
-| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L38-44 | code block from `nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv` | `cosmos3-inference-simulation-bimanual/SKILL.md` L106-112 |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L38-44 | code block from `nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv` | `cosmos3-inference-simulation-bimanual/SKILL.md` L108-114 |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L45 | one line, split by sentence | `Framework setup.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `Framework discovers wheel-provided NPP libraries.` → `cosmos3-inference-simulation-bimanual/SKILL.md`; `Measure` → stays |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L46-60 | from `shared-memory use during a bounded step and …`; "Bind resources for the requested task" | stays (now L35-49) |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L61 | one line, split by sentence | `entity and project.` → stays; `Keep any credentials outside code, manifests and logs;` → `cosmos3-inference-simulation-bimanual/SKILL.md` |
-| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L62-66 | from `only remote resources require their corresponding provider …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L118-122 |
+| `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L62-66 | from `only remote resources require their corresponding provider …` | `cosmos3-inference-simulation-bimanual/SKILL.md` L120-124 |
 | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` | L68-70 | from `Use the native [multi-node notes](../post-training/references/multinode-launcher.md)` | stays (now L52-54) |
 | `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | L1-6 | "Troubleshoot Cosmos3-Nano-Sim-Bimanual" | stays (now L1-6) |
 | `cosmos3-nano-sim-bimanual/troubleshooting/SKILL.md` | L8-11 | from `Find the first broken boundary in setup, …` | `cosmos3-inference-simulation-bimanual/references/troubleshooting.md` L5-8 |
@@ -678,8 +678,8 @@ comparison matched first.
 | section heading | `Data failures`                                        | `cosmos3-nano-sim-bimanual/troubleshooting/references/failure-playbook.md` L28 | `cosmos3-inference-simulation-bimanual/references/troubleshooting.md` L155  |
 | section heading | `References`                                           | `cosmos3-nano-sim-transfer/troubleshooting/SKILL.md` L37                       | `cosmos3-inference-simulation-transfer/references/troubleshooting.md` L143  |
 | section heading | `Camera identities`                                    | `cosmos3-nano-transfer-auto/post-training/references/data-contract.md` L168    | `cosmos3-inference-simulation-auto/references/camera-identities.md` L1      |
-| section heading | `Hardware and allocation checks`                       | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` L28                     | `cosmos3-inference-simulation-bimanual/SKILL.md` L100                       |
-| section heading | `Authenticate hosted files without exposing the token` | `cosmos3-inference-simulation-bimanual/SKILL.md` L115                          | `cosmos3-inference-simulation-bimanual/references/hugging-face-token.md` L1 |
+| section heading | `Hardware and allocation checks`                       | `cosmos3-nano-sim-bimanual/shared/release-workflow.md` L28                     | `cosmos3-inference-simulation-bimanual/SKILL.md` L102                       |
+| section heading | `Authenticate hosted files without exposing the token` | `cosmos3-inference-simulation-bimanual/SKILL.md` L117                          | `cosmos3-inference-simulation-bimanual/references/hugging-face-token.md` L1 |
 
 The four inference `SKILL.md` files. The two Auto bodies were carried into one new `SKILL.md` as its sections `## Transfer-Auto`
 and `## Sim-Auto` (headings two levels down, with the model name added where the two bodies had the same title), and three blocks
@@ -715,11 +715,11 @@ and stay in `references/vllm-omni.md` and `references/sglang.md`. The entry `SKI
 | `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L2-3         | frontmatter `name` and `description`                                                                    | replaced by the new frontmatter; the old values are under "Removed"                                                                                    |
 | `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L6-11        | "Run inference with Cosmos3-Nano-Sim-Bimanual"                                                          | `cosmos3-inference-simulation-bimanual/SKILL.md` L14-19                                                                                                |
 | `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L13-54       | "Choose the task"; "Prerequisites and environment setup"                                                | `cosmos3-inference-simulation-bimanual/SKILL.md` L38-91                                                                                                |
-| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L56          | "Authenticate hosted files without exposing the token"                                                  | `cosmos3-inference-simulation-bimanual/SKILL.md` L115                                                                                                  |
+| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L56          | "Authenticate hosted files without exposing the token"                                                  | `cosmos3-inference-simulation-bimanual/SKILL.md` L117                                                                                                  |
 | `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L58-92       | from `The checkpoint and current hosted examples may …`                                                 | `cosmos3-inference-simulation-bimanual/references/hugging-face-token.md` L5-39                                                                         |
-| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L94-308      | "1. Choose the checkpoint path" to "Use your own Stage 3 checkpoint" (8 headings)                       | `cosmos3-inference-simulation-bimanual/SKILL.md` L131-345                                                                                              |
-| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L310-335     | "6. Verify outputs and hand off"                                                                        | `cosmos3-inference-simulation-bimanual/SKILL.md` L405-430                                                                                              |
-| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L337-343     | "References"                                                                                            | `cosmos3-inference-simulation-bimanual/SKILL.md` L444-450                                                                                              |
+| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L94-308      | "1. Choose the checkpoint path" to "Use your own Stage 3 checkpoint" (8 headings)                       | `cosmos3-inference-simulation-bimanual/SKILL.md` L133-347                                                                                              |
+| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L310-335     | "6. Verify outputs and hand off"                                                                        | `cosmos3-inference-simulation-bimanual/SKILL.md` L407-432                                                                                              |
+| `cosmos3-nano-sim-bimanual/inference/SKILL.md`  | L337-343     | "References"                                                                                            | `cosmos3-inference-simulation-bimanual/SKILL.md` L446-452                                                                                              |
 | `cosmos3-nano-sim-transfer/inference/SKILL.md`  | L2-3         | frontmatter `name` and `description`                                                                    | replaced by the new frontmatter; the old values are under "Removed"                                                                                    |
 | `cosmos3-nano-sim-transfer/inference/SKILL.md`  | L6-11        | "Run inference with Cosmos3-Nano-Sim-Transfer"                                                          | `cosmos3-inference-simulation-transfer/SKILL.md` L15-20                                                                                                |
 | `cosmos3-nano-sim-transfer/inference/SKILL.md`  | L13-60       | from `Complete [Framework setup](../shared/setup.md) and`; "1. Select the matched inference checkpoint" | `cosmos3-inference-simulation-transfer/SKILL.md` L92-139                                                                                               |
@@ -746,7 +746,7 @@ Headings of the carried bodies whose title changed (a heading whose level alone 
 | `cosmos3-nano-sim-auto/inference/SKILL.md` L105      | `## Check the result`                             | `#### Check the result (Sim-Auto)`                                     | `cosmos3-inference-simulation-auto/SKILL.md` L335                             |
 | `cosmos3-nano-sim-auto/inference/SKILL.md` L125      | `## References`                                   | `## Reference files`                                                   | `cosmos3-inference-simulation-auto/SKILL.md` L425                             |
 | `cosmos3-nano-sim-bimanual/inference/SKILL.md` L25   | `## Prerequisites and environment setup`          | `## Prerequisites`                                                     | `cosmos3-inference-simulation-bimanual/SKILL.md` L58                          |
-| `cosmos3-nano-sim-bimanual/inference/SKILL.md` L337  | `## References`                                   | `## Reference files`                                                   | `cosmos3-inference-simulation-bimanual/SKILL.md` L444                         |
+| `cosmos3-nano-sim-bimanual/inference/SKILL.md` L337  | `## References`                                   | `## Reference files`                                                   | `cosmos3-inference-simulation-bimanual/SKILL.md` L446                         |
 | `cosmos3-nano-sim-transfer/inference/SKILL.md` L239  | `## References`                                   | `## Reference files`                                                   | `cosmos3-inference-simulation-transfer/SKILL.md` L430                         |
 
 The other files of the four families stay at their path. 16 are byte-identical to `45fecab`; the 17 below changed in place
@@ -1180,11 +1180,16 @@ FFprobe on the client, in the Bimanual `references/sglang.md` and `references/vl
 in their place as root in a container that has no `sudo` (the same prerequisite, in the Sim-Transfer `references/vllm-omni.md`: the
 note, L40, and the block, L42-45, stand between the `pip install` block of the source, L36-38, and the source sentence that names
 FFmpeg, L47, and the source's own lines stay below that sentence: `sudo apt-get update` and `sudo apt-get install -y ffmpeg`,
-L50-51, and `brew install ffmpeg` for macOS, L54), or where a prerequisite, a check or a measured figure is stated that the sources
-do not state (56); and a code comment on the line above a changed or added code line (135, of which 58 in the tests). The fenced
-block below the note of the Bimanual `SKILL.md` on the `ffprobe` command of step 6 holds the same FFmpeg install command as the
-blocks of the four references, word for word; it does not hold the `ffprobe` command, which stays in the fenced block of step 6.
-Text that is
+L50-51, and `brew install ffmpeg` for macOS, L54), where a fenced block of the source sets an environment variable with an `export`
+line and the note says that the line holds for the current shell only, names the error that the inference entry point stops with in
+a shell without the variable, and says how to check the variable and to run the `source .venv/bin/activate` line and the `export`
+line again in a new shell instead of installing the package (the line sets `COSMOS_TRAINING=0`, and the error is
+`ModuleNotFoundError: No module named 'pandas'`; the same note in the Bimanual `SKILL.md`, L93, for the block L69-79 and in the
+Bimanual `references/bimanual-guide.md`, L43, for the block L29-38, in each file directly below a source paragraph, with source
+lines only between the block and the note), or where a prerequisite, a check or a measured figure is stated that the sources do not
+state (58); and a code comment on the line above a changed or added code line (135, of which 58 in the tests). The fenced block
+below the note of the Bimanual `SKILL.md` on the `ffprobe` command of step 6 holds the same FFmpeg install command as the blocks of
+the four references, word for word; it does not hold the `ffprobe` command, which stays in the fenced block of step 6. Text that is
 new as a whole (the four `SKILL.md` frontmatters and their added sections, the entry router, organising headings such as
 `## Sim-Auto`, `## Support request` and `## Inference action sidecar`) is not marked line by line; the tables above say which lines
 are carried.
@@ -1211,8 +1216,8 @@ are carried.
 | `cosmos3-inference-simulation-auto/references/troubleshooting.md`                | L3              | —                     | —                                                                                                 |
 | `cosmos3-inference-simulation-auto/references/wsm-conventions.md`                | —               | L157                  | —                                                                                                 |
 | `cosmos3-inference-simulation-auto/scripts/wsm/README.md`                        | —               | L71                   | L74                                                                                               |
-| `cosmos3-inference-simulation-bimanual/SKILL.md`                                 | —               | L398                  | L401                                                                                              |
-| `cosmos3-inference-simulation-bimanual/references/bimanual-guide.md`             | L3              | —                     | —                                                                                                 |
+| `cosmos3-inference-simulation-bimanual/SKILL.md`                                 | —               | L93, L400             | L403                                                                                              |
+| `cosmos3-inference-simulation-bimanual/references/bimanual-guide.md`             | L3              | L43                   | —                                                                                                 |
 | `cosmos3-inference-simulation-bimanual/references/hugging-face-token.md`         | L3              | —                     | —                                                                                                 |
 | `cosmos3-inference-simulation-bimanual/references/input-contract.md`             | L3              | —                     | —                                                                                                 |
 | `cosmos3-inference-simulation-bimanual/references/sglang.md`                     | L15             | L69, L86              | L72, L112, L114, L120, L122, L124, L126                                                           |
@@ -1329,7 +1334,7 @@ Defects of the sources that were carried word for word (not corrected in this ch
 - Bimanual `references/prompt-guide.md` reads examples from `$CHECKPOINT_DIR/examples/` while `SKILL.md` downloads them to
   `$HF_EXAMPLE_DIR`.
 - Bimanual `SKILL.md` names `examples/inference/bimanual_frustum.json`, a path inside the model's Hugging Face repository, in
-  backticks (L315, carried from L278 of the old inference `SKILL.md`). The evaluator's static check reads it as a missing repository
+  backticks (L317, carried from L278 of the old inference `SKILL.md`). The evaluator's static check reads it as a missing repository
   path; it reports nothing else for the three block skills and scores them 95 (Bimanual), 100 (Auto) and 100 (Sim-Transfer). It scores
   the entry skill 85 because a router has no `eval/eval.config`.
 - Served launch blocks (quoted in the Auto and Sim-Transfer `SKILL.md`, named in the Bimanual `SKILL.md`): all eight run

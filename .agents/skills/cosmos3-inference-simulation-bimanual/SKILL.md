@@ -90,6 +90,8 @@ required by your installation; Framework discovers wheel-provided NPP libraries.
 Keep `COSMOS_TRAINING=0` for every inference-only step so imports do not require
 training extras. The one-process example below is not a GPU-memory minimum.
 
+> **Skill note (not in the source):** the `export` line of the block above holds for the current shell only. In a shell without `COSMOS_TRAINING=0`, `python -m cosmos_framework.scripts.inference` stops with `ModuleNotFoundError: No module named 'pandas'`: the import belongs to the training extras, which this environment does not install. Check with `echo "$COSMOS_TRAINING"`. In a new shell, run `source .venv/bin/activate` and the `export` line again; do not install the package.
+
 Run from the Framework root.
 The root lockfile is generated and checked with `uv==0.11.29`. Before setup,
 set `UV_CACHE_DIR` to a writable workspace-local directory, then run
