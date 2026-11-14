@@ -356,7 +356,8 @@ def tiny_snapshot(path, *, tied=False):
     )
 
 
-def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path):
+@pytest.mark.parametrize("shared_pissa", [False, True])
+def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path, shared_pissa):
     from transformers import AutoModelForImageTextToText
 
     from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
@@ -367,7 +368,10 @@ def test_architecture_embedding_tie_survives_portable_and_merged_reload(tmp_path
     base = tmp_path / "base"
     tiny_snapshot(base, tied=True)
     cfg = Qwen3VLModelConfig(name_or_path=str(base), dtype="float32", activation_checkpointing="none")
-    adapters = adapter_config("dora")
+    adapters = adapter_config("pissa" if shared_pissa else "dora")
+    if shared_pissa:
+        for group in adapters.components:
+            group.pissa_input_gradient = "shared_fp32_v1"
     original = build_qwen3_vl_model(cfg, adapters=adapters)
     assert original.net.lm_head.weight is original.net.model.language_model.embed_tokens.weight
     assert not original.net.lm_head.weight.requires_grad

@@ -33,6 +33,7 @@ FORMAT = "cosmos-posttrain-adapter-v1"
 DENSE_FORMAT = "cosmos-posttrain-adapter-v2"
 MODEL_EXECUTION_FORMAT = "cosmos-posttrain-adapter-v3"
 MERGED_WEIGHT_FORMAT = "cosmos-posttrain-adapter-v4"
+PISSA_GRADIENT_FORMAT = "cosmos-posttrain-adapter-v5"
 MANIFEST = "adapter_manifest.json"
 WEIGHTS = "adapter.safetensors"
 
@@ -97,7 +98,12 @@ def make_adapter_identity(
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = None
     result = {
-        "format": MERGED_WEIGHT_FORMAT
+        "format": PISSA_GRADIENT_FORMAT
+        if any(
+            row["settings"].get("pissa_input_gradient", "separate_casts_v1") != "separate_casts_v1"
+            for row in targets["targets"]
+        )
+        else MERGED_WEIGHT_FORMAT
         if targets.get("model_execution") == "merged_weight_bf16_v1"
         else MODEL_EXECUTION_FORMAT
         if targets.get("model_execution", "default_v1") != "default_v1"
@@ -141,7 +147,13 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         "parameter_dtypes"
     ):
         raise ValueError("model-defined adapter base precision requires the materialized parameter dtype map")
-    if identity.get("format") not in (FORMAT, DENSE_FORMAT, MODEL_EXECUTION_FORMAT, MERGED_WEIGHT_FORMAT):
+    if identity.get("format") not in (
+        FORMAT,
+        DENSE_FORMAT,
+        MODEL_EXECUTION_FORMAT,
+        MERGED_WEIGHT_FORMAT,
+        PISSA_GRADIENT_FORMAT,
+    ):
         raise ValueError("unsupported adapter format/architecture; use a matching Cosmos adapter loader")
     from cosmos_framework.posttrain.model.adapter_families import adapter_family
 
@@ -150,12 +162,20 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         raise ValueError("unsupported PiSSA residual-base representation")
     result = {}
     dense = False
+    shared_input_gradient = False
     for row in identity["resolved"]["targets"]:
         execution = row["settings"].get("execution", "factorized_v1")
         if execution not in ("factorized_v1", "pissa_dense_v1", "merged_weight_bf16_v1") or (
             execution == "pissa_dense_v1" and row["settings"]["method"] != "pissa"
         ):
             raise ValueError("unsupported adapter execution semantics; use the recorded compatible runtime")
+        input_gradient = row["settings"].get("pissa_input_gradient", "separate_casts_v1")
+        if input_gradient not in ("separate_casts_v1", "shared_fp32_v1") or (
+            input_gradient == "shared_fp32_v1"
+            and (row["settings"]["method"] != "pissa" or execution != "factorized_v1" or row["settings"]["dropout"])
+        ):
+            raise ValueError("unsupported PiSSA input-gradient policy; preserve the recorded backward contract")
+        shared_input_gradient |= input_gradient == "shared_fp32_v1"
         dense |= execution == "pissa_dense_v1"
         out_features, in_features = row["shape"]
         rank = row["settings"]["rank"]
@@ -177,6 +197,8 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
         "qwen_vl_hf_ordered_v1",
     ):
         raise ValueError("unsupported adapter model execution semantics")
+    if shared_input_gradient and profile != "default_v1":
+        raise ValueError("shared PiSSA input gradients currently require default_v1 model execution")
     if profile == "qwen3_vl_moe_stock_v1" and (
         identity["architecture"] != "qwen3_vl_moe"
         or identity["resolved"]["extra_parameters"]
@@ -219,7 +241,9 @@ def state_spec(identity: dict) -> dict[str, tuple[int, ...]]:
     elif any(rounded):
         raise ValueError("rounded component execution requires its complete model execution contract")
     expected_format = (
-        MERGED_WEIGHT_FORMAT
+        PISSA_GRADIENT_FORMAT
+        if shared_input_gradient
+        else MERGED_WEIGHT_FORMAT
         if profile == "merged_weight_bf16_v1"
         else MODEL_EXECUTION_FORMAT
         if profile != "default_v1"

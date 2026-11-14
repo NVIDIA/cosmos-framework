@@ -81,6 +81,8 @@ def resolve_targets(net: nn.Module, config: AdapterConfig, *, family: str | None
             # Absence means the original factorized execution, never dense mode.
             if settings["execution"] == "factorized_v1":
                 settings.pop("execution")
+            if settings["pissa_input_gradient"] == "separate_casts_v1":
+                settings.pop("pissa_input_gradient")
             row = dict(
                 component=group.component,
                 name=name,
@@ -244,6 +246,7 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
         )
         self.method = config.method
         self.execution = config.execution
+        self.pissa_input_gradient = config.pissa_input_gradient
         if self.method == "dora":
             self.magnitude = nn.Parameter(torch.ones(base.out_features, device=base.weight.device, dtype=torch.float32))
         if self.method == "pissa":
@@ -299,9 +302,15 @@ class PosttrainAdapterLinear(LoraInjectedLinear):
         dropped = self.lora_dropout(x)
         base_dropped = F.linear(dropped, self.weight, None) if self.method == "dora" else None
         with torch.autocast(device_type=x.device.type, enabled=False):
-            delta = self.lora_B(self.lora_A(dropped.float())) * self._lora_scale
+            adapter_input = dropped.float()
+            delta = self.lora_B(self.lora_A(adapter_input)) * self._lora_scale
             if self.method == "pissa":
-                initial = F.linear(F.linear(x.float(), self.initial_A), self.initial_B) * self._lora_scale
+                # PiSSA requires zero dropout, so both branches see the same
+                # values. Sharing the cast lets their input adjoints cancel in
+                # FP32 before one cast back to the input dtype. Separate casts
+                # retain the original backward graph for legacy checkpoints.
+                initial_input = adapter_input if self.pissa_input_gradient == "shared_fp32_v1" else x.float()
+                initial = F.linear(F.linear(initial_input, self.initial_A), self.initial_B) * self._lora_scale
                 return (base.float() + (delta - initial)).to(base.dtype)
             # DoRA's norm is detached as in the reference algorithm. Bias is not
             # scaled. Reuse the native merge math for the directional weight.

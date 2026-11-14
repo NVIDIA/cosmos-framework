@@ -17,6 +17,9 @@ recorded checkpoint and execution profile, not every model sharing its family na
 See the [original qualification](../adapters-progress.md) and the
 [execution/deployment extension](../adapter-extension-progress.md) for exact
 checkpoint/profile coverage. CPU correctness is not real-model GPU qualification.
+The [PiSSA input-gradient candidate](../adapter-pissa-input-gradient.md) describes
+an explicit backward-policy correction, its artifact version and outstanding
+distributed qualification; existing factorized execution remains the default.
 The [effective-execution extension](../adapter-effective-execution.md) records
 physical 2×2 HSDP/full replay, explicitly versioned PiSSA execution and broader
 BF16 checks, including their failures. Its explicitly versioned MoE profile passes

@@ -31,6 +31,7 @@ class AdapterComponentConfig:
     dropout: float = 0.0
     dtype: str = "float32"
     pissa_niter: int = 4
+    pissa_input_gradient: str = "separate_casts_v1"
     lr_multiplier: float = 1.0
     weight_decay: float = 0.0
 
@@ -76,6 +77,12 @@ class AdapterComponentConfig:
                 raise ValueError("PiSSA requires svd/svd_lowrank initialization and dropout=0")
         elif self.initialization != "default":
             raise ValueError("LoRA/DoRA currently support default (Kaiming A, zero B) initialization only")
+        if self.pissa_input_gradient not in ("separate_casts_v1", "shared_fp32_v1"):
+            raise ValueError(f"unsupported PiSSA input-gradient policy {self.pissa_input_gradient!r}")
+        if self.pissa_input_gradient == "shared_fp32_v1" and (
+            self.method != "pissa" or self.execution != "factorized_v1"
+        ):
+            raise ValueError("shared_fp32_v1 input gradients require factorized PiSSA")
         if type(self.pissa_niter) is not int or self.pissa_niter < 1:
             raise ValueError("pissa_niter must be a positive integer")
         if not math.isfinite(self.lr_multiplier) or self.lr_multiplier <= 0:
@@ -137,6 +144,10 @@ class AdapterConfig:
             "qwen_vl_hf_ordered_v1",
         ):
             raise ValueError(f"unsupported adapter model execution {self.model_execution!r}")
+        if self.model_execution != "default_v1" and any(
+            group.pissa_input_gradient != "separate_casts_v1" for group in self.components
+        ):
+            raise ValueError("shared PiSSA input gradients currently require default_v1 model execution")
         if (self.model_execution == "merged_weight_bf16_v1") != any(
             group.execution == "merged_weight_bf16_v1" for group in self.components
         ) or (

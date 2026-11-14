@@ -34,8 +34,27 @@ def test_execution_identity_uses_effective_hf_mesh_and_checkpointing(monkeypatch
     assert adapter_execution_identity(config)["attention"] == "sdpa"
 
 
-@pytest.mark.parametrize("execution", ["factorized_v1", "pissa_dense_v1"])
-def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp_path, monkeypatch, execution):
+@pytest.mark.parametrize(
+    ("execution", "input_gradient"),
+    [
+        ("factorized_v1", "separate_casts_v1"),
+        ("pissa_dense_v1", "separate_casts_v1"),
+        ("factorized_v1", "shared_fp32_v1"),
+    ],
+)
+def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(
+    tmp_path, monkeypatch, execution, input_gradient
+):
+    import os
+    import platform
+
+    # Scope the Gloo helper and Ray's import-time environment changes to this
+    # fixture; neither may leak into the next checkpoint test.
+    monkeypatch.setenv(
+        "GLOO_SOCKET_IFNAME", os.environ.get("GLOO_SOCKET_IFNAME", "lo0" if platform.system() == "Darwin" else "lo")
+    )
+    monkeypatch.setenv("RAY_CLIENT_MODE", "0")
+
     from cosmos_framework.posttrain.checkpoint.adapters import save_adapter_artifact
     from cosmos_framework.posttrain.scripts.prepare_sft_example import prepare_example
     from cosmos_framework.posttrain.tests.helpers.distributed import init_gloo_process_group
@@ -69,6 +88,7 @@ def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp
         "rl.adapters.components.1.method=dora",
         "rl.adapters.components.2.method=pissa",
         f"rl.adapters.components.2.execution={execution}",
+        f"rl.adapters.components.2.pissa_input_gradient={input_gradient}",
         "rl.adapters.components.2.layers=[0]",
         "rl.processor_kwargs.images_kwargs.size.shortest_edge=16",
         "rl.processor_kwargs.images_kwargs.size.longest_edge=64",
@@ -94,10 +114,15 @@ def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp
         train_step(resumed_data, resumed, rl)
         assert all(torch.equal(value, trainable_state(resumed.model.net)[name]) for name, value in expected.items())
         other_execution = "pissa_dense_v1" if execution == "factorized_v1" else "factorized_v1"
+        changed_adapter = (
+            "rl.adapters.components.2.pissa_input_gradient=separate_casts_v1"
+            if input_gradient == "shared_fp32_v1"
+            else f"rl.adapters.components.2.execution={other_execution}"
+        )
         for changed in (
             "model.model_config.attn_impl=sdpa",
             "model.model_config.activation_checkpointing=full",
-            f"rl.adapters.components.2.execution={other_execution}",
+            changed_adapter,
         ):
             with pytest.raises(RuntimeError, match="objective exact-resume identity differs"):
                 runtime(recipe, [*opts, f"rl.resume={checkpoint}", changed], str(tmp_path / "refused"))
@@ -118,6 +143,13 @@ def test_adapter_checkpoint_binds_execution_but_portable_warm_start_does_not(tmp
         )
         assert warm.optimizer_is_pristine() and warm._update_state_dict()["optimizer_step"] == 0
         assert all(torch.equal(value, trainable_state(warm.model.net)[name]) for name, value in expected.items())
+        if input_gradient == "shared_fp32_v1":
+            with pytest.raises((ValueError, RuntimeError), match="compatibility mismatch|identity"):
+                runtime(
+                    recipe,
+                    [*opts, "rl.resume=off", f"rl.adapters.warm_start={portable}", changed_adapter],
+                    str(tmp_path / "wrong-backward-policy"),
+                )
     finally:
         dist.destroy_process_group()
 
