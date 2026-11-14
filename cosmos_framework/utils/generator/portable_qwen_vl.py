@@ -10,9 +10,12 @@ importing a training wrapper, trainer, optimizer or distributed setup.
 import copy
 import re
 from functools import partial
+from inspect import signature
 from pathlib import Path
 
 PROFILE = "qwen_vl_hf_ordered_v1"
+STOCK_FACTORIZED_PROFILE = "qwen3_vl_factorized_fp32_v1"
+PROFILES = (PROFILE, STOCK_FACTORIZED_PROFILE)
 FAMILIES = ("qwen2_vl", "qwen2_5_vl", "qwen3_vl")
 
 
@@ -28,19 +31,30 @@ def validate_processor(processor, family):
         raise ValueError("ordered portable processor must match the recorded stock Qwen-VL architecture")
 
 
-def validate_identity(identity):
+def validate_identity(identity, *, profile=PROFILE):
     from cosmos_framework.posttrain.checkpoint.adapters import state_spec
 
+    if profile not in PROFILES:
+        raise ValueError(f"unknown original-factorized VLM deployment profile: {profile!r}")
     state_spec(identity)
+    stock = profile == STOCK_FACTORIZED_PROFILE
+    execution = "qwen3_vl_hf_stock_v1" if stock else PROFILE
     if (
         identity["format"] != "cosmos-posttrain-adapter-v3"
-        or identity["architecture"] not in FAMILIES
+        or identity["architecture"] not in (("qwen3_vl",) if stock else FAMILIES)
         or identity["base_storage_dtype"] != "bfloat16"
-        or identity["resolved"].get("model_execution") != PROFILE
+        or identity["resolved"].get("model_execution") != execution
         or not identity["resolved"]["targets"]
         or any(row["settings"]["dtype"] != "float32" for row in identity["resolved"]["targets"])
+        or (
+            stock
+            and any(
+                row["settings"].get("execution", "factorized_v1") != "factorized_v1"
+                for row in identity["resolved"]["targets"]
+            )
+        )
     ):
-        raise ValueError(f"{PROFILE} requires its recorded BF16-base/FP32-adapter HF VLM artifact")
+        raise ValueError(f"{profile} requires its recorded BF16-base/FP32-adapter HF VLM artifact")
 
 
 def load_base(base_path, hf_config, device, identity):
@@ -125,18 +139,23 @@ def load_base(base_path, hf_config, device, identity):
     return net
 
 
-def install_inference_guard(net, identity):
+def install_inference_guard(net, identity, *, profile=PROFILE):
     """Declare FP32 eager inference without changing adapter/attention arithmetic."""
     import torch
 
     from cosmos_framework.posttrain.model.qwen_vl_hf_execution import _validate_owner
 
-    validate_identity(identity)
+    validate_identity(identity, profile=profile)
     _validate_owner(net, identity["architecture"])
     if getattr(net, "_cosmos_deployment_profile", None) is not None:
         raise ValueError("ordered portable inference conflicts with an already installed deployment profile")
+    stock = profile == STOCK_FACTORIZED_PROFILE
+    execution = "qwen3_vl_hf_stock_v1" if stock else PROFILE
+    if stock and any(module.training for module in net.modules()):
+        raise ValueError(f"{profile} requires every module, including configured dropout, in eval mode")
     captured_identity = copy.deepcopy(identity)
     captured_config = copy.deepcopy(net.config.to_dict())
+    forward_signature = signature(net.forward)
 
     def tensor_owner(name, tensor):
         return name, id(tensor), tensor.dtype, tensor.device, tuple(tensor.shape)
@@ -158,12 +177,43 @@ def install_inference_guard(net, identity):
                 module.execution,
                 module._lora_scale,
                 getattr(module.lora_dropout, "p", 0.0),
+                id(module.lora_dropout),
             )
             for name, module in model.named_modules()
             if hasattr(module, "lora_A")
         )
 
     adapter_settings = settings(net)
+
+    def callable_owner(fn):
+        # Attribute access creates a fresh bound-method object. Its function and
+        # receiver, rather than the transient method object, own the execution.
+        return id(getattr(fn, "__self__", None)), id(getattr(fn, "__func__", fn))
+
+    def execution_owners(model):
+        return tuple(
+            (
+                name,
+                id(module),
+                callable_owner(module.forward),
+                callable_owner(getattr(module, "_old_forward", None)),
+                id(getattr(module, "_hf_hook", None)),
+            )
+            for name, module in model.named_modules()
+        )
+
+    if stock:
+        from cosmos_framework.posttrain.model.adapters import PosttrainAdapterLinear
+
+        for module in net.modules():
+            if isinstance(module, PosttrainAdapterLinear):
+                original = getattr(module, "_old_forward", module.forward)
+                if (
+                    getattr(original, "__self__", None) is not module
+                    or getattr(original, "__func__", None) is not PosttrainAdapterLinear.forward
+                ):
+                    raise ValueError(f"{profile} requires original factorized adapter forward ownership")
+    captured_execution = execution_owners(net) if stock else None
 
     def guard(model, args, kwargs):
         if (
@@ -172,26 +222,50 @@ def install_inference_guard(net, identity):
             or torch.is_autocast_enabled("cuda")
             or torch.is_autocast_enabled("cpu")
             or torch.compiler.is_compiling()
+            or (stock and any(module.training for module in model.modules()))
         ):
-            raise ValueError("ordered portable deployment is eager FP32 eval/no_grad only, without autocast/compile")
+            raise ValueError(f"{profile} is eager FP32 eval/no_grad only, including dropout, without autocast/compile")
+        if stock and (torch.backends.cuda.matmul.allow_tf32 or torch.cuda.is_current_stream_capturing()):
+            raise ValueError(f"{profile} requires FP32 matmul without TF32 or CUDA graph capture")
+        if stock:
+            from transformers.cache_utils import DynamicCache, DynamicLayer
+
+            call = forward_signature.bind_partial(*args, **kwargs).arguments
+            for name, ndim in (("input_ids", 2), ("inputs_embeds", 3)):
+                value = call.get(name)
+                if value is not None and (value.ndim != ndim or value.shape[0] != 1):
+                    raise ValueError(f"{profile} requires batch-one {name}, without beam expansion")
+            cache = call.get("past_key_values")
+            if cache is not None and (
+                type(cache) is not DynamicCache
+                or getattr(cache, "offloading", False)
+                or any(type(layer) is not DynamicLayer for layer in cache.layers)
+                or cache.layer_class_to_replicate not in (None, DynamicLayer)
+                or (
+                    cache.layer_class_to_replicate is None
+                    and len(cache.layers) != model.config.text_config.num_hidden_layers
+                )
+            ):
+                raise ValueError(f"{profile} supports ordinary full-attention DynamicCache without offload")
         inputs = kwargs.get("input_ids", args[0] if args else None)
         if inputs is None:
             inputs = kwargs.get("inputs_embeds")
         if inputs is not None and int(inputs.shape[0]) != 1:
             raise ValueError("ordered portable deployment requires batch-one inference, without beam expansion")
         if (
-            model._cosmos_deployment_profile != PROFILE
-            or model._posttrain_model_execution != PROFILE
+            model._cosmos_deployment_profile != profile
+            or model._posttrain_model_execution != execution
             or model._posttrain_adapter_identity != captured_identity
             or model.config.to_dict() != captured_config
             or getattr(model.model.forward, "__func__", None) is not forward
             or settings(model) != adapter_settings
+            or (stock and execution_owners(model) != captured_execution)
             or tuple(tensor_owner(n, p) for n, p in model.named_parameters(remove_duplicate=False)) != owners
             or tuple(tensor_owner(n, b) for n, b in model.named_buffers() if n.endswith(("initial_A", "initial_B")))
             != initials
         ):
-            raise ValueError("ordered portable parameter/profile ownership changed; reload the declared artifact")
+            raise ValueError(f"{profile} parameter/profile ownership changed; reload the declared artifact")
         _validate_owner(model, identity["architecture"])
 
-    net._cosmos_deployment_profile = PROFILE
+    net._cosmos_deployment_profile = profile
     net.register_forward_pre_hook(guard, with_kwargs=True)

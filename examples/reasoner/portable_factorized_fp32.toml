@@ -1,0 +1,27 @@
+# Stage the exact base and a v3 stock-bound factorized portable adapter.
+# Replace the portable path; retain the immutable base/processor identity.
+# python -m cosmos_framework.inference.reasoner.generate --config examples/reasoner/portable_factorized_fp32.toml --output answer.json
+# Original factorized FP32 reference: no claim of cache-consistent numerics.
+[model]
+model_name = "/models/Qwen3-VL-2B-Instruct/89644892e4d85e24eaac8bacfd4f463576704203"
+dtype = "float32"
+attn_implementation = "sdpa"
+
+[model.portable_adapter]
+directory = "/adapters/stock-factorized/portable"
+execution_profile = "qwen3_vl_factorized_fp32_v1"
+cache_effective_weights = false
+
+[generation]
+max_tokens = 32
+temperature = 0.0
+seed = 42
+
+[vision]
+num_frames = 4
+min_pixels = 50176
+max_pixels = 81920
+
+[[tasks]]
+question = "Describe one reason a vehicle should slow down near a pedestrian crossing."
+# For video: media_paths=["/data/example.mp4"], media_mode="video".

@@ -97,6 +97,7 @@ point `model_name` at the completed export.
 | `qwen3_vl_bf16_canonical_cache_v1` | v4 `merged_weight_bf16_v1`; BF16 frozen base and FP32 adapter storage | Legacy arithmetic retained for reproducibility; recorded cache failure on `video-961109`. |
 | `qwen3_vl_bf16_canonical_cache_v2` | Same unchanged v4 artifact | Fixed-row language RMSNorm plus canonical linear/attention arithmetic. Correctness reference; long-prefill performance gates remain unmet. |
 | `qwen3_vl_bf16_tensorcore_prefill_v1` | Same unchanged v4 artifact | Corrected normalization; FP64 tensor-core attention for long prefill, reference attention for short inputs/decoding. Qualified opt-in fast profile. |
+| `qwen3_vl_factorized_fp32_v1` | v3 `qwen3_vl_hf_stock_v1`, all components `factorized_v1`; BF16 base explicitly promoted to FP32 | Original adapter forwards, including DoRA magnitudes and saved PiSSA initial factors. Recorded training dropout is preserved and disabled by evaluation. No replacement forward or derived-weight cache. |
 | `qwen3_vl_factorized_fp64_branch_v1` | v3 `qwen3_vl_hf_stock_v1`, `factorized_v1`; BF16 base loaded then explicitly promoted to FP32 | FP32 frozen base projection, FP64 separate low-rank projections and final sum. PiSSA subtracts its saved initial branch; DoRA computes its direction norm and magnitude ratio in FP64. No dense effective-weight forward or cache. |
 
 All public profiles are inference-only: exact stock dense HF Qwen3-VL,
@@ -104,11 +105,24 @@ Transformers 5.8.1 / PyTorch 2.10.0, a single A100 SM80, SDPA, batch one, eager
 `eval()` and `no_grad()`/`inference_mode()`, no autocast, compilation, CUDA graphs
 or CPU/disk offload. BF16 profiles additionally require Triton 3.6.0 and permit
 `cache_effective_weights=true`. Stable
-factorized requires FP32 matmul without TF32 (`torch.set_float32_matmul_precision("highest")`).
+factorized and original-factorized FP32 require FP32 matmul without TF32
+(`torch.set_float32_matmul_precision("highest")`).
 Ordinary non-offloaded `DynamicCache` and the existing runtime's video-prefix
 reuse are supported; static/custom caches are rejected. These profiles do not
 claim support for arbitrary checkpoints, other hardware, serving backends or
 training/autograd. Qualification results are recorded separately from API availability.
+
+The [original-factorized example](../../examples/reasoner/portable_factorized_fp32.toml)
+selects the public FP32 reference execution for stock-bound artifacts, including
+mixed component recipes with recorded nonzero training dropout. It requires all
+modules to remain in evaluation mode and rejects changing the dropout module,
+adapter settings, parameter ownership or profile after loading. It leaves the
+separate stable-FP64 profile's zero-dropout admission unchanged. FP32 promotion
+is explicit: this is neither BF16 equivalence nor a repair of the preserved
+factorized merge/cache numerical failures. Source correctness fixtures cover
+the six method/scaling settings and a mixed recipe; installed real-model
+qualification of this new public route remains pending. Existing merged loading
+is unchanged. No new training execution mode is introduced.
 
 The stable factorized profile is a deployment override recorded in output
 provenance. It leaves the original artifact, tensors, ties and trainability

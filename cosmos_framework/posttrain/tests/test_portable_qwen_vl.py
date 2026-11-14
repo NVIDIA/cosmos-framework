@@ -76,13 +76,23 @@ def snapshot(path, family="qwen2_vl", *, tied=False):
     return config
 
 
-def artifact(tmp_path, monkeypatch, family="qwen2_vl", method="mixed", rslora=False, *, tied=False, dense=False):
+def artifact(
+    tmp_path,
+    monkeypatch,
+    family="qwen2_vl",
+    method="mixed",
+    rslora=False,
+    *,
+    tied=False,
+    dense=False,
+    model_execution=portable_qwen_vl.PROFILE,
+):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     base, portable = tmp_path / "base", tmp_path / "portable"
     config = snapshot(base, family, tied=tied)
     projector = "model.visual.merger.linear_fc1" if family == "qwen3_vl" else "model.visual.merger.mlp.2"
     cfg = AdapterConfig(
-        model_execution=portable_qwen_vl.PROFILE,
+        model_execution=model_execution,
         components=[
             Component(
                 component=component,
@@ -276,8 +286,17 @@ def test_no_autograd_autocast_or_profile_reinterpretation(tmp_path, monkeypatch)
         portable_adapters.PortableAdapterConfig(str(portable), portable_qwen_vl.PROFILE, cache_effective_weights=True)
 
 
-def test_fresh_public_runtime_without_training_builder_or_optional_dependencies(tmp_path, monkeypatch):
-    base, portable, reference, config = artifact(tmp_path, monkeypatch)
+@pytest.mark.parametrize("stock_factorized", [False, True])
+def test_fresh_public_runtime_without_training_builder_or_optional_dependencies(
+    tmp_path, monkeypatch, stock_factorized
+):
+    profile = portable_qwen_vl.STOCK_FACTORIZED_PROFILE if stock_factorized else portable_qwen_vl.PROFILE
+    base, portable, reference, config = artifact(
+        tmp_path,
+        monkeypatch,
+        family="qwen3_vl" if stock_factorized else "qwen2_vl",
+        model_execution="qwen3_vl_hf_stock_v1" if stock_factorized else portable_qwen_vl.PROFILE,
+    )
     output = tmp_path / "fresh.pt"
     script = r"""
 import sys
@@ -290,17 +309,19 @@ sys.meta_path.insert(0, NoTraining())
 for name in ("megatron", "apex", "deepspeed", "ray"):
     sys.modules[name] = None  # Normal unavailable-optional-package semantics, including find_spec.
 import torch
+torch.set_float32_matmul_precision("highest")
+torch.cuda.is_current_stream_capturing = lambda: False  # No CUDA graphs in the CPU structural fixture.
 from cosmos_framework.utils.generator import portable_adapters
 portable_adapters._validate_device = lambda device: None  # CPU fixture admission only.
 from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
-runtime = CosmosFrameworkRuntime(sys.argv[1], dtype="float32", attn_implementation="sdpa", portable_adapter={"directory":sys.argv[2],"execution_profile":"qwen_vl_hf_ordered_v1"})
+runtime = CosmosFrameworkRuntime(sys.argv[1], dtype="float32", attn_implementation="sdpa", portable_adapter={"directory":sys.argv[2],"execution_profile":sys.argv[4]})
 with torch.no_grad():
     logits = runtime.model(input_ids=torch.tensor([[30,31,32,33]])).logits
     output = runtime.model.generate(input_ids=torch.tensor([[30,31,32,33]]), max_new_tokens=3, do_sample=False)
 torch.save({"logits":logits,"output":output,"deployment":runtime.adapter_deployment},sys.argv[3])
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(base), str(portable), str(output)],
+        [sys.executable, "-c", script, str(base), str(portable), str(output), profile],
         env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
         text=True,
         capture_output=True,
@@ -311,17 +332,27 @@ torch.save({"logits":logits,"output":output,"deployment":runtime.adapter_deploym
     with torch.no_grad():
         torch.testing.assert_close(actual["logits"], reference(**data(config)[0]).logits, rtol=0, atol=0)
         assert torch.equal(actual["output"], reference.generate(**data(config)[0], max_new_tokens=3, do_sample=False))
-    assert actual["deployment"]["execution_profile"] == portable_qwen_vl.PROFILE
+    assert actual["deployment"]["execution_profile"] == profile
 
 
-@pytest.mark.parametrize("family", ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"])
-def test_public_task_generation_and_repeated_video_prefixes(tmp_path, monkeypatch, family):
+@pytest.mark.parametrize(
+    "family,stock_factorized", [("qwen2_vl", False), ("qwen2_5_vl", False), ("qwen3_vl", False), ("qwen3_vl", True)]
+)
+def test_public_task_generation_and_repeated_video_prefixes(tmp_path, monkeypatch, family, stock_factorized):
     import numpy as np
     from PIL import Image
 
     from cosmos_framework.inference.reasoner.runtime import CosmosFrameworkRuntime
 
-    base, portable, _, _ = artifact(tmp_path, monkeypatch, family=family, dense=True)
+    profile = portable_qwen_vl.STOCK_FACTORIZED_PROFILE if stock_factorized else portable_qwen_vl.PROFILE
+    base, portable, _, _ = artifact(
+        tmp_path,
+        monkeypatch,
+        family=family,
+        dense=not stock_factorized,
+        model_execution="qwen3_vl_hf_stock_v1" if stock_factorized else portable_qwen_vl.PROFILE,
+    )
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
     monkeypatch.setattr(portable_adapters, "_validate_device", lambda device: None)
     runtime = CosmosFrameworkRuntime(
         str(base),
@@ -329,7 +360,7 @@ def test_public_task_generation_and_repeated_video_prefixes(tmp_path, monkeypatc
         attn_implementation="sdpa",
         portable_adapter={
             "directory": str(portable),
-            "execution_profile": portable_qwen_vl.PROFILE,
+            "execution_profile": profile,
         },
     )
     generation = {"max_tokens": 3, "temperature": 0, "seed": 42}

@@ -18,6 +18,7 @@ from cosmos_framework.utils.generator.bf16_cache_contract import QWEN3_VL_PROFIL
 from cosmos_framework.utils.generator.factorized_inference import PROFILE as FACTORIZED
 from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
 from cosmos_framework.utils.generator.portable_qwen_vl import PROFILE as ORDERED_VLM
+from cosmos_framework.utils.generator.portable_qwen_vl import STOCK_FACTORIZED_PROFILE
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
 
@@ -31,13 +32,21 @@ class PortableAdapterConfig:
     def __post_init__(self):
         if not isinstance(self.directory, str) or not self.directory:
             raise ValueError("portable_adapter.directory must name a complete local portable adapter")
-        profiles = (*QWEN3_VL_PROFILES, FACTORIZED, *SMOLLM_PROFILES, *GEMMA_PROFILES, ORDERED_VLM)
+        profiles = (
+            *QWEN3_VL_PROFILES,
+            FACTORIZED,
+            *SMOLLM_PROFILES,
+            *GEMMA_PROFILES,
+            ORDERED_VLM,
+            STOCK_FACTORIZED_PROFILE,
+        )
         if self.execution_profile not in profiles:
             raise ValueError(f"portable execution_profile must be one of {profiles!r}")
         if type(self.cache_effective_weights) is not bool:
             raise ValueError("cache_effective_weights must be a boolean")
         if (
-            self.execution_profile in (FACTORIZED, *SMOLLM_PROFILES, *GEMMA_PROFILES, ORDERED_VLM)
+            self.execution_profile
+            in (FACTORIZED, *SMOLLM_PROFILES, *GEMMA_PROFILES, ORDERED_VLM, STOCK_FACTORIZED_PROFILE)
             and self.cache_effective_weights
         ):
             raise ValueError(
@@ -97,8 +106,8 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         smollm_consistent.validate_identity(identity, profile=profile)
     elif profile in GEMMA_PROFILES:
         gemma_sdpa_layout.validate_identity(identity, profile=profile)
-    elif profile == ORDERED_VLM:
-        portable_qwen_vl.validate_identity(identity)
+    elif profile in portable_qwen_vl.PROFILES:
+        portable_qwen_vl.validate_identity(identity, profile=profile)
     else:
         factorized_inference.validate_identity(identity)
     for name, expected in identity["dependencies"].items():
@@ -121,7 +130,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     hf_config = AutoConfig.from_pretrained(base_path, local_files_only=True, trust_remote_code=False)
     family = (
         identity["architecture"]
-        if profile == ORDERED_VLM
+        if profile in portable_qwen_vl.PROFILES
         else ("gemma" if profile in GEMMA_PROFILES else ("llama" if profile in SMOLLM_PROFILES else "qwen3_vl"))
     )
     if hf_config.model_type != family or getattr(hf_config, "quantization_config", None):
@@ -189,9 +198,9 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     elif profile == FACTORIZED:
         net.float()  # Explicit deployment precision; installer never replaces owned tensors.
         factorized_inference.install(net, adapter_type=PosttrainAdapterLinear)
-    elif profile == ORDERED_VLM:
+    elif profile in portable_qwen_vl.PROFILES:
         net.float()  # Explicit FP32 reference deployment, not original BF16-storage inference.
-        portable_qwen_vl.install_inference_guard(net, identity)
+        portable_qwen_vl.install_inference_guard(net, identity, profile=profile)
     else:
         from cosmos_framework.posttrain.model.adapter_bf16_execution import install_adapter_inference_profile
 
@@ -199,6 +208,8 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     processor_class = AutoTokenizer if profile in (*SMOLLM_PROFILES, *GEMMA_PROFILES) else AutoProcessor
     if processor is None:
         processor = processor_class.from_pretrained(processor_path, local_files_only=True, trust_remote_code=False)
+    if profile == STOCK_FACTORIZED_PROFILE:
+        portable_qwen_vl.validate_processor(processor, family)
     if getattr(processor, "tokenizer", None) is not None:
         processor.tokenizer.padding_side = "left"
     # Detect snapshot edits during construction. The portable tensors themselves
@@ -223,7 +234,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         "generation_config": net.generation_config.to_dict(),
         "backend": "Transformers SDPA, single A100 SM80, eager inference, batch one",
     }
-    if profile == ORDERED_VLM:
+    if profile in portable_qwen_vl.PROFILES:
         provenance["precision_contract"] = {
             "artifact_base_storage": identity["base_storage_dtype"],
             "deployment_parameters": "float32",
@@ -233,6 +244,12 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
             "original_storage_equivalence": "not claimed; this loader is the explicit FP32 reference",
             "cache_consistent_numerics": "not claimed; recorded ordered forward and native SDPA",
         }
+        if profile == STOCK_FACTORIZED_PROFILE:
+            provenance["precision_contract"].update(
+                adapter_arithmetic="original factorized_v1 forwards, without replacement or dense weight cache",
+                recorded_dropout="preserved; every module must remain in eval mode",
+                cache_consistent_numerics="not claimed; original factorized FP32 execution and native SDPA",
+            )
     return net, processor, provenance
 
 
