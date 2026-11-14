@@ -595,9 +595,9 @@ in `[1,40,132]` tensors. Gradient-finiteness validation consumed approximately
 104.7/106.4 ms of traced NF4/BF16 update wall time; clipping was another distinct
 region. The unused vocabulary projection took only about 0.59 ms of GPU time per
 update. CPU and GPU regions overlap, and trace overhead prevents treating these
-numbers as production throughput. The next single intervention is a read-only
-batched gradient check, shared by both precision arms, subject to correctness and
-unprofiled timing gates.
+numbers as production throughput. This motivated a read-only batched gradient
+check, shared by both precision arms and subject to correctness and unprofiled
+timing gates. Its final rejection is recorded below.
 
 That profile measured sampled owned-process GPU peaks of 30.404/31.490 GiB and
 native training allocator peaks of 27.221/28.334 GiB. These new samples are valid;
@@ -709,11 +709,47 @@ the fixed 256 MiB limits. The allocation consumed 5,084 GPU-seconds, including
 The first reference BF16 case shared its host with an Alpamayo allocation on
 different GPUs and disjoint CPU sets; the later cases had no known such overlap.
 This asymmetric placement limitation remains, without clock correction or an
-isolation claim. All mandatory first-block gates passed, but the optimization
-is **not promoted**: the predeclared reversed seed-42 block and joint geometric
-thresholds, candidate-owned mature recovery and remaining family checks are still
-required. The seed-42 block uses identical settings and retains its native outputs
+isolation claim. All mandatory first-block gates passed; promotion then remained
+conditional on the reversed seed-42 block, joint geometric thresholds and further
+qualification. That block used identical settings and retained its native outputs
 for development analysis. Old `38528318` clocks remain separate. None of these
 arithmetic-preserving results repairs the unmet quality guards or establishes
 quantization superiority; NF4 still takes longer than optimized BF16 and saves
 only about 1.10 GiB of training GPU memory in this head-training recipe.
+
+The reversed seed-42 block `38535185` completed all four cases and six exact
+100/200/300 model, optimizer, RNG/data and task comparisons, consuming 5,126
+GPU-seconds. Independent replay verified all 204 receipt files, 3,323 raw memory
+samples and four producing-step release proofs. Its separate CPU comparison
+step took 459.42 seconds. Each case had complete owned-GPU and host-PSS evidence;
+the sampled peaks remain lower bounds.
+
+| Observed reduction across the two fixed blocks | NF4 | BF16 |
+| --- | ---: | ---: |
+| Geometric mean steady-update time | 8.682% | 8.908% |
+| Geometric mean complete-case workflow | **0.798%** | 1.754% |
+| Geometric mean native workflow | 2.623% | 2.262% |
+
+The NF4 complete-case result **fails the unchanged 1% requirement**, so the
+batched finite-check intervention is discarded despite exact numerical results
+and faster updates. Commit `26bc60f` restored the original elementwise predicate,
+removed the grouped helper and its runtime allowlist, and retained general
+finite-check regressions. No further timing repeat or candidate-owned mature
+recovery was run. Historical CUDA and full-model candidate evidence remains
+available; it does not describe the selected implementation.
+
+Both precisions first reached the offline target at update 100 in seed 42,
+versus update 200 in seed 17. Observed preflight-inclusive target times decreased
+within each matched precision pair. The producer's
+`time_to_quality_improvement_established` fields describe only those two fixed
+offline-clock observations; they do not establish quantization superiority,
+useful rollout time-to-quality, statistical recipe improvement or promotion.
+BF16 seed-42 native target time alone increased from 272.108 to 273.974 seconds
+(0.686%); its preflight-inclusive time decreased from 356.238 to 353.192 seconds.
+
+The first two seed-42 cases shared their host with the Alpamayo head control;
+later cases shared it with the GR00T frozen-backbone qualification. Actual GPU
+and CPU ownership was distinct, but shared-host and filesystem effects remain
+uncontrolled. All cleanup costs and original clocks are retained without
+adjustment. The joint decision and exact source/result hashes are in the
+[family evidence](evidence/native_qlora_family_engineering_4cba88f.json).

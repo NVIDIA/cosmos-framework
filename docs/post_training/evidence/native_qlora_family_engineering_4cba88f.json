@@ -15408,6 +15408,478 @@
         "sha256": "f651589c219d50a370a9274b16113db8b9b2a94dc837091fb2d0df3a637d17fa",
         "scope": "Archive and all50 file hashes,512 applied metric rows, all five256-example metric reductions, final target-null and raw release/accounting replay; no full tensor or fresh inference claim."
       }
+    },
+    "38535185": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 5126,
+      "scope": "Predeclared seed42 reversed four-case finite-gradient block; actual producing-step cleanup remains within each cold case. Independent training seed for exposed development, not independent task confirmation.",
+      "reference_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "candidate_revision": "3c96ce8503eef263b7feb3fd2a23cad28efa6ab7",
+      "protocol_sha256": "70d0722b69758491afb66139d4dfa5ed10c8e95de9d0aed09af096da2d1e2e46",
+      "measurement_release_contract_sha256": "36773266543e55956fd4871eb6c1d92eb03600c24693b382bdab6fb1a230672a",
+      "payload_manifest_sha256": "4ee1714a66f3b12d4d6b41a48a603fd64f9609e20fc20e566a4aa20a1df731e4",
+      "order": [
+        "candidate:bf16_lora",
+        "reference:nf4_lora",
+        "candidate:nf4_lora",
+        "reference:bf16_lora"
+      ],
+      "block_result": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-receipts-v1/block-result.json",
+        "sha256": "19e3f82e3c6664eadc2bb1ca317988edd180c8416d3bcc20582e210a895cd1d2"
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-readout-v1.json",
+        "sha256": "83f679322d717dfd7cfb4c0229a2b94bf7c474e5b99007962f40e7455877e0aa"
+      },
+      "independent_replay": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-terminal-peer-review.json",
+        "sha256": "2d276fa518141f6ed40016f6755e2036cd8bd00679fb896e0607f0f3ab72a77e"
+      },
+      "comparison_seconds": 459.415825589007,
+      "correctness": {
+        "exact100_200_300_model_optimizer_rng_data_and_task_both_arms": true,
+        "strict_owned_gpu_and_host_pss_complete_all_four": true,
+        "raw_samples_independently_replayed": 3323,
+        "raw_files_verified": 204,
+        "independent_tensor_recomputation": false
+      },
+      "precision_results": {
+        "bf16_lora": {
+          "times": {
+            "complete_case_workflow": {
+              "candidate_over_reference": 0.9762607837665619,
+              "candidate_seconds": 1118.1379169790016,
+              "reduction_percent": 2.373921623343811,
+              "reference_seconds": 1145.3270842909988
+            },
+            "native_workflow": {
+              "candidate_over_reference": 0.9902144588266406,
+              "candidate_seconds": 573.6313846760022,
+              "reduction_percent": 0.9785541173359391,
+              "reference_seconds": 579.3001501469989
+            },
+            "runner_workflow": {
+              "candidate_over_reference": 0.9757231883739851,
+              "candidate_seconds": 1109.5228494190087,
+              "reduction_percent": 2.4276811626014916,
+              "reference_seconds": 1137.1287088789977
+            },
+            "steady_update": {
+              "candidate_over_reference": 0.9262275308812637,
+              "candidate_seconds": 0.4251161500152375,
+              "reduction_percent": 7.377246911873625,
+              "reference_seconds": 0.4589759382457123
+            }
+          },
+          "target": {
+            "attained": true,
+            "candidate": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 273.9742310020083,
+              "preflight_inclusive_seconds": 353.1918591739959,
+              "step": 100,
+              "threshold": 0.049561327725898344
+            },
+            "candidate_over_reference": 0.9914495595579559,
+            "reference": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 272.1076694520016,
+              "preflight_inclusive_seconds": 356.2378496909805,
+              "step": 100,
+              "threshold": 0.049561327725898344
+            },
+            "step": 100
+          },
+          "allocated_increase_bytes": 4194304,
+          "sampled_owned_gpu_increase_bytes": 46137344,
+          "per_block_checks": {
+            "allocated_and_process_increase_at_most256MiB": true,
+            "attained_target_no_slower": true,
+            "exact100_200_300_model_optimizer_rng_data_and_task": true,
+            "strict_measurement": true,
+            "this_block_complete_workflow_strictly_faster": true,
+            "this_block_steady_strictly_faster": true
+          },
+          "exact_parity": {
+            "100": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "200": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "300": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            }
+          },
+          "reference_allocator": {
+            "host_process_hwm_bytes": 31323529216,
+            "peak_allocated_bytes": 32039697920,
+            "peak_reserved_bytes": 32765902848,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "candidate_allocator": {
+            "host_process_hwm_bytes": 31313428480,
+            "peak_allocated_bytes": 32043892224,
+            "peak_reserved_bytes": 32812040192,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "reference_samples": {
+            "device_peak_bytes": 34615787520,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31441845248,
+            "host_rss_sum_peak_bytes": 31983345664,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1072.2480299472809,
+            "owned_device_process_peak_bytes": 33839644672,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 822,
+            "sampling_gap_seconds": {
+              "count": 821,
+              "maximum": 3.8101584911346436,
+              "mean": 1.3060268330661156,
+              "median": 1.2821357250213623,
+              "p95": 1.3630266189575195,
+              "sum": 1072.2480299472809
+            }
+          },
+          "candidate_samples": {
+            "device_peak_bytes": 34661924864,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31433871360,
+            "host_rss_sum_peak_bytes": 31973355520,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1049.6084487438202,
+            "owned_device_process_peak_bytes": 33885782016,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 796,
+            "sampling_gap_seconds": {
+              "count": 795,
+              "maximum": 3.2330691814422607,
+              "mean": 1.3202621996777613,
+              "median": 1.2705764770507812,
+              "p95": 1.4514080286026,
+              "sum": 1049.6084487438202
+            }
+          }
+        },
+        "nf4_lora": {
+          "times": {
+            "complete_case_workflow": {
+              "candidate_over_reference": 0.9927914552513675,
+              "candidate_seconds": 1192.0443999879935,
+              "reduction_percent": 0.7208544748632528,
+              "reference_seconds": 1200.699697486998
+            },
+            "native_workflow": {
+              "candidate_over_reference": 0.9611069867492819,
+              "candidate_seconds": 598.3318052349787,
+              "reduction_percent": 3.8893013250718145,
+              "reference_seconds": 622.5444341620023
+            },
+            "runner_workflow": {
+              "candidate_over_reference": 0.995590899357237,
+              "candidate_seconds": 1183.8397652549902,
+              "reduction_percent": 0.44091006427630086,
+              "reference_seconds": 1189.0825498900085
+            },
+            "steady_update": {
+              "candidate_over_reference": 0.9004735548956105,
+              "candidate_seconds": 0.45570029941547546,
+              "reduction_percent": 9.952644510438946,
+              "reference_seconds": 0.5060673874740315
+            }
+          },
+          "target": {
+            "attained": true,
+            "candidate": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 281.52573151898105,
+              "preflight_inclusive_seconds": 368.6499174569617,
+              "step": 100,
+              "threshold": 0.049561327725898344
+            },
+            "candidate_over_reference": 0.9955350427454217,
+            "reference": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 286.55138419297873,
+              "preflight_inclusive_seconds": 370.30330588898505,
+              "step": 100,
+              "threshold": 0.049561327725898344
+            },
+            "step": 100
+          },
+          "allocated_increase_bytes": 6815744,
+          "sampled_owned_gpu_increase_bytes": 54525952,
+          "per_block_checks": {
+            "allocated_and_process_increase_at_most256MiB": true,
+            "attained_target_no_slower": true,
+            "exact100_200_300_model_optimizer_rng_data_and_task": true,
+            "strict_measurement": true,
+            "this_block_complete_workflow_strictly_faster": true,
+            "this_block_steady_strictly_faster": true
+          },
+          "exact_parity": {
+            "100": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "200": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "300": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            }
+          },
+          "reference_allocator": {
+            "host_process_hwm_bytes": 31360450560,
+            "peak_allocated_bytes": 30843175424,
+            "peak_reserved_bytes": 31581011968,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "candidate_allocator": {
+            "host_process_hwm_bytes": 31334031360,
+            "peak_allocated_bytes": 30849991168,
+            "peak_reserved_bytes": 31635537920,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "reference_samples": {
+            "device_peak_bytes": 33432993792,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31479504896,
+            "host_rss_sum_peak_bytes": 32021409792,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1123.6416771411896,
+            "owned_device_process_peak_bytes": 32656850944,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 851,
+            "sampling_gap_seconds": {
+              "count": 850,
+              "maximum": 3.960036277770996,
+              "mean": 1.3219313848719878,
+              "median": 1.275455355644226,
+              "p95": 1.4334765672683716,
+              "sum": 1123.6416771411896
+            }
+          },
+          "candidate_samples": {
+            "device_peak_bytes": 33487519744,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31491012608,
+            "host_rss_sum_peak_bytes": 32003653632,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1115.4559688568115,
+            "owned_device_process_peak_bytes": 32711376896,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 854,
+            "sampling_gap_seconds": {
+              "count": 853,
+              "maximum": 2.9764440059661865,
+              "mean": 1.3076857782612092,
+              "median": 1.27516508102417,
+              "p95": 1.3907336235046386,
+              "sum": 1115.4559688568115
+            }
+          }
+        }
+      },
+      "owned_step_release": {
+        "candidate-bf16_lora": {
+          "cleanup_seconds": 7.22496577000129,
+          "owner_sha256": "f42a35a977c90f5583168eee10b6b0f0e7479e685da9c18399ee5b73714b2f25",
+          "parent_sha256": "e808b3254b69035404cc12d96589ffb7d380860f7d9011a20cdf77adc43d1162",
+          "release_sha256": "0d71540110935a2d3943b23fe38ffef11d2c37f23cf54dca512f1d26cfaaff09",
+          "step_id": "38535185.0"
+        },
+        "candidate-nf4_lora": {
+          "cleanup_seconds": 6.783591700019315,
+          "owner_sha256": "70099985cfa8e24730be6c1b8e4aedd029515e3f471a1b0f0d71a721651850cc",
+          "parent_sha256": "7c8c5fb7cb28621fc3be7da8adc067f609db86d2ebacd61e3cc7cc9ebaf64042",
+          "release_sha256": "e6ec502a9a9dcd7c2745dc2c161a4c8603aad455cb8d1a50078340af8ca5f657",
+          "step_id": "38535185.2"
+        },
+        "reference-bf16_lora": {
+          "cleanup_seconds": 6.807714994007256,
+          "owner_sha256": "de9e992495b26ec36d229febb0040ce431b2b82ae17cd1555541252e186e7880",
+          "parent_sha256": "b5c09ef7cd5246abc346cd1a63de2f354a9c6ff5206be06771e8955cbf591b0b",
+          "release_sha256": "13289d7cb3ddd27b9e5b4943c034466634f3308e8930c41365a455c797e1b272",
+          "step_id": "38535185.3"
+        },
+        "reference-nf4_lora": {
+          "cleanup_seconds": 9.604603491985472,
+          "owner_sha256": "3a2c11f78ac87ff4da752cc7db986eeb9587afc341585c891145d433736958d9",
+          "parent_sha256": "3770fbdf1cce7b9861551927e1d532551cb9b0116970f3e8c0e0f7c83bb59188",
+          "release_sha256": "3953ca79c6b44edd77e58707795b3172ecc80128afde8cbe3c5ec943433b69ce",
+          "step_id": "38535185.1"
+        }
+      },
+      "complete_case_attribution_qualified": true,
+      "performance_promoted": false,
+      "candidate_nf4_training_memory_saved_bytes": 1174405120,
+      "placement_limitation": "First two cases overlapped Alpamayo38533726, and later cases overlapped frozen-backbone38536188 on the same node with verified distinct GPU/CPU ownership. Shared host, storage and scheduling effects remain uncontrolled. No clocks corrected.",
+      "cross_job_placement": [
+        {
+          "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-receipts-v1/cross-job-placement.json",
+          "sha256": "4ed16f26bb678a830f42094161a6b4e5dbf239809c24579f596d5dd91e327c15"
+        },
+        {
+          "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-receipts-v1/cross-job-placement-v2.json",
+          "sha256": "8075ff3c89e5fd9daef48f299ff38619fbb2c26107d523694b8431b026498bdb"
+        }
+      ],
+      "terminal_release": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-receipts-v1/allocation-release-v1.json",
+        "sha256": "b282d30c85477df8dbdb09443e4aebf18f17dd7a58a9fdd5085713974f458ac9"
+      },
+      "joint_decision": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-v4-joint-decision-v1.json",
+        "sha256": "8330eed3265524b0c5b238fe3b8afde7d9b68baa56991434fa98a785f1ff7274"
+      },
+      "quality": "Arithmetic-preserving runtime study; no new learning-quality or independent-data claim.",
+      "offline_target_scope": "Observed same-precision candidate/reference preflight-inclusive OFFLINE action-MSE target clocks in two blocks only. BF42 native target alone is0.686%slower. No QLoRA-vs-BF superiority, useful-rollout TTQ, statistical recipe claim or promotion.",
+      "candidate_mature": "Not run following mandatory NF complete-workflow rejection; no additional timing repeats.",
+      "discard_commit": "26bc60f7151ae5edb09aa26071be2d69820ff8ad"
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -15521,6 +15993,12 @@
       "sha256": "f8c829f92e99657f6efe11d94d4fd92ac8a386357fc76a80239058a867b0b4f2",
       "inventory_sha256": "5aeb5fb6b0e62bb67a2b64f6eb3176c0d1bfa25338c118198b59eb8ed20b5b7e",
       "scope": "201 terminal v4 case, native task/state comparison, raw sampler/allocator, owned-step release and placement/scheduler receipts; no trained tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38535185-receipts-v1.tar.gz",
+      "sha256": "b1d077c6d4d3f93c6e3782cae63d373881564d7798b2a32fbe08b3ae801c4a2e",
+      "inventory_sha256": "f1232efe2b6f6198b205a2084c7fbfddaee038dc99de0af66c19bcce1d16fa2b",
+      "scope": "204 terminal seed42 native task/state comparison, rawv9 sampler/allocator, producing-step release, co-tenancy and scheduler receipts. No trained tensor payloads downloaded."
     }
   ],
   "fixed_development_targets": {
@@ -16531,5 +17009,263 @@
       "bf16": 6758.296964066918,
       "nf4": 6874.320324256085
     }
+  },
+  "gr00t_finite_check_intervention": {
+    "decision": "discard",
+    "producer_analysis": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-v4-joint-decision-v1.json",
+      "sha256": "8330eed3265524b0c5b238fe3b8afde7d9b68baa56991434fa98a785f1ff7274"
+    },
+    "producer_result": {
+      "format": "native-finite-engineering-decision-v1",
+      "measurement_release_contract_sha256": "36773266543e55956fd4871eb6c1d92eb03600c24693b382bdab6fb1a230672a",
+      "performance_keep_criteria_passed": false,
+      "precisions": {
+        "bf16_lora": {
+          "blocks": [
+            {
+              "complete_workflow": 0.9886899821955387,
+              "native_workflow": 0.9647085368091083,
+              "runner_workflow": 0.9882428120067487,
+              "seed": 17,
+              "steady": 0.8958689392066312
+            },
+            {
+              "complete_workflow": 0.9762607837665619,
+              "native_workflow": 0.9902144588266406,
+              "runner_workflow": 0.9757231883739851,
+              "seed": 42,
+              "steady": 0.9262275308812637
+            }
+          ],
+          "checks": {
+            "attained_targets_no_slower": true,
+            "complete_workflow": true,
+            "memory": true,
+            "steady": true
+          },
+          "geometric_ratios": {
+            "complete_workflow": 0.9824557277151804,
+            "native_workflow": 0.9773783002000154,
+            "steady": 0.9109217724670846
+          },
+          "memory": [
+            {
+              "allocated_increase_bytes": 4194304,
+              "owned_process_increase_bytes": 46137344,
+              "passed": true,
+              "seed": 17
+            },
+            {
+              "allocated_increase_bytes": 4194304,
+              "owned_process_increase_bytes": 46137344,
+              "passed": true,
+              "seed": 42
+            }
+          ],
+          "passed": true,
+          "targets": [
+            {
+              "attained": true,
+              "candidate": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 393.1104417620227,
+                "preflight_inclusive_seconds": 476.08180765016004,
+                "step": 200,
+                "threshold": 0.049561327725898344
+              },
+              "ratio": 0.9900047863199974,
+              "reference": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 404.54141624318436,
+                "preflight_inclusive_seconds": 480.8883898630738,
+                "step": 200,
+                "threshold": 0.049561327725898344
+              },
+              "seed": 17,
+              "step": 200
+            },
+            {
+              "attained": true,
+              "candidate": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 273.9742310020083,
+                "preflight_inclusive_seconds": 353.1918591739959,
+                "step": 100,
+                "threshold": 0.049561327725898344
+              },
+              "ratio": 0.9914495595579559,
+              "reference": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 272.1076694520016,
+                "preflight_inclusive_seconds": 356.2378496909805,
+                "step": 100,
+                "threshold": 0.049561327725898344
+              },
+              "seed": 42,
+              "step": 100
+            }
+          ],
+          "time_to_quality_improvement_established": true
+        },
+        "nf4_lora": {
+          "blocks": [
+            {
+              "complete_workflow": 0.9912568468979318,
+              "native_workflow": 0.9866077060227709,
+              "runner_workflow": 0.9925850364664018,
+              "seed": 17,
+              "steady": 0.9260731858985962
+            },
+            {
+              "complete_workflow": 0.9927914552513675,
+              "native_workflow": 0.9611069867492819,
+              "runner_workflow": 0.995590899357237,
+              "seed": 42,
+              "steady": 0.9004735548956105
+            }
+          ],
+          "checks": {
+            "attained_targets_no_slower": true,
+            "complete_workflow": false,
+            "memory": true,
+            "steady": true
+          },
+          "geometric_ratios": {
+            "complete_workflow": 0.992023854329965,
+            "native_workflow": 0.9737738749007219,
+            "steady": 0.9131836692580593
+          },
+          "memory": [
+            {
+              "allocated_increase_bytes": 5767168,
+              "owned_process_increase_bytes": 50331648,
+              "passed": true,
+              "seed": 17
+            },
+            {
+              "allocated_increase_bytes": 6815744,
+              "owned_process_increase_bytes": 54525952,
+              "passed": true,
+              "seed": 42
+            }
+          ],
+          "passed": false,
+          "targets": [
+            {
+              "attained": true,
+              "candidate": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 426.1795753980987,
+                "preflight_inclusive_seconds": 509.00874880421907,
+                "step": 200,
+                "threshold": 0.049561327725898344
+              },
+              "ratio": 0.9888043261604992,
+              "reference": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 431.64545948104933,
+                "preflight_inclusive_seconds": 514.7719678580761,
+                "step": 200,
+                "threshold": 0.049561327725898344
+              },
+              "seed": 17,
+              "step": 200
+            },
+            {
+              "attained": true,
+              "candidate": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 281.52573151898105,
+                "preflight_inclusive_seconds": 368.6499174569617,
+                "step": 100,
+                "threshold": 0.049561327725898344
+              },
+              "ratio": 0.9955350427454217,
+              "reference": {
+                "attained": true,
+                "baseline": 0.05506814191766483,
+                "metric": "normalized_action_mse",
+                "native_seconds": 286.55138419297873,
+                "preflight_inclusive_seconds": 370.30330588898505,
+                "step": 100,
+                "threshold": 0.049561327725898344
+              },
+              "seed": 42,
+              "step": 100
+            }
+          ],
+          "time_to_quality_improvement_established": true
+        }
+      },
+      "production_decision": {
+        "candidate_owned_mature": "not run after mandatory performance rejection",
+        "commit": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+        "decision": "discard",
+        "independent_tensor_recomputation": false,
+        "reason": "NF4 geometric complete-workflow reduction0.797615% misses unchanged1% requirement",
+        "scope": "Frozen scientific analysis and exact owned-step receipt validation; raw-sampler independent replay retained separately. No clock correction or repeat."
+      },
+      "protocol_sha256": "70d0722b69758491afb66139d4dfa5ed10c8e95de9d0aed09af096da2d1e2e46",
+      "quality_improvement": "Not established by an arithmetic-preserving implementation change",
+      "quantized_memory_saving": [
+        {
+          "nf4_saved_bytes": 1180696576,
+          "passed": true,
+          "seed": 17
+        },
+        {
+          "nf4_saved_bytes": 1174405120,
+          "passed": true,
+          "seed": 42
+        }
+      ],
+      "release": "Requires separate native correctness and candidate-owned mature recovery gates; no independent task confirmation supplied by these exposed development rows.",
+      "source_blocks": [
+        {
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38532930/block-result.json",
+          "sha256": "d6fe803c2da7a889861ad9f300b9795ec9b9092241f2ca31d8f300b078aef322"
+        },
+        {
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38535185/block-result.json",
+          "sha256": "19e3f82e3c6664eadc2bb1ca317988edd180c8416d3bcc20582e210a895cd1d2"
+        }
+      ]
+    },
+    "criterion_failed": "NF4 geometric complete-case candidate/reference ratio0.992023854329965 exceeds frozen0.99 maximum; improvement0.797614567% is below1%.",
+    "default_restore": {
+      "commit": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "finite_source": "byte-exact original4c elementwise predicate; grouped helper and source allowlist removed, general predicate regressions retained",
+      "validation": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/finite-default-discard-validation-v1.json",
+        "sha256": "ba9d39a0aec5a5248a835237b49d4a52a2830c4854c7ab4104e1cf8ad339ac6c"
+      }
+    },
+    "target_field_annotation": "Producer time_to_quality_improvement_established fields are unchanged and mean only observed same-precision runtime-candidate/reference preflight-inclusive offline-MSE clocks in two fixed blocks. They do not establish QLoRA-versus-BF superiority, useful rollout time-to-quality, statistical recipe improvement or promotion. BF42 native target273.974231s versus272.107669s is0.686%slower and remains reported.",
+    "cost": {
+      "two_corrected_timing_allocations_gpu_seconds": 10210,
+      "candidate_owned_mature_gpu_seconds": 0,
+      "earlier_attempts": "38527266,38528318 and prior44CUDA/native gates remain separately retained; no old/new clock splicing."
+    },
+    "limits": [
+      "Asymmetric shared-host co-tenancy in both blocks remains uncontrolled; no causal whole-workflow attribution beyond these observations or clock correction.",
+      "Complete-case improvement and numerical correctness are distinct; all12 corrected-block trained-state checks passed but mandatory performance criterion failed.",
+      "No extra seed/repeat or candidate mature run after rejection.",
+      "Original4c seed42 native artifacts remain development evidence; do not duplicate this training solely to refresh a report."
+    ]
   }
 }
