@@ -32,6 +32,13 @@ pip install requests huggingface_hub matplotlib pillow ipython
 
 Install FFmpeg on the client host; the package also includes FFprobe.
 
+> **Skill note (not in the source):** the block below installs that package when `ffmpeg` or `ffprobe` is missing on the client (Debian or Ubuntu, as root; the [vLLM-Omni reference](vllm-omni.md) gives `apt-get update` and `apt-get install -y ffmpeg` with `sudo`):
+
+```bash
+# Skill note (not in the source): installs FFmpeg with FFprobe on the client when either is missing.
+{ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; } || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+```
+
 **Inputs:** the notebook downloads the saved `example2` prompt and its four precomputed controls from the same Hugging Face repository as the model. It writes them under `cosmos3-inference-simulation-transfer/outputs/sglang/transfer/inputs`, inside the cookbook root, because the server does not receive uploads: a Sim-Transfer request names each control by absolute `control_path`, and the Docker command below mounts the cookbook root at its host path. Run the notebook from that checkout on the server host, or use the same absolute checkout path on both hosts. Later runs reuse the downloaded files.
 
 > **Skill note (not in the source):** the folder named above was `simulation/outputs/sglang/transfer/inputs` in the source; the default output folder moved into this skill with the cookbook.

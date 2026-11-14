@@ -66,6 +66,13 @@ pip install numpy Pillow httpx matplotlib ipython huggingface_hub orjson
 
 Install FFmpeg with `ffprobe` on the client as well. The local [`bimanual_helpers.py`](../scripts/bimanual_helpers.py) prepares the image and actions with NumPy and Pillow, then submits HTTP requests. The client does not import an inference runtime or download checkpoint weights; SGLang validates the exported model and conditioning contract on the server.
 
+> **Skill note (not in the source):** the block below installs the FFmpeg package, which includes `ffprobe`, when either command is missing on the client (Debian or Ubuntu, as root):
+
+```bash
+# Skill note (not in the source): installs FFmpeg with ffprobe on the client when either is missing.
+{ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; } || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+```
+
 | Variable                    | Default                                                 | Purpose                                                                                                                      |
 | --------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `SGLANG_BASE_URL`           | `http://127.0.0.1:30000`                                | Server address                                                                                                               |
