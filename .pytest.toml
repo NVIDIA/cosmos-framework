@@ -9,7 +9,7 @@ norecursedirs = [
     "_src",
     "packages",
     "projects",
-    "wsm", # Standalone renderer under .agents/skills/cookbooks/cosmos3/simulation/auto/.
+    "wsm", # Standalone renderer under .agents/skills/cosmos3-inference-simulation-auto/scripts/.
 ]
 addopts = [
     "--suppress-no-test-exit-code",

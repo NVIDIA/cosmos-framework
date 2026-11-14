@@ -323,6 +323,11 @@ runner at the moment (`serial_backends: []`). Cursor cells used to be serialised
 Cursor service rejected concurrent sessions (2026-10-26: 2 of 7 cursor cells died with `[resource_exhausted]`); with
 Claude Sonnet 5.5 as the cursor model the 11 cursor cells ran four at a time on 2026-10-29 without a rejection, and
 since evaluator 0.3.3 such an exit is retried by the cell itself. Set `serial_backends: [cursor]` to pin them again.
+A case that asks for more than one GPU can run only on a node that has them. The count is the case's own `gpus` in
+`eval/eval.config` when it sets one, else the skill's top-level `gpus` (evaluator 0.3.5 and later read the same two
+keys). The cell jobs of such a case also get `multi_gpu_runner_label:` when the config sets it (today the label of
+the one four-GPU runner), and the plan warns when such a case is selected while the key is unset; the other cases
+of the skill run on any runner.
 Registering a node (after the lease is populated with
 the GPU-host setup and lease onboarding scripts of the evaluator repo):
 
@@ -424,7 +429,8 @@ for the cells of that backend — the model the agent runs; a cursor value is a 
 e.g. `cursor/claude-sonnet-5-5-medium`, served by Cursor's own backend),
 of the cell jobs: `runner_labels:` (default `[self-hosted, cosmos-skill-eval, h100]`, every cell job's `runs-on`),
 `serial_backends:` (default `[cursor]`; `[]` switches the pinning off) and `serial_runner_label:` (default
-`cursor-serial`) — a cell of a serial backend gets that extra label, which exactly one runner carries, see
+`cursor-serial`) — a cell of a serial backend gets that extra label, which exactly one runner carries — and the optional
+`multi_gpu_runner_label:` (no default), the extra label for the cells of a case whose `gpus` (its own, else the skill's) is above 1, see
 [Runners](#runners). The plan writes the labels into every matrix entry (`runs_on`, a JSON list) and the workflow's
 cell jobs use `runs-on: ${{ fromJSON(matrix.runs_on) }}`. The file is
 parsed by a tiny built-in reader, so keep it flat: `key: value` and `key: [a, b]` only, `#` comments allowed,

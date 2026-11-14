@@ -13,19 +13,21 @@ teacher forcing, four-step distillation and self-forcing.
 
 ## Choose your starting point
 
-| Goal                         | Start with                                                      | Follow                                          |
-| ---------------------------- | --------------------------------------------------------------- | ----------------------------------------------- |
-| Start a new training chain   | Compatible base regular weights and a prepared local bundle     | [Stage 0 Quickstart](#quickstart-train-stage-0) |
-| Continue your training chain | Your completed stage checkpoints and saved configuration        | [Continue training](#continue-training)         |
-| Generate RGB video           | Matched release checkpoint or your selected Stage 3 student EMA | [Inference](../inference/SKILL.md)              |
+| Goal                         | Start with                                                      | Follow                                                            |
+| ---------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Start a new training chain   | Compatible base regular weights and a prepared local bundle     | [Stage 0 Quickstart](#quickstart-train-stage-0)                   |
+| Continue your training chain | Your completed stage checkpoints and saved configuration        | [Continue training](#continue-training)                           |
+| Generate RGB video           | Matched release checkpoint or your selected Stage 3 student EMA | [Inference](../../cosmos3-inference-simulation-transfer/SKILL.md) |
 
 ## Set up the environment
 
 Export `FRAMEWORK_DIR` as the absolute Framework checkout root and
 `SIM_TRANSFER_SKILL` as the absolute location of this skill bundle. Follow
-the [Sim-Transfer setup guide](../shared/setup.md) to prepare
+the [Sim-Transfer setup guide](../../cosmos3-inference-simulation-transfer/references/setup.md) to prepare
 Python 3.13 and CUDA in the Framework checkout containing this skill. Run
 training commands from `FRAMEWORK_DIR`.
+
+> **Skill note (not in the source):** the setup guide sets `SIM_TRANSFER_SKILL` to the Sim-Transfer inference skill folder, which holds the sample-preparation script. The commands of this skill address its own scripts from `FRAMEWORK_DIR`.
 
 ## Quickstart: train Stage 0
 
@@ -54,7 +56,7 @@ export OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false
    resized RGB. Use equal weights for the four controls.
 3. Review each structured caption and its nonempty `temporal_caption` against
    first, middle and last RGB frames. Retained captions use the same-window
-   93% structured / 7% dense mixture. See [caption preparation](references/caption-guide.md).
+   93% structured / 7% dense mixture. See [caption preparation](../../cosmos3-inference-simulation-transfer/references/caption-guide.md).
 4. Follow the [data contract](../shared/data-contract.md) and
    [local bundle layout](../shared/local-dataset.md). Inspect aligned decoded
    controls, RGB and packed tensors. Normalize pixels to `pixels / 127.5 - 1`;
@@ -63,7 +65,7 @@ export OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false
    [local training walkthrough](references/local-training.md). Stage 0 also
    initializes its inherited audio tokenizer and needs both audio assets.
 
-Use **[Hugging Face example2](../shared/hf-sample.md)** for this workflow.
+Use **[Hugging Face example2](../../cosmos3-inference-simulation-transfer/references/hf-sample.md)** for this workflow.
 Download its RGB, depth, segmentation, short prompt and structured caption, then
 follow [bundle preparation](../shared/local-dataset.md) to create the training
 manifest and add the tokenizer.
@@ -98,7 +100,8 @@ export TRANSFER_QA_BASE_MODEL_ONLY=1
 export IMAGINAIRE_OUTPUT_ROOT="${IMAGINAIRE_OUTPUT_ROOT:?Set the writable output directory shared by all ranks}"
 mkdir -p "$IMAGINAIRE_OUTPUT_ROOT"
 RUN_ID="local_example2_$(date -u +%Y%m%dT%H%M%SZ)"
-STAGE_HELPER="$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py"
+# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".
+STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/qa_transfer_stage.py"
 ARGS_FILE="$IMAGINAIRE_OUTPUT_ROOT/${RUN_ID}.args"
 ```
 
@@ -197,18 +200,45 @@ See [checkpoint and resume](references/checkpoint-and-resume.md) for full-state
 requirements and explicit checkpoint selection.
 
 Pass your selected Stage 3 student EMA and resolved configuration to the
-[inference Skill](../inference/SKILL.md), together with
+[inference Skill](#run-inference-from-your-trained-checkpoint), together with
 the tokenizer/VAE, preprocessing, caption policy and sampling settings. Retain
 the full checkpoint for further training.
 
+## Run inference from your trained checkpoint
+
+> **Skill note (not in the source):** this section is the Stage 3 DCP route of the Sim-Transfer inference skill, moved here because its block reads variables of the training shell. In the source it follows the Hugging Face download block of [1. Select the matched inference checkpoint](../../cosmos3-inference-simulation-transfer/SKILL.md#1-select-the-matched-inference-checkpoint), which defines `SIM_TRANSFER_RESOURCE_OVERRIDES` ("the HF resource overrides") and the checkpoint argument array that the block below replaces, and it precedes the generation commands of that skill.
+
+For a **Stage 3 DCP produced by the training walkthrough**, replace only the
+checkpoint argument array below. Keep the HF resource overrides:
+
+```bash
+: "${SIM_TRANSFER_DCP_ROOT:?Select a completed Stage 3 checkpoint from your training run}"
+export COSMOS_SIM_TRANSFER_STAGE0_CHECKPOINT="${STAGE0_CKPT_ROOT:?Use the Stage 0 parent from the training walkthrough}"
+export COSMOS_SIM_TRANSFER_STAGE2_CHECKPOINT="${STAGE2_CKPT_ROOT:?Use the Stage 2 parent from the training walkthrough}"
+export COSMOS_SIM_TRANSFER_LOCAL_BUNDLE="${SIM_TRANSFER_TRAINING_BUNDLE:?Use the prepared example2 training bundle}"
+SIM_TRANSFER_CHECKPOINT_ARGS=(
+  --checkpoint-path "$SIM_TRANSFER_DCP_ROOT"
+  --config-file cosmos_framework/configs/simulation/local.py
+  --experiment sim_local_transfer
+  --credential-path ""
+  --use-ema-weights
+)
+```
+
+Framework resolves the recipe before loading a native checkpoint, so retain
+its parent-checkpoint and prepared-bundle bindings. Inference then skips training
+loaders, parent initialization and teacher/score-model construction. The native
+route selects EMA from the checkpoint's `model/` child. Earlier stages use
+their own [inference profiles](references/canonical-recipe.md#check-intermediate-training-models).
+
 ## References
 
-- [Framework environment setup](../shared/setup.md)
+- [Framework environment setup](../../cosmos3-inference-simulation-transfer/references/setup.md)
 - [Control video and caption contract](../shared/data-contract.md)
-- [Caption preparation and review](references/caption-guide.md)
+- [Caption preparation and review](../../cosmos3-inference-simulation-transfer/references/caption-guide.md)
 - [Local training bundle preparation](../shared/local-dataset.md)
 - [Complete Stage 0–3 training walkthrough](references/local-training.md)
-- [Hugging Face examples](../shared/hf-sample.md)
+- [Hugging Face examples](../../cosmos3-inference-simulation-transfer/references/hf-sample.md)
 - [Nano checkpoint conversion](references/nano-conversion.md)
 - [Two-node training launcher](references/multinode-training.md)
 - [Training method and stage settings](references/canonical-recipe.md)

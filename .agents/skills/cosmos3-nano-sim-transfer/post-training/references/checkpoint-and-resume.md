@@ -143,7 +143,7 @@ The default short inference recipe uses full history with no sink and generates
 121 RGB frames, while training allows up to 201. For longer outputs, follow the
 inference Skill’s long-rollout settings.
 
-Follow the [inference Skill](../../inference/SKILL.md)
+Follow the [inference Skill](../SKILL.md#run-inference-from-your-trained-checkpoint)
 to load Stage 3 student EMA directly from its DCP checkpoint. Use the
-[output comparison guide](../../inference/references/output.md)
+[output comparison guide](../../../cosmos3-inference-simulation-transfer/references/output.md)
 to compare control adherence, appearance and motion on held-out examples.

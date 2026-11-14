@@ -88,4 +88,4 @@ conversion. The [student export](../SKILL.md#export-and-check-inference) uses
 
 The canonical Stage 3 student export and released schema-5 inference model both
 use four-step SDE schedules. Each export owns its exact ladder; follow its
-matched [inference instructions](../../inference/SKILL.md).
+matched [inference instructions](../../../cosmos3-inference-simulation-bimanual/SKILL.md).

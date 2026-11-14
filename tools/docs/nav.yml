@@ -42,7 +42,7 @@ nav:
           - Action: skills/cosmos3-inference-action/SKILL.md
           - Control-to-video transfer: skills/cosmos3-inference-transfer/SKILL.md
           - Reasoner: skills/cosmos3-inference-reasoning/SKILL.md
-          - Simulation: skills/cookbooks/cosmos3/simulation/README.md
+          - Simulation: skills/cosmos3-inference-simulation/SKILL.md
   - Post-Training:
       - Choose a path: post_training/choose_path.md
       - Model and algorithm support: post_training/model_algorithm_support.md
@@ -138,8 +138,8 @@ hold:
   - docs/transfer_numerical_preservation.md
   - docs/posttrain/reference/compatibility.md
   # These simulation pages clone the code from a fork; publish once they use this repo.
-  - .agents/skills/cookbooks/cosmos3/simulation/auto/auto.md
-  - .agents/skills/cookbooks/cosmos3/simulation/transfer/transfer.md
+  - .agents/skills/cosmos3-inference-simulation-auto/references/transfer-auto-guide.md
+  - .agents/skills/cosmos3-inference-simulation-transfer/references/transfer-guide.md
 
 # Repo-only pages: links to them go to GitHub.
 not_on_site:

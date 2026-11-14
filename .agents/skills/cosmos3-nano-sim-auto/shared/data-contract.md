@@ -5,7 +5,7 @@ Use the same paired local scene format as
 RGB targets, camera WSM v4.0.1 controls, camera-local target-grounded captions, measured
 LiDAR targets, HD-map range controls, and timing/calibration evidence.
 
-The [shared reference scene](../../cosmos3-nano-transfer-auto/shared/reference-scene.md)
+The [shared reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)
 provides the seven-camera `daytime_scene` assets, native index and inference
 requests. Follow its HF download and checksum instructions. One scene is
 a format example, not a sufficient dataset for assessing generalization.
@@ -13,7 +13,7 @@ a format example, not a sufficient dataset for assessing generalization.
 Prefer its `captions_with_timestamp/` variant when preparing post-training data:
 timestamped captions match the training format and reduce the caption-format gap.
 Paragraph-style `captions/` remains supported. Follow the shared
-[caption selection](../../cosmos3-nano-transfer-auto/shared/reference-scene.md#choose-a-caption-style)
+[caption selection](../../cosmos3-inference-simulation-auto/references/reference-scene.md#choose-a-caption-style)
 and [target-grounding/cross-view checks](../../cosmos3-nano-transfer-auto/post-training/references/data-contract.md#training-captions)
 before packaging; the supplied index selects paragraph captions by default.
 

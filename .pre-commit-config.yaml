@@ -5,9 +5,12 @@ default_language_version:
   python: python3.13
 # .agents/skills/{cookbooks,evaluation}/ include third-party code (VLMEvalKit,
 # Apache-2.0); keep hooks off them until they are cleaned up.
+# .agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/ is the standalone
+# WSM renderer, checked by validate-wsm.yml; keep hooks off it as well.
 exclude: (?x)(
     ^tests/data/|
-    ^\.agents/skills/(cookbooks|evaluation)/
+    ^\.agents/skills/(cookbooks|evaluation)/|
+    ^\.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/
   )
 repos:
   - repo: https://github.com/google/addlicense
@@ -44,7 +47,7 @@ repos:
         files: pyproject\.toml$
         # WSM is independently installed. The Posttrain lock is generated and
         # runtime-qualified by its pinned independent mapping flow.
-        exclude: ^(?:\.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/pyproject\.toml|docker/posttrain/environment/pyproject\.toml)$
+        exclude: ^(?:\.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/pyproject\.toml|docker/posttrain/environment/pyproject\.toml)$
       - id: uv-lock-script
         name: Generate uv lock files for scripts
         entry: ./ci/uv_lock_script.sh

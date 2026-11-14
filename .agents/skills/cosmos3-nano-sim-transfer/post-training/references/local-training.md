@@ -7,11 +7,11 @@ so the same bundle supports all four stages.
 
 ## Prepare local assets
 
-Complete [Framework setup](../../shared/setup.md), including native
+Complete [Framework setup](../../../cosmos3-inference-simulation-transfer/references/setup.md), including native
 libraries and the CUDA toolkit, on every compute node. Export `FRAMEWORK_DIR`
 and `SIM_TRANSFER_SKILL` as absolute locations. All model, data and output paths
 must resolve identically on every rank.
-For the example run, [download example2](../../shared/hf-sample.md) and
+For the example run, [download example2](../../../cosmos3-inference-simulation-transfer/references/hf-sample.md) and
 [prepare its native training bundle](../../shared/local-dataset.md) to set
 `SIM_TRANSFER_TRAINING_BUNDLE`.
 Follow [Nano conversion](nano-conversion.md) to download the model and video
@@ -38,7 +38,8 @@ export TRANSFER_QA_BASE_MODEL_ONLY=1
 export IMAGINAIRE_OUTPUT_ROOT="${IMAGINAIRE_OUTPUT_ROOT:?Set the writable output directory shared by all ranks}"
 mkdir -p "$IMAGINAIRE_OUTPUT_ROOT"
 RUN_ID="local_example2_$(date -u +%Y%m%dT%H%M%SZ)"
-STAGE_HELPER="$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py"
+# Skill note (not in the source): SIM_TRANSFER_SKILL is now the Sim-Transfer inference skill folder, so this script is addressed from FRAMEWORK_DIR. The source path was "$SIM_TRANSFER_SKILL/post-training/scripts/qa_transfer_stage.py".
+STAGE_HELPER="$FRAMEWORK_DIR/.agents/skills/cosmos3-nano-sim-transfer/post-training/scripts/qa_transfer_stage.py"
 ARGS_FILE="$IMAGINAIRE_OUTPUT_ROOT/${RUN_ID}.args"
 ```
 
@@ -179,7 +180,7 @@ Keep parents accessible: Stage 2/3 construct them before restoring the child
 checkpoint. See [checkpoint operations](checkpoint-and-resume.md) for restart
 requirements.
 
-Finish with [inference](../../inference/SKILL.md).
+Finish with [inference](../SKILL.md#run-inference-from-your-trained-checkpoint).
 Select useful parents through held-out review before extending training.
 
 ## Framework training entry points

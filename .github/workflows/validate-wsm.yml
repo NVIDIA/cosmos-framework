@@ -4,9 +4,9 @@
 name: Validate standalone WSM
 on:
   push:
-    paths: ['.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']
+    paths: ['.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']
   pull_request:
-    paths: ['.agents/skills/cookbooks/cosmos3/simulation/auto/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']
+    paths: ['.agents/skills/cosmos3-inference-simulation-auto/scripts/wsm/**', '.github/workflows/validate-wsm.yml', '.gitattributes', '.pytest.toml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 20
     env:
       RUN_GPU_TESTS: "0"
-      WSM_DIR: .agents/skills/cookbooks/cosmos3/simulation/auto/wsm
+      WSM_DIR: .agents/skills/cosmos3-inference-simulation-auto/scripts/wsm
     steps:
       - uses: actions/checkout@v6
       - name: Fetch standalone WSM scene and documentation resources

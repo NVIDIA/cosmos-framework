@@ -221,7 +221,7 @@ Efficiency), Skill lift (opt-in), Static.
     }
   ],
   "credentials": ["HF_TOKEN"],        // env vars forwarded to the agent (HF_TOKEN, NGC_API_KEY, GITHUB_TOKEN; the inference key is the evaluator's own)
-  "gpus": 1,                          // GPUs for the task container (runners: H100 80 GB PCIe/SXM and 94 GB NVL — every case must fit all of them)
+  "gpus": 1,                          // GPUs for the task container (runners: H100 80 GB PCIe/SXM and 94 GB NVL — every case must fit all of them); a case may set its own "gpus" (cells of a case with more than one go to the multi-GPU runner)
   "docker": false,                    // per-case or global: give the agent the host docker socket (read-only mount) for container-served backends (vLLM-Omni, SGLang, NIM)
   "budget": {"minutes": 45, "tokens": 3000000},  // drives timeouts + Efficiency scoring; cells that install a framework in-run take 15–45 min
   "setup": {                          // for skills that need the repo checkout

@@ -191,7 +191,7 @@ Set `enable_sound: true` on a `text2video` sample (see [`inputs/omni/t2vs.json`]
 
 By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp_shard_size = WORLD_SIZE`, `dp_replicate_size = 1`). Sharding reduces per-GPU weight storage but does not guarantee that the complete workload fits. Override any axis with the `--dp-shard-size` / `--dp-replicate-size` / `--cp-size` / `--cfgp-size` flags.
 
-Increasing context parallelism can reduce per-GPU activation memory and speed up large requests, but communication overhead can offset the benefit. Compare latency on the same workload; more GPUs or a higher CP degree do not guarantee faster inference. For Transfer-Auto and Sim-Auto, follow the model-specific commands and [Auto memory guidance](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#gpu-memory-and-parallelism).
+Increasing context parallelism can reduce per-GPU activation memory and speed up large requests, but communication overhead can offset the benefit. Compare latency on the same workload; more GPUs or a higher CP degree do not guarantee faster inference. For Transfer-Auto and Sim-Auto, follow the model-specific commands and [Auto memory guidance](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#gpu-memory-and-parallelism).
 
 - `--parallelism-preset`
   - `latency`: Minimize wall-clock per sample by splitting each sample across GPUs with **context parallelism**. On multiple GPUs, also pass `--dp-shard-size=1` so the ranks are used for context/CFG parallelism instead of weight sharding. Used for real-time jobs.
@@ -249,7 +249,7 @@ Common arguments:
   Omitted, output FPS follows `fps`. Joint RGB/LiDAR currently requires the same
   model and output rate; this option is unsupported for other models and
   LiDAR-only generation. See the
-  [Auto timing guide](../.agents/skills/cosmos3-nano-transfer-auto/inference/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
+  [Auto timing guide](../.agents/skills/cosmos3-inference-simulation-auto/references/input-and-execution.md#source-timing-model-fps-and-playback-fps)
   for timestamped captions and synchronization constraints.
 - `resolution` (`"256"`, `"480"`, `"720"`, `"768"`): Condition and output resolution **tier**, not a
   pixel dimension. The output width and height are looked up from the tier *and* the

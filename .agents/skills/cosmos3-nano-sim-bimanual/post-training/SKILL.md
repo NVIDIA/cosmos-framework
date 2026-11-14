@@ -12,11 +12,11 @@ The worked chain starts from Cosmos3-Nano and runs Stage 0 through Stage 3.
 
 ## Choose your starting point
 
-| Goal                                | Start with                                               | Follow                                          |
-| ----------------------------------- | -------------------------------------------------------- | ----------------------------------------------- |
-| Start a new four-stage training run | Cosmos3-Nano and a completed local bundle                | [Stage 0 Quickstart](#quickstart-train-stage-0) |
-| Continue an existing chain          | Your completed stage checkpoint and saved configuration  | [Continue training](#continue-training)         |
-| Generate video                      | Released Bimanual model or your exported Stage 3 student | [Inference](../inference/SKILL.md)              |
+| Goal                                | Start with                                               | Follow                                                            |
+| ----------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------- |
+| Start a new four-stage training run | Cosmos3-Nano and a completed local bundle                | [Stage 0 Quickstart](#quickstart-train-stage-0)                   |
+| Continue an existing chain          | Your completed stage checkpoint and saved configuration  | [Continue training](#continue-training)                           |
+| Generate video                      | Released Bimanual model or your exported Stage 3 student | [Inference](../../cosmos3-inference-simulation-bimanual/SKILL.md) |
 
 Use the [data contract](references/data-contract.md) for action meaning,
 normalization, timing and captions, and the [parameter guide](references/parameter-guide.md)
@@ -74,7 +74,7 @@ training bundle retains raw robot actions rather than already-normalized
 inference sidecars.
 
 Prepare data using the [local bundle layout](references/data-contract.md#user-owned-local-bundle),
-[action schema](references/unified-v1-action-schema.md) and
+[action schema](../../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md) and
 [caption guide](references/caption-guide.md):
 
 1. Split source episodes before creating windows, keeping all windows from an
@@ -259,14 +259,14 @@ python -m cosmos_framework.scripts.export_model \
 
 This command selects student EMA explicitly. Preserve the selected variant and
 saved four-step schedule, and inspect the export's action metadata and local-path
-sanitization. Follow [inference](../inference/SKILL.md#use-your-own-stage-3-checkpoint)
+sanitization. Follow [inference](../../cosmos3-inference-simulation-bimanual/SKILL.md#use-your-own-stage-3-checkpoint)
 with that export. The released schema-5 example also uses four steps; preserve
 each export's exact saved ladder rather than assuming the schedules are identical.
 
 ## References
 
 - [Training data contract and local bundle layout](references/data-contract.md)
-- [Unified action schema](references/unified-v1-action-schema.md)
+- [Unified action schema](../../cosmos3-inference-simulation-bimanual/references/unified-v1-action-schema.md)
 - [Caption preparation](references/caption-guide.md)
 - [Parameter guide](references/parameter-guide.md)
 - [Framework environment and workflow](../shared/release-workflow.md#cosmos-framework)
