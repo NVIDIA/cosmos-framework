@@ -19590,6 +19590,330 @@
       "readout_sha256": "9334b3ed557dfc613983562d3c31ec95f07b0a79b79714c745abf5761bb7d3e8",
       "independent_raw_review_sha256": "453f28176132c4136937556c08b0e99d0cffda83edaca606c0c74a790f467648",
       "quality_limits": "Exposed development seed42 endpoint; no partial paired-panel confidence interval or release claim."
+    },
+    "38548973": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "allocation_gpu_seconds": 1021,
+      "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "passed": true,
+      "scope": "Clean predeclared BF16 head-only seed42 retry; original failed38547636 remains failed. No partial-panel uncertainty or full optimizer/RNG/data tensor comparison.",
+      "readout": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-remaining-38548973-readout-v1.json",
+        "sha256": "4f4191906c9f7eff8767839f0ef070fe262d5eb79ca1f69310be0a186ade31a9"
+      },
+      "independent_replay": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-remaining-38548973-alpa-peer-v1.json",
+        "sha256": "933f946f48e996f8751560a58d2e72a99b6b48831a5a7fbf558f80c326ce7f14"
+      },
+      "old_new_numerical_comparison": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-head42-release-retry-38548973-comparison-v1.json",
+        "sha256": "2661cf05e2c8c527c22645259644eacf868f1fa9fd86a8c24c5d55e29d0d1a7d"
+      },
+      "archive": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-remaining-38548973-receipts-v1.tar.gz",
+        "sha256": "f8ff0f3d0ccb4944d2b69e2e744890d59765c50ee369d3aff8bbc9b9e7603745"
+      },
+      "terminal_release_sha256": "b46e1353330e366417a38d27b4d5169a4188b4674e0aef39639331ffc322e037",
+      "acceptance_sha256": "2cc9b7d08bef7291fcc72ca743ff7c703484653bd346cfc3d558bcb09bceb0b7",
+      "execution_contract_sha256": "d4a54ef2ab8047900b397f3478863ec6d886897957d92f957de7d45a7632d0fb",
+      "primary_mse": 0.04523234245234302,
+      "first_target_step": 100,
+      "clocks": {
+        "complete_case_seconds": 1014.9852180000016,
+        "first_target_publication_seconds": 309.03407613100717,
+        "owned_step_cleanup_seconds": 5.46044221399643,
+        "scope": "Host before srun through producing step release; queue wait excluded. Retain native/outer clocks separately.",
+        "unreached": false
+      },
+      "fixed_work": {
+        "native_clocks": {
+          "checkpoint_seconds": 68.86950602200523,
+          "evaluation_seconds": 265.7565164550033,
+          "portable_export_seconds": 16.137511015011114,
+          "startup_seconds": 45.96821711001394,
+          "training_seconds": 96.41322612996737
+        },
+        "native_workflow_seconds": 496.63661604000663,
+        "outer_workflow_seconds": 1008.2694096980122,
+        "steady_examples_per_second": 3.114477163360077,
+        "steady_update_seconds_101_300": {
+          "count": 200,
+          "maximum": 0.3633758619980654,
+          "mean": 0.3210811791347805,
+          "median": 0.319662279500335,
+          "p95": 0.3282586622975941,
+          "sum": 64.21623582695611
+        },
+        "updates": 300
+      },
+      "memory": {
+        "by_model_stage": {
+          "native-training": {
+            "device_peak_bytes": 34225717248,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 30851033088,
+            "host_rss_sum_peak_bytes": 31699247104,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 525.4390325546265,
+            "owned_device_process_peak_bytes": 33451671552,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 393,
+            "sampling_gap_seconds": {
+              "count": 392,
+              "maximum": 3.9632487297058105,
+              "mean": 1.3404056952924144,
+              "median": 1.3871856927871704,
+              "p95": 1.435551905632019,
+              "sum": 525.4390325546265
+            }
+          },
+          "portable-evaluation-123": {
+            "device_peak_bytes": 13767999488,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 8311140352,
+            "host_rss_sum_peak_bytes": 8593350656,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 143.50076866149902,
+            "owned_device_process_peak_bytes": 13033799680,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 114,
+            "sampling_gap_seconds": {
+              "count": 113,
+              "maximum": 1.4858276844024658,
+              "mean": 1.2699183067389295,
+              "median": 1.2663538455963135,
+              "p95": 1.2881451606750487,
+              "sum": 143.50076866149902
+            }
+          },
+          "portable-evaluation-456": {
+            "device_peak_bytes": 13767999488,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 8314351616,
+            "host_rss_sum_peak_bytes": 8596656128,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 144.04272031784058,
+            "owned_device_process_peak_bytes": 13033799680,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 114,
+            "sampling_gap_seconds": {
+              "count": 113,
+              "maximum": 1.5278668403625488,
+              "mean": 1.2747143390959343,
+              "median": 1.269327163696289,
+              "p95": 1.3050403594970703,
+              "sum": 144.04272031784058
+            }
+          },
+          "portable-evaluation-789": {
+            "device_peak_bytes": 13767999488,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 8301279232,
+            "host_rss_sum_peak_bytes": 8583663616,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 142.46854782104492,
+            "owned_device_process_peak_bytes": 13033799680,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 113,
+            "sampling_gap_seconds": {
+              "count": 112,
+              "maximum": 1.7773854732513428,
+              "mean": 1.272040605545044,
+              "median": 1.264434814453125,
+              "p95": 1.2904136061668396,
+              "sum": 142.46854782104492
+            }
+          }
+        },
+        "host_incomplete_samples": 0,
+        "scope": "Same original valid-owned-GPU gate. Host completeness is reported, not retrospectively repaired. Peaks are sampled lower bounds; fresh4c allocator peaks unavailable.",
+        "whole_observed_case": {
+          "device_peak_bytes": 34225717248,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 30851033088,
+          "host_rss_sum_peak_bytes": 31699247104,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 960.4781737327576,
+          "owned_device_process_peak_bytes": 33451671552,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 735,
+          "sampling_gap_seconds": {
+            "count": 734,
+            "maximum": 3.9632487297058105,
+            "mean": 1.3085533702081167,
+            "median": 1.2680898904800415,
+            "p95": 1.4268608331680297,
+            "sum": 960.4781737327576
+          }
+        }
+      },
+      "runtime": {
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "cpu_affinity": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141
+        ],
+        "cpu_numa_nodes": {
+          "10": [
+            "node0"
+          ],
+          "11": [
+            "node0"
+          ],
+          "12": [
+            "node0"
+          ],
+          "13": [
+            "node0"
+          ],
+          "134": [
+            "node0"
+          ],
+          "135": [
+            "node0"
+          ],
+          "136": [
+            "node0"
+          ],
+          "137": [
+            "node0"
+          ],
+          "138": [
+            "node0"
+          ],
+          "139": [
+            "node0"
+          ],
+          "14": [
+            "node0"
+          ],
+          "140": [
+            "node0"
+          ],
+          "141": [
+            "node0"
+          ],
+          "15": [
+            "node0"
+          ],
+          "16": [
+            "node1"
+          ],
+          "17": [
+            "node1"
+          ]
+        },
+        "cuda_visible_devices": "0",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "torch_uuid": "e0b56134-5bfe-998b-3a70-ca4aae2bdd14",
+          "uuid": "GPU-e0b56134-5bfe-998b-3a70-ca4aae2bdd14"
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t10-17,134-141",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38548973",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      }
+    },
+    "38548693": {
+      "family": "gr00t",
+      "slurm_state": "FAILED",
+      "allocation_gpu_seconds": 68,
+      "passed": false,
+      "scope": "Launcher imported executable monitor module before model loading; IndexError from missing CLI argument. No training/scoring/profile result. Corrected only origin verification via find_spec; old failure retained.",
+      "readout": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-evaluation-profile-38548693-readout-v1.json",
+        "sha256": "fd325a437c441e105c702c7e476b06becdd11292fb7fa3599c9a327496b0a2ce"
+      },
+      "archive": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-evaluation-profile-38548693-receipts-v1.tar.gz",
+        "sha256": "9d3cf370b3aebb783f03e8948cc9099359a2b9c78b97eda621c384200465ceb7"
+      }
+    },
+    "38549122": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "allocation_gpu_seconds": 334,
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "passed": true,
+      "scope": "Two exposed rows per NF4/BF16 LoRA selected200 artifact; five evaluations per arm. Trace diagnostic and exact native semantic checks, not achieved runtime gain or new quality study.",
+      "readout": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-evaluation-profile-38549122-readout-v1.json",
+        "sha256": "f7ea93610b11126a5a2d5f879530ea66ef74d66ade942ea61e5e4b30334b0ec8"
+      },
+      "independent_replay": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-evaluation-profile-38549122-alpa-peer-v1.json",
+        "sha256": "b7f263254cba4c6f794352ee5670fb44c35108d1dc5490e264acbaaec233bc1f"
+      },
+      "raw_archive_sha256": "89b3b52575030a4306b6ccc354430623dd73b1705246ec9dd03877a2185076cc",
+      "raw_inventory_sha256": "243dae5f5658fc6be0f62f4ae0ed2ec1f16c24d4fa190d2077117a84b968a76d",
+      "terminal_release_sha256": "d287f5fa7a85e74554d48b5788910a7f8c3cc8088ead44289d7cbc7bfc5bc310",
+      "memory": {
+        "device_peak_bytes": 13902217216,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 8858748928,
+        "host_rss_sum_peak_bytes": 9140559872,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 259.80919766426086,
+        "owned_device_process_peak_bytes": 13168017408,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 199,
+        "sampling_gap_seconds": {
+          "count": 198,
+          "maximum": 1.4858767986297607,
+          "mean": 1.3121676649710146,
+          "median": 1.289484977722168,
+          "p95": 1.436459732055664,
+          "sum": 259.80919766426086
+        }
+      },
+      "protocol_sha256": "73826bea7fc271b67f111e57f0ffe3f2f856a6ad7a662633d7cea0a65ca0ebb0",
+      "payload_manifest_sha256": "82510456bc357fa49243a6d73374158a3578e1ae9642769bc63cdefaec8d4381",
+      "limits": [
+        "Two selected rows and five calls per arm; no full160 profile or training.",
+        "All five results match via on-device retained semantic audit; original row0 parity only, row159 uses selected-row RNG order.",
+        "Projection uses traced serial intervals and historical300 clocks; trace overhead is retained, not subtracted.",
+        "No implementation, matched cached workflow, achieved gain, task-quality or new rollout evidence.",
+        "Sampled GPU/PSS peaks cover observer span, are lower bounds, and exclude earlier preflight.",
+        "Parent accounting ends20:35:41, step accounting ends20:35:48; both original clocks retained, subsequent controller/steps release independently observed."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -19934,7 +20258,7 @@
     },
     "supervised_action_elements": 70,
     "input_semantic_check": "Native content fingerprint exactly matches original real rows after content-preserving local media remapping. State/action values and image bytes were not substituted.",
-    "processor_geometry_basis": "All 1,440 admitted rows have two 256×256 RGB images, 8D state, and 10×7 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
+    "processor_geometry_basis": "All 1,440 admitted rows have two 256\u00d7256 RGB images, 8D state, and 10\u00d77 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
     "cuda_initialized": false,
     "model_weights_loaded": false,
     "processor_elapsed_seconds": 9.134169723838568,
@@ -21079,7 +21403,7 @@
       "bf16_lora": "38543002"
     },
     "incremental_gpu_seconds": 5771,
-    "source": "4cba88f; only LR1e-4→1e-5 changes from original128 comparisons;512 schedule remains paused128",
+    "source": "4cba88f; only LR1e-4\u21921e-5 changes from original128 comparisons;512 schedule remains paused128",
     "quality": {
       "bf16_lora": {
         "metrics": {
@@ -21218,5 +21542,53 @@
       "scope": "Only remaining42/123 after completed selected123; original17/v7 untouched. A missing copied fixture, wrong shell-test filename and observer import-path setup were corrected before sealing; attempt01 retained. No GPU admission or task outcome from preparation."
     },
     "reviewability": "Exact helpers, tests, amendments and failed histories are included in sealed retained campaign payloads. CPU case counts overlap and are not additive; no accelerator result follows from these tests."
+  },
+  "gr00t_evaluation_backbone_profile": {
+    "job": "38549122",
+    "prospective_diagnostic_thresholds": {
+      "duplicate_serial_fraction_minimum": 0.1,
+      "optimistic_native_workflow_reduction_minimum": 0.05,
+      "both_precision_arms_required": true
+    },
+    "arms": {
+      "bf16_lora": {
+        "duplicate_serial_fraction": 0.1733361765385849,
+        "optimistic_complete_native300_time_reduction": 0.08596801897970514,
+        "descriptive_complete_outer_time_reduction_no_fresh_savings": 0.046040852207334976,
+        "diagnostic_eligible": true,
+        "timings_seconds": {
+          "after": 1.0631157332099974,
+          "audit": 0.9767690966837108,
+          "before": 0.9618281652219594,
+          "trace": 1.7255190038122237,
+          "warmup": 1.426908936817199
+        },
+        "raw_features_bytes_per_row": [
+          639288,
+          622896
+        ]
+      },
+      "nf4_lora": {
+        "duplicate_serial_fraction": 0.20435359464728867,
+        "optimistic_complete_native300_time_reduction": 0.10509844534050801,
+        "descriptive_complete_outer_time_reduction_no_fresh_savings": 0.05707807266798845,
+        "diagnostic_eligible": true,
+        "timings_seconds": {
+          "after": 1.1758897420950234,
+          "audit": 1.0895267250016332,
+          "before": 1.0916003361344337,
+          "trace": 1.8583363769575953,
+          "warmup": 1.869717906229198
+        },
+        "raw_features_bytes_per_row": [
+          639288,
+          622896
+        ]
+      }
+    },
+    "decision": "Implement and test one default-off bounded per-batch raw-backbone evaluation reuse path in both precision arms. Actual numerical/recovery and matched workflow qualification are required before promotion.",
+    "semantic_constraint": "Native action head mutates its BatchFeature mapping; retain pre-head raw clones and separately owned call inputs, never post-head features or sampled state/noise.",
+    "actual_runtime_gain_demonstrated": false,
+    "source_compatibility": "Explicit new family source identity. No historical identity rewrite, bridge, or cross-build resume; old artifacts retain their sealed native loader builds."
   }
 }

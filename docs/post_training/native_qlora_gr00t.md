@@ -141,8 +141,35 @@ builds, objectives, settings, target and statistical procedure. Original failed
 results and costs remain recorded; the repair itself supplies no quality or
 performance result.
 
-Strict v11 memory acceptance passed across the whole observed workflow and all
-four model stages: all 768 host samples were complete and owned-GPU attribution
+The clean repeat `38548973` completed and passed the repaired release check.
+All 300 reported numerical update records, four resident scores and three fresh
+scores match the failed attempt; the portable model component digest also matches.
+This is not a full optimizer/RNG/data tensor-state comparison. The new complete
+case took 1,014.985 seconds, including 5.460 seconds of owned-step cleanup, and
+all 735 host collections were complete. Its first target publication was at
+update 100, 309.034 seconds after case preparation began. These are new clocks;
+the original failed clock remains unaccepted.
+
+The bounded GR00T profile `38549122` measured duplicate backbone work between
+native flow-loss and sampled-action evaluation on two exposed rows per arm.
+After warmup, that duplicate occupied 20.44% of NF4 and 17.33% of BF16 traced
+serial evaluation time. Applying those fractions to retained evaluation costs
+gives optimistic native-workflow reductions of 10.51% and 8.60%; **these are
+projections, not achieved speedups**. The traced calls were 1.64×/1.70× slower
+than their surrounding untraced calls. All five evaluations per arm preserved
+the controlled scores, RNG, modes, frozen weights and prepared inputs.
+
+The next implementation reuses only the raw backbone output within one
+evaluation batch, with independent inputs for both native head calls. The head
+mutates its input mapping, so reusing already transformed features is incorrect.
+The option remains off pending real-model correctness and matched workflow
+qualification. It benefits both precision arms and does not change learning.
+The first profile allocation `38548693` failed before model loading because a
+launcher imported an executable monitor module; its 68 GPU-seconds remain
+recorded separately from the successful diagnostic's 334 GPU-seconds.
+
+For the official seed-17 control `38546671`, strict v11 memory acceptance passed
+across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
 was valid. Sampled peaks were 38.254 GiB owned GPU memory and 29.019 GiB host PSS;
 these remain lower bounds and exclude disposable preflight peaks. The complete
 case took 1,096.554 seconds, including 7.479 seconds of verified owned-step cleanup;
