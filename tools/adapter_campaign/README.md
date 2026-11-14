@@ -13,7 +13,8 @@ python -m pytest -c /dev/null --noconftest \
   tools/adapter_campaign/test_references.py \
   tools/adapter_campaign/test_recovered.py \
   tools/adapter_campaign/test_segmented.py \
-  tools/adapter_campaign/test_inline_midpoint.py
+  tools/adapter_campaign/test_inline_midpoint.py \
+  tools/adapter_campaign/test_final_checkpoint.py
 python -m tools.adapter_campaign.contract \
   --root "$CAMPAIGN_ROOT" --inputs "$COMPILE_INPUTS" --out "$CONTRACT"
 python -m tools.adapter_campaign.primary \
@@ -90,6 +91,36 @@ does not perform a new full-model checkpoint load. Historical source/wheel/image
 and sample coverage retain their original identity; diagnostic replay adds no
 primary training rows. Other recovery formats and nonidentical snapshot proofs
 need their own admitted evidence producer. Numerical thresholds are unchanged.
+
+
+`final_checkpoint.py` normalizes the independently reviewed full-text final DCP
+and lossless-consolidation format. Its initial actual evidence covers SmolLM2
+DoRA at update 935 on the recorded FSDP2 and HSDP runs. It checks the original
+training lineage against an admitted full-schedule receipt, then binds the
+separate installed export revision, exact commands, source inventories and
+producer review. Small final trainer/data controls and DCP metadata are checked
+on CPU for the committed clock, RNG, sampler cursor, optimizer ownership and
+complete shard ranges. Full model/optimizer value equality remains attributed
+to the existing installed consolidation worker; the normalizer does not reread
+those large tensor shards. The original DCP inventory anchors the final gate.
+
+The legacy capture is larger than the receipt store's 64 MiB limit. A separately
+reviewed extraction retains exact selected text bytes and their original hashes
+from the independently reviewed complete capture inventory. It does not replace
+raw checkpoints with JSON or increase the store limit. The extraction, small
+control transfer, original admission, producer dependencies and capture review
+must all be admitted before this producer can emit a receipt. Numerical failures
+in the same artifact job remain unchanged; this gate grants no portable warm,
+merged-output, task, simulator or whole-cell qualification.
+
+```bash
+python -m tools.adapter_campaign.final_checkpoint \
+  --root "$CAMPAIGN_ROOT" --contract "$CONTRACT" --cell-id "$CELL_ID" \
+  --capture "$REVIEWED_EXTRACTED_CAPTURE" --controls "$REVIEWED_SMALL_CONTROLS" \
+  --primary-admission "$AUTHORITATIVE_PRIMARY_ADMISSION" \
+  --producer-review "$FINAL_CHECKPOINT_PRODUCER_REVIEW" \
+  --output "$NEW_CHECKPOINT_RECEIPT_DIRECTORY"
+```
 
 The inline producer requires exact `producer_reviews` admission and matching
 hashes for its dependencies and the actual capture review. The output directory
