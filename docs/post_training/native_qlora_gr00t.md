@@ -786,3 +786,30 @@ and CPU ownership was distinct, but shared-host and filesystem effects remain
 uncontrolled. All cleanup costs and original clocks are retained without
 adjustment. The joint decision and exact source/result hashes are in the
 [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
+The selected native build `26bc60f` passed GR00T lifecycle job `38537970` in both
+NF4 and BF16 LoRA modes. Fresh ten-update runs matched the retained `4cba88f`
+model, optimizer, RNG, data cursor and task results at updates five and ten.
+Each current-build five-to-ten recovery was exact. This comparison permits only
+the declared training-identity metadata differences; it does not enable
+cross-build resume or modify old artifacts. The original elementwise finite
+check remains selected.
+
+Changing the bound `finite.py` source caused actual native resume to refuse
+before data/model preparation or checkpoint mutation in both modes. All 28
+bound implementation files matched the qualified source. Each artifact retained
+all 224 FP32 LoRA factors and 537 FP32 head parameters, with exact optimizer
+membership. Fresh current DCP, current portable and old `4cba88f` portable loads
+all reproduced the corresponding 20 engineering rows exactly. Native official
+head-policy `--base` evaluation also matched the original first two rows; this
+is a two-row dispatch check, not a new quality result.
+
+The gate consumed 1,674 GPU-seconds. Independent review verified 132 receipt
+files and all 1,215 raw memory samples. One BF16 sample exceeded the original
+v9 collection deadline, so **whole-host PSS coverage remains incomplete**; the
+required per-stage observations passed and sampled peaks remain lower bounds.
+The terminal controller and owned steps were released before the next admission.
+This small current-build gate complements the separately qualified selected
+`4cba88f` mature recovery and artifacts; it does not repeat or improve their
+quality, timing or rollout conclusions. Exact hashes and artifact paths are in
+the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).

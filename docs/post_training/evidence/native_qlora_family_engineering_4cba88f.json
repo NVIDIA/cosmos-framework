@@ -16469,6 +16469,316 @@
         "Old4c fresh action_eval emits no allocator phase records; fresh GPU/host observations are sampled lower bounds, not allocator peaks.",
         "Sequential same-GPU/CPU cases share host/IO with concurrent owned finite42 earlier; no clock correction or general throughput claim."
       ]
+    },
+    "38537970": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 1674,
+      "implementation_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "wheel_sha256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1",
+      "scope": "Current-build native LoRA correctness for both single-device NF4/BF16 modes. No new recipe-quality, memory-comparison, inference-speed or runtime-promotion claim.",
+      "protocol_sha256": "a1527022e02835385b022870bcd3ea6283ac4312f1f4b6f9e5c8d5fe9f3bb60b",
+      "payload_manifest_sha256": "1acbc28c9e14dec822a3770794dbc99ad573dbf6a90abbcdc728529e9f5e3783",
+      "acceptance_sha256": "2dce9f3acf2e1501b9e39bddd970f019ef1c597fdf1362ef589a1c21185b0e4f",
+      "final_qualification_acceptance": true,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-final-build-38537970-readout-v1.json",
+        "sha256": "4921cb3adacee34a095c76d6167324039aa15c6facb0f65a281c1dd30c6894e2"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-final-build-38537970-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-final-build-38537970-receipts-v1.tar.gz",
+        "archive_sha256": "c31e7ad80364883773b64d4b39dcf7f08647ba2223a01f0013c2f0c7fd53b6fe",
+        "inventory_sha256": "92f1fc96e937a90058d14f5afee50557d2c814a4f2731ac45e4e069f37ec84e5",
+        "files_verified": 132,
+        "raw_samples_replayed": 1215,
+        "terminal_release_sha256": "22bedf84b6202744753b1f7f80fb3f84bd6725160fba5b6295fa7222854709b9"
+      },
+      "independent_root_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-final-build-38537970-root-review.json",
+        "sha256": "ba4d376c93176aad88cb92b2eaff6e4cd66ceabf2f48819ffb32e30a7aee6333"
+      },
+      "old_current_comparison": {
+        "baseline_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "each_mode_boundaries": [
+          5,
+          10
+        ],
+        "model_optimizer_rng_cursor_evaluation_exact": true,
+        "allowed_observational_metadata_differences": [
+          "identity.training_contract.implementation",
+          "identity.training_contract.factories.entrypoint_sha256",
+          "identity.training_contract.evaluation_input_reuse"
+        ],
+        "cross_build_resume_supported": false,
+        "metadata_files_modified": false,
+        "tensor_validation_scope": "On-node full comparisons; bounded downloaded receipt collection excludes trained tensor payloads."
+      },
+      "results": [
+        {
+          "early_source_refusal": {
+            "native_entrypoint": "/run/output/negative-source/cosmos_framework/posttrain/entrypoints/action_sft.py",
+            "native_error": "native action checkpoint training implementation differs: roles/trainer/finite.py. Resume with the original qualified source build and runtime. Cross-build exact resume requires separate qualification; do not edit checkpoint identities. Portable inference reload remains supported independently.",
+            "native_phase_records": [],
+            "no_updates_or_checkpoints_created": true,
+            "passed": true
+          },
+          "fresh_reload": {
+            "checkpoint": {
+              "evaluation_sha256": "955737df6cf76aec6fa188f1a3321e77361730e9a57b92e7678a58c22da7e462",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            },
+            "legacy4c-portable": {
+              "evaluation_sha256": "39954521601b491d7d5df18d3fca095d5a22638f856f63d26ebacf9c1111c01c",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            },
+            "portable": {
+              "evaluation_sha256": "1833fc636be627986d1cf8b84bd992c9f9e411160652e51c2ef1ef1c6e321db1",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            }
+          },
+          "metadata": {
+            "factors": 224,
+            "heads": 537,
+            "optimizer_membership_exact": true,
+            "portable_complete_and_optimizer_none": true,
+            "quantized_targets": 112,
+            "source_files": 28,
+            "source_files_match_exact26bc": true,
+            "targets": 112,
+            "trainable_fp32": 761
+          },
+          "mode": "nf4_lora",
+          "recovery_rng_data_and_evaluation_exact": true,
+          "reported_on_node_old_current_exact_boundaries": [
+            5,
+            10
+          ],
+          "reported_on_node_same_build_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          }
+        },
+        {
+          "early_source_refusal": {
+            "native_entrypoint": "/run/output/negative-source/cosmos_framework/posttrain/entrypoints/action_sft.py",
+            "native_error": "native action checkpoint training implementation differs: roles/trainer/finite.py. Resume with the original qualified source build and runtime. Cross-build exact resume requires separate qualification; do not edit checkpoint identities. Portable inference reload remains supported independently.",
+            "native_phase_records": [],
+            "no_updates_or_checkpoints_created": true,
+            "passed": true
+          },
+          "fresh_reload": {
+            "checkpoint": {
+              "evaluation_sha256": "78dc3130165b190efb0314418f041d69a488817d61a41c16a779c162729cdf87",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            },
+            "legacy4c-portable": {
+              "evaluation_sha256": "828909fb6865c2edc0d066ff7a7fb678c5f4e9e5da4f53f31c71d7221914106b",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            },
+            "portable": {
+              "evaluation_sha256": "9e5dc31f36e8b38c7a52e09f377bd29bf0c26a10f31203a74626413b2b57dd33",
+              "metrics_and_rows_exact": true,
+              "rows": 20
+            }
+          },
+          "metadata": {
+            "factors": 224,
+            "heads": 537,
+            "optimizer_membership_exact": true,
+            "portable_complete_and_optimizer_none": true,
+            "quantized_targets": 0,
+            "source_files": 28,
+            "source_files_match_exact26bc": true,
+            "targets": 112,
+            "trainable_fp32": 761
+          },
+          "mode": "bf16_lora",
+          "recovery_rng_data_and_evaluation_exact": true,
+          "reported_on_node_old_current_exact_boundaries": [
+            5,
+            10
+          ],
+          "reported_on_node_same_build_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          }
+        }
+      ],
+      "official_base": {
+        "first_two_rows_and_weighted_metrics_exact": true,
+        "retained_reference_rows": 20,
+        "rows": 2,
+        "scope": "Native source dispatch/fidelity only"
+      },
+      "memory": {
+        "device_peak_bytes": 45313359872,
+        "errors": [
+          "incomplete_host_pss"
+        ],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": 38951282688,
+        "host_rss_sum_peak_bytes": 39538302976,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1607.946882724762,
+        "owned_device_process_peak_bytes": 44537217024,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1215,
+        "sampling_gap_seconds": {
+          "count": 1214,
+          "maximum": 5.201355934143066,
+          "mean": 1.3245031982905782,
+          "median": 1.288529634475708,
+          "p95": 1.466238796710968,
+          "sum": 1607.946882724762
+        }
+      },
+      "memory_gaps": [
+        {
+          "errors": [
+            "collection_deadline_exceeded",
+            "membership_transition_retry_exhausted"
+          ],
+          "index": 784,
+          "method": "proc-identity-state-read-attempts-v9",
+          "stage": "bf16_lora-full"
+        }
+      ],
+      "stage_memory_observations": {
+        "bf16_lora-checkpoint-reload": {
+          "complete_host": 57,
+          "positive_owned_gpu": 48,
+          "samples": 57
+        },
+        "bf16_lora-full": {
+          "complete_host": 205,
+          "positive_owned_gpu": 107,
+          "samples": 206
+        },
+        "bf16_lora-legacy4c-portable-reload": {
+          "complete_host": 69,
+          "positive_owned_gpu": 58,
+          "samples": 69
+        },
+        "bf16_lora-portable-reload": {
+          "complete_host": 66,
+          "positive_owned_gpu": 57,
+          "samples": 66
+        },
+        "bf16_lora-resumed": {
+          "complete_host": 127,
+          "positive_owned_gpu": 85,
+          "samples": 127
+        },
+        "bf16_lora-source-refusal": {
+          "complete_host": 24,
+          "positive_owned_gpu": 3,
+          "samples": 24
+        },
+        "nf4_lora-checkpoint-reload": {
+          "complete_host": 58,
+          "positive_owned_gpu": 47,
+          "samples": 58
+        },
+        "nf4_lora-full": {
+          "complete_host": 221,
+          "positive_owned_gpu": 120,
+          "samples": 221
+        },
+        "nf4_lora-legacy4c-portable-reload": {
+          "complete_host": 68,
+          "positive_owned_gpu": 59,
+          "samples": 68
+        },
+        "nf4_lora-portable-reload": {
+          "complete_host": 67,
+          "positive_owned_gpu": 58,
+          "samples": 67
+        },
+        "nf4_lora-resumed": {
+          "complete_host": 149,
+          "positive_owned_gpu": 111,
+          "samples": 149
+        },
+        "nf4_lora-source-refusal": {
+          "complete_host": 25,
+          "positive_owned_gpu": 3,
+          "samples": 25
+        },
+        "official-base-evaluation": {
+          "complete_host": 78,
+          "positive_owned_gpu": 41,
+          "samples": 78
+        }
+      },
+      "memory_scope": "Original v9 per-required-model-stage positive GPU plus complete-host observation guard passed. One incomplete sample remains; whole-host PSS is false, sampled peaks are lower bounds. This is not the strict-all-samples frozen-backbone acceptance.",
+      "workflow_seconds": 1611.4537735709455,
+      "runtime": {
+        "allocator": null,
+        "code": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+        "cpu_affinity": [
+          18,
+          19,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          144,
+          145,
+          166,
+          167,
+          168,
+          169,
+          170,
+          171
+        ],
+        "family": "gr00t",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-8aac6146-ef11-7512-ac13-a8d371feeaf2"
+        },
+        "node": "batch-block7-02044",
+        "numa_nodes": [
+          "node1",
+          "node2"
+        ],
+        "slurm_job": "38537970",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "artifacts": {
+        "nf4_lora": {
+          "checkpoint": "/run/output/native/qualification/source-guard/nf4_lora-full/fixed10/checkpoints/iter_000010",
+          "portable": "/run/output/native/qualification/source-guard/nf4_lora-full/fixed10/checkpoint_artifacts/iter_000010",
+          "trained_fp32_parameters": 761,
+          "auxiliary_head_parameters": 537,
+          "lora_factors": 224
+        },
+        "bf16_lora": {
+          "checkpoint": "/run/output/native/qualification/source-guard/bf16_lora-full/fixed10/checkpoints/iter_000010",
+          "portable": "/run/output/native/qualification/source-guard/bf16_lora-full/fixed10/checkpoint_artifacts/iter_000010",
+          "trained_fp32_parameters": 761,
+          "auxiliary_head_parameters": 537,
+          "lora_factors": 224
+        }
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -16588,6 +16898,12 @@
       "sha256": "b1d077c6d4d3f93c6e3782cae63d373881564d7798b2a32fbe08b3ae801c4a2e",
       "inventory_sha256": "f1232efe2b6f6198b205a2084c7fbfddaee038dc99de0af66c19bcce1d16fa2b",
       "scope": "204 terminal seed42 native task/state comparison, rawv9 sampler/allocator, producing-step release, co-tenancy and scheduler receipts. No trained tensor payloads downloaded."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-final-build-38537970-receipts-v1.tar.gz",
+      "sha256": "c31e7ad80364883773b64d4b39dcf7f08647ba2223a01f0013c2f0c7fd53b6fe",
+      "inventory_sha256": "92f1fc96e937a90058d14f5afee50557d2c814a4f2731ac45e4e069f37ec84e5",
+      "scope": "132 terminal26bc GR native/source-refusal/checkpoint/reload/metadata, originalv9memory and release receipts; no trained tensor payloads."
     }
   ],
   "fixed_development_targets": {
