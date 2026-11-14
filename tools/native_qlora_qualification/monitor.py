@@ -13,11 +13,11 @@ import pynvml
 
 try:
     from .monitor_gpu import resolve_gpu_handle
-    from .monitor_host import TEARDOWN_METHOD, HostSampler, finish_sample
+    from .monitor_host import MEMBERSHIP_RETRY_METHOD, HostSampler, finish_sample
     from .monitor_stage import sample_stage
 except ImportError:
     from monitor_gpu import resolve_gpu_handle
-    from monitor_host import TEARDOWN_METHOD, HostSampler, finish_sample
+    from monitor_host import MEMBERSHIP_RETRY_METHOD, HostSampler, finish_sample
     from monitor_stage import sample_stage
 
 root_pid = int(sys.argv[1])
@@ -35,7 +35,7 @@ def stop(*unused):
 
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
-host_sampler = HostSampler(root_pid, stage_file, method=TEARDOWN_METHOD)
+host_sampler = HostSampler(root_pid, stage_file, method=MEMBERSHIP_RETRY_METHOD)
 try:
     with out.open("x") as stream:
         while active:

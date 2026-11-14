@@ -203,6 +203,19 @@ Version 5 permits a fresh whole collection after a failed live-thread `ESRCH` re
 
 Version 7 additionally permits recollection when final discovery returns exactly `ENOENT` after the held-thread proof already recorded the same zombie leader identity, provided the same held process pidfd subsequently proves release within the original deadline and retry reserve. The failed interval still contributes no memory. A missing earlier identity, permission error, changed birth/thread group, exec transition or unproven release remains incomplete. The [version 7 target CPU proof](../../docs/post_training/evidence/native_qlora_collector_v7_bed3d03.json) passed all 132 tests without skips on Linux `5.15.0-1032-oracle`, including four actual-process properties. The release fixtures use controlled thread-read `ESRCH`; child exit, reap, discovery `ENOENT` and held-pidfd release are real. All seven historical incomplete rows remain incomplete. This new allocation took 166 seconds with 16 CPUs (2,656 allocated CPU-seconds) and no GPU. It does not qualify complete full-model shutdown telemetry. The completed version 6 evidence and its separate costs, and all historical version 1–6 classifications, are retained.
 
+The current monitor CLI selects version 10: a 4.5-second acquisition budget with
+the same maximum 3.5-second PIDFD exit wait as version 9. This leaves more time for
+a new complete membership/read pass after a slow exit-time `/proc` read. Actual
+release proof and a fresh complete observation remain mandatory; live unreadable
+processes and deadline overruns remain incomplete. The five-second stage-lock
+deadline is unchanged. Blocking kernel reads can still overrun these budgets, so
+this is not a hard real-time guarantee. Acquisition can delay the next stage;
+include that cost in all measured arms. Historical version 9 retains its original
+four-second budget, including the retained failed sample from job `38536188`.
+The CPU tests distinguish an injected slow-read fixture with real PIDFDs from an
+optional actual 8-GiB process teardown (`COSMOS_RUN_LARGE_EXIT_TEST=1`); neither
+establishes complete telemetry for a future full-model run.
+
 ### Checkpointed dequantization experiment
 
 The opt-in [CUDA fixture](tests/test_saved_dequant_cuda.py) evaluates a test-only alternative to the pinned bitsandbytes backward path: dequantize a frozen matrix and use ordinary `F.linear` inside the actual native full non-reentrant checkpoint wrapper. Checkpoint hooks own the temporary dense tensors; the fixture never caches them on modules. It tests two synthetic blocks with the seven real language-matrix shapes, nonzero FP32 adapters, input gradients, three optimizer updates, frozen quantization state, and actual storage lifetime. The original inference path is retained. No attention, dataset, full VLM, native feature flag or end-to-end speed claim is involved.
