@@ -1413,7 +1413,7 @@ Files that moved as files. Five of them are byte-identical to their source; the 
 | `cosmos3-nano-sim-auto/post-training/references/canonical-recipe.md` | L1-74 | `cosmos3-post-train-simulation-auto/references/sim-auto-recipe.md` | L1-74 | 4 link targets re-pointed |
 | `cosmos3-nano-sim-auto/post-training/references/runtime.md` | L1-92 | `cosmos3-post-train-simulation-auto/references/sim-auto-runtime.md` | L1-92 | 3 link targets re-pointed |
 | `cosmos3-nano-sim-auto/post-training/references/smoke.md` | L1-69 | `cosmos3-post-train-simulation-auto/references/sim-auto-smoke.md` | L1-69 | 3 link targets re-pointed |
-| `cosmos3-nano-transfer-auto/shared/reference-scene.md` | L1-98 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L1-40, L44-59, L62-74, L85-102, L106-113 | 5 link targets re-pointed; the listed lines hold the source text; the 11 other non-blank lines are new, 4 skill notes among them (table under "New text") |
+| `cosmos3-nano-transfer-auto/shared/reference-scene.md` | L1-98 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L1-40, L44-59, L62-74, L85-102, L110-117 | 5 link targets re-pointed; the listed lines hold the source text; the 14 other non-blank lines are new, 4 skill notes among them (table under "New text") |
 | `cosmos3-nano-transfer-auto/post-training/references/parameter-guide.md` | L1-38 | `cosmos3-post-train-simulation-auto/references/transfer-auto-parameters.md` | L1-38 | 2 link targets re-pointed |
 | `cosmos3-nano-transfer-auto/post-training/references/canonical-recipe.md` | L1-158 | `cosmos3-post-train-simulation-auto/references/transfer-auto-recipe.md` | L1-158 | 2 link targets re-pointed |
 | `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L1-273 | `cosmos3-post-train-simulation-bimanual/SKILL.md` | L1-346 | 10 link targets re-pointed; 4 table lines re-padded; edited in place: new frontmatter and new sections around the carried body (next table) |
@@ -1991,7 +1991,7 @@ state: each of its statements rests on text of the three block skills, of `cosmo
 `cosmos3-post-train-simulation-bimanual/references/troubleshooting.md`, `cosmos3-post-train-simulation-transfer/SKILL.md` and
 `cosmos3-post-train-simulation-transfer/references/troubleshooting.md`.
 
-New lines in the files that carry source text (214 non-blank lines). Every other non-blank line of these files is a source line
+New lines in the files that carry source text (217 non-blank lines). Every other non-blank line of these files is a source line
 (tables above) or one of the three descriptions carried as a paragraph ("Removed text"). The new descriptions are 930 (Auto), 920
 (Sim-Bimanual) and 929 (Sim-Transfer) characters long. The "Prerequisites" section of the Sim-Transfer `SKILL.md` quotes four
 passages (five sentences) of its references in quotation marks (L47-54); they stay in the references as well. The "Prerequisites"
@@ -2024,7 +2024,7 @@ paragraph of the Auto `SKILL.md` (L37) quotes two phrases of its `references/run
 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L42      | 1 line from `> **Skill note (not in the source):** …`                                             |
 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L60-61   | 2 lines from `# Skill note (not in the source): …`                                                |
 | `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L76-83   | 7 lines from `> **Skill note (not in the source):** …`                                            |
-| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L104     | 1 line from `> **Skill note (not in the source):** …`                                             |
+| `cosmos3-post-train-simulation-auto/references/training-bundle-and-short-check.md` | L104-108 | 4 lines from `> **Skill note (not in the source):** …`                                            |
 | `cosmos3-post-train-simulation-bimanual/SKILL.md`                                  | L1-12    | frontmatter: `name: cosmos3-post-train-simulation-bimanual` and a `description` of 920 characters |
 | `cosmos3-post-train-simulation-bimanual/SKILL.md`                                  | L21-24   | section "When to use this skill": heading and 2 lines                                             |
 | `cosmos3-post-train-simulation-bimanual/SKILL.md`                                  | L42-45   | section "Prerequisites": heading and 2 lines                                                      |
