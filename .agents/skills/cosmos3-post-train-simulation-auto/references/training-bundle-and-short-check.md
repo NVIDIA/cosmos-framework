@@ -39,7 +39,7 @@ and optimizer state. CP=4/FSDP=1 leaves that state unsharded and is not an
 equivalent memory-saving layout. These degrees describe overlapping meshes,
 not two dimensions that must always multiply to the GPU count.
 
-> **Skill note (not in the source):** measured on four H100 NVL 95 GB: at CP=2 and FSDP=2 this check runs out of GPU memory in the forward pass of the first update on all four processes (`torch.OutOfMemoryError` with 85.4 GiB allocated by PyTorch per GPU; no loss printed, no checkpoint written). With FSDP=4 and nothing else changed it passes: losses 0.5182 and 0.5027, a synchronous save of 117 s, 283 s for the whole launch, and a peak of about 95.0 GB of 95.8 GB per GPU in `nvidia-smi`, which includes memory the allocator holds in reserve. The block below therefore selects FSDP=4 by itself when the smallest GPU has less than 140 GB and keeps FSDP=2 otherwise. GPUs smaller than 95 GB are not measured.
+> **Skill note (not in the source):** measured on four H100 NVL 95 GB: at CP=2 and FSDP=2 this check runs out of GPU memory in the forward pass of the first update on all four processes (`torch.OutOfMemoryError` with 85.4 GiB allocated by PyTorch per GPU; no loss printed, no checkpoint written). With FSDP=4 and nothing else changed it passes: losses 0.5182 and 0.5027, a synchronous save of 117 s, 283 s for the whole launch, and a peak of about 95,000 MiB of 95,830 MiB per GPU in `nvidia-smi`, which includes memory the allocator holds in reserve. The block below therefore selects FSDP=4 by itself when the smallest GPU reports less than 140,000 MiB and keeps FSDP=2 otherwise. GPUs with less memory than these are not measured.
 
 After constructing the fine-tuning `settings` array, append:
 
@@ -57,7 +57,7 @@ settings+=(
   model.config.parallelism.context_parallel_shard_degree=2
   model.config.parallelism.data_parallel_shard_degree=2
 )
-# Skill note (not in the source): FSDP=4 on GPUs with less than 140 GB each; appended last, it replaces the 2 above.
+# Skill note (not in the source): FSDP=4 when the smallest GPU reports less than 140000 MiB; appended last, it replaces the 2 above.
 if [ "$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | sort -n | head -1)" -lt 140000 ]; then settings+=(model.config.parallelism.data_parallel_shard_degree=4); fi
 python -m cosmos_framework.scripts.train_experiment \
   "${entry[@]}" --dryrun -- "${settings[@]}"
@@ -73,7 +73,7 @@ memory on your allocation. The save is synchronous; see
 asynchronous saves. Require finite losses, a completed checkpoint, and a
 successful same-run reload before treating the check as passed.
 
-> **Skill note (not in the source):** the same-run reload is the launch command once more, with the same `job.name`, `IMAGINAIRE_OUTPUT_ROOT` and `settings`. The run then finds its own `checkpoints/latest_checkpoint.txt` and restores that checkpoint with its training state in place of the converted weights; the saved iteration already equals `trainer.max_iter`, so it ends without another update or save. Measured on four H100 NVL 95 GB with FSDP=4: 66 s, about 52 GB per GPU. The three lines that the `grep` below prints are the evidence of a successful reload.
+> **Skill note (not in the source):** the same-run reload is the launch command once more, with the same `job.name`, `IMAGINAIRE_OUTPUT_ROOT` and `settings`. The run then finds its own `checkpoints/latest_checkpoint.txt` and restores that checkpoint with its training state in place of the converted weights; the saved iteration already equals `trainer.max_iter`, so it ends without another update or save. Measured on four H100 NVL 95 GB with FSDP=4: 66 s, a peak of about 51,600 MiB per GPU. The three lines that the `grep` below prints are the evidence of a successful reload.
 
 ```bash
 torchrun --standalone --nproc-per-node=4 -m cosmos_framework.scripts.train_experiment "${entry[@]}" -- "${settings[@]}" \
@@ -101,7 +101,7 @@ sample_overrides=(
 settings+=("${sample_overrides[@]}")
 ```
 
-> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. On one node with four GPUs the launcher variables are the ones in the block below: with the first address of `hostname -I` as `MASTER_ADDR` the four processes did not reach the rendezvous endpoint from inside a container (`RendezvousConnectionError` after 92 s), with `127.0.0.1` they did. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
+> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. On one node with four GPUs the launcher variables are the ones in the block below: with the first address of `hostname -I` as `MASTER_ADDR` the four processes did not reach the rendezvous endpoint from inside a container (`RendezvousConnectionError` after 92 s), with `127.0.0.1` they did. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90,000 MiB of 95,830 MiB per GPU in `nvidia-smi`.
 
 ```bash
 export NNODES=1 GPUS_PER_NODE=4 NODE_RANK=0 MASTER_ADDR=127.0.0.1 CONTEXT_PARALLEL=4 FSDP_SHARDS=4
