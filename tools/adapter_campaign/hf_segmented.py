@@ -1338,7 +1338,14 @@ def produce(root, contract, output, *, cell_id, audit_review, producer_review, c
         r = requirements[gate]
         require(source in r["sources"] and producer in r["producers"], "source/producer not admitted")
         reviews = producer_reviews(r, producer)
-        require(producer_review in reviews, "missing exact independent producer review admission")
+        if "producer_reviews" in r:
+            require(producer_review in reviews, "missing exact independent producer review admission")
+        else:
+            require(
+                gate in {"full_schedule", "complete_sample_coverage", "initial_final_validation"}
+                and producer_review in contract.get("sealed_inputs", []),
+                "legacy primary gate requires the exact reviewed producer seal in the contract",
+            )
     result = {"lineage": lineage, "final_checkpoint": None, "gates": {}}
     for gate, measurement in values.items():
         closure = list(

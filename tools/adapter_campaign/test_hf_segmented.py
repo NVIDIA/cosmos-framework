@@ -644,6 +644,51 @@ def test_reviewed_relocation_is_forwarded_to_the_strict_normalizer(tmp_path):
     mocked.assert_called_once_with(tmp_path, contract["cells"][0], audit, capture_origin="/synthetic-original")
 
 
+def test_legacy_primary_categories_accept_only_the_exact_contract_sealed_review(tmp_path):
+    contract, audit, review, normalized = producer_fixture(tmp_path)
+    contract["sealed_inputs"] = [review]
+    for row in contract["cells"][0]["requirements"]:
+        if row["id"] != "mid_epoch_continuation":
+            row.pop("producer_reviews")
+    with patch.object(h, "normalize", return_value=normalized):
+        index = h.produce(
+            tmp_path, contract, tmp_path / "output", cell_id="synthetic", audit_review=audit, producer_review=review
+        )
+    assert set(index["cells"]["synthetic"]["gates"]) == h.GATES
+    for refs in index["cells"]["synthetic"]["gates"].values():
+        assert review in Store(tmp_path).json(refs[0])["supporting_evidence"]
+
+
+@pytest.mark.parametrize(
+    "kind", ["missing_seal", "wrong_hash", "wrong_path", "midpoint_missing_map", "map_empty", "map_wrong_review"]
+)
+def test_legacy_admission_cannot_bypass_sealed_review_or_existing_map(tmp_path, kind):
+    contract, audit, review, normalized = producer_fixture(tmp_path)
+    contract["sealed_inputs"] = [copy.deepcopy(review)]
+    rows = {row["id"]: row for row in contract["cells"][0]["requirements"]}
+    for name in ("full_schedule", "complete_sample_coverage", "initial_final_validation"):
+        rows[name].pop("producer_reviews")
+    if kind == "missing_seal":
+        contract["sealed_inputs"] = []
+    elif kind == "wrong_hash":
+        contract["sealed_inputs"][0]["sha256"] = "f" * 64
+    elif kind == "wrong_path":
+        contract["sealed_inputs"][0]["path"] = "other.json"
+    elif kind == "midpoint_missing_map":
+        rows["mid_epoch_continuation"].pop("producer_reviews")
+    elif kind == "map_empty":
+        rows["full_schedule"]["producer_reviews"] = {}
+    else:
+        rows["full_schedule"]["producer_reviews"] = {
+            rows["full_schedule"]["producers"][0]: [{"path": "other.json", "sha256": "f" * 64}]
+        }
+    with patch.object(h, "normalize", return_value=normalized), pytest.raises(EvidenceError):
+        h.produce(
+            tmp_path, contract, tmp_path / "output", cell_id="synthetic", audit_review=audit, producer_review=review
+        )
+    assert not (tmp_path / "output").exists()
+
+
 @pytest.mark.parametrize("mutation", ["source", "producer", "review", "extra_gate"])
 def test_no_partial_gate_publication_when_any_admission_missing(tmp_path, mutation):
     contract, audit, review, normalized = producer_fixture(tmp_path)
