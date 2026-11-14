@@ -52,11 +52,14 @@ def run(
         validate_evaluation_input_reuse,
     )
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
+    from cosmos_framework.posttrain.utils.gr00t_evaluation_backbone import install_reuse, observations
     from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
     from cosmos_framework.utils import misc
 
     start = time.monotonic()
     rl = validate_config(config)
+    if rl.reuse_gr00t_evaluation_backbone and (dense or unmerged):
+        raise ValueError("GR00T evaluation backbone reuse does not support dense or unmerged artifact loading")
     if "LOCAL_RANK" not in os.environ or not torch.cuda.is_available():
         raise ValueError("native action evaluation requires single-process CUDA torchrun")
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
@@ -93,6 +96,7 @@ def run(
     source = _Source(_factory(config.data_factory)(config, "validation", policy))
     validate_evaluation_input_reuse(config, rl, source)
     install_evaluation_input_reuse(policy, config, rl)
+    install_reuse(policy, config, rl)
     objective = _factory(config.objective_factory)(policy, config)
     callback = _factory(config.evaluation_callback) if config.evaluation_callback else None
     try:
@@ -102,6 +106,9 @@ def run(
         preparation = preparation_observations(policy)
         if preparation is not None:
             _json(destination / "evaluation_preparation.json", preparation)
+        backbone_reuse = observations(policy)
+        if backbone_reuse is not None:
+            _json(destination / "evaluation_backbone.json", backbone_reuse)
         record_qlora_phase("family_evaluation_complete", reset_peak=True)
         if codec is not None:
             codec.validate_frozen_base()

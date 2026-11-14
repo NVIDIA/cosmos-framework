@@ -25,6 +25,7 @@ class ActionSFTConfig(RunConfig):
     evaluation_seed: int = 123
     evaluation_max_samples: int = 0
     reuse_evaluation_inputs: bool = False
+    reuse_gr00t_evaluation_backbone: bool = False
     lr_schedule: SFTLRScheduleConfig = field(default_factory=SFTLRScheduleConfig)
     pause_after_step: int = 0
     target_metric: str = ""
@@ -71,6 +72,8 @@ class ActionSFTConfig(RunConfig):
                 raise ValueError(f"{name} must be a nonnegative integer")
         if type(self.reuse_evaluation_inputs) is not bool:
             raise ValueError("reuse_evaluation_inputs must be a boolean")
+        if type(self.reuse_gr00t_evaluation_backbone) is not bool:
+            raise ValueError("reuse_gr00t_evaluation_backbone must be a boolean")
         if self.pause_after_step > self.max_steps:
             raise ValueError("pause_after_step must not exceed the declared max_steps")
         if self.target_direction not in {"min", "max"}:

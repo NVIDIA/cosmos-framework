@@ -266,9 +266,14 @@ def install_evaluation_input_reuse(policy, config, rl):
     policy.packer = _EvaluationPacker(policy.packer)
 
 
+@contextmanager
 def evaluation_batch_scope(policy, batch):
+    from cosmos_framework.posttrain.utils.gr00t_evaluation_backbone import batch_scope
+
     packer = getattr(policy, "packer", None)
-    return packer.batch_scope(batch) if isinstance(packer, _EvaluationPacker) else nullcontext()
+    prepared = packer.batch_scope(batch) if isinstance(packer, _EvaluationPacker) else nullcontext()
+    with prepared, batch_scope(policy, batch):
+        yield
 
 
 def preparation_observations(policy):

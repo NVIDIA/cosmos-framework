@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """GR00T-N1.7 adapter for `LLMTrainer`: frozen backbone, trainable action head, official forward.
 
-`flow_matching_loss` is Isaac's `Gr00tN1d7.forward` called whole, so the flow-matching math is never
-re-derived here. Precision is a `Precision` preset: the default `OFFICIAL_PRECISION` is the official finetune
+`flow_matching_loss` calls Isaac's `Gr00tN1d7.forward` whole by default. Opt-in evaluation reuse calls
+the same preparation/backbone/head methods separately; the flow-matching math is never re-derived here.
+Precision is a `Precision` preset: the default `OFFICIAL_PRECISION` is the official finetune
 recipe -- fp32 parameters (backbone included) with bf16 autocast on the forward -- which is what makes the
 training parity gate bitwise; `mode="fsdp"` with bf16 storage is the RLinf-style all-bf16 recipe, supported
 but not gated (no official reference exists for it). `net` is the trainable scope `LLMTrainer` checkpoints
@@ -365,8 +366,26 @@ class Gr00tN1d7TrainPolicy:
             dtype = getattr(torch, self.precision.param)
             inputs = {k: v.to(dtype) if torch.is_tensor(v) and v.is_floating_point() else v for k, v in inputs.items()}
         with self.compute_ctx:
-            out = self.gr00t(inputs)
+            reuse = getattr(self, "_evaluation_backbone_reuse", None)
+            if reuse is not None and reuse.active:
+                backbone_inputs, action_inputs = self.gr00t.prepare_input(dict(inputs))
+                reuse.begin_loss(backbone_inputs)
+                raw = self.backbone(backbone_inputs)
+                out = self.gr00t.action_head(reuse.finish_loss(backbone_inputs, raw), action_inputs)
+            else:
+                out = self.gr00t(inputs)
         return FlowMatchingLossOutput(loss=out["loss"], action_mask=out["action_mask"])
+
+    def predict_actions(self, inputs: dict) -> Any:
+        """Native sampler; optional evaluation scope reuses only pre-head backbone output."""
+        with self.compute_ctx:
+            reuse = getattr(self, "_evaluation_backbone_reuse", None)
+            if reuse is None or not reuse.active:
+                return self.gr00t.get_action(inputs)
+            if "action" in inputs or "action_mask" in inputs:
+                raise ValueError("GR00T evaluation prediction must not receive ground-truth action conditioning")
+            backbone_inputs, action_inputs = self.gr00t.prepare_input(dict(inputs))
+            return self.gr00t.action_head.get_action(reuse.prediction(backbone_inputs), action_inputs)
 
     def ppo_condition(self, inputs: dict, *, native_ode: bool = False) -> Gr00tPPOCondition:
         """Prepare only frozen backbone outputs; the action/value forward owns trainable features."""

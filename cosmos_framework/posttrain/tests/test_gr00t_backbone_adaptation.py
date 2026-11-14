@@ -175,6 +175,9 @@ def test_action_sampling_does_not_receive_ground_truth_and_reports_decoded_units
         gr00t=SimpleNamespace(get_action=sample),
         config=SimpleNamespace(training_prefix=2, resolve_embodiment_tag=lambda: "libero_sim"),
     )
+    from cosmos_framework.posttrain.model.gr00t.policy import Gr00tN1d7TrainPolicy
+
+    policy.predict_actions = lambda value: Gr00tN1d7TrainPolicy.predict_actions(policy, value)
     metrics = evaluate_actions(policy, [example], None)
     assert metrics["normalized_action_mse"] == {"sum": 0, "count": 14}
     assert metrics["action_mae_gripper_environment_units"] == {"sum": 2, "count": 2}

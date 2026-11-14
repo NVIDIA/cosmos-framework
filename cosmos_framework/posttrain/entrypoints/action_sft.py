@@ -160,8 +160,10 @@ def validate_config(config):
         if not isinstance(getattr(config, name), str) or "." not in getattr(config, name):
             raise ValueError(f"action SFT requires {name}")
     from cosmos_framework.posttrain.utils.action_evaluation_inputs import validate_evaluation_input_reuse
+    from cosmos_framework.posttrain.utils.gr00t_evaluation_backbone import validate_reuse
 
     validate_evaluation_input_reuse(config, rl)
+    validate_reuse(config, rl)
     return rl
 
 
@@ -221,6 +223,7 @@ def training_identity(config, rl, objective, validation):
 
     from cosmos_framework.posttrain.utils.action_evaluation_inputs import reuse_identity
     from cosmos_framework.posttrain.utils.action_training_identity import action_training_source_identity
+    from cosmos_framework.posttrain.utils.gr00t_evaluation_backbone import reuse_identity as backbone_reuse_identity
     from cosmos_framework.posttrain.utils.identity import canonical_config_value
 
     return canonical_config_value(
@@ -246,6 +249,7 @@ def training_identity(config, rl, objective, validation):
             "evaluation_seed": rl.evaluation_seed,
             "evaluation_max_samples": rl.evaluation_max_samples,
             "evaluation_input_reuse": reuse_identity(rl),
+            "evaluation_backbone_reuse": backbone_reuse_identity(rl),
             "target": [rl.target_metric, rl.target_threshold, rl.target_direction, rl.stop_on_target],
         }
     )
@@ -272,6 +276,7 @@ def run(config, *, config_path: str, opts: list[str]):
     )
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
     from cosmos_framework.posttrain.utils.entry import dump_resolved, out_dir, pin_run_attempt
+    from cosmos_framework.posttrain.utils.gr00t_evaluation_backbone import install_reuse, observations
     from cosmos_framework.posttrain.utils.qlora_metrics import record_qlora_phase
     from cosmos_framework.posttrain.utils.rank_state import collect_rank_state, state_for_current_rank
     from cosmos_framework.utils import misc
@@ -311,6 +316,7 @@ def run(config, *, config_path: str, opts: list[str]):
     record_qlora_phase("model_loading_complete", reset_peak=True)
     cursor = IndexedCursor(train, shuffle=True, seed=rl.seed, cursor_resume="strict", label="action SFT")
     install_evaluation_input_reuse(policy, config, rl)
+    install_reuse(policy, config, rl)
     objective = _factory(config.objective_factory)(policy, config)
     objective.identity = {
         **objective.identity,
@@ -398,6 +404,9 @@ def run(config, *, config_path: str, opts: list[str]):
         preparation = preparation_observations(policy)
         if preparation is not None:
             _json(output / "evaluation_preparation.json", preparation)
+        backbone_reuse = observations(policy)
+        if backbone_reuse is not None:
+            _json(output / "evaluation_backbone.json", backbone_reuse)
         record_qlora_phase("evaluation_complete", reset_peak=True)
         clocks["evaluation_seconds"] += time.monotonic() - tick
         history.append({"step": update, "metrics": metrics})

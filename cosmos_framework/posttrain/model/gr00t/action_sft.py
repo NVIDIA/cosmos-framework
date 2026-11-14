@@ -148,8 +148,7 @@ def evaluate_actions(policy, batch, config):
     # Upstream interprets an action input as RTC conditioning. Never condition an evaluation
     # prediction on its demonstration's ground-truth action chunk.
     inference_inputs = {key: value for key, value in inputs.items() if key not in {"action", "action_mask"}}
-    with policy.compute_ctx:
-        prediction = policy.gr00t.get_action(inference_inputs)["action_pred"]
+    prediction = policy.predict_actions(inference_inputs)["action_pred"]
     expected, mask = expected.to(prediction.device), mask.to(prediction.device)
     squared = ((prediction.float() - expected.float()).square() * mask.float()).sum()
     result = {"normalized_action_mse": {"sum": float(squared), "count": float(mask.sum())}}

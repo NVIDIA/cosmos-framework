@@ -111,7 +111,11 @@ def cfg(enabled=True):
         objective_factory=reuse._FACTORY + "training.build_objective",
         evaluation_callback=reuse._FACTORY + "training.evaluate_trajectories",
         rl=SimpleNamespace(
-            reuse_evaluation_inputs=enabled, micro_batch_size=1, evaluation_seed=123, evaluation_max_samples=0
+            reuse_evaluation_inputs=enabled,
+            reuse_gr00t_evaluation_backbone=False,
+            micro_batch_size=1,
+            evaluation_seed=123,
+            evaluation_max_samples=0,
         ),
     )
 
