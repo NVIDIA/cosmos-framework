@@ -101,7 +101,11 @@ sample_overrides=(
 settings+=("${sample_overrides[@]}")
 ```
 
-> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
+> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. On one node with four GPUs the launcher variables are the ones in the block below: with the first address of `hostname -I` as `MASTER_ADDR` the four processes did not reach the rendezvous endpoint from inside a container (`RendezvousConnectionError` after 92 s), with `127.0.0.1` they did. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
+
+```bash
+export NNODES=1 GPUS_PER_NODE=4 NODE_RANK=0 MASTER_ADDR=127.0.0.1 CONTEXT_PARALLEL=4 FSDP_SHARDS=4
+```
 
 Apply this after constructing `settings` and before the first dry run.
 These are reduced data settings, not changes to the published training recipe.
