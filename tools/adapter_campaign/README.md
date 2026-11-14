@@ -149,3 +149,21 @@ evidence. Synthetic receipts are never accepted by the production CLI and never
 count toward a real campaign. Simulator protocols must seal the full frozen task,
 state and seed census before results; dataset-preparation receipts cannot stand
 in for closed-loop evaluation.
+
+`smollm_lora_recorded.py` handles the preserved Smol LoRA FSDP2 cell's original
+v1 independent reference and separate completion-only midpoint replay. It pins
+the exact old oracle, validates the full/preflight recipe inverse and four-rank
+ownership, and requires a reviewed CPU comparison of the original initial
+portable, saved independent gradients, uninterrupted AdamW state and complete
+467→470 continuation. The shared batch's later timeout and the full primary's
+post-training failure remain in the evidence and resource records. It does not
+rerun training or reuse the DoRA v2 oracle.
+
+The same producer records the completed six-update LoRA preflight as partial
+evidence, with the composite `installed_cell_preflight` gate explicitly BLOCKED:
+own activation-checkpointing off/on and whole-model alias lifecycle applicability
+remain unproved. An unrelated method's supplemental check cannot clear that gap.
+Only the two complete reference/continuation gates can emit PASS after exact
+producer, source and independent-review admission. The producer leaves every
+legacy deployment failure and the separate `smollm_fp32_fixed_mma_v2` inference
+identity untouched; it never activates a campaign index.
