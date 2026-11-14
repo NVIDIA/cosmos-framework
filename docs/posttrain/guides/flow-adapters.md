@@ -131,6 +131,12 @@ Nonfinite derivatives or a nonfinite final FP32 cast use the trainer's existing
 microbatches in that update; it does not poison model ownership. Structural or
 reducer failures require restoration from a complete checkpoint.
 
+The CUDA hook registers its FP64 reducer input on the consuming stream before
+copying it. This preserves the allocation through Torch's subsequent FP32 cast;
+the copied numerator alone does not retain that input. This is a buffer-lifetime
+correction, with no change to the policy's arithmetic or checkpoint identity.
+Installed two-host evidence must still name the package revision it executed.
+
 With the model/processor/data environment variables above, the configuration for
 a four-GPU qualification run is:
 

@@ -165,3 +165,27 @@ Fifteen preserved Gemma/Gemma2 primary schedules add 45 reviewed gates for full 
 HF Qwen3-VL mixed-model fault job `38512879` passes all six controlled recovery cases across two physical hosts under FSDP2 and HSDP. The committed update-3 checkpoint restores updates 4–6 with zero recorded loss difference and byte-equal serialized per-rank states; incomplete checkpoints are rejected on every rank. The independent audit rehashes 128 continuation files and 24 checkpoint files, verifies actual rank-to-host placement and clean teardown, and records 2.52333 allocated GPU-hours. This is a bounded lifecycle result, not a Qwen2-VL numerical result or a complete WTS schedule. See `review/hf-wts-controlled-recovery-actual-v1/report.json` in the campaign workspace.
 
 The proposed Gemma SDPA64 inference profile and its unqualified boundary are described in [adapter-gemma-cache.md](adapter-gemma-cache.md). The preserved fixed-MMA failures remain attached to their original profile and artifacts.
+
+The GR00T homogeneous LoRA FSDP2 attempt `38533450` fails after four recorded
+updates at the owned-gradient placeholder check on rank 1. Inspection of the
+pinned Torch 2.10 reducer identifies a lifetime defect: it allocates the FP64
+input on the reduce-scatter stream, then invokes the hook and FP32 cast on the
+all-reduce stream. In FSDP, the cast releases the last FP64 reference without
+registering that consuming stream. HSDP retains a separate all-reduce input.
+`OwnedGradientWindow.hook` now registers the original input's stream; neither
+reduction arithmetic nor the policy/checkpoint identity changes. The exception
+also names the affected owner and its local gradient layout.
+
+The paired allocator diagnostic `38534230` uses the installed `d20efc4` native
+image `0323efd81138dc5bfdf4380af88b89e81f8fa4d0b9a47ab6e4c0f0de187ad0e4`
+on one A100. Five of six original-path pressure trials corrupt the FP32
+placeholder; all six stream-registration trials and six retained-reference
+controls preserve the captured numerator and zero placeholder. The allocation
+lasts 70 seconds, while the diagnostic worker takes 4.685 seconds and peaks at
+127,929,856 CUDA allocated bytes. This isolates the defect; it is not a native
+two-host training pass. Source CPU tests pass 104 cases, with 18 declared skips.
+The corrected wheel's installed CUDA tests and affected native training/resume
+checks remain pending. The original failure is preserved. Evidence is under
+`all-family-20261114/gr00t-gradient-input-stream-probe-v1` and
+`all-family-20261114/gr00t-gradient-stream-fix-validation-v1` in the owned RAID
+continuation workspace.

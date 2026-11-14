@@ -268,6 +268,14 @@ class OwnedGradientWindow:
                 raise RuntimeError("unexpected or duplicate group reduction")
             if output.ndim != 1 or output.dtype != torch.float64 or output.requires_grad:
                 raise RuntimeError("requires native FP64 flattened SUM output")
+            if output.device.type == "cuda":
+                # Torch allocates this buffer on its reduce-scatter stream, then
+                # runs our hook and the subsequent FP32 cast on its all-reduce
+                # stream. For FSDP, the cast releases the final FP64 reference;
+                # unlike HSDP, no all_reduce_input retains it. Protect that
+                # input until all consuming stream work (including the cast
+                # queued after this hook) completes, before allocator reuse.
+                output.record_stream(torch.cuda.current_stream(output.device))
             saved = output.detach().clone()
             event = None
             output.zero_()
@@ -316,7 +324,12 @@ class OwnedGradientWindow:
                         or not raw.is_contiguous()
                         or bool(torch.count_nonzero(raw))
                     ):
-                        raise RuntimeError("FSDP gradient placeholder/ownership changed")
+                        raise RuntimeError(
+                            f"FSDP gradient placeholder/ownership changed for {owner.name}: "
+                            f"dtype={grad.dtype}, local_shape={tuple(raw.shape)}, "
+                            f"expected_shape={owner.local_shape}, contiguous={raw.is_contiguous()}, "
+                            f"nonzero={int(torch.count_nonzero(raw))}"
+                        )
                     if hasattr(owner.parameter, "placements") and (
                         grad.placements != owner.parameter.placements or grad.device_mesh != owner.parameter.device_mesh
                     ):
