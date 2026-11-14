@@ -38,7 +38,10 @@ in checkpoint and portable artifacts.
 `model.backbone_adaptation.mode=bf16_lora` is the matched precision control.
 `nf4_frozen`/`bf16_frozen` train only the explicitly selected native task head;
 they are distinct controls and are not backbone QLoRA. `train_action_head=false`
-is permitted only with trainable language adapters. No mode changes the task loss.
+is permitted only with trainable language adapters, but leaves the frozen expert
+and action projections in their source BF16 dtype. It is not a trainability-only
+ablation of the selected FP32 expert and has not been qualified. No mode changes
+the task loss.
 
 The model loads its complete approximately 22 GB BF16 source on the host, then
 moves/quantizes one matrix at a time; no complete dense base is placed on a GPU
@@ -615,3 +618,35 @@ separate tensor ownership and cleanup on failure. Thirty focused CPU cases
 include native evaluation, committed recovery and the actual pinned processor.
 Full-model accelerator checks and a matched uninstrumented workflow comparison
 in both precision arms remain required before promotion.
+
+The original third seed-17 control, frozen BF16 backbone with **409 FP32
+expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
+(6,214 GPU-seconds, normal controller release). This is the native matched head
+policy, not the public Stage2 recipe's BF16 expert precision. All four committed
+boundaries preserved exact optimizer membership, scheduler/update/RNG controls,
+training cursor and evaluation history. Native frozen-state and publication checks
+passed; separate fresh-task reload and mature recovery of this head-only policy
+remain untested. LoRA recovery evidence does not fill that mode-specific gap.
+
+Head-only ADE/FDE at update 512 was **2.06870/6.30633 m**, with flow loss
+**0.284094**. These are smaller errors than BF16 LoRA's 2.08567/6.35045 m, but
+still **5.76%/3.81% above its frozen source**; flow loss is 6.56% higher. None of
+the scheduled 0/128/256/384/512 evaluations reached the unchanged 1.8582104-m
+ADE target. All three original arms therefore failed useful adaptation in this
+seed. The head-only arm clipped 505/512 updates, versus 506/508 for BF16/NF4
+LoRA, and all three had their largest training loss at update 279. Head-only
+and BF16 LoRA per-update loss correlation was 0.99895. These retained diagnostics
+support shared adaptation drift, not an identified NF4 correctness defect; no
+difficult clips or release metrics were removed.
+
+Head-only mean update time over steps 31–512 was 2.3359 seconds; the complete
+workflow took 102.68 minutes, including 74.72 minutes of evaluation. Sampled owned
+GPU memory peaked at **56.934 GiB**, with host RSS **42.849 GiB**; whole-run host
+PSS coverage remains incomplete. These memory and update costs belong to the
+head-only training graph, separate from the matched NF4/BF16 LoRA comparison.
+All three runs had actual 16-CPU affinity, but placements differed; this control
+also overlapped another allocation on the node and lacks a NUMA-topology receipt.
+These clocks are descriptive, not an isolated runtime or time-to-quality gain.
+The 50 hash-listed terminal receipts plus inventory preserve all failed targets
+and raw release/accounting observations. Further paired seeds and independent
+recording families remain necessary for recipe-quality claims.

@@ -15150,6 +15150,264 @@
         "settings_changed": false,
         "scope": "One authorized seed42 block; no candidate-mature or further-learning admission. Native seed42 outputs retained for existing recipe evidence."
       }
+    },
+    "38533726": {
+      "state": "COMPLETED",
+      "allocated_gpu_seconds": 6214,
+      "mode": "bf16_frozen",
+      "seed": 17,
+      "native_implementation": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "scope": "Original prospective third512-update control: frozen BF16 language/vision backbone,409 FP32 expert/action trainables,zero LoRA. Native matched head policy, not exact public Stage2 BF16-expert precision. Exposed development only; no independent-family or recipe-level claim.",
+      "receipt_archive": {
+        "hash_listed_files": 50,
+        "inventory_sha256": "bfb9ffc07072d52ea3f1a90d564a6d677757c988ddb00b86779f75f5bd0950b5",
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38533726-terminal-receipts-v1.tar.gz",
+        "sha256": "83f4b40ec787529be681801eaecbc44d3e2bd45f2812b6c9e8dfc3244192def7"
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38533726-terminal-summary.json",
+        "sha256": "989d31c05d884e6bed8b9a2f8b88873d367641ca85a21d90cd114c040461bdcb"
+      },
+      "original_execution_payload_manifest_sha256": "113b9b34da922808ca7c45c7d051d971b73b6be8d8e32388e63ec7225355975f",
+      "original_scientific_protocol_sha256": "c78a4ae86af4a874bfa7411b9b7f5c56c5220ca1850f04d45cf77a8e605e57ef",
+      "unchanged_target_meters": 1.8582104004141,
+      "target_sha256": "7296ca5692d68d4dd792cd66a3125109375d9200fb03b7010af0d3dfe58f558c",
+      "target_reached": false,
+      "history": [
+        {
+          "step": 0,
+          "ade_6p4s_meters": 1.956010947804316,
+          "fde_6p4s_meters": 6.074706420644361,
+          "flow_loss": 0.2666164163815665
+        },
+        {
+          "step": 128,
+          "ade_6p4s_meters": 2.39052597846603,
+          "fde_6p4s_meters": 7.416022368357517,
+          "flow_loss": 0.314077678231115
+        },
+        {
+          "step": 256,
+          "ade_6p4s_meters": 2.113569912580715,
+          "fde_6p4s_meters": 6.335691054497147,
+          "flow_loss": 0.3081529209821383
+        },
+        {
+          "step": 384,
+          "ade_6p4s_meters": 2.0843370372749632,
+          "fde_6p4s_meters": 6.349456805997761,
+          "flow_loss": 0.2875291686195851
+        },
+        {
+          "step": 512,
+          "ade_6p4s_meters": 2.0686999379304325,
+          "fde_6p4s_meters": 6.306332351938181,
+          "flow_loss": 0.28409366544292425
+        }
+      ],
+      "controls": {
+        "128": {
+          "all_trainables_auxiliary_fp32": true,
+          "data_position": 128,
+          "exact_optimizer_membership": true,
+          "lora_tensors": 0,
+          "native_controls_pass": true,
+          "optimizer_step": 128,
+          "quantized_tensors": 0,
+          "scheduler_clock": "batch",
+          "scheduler_epoch": 128,
+          "sha256": {
+            "data": "c4ea9f615d103d765ef4f912b658c8a8784c20f757e490684cbdab1ad92e11bf",
+            "model_metadata": "146033f6f67fa662dd4a53ed1c9ebba4f783ee942492fd208084df530f3b6d52",
+            "trainer": "5d59c30bf119bff57bf3d14f5b58684c9da97f39fd37f3acfd19d7e25febde09"
+          },
+          "trainable_tensors": 409
+        },
+        "256": {
+          "all_trainables_auxiliary_fp32": true,
+          "data_position": 256,
+          "exact_optimizer_membership": true,
+          "lora_tensors": 0,
+          "native_controls_pass": true,
+          "optimizer_step": 256,
+          "quantized_tensors": 0,
+          "scheduler_clock": "batch",
+          "scheduler_epoch": 256,
+          "sha256": {
+            "data": "d1b355ef1271a6f367bf0fd7989e99dd8097cfd3d0382d66fbb3d85ab3eab71e",
+            "model_metadata": "146033f6f67fa662dd4a53ed1c9ebba4f783ee942492fd208084df530f3b6d52",
+            "trainer": "fdd3a63ad456dd265de474ecb30d05d9d4af3b1b6683e653f2ced6040a88e7da"
+          },
+          "trainable_tensors": 409
+        },
+        "384": {
+          "all_trainables_auxiliary_fp32": true,
+          "data_position": 384,
+          "exact_optimizer_membership": true,
+          "lora_tensors": 0,
+          "native_controls_pass": true,
+          "optimizer_step": 384,
+          "quantized_tensors": 0,
+          "scheduler_clock": "batch",
+          "scheduler_epoch": 384,
+          "sha256": {
+            "data": "82c45ec00a2fcb571d547cbd0bbca5d84ec0bc7559cb03fcbe9975894b332f4c",
+            "model_metadata": "146033f6f67fa662dd4a53ed1c9ebba4f783ee942492fd208084df530f3b6d52",
+            "trainer": "53cd53a7142c5e77914d030c8780a601ccceeb1530a35fcbc464b8844fce510d"
+          },
+          "trainable_tensors": 409
+        },
+        "512": {
+          "all_trainables_auxiliary_fp32": true,
+          "data_position": 512,
+          "exact_optimizer_membership": true,
+          "lora_tensors": 0,
+          "native_controls_pass": true,
+          "optimizer_step": 512,
+          "quantized_tensors": 0,
+          "scheduler_clock": "batch",
+          "scheduler_epoch": 512,
+          "sha256": {
+            "data": "22e1b4a024c905ee7e12552e08a5349a339fbd582a0d99ff006cc2b8e5ad3c6f",
+            "model_metadata": "146033f6f67fa662dd4a53ed1c9ebba4f783ee942492fd208084df530f3b6d52",
+            "trainer": "47b25ff5b99bf3452842f461b62001886e06256ab332fe9d178229c2bc13f1fc"
+          },
+          "trainable_tensors": 409
+        }
+      },
+      "train_summary": {
+        "clipped_updates": 505.0,
+        "mean_flow_loss": 0.3989878811555627,
+        "mean_update31_512_seconds": 2.335920290375929,
+        "median_clip_coefficient": 0.10964497841866708,
+        "median_preclip_norm": 9.120350360870361,
+        "peak_loss_step": 279,
+        "updates": 512
+      },
+      "clocks": {
+        "checkpoint_seconds": 159.36148932401557,
+        "complete_workflow_seconds": 6161.027563587006,
+        "evaluation_seconds": 4483.396728891035,
+        "native_workflow_seconds": 6117.319398951018,
+        "portable_export_seconds": 21.791216566984076,
+        "startup_seconds": 242.30907048800145,
+        "training_seconds": 1195.7014229111373
+      },
+      "memory": {
+        "allocator_peak_allocated_bytes": 59544872448,
+        "allocator_peak_reserved_bytes": 59919826944,
+        "sampled": {
+          "device_peak_bytes": 61929095168,
+          "errors": [
+            "incomplete_host_pss"
+          ],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": false,
+          "host_pss_sum_peak_bytes": 45499035648,
+          "host_rss_sum_peak_bytes": 46009044992,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 6147.911056756973,
+          "owned_device_process_peak_bytes": 61131980800,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 4578,
+          "sampling_gap_seconds": {
+            "count": 4577,
+            "maximum": 2.915058135986328,
+            "mean": 1.3432184961234375,
+            "median": 1.365811824798584,
+            "p95": 1.4242424964904785,
+            "sum": 6147.911056756973
+          }
+        }
+      },
+      "memory_analysis": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38533726-memory-summary.json",
+        "phase_family": "native_action",
+        "sha256": "a08630c5e0ba35d09ff014bd3bf229ec338922e527a87a6bb3b76075f1295adb"
+      },
+      "retained_quality_diagnosis": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38533726-head-control-comparison.json",
+        "sha256": "1f588388fb27a9455c0dca7272cf84ace35cea68cf9ffe12632cff752117b1c8",
+        "final_source_changes": {
+          "loss": {
+            "bf16_lora": 0.2904641438362887,
+            "bf16_lora_rows_worse_than_source": 170,
+            "both_worse": 162,
+            "head": 0.28409366544292425,
+            "head_relative_change_from_source": 0.06555203651205499,
+            "head_rows_better_than_bf16_lora": 150,
+            "head_rows_worse_than_source": 175,
+            "source_delta_correlation": 0.968184422358797
+          },
+          "open_loop_ade_6p4s_meters": {
+            "bf16_lora": 2.0856738041020435,
+            "bf16_lora_rows_worse_than_source": 142,
+            "both_worse": 126,
+            "head": 2.0686999379304325,
+            "head_relative_change_from_source": 0.05761163568773142,
+            "head_rows_better_than_bf16_lora": 135,
+            "head_rows_worse_than_source": 150,
+            "source_delta_correlation": 0.8569127837985893
+          },
+          "open_loop_fde_6p4s_meters": {
+            "bf16_lora": 6.350451150792651,
+            "bf16_lora_rows_worse_than_source": 135,
+            "both_worse": 116,
+            "head": 6.306332351938181,
+            "head_relative_change_from_source": 0.03812956795848765,
+            "head_rows_better_than_bf16_lora": 138,
+            "head_rows_worse_than_source": 132,
+            "source_delta_correlation": 0.8766991891963373
+          }
+        },
+        "update_loss_correlation_with_bf16_lora": 0.9989513154042271,
+        "update_norm_correlation_with_bf16_lora": 0.9939798378638652,
+        "shared_largest_loss_update": 279,
+        "interpretation": "All three original512 arms degrade their own frozen source. Head-only drift and shared high-loss updates support a shared adaptation problem; they do not identify a quantization defect or establish that lower LR will fix it. No examples or metrics changed."
+      },
+      "placement": {
+        "node": "batch-block4-1039",
+        "gpu_uuid": "GPU-33695c6e-7ee8-515b-61e5-94de85a35356",
+        "cpu_affinity": [
+          2,
+          3,
+          6,
+          7,
+          10,
+          11,
+          14,
+          15,
+          124,
+          125,
+          130,
+          131,
+          134,
+          135,
+          138,
+          139
+        ],
+        "actual_cpu_count": 16,
+        "numa_topology": "not recorded by unchanged launch",
+        "overlapping_campaign_job": "38535185 on same node, distinct GPU and disjoint CPU affinity",
+        "limitation": "Native update/workflow clocks are descriptive; different placements and task trainability prevent attributing changes versus LoRA to quantization or LR."
+      },
+      "release": {
+        "utc_parent_start": "2026-11-14T11:57:35",
+        "utc_parent_end": "2026-11-14T13:41:09",
+        "utc_native_step_end": "2026-11-14T13:41:14",
+        "controller": "COMPLETED",
+        "full_user_queue_absent": true,
+        "steps_absent": true,
+        "allocation_release_sha256": "8247a520a8bec952612287d3955f611cad15fcdcdb09b2d58602a206d7162d9a",
+        "steps_release_sha256": "bbd25c8055ab1077a6e0cdb3cc70e98221c39911081d8a29a219ac4c39db53c9",
+        "note": "Normal release, no cancellation. Raw five-second step/parent accounting discrepancy and first invalid custom step-format query retained; v2 default-format query confirms no steps."
+      },
+      "reliability_limitations": "Completed native frozen-state/optimizer/publication checks and all four small checkpoint-control validations passed. This head-only selected512 policy has not had separate fresh-task artifact reconstruction or mature recovery; LoRA checks do not establish those mode-specific claims. Whole-run host PSS is incomplete.",
+      "independent_receipt_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-38533726-root-peer.json",
+        "sha256": "f651589c219d50a370a9274b16113db8b9b2a94dc837091fb2d0df3a637d17fa",
+        "scope": "Archive and all50 file hashes,512 applied metric rows, all five256-example metric reductions, final target-null and raw release/accounting replay; no full tensor or fresh inference claim."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -15418,7 +15676,7 @@
     },
     "supervised_action_elements": 70,
     "input_semantic_check": "Native content fingerprint exactly matches original real rows after content-preserving local media remapping. State/action values and image bytes were not substituted.",
-    "processor_geometry_basis": "All 1,440 admitted rows have two 256×256 RGB images, 8D state, and 10×7 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
+    "processor_geometry_basis": "All 1,440 admitted rows have two 256\u00d7256 RGB images, 8D state, and 10\u00d77 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
     "cuda_initialized": false,
     "model_weights_loaded": false,
     "processor_elapsed_seconds": 9.134169723838568,
