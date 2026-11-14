@@ -813,3 +813,35 @@ This small current-build gate complements the separately qualified selected
 `4cba88f` mature recovery and artifacts; it does not repeat or improve their
 quality, timing or rollout conclusions. Exact hashes and artifact paths are in
 the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
+A separate frozen-action-head screen (`38539345`, original `4cba88f`, seed 17)
+kept all 537 head tensors in FP32 and trained only the 224 language LoRA factors.
+Both modes first passed exact initialized forward/RNG and unclipped adapter-gradient
+comparisons against their corresponding joint-head policy. Native three-update
+runs, own two-to-three recovery, unchanged head/base fingerprints, complete
+optimizer membership and fresh portable reloads passed before either learning
+arm started. Both then completed the fixed 100 updates and fresh full-160
+portable scoring with exact rows and metrics. This establishes the exercised
+native path; the short recovery does not establish mature 100-update recovery.
+
+The development candidate **failed the unchanged screen**. BF16 action MSE moved
+from 0.0550681 to 0.0550214; NF4 moved from 0.0556545 to 0.0558056. Both missed the
+fixed 0.0495613 target. BF16 worsened five decoded action-axis MAEs and NF4 worsened
+three. The NF4/BF16 MSE ratio of 1.01425 passes the 1.05 point margin, but cannot
+override the target and per-axis failures. Both time-to-target results remain
+unreached. No extra updates, seed extension or rollout was admitted.
+
+Measured native allocated peaks were 10.623 GiB for NF4 and 11.735 GiB for BF16;
+owned-process sampled peaks across training and fresh scoring were 11.723 and
+12.846 GiB. The approximately 1.1 GiB quantization saving remains modest. Freezing
+the large action head changes both recipes; its lower footprint is not an
+NF4-specific improvement over joint-head training. Native workflows took 278.281
+and 258.392 seconds respectively, with median updates of 0.3733 and 0.3273 seconds.
+NF4 was slower in this fixed-order observation. All 100 updates applied in each
+arm; clipping occurred on 13 NF4 and nine BF16 updates.
+
+The complete qualification consumed 1,801 GPU-seconds. All 1,322 v10 host samples
+were complete, and owned-GPU evidence was valid; sampled peaks remain lower bounds.
+The old native fresh scorer has no allocator-phase records. Independent receipt
+replay retains the failed decision, native artifacts and exact source bindings in
+the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).

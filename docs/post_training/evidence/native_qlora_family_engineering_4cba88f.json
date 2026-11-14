@@ -17294,6 +17294,472 @@
         "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-final-build-38537242-root-review.json",
         "sha256": "074269c47e52d7c114c93cb967bcde25f16cd3d29f946c9d625802d6174204fe"
       }
+    },
+    "38539345": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 1801,
+      "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697",
+      "scope": "One exposed-development seed, frozen FP32 action head and trainable language LoRA,100 native updates per precision. Technical checks pass; prospective quality screen fails. No rollout, release-quality, mature100 recovery, merged artifact, or inference-speed claim.",
+      "protocol_sha256": "1e9626ea395dafe3d8880094cd0adffb3ad65990f1a702ee23432c4b3658163c",
+      "payload_manifest_sha256": "d1f2d36048b91ecd8bf6ce1970f82adcec24bed2e99c9b2b8faf47834bcce318",
+      "acceptance_sha256": "ec5505a5854adb14c3b13ce15a435f125701899cbe0dc8eac74afcfe28f7a01e",
+      "technical_passed": true,
+      "development_screen_passed": false,
+      "release_qualified": false,
+      "decision": {
+        "arms": {
+          "bf16_lora": {
+            "decoded_axes_no_worse_than_own_source": {
+              "gripper": true,
+              "pitch": false,
+              "roll": false,
+              "x": true,
+              "y": false,
+              "yaw": false,
+              "z": false
+            },
+            "target_reached_by100": false
+          },
+          "nf4_lora": {
+            "decoded_axes_no_worse_than_own_source": {
+              "gripper": false,
+              "pitch": true,
+              "roll": true,
+              "x": true,
+              "y": true,
+              "yaw": false,
+              "z": false
+            },
+            "target_reached_by100": false
+          }
+        },
+        "decision": "discard candidate under the unchanged prospective point screen; retain all outcomes",
+        "endpoints": {
+          "bf16_lora": {
+            "action_mae_environment_units": 0.04928722987235076,
+            "action_mae_gripper_environment_units": 0.13582435332238674,
+            "action_mae_pitch_environment_units": 0.01620034909753458,
+            "action_mae_roll_environment_units": 0.00828750902757819,
+            "action_mae_x_environment_units": 0.05394786672534804,
+            "action_mae_y_environment_units": 0.045849807516885936,
+            "action_mae_yaw_environment_units": 0.009657257088192407,
+            "action_mae_z_environment_units": 0.07524346632852937,
+            "loss": 0.12703555043808593,
+            "normalized_action_mse": 0.055021419636239965
+          },
+          "nf4_lora": {
+            "action_mae_environment_units": 0.04975934600078017,
+            "action_mae_gripper_environment_units": 0.13709269300103188,
+            "action_mae_pitch_environment_units": 0.016550655954856126,
+            "action_mae_roll_environment_units": 0.00830061288452031,
+            "action_mae_x_environment_units": 0.05443109050795944,
+            "action_mae_y_environment_units": 0.04669282084288403,
+            "action_mae_yaw_environment_units": 0.009921375469048793,
+            "action_mae_z_environment_units": 0.07532617334516058,
+            "loss": 0.1297224259637005,
+            "normalized_action_mse": 0.05580556517308911
+          }
+        },
+        "passed": false,
+        "precision_ratio_point_gate": true,
+        "protocol_sha256": "1e9626ea395dafe3d8880094cd0adffb3ad65990f1a702ee23432c4b3658163c",
+        "release_qualified": false
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-readout-v1.json",
+        "sha256": "3f96892a2cc6fd3bf4d957fd8bac3570f2f0afcba7bc12b583886370b98717b8"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-receipts-v1.tar.gz",
+        "archive_sha256": "130ac9d36ea70687ef39a5831eecfd045874498d2f864a03149d4cf51343a58c",
+        "inventory_sha256": "bffc749145f6b4401127ef934c93fa8264c8e491ed46fc30254cb2f9f478c9ff",
+        "files_verified": 159,
+        "raw_samples_replayed": 1322,
+        "terminal_release_sha256": "3d7f4525de158597cae7e1e3b9f66d8cf88b72d9b172dd86914335e9aa931bce"
+      },
+      "intervention": {
+        "train_action_head": false,
+        "source_action_head_dtype": "float32",
+        "frozen_head_tensors": 537,
+        "trainable_factor_tensors": 224,
+        "optimizer_membership": 224,
+        "learning": {
+          "accumulation": 1,
+          "alpha": 64,
+          "batch": 1,
+          "betas": [
+            0.9,
+            0.999
+          ],
+          "clip_norm": 1.0,
+          "dropout": 0,
+          "eps": 1e-08,
+          "lr": 1e-05,
+          "optimizer": "fused FP32 AdamW",
+          "rank": 32,
+          "schedule": "constant",
+          "source_action_head_dtype": "float32",
+          "source_action_head_tensors": 537,
+          "trainable_factors": 224,
+          "trained_action_head_parameters": 0,
+          "weight_decay": 1e-05
+        },
+        "seed": 17,
+        "evaluation_seed": 123,
+        "evaluation_steps": [
+          0,
+          100
+        ],
+        "data_scope": "1280 training windows/80 episodes,160 exposed development windows/40 disjoint episodes,all 10 tasks; no independent confirmation",
+        "fixed_target": {
+          "baseline": 0.05506814191766483,
+          "calibration_protocol_sha256": "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7",
+          "sha256": "eff946f62dbdc9c57f61ac96f03f13640baaf5bee4695d9fd1381830b95e4534",
+          "threshold": 0.049561327725898344
+        }
+      },
+      "native_semantics_before_learning": {
+        "both_modes_passed": true,
+        "initial_forward_rng_inputs_exact_against_joint_head": true,
+        "all224_unclipped_adapter_gradients_exact": true,
+        "every112B_gradient_nonzero_finite": true,
+        "frozen_head_source_fingerprints_exact": true,
+        "both_own2_to3_model_optimizer_maxdiff": 0,
+        "rng_cursor_and_task_recovery_exact": true,
+        "both_fresh_portable2_rows_exact": true,
+        "no_postclip_joint_trajectory_equality_claim": true,
+        "scope": "Small native3-step qualification, not mature100 recovery. Tensor/gradient comparisons were performed on node; downloaded receipts omit large tensor payloads."
+      },
+      "results": {
+        "bf16_lora": {
+          "endpoint": {
+            "action_mae_environment_units": 0.04928722987235076,
+            "action_mae_gripper_environment_units": 0.13582435332238674,
+            "action_mae_pitch_environment_units": 0.01620034909753458,
+            "action_mae_roll_environment_units": 0.00828750902757819,
+            "action_mae_x_environment_units": 0.05394786672534804,
+            "action_mae_y_environment_units": 0.045849807516885936,
+            "action_mae_yaw_environment_units": 0.009657257088192407,
+            "action_mae_z_environment_units": 0.07524346632852937,
+            "loss": 0.12703555043808593,
+            "normalized_action_mse": 0.055021419636239965
+          },
+          "fresh160_rows_exact": true,
+          "metadata": {
+            "frozen_fp32_head_tensors": 537,
+            "quantized_targets": 0,
+            "source_and_portable_exact": true,
+            "trainable_fp32_factors": 224
+          },
+          "metric_delta_from_own_source": {
+            "action_mae_environment_units": 0.0001249456101944102,
+            "action_mae_gripper_environment_units": -0.001381986550986758,
+            "action_mae_pitch_environment_units": 0.00010651895789386481,
+            "action_mae_roll_environment_units": 6.163333111120287e-05,
+            "action_mae_x_environment_units": -2.497520784772167e-05,
+            "action_mae_y_environment_units": 0.0009083470781147338,
+            "action_mae_yaw_environment_units": 5.570596632398228e-05,
+            "action_mae_z_environment_units": 0.0011493756967514979,
+            "loss": -0.0019636933491710695,
+            "normalized_action_mse": -4.672228142486162e-05
+          },
+          "native_and_fresh_sampled_memory": {
+            "device_peak_bytes": 14527168512,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3954439168,
+            "host_rss_sum_peak_bytes": 4492111872,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 431.52446126937866,
+            "owned_device_process_peak_bytes": 13792968704,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 330,
+            "sampling_gap_seconds": {
+              "count": 329,
+              "maximum": 1.6357192993164062,
+              "mean": 1.311624502338537,
+              "median": 1.304023027420044,
+              "p95": 1.3725902080535886,
+              "sum": 431.52446126937866
+            }
+          },
+          "native_clocks": {
+            "checkpoint_seconds": 10.202622261829674,
+            "evaluation_seconds": 157.13218239694834,
+            "portable_export_seconds": 0.6956905573606491,
+            "startup_seconds": 48.286682952195406,
+            "training_seconds": 33.25073356367648
+          },
+          "native_phase_peak_allocated_bytes": 12600725504,
+          "native_phase_peak_reserved_bytes": 12719226880,
+          "native_seconds": 258.3916782233864,
+          "source": {
+            "action_mae_environment_units": 0.04916228426215635,
+            "action_mae_gripper_environment_units": 0.1372063398733735,
+            "action_mae_pitch_environment_units": 0.016093830139640716,
+            "action_mae_roll_environment_units": 0.008225875696466987,
+            "action_mae_x_environment_units": 0.053972841933195764,
+            "action_mae_y_environment_units": 0.0449414604387712,
+            "action_mae_yaw_environment_units": 0.009601551121868425,
+            "action_mae_z_environment_units": 0.07409409063177787,
+            "loss": 0.128999243787257,
+            "normalized_action_mse": 0.05506814191766483
+          },
+          "target": null,
+          "training_diagnostics": {
+            "clipped_updates": 9.0,
+            "first20_mean_loss": 0.015323899913346395,
+            "last20_mean_loss": 0.021990477666258813,
+            "median_grad_norm": 0.07569695636630058,
+            "median_update_seconds": 0.3273219424299896,
+            "skipped_updates": 0.0
+          },
+          "training_rows": 100
+        },
+        "nf4_lora": {
+          "endpoint": {
+            "action_mae_environment_units": 0.04975934600078017,
+            "action_mae_gripper_environment_units": 0.13709269300103188,
+            "action_mae_pitch_environment_units": 0.016550655954856126,
+            "action_mae_roll_environment_units": 0.00830061288452031,
+            "action_mae_x_environment_units": 0.05443109050795944,
+            "action_mae_y_environment_units": 0.04669282084288403,
+            "action_mae_yaw_environment_units": 0.009921375469048793,
+            "action_mae_z_environment_units": 0.07532617334516058,
+            "loss": 0.1297224259637005,
+            "normalized_action_mse": 0.05580556517308911
+          },
+          "fresh160_rows_exact": true,
+          "metadata": {
+            "frozen_fp32_head_tensors": 537,
+            "quantized_targets": 112,
+            "source_and_portable_exact": true,
+            "trainable_fp32_factors": 224
+          },
+          "metric_delta_from_own_source": {
+            "action_mae_environment_units": -0.00017596820839858862,
+            "action_mae_gripper_environment_units": 0.00131391942501069,
+            "action_mae_pitch_environment_units": -0.00024405793660382466,
+            "action_mae_roll_environment_units": -8.022257674110238e-05,
+            "action_mae_x_environment_units": -0.0019915753760376548,
+            "action_mae_y_environment_units": -0.00046260473725288215,
+            "action_mae_yaw_environment_units": 1.5735311644818686e-05,
+            "action_mae_z_environment_units": 0.00021702843118974469,
+            "loss": -0.0016315269334881977,
+            "normalized_action_mse": 0.00015110142163134166
+          },
+          "native_and_fresh_sampled_memory": {
+            "device_peak_bytes": 13321306112,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4070333440,
+            "host_rss_sum_peak_bytes": 4607791104,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 458.38413977622986,
+            "owned_device_process_peak_bytes": 12587106304,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 351,
+            "sampling_gap_seconds": {
+              "count": 350,
+              "maximum": 1.5759391784667969,
+              "mean": 1.3096689707892282,
+              "median": 1.3037176132202148,
+              "p95": 1.3531712293624878,
+              "sum": 458.38413977622986
+            }
+          },
+          "native_clocks": {
+            "checkpoint_seconds": 9.245439572259784,
+            "evaluation_seconds": 176.15742824878544,
+            "portable_export_seconds": 0.710822056978941,
+            "startup_seconds": 46.339907094836235,
+            "training_seconds": 37.92469934653491
+          },
+          "native_phase_peak_allocated_bytes": 11405991936,
+          "native_phase_peak_reserved_bytes": 11513364480,
+          "native_seconds": 278.2806660272181,
+          "source": {
+            "action_mae_environment_units": 0.04993531420917876,
+            "action_mae_gripper_environment_units": 0.1357787735760212,
+            "action_mae_pitch_environment_units": 0.01679471389145995,
+            "action_mae_roll_environment_units": 0.008380835461261412,
+            "action_mae_x_environment_units": 0.056422665883997095,
+            "action_mae_y_environment_units": 0.04715542558013691,
+            "action_mae_yaw_environment_units": 0.009905640157403974,
+            "action_mae_z_environment_units": 0.07510914491397083,
+            "loss": 0.1313539528971887,
+            "normalized_action_mse": 0.055654463751457765
+          },
+          "target": null,
+          "training_diagnostics": {
+            "clipped_updates": 13.0,
+            "first20_mean_loss": 0.015248604316730053,
+            "last20_mean_loss": 0.024548029864672572,
+            "median_grad_norm": 0.08161219581961632,
+            "median_update_seconds": 0.3732654293999076,
+            "skipped_updates": 0.0
+          },
+          "training_rows": 100
+        }
+      },
+      "memory": {
+        "device_peak_bytes": 18843107328,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 4276145152,
+        "host_rss_sum_peak_bytes": 4694822912,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 1722.927723646164,
+        "owned_device_process_peak_bytes": 18108907520,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 1322,
+        "sampling_gap_seconds": {
+          "count": 1321,
+          "maximum": 1.6357192993164062,
+          "mean": 1.3042601995807448,
+          "median": 1.3000872135162354,
+          "p95": 1.3512046337127686,
+          "sum": 1722.927723646164
+        }
+      },
+      "memory_gaps": [],
+      "workflow_seconds": 1724.5246816808358,
+      "allocation_case_seconds": 1791.7280346611515,
+      "runtime": {
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "cpu_affinity": [
+          52,
+          53,
+          66,
+          67,
+          88,
+          89,
+          90,
+          91,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131
+        ],
+        "cpu_numa_nodes": {
+          "124": [
+            "node7"
+          ],
+          "125": [
+            "node7"
+          ],
+          "126": [
+            "node7"
+          ],
+          "127": [
+            "node7"
+          ],
+          "128": [
+            "node0"
+          ],
+          "129": [
+            "node0"
+          ],
+          "130": [
+            "node0"
+          ],
+          "131": [
+            "node0"
+          ],
+          "52": [
+            "node3"
+          ],
+          "53": [
+            "node3"
+          ],
+          "66": [
+            "node4"
+          ],
+          "67": [
+            "node4"
+          ],
+          "88": [
+            "node5"
+          ],
+          "89": [
+            "node5"
+          ],
+          "90": [
+            "node5"
+          ],
+          "91": [
+            "node5"
+          ]
+        },
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-efa2ed19-de2a-c402-80f1-3c5caaf1552f"
+        },
+        "measurement": {
+          "host_protocol": "proc-identity-state-read-attempts-v10",
+          "manifest_sha256": "3043fc80e0726e5cb12b6487287a753dd429e75bc64f849e03a06161b8753d8d",
+          "scope": "same actual PIDFD proof and complete-stage reporting; incomplete samples remain incomplete, no historical repair",
+          "source": "immutable10-file shared observer888583e; v10 acquisition4.5s with unchanged3.5s actual PIDFD wait, no historical repair",
+          "timing_limits": "One container with sequential cold model processes and shared task-owned kernel disk cache; fixed order. Native per-arm clocks include their loading/training/scoring/publication, semantic gate cost is separate and total Slurm accounting includes allocation cleanup. No superiority inference."
+        },
+        "node": "batch-block5-03958",
+        "safe_path": true,
+        "slurm_job": "38539345",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        },
+        "wheel": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697"
+      },
+      "artifacts": {
+        "bf16_lora": {
+          "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38539345/screen/native/qualification/gr00t-frozen-actionhead-v1/bf16_lora-screen/fixed/checkpoints/iter_000100",
+          "portable": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38539345/screen/native/qualification/gr00t-frozen-actionhead-v1/bf16_lora-screen/fixed/checkpoint_artifacts/iter_000100",
+          "trained_factor_tensors": 224,
+          "frozen_head_source_tensors": 537,
+          "fresh_native_rows_exact": 160,
+          "format": "same-base adapter plus immutable source-head reconstruction; not a standalone artifact"
+        },
+        "nf4_lora": {
+          "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38539345/screen/native/qualification/gr00t-frozen-actionhead-v1/nf4_lora-screen/fixed/checkpoints/iter_000100",
+          "portable": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38539345/screen/native/qualification/gr00t-frozen-actionhead-v1/nf4_lora-screen/fixed/checkpoint_artifacts/iter_000100",
+          "trained_factor_tensors": 224,
+          "frozen_head_source_tensors": 537,
+          "fresh_native_rows_exact": 160,
+          "format": "same-base adapter plus immutable source-head reconstruction; not a standalone artifact"
+        }
+      },
+      "comparison": {
+        "nf4_bf16_mse_ratio": 1.0142516413068459,
+        "native_allocated_saving_gib": 1.1126823425292969,
+        "native_and_fresh_sampled_owned_gpu_saving_gib": 1.123046875,
+        "native_workflow_nf4_increase_percent": 7.6972245935246875,
+        "median_update_nf4_increase_percent": 14.0361769299181,
+        "time_to_quality": "Both fixed targets unreached; no target-time result.",
+        "scope": "Observed fixed-order one-seed comparison, not statistical performance superiority. Native4c fresh action_eval has no allocator-phase records; sampled values include fresh scoring and remain lower bounds. Freezing the action head changes both recipes and does not establish NF4-specific savings over joint-head training."
+      },
+      "retained_failure": "Both target checks fail. BF16 worsens y/z/roll/pitch/yaw MAE; NF4 worsens z/yaw/gripper MAE. The 1.05 precision ratio passes but cannot override failed target/axis gates. No extension, extra seed or rollout was admitted.",
+      "independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-independent-replay-v1.json",
+        "sha256": "922ebd16d89b99559f6321354fb78e9be1e9b8adc126578957ab7deaf277cd25"
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -17419,6 +17885,12 @@
       "sha256": "c31e7ad80364883773b64d4b39dcf7f08647ba2223a01f0013c2f0c7fd53b6fe",
       "inventory_sha256": "92f1fc96e937a90058d14f5afee50557d2c814a4f2731ac45e4e069f37ec84e5",
       "scope": "132 terminal26bc GR native/source-refusal/checkpoint/reload/metadata, originalv9memory and release receipts; no trained tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-actionhead-screen-38539345-receipts-v1.tar.gz",
+      "sha256": "130ac9d36ea70687ef39a5831eecfd045874498d2f864a03149d4cf51343a58c",
+      "inventory_sha256": "bffc749145f6b4401127ef934c93fa8264c8e491ed46fc30254cb2f9f478c9ff",
+      "scope": "159 terminal frozen-action-head100 native gradient/recovery/update/portable, decision, metadata, raw v10 memory and scheduler/release receipts; no trained tensor payloads."
     }
   ],
   "fixed_development_targets": {
