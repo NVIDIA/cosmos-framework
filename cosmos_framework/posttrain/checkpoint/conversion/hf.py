@@ -236,11 +236,17 @@ def config_with_export_dtype(
         # Transformers 4 reads torch_dtype; Transformers 5 reads dtype. Record the
         # same value for both so dtype='auto' cannot silently downcast this export.
         section["dtype"] = section["torch_dtype"] = output_dtype
+    from cosmos_framework.utils.generator import qwen3_vl_projection_contract as qwen_fixed
     from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
     from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
     from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-    if execution_profile in GEMMA_PROFILES:
+    if execution_profile == qwen_fixed.PROFILE:
+        qwen_fixed.validate_configuration(config)
+        if output_dtype != "float32" or model_execution != "qwen3_vl_hf_stock_v1":
+            raise ValueError("fixed Qwen3-VL projections require an FP32 stock-factorized merge")
+        result["cosmos_inference_profile"] = execution_profile
+    elif execution_profile in GEMMA_PROFILES:
         if output_dtype != "float32" or result.get("model_type") != "gemma" or model_execution is not None:
             raise ValueError("Gemma inference profiles require a default-execution FP32 Gemma1 merge")
         result["cosmos_inference_profile"] = execution_profile
@@ -275,7 +281,11 @@ def config_with_export_dtype(
             ):
                 raise ValueError("ordered HF VLM merged execution requires float32 output and stock SDPA")
         elif model_execution == "qwen3_vl_hf_stock_v1":
-            if output_dtype != "float32" or result.get("model_type") != "qwen3_vl" or execution_profile is not None:
+            if (
+                output_dtype != "float32"
+                or result.get("model_type") != "qwen3_vl"
+                or execution_profile not in (None, qwen_fixed.PROFILE)
+            ):
                 raise ValueError("stock HF factorized Qwen3-VL merged execution requires float32 output")
         elif (
             model_execution != "qwen3_vl_moe_stock_v1"

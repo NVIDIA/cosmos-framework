@@ -14,6 +14,7 @@ import json
 import types
 from pathlib import Path
 
+from cosmos_framework.utils.generator import qwen3_vl_projection_contract as qwen_fixed
 from cosmos_framework.utils.generator.bf16_cache_contract import (
     CORRECTED_PROFILE,
     FAST_PROFILE,
@@ -29,7 +30,7 @@ PROFILE = "qwen3_vl_bf16_residual_fp32_v1"
 
 def validate_deployment_environment(profile: str | None, device: str, *, device_map: str = "auto") -> None:
     """Fail before allocating weights on an unsupported v2/fast deployment host."""
-    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, *SMOLLM_PROFILES, *GEMMA_PROFILES):
+    if profile not in (CORRECTED_PROFILE, FAST_PROFILE, *SMOLLM_PROFILES, *GEMMA_PROFILES, qwen_fixed.PROFILE):
         return  # Preserve the legacy loaders' original validation boundary.
     if device_map not in ("auto", device):
         raise ValueError(f"{profile} requires one rank-local GPU; alternate device maps/offload are unsupported")
@@ -40,6 +41,8 @@ def validate_deployment_environment(profile: str | None, device: str, *, device_
     target = torch.device(device)
     if target.type != "cuda" or torch.cuda.get_device_capability(target) != (8, 0):
         raise ValueError(f"{profile} requires one A100 (SM80); select its CUDA UUID before loading")
+    if profile == qwen_fixed.PROFILE and "A100" not in torch.cuda.get_device_name(target):
+        raise ValueError(f"{profile} requires an A100; SM80 alone does not identify the admitted GPU")
     required = {"torch": "2.10.0", "transformers": "5.8.1", "triton": "3.6.0"}
     if any(version(name).split("+")[0] != expected for name, expected in required.items()):
         raise ValueError(f"{profile} requires the pinned cosmos-framework-reasoner-runtime environment: {required}")
@@ -68,8 +71,29 @@ def deployment_profile(path: str) -> str | None:
     bound = precision.get("execution_profile")
     if declared is None and bound is None:
         return None
-    if declared not in (PROFILE, *PROFILE_FAMILIES, *SMOLLM_PROFILES, *GEMMA_PROFILES) or bound != declared:
+    if (
+        declared not in (PROFILE, *PROFILE_FAMILIES, *SMOLLM_PROFILES, *GEMMA_PROFILES, qwen_fixed.PROFILE)
+        or bound != declared
+    ):
         raise ValueError("missing, conflicting or unknown deployment profile in config/.materialized; re-export")
+    if declared == qwen_fixed.PROFILE:
+        qwen_fixed.validate_identity(metadata.get("adapter_identity", {}))
+        qwen_fixed.validate_configuration(config)
+        if (
+            config.get("dtype", config.get("torch_dtype")) != "float32"
+            or config.get("cosmos_model_execution") != "qwen3_vl_hf_stock_v1"
+            or identity.get("output_dtype") != "float32"
+            or metadata.get("format") != "cosmos-merged-adapter-v1"
+            or precision
+            != {
+                "dtype": "float32",
+                "execution_profile": declared,
+                "weight_conversion": "unchanged_float32_merge",
+                "equivalence": qwen_fixed.EXPORT_EQUIVALENCE,
+            }
+        ):
+            raise ValueError("fixed Qwen3-VL projections require their committed FP32 stock adapter merge")
+        return declared
     if declared in GEMMA_PROFILES:
         from cosmos_framework.utils.generator.gemma_sdpa_layout import (
             export_equivalence,
@@ -188,6 +212,10 @@ def install_deployment_profile(model, profile: str, *, adapter_identity=None) ->
     import torch
     from torch import nn
 
+    if profile == qwen_fixed.PROFILE:
+        from cosmos_framework.inference.reasoner.qwen3_vl_fixed_mma import install
+
+        return install(model, identity=adapter_identity or {})
     if profile in GEMMA_PROFILES:
         from cosmos_framework.utils.generator.gemma_sdpa_layout import install
 

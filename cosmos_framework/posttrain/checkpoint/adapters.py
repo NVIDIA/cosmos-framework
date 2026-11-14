@@ -527,9 +527,20 @@ def merged_export_metadata(
         }
     elif output_dtype != "float32":
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
-    from cosmos_framework.utils.generator import gemma_sdpa_layout
+    from cosmos_framework.utils.generator import gemma_sdpa_layout, qwen3_vl_projection_contract
     from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
+    if execution_profile == qwen3_vl_projection_contract.PROFILE:
+        qwen3_vl_projection_contract.validate_identity(identity)
+        if output_dtype != "float32":
+            raise ValueError(f"{execution_profile} requires float32 export")
+        result["deployment_precision"] = {
+            "dtype": "float32",
+            "execution_profile": execution_profile,
+            "weight_conversion": "unchanged_float32_merge",
+            "equivalence": qwen3_vl_projection_contract.EXPORT_EQUIVALENCE,
+        }
+        return result
     if execution_profile in gemma_sdpa_layout.PROFILES:
         gemma_sdpa_layout.validate_identity(identity, profile=execution_profile)
         if output_dtype != "float32":

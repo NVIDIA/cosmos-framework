@@ -19,6 +19,7 @@ from cosmos_framework.utils.generator.factorized_inference import PROFILE as FAC
 from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
 from cosmos_framework.utils.generator.portable_qwen_vl import PROFILE as ORDERED_VLM
 from cosmos_framework.utils.generator.portable_qwen_vl import STOCK_FACTORIZED_PROFILE
+from cosmos_framework.utils.generator.qwen3_vl_projection_contract import PROFILE as QWEN_FIXED_PROFILE
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
 
@@ -39,6 +40,7 @@ class PortableAdapterConfig:
             *GEMMA_PROFILES,
             ORDERED_VLM,
             STOCK_FACTORIZED_PROFILE,
+            QWEN_FIXED_PROFILE,
         )
         if self.execution_profile not in profiles:
             raise ValueError(f"portable execution_profile must be one of {profiles!r}")
@@ -46,7 +48,14 @@ class PortableAdapterConfig:
             raise ValueError("cache_effective_weights must be a boolean")
         if (
             self.execution_profile
-            in (FACTORIZED, *SMOLLM_PROFILES, *GEMMA_PROFILES, ORDERED_VLM, STOCK_FACTORIZED_PROFILE)
+            in (
+                FACTORIZED,
+                *SMOLLM_PROFILES,
+                *GEMMA_PROFILES,
+                ORDERED_VLM,
+                STOCK_FACTORIZED_PROFILE,
+                QWEN_FIXED_PROFILE,
+            )
             and self.cache_effective_weights
         ):
             raise ValueError(
@@ -100,7 +109,11 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
         )
     record, state = read_adapter_snapshot(config.directory)
     identity = record["identity"]
-    if profile in QWEN3_VL_PROFILES:
+    if profile == QWEN_FIXED_PROFILE:
+        from cosmos_framework.utils.generator.qwen3_vl_projection_contract import validate_identity
+
+        validate_identity(identity)
+    elif profile in QWEN3_VL_PROFILES:
         validate_adapter_identity(identity, profile=profile)
     elif profile in SMOLLM_PROFILES:
         smollm_consistent.validate_identity(identity, profile=profile)
@@ -119,6 +132,10 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
             raise ValueError(f"portable dependency mismatch for {name}: artifact={expected!r}, installed={actual!r}")
     device = torch.device(device)
     _validate_device(device)
+    if profile == QWEN_FIXED_PROFILE:
+        from cosmos_framework.inference.reasoner.precision import validate_deployment_environment
+
+        validate_deployment_environment(profile, str(device))
     processor_path = config.processor_path or base_path
     sources = {
         "base": snapshot_identity(base_path, weights=True),
@@ -135,6 +152,10 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     )
     if hf_config.model_type != family or getattr(hf_config, "quantization_config", None):
         raise ValueError(f"{profile} requires an unquantized stock {family} base")
+    if profile == QWEN_FIXED_PROFILE:
+        from cosmos_framework.utils.generator.qwen3_vl_projection_contract import validate_configuration
+
+        validate_configuration(hf_config)
     source_identity = None
     if profile in GEMMA_PROFILES:
         from cosmos_framework.posttrain.model.hf_adapter_buffers import buffer_contract, validate_buffer_contract
@@ -189,7 +210,31 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     net._posttrain_adapter_identity = identity
     load_adapter_state(net, identity, state)
     net.eval()
-    if profile in SMOLLM_PROFILES:
+    if profile == QWEN_FIXED_PROFILE:
+        from cosmos_framework.inference.reasoner.qwen3_vl_fixed_mma import install
+        from cosmos_framework.posttrain.model.adapter_bf16_execution import _effective_norm
+        from cosmos_framework.posttrain.model.qwen3_vl_hf import _forward
+
+        bindings = {"model": _forward}
+        bindings.update(
+            {row["name"].rsplit(".", 1)[0]: _effective_norm for row in identity["resolved"]["extra_parameters"]}
+        )
+        for name, function in bindings.items():
+            module = net.get_submodule(name)
+            bound = getattr(module, "_old_forward", module.forward)
+            if getattr(bound, "__func__", None) is not function or getattr(bound, "__self__", None) is not module:
+                raise ValueError(
+                    "fixed Qwen3-VL projections require the builder's exact recorded assembly/norm callables"
+                )
+        net.float()
+        install(
+            net,
+            identity=identity,
+            adapter_type=PosttrainAdapterLinear,
+            assembly_forward=_forward,
+            extra_norm_forward=_effective_norm,
+        )
+    elif profile in SMOLLM_PROFILES:
         net.float()
         smollm_consistent.install(net, identity=identity, adapter_type=PosttrainAdapterLinear, profile=profile)
     elif profile in GEMMA_PROFILES:
@@ -208,7 +253,7 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
     processor_class = AutoTokenizer if profile in (*SMOLLM_PROFILES, *GEMMA_PROFILES) else AutoProcessor
     if processor is None:
         processor = processor_class.from_pretrained(processor_path, local_files_only=True, trust_remote_code=False)
-    if profile == STOCK_FACTORIZED_PROFILE:
+    if profile in (STOCK_FACTORIZED_PROFILE, QWEN_FIXED_PROFILE):
         portable_qwen_vl.validate_processor(processor, family)
     if getattr(processor, "tokenizer", None) is not None:
         processor.tokenizer.padding_side = "left"
@@ -250,6 +295,16 @@ def load_portable_model(base_path, config, *, dtype, device, attn_implementation
                 recorded_dropout="preserved; every module must remain in eval mode",
                 cache_consistent_numerics="not claimed; original factorized FP32 execution and native SDPA",
             )
+    if profile == QWEN_FIXED_PROFILE:
+        provenance["precision_contract"] = {
+            "artifact_base_storage": "bfloat16",
+            "deployment_parameters": "float32",
+            "projection_reduction": "fixed A100 FP64 MMA; each native projection rounds separately to FP32",
+            "adapter_arithmetic": "original FP32 separate-branch boundaries/scaling/DoRA norm and bias",
+            "native_norm_attention_vision": "unchanged",
+            "recorded_dropout": "preserved; inactive only in eval",
+            "cache_consistent_numerics": "experimental; own full numerical and task qualification required",
+        }
     return net, processor, provenance
 
 

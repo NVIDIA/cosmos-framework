@@ -26,11 +26,18 @@ from cosmos_framework.posttrain.checkpoint.adapters import (
 from cosmos_framework.posttrain.checkpoint.adapters import (
     merged_export_metadata as merged_export_metadata,
 )
+from cosmos_framework.utils.generator import qwen3_vl_projection_contract as qwen_fixed
 from cosmos_framework.utils.generator.bf16_cache_contract import PROFILE_FAMILIES
 from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
 from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
-DEPLOYMENT_PROFILES = ("qwen3_vl_bf16_residual_fp32_v1", *PROFILE_FAMILIES, *SMOLLM_PROFILES, *GEMMA_PROFILES)
+DEPLOYMENT_PROFILES = (
+    "qwen3_vl_bf16_residual_fp32_v1",
+    *PROFILE_FAMILIES,
+    *SMOLLM_PROFILES,
+    *GEMMA_PROFILES,
+    qwen_fixed.PROFILE,
+)
 
 
 def validate_merged_export_metadata(
@@ -120,11 +127,15 @@ def export_merged_adapter(
     if output_dtype not in ("float32", "bfloat16"):
         raise ValueError("adapter merged export output_dtype must be float32|bfloat16")
     if execution_profile is not None:
-        expected_dtype = "float32" if execution_profile in (*SMOLLM_PROFILES, *GEMMA_PROFILES) else "bfloat16"
+        expected_dtype = (
+            "float32" if execution_profile in (*SMOLLM_PROFILES, *GEMMA_PROFILES, qwen_fixed.PROFILE) else "bfloat16"
+        )
         if execution_profile not in DEPLOYMENT_PROFILES or output_dtype != expected_dtype:
             raise ValueError(f"execution_profile requires a supported profile and output_dtype={expected_dtype}")
     record, state = read_adapter_snapshot(adapter)
     identity = record["identity"]
+    if execution_profile == qwen_fixed.PROFILE:
+        qwen_fixed.validate_identity(identity)
     if execution_profile in SMOLLM_PROFILES:
         from cosmos_framework.utils.generator.smollm_consistent import validate_identity
 

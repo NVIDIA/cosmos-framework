@@ -120,8 +120,9 @@ class CosmosFrameworkRuntime:
         self._adapter_cache_signature = None
         if base_execution_profile is not None:
             from cosmos_framework.utils.generator.gemma_sdpa_layout import SDPA64_PROFILE
+            from cosmos_framework.utils.generator.qwen3_vl_projection_contract import PROFILE as QWEN_FIXED_PROFILE
 
-            if base_execution_profile != SDPA64_PROFILE:
+            if base_execution_profile not in (SDPA64_PROFILE, QWEN_FIXED_PROFILE):
                 raise ValueError(f"unsupported base_execution_profile: {base_execution_profile!r}")
             if portable_adapter is not None or any(
                 (config_file, export_dir, vit_checkpoint_path, enable_lora, base_model_path)
@@ -211,13 +212,20 @@ class CosmosFrameworkRuntime:
             validate_deployment_environment,
         )
         from cosmos_framework.utils.generator.gemma_sdpa_layout import PROFILES as GEMMA_PROFILES
+        from cosmos_framework.utils.generator.qwen3_vl_projection_contract import PROFILE as QWEN_FIXED_PROFILE
         from cosmos_framework.utils.generator.smollm_consistent import PROFILES as SMOLLM_PROFILES
 
         fp32_text_profiles = (*SMOLLM_PROFILES, *GEMMA_PROFILES)
+        fp32_profiles = (*fp32_text_profiles, QWEN_FIXED_PROFILE)
 
         profile = deployment_profile(self.model_path)
+        qwen_merged_source = None
         if profile:
             validate_deployment_environment(profile, self.device, device_map=self.device_map)
+        if profile == QWEN_FIXED_PROFILE:
+            from cosmos_framework.inference.reasoner.qwen3_vl_fixed_mma import merged_source_identity
+
+            qwen_merged_source = merged_source_identity(self.model_path, verify_tensors=True)
         model_profile = model_execution_profile(self.model_path)
         if model_profile in ("merged_weight_bf16_v1", "qwen3_vl_hf_stock_v1", "qwen_vl_hf_ordered_v1"):
             config = json.loads((Path(self.model_path) / "config.json").read_text())
@@ -231,12 +239,12 @@ class CosmosFrameworkRuntime:
                 raise ValueError("this merged artifact requires stock FP32 MoE execution with SDPA/grouped_mm")
             self.dtype, self.attn_implementation = "float32", "sdpa"
         if profile:
-            accepted = ("float32", "fp32", "auto") if profile in fp32_text_profiles else ("bfloat16", "bf16", "auto")
+            accepted = ("float32", "fp32", "auto") if profile in fp32_profiles else ("bfloat16", "bf16", "auto")
             if self.dtype not in accepted or self.attn_implementation not in (None, "sdpa"):
-                if profile in fp32_text_profiles:
+                if profile in fp32_profiles:
                     raise ValueError(f"{profile} requires FP32 consistent deployment with SDPA")
                 raise ValueError("this merged artifact requires BF16 residual FP32 deployment with SDPA")
-            self.dtype = "float32" if profile in fp32_text_profiles else "bfloat16"
+            self.dtype = "float32" if profile in fp32_profiles else "bfloat16"
             self.attn_implementation = "sdpa"
         logger.info(
             "Loading Cosmos Framework model from %s on %s (model_type=%s)",
@@ -269,7 +277,11 @@ class CosmosFrameworkRuntime:
                 self.model_path, local_files_only=True, trust_remote_code=False
             )
         else:
-            self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_path,
+                trust_remote_code=profile != QWEN_FIXED_PROFILE,
+                **({"local_files_only": True} if profile == QWEN_FIXED_PROFILE else {}),
+            )
 
         auto_class = AutoModelForCausalLM if profile in fp32_text_profiles else AutoModelForImageTextToText
         device_map: str | dict[str, str]
@@ -286,6 +298,8 @@ class CosmosFrameworkRuntime:
             "device_map": device_map,
             "trust_remote_code": True,
         }
+        if profile == QWEN_FIXED_PROFILE:
+            model_load_kwargs.update(trust_remote_code=False, local_files_only=True)
         if self.attn_implementation:
             model_load_kwargs["attn_implementation"] = self.attn_implementation
         if model_profile == "qwen3_vl_moe_stock_v1":
@@ -323,11 +337,18 @@ class CosmosFrameworkRuntime:
 
             apply_qwen3_vl_patch_embed_compat(self.model, model_type=self.model_type, mode="auto")
         self.model.eval()
+        if profile == QWEN_FIXED_PROFILE:
+            from transformers import Qwen3VLProcessor
+
+            if type(self.processor) is not Qwen3VLProcessor:
+                raise ValueError("fixed Qwen3-VL projections require the recorded stock processor")
+            if merged_source_identity(self.model_path) != qwen_merged_source:
+                raise ValueError("fixed Qwen3-VL merged sources changed during loading")
         if model_profile:
             validate_loaded_model(self.model)
         if profile:
             profile_kwargs = {}
-            if profile in fp32_text_profiles:
+            if profile in fp32_profiles:
                 marker = json.loads((Path(self.model_path) / ".materialized").read_text())
                 profile_kwargs["adapter_identity"] = marker["identity"]["export_metadata"]["adapter_identity"]
                 self.adapter_deployment = {
@@ -337,6 +358,8 @@ class CosmosFrameworkRuntime:
                     "identity": profile_kwargs["adapter_identity"],
                     "adapter_weights_sha256": marker["identity"]["export_metadata"]["adapter_weights_sha256"],
                 }
+                if qwen_merged_source is not None:
+                    self.adapter_deployment["source_identity"] = qwen_merged_source
             installed = install_deployment_profile(self.model, profile, **profile_kwargs)
             logger.info("Installed deployment profile %s on %d modules", profile, len(installed))
         if self.attn_implementation:
@@ -364,6 +387,10 @@ class CosmosFrameworkRuntime:
         detected at generation entry. Mutating a live runtime concurrently with
         generation is unsupported. External prefix caches belong to their caller.
         """
+        from cosmos_framework.utils.generator.qwen3_vl_projection_contract import PROFILE as QWEN_FIXED_PROFILE
+
+        if getattr(self.model, "_cosmos_deployment_profile", None) == QWEN_FIXED_PROFILE:
+            self.model._cosmos_qwen3_fixed_invalidated = True
         if getattr(self, "adapter_deployment", None) is not None:
             # The caller uses this boundary for mutations whose versions cannot
             # be observed (.data/fused optimizers). Do not keep claiming that
@@ -408,10 +435,13 @@ class CosmosFrameworkRuntime:
 
     def restore_inference_execution(self) -> None:
         """Restore unprofiled FP32 forwards; discard all external prefixes as well."""
+        from cosmos_framework.inference.reasoner import qwen3_vl_fixed_mma
         from cosmos_framework.utils.generator import factorized_inference, gemma_sdpa_layout, smollm_consistent
 
         previous = getattr(self.model, "_cosmos_deployment_profile", None)
-        if previous in smollm_consistent.PROFILES:
+        if previous == qwen3_vl_fixed_mma.PROFILE:
+            qwen3_vl_fixed_mma.restore(self.model)
+        elif previous in smollm_consistent.PROFILES:
             smollm_consistent.restore(self.model)
         elif previous == factorized_inference.PROFILE:
             factorized_inference.restore(self.model)

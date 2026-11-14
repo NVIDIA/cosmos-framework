@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Explicit unadapted controls for a qualified inference arithmetic profile.
+"""Explicit unadapted controls for versioned inference arithmetic profiles.
 
 This is a local, immutable base loader, not an adapter or checkpoint loader.
-The only admission is the recorded Gemma1-2B BF16 snapshot promoted to FP32
-with the same canonical buffer and operators as its portable/merged profile.
+Each admitted family owns its immutable BF16 snapshot and FP32 deployment
+contract. API admission is separate from numerical and task qualification.
 """
 
 from __future__ import annotations
@@ -29,6 +29,12 @@ def load_base_model(base_path, *, profile, dtype, device, attn_implementation=No
     """Validate content/profile compatibility before construction or mutation."""
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+    from cosmos_framework.utils.generator.qwen3_vl_projection_contract import PROFILE as QWEN_FIXED_PROFILE
+
+    if profile == QWEN_FIXED_PROFILE:
+        from cosmos_framework.inference.reasoner.qwen3_vl_fixed_mma import load_base_model as load_qwen_base
+
+        return load_qwen_base(base_path, dtype=dtype, device=device, attn_implementation=attn_implementation)
     if profile != gemma.SDPA64_PROFILE:
         raise ValueError(f"unsupported base_execution_profile: {profile!r}")
     if dtype not in ("auto", "float32", "fp32") or attn_implementation not in (None, "sdpa"):
