@@ -18806,6 +18806,164 @@
         "No merged-export, generic context-length, closed-loop, real-world driving or inference-acceleration claim.",
         "Earlier portable observation checks, full-256 standalone reloads and mature training recovery remain separately bound evidence."
       ]
+    },
+    "38546021": {
+      "family": "gr00t",
+      "implementation_revision": "699869a89a176e640d8c842921adf4eaafe66161",
+      "wheel_sha256": "9e9d3dfb325ba59a93ff6a13ad680f15dbef0ebb82e796b6e47505a9be37a199",
+      "scientific_protocol_sha256": "a7f98d474ad440c2d3433ccb04c3a590b5c2c9b7ef6f1d2b7f143baa47b6762c",
+      "slurm_state": "FAILED",
+      "exit_code": "1:0",
+      "allocation_gpu_seconds": 156,
+      "scope": "Original official699/v6 seed17 attempt; runtime/model initialization passed, qualification identity wrapper failed before the first evaluation or any update. No quality or completed-memory result.",
+      "payload_manifest_sha256": "5757c822f9af1321dabf5f6a45a9d84594edd1c61e9ccdf81c78820f0c27c5db",
+      "failure": "Wrapper inserted backbone_adaptation=null into an expected task identity; the native official identity intentionally omits unset adaptation. Actual retained metadata reproduced the sole mismatch.",
+      "correction": "Prospective v7 requires the locked matched-source bf16_frozen adaptation then removes exactly that field before all remaining task/source/processor/scorer comparisons. Native699 and science unchanged; failed v6 preserved.",
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546021-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546021-receipts-v1.tar.gz",
+        "archive_sha256": "c55130a060a2ced9d5c279b9da357377761e013d7f7c04fff8097d93343263d5",
+        "inventory_sha256": "c71de000bf0992d05c34b5a0bb442d8efd44b30df9cf2b814c11260f3496da35",
+        "files_verified": 31,
+        "terminal_release_sha256": "0f6f3f8ba8cdd3d4dde0bcf41362ba32212b6bc5f314aa883327d05e4211c9e0"
+      }
+    },
+    "38546671": {
+      "family": "gr00t",
+      "implementation_revision": "699869a89a176e640d8c842921adf4eaafe66161",
+      "wheel_sha256": "9e9d3dfb325ba59a93ff6a13ad680f15dbef0ebb82e796b6e47505a9be37a199",
+      "scientific_protocol_sha256": "a7f98d474ad440c2d3433ccb04c3a590b5c2c9b7ef6f1d2b7f143baa47b6762c",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 1106,
+      "scope": "One exposed-development seed17 practical head-only control, batch1/300 updates. FP32 source/head storage with BF16 autocast, official optimizer groups/unfused AdamW, warmup/cosine and native augmentation. Not a published large-batch replication or matched quantization isolation.",
+      "payload_manifest_sha256": "173acc737414ade834954d8b697b68bdf6a3e8fda7e59d9311ca7eda516b923f",
+      "measurement_protocol_sha256": "471cd57df6968253cdc349ad8a08a9181c8a0c968a4e373a407e3c19789e797e",
+      "selected_comparison_sha256": "44c6d33ab5de4416af41468cc7cc847712378b4ce351a1b0a4b75744c3163080",
+      "acceptance_sha256": "188ef5413fc221422eb034178324b2e8117c7fe6b61a4bd3d76ed97705bd0b98",
+      "development_result_sha256": "865cd758b65a27af79baa5f6fab5df9df86be19b6e4c268ae211ce8a87030705",
+      "technical_pass": true,
+      "quality_target_attained": false,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546671-readout-v1.json",
+        "sha256": "18cfe2ec45befa29c44a787fa0c1863cf89e2acc75b7b301088f397436de4f00"
+      },
+      "independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-selected-analysis-replay-v1.json",
+        "sha256": "f3dc8c245746ec7d60254d158cff97dc1238703e7a77af7b12de608cdc44dfd9",
+        "scope": "73 receipt hashes,768 raw v11 samples, small metadata/DCP inventory, exact full160 resident/fresh123 rows and completion/release bindings; no full portable tensor deserialization or partial-panel statistics."
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546671-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546671-receipts-v1.tar.gz",
+        "archive_sha256": "11150c273836b52dbda24d29d80fc14f413a5ec921f9071cdf8fe0ae90a7e1b1",
+        "inventory_sha256": "99b486a69af4de2d32945f0a23e95666205789b1523d267a38c919f53c9d9720",
+        "files_verified": 73,
+        "terminal_release_sha256": "18a79bb90f0a9c38c827316b53dafc7019d890345a988cf0e46f947326b661e3"
+      },
+      "native_training": {
+        "applied_updates": 300,
+        "clipped_updates": 285,
+        "skipped_updates": 0,
+        "masked_elements_per_example": 70,
+        "trainable_fp32_head_parameters": 537,
+        "lora_factors": 0,
+        "hundred_update_mean_training_losses": [
+          0.36685098861169535,
+          0.30010496608912945,
+          0.2248652364872396
+        ],
+        "hundred_update_median_gradient_norms": [
+          3.400362730026245,
+          3.3370281457901,
+          2.8937407732009888
+        ]
+      },
+      "normalized_action_mse_history": [
+        {
+          "step": 0,
+          "value": 0.05504474296234548
+        },
+        {
+          "step": 100,
+          "value": 0.145804792078478
+        },
+        {
+          "step": 200,
+          "value": 0.12471977134368249
+        },
+        {
+          "step": 300,
+          "value": 0.09820883813181094
+        }
+      ],
+      "all_seven_decoded_action_axis_maes_worsened_vs_own_source": true,
+      "target": {
+        "attained": false,
+        "baseline": 0.05506814191766483,
+        "metric": "normalized_action_mse",
+        "native_seconds": null,
+        "preflight_inclusive_seconds": null,
+        "step": null,
+        "threshold": 0.049561327725898344
+      },
+      "fresh_portable": {
+        "rows_per_evaluation": 160,
+        "primary_noise_seed": 123,
+        "primary_rows_and_metrics_exact": true,
+        "normalized_action_mse_by_noise_seed": {
+          "123": 0.09820883813181094,
+          "456": 0.09309997648532901,
+          "789": 0.09348370664353882
+        },
+        "diagnostic_noise_seeds_are_not_training_seeds": true
+      },
+      "clocks": {
+        "complete_case_seconds": 1096.5536897429265,
+        "first_target_publication_seconds": null,
+        "owned_step_cleanup_seconds": 7.479182478040457,
+        "scope": "Host before srun through owned-step release; target clock ends at native verified checkpoint publication. Queue waiting is excluded.",
+        "unreached": true,
+        "native_workflow_seconds": 530.835571042262,
+        "inner_outer_workflow_seconds": 1087.1072179758921,
+        "steady_update_mean_seconds_101_300": 0.37803436181042344
+      },
+      "measurement": {
+        "host_protocol": "proc-identity-state-read-attempts-v11",
+        "raw_samples": 768,
+        "complete_host_samples": 768,
+        "whole_and_all_four_model_stages_passed": true,
+        "owned_gpu_valid": true,
+        "sampled_peaks": {
+          "device_peak_bytes": 41848864768,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 31158547456,
+          "host_rss_sum_peak_bytes": 31695126528,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1015.6236581802368,
+          "owned_device_process_peak_bytes": 41074819072,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 768,
+          "sampling_gap_seconds": {
+            "count": 767,
+            "maximum": 3.1143386363983154,
+            "mean": 1.3241507929338159,
+            "median": 1.2871649265289307,
+            "p95": 1.4301784038543701,
+            "sum": 1015.6236581802368
+          }
+        },
+        "scope": "Native training/publication/export and three fresh full160 scoring stages. Disposable preflight memory excluded; cold clock includes preflight and producing-step cleanup. Peaks remain sampled lower bounds; native699 fresh scorer has no allocator-phase instrumentation."
+      },
+      "limits": [
+        "The original shared0.049561327725898344 target remains unreached; no finite time-to-quality assigned.",
+        "Single training seed; all three official and nine selected matched cells are required for the frozen practical comparison. No partial-panel confidence interval or recipe conclusion.",
+        "Native augmentation differs together with storage precision, LR/schedule and optimizer policy; this negative control does not isolate augmentation.",
+        "No new300 mature recovery, fresh endpoint DCP evaluation, rollout preservation or independent confirmation.",
+        "Original failed LR1e-4 practical comparison remains unperformed, with identities/results preserved."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -18965,6 +19123,16 @@
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-observation-38544411-receipts-v1.tar.gz",
       "sha256": "5c73ac3bcd090778959a6dd3b02090b0feeab05c679ab20583719444ebf5f9f2",
       "scope": "24 terminal observation-only standalone reload receipts plus inventory, including both actual mount namespaces; no model or optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546021-receipts-v1.tar.gz",
+      "sha256": "c55130a060a2ced9d5c279b9da357377761e013d7f7c04fff8097d93343263d5",
+      "scope": "Terminal official699 job38546021 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546671-receipts-v1.tar.gz",
+      "sha256": "11150c273836b52dbda24d29d80fc14f413a5ec921f9071cdf8fe0ae90a7e1b1",
+      "scope": "Terminal official699 job38546671 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
     }
   ],
   "fixed_development_targets": {

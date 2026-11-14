@@ -115,6 +115,32 @@ The selected comparison requires all three official seeds, keeps the matched
 BF16 LoRA comparison separate, and retains the original target and quality guards.
 It does not establish equal-compute superiority or independent confirmation.
 
+The first practical control (seed 17, `38546671`) completed all 300 updates and
+three fresh 160-row portable evaluations. Its normalized action MSE moved from
+0.0550447 to 0.145805, 0.124720 and 0.0982088 at updates 100, 200 and 300. It never
+reached the unchanged shared 0.0495613 target, and all seven decoded action-axis
+MAEs worsened against its own source. All updates applied; 285 were clipped and
+none skipped. Fresh evaluation seed 123 reproduced the resident endpoint exactly;
+456/789 yielded 0.0931000/0.0934837 as noise diagnostics, not additional training
+seeds. This is a negative single-seed development result, not the completed
+three-seed practical comparison or evidence isolating augmentation.
+
+Strict v11 memory acceptance passed across the whole observed workflow and all
+four model stages: all 768 host samples were complete and owned-GPU attribution
+was valid. Sampled peaks were 38.254 GiB owned GPU memory and 29.019 GiB host PSS;
+these remain lower bounds and exclude disposable preflight peaks. The complete
+case took 1,096.554 seconds, including 7.479 seconds of verified owned-step cleanup;
+the allocation consumed 1,106 GPU-seconds. Native699 fresh scoring has no allocator
+phase records, and no new 300-update mature recovery or rollout was measured.
+
+The original attempt `38546021` failed before evaluation or training because its
+qualification wrapper inserted a null adaptation field that the native official
+identity intentionally omits. The narrow, actual-metadata-tested v7 correction
+left native699, data, recipe and all other validation gates unchanged. The failed
+attempt's 156 GPU-seconds and receipts remain separate. Exact successful and failed
+receipts, including independent replay, are retained in the
+[family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
 This is not a reproduction of the published LIBERO training benchmark. The pinned
 [upstream Spatial recipe](https://github.com/NVIDIA/Isaac-GR00T/blob/51d4c89f72fda44cbf77285c6a8114b52676b8a1/examples/LIBERO/README.md#fine-tune-libero-spatial)
 uses eight GPUs, global batch 640 and 20,000 updates from the generic
