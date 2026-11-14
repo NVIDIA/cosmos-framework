@@ -395,7 +395,12 @@ Apply the four points of the Simulation checklist,
 below. The served references check their own outputs: "6. Validate and view" in the
 [vLLM-Omni reference](references/vllm-omni.md), "6. Verify and view the output" in the [SGLang reference](references/sglang.md).
 
-> **Skill note (not in the source):** step 6 calls the `ffprobe` command-line tool, which the "FFmpeg shared libraries" prerequisite does not include. Check with `command -v ffprobe`; if it is missing (`ffprobe: command not found`, exit status 127), install the FFmpeg command-line tools before step 6 (`apt-get install -y ffmpeg` on Debian or Ubuntu).
+> **Skill note (not in the source):** step 6 calls the `ffprobe` command-line tool, which the "FFmpeg shared libraries" prerequisite does not include; without it step 6 stops with `ffprobe: command not found` (exit status 127). The served references need `ffmpeg` and `ffprobe` on the client as well. Before step 6, run the block below: it installs the FFmpeg package, which has both commands, when either is missing (Debian or Ubuntu, as root). In a new container `apt-get install` alone stops with `Unable to locate package ffmpeg` until `apt-get update` has run.
+
+```bash
+# Skill note (not in the source): installs the FFmpeg command-line tools (ffmpeg and ffprobe) when either is missing.
+{ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; } || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+```
 
 ### 6. Verify outputs and hand off
 

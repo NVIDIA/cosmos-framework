@@ -61,6 +61,13 @@ The notebook client needs Python 3.10 or newer, FFmpeg/FFprobe, and Hugging Face
 pip install httpx huggingface_hub numpy orjson pillow ipython
 ```
 
+> **Skill note (not in the source):** the block below installs the FFmpeg package, which includes FFprobe, when either command is missing on the client (Debian or Ubuntu, as root):
+
+```bash
+# Skill note (not in the source): installs FFmpeg with FFprobe on the client when either is missing.
+{ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; } || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+```
+
 Set `VLLM_BASE_URL` when the server is not local. Set `VLLM_API_KEY` if the server uses one. `COSMOS3_OUTPUT_DIR` selects the output directory. `COSMOS3_MODEL_REVISION` selects the same checkpoint revision as the server; set it before starting the notebook kernel, or edit `MODEL_REVISION` in the next cell.
 
 ```python

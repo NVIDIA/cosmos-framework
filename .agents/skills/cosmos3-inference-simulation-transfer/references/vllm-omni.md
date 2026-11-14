@@ -37,6 +37,13 @@ Steps 1 and 2 run on the server host. Steps 3 to 6 run in this notebook.
 pip install httpx huggingface_hub pillow matplotlib ipython
 ```
 
+> **Skill note (not in the source):** as root in a container that has no `sudo`, the two `sudo` lines of the next paragraph stop with `sudo: command not found`. Run the block below in their place: it installs the FFmpeg package, which includes FFprobe, when `ffmpeg` or `ffprobe` is missing (Debian or Ubuntu, as root).
+
+```bash
+# Skill note (not in the source): installs FFmpeg with FFprobe on the client when either is missing.
+{ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; } || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+```
+
 Install FFmpeg on the client host; the package also includes FFprobe. On Ubuntu/Debian:
 
 ```bash
