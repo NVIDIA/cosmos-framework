@@ -101,10 +101,10 @@ sample_overrides=(
 settings+=("${sample_overrides[@]}")
 ```
 
+> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
+
 Apply this after constructing `settings` and before the first dry run.
 These are reduced data settings, not changes to the published training recipe.
-
-> **Skill note (not in the source):** for a short first run, the order that resolved and trained is: the stage selection, the bundle camera-map overrides, the [smoke settings](sim-auto-smoke.md#prepare-a-reduced-source), then the block above as the last addition to `settings`, so that its 720p stream replaces the 480p stream that the smoke loop selects. Measured on four H100 NVL 95 GB at CP4/FSDP4: the two-update launch with its synchronous save took 345 s (losses 0.9585 and 0.7980), the resume to iteration 3 took 294 s (loss 0.7485), and both peaked at about 90 GB of 95.8 GB per GPU in `nvidia-smi`.
 For Sim-Auto allocation and all three stages, follow the
 [bounded train/save/resume guide](sim-auto-smoke.md).
 Do not overwrite the original full-run config.
