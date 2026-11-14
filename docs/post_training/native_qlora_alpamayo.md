@@ -673,3 +673,40 @@ aggregate is explicitly incomplete and sampled peaks remain lower bounds.
 This is build-specific correctness evidence, not new quality, deployment-speed
 or cache-performance qualification. Later checkpoint-loading changes require
 their own accelerator check; the selected 512-update results remain on `4cba88f`.
+
+The LR-only seed-17 screen changed both LoRA arms from `1e-4` to `1e-5`, keeping
+the native `4cba88f` recipe, a 512-update cosine schedule, 100 warmup updates and
+gradient clipping at 1.0, then pausing at update 128. NF4/BF16 ADE was
+**1.93094/1.92110 m**, FDE **5.95635/5.94113 m**, and flow loss
+**0.267002/0.266486**. ADE improved **2.1079%/1.7850%** over each frozen source,
+below the prospectively required 5%; neither reached the unchanged 1.8582104-m
+target. NF4 ADE was 0.5124% (0.00984 m) above BF16. The point estimates stayed
+within the declared ADE/FDE relative and absolute preservation margins. These
+single-seed, exposed-data results establish no confidence bound or NF4 superiority.
+The screen is **rejected**, with no automatic extension or new learning adjustment.
+
+All 128 updates were finite and applied, both full development evaluations retained
+all 256 data identities and exact metric reductions, and fresh portable rows 0 and
+1 matched native scoring. The 903 FP32 trainables and exact optimizer membership
+were verified. The original NF4 allocation `38540661` failed in post-run analysis
+because the observer's old phase-reduction API was incompatible; its native
+128-update and fresh two-row stages succeeded. Separately dated analysis preserved
+that failure. The BF16-only continuation `38543002` used the corrected, hash-bound
+analyzer without repeating NF4 training. It also failed overall, on the strict
+host-memory guard: NF4 had 2,178/2,179 complete host samples and BF16 2,207/2,208.
+Both observed teardown gaps remain incomplete; the analysis repair does not turn
+either allocation into a pass.
+
+Recorded native allocator peaks were **64.664/74.009 GiB**, and sampled owned GPU
+peaks **67.104/76.240 GiB** for NF4/BF16. These are 9.345/9.137-GiB observed
+differences, while whole-host strict acceptance remains unmet. The `4cba88f` fresh
+evaluator has no allocator-phase record; its sampled GPU/host observations are
+separate. Successful native 128-update process times were 43.295/43.224 minutes,
+with fresh two-row reload times of 181.38/201.00 seconds. The original failed cold
+case clocks, including each producer's cleanup, were 47.761/48.076 minutes.
+Separate allocations and nodes prevent a matched-placement speed claim, and a
+paused 128-update run is not time to the unreached target or a completed 512-update
+study. Total allocation cost was **5,771 GPU-seconds**, including both failures.
+The existing evidence JSON retains 42 NF4 and 43 BF16 hash-listed raw files,
+immutable failed clocks, the dated NF4 analysis and independent numerical and
+telemetry reviews.

@@ -18244,6 +18244,194 @@
         "modes": 4,
         "scope": "Independent receipt and raw-sample replay with four-mode inventory, lifetime and live-fingerprint checks; no second full DCP tensor read."
       }
+    },
+    "38540661": {
+      "family": "alpamayo",
+      "mode": "nf4_lora",
+      "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "seed": 17,
+      "slurm_state": "FAILED",
+      "slurm_exit_code": "1:0",
+      "allocation_gpu_seconds": 2874,
+      "passed": false,
+      "native128_and_fresh_portable2_passed": true,
+      "failure": "TypeError: original v2 phase analyzer did not accept phase_family; separately dated verified v3 analysis retains original failure. Strict whole-host evidence also fails.",
+      "scope": "One exposed development LR-only screen: unchanged rank32/alpha64/FP32 heads and adapters/fused AdamW,512 cosine schedule/warmup100/clip1 paused128; all128 updates finite/applied, native full256 evaluation0/128, fresh2 exact. Not completed512 or independent confirmation.",
+      "protocol_sha256": "0407fab331b9294ab7fb035f73c42f43f99a80a11434cba1c285244fa4f0ab21",
+      "trainable_inventory": {
+        "auxiliary": 409,
+        "fp32_trainables": 903,
+        "lora_factors": 494,
+        "passed": true,
+        "quantized": 247
+      },
+      "history": [
+        {
+          "metrics": {
+            "loss": 0.26709095919500214,
+            "open_loop_ade_1s_meters": 0.04602302479088394,
+            "open_loop_ade_3s_meters": 0.39951302091867547,
+            "open_loop_ade_6p4s_meters": 1.972519713366637,
+            "open_loop_fde_1s_meters": 0.11959648791435029,
+            "open_loop_fde_3s_meters": 1.1776479348218345,
+            "open_loop_fde_6p4s_meters": 6.102828524013603
+          },
+          "step": 0
+        },
+        {
+          "metrics": {
+            "loss": 0.26700158860307965,
+            "open_loop_ade_1s_meters": 0.045649163123812286,
+            "open_loop_ade_3s_meters": 0.39468052825941413,
+            "open_loop_ade_6p4s_meters": 1.930941396196431,
+            "open_loop_fde_1s_meters": 0.11842280730661514,
+            "open_loop_fde_3s_meters": 1.160644795229473,
+            "open_loop_fde_6p4s_meters": 5.956352971785236
+          },
+          "step": 128
+        }
+      ],
+      "target_reached": false,
+      "native128_process_seconds": 2597.683189956995,
+      "native_phase_seconds": {
+        "checkpoint_seconds": 41.18262932897778,
+        "evaluation_seconds": 1876.7456039729877,
+        "portable_export_seconds": 25.869879950012546,
+        "startup_seconds": 228.8657124749734,
+        "training_seconds": 398.96169427991845
+      },
+      "fresh_portable2_seconds": 181.3753897830029,
+      "failed_cold_case_seconds": 2865.678085596999,
+      "owned_step_cleanup_seconds": 8.768505949992687,
+      "owned_step_released": true,
+      "timing_scope": "Separate allocations and nodes; original failed cold clocks retained without splicing. No matched-placement speed or time-to-target claim.",
+      "checkpoint_publication": {
+        "checkpoint_publications": [
+          {
+            "seconds": 2624.3781003270415,
+            "step": 128
+          }
+        ],
+        "first_target_publication_seconds": null,
+        "scope": "cold allocation-case start through native verified publication; paused128 under512schedule, not a completed512 study",
+        "unreached": true
+      },
+      "memory": {
+        "scope": "Recorded native allocator phases plus native/fresh sampled owned-process memory. Old4c fresh evaluator lacks allocator phase records; host sampled peaks are lower bounds.",
+        "native_peak_allocated_bytes": 69432915968,
+        "native_peak_reserved_bytes": 70835503104,
+        "sampled_owned_process_peak_bytes": 72051851264,
+        "sampled_host_rss_peak_bytes": 47046811648,
+        "sampled_host_pss_peak_bytes": 46511081472,
+        "native_allocator_evidence_complete": true,
+        "sampled_gpu_evidence_valid": true,
+        "host_pss_complete": false,
+        "samples": 2179,
+        "complete_host_samples": 2178,
+        "host_protocol": "proc-identity-state-read-attempts-v10",
+        "strict_memory_screen_passed": false
+      },
+      "receipts": {
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-screen-38540661-receipts-v1.tar.gz",
+        "archive_sha256": "f3b7e1d874c32335c2a491ecebdb4c152f375ebe64660af8d34763de9b8a7f1a",
+        "inventory_sha256": "f50a62457d5771b0e959d52fc111768acc86ade52325e8ed0ac12377659734bb",
+        "hash_listed_files": 42,
+        "trained_tensor_payloads_downloaded": false
+      }
+    },
+    "38543002": {
+      "family": "alpamayo",
+      "mode": "bf16_lora",
+      "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "seed": 17,
+      "slurm_state": "FAILED",
+      "slurm_exit_code": "1:0",
+      "allocation_gpu_seconds": 2897,
+      "passed": false,
+      "native128_and_fresh_portable2_passed": true,
+      "failure": "Corrected analyzer completed; explicit strict whole-host memory guard failed after successful native128 and fresh2.",
+      "scope": "One exposed development LR-only screen: unchanged rank32/alpha64/FP32 heads and adapters/fused AdamW,512 cosine schedule/warmup100/clip1 paused128; all128 updates finite/applied, native full256 evaluation0/128, fresh2 exact. Not completed512 or independent confirmation.",
+      "protocol_sha256": "0407fab331b9294ab7fb035f73c42f43f99a80a11434cba1c285244fa4f0ab21",
+      "trainable_inventory": {
+        "auxiliary": 409,
+        "fp32_trainables": 903,
+        "lora_factors": 494,
+        "passed": true,
+        "quantized": 0
+      },
+      "history": [
+        {
+          "metrics": {
+            "loss": 0.2666164163815665,
+            "open_loop_ade_1s_meters": 0.045508761263135966,
+            "open_loop_ade_3s_meters": 0.39572003935700195,
+            "open_loop_ade_6p4s_meters": 1.956010947804316,
+            "open_loop_fde_1s_meters": 0.11850085828859847,
+            "open_loop_fde_3s_meters": 1.1632316133618588,
+            "open_loop_fde_6p4s_meters": 6.074706420644361
+          },
+          "step": 0
+        },
+        {
+          "metrics": {
+            "loss": 0.26648557599128253,
+            "open_loop_ade_1s_meters": 0.04533754724513983,
+            "open_loop_ade_3s_meters": 0.3927282422755525,
+            "open_loop_ade_6p4s_meters": 1.9210970670246752,
+            "open_loop_fde_1s_meters": 0.11789960967257684,
+            "open_loop_fde_3s_meters": 1.1533321709212032,
+            "open_loop_fde_6p4s_meters": 5.941127493220847
+          },
+          "step": 128
+        }
+      ],
+      "target_reached": false,
+      "native128_process_seconds": 2593.4669607940014,
+      "native_phase_seconds": {
+        "checkpoint_seconds": 48.74772402900271,
+        "evaluation_seconds": 1857.8741674500052,
+        "portable_export_seconds": 21.354396526003256,
+        "startup_seconds": 244.2373503970157,
+        "training_seconds": 388.3430384200474
+      },
+      "fresh_portable2_seconds": 201.00130164599977,
+      "failed_cold_case_seconds": 2884.5638521799992,
+      "owned_step_cleanup_seconds": 10.177614930988057,
+      "owned_step_released": true,
+      "timing_scope": "Separate allocations and nodes; original failed cold clocks retained without splicing. No matched-placement speed or time-to-target claim.",
+      "checkpoint_publication": {
+        "checkpoint_publications": [
+          {
+            "seconds": 2617.650666970003,
+            "step": 128
+          }
+        ],
+        "first_target_publication_seconds": null,
+        "scope": "cold allocation-case start through native verified publication; paused128 under512schedule, not a completed512 study",
+        "unreached": true
+      },
+      "memory": {
+        "scope": "Recorded native allocator phases plus native/fresh sampled owned-process memory. Old4c fresh evaluator lacks allocator phase records; host sampled peaks are lower bounds.",
+        "native_peak_allocated_bytes": 79466941440,
+        "native_peak_reserved_bytes": 80645980160,
+        "sampled_owned_process_peak_bytes": 81862328320,
+        "sampled_host_rss_peak_bytes": 46962982912,
+        "sampled_host_pss_peak_bytes": 46427101184,
+        "native_allocator_evidence_complete": true,
+        "sampled_gpu_evidence_valid": true,
+        "host_pss_complete": false,
+        "samples": 2208,
+        "complete_host_samples": 2207,
+        "host_protocol": "proc-identity-state-read-attempts-v10",
+        "strict_memory_screen_passed": false
+      },
+      "receipts": {
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-bf-38543002-receipts-v1.tar.gz",
+        "archive_sha256": "1c04b5ef7ca1015d09b385e5a196f89d7f653fe9a01a1f6fac23991bf9e437bc",
+        "inventory_sha256": "57b110c746cf63dd3a13ae638e00c1e370e2f5703483c533ebf13ce22395eeeb",
+        "hash_listed_files": 43,
+        "trained_tensor_payloads_downloaded": false
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -18381,6 +18569,18 @@
       "sha256": "71cec113f5559ce38a701c4e9da20f1e82eb9cc189497f2306cf0eb0806d4539",
       "inventory_sha256": "e1c7eb2f6cdb3fbad84119e8b4fdfea3ccabe95393eb8435a16442e8db9176e2",
       "scope": "197 terminal02 GR four-mode load/own5-to10, weakref/scalar allocator observations, metadata/control, raw1500v10 samples, separate retrospective old300 comparisons and terminal/staging receipts; no trained model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-screen-38540661-receipts-v1.tar.gz",
+      "sha256": "f3b7e1d874c32335c2a491ecebdb4c152f375ebe64660af8d34763de9b8a7f1a",
+      "inventory_sha256": "f50a62457d5771b0e959d52fc111768acc86ade52325e8ed0ac12377659734bb",
+      "scope": "42 raw terminal 38540661 control/metadata/task/telemetry/clock files plus inventory; no trained tensor payloads; original failed state retained."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-bf-38543002-receipts-v1.tar.gz",
+      "sha256": "1c04b5ef7ca1015d09b385e5a196f89d7f653fe9a01a1f6fac23991bf9e437bc",
+      "inventory_sha256": "57b110c746cf63dd3a13ae638e00c1e370e2f5703483c533ebf13ce22395eeeb",
+      "scope": "43 raw terminal 38543002 control/metadata/task/telemetry/clock files plus inventory; no trained tensor payloads; original failed state retained."
     }
   ],
   "fixed_development_targets": {
@@ -19672,5 +19872,121 @@
       "No extra seed/repeat or candidate mature run after rejection.",
       "Original4c seed42 native artifacts remain development evidence; do not duplicate this training solely to refresh a report."
     ]
+  },
+  "alpamayo_lr1e5_development_screen": {
+    "scientific_protocol_sha256": "0407fab331b9294ab7fb035f73c42f43f99a80a11434cba1c285244fa4f0ab21",
+    "measurement_repair_sha256": "b3826545f0687edbf9ad39707dc33623d0f7d555bbd3a92a66666f0e0f7d19f3",
+    "job_ids": {
+      "nf4_lora": "38540661",
+      "bf16_lora": "38543002"
+    },
+    "incremental_gpu_seconds": 5771,
+    "source": "4cba88f; only LR1e-4\u21921e-5 changes from original128 comparisons;512 schedule remains paused128",
+    "quality": {
+      "bf16_lora": {
+        "metrics": {
+          "ade": 1.9210970670246752,
+          "fde": 5.941127493220847,
+          "flow": 0.26648557599128253
+        },
+        "native_phase_allocated_peak_bytes": 79466941440,
+        "own_source_point_guards": {
+          "ade_at_least5percent_improvement": false,
+          "fde_no_increase": true,
+          "flow_no_increase": true
+        },
+        "own_source_relative_changes": {
+          "ade": -0.017849532395937118,
+          "fde": -0.021989363464472556,
+          "flow": -0.0004907439386505619
+        },
+        "retained_lr1e4_step128_relative_changes": {
+          "ade": -0.25337911573126637,
+          "fde": -0.26682690210796145,
+          "flow": -0.1683161649556848
+        },
+        "sampled_owned_process_peak_bytes": 81862328320,
+        "strict_host_complete": false,
+        "target_reached": false
+      },
+      "nf4_lora": {
+        "metrics": {
+          "ade": 1.930941396196431,
+          "fde": 5.956352971785236,
+          "flow": 0.26700158860307965
+        },
+        "native_phase_allocated_peak_bytes": 69432915968,
+        "own_source_point_guards": {
+          "ade_at_least5percent_improvement": false,
+          "fde_no_increase": true,
+          "flow_no_increase": true
+        },
+        "own_source_relative_changes": {
+          "ade": -0.021078784099572534,
+          "fde": -0.024001256409550087,
+          "flow": -0.0003346073270014127
+        },
+        "retained_lr1e4_step128_relative_changes": {
+          "ade": -0.2841466699211864,
+          "fde": -0.3065151356306117,
+          "flow": -0.1861913887227381
+        },
+        "sampled_owned_process_peak_bytes": 72051851264,
+        "strict_host_complete": false,
+        "target_reached": false
+      }
+    },
+    "paired_point_preservation_guards": {
+      "ade_absolute": true,
+      "ade_relative": true,
+      "fde_absolute": true,
+      "fde_relative": true
+    },
+    "nf_relative_to_bf": {
+      "ade": 0.005124326792608436,
+      "fde": 0.002562725439196889,
+      "flow": 0.0019363622585486517
+    },
+    "nf_absolute_minus_bf": {
+      "ade": 0.009844329171755817,
+      "fde": 0.01522547856438905,
+      "flow": 0.0005160126117971231
+    },
+    "observed_peak_differences_bf_minus_nf": {
+      "native_allocated_bytes": 10034025472,
+      "sampled_owned_process_bytes": 9810477056
+    },
+    "strict_screen_call_refused": "complete native allocator and external host/GPU memory required",
+    "screen_pass": false,
+    "decision": "Discard under unchanged5percent source-relative ADE threshold and strict host coverage; no promotion, automatic extension or new knob.",
+    "qualification_limits": "One exposed training seed, unchanged native4c/512schedule paused128. Scientific point comparison only; different allocations/nodes preclude same-allocation timing. Native128/fresh2 correctness is separate from wrapper/strict memory failures. No completed512 time-to-target, independent-recording confidence, or quantization superiority claim. Small model_metadata read only; original on-node tensor validation retained, no fresh fulltensor login read.",
+    "nf_retrospective_analysis": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-screen-38540661-posthoc-v1.json",
+      "sha256": "423f0497f79157e517c441dd45bfefd2e85d92de7ba0efdfeb2599ef7d000baa",
+      "analyzed_utc": "2026-11-14T16:39:30.010478+00:00",
+      "original_wrapper_success": false
+    },
+    "independent_readout": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-comparison-readout-v1.json",
+      "sha256": "3a554eac853f20b6796b6fea3461c60ea49d9d4d571d9cf6c7b36a30499f72f0",
+      "bf_full256_sum_count_and_fresh2_replayed": true,
+      "raw_memory_and_timing_replayed": true,
+      "small_metadata_only": true
+    },
+    "independent_root_reviews": [
+      {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-38540661-root-review.json",
+        "sha256": "2b9b2d5042df4f3ac154511a157a8e2a61e705081c3eaf75904a8d1323bfcbe1"
+      },
+      {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-lr-bf-38543002-root-review-v1.json",
+        "sha256": "76dfbea0f85fdfe787d0b733a736939a13acbdaa406dc45e5df8cef8a167c795"
+      }
+    ],
+    "independent_host_gap_review": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-v10-exit-gap-review-v1.json",
+      "sha256": "bafc449647c690b5c4cbb0a56d80fd64e362d3aaa842cb2439912697bba19992",
+      "scope": "Read-only replay of all4387 original samples; NF/BF gaps stay incomplete. Same-birth held PIDFD3500ms waits expired with ESRCH/empty VM fields and stateR. Positive exit observations straddle the4.5s acquisition deadline; raw evidence does not prove exact remote exit duration or a namespace/parser cause. No observer policy change or historical repair."
+    }
   }
 }
