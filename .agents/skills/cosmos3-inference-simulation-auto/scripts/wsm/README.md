@@ -68,6 +68,16 @@ The container runtime must expose both the NVIDIA EGL libraries and their GLVND
 vendor configuration. `nvidia-smi` alone does not verify graphics support. Check
 the renderer selected by EGL:
 
+> **Skill note (not in the source):** in a container, write the NVIDIA vendor file first. `libegl1` registers only the Mesa vendor there, so the check below can print `Mesa llvmpipe` (software rendering) instead of failing:
+
+```bash
+# Skill note (not in the source): the vendor file of the block further down, applied before the check.
+cat > nvidia-egl.json <<'JSON'
+{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}
+JSON
+export __EGL_VENDOR_LIBRARY_FILENAMES="$PWD/nvidia-egl.json"
+```
+
 ```bash
 python -c 'import moderngl; ctx = moderngl.create_context(standalone=True, backend="egl", require=330); print(ctx.info["GL_VENDOR"], ctx.info["GL_RENDERER"]); ctx.release()'
 ```

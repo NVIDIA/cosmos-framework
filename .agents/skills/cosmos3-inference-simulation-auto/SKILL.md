@@ -56,6 +56,13 @@ Framework checkout, `uv` and checkpoint download: `../cosmos3-setup/SKILL.md` an
 - **vLLM-Omni and SGLang:** a server host with Docker and the NVIDIA Container Toolkit (images `vllm/vllm-omni:cosmos3` and `lmsysorg/sglang:dev`); a client with Python 3.10 or newer, the `pip install` line of the reference's section 1, and FFmpeg with FFprobe. SGLang opens inputs by path, so "the cookbook checkout, including the output folder this notebook writes, must be on the server host or on a filesystem it shares with this notebook, at one absolute path".
 - **WSM renderer:** your own RDS-HQ scene, and the renderer installed "following [WSM setup](scripts/wsm/README.md#install) and its NVIDIA EGL instructions. The renderer needs a graphics-capable NVIDIA driver; the notebook kernel needs NumPy, IPython and FFmpeg/FFprobe."
 
+> **Skill note (not in the source):** the Cosmos Framework runs decode the conditioning videos through TorchCodec, which needs the FFmpeg shared libraries that the setup guide's system-package line installs. Without them inference stops with an error such as `libavutil.so.56: cannot open shared object file`. On Debian or Ubuntu, as root:
+
+```bash
+# Skill note (not in the source): the FFmpeg shared libraries for TorchCodec.
+apt-get update && apt-get install -y --no-install-recommends ffmpeg
+```
+
 ## Transfer-Auto
 
 Cosmos3-Nano-Transfer-Auto, the bidirectional model: the Cosmos Framework path first, then the two served backends and WSM rendering for your own scene.
@@ -127,6 +134,8 @@ files. See [automatic prefixes](references/caption-policy.md#caption-text-and-au
 
 From the Framework root, inside your GPU allocation:
 
+> **Skill note (not in the source):** measured on four H100 NVL 95 GB: the command below at 720p (297 frames, seven cameras and LiDAR, 35 steps) samples at about 265 s per step, about 2 h 35 min for the 35 steps, and uses about 91 GB per GPU. Start it in the background and follow its log. With `--resolution 480` in place of `--resolution 720` the same request samples at about 111 s per step, about 1 h 5 min of sampling and 1 h 9 min for the whole command (memory not measured).
+
 ```bash
 export COSMOS_INTERNAL=0 COSMOS_TRAINING=0
 # Skill note (not in the source): the negative prompt is now this skill's assets/negative-prompt.txt; this was .agents/skills/cosmos3-nano-transfer-auto/inference/assets/negative-prompt.txt.
@@ -191,6 +200,8 @@ docker run --rm --gpus '"device=0"' --ipc=host \
     --host 0.0.0.0 --port 8000 --init-timeout 1800
 ```
 
+> **Skill note (not in the source):** measured on H100 NVL 95 GB: with the one-GPU launch the published WSM request (201 frames, 35 steps) did not finish within the two 1800-second timeouts (HTTP 504 at step 31 of 35); in the two-GPU form it took 1127 s. On GPUs of that class use the two-GPU form from the start: `--gpus all` in place of `--gpus '"device=0"'`, and `--cfg-parallel-size 2` added to the `vllm serve` options.
+
 Readiness, from "Verify the server": "Wait for the server to finish starting, then confirm that it serves the Transfer-Auto model. The cell polls for up to 30 minutes, so you can run it while the server is still loading." The guide: "When startup finishes, `curl http://127.0.0.1:8000/v1/models` must return the served model before you submit generation requests." "Both requests upload their files, so the notebook can run on any host that reaches the server."
 
 ### Serve Cosmos3-Nano-Transfer-Auto with SGLang
@@ -223,6 +234,16 @@ Readiness, from section 2: "The HTTP port opens only after the weights are loade
 ### Render WSM controls from your own scene
 
 Reference: [`references/generate-wsm.md`](references/generate-wsm.md) (the WSM notebook, converted 1:1). Run its sections in order: "1. Environment and inputs", "2. Render controls", "3. Check the rendered views", "4. Prepare or review per-view captions", optionally "5. Optional: render same-scene LiDAR controls", then "6. Generate RGB or joint RGB/LiDAR", which hands the exported request to the native reference of either model.
+
+> **Skill note (not in the source):** in a container the renderer README's EGL check can print `Mesa llvmpipe` instead of failing. The `libegl1` package registers only the Mesa vendor, so EGL silently renders in software, and the README applies its NVIDIA vendor file only when `eglInitialize` fails. In a container, write that vendor file before the check, in `scripts/wsm` after the README's install (as root without `sudo`, run its `apt-get` lines without it), and keep the variable exported in the shell that runs the check and the render; the check must then name NVIDIA and your GPU:
+
+```bash
+# Skill note (not in the source): the README's NVIDIA vendor file, applied before its EGL check.
+cat > nvidia-egl.json <<'JSON'
+{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}
+JSON
+export __EGL_VENDOR_LIBRARY_FILENAMES="$PWD/nvidia-egl.json"
+```
 
 "The published HF daytime sample contains already-rendered WSM videos, not raw RDS-HQ inputs; use it directly in the inference notebooks if you only want to try the models." The renderer is the standalone package in `scripts/wsm` (its own [README](scripts/wsm/README.md)); "Convert your own source with the [RDS-HQ schema](scripts/wsm/docs/rds-hq.md) and [conversion skill](scripts/wsm/skills/scenario-to-rds-hq/SKILL.md)." Section 1 sets `AUTO_RDS_HQ_ROOT`, `AUTO_RDS_HQ_CLIP` and `WSM_PYTHON` "before running the configuration cell"; "This notebook supports **F-theta scenes, supported Auto camera keys, and 30 Hz poses**." Inspect the rendered controls with [WSM control checks](references/wsm-conventions.md).
 

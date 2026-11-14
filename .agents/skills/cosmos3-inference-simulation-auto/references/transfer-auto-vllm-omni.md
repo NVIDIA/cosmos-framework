@@ -40,6 +40,18 @@ sudo apt-get install -y ffmpeg
 
 On macOS with Homebrew, use `brew install ffmpeg`. Verify that both `ffmpeg -version` and `ffprobe -version` work.
 
+> **Skill note (not in the source):** the helpers call FFmpeg with `-fps_mode`, which needs FFmpeg 5.1 or newer. Ubuntu 22.04 installs 4.4.2, and the first helper call then stops with `Unrecognized option 'fps_mode'`. Run the block below right after the install above: it looks for the option and, when the installed FFmpeg lacks it, puts the FFmpeg 7.0.2 of `imageio-ffmpeg==0.6.0` first on `PATH`, the version the repository's cookbook checks run these helpers with (`ffprobe` from the distribution package is enough). In a Python environment without `pip`, such as one made by `uv venv`, the block installs the package with `uv pip`, run from `/` because uv stops inside the Framework checkout unless it is the pinned 0.11.29. The `PATH` line holds for the current shell only. Where `/usr/local/bin` is writable and holds no `ffmpeg` (root in a container), the block also links that FFmpeg there, ahead of `/usr/bin` on the default `PATH`, so shells and Python processes started later find it; elsewhere, run the block again in the shell that starts the client:
+
+```bash
+# Skill note (not in the source): adds FFmpeg 7.0.2 from imageio-ffmpeg when the installed FFmpeg has no -fps_mode.
+if [ -z "$(ffmpeg -hide_banner -h full 2>/dev/null | grep -- '-fps_mode')" ]; then
+  if python -m pip --version >/dev/null 2>&1; then python -m pip install imageio-ffmpeg==0.6.0; else (cd / && uv pip install --python "$(command -v python)" imageio-ffmpeg==0.6.0); fi
+  mkdir -p "$PWD/ffmpeg7" && ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$PWD/ffmpeg7/ffmpeg"
+  export PATH="$PWD/ffmpeg7:$PATH"
+  if [ -w /usr/local/bin ] && [ ! -e /usr/local/bin/ffmpeg ] && [ -x "$PWD/ffmpeg7/ffmpeg" ]; then ln -sf "$(readlink -f "$PWD/ffmpeg7/ffmpeg")" /usr/local/bin/ffmpeg; fi
+fi
+```
+
 **Inputs:** The examples use the shared daytime sample published with the model under `assets/sample_data`: one scene with seven synchronized cameras, each with an RGB recording, a WSM control, and a caption. Step 3 downloads the files these examples need, about 100 MiB, into the Hugging Face cache and checks them against the sample's `SHA256SUMS`. To use a copy you already have, set `AUTO_SAMPLE_ROOT` to its `sample_data` folder.
 
 The joint preparation cell converts the published `daytime_scene/lidar/control.tar` to a local `prepared/lidar_control.safetensors` file for vLLM-Omni. Native Framework reads the archive directly; no converted tensor or duplicate media is bundled. See the [format notes](../assets/daytime_scene/README.md).
@@ -85,6 +97,8 @@ The container reuses the host Hugging Face cache and listens on all container in
 | `-p 127.0.0.1:8000:8000`, `--host 0.0.0.0`                                   | Exposes the container server on host loopback port 8000. Use the port-forwarding instructions above for a remote notebook.                                                                                   |
 
 The command uses one GPU. For two GPUs, change Docker's GPU selection to `--gpus all` and add `--cfg-parallel-size 2`. For more, also set `--ulysses-degree`; for example, `--cfg-parallel-size 2 --ulysses-degree 2` uses four GPUs. Raise both timeouts above the measured request time on your hardware.
+
+> **Skill note (not in the source):** measured on H100 NVL 95 GB: with the one-GPU launch the published WSM request (201 frames, 35 steps) did not finish within the two 1800-second timeouts (HTTP 504 at step 31 of 35); in the two-GPU form it took 1127 s. On GPUs of that class use the two-GPU form from the start: `--gpus all` in place of `--gpus '"device=0"'`, and `--cfg-parallel-size 2` added to the `vllm serve` options.
 
 ## 3. Set up the client
 
