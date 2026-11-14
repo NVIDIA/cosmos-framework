@@ -478,8 +478,9 @@ lower bounds. The source-relative comparisons and all case outcomes are retained
 in the [terminal evidence](evidence/native_qlora_family_engineering_4cba88f.json).
 On-policy response inputs differ, so these timings do not establish inference
 acceleration. The previously verified update-300 portable and standalone artifacts
-validate their own tensors; selected update-200 publication and fresh scoring remain
-separate pending checks.
+validated their own tensors; selected update-200 publication and fresh scoring were
+separate pending checks at that rollout decision. Their subsequent successful
+qualification is recorded below.
 
 To reproduce this screen through the native training command above, use the
 admitted `gr00t-development-v1` JSONL files and these overrides in **each** arm:
@@ -689,3 +690,30 @@ merged or four-bit serving result. The historical merged failures and pending
 final-current-build qualification remain unchanged. The
 [raw hashes, exact source bindings and phase measurements](evidence/native_qlora_family_engineering_4cba88f.json)
 do not establish new task quality, rollout success or inference acceleration.
+
+The repaired timing block `38532930` completed four fresh 300-update cases on
+seed 17, with verified release of each producing Slurm step included in its own
+clock. NF4 complete-case time changed from 1173.81 to 1163.55 seconds (0.87% lower)
+and BF16 from 1116.96 to 1104.33 seconds (1.13% lower). Steady-update time improved
+7.39%/10.41%, and native workflow time improved 1.34%/3.53%, respectively.
+Both arms still first met the unchanged target at update 200: preflight-inclusive
+times were 514.77→509.01 seconds for NF4 and 480.89→476.08 seconds for BF16.
+
+All six 100/200/300 checkpoint comparisons were exact for model, optimizer,
+RNG/data and task outputs. Independent replay verified 201 receipt files, all
+3,225 raw memory samples and four owned-step release proofs. Allocator increases
+were 5.5/4 MiB and sampled owned-process increases 48/44 MiB for NF4/BF16, within
+the fixed 256 MiB limits. The allocation consumed 5,084 GPU-seconds, including
+513.92 seconds of separate post-workflow CPU comparisons.
+
+The first reference BF16 case shared its host with an Alpamayo allocation on
+different GPUs and disjoint CPU sets; the later cases had no known such overlap.
+This asymmetric placement limitation remains, without clock correction or an
+isolation claim. All mandatory first-block gates passed, but the optimization
+is **not promoted**: the predeclared reversed seed-42 block and joint geometric
+thresholds, candidate-owned mature recovery and remaining family checks are still
+required. The seed-42 block uses identical settings and retains its native outputs
+for development analysis. Old `38528318` clocks remain separate. None of these
+arithmetic-preserving results repairs the unmet quality guards or establishes
+quantization superiority; NF4 still takes longer than optimized BF16 and saves
+only about 1.10 GiB of training GPU memory in this head-training recipe.

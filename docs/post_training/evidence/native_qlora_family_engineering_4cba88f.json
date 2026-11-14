@@ -14681,6 +14681,475 @@
         "Independent recording-family confirmation",
         "Merged dense conversion remains separately failed/unqualified where recorded; no inference acceleration claim"
       ]
+    },
+    "38532930": {
+      "family": "gr00t",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 5084,
+      "scope": "Fresh v4 seed17 four-case finite-gradient timing block with producer-owned Slurm release inside each complete-case clock. This repeats seed17; it is not a new independent training seed or task set.",
+      "reference_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "candidate_revision": "3c96ce8503eef263b7feb3fd2a23cad28efa6ab7",
+      "protocol_sha256": "70d0722b69758491afb66139d4dfa5ed10c8e95de9d0aed09af096da2d1e2e46",
+      "measurement_release_contract_sha256": "36773266543e55956fd4871eb6c1d92eb03600c24693b382bdab6fb1a230672a",
+      "payload_manifest_sha256": "4ee1714a66f3b12d4d6b41a48a603fd64f9609e20fc20e566a4aa20a1df731e4",
+      "order": [
+        "reference:bf16_lora",
+        "candidate:nf4_lora",
+        "reference:nf4_lora",
+        "candidate:bf16_lora"
+      ],
+      "block_result": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38532930-receipts-v1/block-result.json",
+        "sha256": "d6fe803c2da7a889861ad9f300b9795ec9b9092241f2ca31d8f300b078aef322"
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38532930-readout-v1.json",
+        "sha256": "666cb3da05e9ced9ba8383238bacb350b6e84ad0b2ef303285c653db1608e628"
+      },
+      "independent_replay": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38532930-terminal-peer-review.json",
+        "sha256": "5e11d72f8b1cee5a0b7bf6384d80a0fae37dcdb755eb2685048641475a28a08a"
+      },
+      "comparison_seconds": 513.9173918338493,
+      "correctness": {
+        "exact100_200_300_model_optimizer_rng_data_and_task_both_arms": true,
+        "strict_owned_gpu_and_host_pss_complete_all_four": true,
+        "raw_samples_independently_replayed": 3225,
+        "raw_files_verified": 201,
+        "independent_tensor_recomputation": false
+      },
+      "precision_results": {
+        "bf16_lora": {
+          "times": {
+            "complete_case_workflow": {
+              "candidate_over_reference": 0.9886899821955387,
+              "candidate_seconds": 1104.3309039608575,
+              "reduction_percent": 1.131001780446128,
+              "reference_seconds": 1116.9637842476368
+            },
+            "native_workflow": {
+              "candidate_over_reference": 0.9647085368091083,
+              "candidate_seconds": 546.9723778842017,
+              "reduction_percent": 3.5291463190891714,
+              "reference_seconds": 566.982002350036
+            },
+            "runner_workflow": {
+              "candidate_over_reference": 0.9882428120067487,
+              "candidate_seconds": 1092.9727678620256,
+              "reduction_percent": 1.1757187993251317,
+              "reference_seconds": 1105.9759348439984
+            },
+            "steady_update": {
+              "candidate_over_reference": 0.8958689392066312,
+              "candidate_seconds": 0.4000253824517131,
+              "reduction_percent": 10.413106079336876,
+              "reference_seconds": 0.44652221429394556
+            }
+          },
+          "target": {
+            "attained": true,
+            "candidate": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 393.1104417620227,
+              "preflight_inclusive_seconds": 476.08180765016004,
+              "step": 200,
+              "threshold": 0.049561327725898344
+            },
+            "candidate_over_reference": 0.9900047863199974,
+            "reference": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 404.54141624318436,
+              "preflight_inclusive_seconds": 480.8883898630738,
+              "step": 200,
+              "threshold": 0.049561327725898344
+            },
+            "step": 200
+          },
+          "allocated_increase_bytes": 4194304,
+          "sampled_owned_gpu_increase_bytes": 46137344,
+          "per_block_checks": {
+            "allocated_and_process_increase_at_most256MiB": true,
+            "attained_target_no_slower": true,
+            "exact100_200_300_model_optimizer_rng_data_and_task": true,
+            "strict_measurement": true,
+            "this_block_complete_workflow_strictly_faster": true,
+            "this_block_steady_strictly_faster": true
+          },
+          "exact_parity": {
+            "100": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "200": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "300": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            }
+          },
+          "reference_allocator": {
+            "host_process_hwm_bytes": 31337340928,
+            "peak_allocated_bytes": 32039697920,
+            "peak_reserved_bytes": 32765902848,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "candidate_allocator": {
+            "host_process_hwm_bytes": 31311405056,
+            "peak_allocated_bytes": 32043892224,
+            "peak_reserved_bytes": 32812040192,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "reference_samples": {
+            "device_peak_bytes": 34615787520,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31457220608,
+            "host_rss_sum_peak_bytes": 31999029248,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1048.8509984016418,
+            "owned_device_process_peak_bytes": 33839644672,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 797,
+            "sampling_gap_seconds": {
+              "count": 796,
+              "maximum": 4.246198415756226,
+              "mean": 1.3176520080422636,
+              "median": 1.2852457761764526,
+              "p95": 1.4047650694847107,
+              "sum": 1048.8509984016418
+            }
+          },
+          "candidate_samples": {
+            "device_peak_bytes": 34661924864,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31430713344,
+            "host_rss_sum_peak_bytes": 32576139264,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1028.607699394226,
+            "owned_device_process_peak_bytes": 33885782016,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 775,
+            "sampling_gap_seconds": {
+              "count": 774,
+              "maximum": 3.637866735458374,
+              "mean": 1.328950516013212,
+              "median": 1.2845269441604614,
+              "p95": 1.4618278384208678,
+              "sum": 1028.607699394226
+            }
+          }
+        },
+        "nf4_lora": {
+          "times": {
+            "complete_case_workflow": {
+              "candidate_over_reference": 0.9912568468979318,
+              "candidate_seconds": 1163.548946150113,
+              "reduction_percent": 0.8743153102068191,
+              "reference_seconds": 1173.8117620991543
+            },
+            "native_workflow": {
+              "candidate_over_reference": 0.9866077060227709,
+              "candidate_seconds": 592.2394008361734,
+              "reduction_percent": 1.3392293977229075,
+              "reference_seconds": 600.2785070710815
+            },
+            "runner_workflow": {
+              "candidate_over_reference": 0.9925850364664018,
+              "candidate_seconds": 1153.7630456229672,
+              "reduction_percent": 0.7414963533598162,
+              "reference_seconds": 1162.3820662563667
+            },
+            "steady_update": {
+              "candidate_over_reference": 0.9260731858985962,
+              "candidate_seconds": 0.4482161201303825,
+              "reduction_percent": 7.392681410140378,
+              "reference_seconds": 0.4839964345749468
+            }
+          },
+          "target": {
+            "attained": true,
+            "candidate": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 426.1795753980987,
+              "preflight_inclusive_seconds": 509.00874880421907,
+              "step": 200,
+              "threshold": 0.049561327725898344
+            },
+            "candidate_over_reference": 0.9888043261604992,
+            "reference": {
+              "attained": true,
+              "baseline": 0.05506814191766483,
+              "metric": "normalized_action_mse",
+              "native_seconds": 431.64545948104933,
+              "preflight_inclusive_seconds": 514.7719678580761,
+              "step": 200,
+              "threshold": 0.049561327725898344
+            },
+            "step": 200
+          },
+          "allocated_increase_bytes": 5767168,
+          "sampled_owned_gpu_increase_bytes": 50331648,
+          "per_block_checks": {
+            "allocated_and_process_increase_at_most256MiB": true,
+            "attained_target_no_slower": true,
+            "exact100_200_300_model_optimizer_rng_data_and_task": true,
+            "strict_measurement": true,
+            "this_block_complete_workflow_strictly_faster": true,
+            "this_block_steady_strictly_faster": true
+          },
+          "exact_parity": {
+            "100": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "200": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            },
+            "300": {
+              "atol": 0,
+              "controls_rng_and_data_exact": true,
+              "excluded_storage_identity_fields": [
+                "validation.publication.destination",
+                "validation.publication.id",
+                "validation.publication.manifest"
+              ],
+              "maximum_tensor_difference": {
+                "model": 0.0,
+                "optim": 0.0
+              },
+              "passed": true,
+              "rtol": 0
+            }
+          },
+          "reference_allocator": {
+            "host_process_hwm_bytes": 31359983616,
+            "peak_allocated_bytes": 30844224000,
+            "peak_reserved_bytes": 31578914816,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "candidate_allocator": {
+            "host_process_hwm_bytes": 31334678528,
+            "peak_allocated_bytes": 30849991168,
+            "peak_reserved_bytes": 31629246464,
+            "phase_count": 27,
+            "phases": [
+              "checkpoint_begin",
+              "checkpoint_complete",
+              "data_preparation_begin",
+              "data_preparation_complete",
+              "development_native_start",
+              "evaluation_begin",
+              "evaluation_complete",
+              "model_loading_begin",
+              "model_loading_complete",
+              "portable_export_begin",
+              "portable_export_complete"
+            ]
+          },
+          "reference_samples": {
+            "device_peak_bytes": 33430896640,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31480258560,
+            "host_rss_sum_peak_bytes": 32021786624,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1097.8542816638947,
+            "owned_device_process_peak_bytes": 32654753792,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 833,
+            "sampling_gap_seconds": {
+              "count": 832,
+              "maximum": 4.2302937507629395,
+              "mean": 1.3195363962306426,
+              "median": 1.277274489402771,
+              "p95": 1.4347435235977173,
+              "sum": 1097.8542816638947
+            }
+          },
+          "candidate_samples": {
+            "device_peak_bytes": 33481228288,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31562579968,
+            "host_rss_sum_peak_bytes": 32104181760,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 1089.368388414383,
+            "owned_device_process_peak_bytes": 32705085440,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 820,
+            "sampling_gap_seconds": {
+              "count": 819,
+              "maximum": 3.7732224464416504,
+              "mean": 1.3301201323740939,
+              "median": 1.2801711559295654,
+              "p95": 1.4701351404190062,
+              "sum": 1089.368388414383
+            }
+          }
+        }
+      },
+      "owned_step_release": {
+        "candidate-bf16_lora": {
+          "cleanup_seconds": 9.790406359825283,
+          "owner_sha256": "923496a60268bc1da540747f9e7bad1e51a95636920b3038d9088584488ad406",
+          "parent_sha256": "cb5119e7c4602182f182e02e4b2c4d09524ef589d9b8946dd94c41d2e5760878",
+          "release_sha256": "51eab4a8edf0cfed96076e9dfa65648dffa47ee00c6e365494b318b601912e2d",
+          "step_id": "38532930.3"
+        },
+        "candidate-nf4_lora": {
+          "cleanup_seconds": 8.386319626122713,
+          "owner_sha256": "119ff907a9019a5e4caf57a6b388c400e5128218b2cb2502f7d1c112c0f984a3",
+          "parent_sha256": "2ffe39a2306abdec5d08854470ee3e1935b893c1010785c0fc1fcaaeb51bdd1f",
+          "release_sha256": "0cafecb3972870d165b983528de0365b82b806ce32f316b5e7a3243bf3b240b9",
+          "step_id": "38532930.1"
+        },
+        "reference-bf16_lora": {
+          "cleanup_seconds": 9.647357638925314,
+          "owner_sha256": "f5b638a72746949df9f31acc568c1bc6cd21fd08300916922ee94f6b04d4ad00",
+          "parent_sha256": "673218c6aed2515144cf5882db2a7197010cc86ebf7ee770a58b9ebc875fe783",
+          "release_sha256": "73674e92aeb5a94be8dbe1e430242b38adb5c20602ea55336446e3abef32e1ac",
+          "step_id": "38532930.0"
+        },
+        "reference-nf4_lora": {
+          "cleanup_seconds": 10.020611701067537,
+          "owner_sha256": "d0e780fffce10fc212bb1f6738f06f60f557689e53696cbe5eedb12491e18eb0",
+          "parent_sha256": "65a1e2fe582fad882177e937762d744d60d103c02d1d4fa23d82b965e0934be1",
+          "release_sha256": "8f5f6436b11a7383e5d6a9bf151fdadd6b0442471e862441744197decbba47b9",
+          "step_id": "38532930.2"
+        }
+      },
+      "all_first_block_mandatory_gates_pass": true,
+      "complete_case_attribution_qualified": true,
+      "performance_promoted": false,
+      "candidate_nf4_training_memory_saved_bytes": 1180696576,
+      "placement_limitation": "Reference BF16 case overlapped Alpamayo38531953 on the same host with disjoint actual GPUs/CPUs. Remaining cases had no known same-host Alpa overlap. All original clocks retained; no subtraction, correction or isolation claim.",
+      "cross_job_placement": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38532930-receipts-v1/cross-job-placement.json",
+        "sha256": "464ce2a96c3429fb1a371d1dea54ab9b1dfdc861d8de7bd00130766f948624ef"
+      },
+      "pending": [
+        "Predeclared reversed seed42 block and joint geometric thresholds: at least5% steady and1% complete-workflow reduction perprecision, eachblock positive and target no slower.",
+        "Candidate-owned mature recovery and affected final-current-build family qualification."
+      ],
+      "quality": "Arithmetic and fixed-step task outputs are unchanged. This cannot improve fixed-step quality, relax source-relative rollout guards, or establish independent confirmation. NF4 remains slower than equally optimized BF16; roughly1.10GiB training memory saved remains modest.",
+      "next_counterbalanced_block": {
+        "job_id": "38535185",
+        "admission": {
+          "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-lr1e5-seed42-admission-v4.json",
+          "sha256": "4bd0c2baec6be75fa2473112dd0b35a342f959311c31bfc40b0dc616fa9ff8a8"
+        },
+        "settings_changed": false,
+        "scope": "One authorized seed42 block; no candidate-mature or further-learning admission. Native seed42 outputs retained for existing recipe evidence."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -14788,6 +15257,12 @@
       "sha256": "acbbf4caf1e25d3327e17a7616d0773e95aaa1bcaf5d7cca4b51ef6a6992cf67",
       "inventory_sha256": "020c6af2d29fb567ec3f8280c1875cb2f84d1c4e9f8c70ef9194bb913e3dd047",
       "scope": "55 actual selected200 publication, fresh160 task parity, trained-component verification and memory receipts; no trained weights."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-finite-38532930-receipts-v1.tar.gz",
+      "sha256": "f8c829f92e99657f6efe11d94d4fd92ac8a386357fc76a80239058a867b0b4f2",
+      "inventory_sha256": "5aeb5fb6b0e62bb67a2b64f6eb3176c0d1bfa25338c118198b59eb8ed20b5b7e",
+      "scope": "201 terminal v4 case, native task/state comparison, raw sampler/allocator, owned-step release and placement/scheduler receipts; no trained tensor payloads."
     }
   ],
   "fixed_development_targets": {
@@ -14943,7 +15418,7 @@
     },
     "supervised_action_elements": 70,
     "input_semantic_check": "Native content fingerprint exactly matches original real rows after content-preserving local media remapping. State/action values and image bytes were not substituted.",
-    "processor_geometry_basis": "All 1,440 admitted rows have two 256\u00d7256 RGB images, 8D state, and 10\u00d77 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
+    "processor_geometry_basis": "All 1,440 admitted rows have two 256×256 RGB images, 8D state, and 10×7 actions. The pinned eval processor forms VLM text from its template and instruction; fixed image geometry determines image grid, independent of pixel values. State/action values remain separate tensor inputs.",
     "cuda_initialized": false,
     "model_weights_loaded": false,
     "processor_elapsed_seconds": 9.134169723838568,
