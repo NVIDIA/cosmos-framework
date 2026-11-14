@@ -415,9 +415,13 @@ indexed shards, with a configurable 512 MiB tensor-payload limit by default.
 A larger single tensor occupies its own shard; headers, the current merge matrix
 and row-block temporaries are additional memory. The reader retains compatibility
 with the earlier one-tensor-per-shard format. Packing and interruption/readback
-checks include fresh tiny multimodal HF loads. The full-model measurements below
-used the earlier format: they do not establish the new packing path's peak host
-memory or export time. The effective-base merge arithmetic is unchanged.
+checks include fresh tiny multimodal HF loads. The historical measurements below
+use the earlier format. A separate [full-model packing qualification on
+`26bc60f`](native_qlora_qualification.md#completed-bounded-shard-packing-on-26bc60f)
+now verifies 32 packed shards, all 750 tensor records and exact fresh
+text/image/video reloads, with loading/export memory and clocks recorded separately.
+It makes no matched performance or new quality claim. The effective-base merge
+arithmetic is unchanged.
 
 With `COSMOS_QLORA_METRICS_FILE` enabled, `09e99c3` records an export-start/reset event and a completion event after committed readback, covering adapter loading, dequantization, merging and publication separately from base loading. Failed exports attempt a diagnostic event without masking the original exception. These allocator records complement the external process sampler; they do not measure allocations outside the PyTorch allocator or whole-host memory.
 

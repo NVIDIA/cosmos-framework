@@ -19227,6 +19227,247 @@
         "state_comparisons_replayed": 12,
         "scope": "Independent receipt, exact on-node comparison-output and raw sampler replay. No second full tensor recomputation."
       }
+    },
+    "38543156": {
+      "family": "qwen3_vl",
+      "implementation_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "wheel_sha256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1",
+      "slurm_state": "FAILED",
+      "exit_code": "1:0",
+      "allocation_gpu_seconds": 86,
+      "final_qualification_acceptance": false,
+      "native_export_or_reload_started": false,
+      "packed_artifact_published": false,
+      "scope": "Original packed-v2 attempt failed before export/loading on source_state equality. No model-memory or packing qualification.",
+      "failure": {
+        "message": "original trained source changed",
+        "actual_failed_state_and_cause": "UNKNOWN; actual derived source_state and full difference were not retained. Later v3 alias proof does not reconstruct that failure."
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38543156-readout-v1.json",
+        "sha256": "fa6720dd0fb7e2b9bab6f3315757a33009fccf70fb060c604574ceed1d72d154"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38543156-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38543156-receipts-v1.tar.gz",
+        "archive_sha256": "c36de882fa03bbfffc00d58291c9afb219b287717d4e71b8f2a0e437bac89e43",
+        "inventory_sha256": "995729cadde6be5975145d6cb5a03e6c794caf3b3106e9842f681442f0408236",
+        "files_verified": 14,
+        "terminal_release_sha256": "d712c983a09184bce8f6e04099db428d4e544e3039fc97c18b8e028d132f0191"
+      }
+    },
+    "38547822": {
+      "family": "qwen3_vl",
+      "implementation_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "wheel_sha256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 493,
+      "final_qualification_acceptance": true,
+      "acceptance_sha256": "8b28855958135366360970f4d90f9d0f4af6c751092a0c86b9eec97185deed40",
+      "protocol_sha256": "4b172e233797becc77c70fae08834b657d86dbeb4dc5abd4d49b11f5e471cca0",
+      "payload_manifest_sha256": "43989131bf3690eff77c1fc0406b74bdccbb544e72949fbc5e51c52023fbd3b0",
+      "source_alias_contract_sha256": "18b5d6b9206c80e63ec729b1c29ba935a7c21bc49d57106967de56f5460ce26a",
+      "scope": "Native bounded512MiB packaging and own fresh text/image/video reload only. All750 tensor digest/shape/dtype metadata compared locally; actual source/output full-file validation was on-node. No weight download, independent remerge,584-row score, learning, serving acceleration or matched old/new memory/time claim. Sampled peaks are lower bounds and incompletehost remains incomplete.",
+      "result": {
+        "artifact_bytes": 17546674856,
+        "exact750_tensor_bytes_and_processor_config": true,
+        "exact_fresh_text_image_video_logits": true,
+        "new_manifest_sha256": "339641bc7ea907a27f5fb1b7d9ff8a7102ba7e1cfeb2d339a19cd21fed51a6d6",
+        "passed": true,
+        "retained_manifest_sha256": "3d302fa9ee5c32fab19d229371c3b0f616b0c5b9d15e34b007336398c394911d",
+        "scope": "Full-model bounded-shard packaging and reload only; no new learning/quality/latency claim.",
+        "shard_payload_max_bytes": 1244659712,
+        "sharding": {
+          "max_shard_size_bytes": 536870912,
+          "oversized_tensor": "alone",
+          "policy": "sorted_greedy_payload_bytes_v1"
+        },
+        "tensor_count": 750,
+        "weight_shards": 32
+      },
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38547822-readout-v1.json",
+        "sha256": "f04e06cb1792a0418992b793ff056fde94d4d8b46655951cfc2573e0267acadc"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38547822-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38547822-receipts-v1.tar.gz",
+        "archive_sha256": "f53df8d45f2de29d48782e5e8741bf50bd2d14e1e15daab2a0270cb7aaf60a00",
+        "inventory_sha256": "063e8385620c036bd0d34eaf15f14f884cac2e5498f069bcfe66138cb687dc9d",
+        "files_verified": 45,
+        "terminal_release_sha256": "705092b702772bef52d51e7f536ad8066049e15b5c4f9e8e66de0d474b4f1964"
+      },
+      "source_state_proof": [
+        {
+          "phase": "before-export",
+          "current_state_sha256": "4aadf85595cb8a0de12eb3f4cf69d58c06a0a84b106a5821f4eb6859ef706c4e",
+          "comparison_sha256": "1db86e5ce7d6716422fc8f8e03bf386b70f546c9afd1640c521f066e6fa7bab1",
+          "source_files_sha256_verified_on_node": 90,
+          "display_paths_samefile_on_node": [
+            [
+              "dcp",
+              "path"
+            ],
+            [
+              "dcp",
+              "provenance",
+              "source"
+            ]
+          ],
+          "all_other_fields_exact": true,
+          "checkpoint_metadata_modified": false,
+          "scope": "Samefile and90 full-file hashes are retained on-node proof; local replay verifies complete structured difference, not a second remote filesystem read."
+        },
+        {
+          "phase": "after-reload",
+          "current_state_sha256": "4aadf85595cb8a0de12eb3f4cf69d58c06a0a84b106a5821f4eb6859ef706c4e",
+          "comparison_sha256": "1db86e5ce7d6716422fc8f8e03bf386b70f546c9afd1640c521f066e6fa7bab1",
+          "source_files_sha256_verified_on_node": 90,
+          "display_paths_samefile_on_node": [
+            [
+              "dcp",
+              "path"
+            ],
+            [
+              "dcp",
+              "provenance",
+              "source"
+            ]
+          ],
+          "all_other_fields_exact": true,
+          "checkpoint_metadata_modified": false,
+          "scope": "Samefile and90 full-file hashes are retained on-node proof; local replay verifies complete structured difference, not a second remote filesystem read."
+        }
+      ],
+      "fresh_logits_exact_locally_replayed": true,
+      "shard_payload_scope": {
+        "normal_limit_bytes": 536870912,
+        "oversized_single_tensor_shards": 2,
+        "oversized_payload_bytes_each": 1244659712,
+        "every_oversized_tensor_is_alone": true
+      },
+      "memory": {
+        "sampled": {
+          "device_peak_bytes": 21634416640,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 17204202496,
+          "host_rss_sum_peak_bytes": 17231908864,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 411.65475845336914,
+          "owned_device_process_peak_bytes": 20900216832,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 321,
+          "sampling_gap_seconds": {
+            "count": 320,
+            "maximum": 1.5044479370117188,
+            "mean": 1.2864211201667786,
+            "median": 1.2730739116668701,
+            "p95": 1.3627820849418641,
+            "sum": 411.65475845336914
+          }
+        },
+        "host_complete_count": 321,
+        "incomplete_samples": [],
+        "allocator": {
+          "native_source_loading_allocator": {
+            "source_sha256": "26884e939c7b30d087d0a58f3abcd72bf71bfa25e526146d9548d99acf813137",
+            "peak_allocated_bytes": 7765099520,
+            "peak_reserved_bytes": 7790919680,
+            "scope": "Native model construction loading interval; complete records the peak before reset. Start may precede CUDA initialization."
+          },
+          "export_allocator": {
+            "source_sha256": "26884e939c7b30d087d0a58f3abcd72bf71bfa25e526146d9548d99acf813137",
+            "peak_allocated_bytes": 7767333888,
+            "peak_reserved_bytes": 7790919680,
+            "scope": "Allocator peaks since dense_export_start reset through committed export readback; includes adapter reload, dequantization, CPU merge, serialization and publication. Source-model loading precedes this interval; parent device/process sampling is separate."
+          },
+          "fresh_reload_allocator": {
+            "peak_allocated_bytes": 20023638528,
+            "peak_reserved_bytes": 20340277248,
+            "peak_scope": "fresh HF load and controlled probes"
+          }
+        },
+        "scope": "321 complete observed host collections, sampled lower bounds only; no preflight/whole-host or unsampled-peak claim. Loading, export/readback, and fresh-load/probe allocator scopes are separate."
+      },
+      "clocks": {
+        "native_export_command_seconds": 205.0294316317886,
+        "fresh_dense_reload_command_seconds": 171.58891396410763,
+        "qualification_seconds": 413.12048951908946,
+        "scope": "New packaging qualification costs only; no matched old/new speed or inference-latency claim."
+      },
+      "runtime": {
+        "code": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+        "cpu_affinity": [
+          8,
+          9,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          126,
+          127,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157
+        ],
+        "cpu_threads": {
+          "MKL_NUM_THREADS": null,
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": null
+        },
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-0b795432-c4fd-642e-e3bd-476a5cd5de4e"
+        },
+        "node": "batch-block4-1017",
+        "numa_nodes": [
+          "node0",
+          "node1",
+          "node2",
+          "node7"
+        ],
+        "slurm_job": "38547822",
+        "slurm_step": "0",
+        "torch_git": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+        "versions": {
+          "accelerate": "1.13.0",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "torch": "2.11.0+cu128",
+          "torchcodec": "0.11.0+cpu",
+          "transformers": "5.8.1"
+        },
+        "wheel_sha256": "36d5fb04a51ad075ced67f06201aa71d8713c3620b7e00c7dbcd4ffc91d6b3a1"
+      },
+      "prior_failed_attempt": {
+        "actual_failed_source_state_and_cause": "UNKNOWN; prospective samefile display-alias bridge does not prove historical cause.",
+        "allocated_gpu_seconds": 86,
+        "job_id": 38543156,
+        "state": "FAILED"
+      },
+      "root_independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38547822-root-review-v1.json",
+        "sha256": "8fe4b6e85f887c5cc48ad26ccacb32a2f25f8c51cc7a48c4316ade87e7b046f0",
+        "files_verified": 45,
+        "exact_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "tensor_manifest_and_index_entries": 750,
+        "weight_shards": 32,
+        "scope": "Independent small-logit equality and tensor/index/packing constraints; no second full-weight/model computation."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -19406,6 +19647,16 @@
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-receipts-v1.tar.gz",
       "sha256": "bd7b9605a1b6709916807230e0eb46bd4943d2153b76d0288307d9da0160df39",
       "scope": "Terminal Qwen02 job38545631 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38543156-receipts-v1.tar.gz",
+      "sha256": "c36de882fa03bbfffc00d58291c9afb219b287717d4e71b8f2a0e437bac89e43",
+      "scope": "Terminal Qwen packed-export job38543156 bounded receipts and small controlled logits; no model weight shards."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-packed-export-38547822-receipts-v1.tar.gz",
+      "sha256": "f53df8d45f2de29d48782e5e8741bf50bd2d14e1e15daab2a0270cb7aaf60a00",
+      "scope": "Terminal Qwen packed-export job38547822 bounded receipts and small controlled logits; no model weight shards."
     }
   ],
   "fixed_development_targets": {

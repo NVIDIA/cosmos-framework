@@ -1,6 +1,6 @@
 # Native QLoRA qualification checklist
 
-**The native QLoRA path is implemented and measured, but it is not release-qualified.** Sealed `02f93ba` now has accepted own-build Qwen recovery/reload checks; the scoped BF16 dense-export evidence remains on `09e99c3`. Resident timing and update-250-to-300 recovery belong to `dadfc89`. Selected rank-32 historical mean NLL was 0.822% lower than BF16, but upper bounds of **+5.879% NLL and 1.556 percentage points accuracy loss** fail the unchanged 2% / one-point requirements. This does not prove a material regression; it leaves preservation unestablished. Quality improvement and a QLoRA time-to-target advantage also remain open.
+**The native QLoRA path is implemented and measured, but it is not release-qualified.** Sealed `02f93ba` now has accepted own-build Qwen recovery/reload checks; the scoped BF16 merge evidence remains on `09e99c3`, with bounded packing and fresh reload additionally qualified on `26bc60f`. Resident timing and update-250-to-300 recovery belong to `dadfc89`. Selected rank-32 historical mean NLL was 0.822% lower than BF16, but upper bounds of **+5.879% NLL and 1.556 percentage points accuracy loss** fail the unchanged 2% / one-point requirements. This does not prove a material regression; it leaves preservation unestablished. Quality improvement and a QLoRA time-to-target advantage also remain open.
 
 The original trained NF4 diagnostic had 4.18% higher NLL and related recording families across its training/validation boundary. That original failure and all later build-specific decisions remain unchanged. Exposed development/regression data cannot supply independent final confirmation.
 
@@ -642,6 +642,14 @@ The external sampler measured these process peaks in GiB, separately from alloca
 All 1,076 sampled host collections were complete; the maximum sampling gap was 4.754 seconds. These remain lower bounds, and summed RSS can double-count shared pages. Preflight execution was not sampled; whole-host memory is not inferred.
 
 This qualifies the measured BF16 effective-base conversion and fresh HF reconstruction on one A100 80GB. It does not qualify exact training resume from dense output, FP32 accelerator export, original-BF16-base merging, requantization, another serving backend or inference acceleration. The [native command and identity requirements](native_qlora.md#effective-base-dense-export) remain mandatory.
+
+### Completed bounded-shard packing on `26bc60f`
+
+Allocation **38547822** qualified the native 512 MiB packing policy against the retained, independently verified `09e99c3` export. All **750 tensor hashes, shapes and dtypes**, processor/config files and source identity matched; fresh HF text/image/video logits and losses were exact. The packed artifact has **32 weight shards / 17,546,674,856 bytes** including its manifest. Two individual tensors exceed the normal payload limit and each occupies its own **1,244,659,712-byte** shard, as declared by the format. This checks packaging and reconstruction; it does not repeat the independent merge or 584-row quality evaluation.
+
+The [45-file receipt collection](evidence/native_qlora_family_engineering_4cba88f.json) retains actual source states before export and after reload. Both comparisons verified all 90 original source files and permitted only two display-path differences, each proven to name the same directory; every other field matched and checkpoint metadata was not rewritten. The earlier **38543156** attempt remains **FAILED / 86 GPU-seconds** before model/export work. Its actual failed state was not recorded, so its cause remains unknown; the prospective alias check does not reconstruct that failure.
+
+Source loading peaked at **7.232/7.256 GiB allocated/reserved**, export through committed readback at **7.234/7.256 GiB**, and fresh HF loading/probes at **18.648/18.943 GiB**. All **321** observed host collections were complete; sampled owned-GPU/PSS peaks were **19.465/16.023 GiB**, with a maximum 1.504-second sampling gap. These are separate scopes and sampled lower bounds, with preflight excluded. The allocation cost **493 GPU-seconds / 7,888 allocated CPU-seconds**. No matched old/new memory or runtime improvement, inference acceleration, new learning or quality claim follows.
 
 ### Completed answer-smoothing correctness
 
