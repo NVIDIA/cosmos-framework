@@ -37,7 +37,7 @@ def make_config():
     config.rl.max_steps = 100
     config.rl.seed = 17
     config.rl.evaluation_every = 25
-    config.rl.optimizer.lr = 1e-4
+    config.rl.optimizer.lr = 1e-5
     config.rl.optimizer.weight_decay = 1e-5
     config.rl.optimizer.eps = 1e-8
     config.rl.optimizer.grad_clip_norm = 1.0
