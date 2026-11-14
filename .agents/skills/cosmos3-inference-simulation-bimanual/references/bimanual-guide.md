@@ -40,6 +40,8 @@ export COSMOS_INTERNAL=0 COSMOS_TRAINING=0
 Select the CUDA dependency group that matches the installed driver. Keep the
 FFmpeg library search path required by the host installation.
 
+> **Skill note (not in the source):** the `export` line of the block above holds for the current shell only. In a shell without `COSMOS_TRAINING=0`, `python -m cosmos_framework.scripts.inference` stops with `ModuleNotFoundError: No module named 'pandas'`: the import belongs to the training extras, which this environment does not install. Check with `echo "$COSMOS_TRAINING"`. In a new shell, run `source .venv/bin/activate` and the `export` line again; do not install the package.
+
 ## Download the model and examples
 
 Authenticate to Hugging Face when the gated model requires it. Keep the token
