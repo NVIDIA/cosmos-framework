@@ -417,10 +417,15 @@ class CosmosFrameworkRuntime:
             _feature_owner: Any,
             pixel_values_videos: Any,
             video_grid_thw: Any = None,
+            *,
+            return_dict: bool | None = None,
         ) -> Any:
+            # Ordered TF5 VLM forwards explicitly request a ModelOutput; legacy
+            # consumers keep their original default. Cache the two forms apart.
+            output_kwargs = {} if return_dict is None else {"return_dict": return_dict}
             active_key = runtime._video_feature_cache_active_key
             if active_key is None or runtime._video_feature_cache_capacity <= 0:
-                return original_get_video_features(pixel_values_videos, video_grid_thw)
+                return original_get_video_features(pixel_values_videos, video_grid_thw, **output_kwargs)
 
             if video_grid_thw is None:
                 grid_key: tuple[int, ...] = ()
@@ -432,6 +437,7 @@ class CosmosFrameworkRuntime:
                 str(pixel_values_videos.dtype),
                 str(pixel_values_videos.device),
                 grid_key,
+                return_dict,
             )
             cache = runtime._video_feature_cache
             if cache_key in cache:
@@ -456,7 +462,7 @@ class CosmosFrameworkRuntime:
                 return cached
 
             runtime._video_feature_cache_misses += 1
-            encoded = original_get_video_features(pixel_values_videos, video_grid_thw)
+            encoded = original_get_video_features(pixel_values_videos, video_grid_thw, **output_kwargs)
             cache[cache_key] = encoded
             while len(cache) > runtime._video_feature_cache_capacity:
                 cache.popitem(last=False)
@@ -941,7 +947,7 @@ class CosmosFrameworkRuntime:
         return outputs, losses
 
     def _process_vision_info(self, conversations: list[Any]) -> tuple[Any, Any, dict[str, Any]]:
-        """Preserve source timing and let Qwen3's processor resize decoded videos.
+        """Preserve source timing and let the admitted Qwen processor resize videos.
 
         qwen-vl-utils' frame-list path fabricates a 2-FPS timeline and resizes
         each PIL frame before video processing. Raw decoded frames with their
@@ -952,12 +958,18 @@ class CosmosFrameworkRuntime:
         from qwen_vl_utils import process_vision_info
         from qwen_vl_utils.vision_process import extract_vision_info
 
+        qwen2 = self.model_type in ("qwen2_vl", "qwen2_5_vl")
+        image_patch_size = 16
+        if qwen2:
+            image_patch_size = getattr(getattr(self.processor, "image_processor", None), "patch_size", None)
+            if type(image_patch_size) is not int or image_patch_size <= 0:
+                raise ValueError("Qwen2/2.5-VL preprocessing requires its processor's image patch geometry")
         media = extract_vision_info(conversations)
         videos = [item for item in media if "video" in item]
         supplied = [item for item in videos if "video_metadata" in item]
         if not supplied:
             return process_vision_info(
-                conversations, image_patch_size=16, return_video_kwargs=True, return_video_metadata=True
+                conversations, image_patch_size=image_patch_size, return_video_kwargs=True, return_video_metadata=True
             )
         if len(supplied) != len(videos):
             raise ValueError("a batch cannot mix source-metadata videos with untracked decoded frames or video paths")
@@ -973,8 +985,17 @@ class CosmosFrameworkRuntime:
         video_processor = getattr(self.processor, "video_processor", None)
         if isinstance(video_processor, _RankLocalVideoProcessorCache):
             video_processor = video_processor._delegate
-        if not isinstance(video_processor, Qwen3VLVideoProcessor):
-            raise ValueError("source-metadata video evaluation currently requires Qwen3VLVideoProcessor")
+        processor_type = Qwen3VLVideoProcessor
+        if qwen2:
+            from importlib.metadata import version
+
+            from transformers.models.qwen2_vl.video_processing_qwen2_vl import Qwen2VLVideoProcessor
+
+            if version("transformers") != "5.8.1":
+                raise ValueError("Qwen2/2.5 source-metadata video requires the pinned Transformers 5.8.1 processor")
+            processor_type = Qwen2VLVideoProcessor
+        if not isinstance(video_processor, processor_type):
+            raise ValueError(f"source-metadata video evaluation requires {processor_type.__name__}")
         settings = set()
         prepared = []
         for item in videos:
@@ -997,16 +1018,19 @@ class CosmosFrameworkRuntime:
         count, minimum, maximum = next(iter(settings))
         padded_count = math.ceil(count / video_processor.temporal_patch_size) * video_processor.temporal_patch_size
         size = dict(video_processor.size)
+        # Qwen2/2.5 resize bounds are per frame. Qwen3's native video processor
+        # instead divides its size budget across padded temporal frames.
+        factor = 1 if qwen2 else padded_count
         if minimum is not None:
-            size["shortest_edge"] = padded_count * minimum
+            size["shortest_edge"] = factor * minimum
         if maximum is not None:
-            size["longest_edge"] = padded_count * maximum
+            size["longest_edge"] = factor * maximum
         images = [item for item in media if "video" not in item]
         image_inputs = None
         if images:
             image_inputs, _, _ = process_vision_info(
                 [{"role": "user", "content": images}],
-                image_patch_size=16,
+                image_patch_size=image_patch_size,
                 return_video_kwargs=True,
                 return_video_metadata=True,
             )
@@ -1085,6 +1109,10 @@ class CosmosFrameworkRuntime:
             "padding": True,
             "return_tensors": "pt",
         }
+        if self.model_type in ("qwen2_vl", "qwen2_5_vl") and image_inputs and not video_inputs:
+            # qwen-vl-utils has already applied each image's explicit bounds.
+            processor_kwargs["images_kwargs"] = {"do_resize": False}
+            processor_kwargs["common_kwargs"] = {"return_tensors": processor_kwargs.pop("return_tensors")}
         if video_inputs:
             videos, video_metadata = zip(*video_inputs)
             processor_kwargs.update(
@@ -1117,6 +1145,9 @@ class CosmosFrameworkRuntime:
             "images": image_inputs,
             "return_tensors": "pt",
         }
+        if self.model_type in ("qwen2_vl", "qwen2_5_vl") and image_inputs and not video_inputs:
+            processor_kwargs["images_kwargs"] = {"do_resize": False}
+            processor_kwargs["common_kwargs"] = {"return_tensors": processor_kwargs.pop("return_tensors")}
         if video_inputs:
             videos, video_metadata = zip(*video_inputs)
             processor_kwargs.update(

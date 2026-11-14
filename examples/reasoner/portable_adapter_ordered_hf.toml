@@ -1,0 +1,26 @@
+# Replace both paths with the exact base and portable artifact recorded at training.
+# This profile must already be declared by the artifact; changing a label is not conversion.
+# python -m cosmos_framework.inference.reasoner.generate --config examples/reasoner/portable_adapter_ordered_hf.toml --output answer.json
+[model]
+model_name = "/models/Qwen2-VL-2B-Instruct/895c3a49bc3fa70a340399125c650a463535e71c"
+dtype = "float32"
+attn_implementation = "sdpa"
+
+[model.portable_adapter]
+directory = "/adapters/qwen2-vl-ordered/portable"
+execution_profile = "qwen_vl_hf_ordered_v1"
+cache_effective_weights = false
+
+[generation]
+max_tokens = 32
+temperature = 0.0
+seed = 42
+
+[vision]
+num_frames = 4
+min_pixels = 50176
+max_pixels = 81920
+
+[[tasks]]
+question = "Describe one reason to slow down near a pedestrian crossing."
+# For media add media_paths=["/data/example.mp4"] and media_mode="video".

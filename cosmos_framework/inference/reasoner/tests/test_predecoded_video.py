@@ -239,6 +239,161 @@ def test_source_metadata_accepts_the_existing_video_processor_cache_wrapper():
     assert kwargs["videos_kwargs"]["size"] == {"shortest_edge": 200704, "longest_edge": 327680}
 
 
+def _qwen2_runtime(family):
+    from importlib.metadata import version
+
+    if version("transformers") != "5.8.1":
+        pytest.skip("Qwen2/2.5 source-metadata inference pins Transformers 5.8.1")
+    pytest.importorskip("transformers.models.qwen2_vl.video_processing_qwen2_vl")
+    from transformers import Qwen2_5_VLProcessor, Qwen2VLImageProcessor, Qwen2VLProcessor, Qwen2VLVideoProcessor
+
+    from cosmos_framework.posttrain.tests.helpers.sft_packer import CHAT_TEMPLATE, local_tokenizer
+
+    runtime = _runtime()
+    runtime.model_type = family
+    runtime.processor = (Qwen2VLProcessor if family == "qwen2_vl" else Qwen2_5_VLProcessor)(
+        image_processor=Qwen2VLImageProcessor(patch_size=14),
+        video_processor=Qwen2VLVideoProcessor(patch_size=14, temporal_patch_size=2, merge_size=2),
+        tokenizer=local_tokenizer(),
+        chat_template=CHAT_TEMPLATE,
+    )
+    return runtime
+
+
+@pytest.mark.parametrize("family", ["qwen2_vl", "qwen2_5_vl"])
+@pytest.mark.parametrize("batched", [False, True])
+def test_qwen2_predecoded_native_processor_pixels_tokens_grid_and_time(family, batched):
+    import copy
+
+    runtime = _qwen2_runtime(family)
+    conversation = _conversation()
+    before = copy.deepcopy(conversation[0]["content"][0]["video_metadata"])
+    _, videos, kwargs = runtime._process_vision_info(conversation)
+    raw, metadata = videos[0]
+    assert metadata == before
+    assert kwargs["videos_kwargs"] == {
+        "do_resize": True,
+        "do_sample_frames": False,
+        "size": {"shortest_edge": 50176, "longest_edge": 81920},
+    }
+    for index in range(4):
+        assert torch.equal(
+            raw[index], torch.from_numpy(np.array(conversation[0]["content"][0]["video"][index])).permute(2, 0, 1)
+        )
+    count = 2 if batched else 1
+    text = runtime.processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+    expected = runtime.processor(
+        text=[text] * count,
+        videos=[raw] * count,
+        videos_kwargs={**kwargs["videos_kwargs"], "video_metadata": [copy.deepcopy(metadata) for _ in range(count)]},
+        common_kwargs={"return_tensors": "pt"},
+    )
+    actual = (
+        runtime._prepare_transformers_batch([conversation] * count)
+        if batched
+        else runtime._prepare_transformers_inputs(conversation)
+    )
+    assert actual.keys() == expected.keys()
+    for name in expected:
+        torch.testing.assert_close(torch.as_tensor(actual[name]), torch.as_tensor(expected[name]), rtol=0, atol=0)
+    assert actual["video_grid_thw"].shape == (count, 3)
+    assert actual["video_grid_thw"][:, 0].tolist() == [2] * count
+    assert conversation[0]["content"][0]["video_metadata"] == before
+    if family == "qwen2_5_vl":
+        # Use the native sampled_fps formula; no replacement with qwen-vl-utils'
+        # fabricated 2 FPS or the decoder's requested nominal sampling rate.
+        torch.testing.assert_close(
+            torch.as_tensor(actual["second_per_grid_ts"]), torch.full((count,), 2 / (4 / 2211 * 30))
+        )
+
+
+@pytest.mark.parametrize("family", ["qwen2_vl", "qwen2_5_vl"])
+def test_qwen2_images_use_recorded_patch_geometry(family):
+    from qwen_vl_utils import process_vision_info
+
+    runtime = _qwen2_runtime(family)
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": Image.fromarray(np.arange(71 * 99 * 3, dtype=np.uint8).reshape(71, 99, 3)),
+                    "min_pixels": 56**2,
+                    "max_pixels": 112**2,
+                },
+                {"type": "text", "text": "Describe."},
+            ],
+        }
+    ]
+    actual, videos, kwargs = runtime._process_vision_info(conversation)
+    expected, _, _ = process_vision_info(
+        conversation, image_patch_size=14, return_video_kwargs=True, return_video_metadata=True
+    )
+    assert videos is None
+    assert np.array_equal(np.asarray(actual[0]), np.asarray(expected[0]))
+    inputs = runtime._prepare_transformers_inputs(conversation)
+    assert inputs["image_grid_thw"].tolist() == [[1, actual[0].height // 14, actual[0].width // 14]]
+
+
+def test_qwen2_foreign_video_processor_rejected():
+    runtime = _qwen2_runtime("qwen2_vl")
+    runtime.processor.video_processor = Qwen3VLVideoProcessor()
+    with pytest.raises(ValueError, match="requires Qwen2VLVideoProcessor"):
+        runtime._process_vision_info(_conversation())
+
+
+def test_qwen2_source_timing_rejects_older_processor_semantics(monkeypatch):
+    import importlib.metadata
+
+    runtime = _qwen2_runtime("qwen2_5_vl")
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "4.57.6")
+    with pytest.raises(ValueError, match="pinned Transformers 5.8.1"):
+        runtime._process_vision_info(_conversation())
+    # The existing Qwen3 metadata pipeline keeps its prior admission behavior.
+    assert _runtime()._process_vision_info(_conversation())[1][0][1]["total_num_frames"] == 2211
+
+
+def test_qwen2_video_cache_keeps_source_metadata():
+    runtime = _qwen2_runtime("qwen2_5_vl")
+    runtime._video_feature_cache_active_key = ("same-qwen2-video",)
+    runtime._video_processor_cache_capacity = 1
+    runtime._video_input_cache = OrderedDict()
+    runtime._video_input_cache_hits = runtime._video_input_cache_misses = 0
+    conversation = _conversation()
+    first = runtime._process_vision_info_cached([conversation])
+    assert runtime._process_vision_info_cached([conversation]) is first
+    prepared = runtime._prepare_transformers_batch([conversation])
+    assert prepared["second_per_grid_ts"]
+    assert first[1][0][1]["frames_indices"] == [0, 737, 1473, 2210]
+    assert first[2]["videos_kwargs"]["size"] == {"shortest_edge": 50176, "longest_edge": 81920}
+
+
+def test_feature_cache_preserves_explicit_and_legacy_return_forms():
+    calls = []
+
+    class Features:
+        def get_video_features(self, pixels, grid, *, return_dict=None):
+            calls.append(return_dict)
+            return (pixels.sum(), return_dict)
+
+    runtime = _runtime()
+    owner = Features()
+    runtime.model = SimpleNamespace(model=owner)
+    runtime._video_feature_cache_wrapped = False
+    runtime._video_feature_cache = OrderedDict()
+    runtime._video_feature_cache_hits = runtime._video_feature_cache_misses = 0
+    runtime._install_video_feature_cache(4)
+    runtime._video_feature_cache_active_key = ("fixed-video",)
+    pixels, grid = torch.ones(4, 24), torch.tensor([[1, 2, 2]])
+    for value in (None, True, False, None, True, False):
+        kwargs = {} if value is None else {"return_dict": value}
+        actual = owner.get_video_features(pixels, grid, **kwargs)
+        assert actual[1] is value
+    assert calls == [None, True, False]
+    assert runtime._video_feature_cache_hits == 3
+
+
 def test_task_conversation_transfers_source_metadata_without_mutating_task():
     task = {
         "media_mode": "video",

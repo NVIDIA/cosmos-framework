@@ -280,3 +280,41 @@ runtimes stay at their catalogued immutable paths. The historical 12 checkpoints
 new inference executions do not increase those counts. PR #342 was not reopened;
 nothing was pushed or published. No full training, checkpoint-export sweep,
 family expansion, four-bit work or HPO was performed.
+
+## Ordered HF VLM portable loading
+
+The public loader also accepts artifacts that already declare
+`qwen_vl_hf_ordered_v1`, using the existing HF Qwen2-VL, Qwen2.5-VL and Qwen3-VL
+architecture implementations. It restores the recorded factorized or dense
+PiSSA component execution, including magnitudes, initial factors and extra
+modules. It uses the shared pretrained weight loader without a training wrapper
+or an evaluation-only factory. Base, processor, target and alias identities are
+checked before adapter installation; missing saved tensors are errors.
+
+Use the pinned Transformers 5.8.1 / PyTorch 2.10.0 reasoner environment and
+[portable_adapter_ordered_hf.toml](../../examples/reasoner/portable_adapter_ordered_hf.toml):
+
+```bash
+python -m cosmos_framework.inference.reasoner.generate \
+  --config examples/reasoner/portable_adapter_ordered_hf.toml --output answer.json
+```
+
+The same model table works in the normal reasoner evaluator. Replace both paths
+with the exact recorded immutable snapshots. This route explicitly promotes the
+recorded BF16 base to FP32; it requires one A100, batch one, eager evaluation,
+SDPA and no autocast or autograd. It does not implement original-storage BF16
+inference or claim cache-consistent numerics. Effective-weight caching is not
+supported. Existing merged loading remains unchanged: omit the portable table
+and select the completed FP32 export.
+
+Qwen2/2.5 source-metadata videos retain frame indices, FPS and native per-frame
+resize budgets. Images use their processor's patch geometry and one resize.
+The existing Qwen3 preprocessing stays unchanged. The evaluator's decoded-media
+path supplies the campaign's source-frame contract; a raw CLI video path uses
+the ordinary qwen-vl-utils reader and is not evidence of that frozen population.
+
+Source review independently passed 102 CPU checks, with four existing GPU tests
+skipped. Real Qwen2-VL processor metadata and 59 resolved targets also match the
+preserved prerequisite artifact. Installed A100 qualification remains pending;
+small fixtures do not qualify real Qwen2.5/3 checkpoints, task quality, full-data
+training or any previously failed numerical gate.
