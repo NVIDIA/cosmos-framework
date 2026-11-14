@@ -10,6 +10,7 @@ an empty admission is deliberately unexecutable, not an architectural exclusion.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -20,6 +21,7 @@ from .evidence import Store, digest, producer_reviews, read_json, require, same
 REQUIRED_DEPLOYMENTS = {"REQUIRED", "REQUIRED_LEGACY_APPROXIMATION_CHECK", "REQUIRED_PRECISION_MATCHED_MERGE_CHECK"}
 EXCLUDED_DEPLOYMENTS = {"EXPLICITLY_REJECTED", "LEGACY_REJECTED_NOT_A_PASS", "UNADMITTED_PROFILE_COMBINATION"}
 PHYSICAL_DATASETS = {"libero_pi05", "libero_gr00t", "physicalai_alpamayo"}
+IDENTITY_PROTOCOL_PREFIX = "pretraining_identity:"
 
 
 def reference(root, name):
@@ -29,6 +31,154 @@ def reference(root, name):
 
 def assertion(field, expected, operator="eq"):
     return {"document": "measurement", "pointer": "/" + field, "operator": operator, "expected": expected}
+
+
+def apply_pretraining_identity(store, cells, *, name, reference):
+    """Resolve one previously empty identity from a separately reviewed proof.
+
+    The inventory/config and all gates remain sealed. This is not an asset-seal
+    receipt, nor permission to reinterpret evidence under a different identity.
+    The caller still needs independent review of the complete compiled digest.
+    """
+    cell_id = name.removeprefix(IDENTITY_PROTOCOL_PREFIX)
+    require(name.startswith(IDENTITY_PROTOCOL_PREFIX) and cell_id, "invalid identity amendment name")
+    amendment = store.json(reference)
+    require(
+        set(amendment) == {"format", "cell", "prior_contract", "prior_index", "resolution", "producer_review"}
+        and amendment["format"] == "adapter-campaign-pretraining-identity-amendment-v1"
+        and amendment["cell"] == cell_id,
+        "invalid cell-scoped identity amendment",
+    )
+    prior = store.json(amendment["prior_contract"])
+    index = store.json(amendment["prior_index"])
+    proof = store.json(amendment["resolution"])
+    review = store.json(amendment["producer_review"])
+    require(
+        review["status"] == "PASS_NO_OPEN_CONFIRMED_FINDINGS" and review["open_findings"] == [],
+        "identity producer has unresolved review findings",
+    )
+    require(
+        review["reviewed_files"].get(amendment["resolution"]["path"]) == amendment["resolution"]["sha256"],
+        "identity resolution has no exact independent review",
+    )
+    require(
+        prior["format"] == "adapter-campaign-completion-contract-v1"
+        and prior["required_cells"] == len(prior["cells"]) == len(cells) == 368
+        and len({v["id"].split("__")[0] for v in prior["cells"]}) == 16
+        and len({v["id"] for v in cells}) == len({v["id"] for v in prior["cells"]}) == 368
+        and {v["id"] for v in cells} == {v["id"] for v in prior["cells"]},
+        "identity amendment changed the sealed scope",
+    )
+    require(
+        index["format"] == "adapter-campaign-evidence-index-v1"
+        and index["contract_sha256"] == digest(prior)
+        and (cell_id not in index["cells"] or index["cells"][cell_id].get("gates") == {}),
+        "identity amendment has stale history or existing target gates",
+    )
+    selected = [v for v in cells if v["id"] == cell_id]
+    previous = [v for v in prior["cells"] if v["id"] == cell_id]
+    require(len(selected) == len(previous) == 1, "unknown identity amendment cell")
+    cell = selected[0]
+    require(
+        same(cell["identity"], previous[0]["identity"])
+        and cell["identity"]["base"] is None
+        and cell["identity"]["processor"] is None,
+        "identity amendment may only resolve the original two null fields",
+    )
+    require(
+        proof["format"] == "hf-segmented-pretraining-identity-resolution-v2"
+        and proof["cell"] == cell_id
+        and same(proof["prior_identity"], cell["identity"])
+        and proof["prior_contract_sha256"] == digest(prior)
+        and proof["prior_index_sha256"] == digest(index)
+        and same(proof["before"], {"base": None, "processor": None})
+        and set(proof["after"]) == {"base", "processor"}
+        and proof["qualification_pass"] is False
+        and proof["active_index_written"] is False
+        and proof["gate_evidence_emitted"] is False,
+        "unbound or post-execution identity resolution",
+    )
+    origin = Path(proof["capture_origin"])
+    require(origin.is_absolute() and ".." not in origin.parts, "unsafe identity capture origin")
+    audit_ref = proof["actual_audit"]
+    require(
+        review["reviewed_files"].get(audit_ref["path"]) == audit_ref["sha256"]
+        and review.get("capture_origins", {}).get(audit_ref["sha256"]) == str(origin),
+        "identity audit or capture relocation has no exact independent review",
+    )
+    audit = store.json(audit_ref)
+    require(
+        audit["cell"] == cell_id
+        and audit["status"] == "PASS_NO_OPEN_CONFIRMED_FINDINGS"
+        and audit["open_findings"] == [],
+        "identity proof belongs to another or unresolved actual audit",
+    )
+    sources = proof["producer_files_sha256"]
+    require(
+        set(sources)
+        == {
+            "tools/adapter_campaign/" + source
+            for source in ("hf_segmented.py", "segmented.py", "recovered.py", "evidence.py", "primary.py")
+        },
+        "incomplete identity producer source closure",
+    )
+    for path, expected in sources.items():
+        require(
+            isinstance(expected, str)
+            and re.fullmatch("[0-9a-f]{64}", expected)
+            and review["reviewed_files"].get(path) == expected,
+            "identity producer source was not independently reviewed",
+        )
+    support = proof["supporting_evidence"]
+    require(
+        isinstance(support, list)
+        and support
+        and len({r["path"] for r in support}) == len(support)
+        and audit_ref in support,
+        "incomplete identity evidence closure",
+    )
+    for ref in support:
+        store.bytes(ref)
+    for asset in proof["after"].values():
+        require(
+            set(asset) == {"sha256", "files"}
+            and isinstance(asset["sha256"], str)
+            and re.fullmatch("[0-9a-f]{64}", asset["sha256"])
+            and isinstance(asset["files"], dict)
+            and asset["files"],
+            "incomplete immutable identity inventory",
+        )
+        for path, expected in asset["files"].items():
+            require(
+                isinstance(path, str)
+                and Path(path).parts
+                and not Path(path).is_absolute()
+                and ".." not in Path(path).parts
+                and isinstance(expected, str)
+                and re.fullmatch("[0-9a-f]{64}", expected),
+                "unsafe or unsealed immutable identity member",
+            )
+    proposal = copy.deepcopy(prior)
+    next(v for v in proposal["cells"] if v["id"] == cell_id)["identity"].update(proof["after"])
+    require(proof["candidate_contract_sha256"] == digest(proposal), "identity proposal changed other fields")
+    base_gates = [v for v in cell["requirements"] if v["id"] == "matched_base_evaluation"]
+    asset_gates = [v for v in cell["requirements"] if v["id"] == "immutable_asset_seal"]
+    require(len(base_gates) == len(asset_gates) == 1, "identity amendment cannot remove a required gate")
+    base_assertions = [v for v in base_gates[0]["assertions"] if v["pointer"] == "/immutable_base_sha256"]
+    require(
+        len(base_assertions) == 1 and same(base_assertions[0], assertion("immutable_base_sha256", digest(None))),
+        "identity amendment cannot change matched-base semantics",
+    )
+    # All validation precedes the allowed identity/assertion/note changes to
+    # this one cell. The required asset gate and its admissions remain intact.
+    cell["identity"].update(copy.deepcopy(proof["after"]))
+    base_assertions[0]["expected"] = digest(proof["after"]["base"])
+    asset_gates[0].pop("pending_admission", None)
+    cell["identity_resolution"] = {
+        "protocol": reference,
+        "resolution": amendment["resolution"],
+        "note": "Pretraining identities resolved; the required own-cell immutable_asset_seal receipt remains unawarded.",
+    }
 
 
 def closed_loop_contract(store, protocols, dataset, data):
@@ -540,6 +690,9 @@ def compile_contract(root, *, inventory, deployment, gates, admissions, protocol
             }
         )
     require(len(cells) == manifest["total_required_cells"], "cell count changed")
+    for name, ref in protocols.items():
+        if name.startswith(IDENTITY_PROTOCOL_PREFIX):
+            apply_pretraining_identity(store, cells, name=name, reference=ref)
     return {
         "format": "adapter-campaign-completion-contract-v1",
         "synthetic": False,
