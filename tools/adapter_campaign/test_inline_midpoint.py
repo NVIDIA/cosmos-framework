@@ -20,12 +20,14 @@ from tools.adapter_campaign.evidence import EvidenceError, Store
 from tools.adapter_campaign.inline_midpoint import (
     Capture,
     check_checkpoint,
+    check_initial_factors,
     check_runtime,
     checkpoint_inventory,
     compare_midpoint,
     compare_replay,
     exact_tree,
     metric_number,
+    portable_factor_spec,
     produce,
 )
 
@@ -331,6 +333,22 @@ class ReplayTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_only_exact_empty_root_admission_lock_is_nonstate(self):
+        empty = {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}
+        self.assertTrue(inline_midpoint.valid_captured_size(Path("/root"), "/root/admission.lock", empty))
+        for name, value in (
+            ("/other/admission.lock", empty),
+            ("/root/output/admission.lock", empty),
+            ("/root/model/__0_0.distcp", empty),
+            ("/root/trainer.pt", empty),
+            ("/root/data.pt", empty),
+            ("/root/admission.lock", {**empty, "bytes": False}),
+            ("/root/admission.lock", {**empty, "bytes": -1}),
+            ("/root/admission.lock", {**empty, "sha256": "0" * 64}),
+        ):
+            with self.subTest(name=name, value=value):
+                self.assertFalse(inline_midpoint.valid_captured_size(Path("/root"), name, value))
+
     def test_producer_review_dependency_capture_and_contract_are_mandatory(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -425,6 +443,199 @@ class AdmissionTests(unittest.TestCase):
                 produce(d, {"synthetic": True}, Path(d) / "new", audit_review={}, producer_review={})
             with self.assertRaisesRegex(EvidenceError, "new evidence"):
                 produce(d, {}, d, audit_review={}, producer_review={})
+
+
+def portable_fixture(*, pissa=True):
+    """Synthetic complete mixed portable artifacts, including both alias kinds."""
+    from safetensors.torch import save
+
+    targets = []
+    for name, owner, method in (
+        ("a", "a", "pissa" if pissa else "lora"),
+        ("tied_a", "a", "pissa" if pissa else "lora"),
+        ("b", "b", "lora"),
+        ("c", "c", "dora"),
+    ):
+        targets.append(
+            {
+                "name": name,
+                "owner": owner,
+                "component": "language",
+                "shape": [4, 3],
+                "settings": {
+                    "method": method,
+                    "rank": 2,
+                    "dtype": "float32",
+                    "initialization": "svd_lowrank" if method == "pissa" else "kaiming",
+                },
+            }
+        )
+    extras = [
+        {
+            "name": name,
+            "owner": "norm.weight",
+            "shape": [3],
+            "dtype": "float32",
+            "component": "language",
+            "lr_multiplier": 2.0,
+            "weight_decay": 0.0,
+        }
+        for name in ("norm.weight", "tied_norm.weight")
+    ]
+    layouts = {}
+    for name in ("a", "b", "c"):
+        layouts[name + ".lora_A.weight"] = {"shape": [2, 3], "dtype": "torch.float32"}
+        layouts[name + ".lora_B.weight"] = {"shape": [4, 2], "dtype": "torch.float32"}
+    layouts["c.magnitude"] = {"shape": [4], "dtype": "torch.float32"}
+    layouts["norm.weight"] = {"shape": [3], "dtype": "torch.float32"}
+    resolved = {"targets": targets, "extra_parameters": extras, "expected_trainable_parameters": 49}
+    identity = {"pissa_representation": "original_base_plus_trained_minus_initial_factors", "resolved": resolved}
+    initial = {"adapter_identity": identity, "resolved": copy.deepcopy(resolved), "parameter_layouts": layouts}
+    spec, owners, factors = portable_factor_spec(initial)
+    state = {
+        name: torch.arange(int(np.prod(shape)), dtype=torch.float32).reshape(shape) + 1 for name, shape in spec.items()
+    }
+    for name, owner in owners.items():
+        state[name] = state[owner].clone()
+    for name, trained in factors.items():
+        state[name] = state[trained].clone()
+    states, manifests, raw, large = {}, {}, {}, {}
+    paths = {
+        "initial": Path("/primary/initial-portable"),
+        "final": Path("/primary/final-portable"),
+        "replay": Path("/branch/final-portable"),
+    }
+    provenance = {
+        "/primary/provenance-rank0.json": {"job": "synthetic", "mode": "full"},
+        "/branch/provenance-rank0.json": {"job": "synthetic", "mode": "branch"},
+    }
+
+    def refresh(label):
+        folder = paths[label]
+        payload = save({name: value.clone() for name, value in states[label].items()})
+        tensor = str(folder / "adapter.safetensors")
+        raw[tensor] = payload
+        large[tensor] = {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+        manifests[str(folder / "adapter_manifest.json")] = {
+            "kind": "portable_adapter",
+            "identity": copy.deepcopy(initial["adapter_identity"]),
+            "provenance": copy.deepcopy(provenance[str(folder.parent / "provenance-rank0.json")]),
+            "weights_sha256": large[tensor]["sha256"],
+        }
+
+    for label in paths:
+        states[label] = {n: v.clone() + (0.0 if label == "initial" or n in factors else 0.25) for n, v in state.items()}
+        refresh(label)
+    capture = SimpleNamespace(
+        json=lambda p: manifests[str(p)] if str(p) in manifests else provenance[str(p)],
+        raw=lambda p: raw[str(p)],
+        large={"files": large},
+    )
+    return capture, initial, states, manifests, raw, large, refresh
+
+
+class InitialFactorTests(unittest.TestCase):
+    def check(self, fixture):
+        capture, initial, *_ = fixture
+        return check_initial_factors(capture, Path("/primary"), Path("/branch"), initial)
+
+    def test_mixed_pissa_exact_values_and_all_aliases(self):
+        result = self.check(portable_fixture())
+        self.assertEqual(result["status"], "PASS_EXACT_INITIAL_FACTORS")
+        self.assertEqual(len(result["initial_factor_keys"]), 4)
+        self.assertEqual(len(result["unique_factor_owners"]), 2)
+        self.assertEqual(len(result["expected_portable_keys"]), 15)
+        self.assertTrue(result["portable_tensor_payloads_compared"])
+
+    def test_nonpissa_requires_bound_manifests_but_not_local_tensor_payloads(self):
+        fixture = portable_fixture(pissa=False)
+        fixture[0].raw = lambda p: self.fail("non-PiSSA must retain original metadata-only admission")
+        result = self.check(fixture)
+        self.assertEqual(result["status"], "NOT_APPLICABLE_NO_PISSA_TARGETS")
+        self.assertEqual(result["initial_factor_keys"], [])
+        self.assertFalse(result["portable_tensor_payloads_compared"])
+
+    def test_changed_or_incomplete_tensors_fail_even_with_rebound_payload_hashes(self):
+        mutations = [
+            lambda s: s["final"]["a.initial_A"].add_(1e-7),
+            lambda s: s["replay"]["a.initial_B"].add_(1e-6),
+            lambda s: [v.pop("tied_a.initial_B") for v in s.values()],
+            lambda s: s["initial"].pop("a.lora_A.weight"),
+            lambda s: s["final"].update(unexpected=torch.zeros(1)),
+            lambda s: s["final"].update({"a.initial_A": s["final"]["a.initial_A"].double()}),
+            lambda s: s["final"].update({"a.initial_B": torch.ones(2, 4)}),
+            lambda s: s["final"]["a.initial_A"].fill_(float("nan")),
+            lambda s: s["final"]["tied_a.lora_A.weight"].add_(0.1),
+            lambda s: s["final"]["tied_norm.weight"].add_(0.1),
+            lambda s: [v["a.initial_A"].add_(0.1) for v in s.values()],
+            lambda s: [v[k].add_(0.1) for v in s.values() for k in ("a.initial_A", "tied_a.initial_A")],
+            lambda s: s["initial"].pop("c.magnitude"),
+        ]
+        for mutate in mutations:
+            fixture = portable_fixture()
+            mutate(fixture[2])
+            for label in fixture[2]:
+                fixture[-1](label)
+            with self.subTest(mutation=mutate), self.assertRaises(EvidenceError):
+                self.check(fixture)
+
+    def test_manifest_inventory_source_or_local_bytes_cannot_change(self):
+        key = "/primary/initial-portable/adapter_manifest.json"
+        tensor = "/primary/initial-portable/adapter.safetensors"
+        for pissa in (False, True):
+            for mutate in (
+                lambda f: f[3][key].update(kind="other"),
+                lambda f: f[3][key]["identity"].update(pissa_representation="other"),
+                lambda f: f[3][key].update(provenance={"job": "different"}),
+                lambda f: f[3][key].update(weights_sha256="0" * 64),
+                lambda f: f[5].pop(tensor),
+                lambda f: f[5][tensor].update(bytes=False),
+                lambda f: f[5][tensor].update(sha256="unsealed"),
+            ):
+                fixture = portable_fixture(pissa=pissa)
+                mutate(fixture)
+                with self.subTest(pissa=pissa, mutation=mutate), self.assertRaises(EvidenceError):
+                    self.check(fixture)
+        fixture = portable_fixture()
+        fixture[4][tensor] = b"changed"
+        with self.assertRaises(EvidenceError):
+            self.check(fixture)
+        fixture = portable_fixture()
+        fixture[4][tensor] = b"invalid safetensors"
+        sha = hashlib.sha256(fixture[4][tensor]).hexdigest()
+        fixture[3][key]["weights_sha256"] = sha
+        fixture[5][tensor].update(sha256=sha, bytes=len(fixture[4][tensor]))
+        with self.assertRaises(EvidenceError):
+            self.check(fixture)
+
+    def test_exact_manifest_spec_rejects_missing_owner_and_inconsistent_aliases(self):
+        mutations = [
+            lambda i: i["adapter_identity"].update(pissa_representation="residual_unknown"),
+            lambda i: i["resolved"]["targets"][0]["settings"].update(method="lora"),
+            lambda i: i["resolved"]["targets"].append(copy.deepcopy(i["resolved"]["targets"][0])),
+            lambda i: i["resolved"]["targets"][1].update(owner="missing"),
+            lambda i: i["resolved"]["targets"][0].update(owner="tied_a"),
+            lambda i: i["resolved"]["targets"][1].update(shape=[4, 4]),
+            lambda i: i["resolved"]["targets"][1]["settings"].update(rank=1),
+            lambda i: i["resolved"]["targets"][0]["settings"].update(rank=True),
+            lambda i: i["resolved"]["targets"][0]["settings"].update(method="unknown"),
+            lambda i: i["resolved"]["targets"][0]["settings"].update(initialization="random"),
+            lambda i: i["resolved"]["extra_parameters"][1].update(owner="missing"),
+            lambda i: i["resolved"]["extra_parameters"][1].update(weight_decay=0.1),
+            lambda i: i["resolved"].update(expected_trainable_parameters=50),
+            lambda i: i["parameter_layouts"].pop("a.lora_A.weight"),
+            lambda i: i["parameter_layouts"]["a.lora_B.weight"].update(shape=[4, 3]),
+        ]
+        for mutate in mutations:
+            fixture = portable_fixture()
+            initial = fixture[1]
+            mutate(initial)
+            # Even if a changed manifest and installed resolution agree, the
+            # exact owner/key/shape census must reject the structural defect.
+            if initial["resolved"]["targets"][0]["settings"]["method"] != "lora":
+                initial["adapter_identity"]["resolved"] = copy.deepcopy(initial["resolved"])
+            with self.subTest(mutation=mutate), self.assertRaises(EvidenceError):
+                portable_factor_spec(initial)
 
 
 if __name__ == "__main__":

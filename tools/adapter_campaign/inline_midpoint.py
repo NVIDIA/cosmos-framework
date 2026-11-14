@@ -31,6 +31,17 @@ DEPENDENCIES = ("inline_midpoint.py", "primary.py", "recovered.py", "evidence.py
 STATE_KEYS = ("parameters", "optimizer", "optimizer_groups", "scheduler", "data", "clock", "rng")
 
 
+def valid_captured_size(base, name, item):
+    """An empty orchestration lock is not an empty checkpoint/state object."""
+    size = item.get("bytes")
+    return type(size) is int and (
+        size > 0
+        or size == 0
+        and name == str(base / "admission.lock")
+        and item.get("sha256") == hashlib.sha256(b"").hexdigest()
+    )
+
+
 class Capture:
     """Bind the existing independent-completed-primary-review-v1 closure."""
 
@@ -68,8 +79,8 @@ class Capture:
             relative = str(Path(name).relative_to(self.remote_root))
             require(
                 same(item["pre_post_stat"], self.small["large_unhashed"][relative]["stat"])
-                and type(item["bytes"]) is int
-                and item["bytes"] == item["pre_post_stat"]["st_size"] > 0
+                and valid_captured_size(self.base, name, item)
+                and item["bytes"] == item["pre_post_stat"]["st_size"]
                 and re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None,
                 "stale remote state hash",
             )
@@ -457,6 +468,167 @@ def check_runtime(postcheck, plan):
         )
 
 
+def portable_factor_spec(initial):
+    """Derive complete tensor/alias coverage from the recorded artifact identity."""
+    identity = initial["adapter_identity"]
+    require(
+        identity.get("pissa_representation") == "original_base_plus_trained_minus_initial_factors",
+        "unsupported PiSSA residual representation",
+    )
+    resolved = identity["resolved"]
+    require(same(resolved, initial["resolved"]), "portable target identity differs from installed resolution")
+    targets, extras = resolved["targets"], resolved["extra_parameters"]
+    require(isinstance(targets, list) and targets and isinstance(extras, list), "incomplete portable target manifest")
+    named = {row["name"]: row for row in targets}
+    extra_named = {row["name"]: row for row in extras}
+    require(len(named) == len(targets) and len(extra_named) == len(extras), "duplicate portable target/extra name")
+    spec, owners, factors, trainables = {}, {}, {}, set()
+
+    def add(name, shape, owner, trainable):
+        require(isinstance(name, str) and name and name not in spec, "duplicate/invalid portable tensor name")
+        require(all(type(n) is int and n > 0 for n in shape), "invalid portable tensor dimensions")
+        spec[name], owners[name] = tuple(shape), owner
+        if trainable:
+            trainables.add(owner)
+
+    for row in targets:
+        name, owner, settings = row["name"], row["owner"], row["settings"]
+        require(isinstance(name, str) and name and isinstance(owner, str) and owner in named, "missing target owner")
+        owner_row = named[owner]
+        require(
+            owner_row["owner"] == owner and all(same(row[k], owner_row[k]) for k in ("shape", "settings", "component")),
+            "inconsistent/cyclic portable target aliases",
+        )
+        shape, rank, method = row["shape"], settings["rank"], settings["method"]
+        require(
+            isinstance(shape, list)
+            and len(shape) == 2
+            and all(type(n) is int and n > 0 for n in shape)
+            and type(rank) is int
+            and 0 < rank <= min(shape)
+            and method in ("lora", "dora", "pissa")
+            and settings["dtype"] == "float32",
+            "invalid portable method/rank/shape/precision",
+        )
+        out_features, in_features = shape
+        for suffix, size in (("lora_A.weight", (rank, in_features)), ("lora_B.weight", (out_features, rank))):
+            add(name + "." + suffix, size, owner + "." + suffix, True)
+        if method == "dora":
+            add(name + ".magnitude", (out_features,), owner + ".magnitude", True)
+        if method == "pissa":
+            require(settings["initialization"] == "svd_lowrank", "PiSSA lacks its recorded decomposition")
+            for suffix, size, trained in (
+                ("initial_A", (rank, in_features), "lora_A.weight"),
+                ("initial_B", (out_features, rank), "lora_B.weight"),
+            ):
+                key = name + "." + suffix
+                add(key, size, owner + "." + suffix, False)
+                factors[key] = name + "." + trained
+    for row in extras:
+        name, owner = row["name"], row["owner"]
+        require(isinstance(owner, str) and owner in extra_named, "missing extra-parameter owner")
+        owner_row = extra_named[owner]
+        require(
+            owner_row["owner"] == owner
+            and all(
+                same(row[k], owner_row[k]) for k in ("shape", "dtype", "component", "lr_multiplier", "weight_decay")
+            )
+            and row["dtype"] == "float32",
+            "inconsistent/cyclic portable extra aliases",
+        )
+        add(name, row["shape"], owner, True)
+    require(
+        all(owner in spec and spec[name] == spec[owner] for name, owner in owners.items()),
+        "incomplete portable aliases",
+    )
+    require(trainables == set(initial["parameter_layouts"]), "portable trainables differ from optimizer-owned state")
+    require(
+        type(resolved["expected_trainable_parameters"]) is int
+        and sum(math.prod(spec[name]) for name in trainables) == resolved["expected_trainable_parameters"],
+        "portable trainable element census differs",
+    )
+    for name in trainables:
+        require(
+            list(spec[name]) == initial["parameter_layouts"][name]["shape"]
+            and initial["parameter_layouts"][name]["dtype"] == "torch.float32",
+            "portable trainable shape/precision differs from installed owner",
+        )
+    return spec, owners, factors
+
+
+def check_initial_factors(capture, primary, branch, initial):
+    """Verify saved PiSSA buffers; non-PiSSA is N/A only from bound manifests.
+
+    This uses the original initial/final/replay portable saver outputs. It is
+    not a fresh model load, export qualification, or new GPU execution.
+    """
+    import torch
+    from safetensors import SafetensorError
+    from safetensors.torch import load
+
+    spec, owners, factors = portable_factor_spec(initial)
+    states, artifacts = {}, {}
+    for label, audit, kind in (
+        ("initial", primary, "initial"),
+        ("final", primary, "final"),
+        ("replay", branch, "final"),
+    ):
+        folder = audit / (kind + "-portable")
+        manifest_path, tensor_path = folder / "adapter_manifest.json", folder / "adapter.safetensors"
+        manifest = capture.json(manifest_path)
+        require(
+            manifest.get("kind") == "portable_adapter"
+            and same(manifest.get("identity"), initial["adapter_identity"])
+            and same(manifest.get("provenance"), capture.json(audit / "provenance-rank0.json")),
+            "portable artifact identity/source differs from installed checkpoint lineage",
+        )
+        item = capture.large["files"].get(str(tensor_path))
+        require(
+            isinstance(item, dict)
+            and type(item.get("bytes")) is int
+            and item["bytes"] > 0
+            and isinstance(item.get("sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None
+            and manifest.get("weights_sha256") == item["sha256"],
+            "portable tensor inventory/manifest binding differs",
+        )
+        artifacts[label] = {"manifest": str(manifest_path), "weights": str(tensor_path), **item}
+        if not factors:
+            continue
+        raw = capture.raw(tensor_path)
+        require(
+            len(raw) == item["bytes"] and hashlib.sha256(raw).hexdigest() == item["sha256"],
+            "changed portable tensor bytes",
+        )
+        try:
+            state = load(raw)
+        except SafetensorError:
+            require(False, "invalid portable safetensors payload")
+        require(set(state) == set(spec), "missing/extra portable adapter or initial-factor tensors")
+        for name, shape in spec.items():
+            value = state[name]
+            require(
+                tuple(value.shape) == shape and value.dtype == torch.float32 and torch.isfinite(value).all().item(),
+                "invalid portable tensor shape/precision/value: " + name,
+            )
+            exact_tree(value, state[owners[name]], "portable-alias/" + name)
+        states[label] = state
+    for name, trained in factors.items():
+        exact_tree(states["initial"][name], states["initial"][trained], "initial-decomposition/" + name)
+        for label in ("final", "replay"):
+            exact_tree(states["initial"][name], states[label][name], label + "-initial-factor/" + name)
+    return {
+        "status": "PASS_EXACT_INITIAL_FACTORS" if factors else "NOT_APPLICABLE_NO_PISSA_TARGETS",
+        "unchanged": True,
+        "initial_factor_keys": sorted(factors),
+        "unique_factor_owners": sorted({owners[name] for name in factors}),
+        "expected_portable_keys": sorted(spec),
+        "artifacts": artifacts,
+        "portable_tensor_payloads_compared": bool(factors),
+        "scope": "Bound initial/final/replay saver outputs; no fresh DCP model restore or deployment credit.",
+    }
+
+
 def normalize(root, contract_cell, audit_ref):
     c = Capture(root, audit_ref)
     base, read = c.base, c.json
@@ -647,6 +819,7 @@ def normalize(root, contract_cell, audit_ref):
     require(receipts[0]["checkpoint"] in checkpoints, "primary final checkpoint differs")
     replayed = sum(v["real_rows"] for v in snapshots)
     require(same(branch["primary_rows_replayed"], replayed), "replayed rows counted incorrectly")
+    factors = check_initial_factors(c, a, b, original_initials[0])
     measurement = {
         "mid_update": mid,
         "updates_compared": len(snapshots) // 4,
@@ -658,7 +831,7 @@ def normalize(root, contract_cell, audit_ref):
         "loss_within_gates": True,
         "parameters_within_gates": True,
         "optimizer_within_gates": True,
-        "initial_factors_unchanged": True,
+        "initial_factors_unchanged": factors["unchanged"],
         "source_immutable": True,
         "gates_sha256": GATES_SHA,
         "inline_replay": {
@@ -668,6 +841,7 @@ def normalize(root, contract_cell, audit_ref):
             "lineage": lineage,
             "checkpoint_inventories": checkpoints,
             "restore_comparisons": restores,
+            "initial_factor_proof": factors,
             "update_snapshots": snapshots,
             "primary_prerequisites_revalidated": sorted(values),
             "diagnostic_replayed_rows_excluded": replayed,
