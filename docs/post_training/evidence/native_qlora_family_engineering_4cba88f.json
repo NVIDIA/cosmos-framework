@@ -18235,7 +18235,15 @@
         "facts": "Corrected C/native-02f93ba verified. Four C-root objects were mistakenly written; prior absence/overwrite unknown; left in place. Sealed active4c/native bundles verified unaffected.",
         "receipt_sha256": "5e15adbd9e60772e9704999555063f93c4f926d609763e397b10d07ef47d6cdb"
       },
-      "reused_earlier_evidence_scope": "Earlier26bc source-refusal, portable compatibility and standalone artifact checks remain separately source-bound; this load-only gate does not rerun or relabel them. No current02 mature200-to300, learning, rollout or Alpamayo qualification is implied."
+      "reused_earlier_evidence_scope": "Earlier26bc source-refusal, portable compatibility and standalone artifact checks remain separately source-bound; this load-only gate does not rerun or relabel them. No current02 mature200-to300, learning, rollout or Alpamayo qualification is implied.",
+      "root_independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-load-lifetime-38541673-root-review.json",
+        "sha256": "a19ffab71dd6ddf1a92ae933e512701e03ac085d6bbace76def44a86b565223f",
+        "verified_files": 197,
+        "raw_v10_samples_validated": 1500,
+        "modes": 4,
+        "scope": "Independent receipt and raw-sample replay with four-mode inventory, lifetime and live-fingerprint checks; no second full DCP tensor read."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -19115,6 +19123,29 @@
       "decision": "No verified Cosmos temporal action subsampling or source-state/action corruption in this probe. Do not resample or change20Hz simulator based on fps10 metadata alone. Raw simulator clock/complete dataset provenance remain unestablished.",
       "data_and_recipe_changed": false,
       "additional_gpu_seconds": 0
+    },
+    "available_data_coverage_audit": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-available-coverage-audit-v1.json",
+      "sha256": "4e079ba40995bfc65b204e070f9718b86df8b3aea832648cf4138f76d08ea717",
+      "scope": "Read-only existing staged metadata, retained cohort receipts and simulator initial-state inventory; no model scoring, media download or new source.",
+      "prepared_spatial_episodes": {
+        "train": 342,
+        "validation": 90
+      },
+      "outside_recorded_development_and_engineering_episodes": {
+        "train": 248,
+        "validation": 45
+      },
+      "spatial_tasks": 10,
+      "additional_spatial_initial_states_outside_100_cases": 400,
+      "other_suite_episodes": {
+        "libero_object": 454,
+        "libero_goal": 428,
+        "libero_10": 379
+      },
+      "other_suite_tasks": 30,
+      "limits": "Data is not exhausted. Outside recorded selections does not establish global or pretraining non-exposure. Additional episodes/initial states retain the same ten task clusters; other suites change the task population.",
+      "confirmation_requirement": "Prospectively define the confirmation population and exposure/content ledger, then use a disjoint native/source-usefulness and paired-variance pilot to justify power under unchanged margins and task/seed clustering. This inventory establishes no fixed sample count or independent-task confirmation."
     }
   },
   "alpamayo_seed17_development_comparison": {

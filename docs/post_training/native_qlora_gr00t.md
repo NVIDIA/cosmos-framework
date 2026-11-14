@@ -361,6 +361,25 @@ The [scoped receipts](evidence/native_qlora_family_engineering_4cba88f.json) ret
 both observations. This probe found no reason to resample actions; it does not
 attest the original simulator clock or establish whole-dataset provenance.
 
+A read-only coverage audit confirms that staged data is **not exhausted**. The
+prepared spatial population contains 342 training and 90 validation episodes.
+After excluding the recorded development and engineering selections, 248 training
+and 45 validation episodes remain outside those selections. Simulator assets also
+contain 400 initial states outside the admitted 100 cases. These are still the same
+ten spatial tasks, not new independent task clusters; demonstration episodes and
+simulator initial states are distinct units. Historical and pretrained-model exposure
+is unknown, so “outside recorded selections” does not mean globally untouched.
+
+The staged metadata also contains 454 object, 428 goal and 379 LIBERO-10 episodes
+across 30 other tasks. Using those suites would change the confirmation population.
+Independent confirmation requires a prospectively defined population and exposure
+ledger, plus a separate pilot to verify native evaluation, source-policy usefulness
+and paired variability before planning power under the declared margins and
+task/seed clustering. This inventory
+justifies no fixed confirmation sample count. The hash-bound
+[coverage audit](evidence/native_qlora_family_engineering_4cba88f.json) preserves the
+counts, source identities and limits without changing the current study.
+
 A processor-only census of one real row per instruction covered all ten fixed instructions
 in both splits: 151–156 tokens, `pixel_values=[512,1536]`, two image grids `[1,16,16]`,
 state `[1,1,132]`, and action/mask `[1,40,132]` with exactly 70 supervised elements.
