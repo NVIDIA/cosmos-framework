@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # Model backend identifiers used by the top-level selector and its thin dispatch.
-I4 = "i4"
+NATIVE = "native"
 HF = "hf"
 QWEN3_VL = "qwen3_vl"
 

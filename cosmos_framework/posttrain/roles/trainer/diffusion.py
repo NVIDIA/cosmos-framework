@@ -454,7 +454,7 @@ class DiffusionTrainer(BaseTrainer):
         self._begin_update_attempt()
 
         prepared_batch = run_rank_converged(
-            lambda: move_to_device(batch, self.device),  # host→device data-fetch (§1.4)
+            lambda: move_to_device(batch, self.device),  # host→device data-fetch
             "trainer batch device transfer",
         )
         loss, metrics = self.objective(self.model, prepared_batch)
@@ -499,7 +499,7 @@ class DiffusionTrainer(BaseTrainer):
             metrics["optim/old_policy_refreshed"] = float(state_events.old_policy_refreshed)
             metrics["optim/reference_refreshed"] = float(state_events.reference_refreshed)
             metrics.update(self._outcome_metrics("applied"))
-            self.callbacks.on_train_step(self, metrics)  # observers fire per optimizer step (§2.6)
+            self.callbacks.on_train_step(self, metrics)  # observers fire per optimizer step
         else:
             # Intermediate microbatches report accumulation without advancing the optimizer clock.
             metrics = self._reduce_metrics(metrics)
@@ -628,7 +628,7 @@ class DiffusionTrainer(BaseTrainer):
         return self._host_offload.onload()
 
     def push_weights(self, target=None) -> None:
-        return None  # DPO: no rollout edge (§8.2 #4 seam)
+        return None  # DPO: no rollout edge (weight-transfer seam)
 
     def abort_accumulation(self) -> bool:
         """Discard and rewind one partial, unapplied diffusion attempt.

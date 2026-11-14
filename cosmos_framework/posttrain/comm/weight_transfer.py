@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""WeightTransfer — trainer → rollout weight sync on the weight plane (DESIGN §8.2 #4).
+"""WeightTransfer — trainer → rollout weight sync on the weight plane.
 
 The seam is push_weights()/apply_weights() on the role bodies; this module holds the swappable
 pieces: a WeightSync (holds a Mover, the transfer primitive) + a WeightMapper (param key/layout).
@@ -63,9 +63,9 @@ def shared_model_identity(model: Any) -> str:
 
 def full_state_dict(model: Any) -> dict:
     """Materialize a model's params as FULL (unsharded) detached tensors: an FSDP2 DTensor is
-    all-gathered via .full_tensor() (a collective — every policy rank must call together, §2.3);
+    all-gathered via.full_tensor() (a collective — every policy rank must call together, §2.3);
     a plain tensor passes through. No physical clone beyond what full_tensor() allocates; the
-    durable snapshot/copy is the mover's job (§2.1). Unwraps `.net` so a wrapped HFModel exports the
+    durable snapshot/copy is the mover's job. Unwraps `.net` so a wrapped HFModel exports the
     same (raw-module) keys the rollout loads into."""
     out = {}
     for k, v in _net(model).state_dict().items():
@@ -176,11 +176,11 @@ def _check_name_sorted(names: list, where: str) -> None:
 def bucket_plan(manifest: WireManifest, bucket_bytes: int = BUCKET_BYTES) -> BucketPlan:
     """Partition a sorted manifest into ordered buckets, each ≤ bucket_bytes (except a single param
     larger than bucket_bytes, which forms its own bucket). Deterministic pure function → every rank
-    computes the same plan from the same manifest (design §3). Returns list[list[(name, shape, dtype)]].
+    computes the same plan from the same manifest. Returns list[list[(name, shape, dtype)]].
     Raises on an unsorted manifest (see _check_name_sorted — ordering is a transfer invariant).
 
     Args:
-        manifest: sorted `[(name, shape, dtype_str), ...]` param metadata (e.g. from `model_manifest`).
+        manifest: sorted `[(name, shape, dtype_str),...]` param metadata (e.g. from `model_manifest`).
         bucket_bytes: soft per-bucket byte cap; a single param exceeding it forms its own bucket.
 
     Returns:
@@ -235,7 +235,7 @@ def _identity_export_bucket(model: Any, bucket: list[WireTensor]) -> dict[str, A
 
 class WeightMapper:
     """Trainer param layout/keys -> rollout. v1: gather FSDP/TP shards to FULL tensors on export
-    (rollout slices its own shard in its sink, §2.4); identity for plain models. import = name-keyed
+    (rollout slices its own shard in its sink); identity for plain models. import = name-keyed
     load. TODO(v2): key remap + DimSliceInfo reshard for asymmetric parallelism."""
 
     # True because nothing here records a dtype it later checks: `wire_manifest` reports whatever the
@@ -421,7 +421,7 @@ def bucket_full_tensors(model: Any, bucket: list[WireTensor], mapper: Any | None
 
 @dataclass
 class WeightPayload:
-    """What export() returns / apply() consumes: a version stamp (staleness, DESIGN §1.4) + the
+    """What export() returns / apply() consumes: a version stamp (staleness) + the
     shared-primitive MoveHandle carrying the weights."""
 
     version: int
@@ -527,7 +527,7 @@ def pull_stream_from_peer(consumer: Any, peer: Any) -> None:
     with ``peer`` = the dp-aligned policy cell's PeerClient (injected by workers.grid._align_one when
     a WorkerGroup is passed as an arg). Pulls the sync bucket by bucket so peak memory stays ≈ one
     bucket, with the transport discipline chosen FROM THE BOUND MOVER — the caller never picks a
-    per-transport API (peer-pull design §1.1/§1.4):
+    per-transport API:
 
     - Plan: pulled from the peer once (the policy is the plan's single source of truth) and cached.
     - STAGED (Copy/IPC): synchronous pull per bucket. The per-bucket drain is IMPLICIT per lane —
@@ -544,7 +544,7 @@ def pull_stream_from_peer(consumer: Any, peer: Any) -> None:
     ONCE, after the WHOLE loop succeeds, with the version the payloads carry — the PRODUCER'S
     TRAINING ITERATION (training owns advancement; sync is a pure transport of "params at iter k").
     Both transports stamp identically: even on COLLECTIVE the bytes ride the broadcast but the
-    payload METADATA (incl. version) rides the control-plane return value (§3.4 metadata/bulk
+    payload METADATA (incl. version) rides the control-plane return value (metadata/bulk
     split). A ``None`` payload raises — a peer that stages nothing has no weight backend bound
     (wiring bug), and silently stamping "fresh" over an unsynced model was the old fail-quiet
     edge. A stream that fails partway raises before the stamp, leaving the OLD version (a
@@ -639,7 +639,7 @@ def pull_stream_from_peer(consumer: Any, peer: Any) -> None:
                 # TODO: (lms) How to decrease the frequency of this call of `call_async`?
                 fut = peer.call_async("push_bucket", i) if has_async else ex.submit(peer.push_bucket, i)
                 consumer.apply_bucket(None, i)  # recv layout comes from the cached plan
-                # Bytes rode the broadcast; the returned payload is METADATA ONLY (§3.4) — it
+                # Bytes rode the broadcast; the returned payload is METADATA ONLY — it
                 # carries the producer's per-sync version, stamped below after the whole stream.
                 payload = _resolved(fut.result())
         if payload is None:
@@ -1114,7 +1114,7 @@ class WeightSync:
             # COLLECTIVE (NCCL): no producer payload — the consumer derives its receive layout from
             # its OWN model (same architecture in v1) and receives live inside the broadcast. The
             # SyncPlan is thus control-plane knowledge (the consumer's own state_dict), not shipped
-            # from the producer (which would create a broadcast deadlock, design §4). A sink that
+            # from the producer (which would create a broadcast deadlock). A sink that
             # cannot derive full shapes from its model (vLLM: TP-sharded live params) relies on the
             # bind-injected recv_plan instead of this derivation — so only override when unset.
             if getattr(self.mover, "recv_plan", None) is None:

@@ -124,7 +124,7 @@ def assert_wire_safe(obj: Any, where: str) -> None:
     callable, and any subclass may hold attributes in ``__dict__``. cloudpickle serialises
     that hidden state, so a payload of "safe items" can still drag an engine handle across.
 
-    This is what ``sim_decouple.md`` §4.2's "pickle is forbidden" reduces to under today's
+    This is what "pickle is forbidden" reduces to under today's
     topology, where the transport is still Ray and cannot be swapped: we cannot stop
     cloudpickle from running, so we assert on the payload it would be handed instead.
 
@@ -196,7 +196,7 @@ class SimCapabilities:
     Declared rather than measured, and that is the contract: the whole value of this object
     is that a mismatch costs a handshake instead of an Isaac boot plus a six-minute scene
     build. Anything that can only be known after a scene exists does not belong here -- see
-    ``describe_obs`` (SPEC §4) for the measured counterpart.
+    ``describe_obs`` for the measured counterpart.
     """
 
     protocol_version: int

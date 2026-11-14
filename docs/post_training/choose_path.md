@@ -1,6 +1,9 @@
 # Choose a post-training path
 
-Every path starts from a released Cosmos3 checkpoint; the sections below differ by the training signal you bring.
+Choose your model and training signal together. Start with the
+[model and algorithm support matrix](model_algorithm_support.md) for supported combinations,
+reference recipes and adaptation guidance. The native Cosmos3 recipes start from a matching
+Cosmos3 checkpoint; Posttrain also integrates Qwen, GR00T-N1.7 and π0.5.
 
 | You have                                                                   | Method       | Where                         |
 | -------------------------------------------------------------------------- | ------------ | ----------------------------- |
@@ -10,7 +13,7 @@ Every path starts from a released Cosmos3 checkpoint; the sections below differ 
 
 ## SFT
 
-Supervised fine-tuning runs on the native trainer. Each recipe is a TOML file under `examples/toml/sft_config/`; most have a paired `examples/launch_sft_*.sh` that runs the trainer under `torchrun`.
+For Cosmos3, supervised fine-tuning runs on the native trainer. Each recipe is a TOML file under `examples/toml/sft_config/`; most have a paired `examples/launch_sft_*.sh` that runs the trainer under `torchrun`.
 
 ```shell
 python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<recipe>.toml
@@ -20,6 +23,9 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 - Your own data: [JSONL datasets](../dataset_jsonl.md) and [custom datasets](../custom_dataset.md).
 - Robot actions from Cosmos3-Nano: [DROID policy](../action_policy_droid_posttrain.md) (reproduces Cosmos3-Nano-Policy-DROID), [DROID forward dynamics](../action_fd_droid_posttrain.md) and [LIBERO-10 policy](../action_policy_libero_posttrain.md).
 - [Transfer-Auto](../training_transfer_auto.md): a four-phase RGB/LiDAR curriculum from Cosmos3-Nano, run with `cosmos_framework.scripts.train_experiment` instead.
+- Qwen text and supported VLM families: use the separate [Posttrain conversation-SFT guide](../posttrain/guides/sft.md).
+- Other compatible HF text/dense-VLM models can reuse the SFT core with tokenizer/template/media shaping and launcher wiring; see [support and recipe availability](model_algorithm_support.md#support-matrix).
+- GR00T-N1.7: CF has an action-head flow-BC implementation but no public end-to-end offline SFT recipe. For customer demonstrations, start with [Isaac-GR00T fine-tuning](https://github.com/NVIDIA/Isaac-GR00T#fine-tuning); see [GR00T workflow boundaries](model_algorithm_support.md#gr00t-choosing-a-repository-and-handing-off-a-checkpoint).
 
 ## Distillation
 
@@ -29,6 +35,8 @@ python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<re
 - [Super four-step (DMD2)](../../.agents/skills/cookbooks/cosmos3/generator/audiovisual/distill/README.md): Cosmos3-Super-Text2Image or Cosmos3-Super-Image2Video as the teacher, the matching `-4Step` checkpoint as the initial student. A six-iteration functional recipe, not a production reproduction.
 
 ## RL
+
+Use the [RL and OPD recipe index](model_algorithm_support.md#preference-optimization-rl-and-on-policy-distillation) to find a starting point for your model and method.
 
 RL runs on the `cosmos_framework.posttrain` runtime in its own environment: the Framework base plus a locked dependency set. Start with the [overview](../posttrain/index.md) and the [run guide](../posttrain/howto/run-posttrain.md).
 

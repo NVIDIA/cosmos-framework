@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Tests for built-in rule-reward contracts and RewardWorker integration (DESIGN §1.5)."""
+"""Tests for built-in rule-reward contracts and RewardWorker integration."""
 
 from __future__ import annotations
 

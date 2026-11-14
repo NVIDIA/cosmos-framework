@@ -648,7 +648,7 @@ class LLMTrainer(BaseTrainer):
 
         Returns:
             Metrics for this call: `"discarded"` for a chunk consumed by the poisoned-window
-            countdown (§5.2), else the usual `"accumulating"` / `"applied"` / `"skipped"` outcome
+            countdown, else the usual `"accumulating"` / `"applied"` / `"skipped"` outcome
             metrics from `BaseTrainer._outcome_metrics` / `_skip_nonfinite`.
 
         Failure semantics:
@@ -660,7 +660,7 @@ class LLMTrainer(BaseTrainer):
         if self._skip_remaining > 0:
             # This chunk belongs to a mini-batch already abandoned by a non-finite skip. Consuming
             # it into the fresh window would step the optimizer on a MIXTURE of two mini-batches
-            # under a divisor matching neither (§5.2).
+            # under a divisor matching neither.
             self._skip_remaining -= 1
             # The pi_old window is keyed by append order, and this return happens BEFORE the
             # objective runs -- so `old_for` never fires for this chunk while the ahead pass already
@@ -699,7 +699,7 @@ class LLMTrainer(BaseTrainer):
             if self.grad_accum > 1 and self.objective.reduction is Reduction.TOKEN_SUM:
                 # ONE division by the window's divisor: Σ_j DPmean(n_j) == DPmean(Σ_j n_j) (the mean
                 # is linear over the chunk index), so no extra collective. Only an exactly empty
-                # window substitutes one; positive fractional DP means remain unchanged (§3.5).
+                # window substitutes one; positive fractional DP means remain unchanged.
                 scale = normalization_scale(self._denom_accum)
                 for parameter in params:
                     parameter.grad.mul_(scale)

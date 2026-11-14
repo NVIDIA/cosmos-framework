@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""@L1 @GPU: rank-level data parallelism under a REAL process group (plan Task 6).
+"""@L1 @GPU: rank-level data parallelism under a REAL process group.
 
 Three properties that only exist across processes, so the CPU tests with stub meshes cannot reach
 them:
@@ -40,7 +40,7 @@ def _batch(n_groups: int, size: int) -> list[Trajectory]:
 
 def _dp_shard(items: list, *, dp_rank: int, dp_world: int) -> list:
     """The deleted `dp_group_sharded`'s exact partition, via `select_chunk` at n_mini=n_micro=1
-    (Task 9 — see `tests/test_workers_chunk_select.py` for the equivalence proof)."""
+    (see `tests/test_workers_chunk_select.py` for the equivalence proof)."""
     return select_chunk(items, mini=0, micro=0, n_mini=1, n_micro=1, dp_rank=dp_rank, dp_world=dp_world)
 
 

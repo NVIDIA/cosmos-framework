@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Orchestration-parity test for the decoupled Flow-DPO objective (DESIGN §8.2 #2).
+"""Orchestration-parity test for the decoupled Flow-DPO objective.
 
 Gate step 1 (CPU, model-free): a mock `FlowMatchingPolicy` returns fixed per-sample
 errors for (policy/ref × winner/loser); we assert `algorithm.dpo.dpo_loss`

@@ -108,13 +108,13 @@ def test_build_processor_routes_local_nemotron3_dense_dir(
 ) -> None:
     import cosmos_framework.data.generator.processors as processors
 
-    model_dir = tmp_path / "nvidia" / "NVIDIA-Nemotron-3-Dense-VL-2B-BF16-Alignment"
+    model_dir = tmp_path / "example" / "dense-vl-backbone"
     model_dir.mkdir(parents=True)
     expected_processor = object()
     processor_factory = Mock(return_value=expected_processor)
     monkeypatch.setattr(processors, "Nemotron3DenseVLProcessor", processor_factory)
 
-    assert processors.build_processor(str(model_dir)) is expected_processor
+    assert processors.build_processor(str(model_dir), processor_family="dense_vl") is expected_processor
     processor_factory.assert_called_once_with(str(model_dir), cache_dir=None)
 
 

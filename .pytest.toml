@@ -7,7 +7,6 @@ python_files = [
 ]
 norecursedirs = [
     "_src",
-    "imaginaire",
     "packages",
     "projects",
     "wsm", # Standalone renderer under .agents/skills/cookbooks/cosmos3/simulation/auto/.

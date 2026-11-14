@@ -82,7 +82,7 @@ python -m cosmos_framework.scripts.export_model \
     --checkpoint-path "$CKPT" --config-file "$RUN_DIR/config.yaml" -o "$RUN_DIR/model"
 ```
 
-Use the exported `$RUN_DIR/model` with the [cosmos3-generate-media skill](../../../../../cosmos3-generate-media/SKILL.md).
+Use the exported `$RUN_DIR/model` with the [cosmos3-inference-generate-media skill](../../../../../cosmos3-inference-generate-media/SKILL.md).
 
 ## Convert to Diffusers
 

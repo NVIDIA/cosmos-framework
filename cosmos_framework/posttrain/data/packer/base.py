@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""DataPacker contract + model_type registry (design 2026-07-28).
+"""DataPacker contract + model_type registry.
 
 A DataPacker is the single, model-agnostic, weight-free owner of raw-sample ->
 model-ready-tensor shaping (tokenization, packing, collation). Rollout bodies and
@@ -13,7 +13,7 @@ over `Trajectory` lists, handed to the objective instead of registered by `model
 collator owns tokenization, patchifying and padding). Same invariants as a DataPacker: weight-free,
 CPU-side, one owner per model x objective. Use a DataPacker when the unit is a token sequence (the
 abstract methods below assume prompt ids and a padded max_len); otherwise a batch-assembly function.
-DESIGN.md v3 "Batch-assembly seam" is the architecture statement.
+The packer owns batch assembly; the objective consumes the resulting model inputs.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ class BaseDataPacker(ABC):
         self, completions: list, token_ids: list | None = None, logprobs: list | None = None, **kw
     ) -> list:
         # Optional output-shaping hook (token decode / logprob attach); default passthrough.
-        # NO external offload: posttrain's codec owns the metadata/bulk split (design §0).
+        # NO external offload: posttrain's codec owns the metadata/bulk split.
         return completions
 
     # --- policy (RL) side ---
@@ -234,7 +234,7 @@ class DataPacker(BaseDataPacker, ABC):
         while `get_policy_input` re-tokenizes with `add_special_tokens=False`, and those agree only
         for a tokenizer that adds nothing, so a BOS-adding tokenizer (llama) meant generating from
         one prefix and scoring under another. That premise no longer holds — the objective now
-        PREFERS `policy_info["prompt_ids"]` (design 2026-07-28 §10), and `VLLMRollout` records
+        PREFERS `policy_info["prompt_ids"]`, and `VLLMRollout` records
         `req.prompt_token_ids`, vLLM's OWN tokenization, so the scored prefix is exactly the
         generated one whatever the tokenizer adds. Enforcing it at construction only blocked
         `llama`, which `data/packer/__init__.py` explicitly REGISTERS as supported.
@@ -257,7 +257,7 @@ class DataPacker(BaseDataPacker, ABC):
                 "packer tokenizer adds special tokens (add_special_tokens=True != False); the "
                 "vLLM+packer path scores completions under a different prompt prefix than vLLM "
                 "generated from. Use a no-BOS tokenizer (e.g. Qwen) or feed vLLM pre-tokenized "
-                "prompts (spec §9.6)."
+                "prompts."
             )
 
     def save_state(self, dest_path: str) -> None:

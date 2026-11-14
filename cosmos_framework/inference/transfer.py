@@ -877,7 +877,13 @@ def generate_transfer_sample(
     _warn_unused_length_and_fps(sample_args, total_frames, input_fps, temporal_compression_factor)
     chunk_frames = 1 if total_frames == 1 else num_video_frames_per_chunk
     chunk_frames = math.ceil((chunk_frames - 1) / temporal_compression_factor) * temporal_compression_factor + 1
-    num_chunks, stride = _get_num_chunks(total_frames, chunk_frames, num_conditional_frames)
+    # The causal path generates one latent frame at a time and never reads num_conditional_frames or the
+    # chunk partition, so only the chunked (bidirectional) path validates it.
+    num_chunks, stride = (
+        (1, chunk_frames)
+        if sample_args.autoregressive
+        else _get_num_chunks(total_frames, chunk_frames, num_conditional_frames)
+    )
 
     per_hint_frames = {k: pad_temporal_frames(f, max(total_frames, chunk_frames)) for k, f in per_hint_frames.items()}
     if input_frames is not None:

@@ -71,6 +71,7 @@ from cosmos_framework.scripts._export_model_helpers import (
     reasoner_vision_capable,
     remove_export_completion_marker,
     reset_export_parallelism,
+    resolve_backbone_download,
     resolve_per_view_caption_fields,
     resolve_vision_bundle_dirs,
     rewrite_visual_fqns_for_vfm,
@@ -78,7 +79,7 @@ from cosmos_framework.scripts._export_model_helpers import (
     set_include_visual,
 )
 from cosmos_framework.utils import log
-from cosmos_framework.utils.checkpoint_db import CheckpointConfig, CheckpointDirHf, sanitize_uri
+from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 from cosmos_framework.utils.lazy_config.registry import convert_target_to_string
 
 
@@ -431,9 +432,8 @@ def export_model(args: Args) -> None:
         resolved_repositories: list[str] = []
 
         def download_vlm_checkpoint(configured_uri: str) -> str:
-            sanitized_uri = sanitize_uri(configured_uri)
-            checkpoint: CheckpointConfig | None = CheckpointConfig.maybe_from_uri(sanitized_uri)
-            if checkpoint is None:
+            download_spec = resolve_backbone_download(configured_uri)
+            if download_spec is None:
                 raise ValueError(
                     f"VLM backbone checkpoint URI '{configured_uri}' is not in the checkpoint "
                     "registry, so the vision tower cannot be resolved automatically. Either "
@@ -441,17 +441,17 @@ def export_model(args: Args) -> None:
                     "--vit-checkpoint-path <local snapshot dir> pointing at a local "
                     "Hugging Face snapshot that contains them."
                 )
-            resolved_repositories.append(checkpoint.hf.repository)
-            if is_edge and isinstance(checkpoint.hf, CheckpointDirHf) and not checkpoint.hf.include:
+            resolved_repositories.append(download_spec.repository)
+            if is_edge and isinstance(download_spec, CheckpointDirHf) and not download_spec.include:
                 # Narrow the Edge download to the ViT bundle (~1 GB) instead of
                 # the full repo (tens of GB). Done at this call site, not on the
                 # registry entry: that entry has no include filter because
                 # training's backbone seeding needs the full repo. Qwen-family
                 # exports keep the full snapshot (the ViT merge reads the root
                 # safetensors).
-                narrowed = checkpoint.hf.model_copy(update={"include": EDGE_VIT_BUNDLE_HF_INCLUDE})
+                narrowed = download_spec.model_copy(update={"include": EDGE_VIT_BUNDLE_HF_INCLUDE})
                 return narrowed.download()
-            return checkpoint.hf.download()
+            return download_spec.download()
 
         vlm_checkpoint_path = resolve_vision_checkpoint_path(
             local_path=str(args.vit_checkpoint_path) if args.vit_checkpoint_path is not None else None,

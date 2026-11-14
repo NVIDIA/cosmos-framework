@@ -462,6 +462,58 @@ def test_generate_transfer_reports_post_alignment_frame_count(monkeypatch: pytes
     sample_args.model_copy.assert_called_once_with(update={"num_frames": 17, "fps": 24, "autoregressive": False})
 
 
+@pytest.mark.parametrize("distilled", (True, False))
+@pytest.mark.parametrize("num_conditional_frames", (17, 30))
+def test_autoregressive_transfer_does_not_validate_the_unused_chunk_partition(
+    monkeypatch: pytest.MonkeyPatch, num_conditional_frames: int, distilled: bool
+) -> None:
+    """num_conditional_frames >= chunk only matters for chunked generation; AR runs (args warn it is ignored)."""
+    from cosmos_framework.inference import transfer
+
+    frames = torch.zeros(3, 25, 2, 2, dtype=torch.uint8)  # [C,T,H,W]
+    generated_output = SimpleNamespace()
+    monkeypatch.setattr(transfer, "read_and_resize_media", Mock(return_value=(frames, 24.0, "16,9", (2, 2))))
+    monkeypatch.setattr(transfer, "load_transfer_control_frames", Mock(return_value=frames))
+    monkeypatch.setattr(transfer, "_get_prompt_sample_data", Mock(return_value={"caption": ["prompt"]}))
+    monkeypatch.setattr(transfer, "_generate_causal_transfer_sample", Mock(return_value=generated_output))
+    sample_args = SimpleNamespace(
+        transfer_hints={TransferHintKey.DEPTH: SimpleNamespace(weight=1.0)},
+        resolution="480",
+        vision_path=Path("input.mp4"),
+        num_frames=25,
+        max_frames=25,
+        num_video_frames_per_chunk=17,
+        num_conditional_frames=num_conditional_frames,
+        num_first_chunk_conditional_frames=0,
+        guidance=4.0,
+        aspect_ratio=None,
+        fps=24,
+        autoregressive=True,
+        emphasize_control_in_prompt=False,
+        seed=7,
+        model_copy=Mock(return_value=SimpleNamespace()),
+    )
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            tokenizer=SimpleNamespace(temporal_compression_factor=4),
+            teacher_forcing_frames_per_chunk=1,
+            fixed_step_sampler_config={} if distilled else None,
+        ),
+        input_caption_key="caption",
+        fixed_step_sampler=Mock(),
+        eval=Mock(),
+    )
+
+    assert transfer.generate_transfer_sample(sample_args, model) is generated_output
+
+
+def test_chunked_partition_still_rejects_conditioning_as_long_as_the_chunk() -> None:
+    from cosmos_framework.inference import transfer
+
+    with pytest.raises(ValueError, match="num_conditional_frames must be smaller"):
+        transfer._get_num_chunks(total_frames=25, frames_per_chunk=17, conditional_frames=17)
+
+
 @pytest.mark.parametrize("total_frames", (1, 5, 17, 25, 201))
 def test_align_ar_frames_framewise_chunk_is_noop(total_frames: int) -> None:
     assert _align_ar_frames_to_chunk_partition(total_frames, 4, 1) == total_frames

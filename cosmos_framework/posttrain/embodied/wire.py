@@ -8,8 +8,8 @@ forwards ``describe``/``act`` to the policy. Between them: **arrays go through P
 memory, and control goes through an ``AF_UNIX`` socket as length-prefixed JSON.**
 
 **Why shmem and not just the socket, measured rather than argued.** Both were benchmarked with
-the real 3,917,128 B observation on a cluster node (``scripts/obs_transport_bench.py``, and
-SPEC §9.7 for the table). At the median they are close -- 899 µs for a socket against 628 µs for
+the real 3,917,128 B observation on a cluster node (``scripts/obs_transport_bench.py``).
+At the median they are close -- 899 µs for a socket against 628 µs for
 the buffer. Under a saturated cgroup they are not: **29,413 µs against 2,884 µs, a factor of
 ~10**, and against the layout this module actually uses (sim copies in, gateway reads in place)
 it is ~48. The reason is that the dominant cost is a scheduler **wakeup**, and streaming 3.9 MB
@@ -191,7 +191,7 @@ def session_identity() -> tuple[str, int]:
 
     ``session_id`` is stable across simulator RESTARTS within one container: a supervisor sets
     it once and every child it spawns reports the same one. ``generation`` is what distinguishes
-    those children -- it increments per restart, which is exactly ``sim_decouple.md`` §10's
+    those children -- it increments per restart, which is exactly the rule
     *"every backend restart increments generation"*.
 
     With no supervisor -- today -- the id is minted per process and the generation is 0. That is
@@ -253,7 +253,7 @@ def refuse_identity_replay(
     supervisor's counter stuck      same id, same gen   **REFUSED**
     ==============================  ==================  ==========
 
-    The refused row is the one worth having. Per ``sim_decouple.md`` §10 a restart invalidates
+    The refused row is the one worth having. A restart invalidates
     simulator state and the episode replays; a restart that fails to advance its generation is
     indistinguishable from no restart at all, so anything fencing on the pair would wave through
     exactly the transition it exists to catch.

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""@L0 @CPU: rank-level per-sample batch selection (spec 2026-08-04 §2.2 + §5.1).
+"""@L0 @CPU: rank-level per-sample batch selection.
 
-Task 9 deleted the objective wrapper `dp_group_sharded`: the ingress predicate `select_chunk`
+The objective wrapper `dp_group_sharded` was deleted: the ingress predicate `select_chunk`
 (`workers/dispatch.py`) is now the sole dp-axis owner, and at `n_mini == n_micro == 1` it selects
 exactly the partition the deleted wrapper used to (pinned by
 `tests/test_workers_chunk_select.py::test_degenerate_case_matches_the_deleted_dp_group_sharded_partition`).
@@ -95,9 +95,9 @@ def test_partition_is_deterministic_regardless_of_input_order():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_build_objective_never_shards_the_batch_regardless_of_pdims(monkeypatch):
-    """Task 9: `build_objective` must hand the objective the WHOLE batch, whatever `pdims` says.
+    """`build_objective` must hand the objective the WHOLE batch, whatever `pdims` says.
 
-    Before Task 9 this was conditional on a `rank_shared_batch` flag: `True` (the ray grid backend)
+    Previously this was conditional on a `rank_shared_batch` flag: `True` (the ray grid backend)
     wrapped the objective in `dp_group_sharded`, `False` (`grid.backend=local`, where each rank
     already runs its own in-process env/rollout with its own groups) left it whole. That flag —
     and the wrapper it gated — no longer exists: `build_objective` never partitions, on ANY backend.
