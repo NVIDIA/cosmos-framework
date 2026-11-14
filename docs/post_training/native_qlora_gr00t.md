@@ -41,6 +41,39 @@ TF32 controls are explicitly enabled as in the upstream head-training path and r
 | `nf4_frozen` | frozen NF4 | none | trained FP32 |
 | `bf16_frozen` | frozen BF16 | none | trained FP32 |
 
+Job `38536188` exercised the two **head-only** modes at LR `1e-5` for 300 updates
+on seed 17, with the same 160-row scorer and fixed target `0.049561327725898344`.
+Both original final artifacts contain all 537 FP32 head tensors, no LoRA factors,
+and exactly match their DCP tensor values. All 537 tensors changed between updates
+200 and 300 and retained nonzero optimizer first moments. The repeated BF16 arm
+is the existing seed-17 control, not an additional independent seed.
+
+| Head-only mode | MSE at 300 | First target update | Native workflow (s) | Cold case including step release (s) | Sampled owned GPU peak (GiB) |
+|---|---:|---:|---:|---:|---:|
+| BF16 frozen backbone | 0.03983719 | 200 | 483.74 | 1002.93 | 31.154 |
+| NF4 frozen backbone | 0.04042368 | 100 | 512.63 | 1049.78 | 30.045 |
+
+NF4 used 1.109 GiB less sampled GPU memory and reached this offline target earlier
+(318.37 versus 418.66 seconds including preparation), but its complete case was
+slower and final MSE was 1.47% higher. Both arms' six decoded motion-axis MAEs
+worsened relative to their own frozen source, while gripper MAE improved. These
+are single-seed point results; no rollout preservation or general speed improvement
+is established.
+
+The allocation **failed final qualification acceptance** after all native stages
+finished (3,643 GPU-seconds). Each own-200-to-300 continuation reproduced all 100
+numerical update records, task history and full 160-row scores; fresh DCP and
+portable scores also matched exactly. The on-node full model/optimizer/RNG/data
+comparisons ran before these later checks, but their returned dictionaries were
+not published when the final memory gate failed. The retained tensor audits and
+task files are separate evidence, not a fabricated final acceptance receipt.
+Both uninterrupted arms had complete host observations; one of 1,149 recovery
+samples exceeded the fixed four-second v9 collection budget during process exit.
+That sample and the failed whole-recovery host-PSS criterion remain unchanged.
+Old `4cba88f` fresh evaluation emits no allocator phase records, so its sampled
+GPU/host peaks are lower bounds. The bound raw receipts and precise failure are in
+the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+
 `train_action_head=false` is permitted only with adapters. It is a separate learning recipe,
 not the selected jointly adapted recipe. The old cached-feature PPO path is rejected for backbone
 adaptation because its no-grad features bypass language adapters. The flow-BC forward retains the

@@ -15880,6 +15880,595 @@
       "offline_target_scope": "Observed same-precision candidate/reference preflight-inclusive OFFLINE action-MSE target clocks in two blocks only. BF42 native target alone is0.686%slower. No QLoRA-vs-BF superiority, useful-rollout TTQ, statistical recipe claim or promotion.",
       "candidate_mature": "Not run following mandatory NF complete-workflow rejection; no additional timing repeats.",
       "discard_commit": "26bc60f7151ae5edb09aa26071be2d69820ff8ad"
+    },
+    "38536188": {
+      "family": "gr00t",
+      "slurm_state": "FAILED",
+      "exit_code": "1:0",
+      "allocation_gpu_seconds": 3643,
+      "scope": "Separate frozen-backbone/head-only modes: one exposed seed17, same-GPU BF then NF,537 FP32 trainables and zero LoRA factors. Not the primary QLoRA comparison or recipe/rollout noninferiority.",
+      "implementation_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697",
+      "protocol_sha256": "c310825c905e59192a51e2c03b64af20eb47d40c91deedca0fd2d81f4a278372",
+      "measurement_contract_sha256": "de7674e16a85f960660e1aee67e58b4127b24e7b2a51ce7f0dd95c873581b7fc",
+      "payload_manifest_sha256": "f3eb618f55bd63c4a380247349a5df70ba637c1a5215b00968ff3e6cfcdfab92",
+      "order": [
+        "bf16_frozen",
+        "nf4_frozen"
+      ],
+      "seed": 17,
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-frozen-head-38536188-readout-v1.json",
+        "sha256": "8d9afbdbf9c1a651b14611ef739e05204e6f967df6c88abe239a965c5112aa6b"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-frozen-head-38536188-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-frozen-head-38536188-receipts-v1.tar.gz",
+        "archive_sha256": "b8d62734dc6395e28e8a360d340bcbf5bf5b968ff0a390a0881a573cdb3a253a",
+        "inventory_sha256": "93e915b30c8072743a55b76af4e4647c3051b4eccc4713fcb4d4f24146dfc2bd",
+        "files_verified": 172,
+        "raw_samples_replayed": 2612,
+        "terminal_release_sha256": "fe20b94d4e69d7151074d07e82e06c4c80f279e85d01a3ed0d2353337f2ecfcf"
+      },
+      "final_qualification_acceptance": false,
+      "failure": {
+        "collection_observed_seconds": 4.016550603002543,
+        "errors": [
+          "collection_deadline_exceeded",
+          "membership_transition_retry_exhausted"
+        ],
+        "full_memory_summary": {
+          "device_peak_bytes": 44925386752,
+          "errors": [
+            "incomplete_host_pss"
+          ],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": false,
+          "host_pss_sum_peak_bytes": 32011968512,
+          "host_rss_sum_peak_bytes": 32636727296,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1496.5381336212158,
+          "owned_device_process_peak_bytes": 44151341056,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 1149,
+          "sampling_gap_seconds": {
+            "count": 1148,
+            "maximum": 5.016122341156006,
+            "mean": 1.303604646011512,
+            "median": 1.2787816524505615,
+            "p95": 1.4394525051116942,
+            "sum": 1496.5381336212158
+          }
+        },
+        "next_sample_complete": true,
+        "per_stage": {
+          "bf16_frozen-checkpoint-fresh": {
+            "device_peak_bytes": 14246150144,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4237254656,
+            "host_rss_sum_peak_bytes": 4826718208,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 136.38403582572937,
+            "owned_device_process_peak_bytes": 13511950336,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 107,
+            "sampling_gap_seconds": {
+              "count": 106,
+              "maximum": 1.4807236194610596,
+              "mean": 1.2866418474125412,
+              "median": 1.2828618288040161,
+              "p95": 1.3248074054718018,
+              "sum": 136.38403582572937
+            }
+          },
+          "bf16_frozen-portable-fresh": {
+            "device_peak_bytes": 13767999488,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 9545233408,
+            "host_rss_sum_peak_bytes": 10133884928,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 154.42285680770874,
+            "owned_device_process_peak_bytes": 13033799680,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 122,
+            "sampling_gap_seconds": {
+              "count": 121,
+              "maximum": 1.3725905418395996,
+              "mean": 1.276221957088502,
+              "median": 1.275085210800171,
+              "p95": 1.3048300743103027,
+              "sum": 154.42285680770874
+            }
+          },
+          "bf16_frozen-resume": {
+            "device_peak_bytes": 44925386752,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31694868480,
+            "host_rss_sum_peak_bytes": 32201940992,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 494.6301574707031,
+            "owned_device_process_peak_bytes": 44151341056,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 376,
+            "sampling_gap_seconds": {
+              "count": 375,
+              "maximum": 3.6337103843688965,
+              "mean": 1.3190137532552084,
+              "median": 1.2899267673492432,
+              "p95": 1.4399753093719483,
+              "sum": 494.6301574707031
+            }
+          },
+          "nf4_frozen-checkpoint-fresh": {
+            "device_peak_bytes": 13117882368,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3580682240,
+            "host_rss_sum_peak_bytes": 4170014720,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 132.97569394111633,
+            "owned_device_process_peak_bytes": 12383682560,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 105,
+            "sampling_gap_seconds": {
+              "count": 104,
+              "maximum": 1.509275197982788,
+              "mean": 1.2786124417415032,
+              "median": 1.270416259765625,
+              "p95": 1.3387157440185546,
+              "sum": 132.97569394111633
+            }
+          },
+          "nf4_frozen-portable-fresh": {
+            "device_peak_bytes": 12641828864,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 9389285376,
+            "host_rss_sum_peak_bytes": 9978064896,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 155.60077333450317,
+            "owned_device_process_peak_bytes": 11907629056,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 123,
+            "sampling_gap_seconds": {
+              "count": 122,
+              "maximum": 1.3715579509735107,
+              "mean": 1.2754161748729769,
+              "median": 1.2730401754379272,
+              "p95": 1.3110936641693116,
+              "sum": 155.60077333450317
+            }
+          },
+          "nf4_frozen-resume": {
+            "device_peak_bytes": 43767758848,
+            "errors": [
+              "incomplete_host_pss"
+            ],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": false,
+            "host_pss_sum_peak_bytes": 32011968512,
+            "host_rss_sum_peak_bytes": 32636727296,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 414.96234917640686,
+            "owned_device_process_peak_bytes": 42993713152,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 315,
+            "sampling_gap_seconds": {
+              "count": 314,
+              "maximum": 5.016122341156006,
+              "mean": 1.3215361438739073,
+              "median": 1.2785958051681519,
+              "p95": 1.476317286491394,
+              "sum": 414.96234917640686
+            }
+          },
+          "storage": {
+            "device_peak_bytes": 727252992,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 841840640,
+            "host_rss_sum_peak_bytes": 847147008,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 0,
+            "owned_device_process_peak_bytes": 0,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 1,
+            "sampling_gap_seconds": {
+              "count": 0,
+              "maximum": null,
+              "mean": null,
+              "median": null,
+              "p95": null,
+              "sum": 0.0
+            }
+          }
+        },
+        "predicate": "mature host_pss_complete",
+        "retrospective_repair": false,
+        "sample_index": 819,
+        "sample_method": "proc-identity-state-read-attempts-v9",
+        "stage": "nf4_frozen-resume",
+        "memory_acceptance_not_repaired": true,
+        "late_final_gate_left_completed_recovery_parity_dict_unpublished": true
+      },
+      "mode_results": {
+        "bf16_frozen": {
+          "metrics_300": {
+            "action_mae_environment_units": 0.04501847510985544,
+            "action_mae_gripper_environment_units": 0.08454849023371935,
+            "action_mae_pitch_environment_units": 0.016740461909634855,
+            "action_mae_roll_environment_units": 0.008816168662205484,
+            "action_mae_x_environment_units": 0.05889318286292453,
+            "action_mae_y_environment_units": 0.05204765263775577,
+            "action_mae_yaw_environment_units": 0.010952587316685332,
+            "action_mae_z_environment_units": 0.08313078214606279,
+            "loss": 0.09418525057189982,
+            "normalized_action_mse": 0.03983719464291685
+          },
+          "history": [
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04916228426215635,
+                "action_mae_gripper_environment_units": 0.1372063398733735,
+                "action_mae_pitch_environment_units": 0.016093830139640716,
+                "action_mae_roll_environment_units": 0.008225875696466987,
+                "action_mae_x_environment_units": 0.053972841933195764,
+                "action_mae_y_environment_units": 0.0449414604387712,
+                "action_mae_yaw_environment_units": 0.009601551121868425,
+                "action_mae_z_environment_units": 0.07409409063177787,
+                "loss": 0.128999243787257,
+                "normalized_action_mse": 0.05506814191766483
+              },
+              "step": 0
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.0503194533263452,
+                "action_mae_gripper_environment_units": 0.12402359951287507,
+                "action_mae_pitch_environment_units": 0.018327845770625076,
+                "action_mae_roll_environment_units": 0.008846645084340824,
+                "action_mae_x_environment_units": 0.05765861004316977,
+                "action_mae_y_environment_units": 0.05263754204316722,
+                "action_mae_yaw_environment_units": 0.010844740555155418,
+                "action_mae_z_environment_units": 0.07989719027508305,
+                "loss": 0.12056560850724055,
+                "normalized_action_mse": 0.05346858950597899
+              },
+              "step": 100
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.047030845367793374,
+                "action_mae_gripper_environment_units": 0.10817161545157433,
+                "action_mae_pitch_environment_units": 0.01716599363673925,
+                "action_mae_roll_environment_units": 0.008820321405358666,
+                "action_mae_x_environment_units": 0.05781893815322624,
+                "action_mae_y_environment_units": 0.04811249035439702,
+                "action_mae_yaw_environment_units": 0.009937841309286467,
+                "action_mae_z_environment_units": 0.07918871726397146,
+                "loss": 0.11199500861766865,
+                "normalized_action_mse": 0.046439082241018434
+              },
+              "step": 200
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04501847510985544,
+                "action_mae_gripper_environment_units": 0.08454849023371935,
+                "action_mae_pitch_environment_units": 0.016740461909634855,
+                "action_mae_roll_environment_units": 0.008816168662205484,
+                "action_mae_x_environment_units": 0.05889318286292453,
+                "action_mae_y_environment_units": 0.05204765263775577,
+                "action_mae_yaw_environment_units": 0.010952587316685332,
+                "action_mae_z_environment_units": 0.08313078214606279,
+                "loss": 0.09418525057189982,
+                "normalized_action_mse": 0.03983719464291685
+              },
+              "step": 300
+            }
+          ],
+          "offline_target": {
+            "attained": true,
+            "baseline": 0.05506814191766483,
+            "metric": "normalized_action_mse",
+            "native_seconds": 348.18321646298864,
+            "preflight_inclusive_seconds": 418.6589554520033,
+            "step": 200,
+            "threshold": 0.049561327725898344
+          },
+          "native_clocks": {
+            "checkpoint_seconds": 68.87651931497385,
+            "evaluation_seconds": 261.02451206199476,
+            "portable_export_seconds": 15.657725777011365,
+            "startup_seconds": 41.08362157898955,
+            "training_seconds": 93.62405941914767
+          },
+          "native_workflow_seconds": 483.73551378698903,
+          "complete_case_seconds_including_own_step_release": 1002.9259200209926,
+          "cleanup_seconds": 8.153967392980121,
+          "steady_update_seconds_101_300": {
+            "count": 200,
+            "maximum": 0.32146780600305647,
+            "mean": 0.31170220771600726,
+            "median": 0.31052372850535903,
+            "p95": 0.3168262780411169,
+            "sum": 62.34044154320145
+          },
+          "sampled_memory": {
+            "device_peak_bytes": 34225717248,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 30797664256,
+            "host_rss_sum_peak_bytes": 31683702784,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 931.2249000072479,
+            "owned_device_process_peak_bytes": 33451671552,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 715,
+            "sampling_gap_seconds": {
+              "count": 714,
+              "maximum": 3.915796995162964,
+              "mean": 1.3042365546319998,
+              "median": 1.2700892686843872,
+              "p95": 1.4000658035278322,
+              "sum": 931.2249000072479
+            }
+          },
+          "native_training_allocator_peak_bytes": {
+            "allocated": 31684115968,
+            "reserved": 32377929728
+          },
+          "original_portable_tensor_audit": {
+            "all537_changed_and_nonzero_first_moments": true,
+            "all537_float32_optimizer_members_exact": true,
+            "portable_tensor_values_equal_original_final_DCP": true,
+            "sha256": "1b48d00add44efca55807c46d34921fd4003ca399dd2a42a4ed98ec4d2cb02af",
+            "zero_lora_factors": true
+          },
+          "mature_recovery_evidence": {
+            "all100_numerical_updates_exact": true,
+            "comparison_dict_publication_missing": true,
+            "current_process_only": true,
+            "fresh_evaluations": {
+              "checkpoint": {
+                "full160_rows_metrics_source_identity_exact": true,
+                "sha256": "d1c70297a1da2c9d32bf5d3d9baa468b09ce13f47e57451d7053578e703ea299"
+              },
+              "portable": {
+                "full160_rows_metrics_source_identity_exact": true,
+                "sha256": "87986f6d5849a17207fd7fae85e2408c80d29463d10d36d2612cacbf17e6d78c"
+              }
+            },
+            "full160_resident_exact": true,
+            "full_history_source_and_target_sibling_exact": true,
+            "full_tensor_control_comparison_execution": "Sealed compare_recovery completed before persisted head-update audit and later successful fresh stages; its returned parity dict was held in memory and not published after the final measurement failure. No independent tensor recomputation claim."
+          },
+          "noise_mse": {
+            "123": 0.03983719464291685,
+            "456": 0.04474551570202623,
+            "789": 0.042986395814389525
+          },
+          "decoded_axis_mae_worse_than_own_source": [
+            "action_mae_pitch_environment_units",
+            "action_mae_roll_environment_units",
+            "action_mae_x_environment_units",
+            "action_mae_y_environment_units",
+            "action_mae_yaw_environment_units",
+            "action_mae_z_environment_units"
+          ]
+        },
+        "nf4_frozen": {
+          "metrics_300": {
+            "action_mae_environment_units": 0.04597347525308199,
+            "action_mae_gripper_environment_units": 0.08650039572268725,
+            "action_mae_pitch_environment_units": 0.017078562595041445,
+            "action_mae_roll_environment_units": 0.00950470819433576,
+            "action_mae_x_environment_units": 0.0657498672391027,
+            "action_mae_y_environment_units": 0.05224302279613931,
+            "action_mae_yaw_environment_units": 0.011012476490992218,
+            "action_mae_z_environment_units": 0.07972529373327529,
+            "loss": 0.09104840638901805,
+            "normalized_action_mse": 0.04042368491446333
+          },
+          "history": [
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04993531420917876,
+                "action_mae_gripper_environment_units": 0.1357787735760212,
+                "action_mae_pitch_environment_units": 0.01679471389145995,
+                "action_mae_roll_environment_units": 0.008380835461261412,
+                "action_mae_x_environment_units": 0.056422665883997095,
+                "action_mae_y_environment_units": 0.04715542558013691,
+                "action_mae_yaw_environment_units": 0.009905640157403974,
+                "action_mae_z_environment_units": 0.07510914491397083,
+                "loss": 0.1313539528971887,
+                "normalized_action_mse": 0.055654463751457765
+              },
+              "step": 0
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.047501215754334275,
+                "action_mae_gripper_environment_units": 0.10841965846717358,
+                "action_mae_pitch_environment_units": 0.01793839766727097,
+                "action_mae_roll_environment_units": 0.008932447302333115,
+                "action_mae_x_environment_units": 0.058553935973851834,
+                "action_mae_y_environment_units": 0.051336676181485394,
+                "action_mae_yaw_environment_units": 0.010976818628587449,
+                "action_mae_z_environment_units": 0.07635057605963741,
+                "loss": 0.11700498771169805,
+                "normalized_action_mse": 0.04888682404632813
+              },
+              "step": 100
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.045035864691052294,
+                "action_mae_gripper_environment_units": 0.09367720872163772,
+                "action_mae_pitch_environment_units": 0.017413054279930312,
+                "action_mae_roll_environment_units": 0.008917636658601845,
+                "action_mae_x_environment_units": 0.05907070775819154,
+                "action_mae_y_environment_units": 0.04844309915340796,
+                "action_mae_yaw_environment_units": 0.010763133038309149,
+                "action_mae_z_environment_units": 0.07696621322728751,
+                "loss": 0.1113718209984654,
+                "normalized_action_mse": 0.04290188540504979
+              },
+              "step": 200
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04597347525308199,
+                "action_mae_gripper_environment_units": 0.08650039572268725,
+                "action_mae_pitch_environment_units": 0.017078562595041445,
+                "action_mae_roll_environment_units": 0.00950470819433576,
+                "action_mae_x_environment_units": 0.0657498672391027,
+                "action_mae_y_environment_units": 0.05224302279613931,
+                "action_mae_yaw_environment_units": 0.011012476490992218,
+                "action_mae_z_environment_units": 0.07972529373327529,
+                "loss": 0.09104840638901805,
+                "normalized_action_mse": 0.04042368491446333
+              },
+              "step": 300
+            }
+          ],
+          "offline_target": {
+            "attained": true,
+            "baseline": 0.05506814191766483,
+            "metric": "normalized_action_mse",
+            "native_seconds": 244.47297478100518,
+            "preflight_inclusive_seconds": 318.3665432840062,
+            "step": 100,
+            "threshold": 0.049561327725898344
+          },
+          "native_clocks": {
+            "checkpoint_seconds": 65.99709364399314,
+            "evaluation_seconds": 286.11418295503245,
+            "portable_export_seconds": 16.490834928990807,
+            "startup_seconds": 40.982840387005126,
+            "training_seconds": 100.53735711690388
+          },
+          "native_workflow_seconds": 512.6274861420097,
+          "complete_case_seconds_including_own_step_release": 1049.7849149290123,
+          "cleanup_seconds": 6.808048994018463,
+          "steady_update_seconds_101_300": {
+            "count": 200,
+            "maximum": 0.38914594901143573,
+            "mean": 0.33476500863413094,
+            "median": 0.33327965150238015,
+            "p95": 0.3392009916802635,
+            "sum": 66.95300172682619
+          },
+          "sampled_memory": {
+            "device_peak_bytes": 33034534912,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 30814483456,
+            "host_rss_sum_peak_bytes": 31096975360,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 975.265239238739,
+            "owned_device_process_peak_bytes": 32260489216,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 748,
+            "sampling_gap_seconds": {
+              "count": 747,
+              "maximum": 3.991208553314209,
+              "mean": 1.3055759561428903,
+              "median": 1.2726318836212158,
+              "p95": 1.3882472515106201,
+              "sum": 975.265239238739
+            }
+          },
+          "native_training_allocator_peak_bytes": {
+            "allocated": 30485496320,
+            "reserved": 31186747392
+          },
+          "original_portable_tensor_audit": {
+            "all537_changed_and_nonzero_first_moments": true,
+            "all537_float32_optimizer_members_exact": true,
+            "portable_tensor_values_equal_original_final_DCP": true,
+            "sha256": "17a5415cbfe04e2be0ace4789a040a9b6cdf9519447609ae1f9b0d323d0e9310",
+            "zero_lora_factors": true
+          },
+          "mature_recovery_evidence": {
+            "all100_numerical_updates_exact": true,
+            "comparison_dict_publication_missing": true,
+            "current_process_only": true,
+            "fresh_evaluations": {
+              "checkpoint": {
+                "full160_rows_metrics_source_identity_exact": true,
+                "sha256": "75e4febccc66dab674855629338c2641522e01fc4b09f708e4def6f5afa7b245"
+              },
+              "portable": {
+                "full160_rows_metrics_source_identity_exact": true,
+                "sha256": "a844fbdc3e37030623b5c01e1c30b90b325f7bf67440b4c64ada413da4d77b8a"
+              }
+            },
+            "full160_resident_exact": true,
+            "full_history_source_and_target_sibling_exact": true,
+            "full_tensor_control_comparison_execution": "Sealed compare_recovery completed before persisted head-update audit and later successful fresh stages; its returned parity dict was held in memory and not published after the final measurement failure. No independent tensor recomputation claim."
+          },
+          "noise_mse": {
+            "123": 0.04042368491446333,
+            "456": 0.043574604224413636,
+            "789": 0.04255482131349189
+          },
+          "decoded_axis_mae_worse_than_own_source": [
+            "action_mae_pitch_environment_units",
+            "action_mae_roll_environment_units",
+            "action_mae_x_environment_units",
+            "action_mae_y_environment_units",
+            "action_mae_yaw_environment_units",
+            "action_mae_z_environment_units"
+          ]
+        }
+      },
+      "quality_point_screen": {
+        "all537_head_no_adapter_mode": true,
+        "automatic_promotion": false,
+        "final_normalized_action_mse": {
+          "bf16_frozen": 0.03983719464291685,
+          "nf4_frozen": 0.04042368491446333
+        },
+        "format": "native-gr00t-frozen-head-pair-v1",
+        "nf4_bf16_mse_ratio": 1.0147221780249218,
+        "offline_preservation_point_guard": true,
+        "original_primary_qlora_comparison_replaced": false,
+        "protocol_sha256": "c310825c905e59192a51e2c03b64af20eb47d40c91deedca0fd2d81f4a278372",
+        "recipe_preservation_established": false,
+        "recovery_required_separately": true,
+        "result_sha256": {
+          "bf16_frozen": "5e61c5c1d3dd07ce19bdbac35de32f82358fbc3938f39061a81f07d8feda0c78",
+          "nf4_frozen": "1a36505511545a239bde2e8fd60141190f4e09f0991e457ca8a99fb03229e440"
+        },
+        "rollout_success_established": false,
+        "scope": "One exposed development seed. Mode correctness and quality/memory/runtime point evidence; not a learning sweep or release qualification.",
+        "seed": 17,
+        "target": 0.049561327725898344,
+        "target_sha256": "eff946f62dbdc9c57f61ac96f03f13640baaf5bee4695d9fd1381830b95e4534",
+        "useful_offline_target_attained": {
+          "bf16_frozen": true,
+          "nf4_frozen": true
+        }
+      },
+      "limitations": [
+        "Distinct frozen-backbone/head-only mode, not QLoRA. One exposed development seed and repeated BF control, not independent recipe noninferiority or rollout success.",
+        "Final whole-workflow measurement acceptance failed; positive native and saved tensor/task evidence is preserved without changing that verdict.",
+        "No separately published resumed model/optimizer/RNG/data parity dictionary survived the late measurement failure; source-controlled execution and independent numerical-update/task replay are distinguished.",
+        "Old4c fresh action_eval emits no allocator phase records; fresh GPU/host observations are sampled lower bounds, not allocator peaks.",
+        "Sequential same-GPU/CPU cases share host/IO with concurrent owned finite42 earlier; no clock correction or general throughput claim."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {
