@@ -18964,6 +18964,269 @@
         "No new300 mature recovery, fresh endpoint DCP evaluation, rollout preservation or independent confirmation.",
         "Original failed LR1e-4 practical comparison remains unperformed, with identities/results preserved."
       ]
+    },
+    "38544702": {
+      "family": "qwen3_vl",
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99",
+      "protocol_sha256": "c87f736603ad14929c6edac456ac542b5ff10a048181b4c1d6fcc78d5f9af0f6",
+      "payload_manifest_sha256": "c9ad92a012a529053125ecd7f59e0728410ac245d42b32bbfecd03afaf7343c2",
+      "slurm_state": "FAILED",
+      "exit_code": "1:0",
+      "allocation_gpu_seconds": 101,
+      "scope": "Pre-model/source admission failure; zero native training/recovery processes completed. No currentQwen02 GPU recovery/learning/export qualification.",
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38544702-readout-v1.json",
+        "sha256": "2c69e5e6e814a0c33f3d5644d72bce1084125eaf55416cfbbf2adefd4cd2e120"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38544702-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38544702-receipts-v1.tar.gz",
+        "archive_sha256": "aa200c3c8ee393e9c2242c85cebc6df38137bd7536f0de6012edab000f9cd034",
+        "inventory_sha256": "f06624dfa0937387708d32d3637c19ae0888ee28827e11dfe268f679f7b42813",
+        "files_verified": 18,
+        "terminal_release_sha256": "5c9fb6b9ee5ec82ec2c08fb23bcd1c8357dc03d67f21b2c50dc0b34a40614453"
+      },
+      "admission_sha256": "52b8a9a611fcefafc1f0632e6249945c03bf18537c62a06740e3c342814984fa",
+      "final_qualification_acceptance": false,
+      "failure": "Native source-integrity guard detected different fstat(dev,inode,size,mtime_ns,ctime_ns) before/after reading original chat_template.json. Actual failed tuples were not retained; differingfield and historical cause UNKNOWN.",
+      "current_read_only_source_observation": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-source-after-38544702-qualified-python-v1.json",
+        "scope": "50stable sidecar reads acrossbothaliases and native full14-file immutable snapshot identity exact; currentidentity only, not historicalcause proof.",
+        "sha256": "734a46a95976a5d92ddad39b110417cf93d0822be2f7ea208a63d15efbd5d0d9"
+      },
+      "partial_monitor": {
+        "host_complete_count": 16,
+        "model_phase_memory_present": false,
+        "raw_sha256": "b9bd095f7ecb292d590c99f207bc384fec4175464b427908848b8abdfbdd287a",
+        "sample_count": 16,
+        "scope": "Only outer driver/pre-model source checks; no model-memory qualification."
+      }
+    },
+    "38545631": {
+      "family": "qwen3_vl",
+      "implementation_revision": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+      "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99",
+      "protocol_sha256": "c87f736603ad14929c6edac456ac542b5ff10a048181b4c1d6fcc78d5f9af0f6",
+      "payload_manifest_sha256": "c9ad92a012a529053125ecd7f59e0728410ac245d42b32bbfecd03afaf7343c2",
+      "slurm_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocation_gpu_seconds": 3413,
+      "scope": "Current02 Qwen NF4/BF16 own-build four-update native lifecycle, both actual recovery paths, text/image/video portable parity, four-row resident/fresh scoring and evaluation-insertion neutrality. No mature300/new learning/release-quality/packing qualification. Native tensor-comparison receipts replayed; tensors were not downloaded or recomputed locally.",
+      "summary": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-readout-v1.json",
+        "sha256": "50013a4d4aea92b38f707fe27d6a533b308b6c3879a5dc4132f12c8b20bed063"
+      },
+      "raw_receipts": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-receipts-v1",
+        "archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-receipts-v1.tar.gz",
+        "archive_sha256": "bd7b9605a1b6709916807230e0eb46bd4943d2153b76d0288307d9da0160df39",
+        "inventory_sha256": "c77f25bfababda58adf15faf8833ed274884f7952b723c8bcc783399c56e9c58",
+        "files_verified": 308,
+        "terminal_release_sha256": "6baf81de8519eb2afd5bc2549b02105dca9d870eca686ce8315a5f6cc9380ff6"
+      },
+      "admission_sha256": "60977759bfbe147308effe4f575e638a5a5304978f7b4bd85e0bf79868cf77b0",
+      "final_qualification_acceptance": true,
+      "acceptance_sha256": "bc861a687b393ab6a69a1c66f0f641c561730b12579e7a5d9c930225c551428d",
+      "runtime": {
+        "code": "02f93bad9deeb32a48f259348607fd1b77f92ebb",
+        "cpu_affinity": [
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          164,
+          165,
+          166,
+          167,
+          168,
+          169,
+          170,
+          171
+        ],
+        "cpu_threads": {
+          "MKL_NUM_THREADS": null,
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": null
+        },
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-9999355b-5323-80eb-87fc-7701c85758bf"
+        },
+        "node": "batch-block7-03411",
+        "numa_nodes": [
+          "node2"
+        ],
+        "slurm_job": "38545631",
+        "slurm_step": "0",
+        "torch_git": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+        "versions": {
+          "accelerate": "1.13.0",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "torch": "2.11.0+cu128",
+          "torchcodec": "0.11.0+cpu",
+          "transformers": "5.8.1"
+        },
+        "wheel_sha256": "e951cfc1e31313f78247ddd528146951895bccc8818e4c8aa7b5bfcfcc79de99"
+      },
+      "source_and_recipe": {
+        "model": "Qwen3-VL-8B-Instruct",
+        "revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+        "rank": 32,
+        "alpha": 64,
+        "dropout": 0,
+        "seed": 42,
+        "activation_checkpointing": "none",
+        "microbatch": 1,
+        "gradient_accumulation": 8,
+        "training_and_resident_cache_bytes_each": 3221225472,
+        "optimizer": "fused AdamW; FP32 adapters and moments",
+        "learning_rate": 0.0001,
+        "max_steps": 4,
+        "resident_rows": 4,
+        "scoring_steps": [
+          2,
+          4
+        ],
+        "OMP_NUM_THREADS": 8
+      },
+      "results": [
+        {
+          "mode": "bf16",
+          "native_stages": 19,
+          "completion_sha256": "b1e46a2aa9428642f6935f0b980a7ef44fadc37042292dc6465fa517e9373fc6",
+          "all_native_outcomes_validated": true,
+          "checkpoint_comparison_count": 6,
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "controls_rng_data_and_next_updates_exact": true,
+          "resident_fresh_four_rows_exact": true,
+          "evaluation_insertion_state_exact": true,
+          "dcp_portable_text_image_video_differences": {
+            "image": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            },
+            "text": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            },
+            "video": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            }
+          },
+          "native_allocator_observations": {
+            "phase_files": 9,
+            "maximum_recorded_peak_allocated_bytes": 22985635840,
+            "maximum_recorded_peak_reserved_bytes": 23481810944,
+            "scope": "Maximum of actual per-stage journals; full phase records and hashes in the bound readout. No reconstructed whole-allocation or old/new comparison."
+          }
+        },
+        {
+          "mode": "nf4",
+          "native_stages": 19,
+          "completion_sha256": "9d3240e44472c748ae42d27a7847a2b286fdf8151f5aa089f1769117a64d9a46",
+          "all_native_outcomes_validated": true,
+          "checkpoint_comparison_count": 6,
+          "on_node_model_optimizer_maxdiff": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "controls_rng_data_and_next_updates_exact": true,
+          "resident_fresh_four_rows_exact": true,
+          "evaluation_insertion_state_exact": true,
+          "dcp_portable_text_image_video_differences": {
+            "image": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            },
+            "text": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            },
+            "video": {
+              "logits_max_abs": 0.0,
+              "loss_abs": 0.0
+            }
+          },
+          "native_allocator_observations": {
+            "phase_files": 9,
+            "maximum_recorded_peak_allocated_bytes": 12586679296,
+            "maximum_recorded_peak_reserved_bytes": 12937330688,
+            "scope": "Maximum of actual per-stage journals; full phase records and hashes in the bound readout. No reconstructed whole-allocation or old/new comparison."
+          }
+        }
+      ],
+      "memory": {
+        "summary": {
+          "device_peak_bytes": 25287655424,
+          "errors": [
+            "incomplete_host_pss"
+          ],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": false,
+          "host_pss_sum_peak_bytes": 7443128320,
+          "host_rss_sum_peak_bytes": 7783596032,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 3336.983000278473,
+          "owned_device_process_peak_bytes": 24553455616,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 2566,
+          "sampling_gap_seconds": {
+            "count": 2565,
+            "maximum": 2.035508871078491,
+            "mean": 1.3009680312976502,
+            "median": 1.2709362506866455,
+            "p95": 1.4001036167144774,
+            "sum": 3336.983000278473
+          }
+        },
+        "raw_sha256": "2d28564d7717cdb7468888711245cf26aa9da26961f5b340a744a43f82e4fde5",
+        "host_complete_count": 2565,
+        "incomplete_indices": [
+          2368
+        ],
+        "gap": {
+          "index": 2368,
+          "stage": "bf16",
+          "method": "proc-identity-state-read-attempts-v10",
+          "errors": [
+            "membership_transition_retry_exhausted"
+          ]
+        },
+        "scope": "Outer native lifecycle monitor interval; sampled GPU/host peaks are lower bounds, not preflight or whole-allocation peaks. One incomplete host observation remains incomplete. Native allocator journals are separate per-stage observations, not matched old/new memory or speed comparisons."
+      },
+      "prior_failed_attempt": {
+        "allocated_gpu_seconds": 101,
+        "failed_fstat_tuple_and_cause": "UNKNOWN; successful retry does not reconstruct the historical failure.",
+        "job_id": 38544702,
+        "readout_sha256": "2c69e5e6e814a0c33f3d5644d72bce1084125eaf55416cfbbf2adefd4cd2e120",
+        "state": "FAILED"
+      },
+      "staging_incident": {
+        "facts": "Correct C/native-02 verified. Four C-root objects were mistakenly written; prior absence/overwrite unknown; left in place. Sealed active4c/native bundles verified unaffected.",
+        "sha256": "5e15adbd9e60772e9704999555063f93c4f926d609763e397b10d07ef47d6cdb"
+      },
+      "root_independent_review": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-root-review-v1.json",
+        "sha256": "27836c06d28ad6c5b1b63247bd6b95d2dcd5be4683c9e251b312771df11cf3aa",
+        "files_verified": 308,
+        "raw_samples_replayed": 2566,
+        "complete_host_samples": 2565,
+        "native_stages_per_mode": 19,
+        "state_comparisons_replayed": 12,
+        "scope": "Independent receipt, exact on-node comparison-output and raw sampler replay. No second full tensor recomputation."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -19133,6 +19396,16 @@
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-official-38546671-receipts-v1.tar.gz",
       "sha256": "11150c273836b52dbda24d29d80fc14f413a5ec921f9071cdf8fe0ae90a7e1b1",
       "scope": "Terminal official699 job38546671 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38544702-receipts-v1.tar.gz",
+      "sha256": "aa200c3c8ee393e9c2242c85cebc6df38137bd7536f0de6012edab000f9cd034",
+      "scope": "Terminal Qwen02 job38544702 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
+    },
+    {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/qwen-native-recovery-38545631-receipts-v1.tar.gz",
+      "sha256": "bd7b9605a1b6709916807230e0eb46bd4943d2153b76d0288307d9da0160df39",
+      "scope": "Terminal Qwen02 job38545631 bounded receipts plus inventory, excluding model/optimizer tensor payloads."
     }
   ],
   "fixed_development_targets": {
