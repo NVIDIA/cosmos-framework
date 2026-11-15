@@ -5,6 +5,11 @@ language backbone. The implementation is available; task quality, performance an
 must be read from the accompanying qualification evidence. CPU tests and configuration acceptance
 alone do not establish accelerator support or robotic task success.
 
+Native commands: [training and recovery](#native-training-and-recovery),
+[fresh-process evaluation](#fresh-process-evaluation),
+[standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).
+The source-build and qualification limits in each section remain applicable.
+
 The initial architecture is `nvidia/GR00T-N1.7-LIBERO` at
 `2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21`, LIBERO-spatial policy, with the checkpoint's
 16 retained Cosmos-Reason2-2B language layers, 2048 hidden width and 40 × 132 action head.
@@ -197,6 +202,33 @@ are missing, not zero. Native allocator records remain. A future-only package-mo
 dispatch correction passed five actual safe-path subprocess tests; the original
 payload and failure are unchanged, and no GPU repeat was made solely for memory
 paperwork. This diagnostic supplies no memory-saving or performance claim.
+
+A separate diagnostic (`38573209`, 177 GPU-seconds) then tested the **selected
+full-head BF16 update-200 policy**, using its original compatible `4cba88f` loader
+and the same 20 consumed training rows. All 537 trained head tensors stayed fixed;
+only the learned language-adapter scale changed temporarily.
+
+| Selected full-head diagnostic | Language enabled | Language disabled |
+|---|---:|---:|
+| Native flow loss | 0.05072161 | 0.05048209 |
+| Sampled normalized action MSE | 0.02207795 | 0.02185888 |
+
+The prospective hypothesis condition **failed**. Language-on MSE increased by
+1.0022%, with 8/10 task means worse, but flow loss also increased by 0.4745%.
+The required lower-flow-loss condition was absent. All seven decoded-axis mean
+errors increased on these calibration rows. This is a checkpoint-local inference
+intervention, not a retraining result or held-out estimate. No lower-language-LR
+trial or new recipe was selected from it; the earlier head-profile diagnosis is
+not transferred to the full-head policy.
+
+All 40 native row evaluations, six restoration checks and the 84-file independent
+replay passed. The corrected observer collected 100 complete host observations
+with valid owned-GPU attribution; these are descriptive sampled lower bounds,
+not matched performance measurements. The original missing observations remain
+missing. A preceding admission preflight timed out on a scheduler query before
+any GPU launch. Its failure and successful write probe were preserved; a narrow
+reuse of the existing bounded whole-census retry passed 41 CPU checks and the
+fresh preflight before the single submission. No scientific setting changed.
 
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16
@@ -398,6 +430,8 @@ continues an already LIBERO-specialized checkpoint on the separately identified
 HuggingFaceVLA export. Its outcome cannot be compared directly with the published
 success rate or attributed to quantization without the matched BF16 LoRA arm.
 
+## Native training and recovery
+
 Use pinned Isaac-GR00T source `51d4c89f72fda44cbf77285c6a8114b52676b8a1`, Transformers 4.57.6,
 and bitsandbytes 0.49.2 for NF4. Construction verifies the upstream source digest and content-bound
 checkpoint/processor identity. No missing-kernel, dense-weight or alternate-backend fallback occurs.
@@ -491,6 +525,8 @@ The allocation cost 1,054 GPU-seconds. This closes current-source default traini
 recovery and portable reload coverage; it does not repeat mature recovery, qualify
 current-default standalone export or establish learning/performance improvement.
 
+## Fresh-process evaluation
+
 Every checkpoint/portable policy includes all trained action-head/projector tensors alongside LoRA,
 with source, model, quantization, processor/statistics, embodiment, action settings, resolved targets,
 implementation hashes and dtype identities. Portable reload reconstructs the same quantized base.
@@ -512,6 +548,8 @@ parameter inventory and complete numerical identity before loading trained compo
 masked normalized-action MSE, per-component decoded environment-action MAE and native teacher-forced
 flow loss separately. Prediction never receives demonstration actions as RTC conditioning. Generic
 HF language-model loading and serving acceleration are not established by this portable loader.
+
+## Standalone artifacts
 
 The qualified standalone representation is **dequantized and unmerged**. It stores the actual
 BF16 effective base, separate FP32 LoRA factors, all trained action components and native sidecars.
@@ -593,6 +631,8 @@ have separate reset-delimited intervals. The existing external sampler is still
 needed for device allocations outside PyTorch and process-tree host memory.
 The historical JSON workflow clock ends before result publication; the new phase
 records expose that publication cost without rewriting old measurements.
+
+## LIBERO rollout
 
 An observation-only native rollout adapter and `entrypoints.gr00t_rollout` also connect a loaded
 portable or dense policy to the existing isolated LIBERO simulator gateway. The separate

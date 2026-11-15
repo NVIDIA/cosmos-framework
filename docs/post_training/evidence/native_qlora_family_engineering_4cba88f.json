@@ -26003,6 +26003,145 @@
       "promotion": false,
       "validation_scope": "Root and independent peer replayed168 file hashes/sizes,3759 strict v11 host observations,128 numerical updates,four256-row metrics and terminal/controller/queue/steps. Peer additionally checked allocator summaries and16 small metadata/trainer/data files. Full model/optimizer equality is the retained on-node assertion. Tiny setup/verification intervals retain no_samples flags; observed-span completeness is not a whole-allocation peak claim. Actual affinity/memory masks are recorded; no new NUMA memory binding is inferred.",
       "decision": "BF17 correctness/memory/all-three-clocks PASS; both seed17 pairs eligible to continue, not promotion. Frozen reversed-order NF42/BF42 and per-precision aggregate gates remain required; default remains off. No trained-ON128 continuation,full512 quality/time-to-target or inference-speed claim. Shared execution benefit applies to both precision arms; no cross-placement NF4/BF16 superiority claim."
+    },
+    "38573209": {
+      "job": "38573209",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 177,
+      "native_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "scope": "Original selected full-head BF16 update200 policy; temporary language-alpha1vs0, same20 consumed training rows,40 native flow/sampler evaluations,zero updates/export. Original compatible loader, no identity bridge.",
+      "protocol_sha256": "50e54911bc88264f0a891efe4ea7ef81241a74a48356096245a3871082fded51",
+      "payload_manifest_sha256": "ee582bf4c99f49eeff8b18e6b01732fee8ac1fe84eda046f1b966824e93a2e3f",
+      "artifact_model_sha256": "481414015d614ee6056a4929b4f080b4f4ad03066e860ef6d2f1f8292d946858",
+      "artifact_metadata_sha256": "d12af7495a3fcb2b917be13ddea208c4060d0c3bfc2b3a6b12b735a35d8b15b8",
+      "artifact_trained_tensors": 761,
+      "unchanged_language_factor_tensors": 224,
+      "unchanged_trained_head_tensors": 537,
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full-head-language-ablation-38573209-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "3ddf02b93a0f25ede3e9206b3d236a344373ef69e81007032c0de897c60897ef",
+      "inventory_sha256": "7c94056b4a0bff6b1f6f1b758cfb0ec6298554d6d731db63a38ecfdec8eb0e46",
+      "result_sha256": "2425ef728ee101f7ee88a322112684fa318ecc73ff24ee59ea8228abbc9ce5ba",
+      "terminal_release_sha256": "badb27d2cc9d6328dfe28307d9ebf1912821ff69fc5f7ffe1606cd519eb009e4",
+      "independent_readout_sha256": "814139f484d9782e888bd54a42cbd64d8af795f595c2103fb595fac339447dd5",
+      "files_verified": 84,
+      "runtime": {
+        "family": "gr00t",
+        "code": "4cba88f4d84ce69037c194e58670e8491388a36d",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "uuid": "GPU-003127b9-6ec9-b6cd-7454-7ae13c78600d",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          152,
+          153,
+          154,
+          155,
+          160,
+          161,
+          162,
+          163
+        ],
+        "slurm_job": "38573209",
+        "node": "batch-block7-03039",
+        "allocator": null,
+        "numa_nodes": [
+          "node1",
+          "node2"
+        ]
+      },
+      "metrics": {
+        "language_off": {
+          "action_mae_environment_units": 0.038557288123656684,
+          "action_mae_gripper_environment_units": 0.027659575045108794,
+          "action_mae_pitch_environment_units": 0.02088342876190101,
+          "action_mae_roll_environment_units": 0.007607784141472278,
+          "action_mae_x_environment_units": 0.08539242278698345,
+          "action_mae_y_environment_units": 0.0463313222203811,
+          "action_mae_yaw_environment_units": 0.013002385161841339,
+          "action_mae_z_environment_units": 0.06902409874790884,
+          "loss": 0.05048208541702479,
+          "normalized_action_mse": 0.021858878087784563
+        },
+        "language_on": {
+          "action_mae_environment_units": 0.03885947246895853,
+          "action_mae_gripper_environment_units": 0.028047777712345123,
+          "action_mae_pitch_environment_units": 0.021202950875130883,
+          "action_mae_roll_environment_units": 0.007700239121597328,
+          "action_mae_x_environment_units": 0.08590334958932688,
+          "action_mae_y_environment_units": 0.046598003128430994,
+          "action_mae_yaw_environment_units": 0.013197192307623715,
+          "action_mae_z_environment_units": 0.06936679454825483,
+          "loss": 0.050721610407345,
+          "normalized_action_mse": 0.02207795396979366
+        }
+      },
+      "restoration": {
+        "factor_base_records_exact": true,
+        "mixed_modes_restored": true,
+        "passed": true,
+        "rng_restored": true,
+        "scales_restored": true,
+        "storage_gradient_graph_exact": true
+      },
+      "diagnostic_interpretation": {
+        "language_flow_loss_strictly_lower": false,
+        "language_mse_relative_increase": 0.010022283903560636,
+        "promotion": false,
+        "prospective_condition_met": false,
+        "represented_tasks": 10,
+        "scope": "Do not transfer the rejected head-profile diagnosis to the selected full-head policy.",
+        "tasks_with_strictly_worse_mean_mse": 8,
+        "training_counterfactual": false
+      },
+      "rows_with_worse_language_on_mse": 13,
+      "all_seven_decoded_axis_mean_errors_increased": true,
+      "decision": "Fixed conjunction FALSE: language-on MSE increases1.002228% with8/10taskmeans worse, but nativeflowloss also increases0.474475% rather than falling. Do not transfer the rejected head-profile diagnosis or select a lower-language-LR trial from this result. No new recipe, validation rescoring or promotion.",
+      "measurement": {
+        "worker_seconds": 125.8175260219723,
+        "wrapper_seconds": 127.26533179590479,
+        "sampled_span_seconds": 125.51285934448242,
+        "complete_host_observations": 100,
+        "invalid_or_incomplete_host_observations": 0,
+        "owned_gpu_evidence_valid": true,
+        "allocator_peak_allocated_bytes": 12311049728,
+        "allocator_peak_reserved_bytes": 12543066112,
+        "sampled_owned_gpu_peak_bytes": 13103005696,
+        "sampled_host_pss_peak_bytes": 8327314432,
+        "limits": "Descriptive diagnostic observations only; sampled lower bounds, not whole-allocation memory or matched training/deployment performance. Scheduler parent177seconds is separate from worker/wrapper clocks; recorded native-step end is5seconds after parent accounting end, not silently reconciled."
+      },
+      "validation_scope": "Root and independent peer replayed all84 file hashes/sizes,40 native sum/count rows,global/task reductions and exact prospective FALSE rule,c928 terminal/controller/queue/steps,100 strict host samples. Six restoration fields passed. Full output/groundtruth/RNG/model-state equality remains the on-device/hash attestation; no login tensor load or fresh native re-evaluation.",
+      "observer_repair": "Future-only package-module dispatch correction now produced100 complete host observations and valid owned-GPU evidence on real hardware; original38567435 observer failure and missing samples remain unchanged.",
+      "admission": {
+        "actual_sha256": "974a22646fc1076383ac920f01a570d0ac453148a3b77645ce09cb892b3f3abe",
+        "approved_preflight_sha256": "c7a155c3ad9ab0243fa6af34f300b6966403b1e290c5429550881998094d941d",
+        "submit_guard_sha256": "34e58a4aab116fad182ce4c71348ddce31a855e98e049230d92e583afbabdd39",
+        "original_failed_preflight_guard_sha256": "a664184ce529035a75efb680038574cd309a583657d83602ce5b7e0397e85072",
+        "failed_preflight_log_sha256": "c0d6593a37477848eda36089349d21ada651596b7ff6d03d01e0ee8735dd7f28",
+        "failed_preflight_write_probe_sha256": "de5fcc08b8858805e1dd627423004bd985f4a9ba973e9fb776ed43593d4b3966",
+        "failed_preflight": "Final squeue TimeoutExpired10s, exit1 after successful source/storage checks; no sbatch or GPU cost. Original bytes retained.",
+        "attempt2_guard_sha256": "001c49f5d8a556ce0eb76fd1d17fdf958803cb0828ae937eaf2e79f26a82bd41",
+        "repair": "Reuse qualified whole-census timeout restart/replay,10squeries/180s full deadline,zero-owned host context. Strict malformed/error/ownership refusals retained; distinct attempt2 paths;26-file science/native unchanged.41 distinct CPU cases passed owner and independentpeer. Both actual preflight and submission complete fresh censuses passed with21unrelated/zero-owned jobs each."
+      },
+      "local_analysis_limits": "The independent peer corrected one supplemental memory-summary call signature locally before executing the frozen reduction. Original traceback/empty log retained; no GPU/source/raw-data repeat or metric change."
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -28184,7 +28323,7 @@
     "outcome": "Completed descriptive diagnostic; read jobs.38567435. Original failed qualitydecision unchanged; no newrecipepromotion."
   },
   "gr00t_selected_fullhead_language_error_diagnostic": {
-    "status": "Prospectively sealed locally before outcomes; no remote staging/admission during active AlpamayoBF17 timing",
+    "status": "Completed original-compatible diagnostic; fixed interpretation rule FALSE, no new recipe selected",
     "rationale": "The rejected BF head-adapter policy exhibits lower flowloss but higher sampled actionerror from its learned language delta on20 consumed trainrows. Selected full-head behavior cannot be inferred from that policy; test that transfer before selecting a learning intervention.",
     "source": {
       "code_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
@@ -28252,6 +28391,8 @@
     },
     "authorization_scope": "Existing user authorization covers necessary bounded learning/qualification. A separately reviewed future learning protocol is required for scientifically interpretable admission; no new user budget-transfer permission is implied. No LR change is selected by this preparation.",
     "resources": "Existingroute;1A10080/16CPU128G/30mincap, defaultallocator, one model load/40native row evaluations. Existing corrected package-module v11observer; missing coverage descriptive, no newmemorygate. No concurrent timing allocation.",
-    "cpu_validation": "66distinct independent core andworker/source tests;5 actualsafe-path dispatch tests. No GPU/numericalpolicy claim from these tests."
+    "cpu_validation": "66distinct independent core andworker/source tests;5 actualsafe-path dispatch tests. No GPU/numericalpolicy claim from these tests.",
+    "completed_job": "38573209",
+    "outcome": "Read jobs.38573209; technical/restoration PASS is separate from failed prospective learning-hypothesis condition. All prior quality and performance decisions remain unchanged."
   }
 }
