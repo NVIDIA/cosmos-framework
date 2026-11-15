@@ -111,10 +111,17 @@ checks passed; independent peers also passed the 24 shared and 28 native new cas
 These overlapping suites are contract evidence, not CUDA qualification. The
 [prospective paired development screen](evidence/native_qlora_gr00t_dit_attention_protocol.json)
 fixes seed 17, LR `1e-5`, 200 updates, the unchanged action-MSE target and all seven
-source-relative decoded-axis guards before outcomes. Real-model initial arithmetic,
-multi-update recovery, portable/unmerged reload, quality and memory results remain
-pending. The retained full-head and frozen-head negative results remain unchanged;
-any head-state memory saving belongs to both precision arms.
+source-relative decoded-axis guards before outcomes. A100 job `38559188` passed all
+six initialized BF16/NF4 controls, including exact task outputs, RNG and existing
+language-adapter gradients, then completed three native BF16 updates. Its enclosing
+qualification failed because the checker omitted one `.model` level from the
+canonical language-target paths; the saved policy contains all 112 intended targets.
+The failed 634-GPU-second allocation and its complete 438 memory observations are
+retained. Optimizer tensor auditing, recovery, fresh portable/unmerged reload, NF4
+updates and development quality remain pending. Diagnostic full-head memory is
+separate from the new recipe's training peak. The retained full-head and frozen-head
+negative results remain unchanged; any head-state memory saving belongs to both
+precision arms.
 
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16

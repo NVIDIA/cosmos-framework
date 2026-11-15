@@ -23275,6 +23275,145 @@
       "verified_raw_files": 44,
       "readout_sha256": "4d08c40eb5069e2fc653a2bd21316a99213f850cb79f794adc3bc29525fee1f1",
       "root_review": "All44 file digests/sizes, terminal/accounting/noqueue/nosteps and exact pre-srun traceback independently replayed. No runtime or native experiment started."
+    },
+    "38559188": {
+      "allocated_gpu_seconds": 634,
+      "archive_sha256": "95505812c32e3bda5bea57a952e1d8e234126819e161d1434452f7c738d4e0b2",
+      "bf_native": {
+        "applied_updates": 3,
+        "expected112_language_present": true,
+        "full480_metadata_membership": true,
+        "nf_native_not_started": true,
+        "optimizer_tensor_value_audit_not_reached": true,
+        "original537_head_frozen": true,
+        "own_recovery_not_started": true,
+        "portable_metadata_exact": true
+      },
+      "exit_code": "1:0",
+      "failure": {
+        "actual_language_prefix": "backbone.model.model.language_model",
+        "actual_shapes": [
+          [
+            1024,
+            2048
+          ],
+          [
+            2048,
+            2048
+          ],
+          [
+            2048,
+            6144
+          ],
+          [
+            6144,
+            2048
+          ]
+        ],
+        "incorrect_guard_prefix": "backbone.model.language_model",
+        "kind": "qualification-only canonical-path fixture error",
+        "native_source_changed": false,
+        "original_guard_reproduced": true,
+        "target_count": 112
+      },
+      "initial": {
+        "bf16_lora": {
+          "gradient_rng_tensor_recompute_on_login": false,
+          "independent_json_forward_sampler_modes_and_initial_values": true,
+          "initial_head_factors": 256,
+          "reported_on_node_exact_gate": {
+            "exact_initialized_full_forward_flow_sampler_rng_and224_language_gradients": true,
+            "new_head_gradient_tensors": 256,
+            "no_postupdate_fullhead_trajectory_claim": true,
+            "passed": true,
+            "roles": [
+              "full",
+              "frozen",
+              "head"
+            ]
+          }
+        },
+        "nf4_lora": {
+          "gradient_rng_tensor_recompute_on_login": false,
+          "independent_json_forward_sampler_modes_and_initial_values": true,
+          "initial_head_factors": 256,
+          "reported_on_node_exact_gate": {
+            "exact_initialized_full_forward_flow_sampler_rng_and224_language_gradients": true,
+            "new_head_gradient_tensors": 256,
+            "no_postupdate_fullhead_trajectory_claim": true,
+            "passed": true,
+            "roles": [
+              "full",
+              "frozen",
+              "head"
+            ]
+          }
+        }
+      },
+      "inventory_sha256": "a7dcea9d9f946e5cea07eca530eb57023dae2ad7685a869d97bd87ec6e10646b",
+      "job_id": "38559188",
+      "no_large_tensor_payloads_loaded": true,
+      "overall_accepted": false,
+      "raw_files_verified": 112,
+      "screen200_started": false,
+      "state": "FAILED",
+      "terminal_release_sha256": "08bbd4f3e147b4205a93f4e05c6321a507d99c1491d2386828d327487b7c973d",
+      "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "readout_sha256": "0dfa052eee29aa043e2f2413870edfa8980d211b69e835e8ff6159ba1f9ee94b",
+      "payload_manifest_sha256": "4f9a9f4be91cd60b957a7796316387260750573d7290062b0927d2a77397fa26",
+      "memory": {
+        "samples": 438,
+        "complete_host_samples": 438,
+        "whole_span": {
+          "device_peak_bytes": 18784387072,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 4267908096,
+          "host_rss_sum_peak_bytes": 4807389184,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 561.9906451702118,
+          "owned_device_process_peak_bytes": 18050187264,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 438,
+          "sampling_gap_seconds": {
+            "count": 437,
+            "maximum": 1.546680212020874,
+            "mean": 1.2860197829981963,
+            "median": 1.2842693328857422,
+            "p95": 1.310782527923584,
+            "sum": 561.9906451702118
+          }
+        },
+        "bf_native3": {
+          "allocator_peak_allocated_bytes": 12817518592,
+          "allocator_peak_reserved_bytes": 12937330688,
+          "sampled": {
+            "device_peak_bytes": 14745272320,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4267908096,
+            "host_rss_sum_peak_bytes": 4807389184,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 94.8636589050293,
+            "owned_device_process_peak_bytes": 14011072512,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 74,
+            "sampling_gap_seconds": {
+              "count": 73,
+              "maximum": 1.546680212020874,
+              "mean": 1.2995021767812232,
+              "median": 1.295233964920044,
+              "p95": 1.3141116619110107,
+              "sum": 94.8636589050293
+            }
+          }
+        },
+        "scope": "Original failed634s allocation only. Whole-span peak includes full-head diagnostic gradients and must not be attributed to the new480 recipe. BFnative3 is one short stage; no NFtraining/paired memory or speed result."
+      },
+      "root_review": "All112 rawfiles/sizes and terminal/accounting/noqueue/nosteps verified. Six JSON forward/loss/sampler/mode comparisons and all438 raw memory observations independently replayed; original on-node gradient/RNG tensor comparisons not repeated locally. No optimizer tensor, recovery or fresh artifact acceptance.",
+      "next": "Correct qualification canonicalpath only using actual metadata; preserve all six initialized proofs and BF3, then finish remaining nine model stages with separate clocks/memory. No200screen yet."
     }
   },
   "read_only_head_memory_diagnostic": {
