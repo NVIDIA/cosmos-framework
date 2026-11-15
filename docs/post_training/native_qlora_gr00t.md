@@ -776,6 +776,13 @@ The [scoped receipts](evidence/native_qlora_family_engineering_4cba88f.json) ret
 both observations. This probe found no reason to resample actions; it does not
 attest the original simulator clock or establish whole-dataset provenance.
 
+A bounded follow-up inspected staged source locations and pinned upstream conversion
+metadata. It found no authenticated raw-demo locator/controller configuration for
+these 92 rows. Current regeneration code and a 20 Hz simulator default do not
+establish the historical dataset clock. The next check requires that exact locator
+and generation/conversion configuration, then an exact raw-state/action comparison.
+No trajectory downloads, model scoring, resampling or recipe changes were made.
+
 A read-only coverage audit confirms that staged data is **not exhausted**. The
 prepared spatial population contains 342 training and 90 validation episodes.
 After excluding the recorded development and engineering selections, 248 training

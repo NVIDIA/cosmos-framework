@@ -29717,6 +29717,22 @@
       "data_and_recipe_changed": false,
       "additional_gpu_seconds": 0
     },
+    "physical_clock_followup": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-physical-clock-provenance-followup-v1.json",
+      "sha256": "ec28a56876025a0fe3d18be95c8f12c41572f4afa82d5efd696d3a5de8bcf8cf",
+      "scope": "Bounded CPU/read-only source and metadata investigation of already-exposed training episode 1347. No GPU, model scoring, simulator execution, dataset mutation, raw trajectory download or admission.",
+      "additional_metadata_source_bytes": 111175,
+      "raw_trajectory_download_bytes": 0,
+      "episode1347_raw_locator_identified": false,
+      "physical_clock_authenticated": false,
+      "verified_temporal_resampling_defect": false,
+      "data_or_recipe_changed": false,
+      "minimum_next_inputs": [
+        "Authenticated raw episode locator: exact regenerated HDF5 file+demo ID or RLDS snapshot/shard/record corresponding to the already-exposed 92-row sequence; preserve its original file_path and episode identity.",
+        "Exact dataset-generation/replay and HDF5→RLDS→LeRobot conversion revisions and configuration, including environment/robosuite versions, control_freq, noop/frame filtering and TFDS read ordering; or a trustworthy producer attestation of these facts."
+      ],
+      "next_executable_action": "With the exact locator, read only that episode, compare all 92 actions and 8-dimensional states bitwise against retained source 831effd0 (plus frame correspondence and image identity where needed), then verify recorded controller interval from bound environment/configuration. If mismatch, trace filtering/order before any resampling. No exact download command/byte count is asserted until a locator exists."
+    },
     "available_data_coverage_audit": {
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-available-coverage-audit-v1.json",
       "sha256": "4e079ba40995bfc65b204e070f9718b86df8b3aea832648cf4138f76d08ea717",
