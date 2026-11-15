@@ -233,6 +233,351 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38604682": {
+      "job": "38604682",
+      "completed_cbc_decision": {
+        "path": "cosmos-qlora-family-20261113/gr00t-reuse-timing-final-decision-v2.json",
+        "sha256": "26987db47c80f7de885c2e2286d8c983141017f63414c93a51db635ea8e9ac97",
+        "timing_gates_passed": true,
+        "mature_passed": true,
+        "promote": true,
+        "scope": "Exact pure CBC four-pair/mature decision only. Current-e64 compatibility remains separate. Original c4 timing-only decision unchanged."
+      },
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 1345,
+      "native_revision": "cbc950f867329838a81f57fa303dbc033b12bef2",
+      "protocol_sha256": "5c3118024028ed43fa6bc9d84b9c16233007c1b92cf0486b986a3dcf5d982f13",
+      "receipt_archive": "cosmos-qlora-family-20261113/gr00t-reuse-mature-38604682-receipts-v2.tar.gz",
+      "archive_sha256": "416eec39f8d3c302c13b16dc0f1b1e76bbf9fc1aeebb0835f2185a3247e8b968",
+      "inventory_sha256": "f5139ae94ac9987db80424fe6a49041b1b5e9ac915e6b28684af04c6d19d705d",
+      "files_verified": 265,
+      "payload_files_verified": 48,
+      "terminal_release_sha256": "7205743fd221f215a0c9977dedb4b3e00d5d9f1cc5743d6256c7c66675d69b97",
+      "acceptance_sha256": "d36a8d9cfd6601e307f9916b7e42b84d17b8b221e4752ac9f1a3c4e7bf74ead2",
+      "admission_sha256": "b6afe45d9a399cb1b9641cfbbc7e18e6826b39326c1b0ca08d6a3bbe4b78ac2c",
+      "owner_readout_sha256": "d24cf529f485f59dafaa4e031e0d20c05eecdfac3a599e6833b485189ab6c90e",
+      "independent_raw_peer_sha256": "dbb66fb1388a285dcbb3ecff483f44c6fa4ab76edcb851e8283400accdf19f6e",
+      "runtime": {
+        "code": "cbc950f867329838a81f57fa303dbc033b12bef2",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "torch_uuid": "bf75a790-5b2b-b7b0-c88b-ad5f289e05cc",
+          "uuid": "GPU-bf75a790-5b2b-b7b0-c88b-ad5f289e05cc",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          4,
+          5,
+          24,
+          25,
+          36,
+          37,
+          38,
+          39,
+          132,
+          133,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141
+        ],
+        "cpu_numa_nodes": {
+          "4": [
+            "node0"
+          ],
+          "5": [
+            "node0"
+          ],
+          "24": [
+            "node1"
+          ],
+          "25": [
+            "node1"
+          ],
+          "36": [
+            "node2"
+          ],
+          "37": [
+            "node2"
+          ],
+          "38": [
+            "node2"
+          ],
+          "39": [
+            "node2"
+          ],
+          "132": [
+            "node0"
+          ],
+          "133": [
+            "node0"
+          ],
+          "136": [
+            "node0"
+          ],
+          "137": [
+            "node0"
+          ],
+          "138": [
+            "node0"
+          ],
+          "139": [
+            "node0"
+          ],
+          "140": [
+            "node0"
+          ],
+          "141": [
+            "node0"
+          ]
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t4-5,24-25,36-39,132-133,136-141",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38604682",
+        "cuda_visible_devices": "0",
+        "allocator": {
+          "PYTORCH_ALLOC_CONF": null,
+          "PYTORCH_CUDA_ALLOC_CONF": null
+        }
+      },
+      "correction": "Only operational dispatch uses the exact fs11 reference parents recorded by the original c4 timing decision. Sealed48 payload/native/source/gates unchanged. Failed38603421/88 GPU-seconds and original timing-only decision preserved.",
+      "modes": {
+        "bf16_lora": {
+          "passed": true,
+          "trainable_tensors": 761,
+          "language_factors": 224,
+          "full_fp32_head_parameters": 537,
+          "applied_updates": 100,
+          "resumed_steps": [
+            201,
+            300
+          ],
+          "on_node_full_state_attestation": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          },
+          "fresh": {
+            "checkpoint": {
+              "metrics": {
+                "action_mae_environment_units": 0.04653531201569703,
+                "action_mae_gripper_environment_units": 0.09405023641884327,
+                "action_mae_pitch_environment_units": 0.017091973185386047,
+                "action_mae_roll_environment_units": 0.008915360425432475,
+                "action_mae_x_environment_units": 0.058923869498432306,
+                "action_mae_y_environment_units": 0.052175882877363654,
+                "action_mae_yaw_environment_units": 0.01096968389634238,
+                "action_mae_z_environment_units": 0.08362017780807897,
+                "loss": 0.09592167070950382,
+                "normalized_action_mse": 0.04244151129986026
+              },
+              "scoring_seconds": 65.94495927216485,
+              "startup_seconds": 49.698266938794404,
+              "workflow_seconds": 115.64322638092563
+            },
+            "portable": {
+              "metrics": {
+                "action_mae_environment_units": 0.04653531201569703,
+                "action_mae_gripper_environment_units": 0.09405023641884327,
+                "action_mae_pitch_environment_units": 0.017091973185386047,
+                "action_mae_roll_environment_units": 0.008915360425432475,
+                "action_mae_x_environment_units": 0.058923869498432306,
+                "action_mae_y_environment_units": 0.052175882877363654,
+                "action_mae_yaw_environment_units": 0.01096968389634238,
+                "action_mae_z_environment_units": 0.08362017780807897,
+                "loss": 0.09592167070950382,
+                "normalized_action_mse": 0.04244151129986026
+              },
+              "scoring_seconds": 65.22680473001674,
+              "startup_seconds": 65.95476565393619,
+              "workflow_seconds": 131.18157064402476
+            }
+          },
+          "target": {
+            "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38592360/on/run/native/qualification/gr00t-evaluation-reuse-v1/bf16_lora-seed17/on/checkpoints/iter_000200",
+            "seconds": null,
+            "step": 200,
+            "timing_scope": "restored-crossing-uninterrupted-time-unavailable"
+          },
+          "memory": {
+            "device_peak_bytes": 35326722048,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31496609792,
+            "host_rss_sum_peak_bytes": 32018427904,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 598.0084216594696,
+            "owned_device_process_peak_bytes": 34550579200,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 459,
+            "sampling_gap_seconds": {
+              "count": 458,
+              "maximum": 3.198052406311035,
+              "mean": 1.3056952437979685,
+              "median": 1.2875837087631226,
+              "p95": 1.4116172909736633,
+              "sum": 598.0084216594696
+            }
+          },
+          "current_process_clocks": {
+            "checkpoint_seconds": 27.382101277122274,
+            "evaluation_seconds": 60.98218524409458,
+            "portable_export_seconds": 16.685943306190893,
+            "startup_seconds": 88.53996797394939,
+            "training_seconds": 46.31153142824769
+          },
+          "cold_case_seconds": 677.9534397809766,
+          "workflow_seconds": 599.5787597917952,
+          "cache_observations": {
+            "enabled": true,
+            "format": "gr00t-evaluation-raw-backbone-observations-v1",
+            "hits": 160,
+            "misses": 160,
+            "retained_tensor_bytes_peak": 2214696,
+            "scope": "current process only"
+          }
+        },
+        "nf4_lora": {
+          "passed": true,
+          "trainable_tensors": 761,
+          "language_factors": 224,
+          "full_fp32_head_parameters": 537,
+          "applied_updates": 100,
+          "resumed_steps": [
+            201,
+            300
+          ],
+          "on_node_full_state_attestation": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          },
+          "fresh": {
+            "checkpoint": {
+              "metrics": {
+                "action_mae_environment_units": 0.046999382085976454,
+                "action_mae_gripper_environment_units": 0.09172343101352454,
+                "action_mae_pitch_environment_units": 0.01706947965699447,
+                "action_mae_roll_environment_units": 0.00960366939938303,
+                "action_mae_x_environment_units": 0.0658144533484739,
+                "action_mae_y_environment_units": 0.05274828548143175,
+                "action_mae_yaw_environment_units": 0.01101367469552166,
+                "action_mae_z_environment_units": 0.08102268100650598,
+                "loss": 0.09369460996167618,
+                "normalized_action_mse": 0.04154304856035326
+              },
+              "scoring_seconds": 65.45008109416813,
+              "startup_seconds": 45.35207701101899,
+              "workflow_seconds": 110.80215834500268
+            },
+            "portable": {
+              "metrics": {
+                "action_mae_environment_units": 0.046999382085976454,
+                "action_mae_gripper_environment_units": 0.09172343101352454,
+                "action_mae_pitch_environment_units": 0.01706947965699447,
+                "action_mae_roll_environment_units": 0.00960366939938303,
+                "action_mae_x_environment_units": 0.0658144533484739,
+                "action_mae_y_environment_units": 0.05274828548143175,
+                "action_mae_yaw_environment_units": 0.01101367469552166,
+                "action_mae_z_environment_units": 0.08102268100650598,
+                "loss": 0.09369460996167618,
+                "normalized_action_mse": 0.04154304856035326
+              },
+              "scoring_seconds": 66.19791379896924,
+              "startup_seconds": 60.81594907399267,
+              "workflow_seconds": 127.01386317308061
+            }
+          },
+          "target": {
+            "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38590055/on/run/native/qualification/gr00t-evaluation-reuse-v1/nf4_lora-seed17/on/checkpoints/iter_000200",
+            "seconds": null,
+            "step": 200,
+            "timing_scope": "restored-crossing-uninterrupted-time-unavailable"
+          },
+          "memory": {
+            "device_peak_bytes": 34160705536,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 31931886592,
+            "host_rss_sum_peak_bytes": 32411942912,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 577.2331221103668,
+            "owned_device_process_peak_bytes": 33384562688,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 449,
+            "sampling_gap_seconds": {
+              "count": 448,
+              "maximum": 2.63325834274292,
+              "mean": 1.2884667904249258,
+              "median": 1.279232144355774,
+              "p95": 1.3441534996032716,
+              "sum": 577.2331221103668
+            }
+          },
+          "current_process_clocks": {
+            "checkpoint_seconds": 25.195338373072445,
+            "evaluation_seconds": 63.74073636997491,
+            "portable_export_seconds": 15.832732676062733,
+            "startup_seconds": 87.16964245797135,
+            "training_seconds": 49.44232157198712
+          },
+          "cold_case_seconds": 654.7299350639805,
+          "workflow_seconds": 578.7736615990289,
+          "cache_observations": {
+            "enabled": true,
+            "format": "gr00t-evaluation-raw-backbone-observations-v1",
+            "hits": 160,
+            "misses": 160,
+            "retained_tensor_bytes_peak": 2214696,
+            "scope": "current process only"
+          }
+        }
+      },
+      "qualification": {
+        "accepted": true,
+        "strict_host_samples": 908,
+        "model_stages": 6,
+        "root_verification": "All265 sizes/hashes, archive, actual completed release, owner/raw-peer records and unchanged pure four-pair plus mature reducer replayed.",
+        "full_tensor_scope": "On-node exact model/optimizer tensor comparison; local independent checks replay small metadata, trainer/RNG/data, all100 numerical updates and full160 resident/fresh rows. No claim of local full-tensor reloading.",
+        "memory_scope": "Observer starts after prerequisite/reference/source checks. Whole/stage v11 host and owned-GPU validity passed; short unsampled phase intervals and pre-observer startup remain unmeasured. Peaks are sampled lower bounds.",
+        "decision_scope": "CBC timing and own-ON200to300 mature gates pass. Current-e64 compatibility remains a separate check; this is not current-e64 mature recovery, new uninterrupted timing, new quality uncertainty or rollout evidence."
+      }
+    },
     "38603421": {
       "job": "38603421",
       "state": "FAILED",

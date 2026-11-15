@@ -14,7 +14,7 @@ total-memory outcomes remain unmet for the selected full-head recipe:
 | NF4-only memory benefit | The matched selected run measured 30.412 GiB NF4 versus 31.516 GiB BF16 sampled GPU-process peaks: 1.104 GiB saved, about 3.5%. FP32 action-head parameters, gradients and optimizer state dominate; substantial total-memory savings are not established. |
 | Offline quality | Across three paired training seeds, mean NF4 action MSE was 2.224% lower than matched BF16 LoRA, but the one-sided 95% upper regression bound was +9.532%, failing the predefined 5% guard. |
 | Rollout quality | The selected update-200 development rollout scored 98/100 NF4 versus 97/100 BF16; the accuracy-loss upper bound was 3 percentage points, failing the 2-point guard. This does not establish real-robot behavior. |
-| Execution improvement | Four paired cache trials passed their timing gates in both precision arms. Cache-enabled mature recovery and current-build compatibility must pass before promotion; this is a shared evaluation optimization, not NF4 learning superiority. |
+| Execution improvement | Four paired cache trials and their same-build mature recovery passed in both precision arms. Current-build compatibility remains required before promotion; this is a shared evaluation optimization, not NF4 learning superiority. |
 | Deployment artifacts | Native portable and standalone unmerged policies retain action components and reproduce task outputs. Merged exports failed parity checks; controlled deployment-latency improvement remains unproven. |
 
 Detailed results below preserve the original builds, negative trials, uncertainty
@@ -510,9 +510,9 @@ These use the two-pair geometric mean in each precision, with reversed order for
 seed 42. Within-pair GPU/CPU placement matched; physical placements differ across
 allocations and filesystem-cache warmth was uncontrolled. The four allocations
 cost **16,139 GPU-seconds**, including all fresh scoring and separate comparisons.
-The hash-bound aggregate decision still has **`promote=false`**: same-build
-own-ON update-200-to-300 recovery remains required, followed by current-`e64a735`
-compatibility checks. These are shared execution gains, not improved learning,
+The original hash-bound timing-only decision retains **`promote=false`**. The
+subsequent same-build recovery below supplies separate evidence; current-`e64a735`
+compatibility remains required. These are shared execution gains, not improved learning,
 NF4 superiority over BF16, new quality confidence intervals, or inference
 acceleration. Exact receipts and clocks remain in the existing family evidence.
 
@@ -523,7 +523,29 @@ container mounts defeated literal resolved-path identity. A CPU reproduction
 with identical bytes confirms the predicate failure. The correction dispatches
 the exact recorded paths and leaves the 48-file payload, native source, recovery
 comparisons and timing results unchanged. No recovery or memory pass is inferred
-from this failed attempt; a corrected execution is still required.
+from this failed attempt.
+
+Corrected allocation `38604682` completed on the same sealed `cbc950f` build,
+consuming **1,345 GPU-seconds**. Both precision arms resumed their own enabled
+update-200 checkpoint through update 300. All 100 numerical update records,
+761 trainables, optimizer tensors, scheduler/update state, RNG, data cursor and
+evaluation history matched the uninterrupted reference exactly. Fresh checkpoint
+and portable-policy evaluations each reproduced all 160 resident task rows.
+The 224 language factors, 537 trained head tensors and 112 language targets
+remained unchanged in membership.
+
+All **908 recorded host samples** and all six model-stage memory checks passed.
+Sampled recovery-workflow owned-GPU peaks were 31.092 GiB NF4 and 32.178 GiB BF16;
+host PSS peaks were 29.739/29.333 GiB. These are recovery-workflow lower bounds,
+not replacements for the paired training peaks. Prerequisite/reference checks
+preceded the observer, and tiny unsampled phase intervals remain explicit.
+Cold case clocks through verified step release were 654.730/677.953 seconds.
+The restored target crossing retains `seconds=null`; these recovery clocks do not
+reconstruct uninterrupted time to quality. Independent replay verified all 265
+retained files, raw memory records, small controls and fresh scores; the full
+model/optimizer tensor comparison ran on the allocated node. The original
+88-second failure and timing-only decision remain immutable. Current-`e64a735`
+compatibility is the next separate gate, not an inferred result of this recovery.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
