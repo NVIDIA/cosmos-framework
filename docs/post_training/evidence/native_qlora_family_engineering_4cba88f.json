@@ -4,6 +4,107 @@
   "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697",
   "receipt_archive": "cosmos-qlora-family-20261113/family-engineering-4cba88f-receipts-v2.tar.gz",
   "receipt_archive_sha256": "934d9b56bc47dc71d8cf18001d582b545a6c63207ba08cb03d4b5ee37a038078",
+  "gr00t_supplemental_step_memory_accounting": {
+    "interpretation_receipt": "gr00t-completed-step-accounting-memory-interpretation-v1.json",
+    "interpretation_sha256": "162656ccf6e450bb6c44f67f729efb90d2b90bb30197cb16462c4af5b07e730b",
+    "raw_receipt": "gr00t-completed-step-accounting-memory-v1.json",
+    "raw_sha256": "e7bccd9097fca1b0461889889479eca32b088f9701869b54eaa6cf79536361d5",
+    "queried_jobs": [
+      "38595290",
+      "38592360"
+    ],
+    "observed_utc": "2026-11-15T21:35:57.558714+00:00",
+    "case_comparisons": [
+      {
+        "accounted_task_count": "1",
+        "accounting_start_rendering_shift_seconds_from_existing_parent_utc": 28800.0,
+        "accounting_step_start_to_first_observer_seconds": 53.60163116455078,
+        "cache": "off",
+        "first_observer_unix_seconds": 1794764771.6016312,
+        "interpretation": "Step accounting interval starts before v11firstsample; no accounting sample timestamps establish when the reported maximum occurred or which pre-observer allocations were tracked.",
+        "job_id": "38592360",
+        "launcher_start_to_first_observer_seconds": 60.075435638427734,
+        "mode": "bf16_lora",
+        "seed": 17,
+        "slurm_max_rss_gib": 7.659557342529297,
+        "source_memory_samples_sha256": "82b0b0faf3ff1fc7667f0fddfa8c206603b514752fc0105ef33a3d84bfd5ba59",
+        "source_owner_sha256": "e6f29065028fa74a84b7acbbb5371dca55379cae1326c19d11ab231469d05c1c",
+        "source_pair_sha256": "c61afb3f88735c715768b389f8c88ac530d60684e94ec05b10a2e5fb03a1844c",
+        "step_id": "38592360.0"
+      },
+      {
+        "accounted_task_count": "1",
+        "accounting_start_rendering_shift_seconds_from_existing_parent_utc": 28800.0,
+        "accounting_step_start_to_first_observer_seconds": 51.68706011772156,
+        "cache": "on",
+        "first_observer_unix_seconds": 1794765917.68706,
+        "interpretation": "Step accounting interval starts before v11firstsample; no accounting sample timestamps establish when the reported maximum occurred or which pre-observer allocations were tracked.",
+        "job_id": "38592360",
+        "launcher_start_to_first_observer_seconds": 52.399370431900024,
+        "mode": "bf16_lora",
+        "seed": 17,
+        "slurm_max_rss_gib": 8.876773834228516,
+        "source_memory_samples_sha256": "a078cd8ac287b7550315f2b559046c964c8d8e592fb911c212ab6b5c5c81485f",
+        "source_owner_sha256": "717756bf29bb324e91a3c6b6a26bd158bba0fab9e4e9656bade4743df3c81e87",
+        "source_pair_sha256": "c61afb3f88735c715768b389f8c88ac530d60684e94ec05b10a2e5fb03a1844c",
+        "step_id": "38592360.1"
+      },
+      {
+        "accounted_task_count": "1",
+        "accounting_start_rendering_shift_seconds_from_existing_parent_utc": 28800.0,
+        "accounting_step_start_to_first_observer_seconds": 595.4773545265198,
+        "cache": "off",
+        "first_observer_unix_seconds": 1794772324.4773545,
+        "interpretation": "Step accounting interval starts before v11firstsample; no accounting sample timestamps establish when the reported maximum occurred or which pre-observer allocations were tracked.",
+        "job_id": "38595290",
+        "launcher_start_to_first_observer_seconds": 596.2652387619019,
+        "mode": "nf4_lora",
+        "seed": 42,
+        "slurm_max_rss_gib": 8.886734008789062,
+        "source_memory_samples_sha256": "78e7b87a2b056bcf2fcb2763a64c08c8ff9e9ff5db97769f1c02dda8596533bf",
+        "source_owner_sha256": "e8e4cc12ae1c76730098977dd237b564fbee15ffab836e3cc7e5cd7b196b120b",
+        "source_pair_sha256": "64274fc6f3a0d0d40f2ba56e88a646aba4ba98f49f07262a04571f7ce06ae126",
+        "step_id": "38595290.1"
+      },
+      {
+        "accounted_task_count": "1",
+        "accounting_start_rendering_shift_seconds_from_existing_parent_utc": 28800.0,
+        "accounting_step_start_to_first_observer_seconds": 569.9807312488556,
+        "cache": "on",
+        "first_observer_unix_seconds": 1794769193.9807312,
+        "interpretation": "Step accounting interval starts before v11firstsample; no accounting sample timestamps establish when the reported maximum occurred or which pre-observer allocations were tracked.",
+        "job_id": "38595290",
+        "launcher_start_to_first_observer_seconds": 570.3579452037811,
+        "mode": "nf4_lora",
+        "seed": 42,
+        "slurm_max_rss_gib": 8.891868591308594,
+        "source_memory_samples_sha256": "713be2cfeb97b27ed6803cffe0e44cbca37b97a8763f0cf902c810f744d984fb",
+        "source_owner_sha256": "191dbbd1863cb59529fd00f37a1c8e5d7e3a44af13b5a870e81669bc706e6e06",
+        "source_pair_sha256": "64274fc6f3a0d0d40f2ba56e88a646aba4ba98f49f07262a04571f7ce06ae126",
+        "step_id": "38595290.0"
+      }
+    ],
+    "configuration_observed_now": {
+      "JobAcctGatherFrequency": "30",
+      "JobAcctGatherType": "jobacct_gather/cgroup"
+    },
+    "configuration_limit": "Current controller configuration, not a retained per-step historical plugin/frequency attestation. Native sealed launch recipes have no explicit accounting-frequency change. Cgroup version and vendor patches were not queried.",
+    "conclusion": {
+      "closes_pre_observer_peak_gap": false,
+      "coverage": "Independent step-level accounting begins before the first application observer sample and can include tracked-task initialization. Actual pre-observer sampling and container/launcher process coverage are not time-resolved in retained aggregates.",
+      "limits": [
+        "MaxRSS is the largest accounted task-memory value for a step, not aggregate concurrent PSS, node memory or a continuous peak. These steps have NTasks1; equality of AveRSS andMaxRSS is not independent corroboration.",
+        "The version-pinned cgroup plugin reads task-cgroup counters over a process tree, with semantics different from summedprocRSS/PSS. No memory.peak/cgroupv2 guarantee is inferred.",
+        "Observed sampling default30s may miss transient peaks. No timestamps identify when memory maxima occurred; steps may have inherited configuration different from current query.",
+        "Slurm/plugin/container setup outside an accounted task and unmappedfilesystem cache are not established as covered. The original startup/cache limitations remain.",
+        "Parent memory blanks and extern0 values are missing/ambiguous, notzero. Step maxima are not added to invent a concurrent whole-job peak.",
+        "MaxVMSize is virtual address-space accounting, notphysical RAM. Diskread/write aggregates are retained asreported; they do not establish physical filesystemtraffic, durablewritevolume or time spent.",
+        "No new acceptance gate, retroactivepass, recipe/memorythresholdchange or comparison of nonmatched seeds is introduced."
+      ],
+      "useful_supplemental_accounting": true
+    },
+    "additional_gpu_seconds": 0
+  },
   "jobs": {
     "38595290": {
       "job": "38595290",

@@ -462,6 +462,15 @@ was unusually slow, including 548.06 seconds for one fresh model load. The cause
 was not established. All delays remain in the cold clocks. The allocation cost
 8,473 GPU-seconds, including a separate 2,070.99-second saved-state comparison.
 
+Supplemental Slurm task accounting for the second and third pairs starts
+52–596 seconds before the application sampler. Its task MaxRSS values were
+7.660/8.877 GiB for BF16 seed 17 (OFF/ON), and 8.892/8.887 GiB for NF4 seed 42
+(ON/OFF). These are separate accounting observations, not replacements for
+process-tree PSS: maxima lack timestamps, the currently reported sampling interval
+is 30 seconds, and complete launcher coverage is unverified. They do not close
+the initialization-memory gap. The raw query and interpretation are retained in
+the family evidence; no acceptance rule changed.
+
 These three pairs establish execution improvements over their own references,
 **not promotion**, better task quality, NF4 superiority over BF16, or inference
 acceleration. Their physical placements differ across allocations. The BF16
