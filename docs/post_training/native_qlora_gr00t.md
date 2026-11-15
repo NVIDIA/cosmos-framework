@@ -132,8 +132,39 @@ These three-update checks establish lifecycle correctness, not development quali
 long-run recovery or a matched performance result. Diagnostic full-head memory is
 separate from the new recipe's training peak. The retained full-head and frozen-head
 negative results remain unchanged; any head-state memory saving belongs to both
-precision arms. The fixed 200-update development screen remains the next learning
-test; it does not automatically authorize a horizon or seed extension.
+precision arms.
+
+The fixed 200-update screen (`38562915`) subsequently **failed its quality rule**
+and the head-adapter recipe is not promoted. Both precision arms applied every
+update, preserved frozen state, and passed fresh 160-row portable parity. Their
+initial full-development rows and metrics exactly reproduce their own frozen-source
+calibrations, so this result does not identify an initialization or scoring defect.
+
+| Head-adapter screen | Source MSE | MSE at 100 | MSE at 200 | Worsened decoded axes at 200 | Sampled training-process peak (GiB) |
+|---|---:|---:|---:|---:|---:|
+| BF16 | 0.05506814 | 0.05492163 | 0.05700561 | 5 | 13.049 |
+| NF4 | 0.05565446 | 0.05588415 | 0.05705529 | 3 | 11.926 |
+
+Neither arm reached the unchanged `0.049561327725898344` target at a scheduled
+observation. NF4 is only 0.087% worse than BF16 at the endpoint, but both worsen
+against their source and fail the required action-axis guards. Gripper error
+worsens in both; the drawer and next-to-plate tasks are shared adverse slices.
+All 480 factors changed between updates 100 and 200, so missing optimizer updates
+do not explain the failure. This does not establish whether rank, target coverage
+or learning rate caused it; another intervention requires that diagnosis first.
+
+Native workflow clocks were 471.85 seconds BF16 and 505.36 seconds NF4, including
+startup, training, scheduled evaluation and publication. Training components were
+87.19/95.42 seconds; evaluation components were 304.22/329.44 seconds. Separate
+enclosing fresh-reload stages took 188.74/197.49 seconds. The whole four-stage pair,
+including intervening audits, took 1,406.99 seconds; allocated cost was 1,476
+GPU-seconds. These are one fixed-order seed on one A100, not a sustained performance
+qualification or a time-to-quality result. All 1,098 host observations were complete;
+short phase gaps and sampled-peak limits remain recorded. The reduction relative
+to earlier full-head runs is shared by BF16; those runs are a descriptive comparison
+with a different build and horizon. The matched NF4 increment here is 1.123 GiB.
+Memory savings do not override the failed learning gate. No mature continuation,
+horizon extension, extra seed or rollout is promoted from this screen.
 
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16

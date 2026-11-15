@@ -23927,6 +23927,913 @@
         "New head profile supports portable and standalone unmerged only; merged export explicitly refused."
       ],
       "independent_peer_sha256": "fdc8bd6ed380c91656e7023342a8e43e0efb5324029fb80794a2521789f59876"
+    },
+    "38562915": {
+      "job_id": "38562915",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 1476,
+      "archive_sha256": "df9458a09f39a7d2097c6e1b184231b5f7724255ca440e619d60281b012a4159",
+      "inventory_sha256": "cf1c23f30274e872284903e61f15b55a8d4bc1efd8bfc0511252e45f8010fb2a",
+      "acceptance_sha256": "097b525cc277527ae4bed155c78bc18167824af7dd7dc9df03b3fd94278e7332",
+      "terminal_release_sha256": "8667cf0de67e08f8cade98f6db7e918f7c90da2521982acfbd4bc969e4d2ca09",
+      "scientific_protocol_sha256": "586c23b0434177083dbf82ec12ceaa6147afd009518532eb3d3753a14c6c5fa4",
+      "execution_protocol_sha256": "de2ac82a53e79b95951dbc086ca1e9930e33727076d5a67a3bcee05eab7311aa",
+      "technical_accepted": true,
+      "quality_passed": false,
+      "release_qualified": false,
+      "mature_recovery_performed": false,
+      "stage_labels": {
+        "actual": [
+          "bf16_lora-native200",
+          "bf16_lora-portable",
+          "nf4_lora-native200",
+          "nf4_lora-portable"
+        ],
+        "admission_descriptive": [
+          "bf16_lora-native200",
+          "bf16_lora-portable160",
+          "nf4_lora-native200",
+          "nf4_lora-portable160"
+        ],
+        "scope": "Admission portable160 descriptive labels refer to actual portable stages, each scoring full160; no execution change."
+      },
+      "decision": {
+        "arms": {
+          "bf16_lora": {
+            "decoded_axes_no_worse_than_own_source": {
+              "gripper": false,
+              "pitch": true,
+              "roll": false,
+              "x": true,
+              "y": false,
+              "yaw": false,
+              "z": false
+            },
+            "endpoint200_target": false
+          },
+          "nf4_lora": {
+            "decoded_axes_no_worse_than_own_source": {
+              "gripper": false,
+              "pitch": true,
+              "roll": true,
+              "x": true,
+              "y": true,
+              "yaw": false,
+              "z": false
+            },
+            "endpoint200_target": false
+          }
+        },
+        "decision": "discard under the unchanged prospective point screen",
+        "endpoints": {
+          "bf16_lora": {
+            "action_mae_environment_units": 0.0502380026645434,
+            "action_mae_gripper_environment_units": 0.14263541255146264,
+            "action_mae_pitch_environment_units": 0.016030042224756604,
+            "action_mae_roll_environment_units": 0.00825153284883482,
+            "action_mae_x_environment_units": 0.05386882386507632,
+            "action_mae_y_environment_units": 0.045591770540559434,
+            "action_mae_yaw_environment_units": 0.009725295852815978,
+            "action_mae_z_environment_units": 0.07556314076829787,
+            "loss": 0.12875060395454058,
+            "normalized_action_mse": 0.05700560792033294
+          },
+          "nf4_lora": {
+            "action_mae_environment_units": 0.050152987251005095,
+            "action_mae_gripper_environment_units": 0.1409105083718896,
+            "action_mae_pitch_environment_units": 0.01636503902265982,
+            "action_mae_roll_environment_units": 0.008267306324907112,
+            "action_mae_x_environment_units": 0.053774291331598015,
+            "action_mae_y_environment_units": 0.04599427037316287,
+            "action_mae_yaw_environment_units": 0.009906177317120783,
+            "action_mae_z_environment_units": 0.07585331801569752,
+            "loss": 0.13016461970364618,
+            "normalized_action_mse": 0.057055290754235884
+          }
+        },
+        "mature100to200_required_before_support": false,
+        "passed": false,
+        "precision_ratio_point_gate": true,
+        "release_qualified": false,
+        "scientific_protocol_sha256": "586c23b0434177083dbf82ec12ceaa6147afd009518532eb3d3753a14c6c5fa4"
+      },
+      "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "readout_sha256": "901a1c9e5aca8772c003dd80cb236f5fba9c11e166b168d5999161450fb8e21e",
+      "independent_peer_sha256": "7df0c3115133bf723e0bbd5f5bf4cf64069f97fee444a49c2c6df2aa998565e4",
+      "raw_files_verified": 125,
+      "memory": {
+        "samples": 1098,
+        "complete_host_samples": 1098,
+        "summary": {
+          "device_peak_bytes": 14745272320,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 4470391808,
+          "host_rss_sum_peak_bytes": 5012262912,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1408.0093750953674,
+          "owned_device_process_peak_bytes": 14011072512,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 1098,
+          "sampling_gap_seconds": {
+            "count": 1097,
+            "maximum": 1.5204288959503174,
+            "mean": 1.2835090019100888,
+            "median": 1.2805497646331787,
+            "p95": 1.304601812362671,
+            "sum": 1408.0093750953674
+          }
+        },
+        "per_model_stage": {
+          "bf16_lora-native200": {
+            "allocator_peak_allocated_bytes": 12817518592,
+            "allocator_peak_reserved_bytes": 12937330688,
+            "sampled": {
+              "device_peak_bytes": 14745272320,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 4038096896,
+              "host_rss_sum_peak_bytes": 4572516352,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 493.8892946243286,
+              "owned_device_process_peak_bytes": 14011072512,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 387,
+              "sampling_gap_seconds": {
+                "count": 386,
+                "maximum": 1.5204288959503174,
+                "mean": 1.279505944622613,
+                "median": 1.2754840850830078,
+                "p95": 1.3082706928253174,
+                "sum": 493.8892946243286
+              }
+            }
+          },
+          "bf16_lora-portable": {
+            "allocator_peak_allocated_bytes": 9800172544,
+            "allocator_peak_reserved_bytes": 9988734976,
+            "sampled": {
+              "device_peak_bytes": 11282874368,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 3582244864,
+              "host_rss_sum_peak_bytes": 4124082176,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 187.70182132720947,
+              "owned_device_process_peak_bytes": 10548674560,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 147,
+              "sampling_gap_seconds": {
+                "count": 146,
+                "maximum": 1.5016233921051025,
+                "mean": 1.285628913200065,
+                "median": 1.281421184539795,
+                "p95": 1.29860121011734,
+                "sum": 187.70182132720947
+              }
+            }
+          },
+          "nf4_lora-native200": {
+            "allocator_peak_allocated_bytes": 11622785024,
+            "allocator_peak_reserved_bytes": 11731468288,
+            "sampled": {
+              "device_peak_bytes": 13539409920,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 4470391808,
+              "host_rss_sum_peak_bytes": 5012262912,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 524.0392732620239,
+              "owned_device_process_peak_bytes": 12805210112,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 408,
+              "sampling_gap_seconds": {
+                "count": 407,
+                "maximum": 1.4858765602111816,
+                "mean": 1.2875657819705748,
+                "median": 1.2830018997192383,
+                "p95": 1.3067237854003906,
+                "sum": 524.0392732620239
+              }
+            }
+          },
+          "nf4_lora-portable": {
+            "allocator_peak_allocated_bytes": 8638253056,
+            "allocator_peak_reserved_bytes": 8839495680,
+            "sampled": {
+              "device_peak_bytes": 10169286656,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 3782493184,
+              "host_rss_sum_peak_bytes": 4324442112,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 196.0714054107666,
+              "owned_device_process_peak_bytes": 9435086848,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 154,
+              "sampling_gap_seconds": {
+                "count": 153,
+                "maximum": 1.3755383491516113,
+                "mean": 1.2815124536651412,
+                "median": 1.2797081470489502,
+                "p95": 1.2896777629852294,
+                "sum": 196.0714054107666
+              }
+            }
+          }
+        },
+        "scope": "Full model stages including loading/training/evaluation/checkpointing/final portable publication and fresh reload. All observed samples complete; some short reset-delimited subintervals have no sample. Sampled peaks remain lower bounds."
+      },
+      "arms": {
+        "bf16_lora": {
+          "applied_updates": 200,
+          "nonfinite_skips": 0,
+          "native_workflow_seconds": 471.84951385401655,
+          "native_phase_clocks": {
+            "checkpoint_seconds": 19.981041772989556,
+            "evaluation_seconds": 304.21818412002176,
+            "portable_export_seconds": 0.8531000110087916,
+            "startup_seconds": 51.0786131399218,
+            "training_seconds": 87.18544248992112
+          },
+          "history": [
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04916228426215635,
+                "action_mae_gripper_environment_units": 0.1372063398733735,
+                "action_mae_pitch_environment_units": 0.016093830139640716,
+                "action_mae_roll_environment_units": 0.008225875696466987,
+                "action_mae_x_environment_units": 0.053972841933195764,
+                "action_mae_y_environment_units": 0.0449414604387712,
+                "action_mae_yaw_environment_units": 0.009601551121868425,
+                "action_mae_z_environment_units": 0.07409409063177787,
+                "loss": 0.128999243787257,
+                "normalized_action_mse": 0.05506814191766483
+              },
+              "step": 0
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04920645758026564,
+                "action_mae_gripper_environment_units": 0.13528181865811348,
+                "action_mae_pitch_environment_units": 0.016172067141554038,
+                "action_mae_roll_environment_units": 0.008272291157994086,
+                "action_mae_x_environment_units": 0.053984753401556645,
+                "action_mae_y_environment_units": 0.045866568892065286,
+                "action_mae_yaw_environment_units": 0.009631757695027958,
+                "action_mae_z_environment_units": 0.07523594611554811,
+                "loss": 0.12675167009401775,
+                "normalized_action_mse": 0.0549216331536549
+              },
+              "step": 100
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.0502380026645434,
+                "action_mae_gripper_environment_units": 0.14263541255146264,
+                "action_mae_pitch_environment_units": 0.016030042224756604,
+                "action_mae_roll_environment_units": 0.00825153284883482,
+                "action_mae_x_environment_units": 0.05386882386507632,
+                "action_mae_y_environment_units": 0.045591770540559434,
+                "action_mae_yaw_environment_units": 0.009725295852815978,
+                "action_mae_z_environment_units": 0.07556314076829787,
+                "loss": 0.12875060395454058,
+                "normalized_action_mse": 0.05700560792033294
+              },
+              "step": 200
+            }
+          ],
+          "target": null,
+          "source0_exact_full160": {
+            "all_metrics_exact": true,
+            "evaluation_seed": 123,
+            "metric_deltas": {
+              "action_mae_environment_units": 0.0,
+              "action_mae_gripper_environment_units": 0.0,
+              "action_mae_pitch_environment_units": 0.0,
+              "action_mae_roll_environment_units": 0.0,
+              "action_mae_x_environment_units": 0.0,
+              "action_mae_y_environment_units": 0.0,
+              "action_mae_yaw_environment_units": 0.0,
+              "action_mae_z_environment_units": 0.0,
+              "loss": 0.0,
+              "normalized_action_mse": 0.0
+            },
+            "retained_metric_rows_exact": true,
+            "same160_ordered_ids": true,
+            "same_validation_source": true,
+            "scope": "Descriptive comparison of retained row metric aggregates under matched validation/noise semantics. Historical4c and currente64 source identities remain distinct; no raw action tensor recomputation or new acceptance gate.",
+            "source_protocol_sha256": "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7",
+            "source_sha256": "5ef0f594b77335cc3aaa5875ec191dfb90bcf61fa5985cfa65426d4e93a4a0d8"
+          },
+          "fresh_full160_exact": true,
+          "trainable_factor_tensors": 480,
+          "frozen_original_head_tensors": 537,
+          "reported_on_compute_fp32_moments": 960,
+          "boundary100_retained": true,
+          "task_transitions": {
+            "pick up the black bowl between the plate and the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.00017319396138190668,
+                "action_mae_pitch_environment_units": -8.391035201756741e-05,
+                "action_mae_roll_environment_units": 0.0003288627609726487,
+                "action_mae_x_environment_units": -0.00028990263563173635,
+                "action_mae_y_environment_units": 0.0016191491487639528,
+                "action_mae_yaw_environment_units": 0.0007540503197565537,
+                "action_mae_z_environment_units": 0.0003474578947142565,
+                "normalized_action_mse": 9.950521135969337e-05
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0004863061010837444,
+                "action_mae_pitch_environment_units": -0.0003416574481188081,
+                "action_mae_roll_environment_units": 0.00039735259217855805,
+                "action_mae_x_environment_units": -0.0015793363416295447,
+                "action_mae_y_environment_units": 0.0023858460335979687,
+                "action_mae_yaw_environment_units": 0.0012400847147514237,
+                "action_mae_z_environment_units": -0.0003570588742085601,
+                "normalized_action_mse": 0.00023756193529282654
+              }
+            },
+            "pick up the black bowl from table center and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.00044652298092842657,
+                "action_mae_pitch_environment_units": -3.714773850420697e-05,
+                "action_mae_roll_environment_units": -8.587278799614389e-05,
+                "action_mae_x_environment_units": -0.002626695791430267,
+                "action_mae_y_environment_units": -0.0007356718712656189,
+                "action_mae_yaw_environment_units": -0.00011347666708344268,
+                "action_mae_z_environment_units": -0.0013368781880571667,
+                "normalized_action_mse": -1.1658079789152176e-05
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0255998384207487,
+                "action_mae_pitch_environment_units": 0.0004283899913285535,
+                "action_mae_roll_environment_units": -0.00015197224246775703,
+                "action_mae_x_environment_units": -0.0018696951022490749,
+                "action_mae_y_environment_units": 0.0006519978000230076,
+                "action_mae_yaw_environment_units": -0.0002749000916113242,
+                "action_mae_z_environment_units": -0.0012285893297179704,
+                "normalized_action_mse": -0.007248723472002894
+              }
+            },
+            "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.05474727116525174,
+                "action_mae_pitch_environment_units": -0.0006066658690160537,
+                "action_mae_roll_environment_units": -0.0004264754255882911,
+                "action_mae_x_environment_units": 0.004618002627693799,
+                "action_mae_y_environment_units": -0.0015908097900523277,
+                "action_mae_yaw_environment_units": 0.0003090225898595145,
+                "action_mae_z_environment_units": 0.003127442013842678,
+                "normalized_action_mse": 0.015375213270142143
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.061435816437006005,
+                "action_mae_pitch_environment_units": -0.00034999375557148715,
+                "action_mae_roll_environment_units": -0.00020133086250740968,
+                "action_mae_x_environment_units": 0.0025380246928767072,
+                "action_mae_y_environment_units": -0.00044836801397307724,
+                "action_mae_yaw_environment_units": 0.0004810277688764471,
+                "action_mae_z_environment_units": 0.00392223387409165,
+                "normalized_action_mse": 0.01692774707917124
+              }
+            },
+            "pick up the black bowl next to the cookie box and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.00031329616904259006,
+                "action_mae_pitch_environment_units": -6.659219587492465e-05,
+                "action_mae_roll_environment_units": 7.79389903057294e-06,
+                "action_mae_x_environment_units": 0.00099096808178456,
+                "action_mae_y_environment_units": 0.00027860950359399894,
+                "action_mae_yaw_environment_units": -0.0001705834303338937,
+                "action_mae_z_environment_units": 0.0012636233036236177,
+                "normalized_action_mse": 0.0005261792834582099
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0005082167685031835,
+                "action_mae_pitch_environment_units": 0.0007322677074575023,
+                "action_mae_roll_environment_units": -0.0005172241480671299,
+                "action_mae_x_environment_units": 0.0009333067371901163,
+                "action_mae_y_environment_units": 0.0002852201850723768,
+                "action_mae_yaw_environment_units": -0.00040656917468568504,
+                "action_mae_z_environment_units": 0.0038672057766079293,
+                "normalized_action_mse": -0.00034912922086992315
+              }
+            },
+            "pick up the black bowl next to the plate and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.0012992076575756017,
+                "action_mae_pitch_environment_units": 0.0008625590074293338,
+                "action_mae_roll_environment_units": 0.00029939451748841467,
+                "action_mae_x_environment_units": 0.0012930002790195044,
+                "action_mae_y_environment_units": 0.00024210829311319126,
+                "action_mae_yaw_environment_units": -0.00037764573058300666,
+                "action_mae_z_environment_units": 0.0032167257362458734,
+                "normalized_action_mse": 0.0014185638632625425
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.0194536402821541,
+                "action_mae_pitch_environment_units": 0.0005480481679549856,
+                "action_mae_roll_environment_units": 0.0006613878796425388,
+                "action_mae_x_environment_units": 0.004733535973216255,
+                "action_mae_y_environment_units": 0.0007105132931803024,
+                "action_mae_yaw_environment_units": -0.0009018555557557123,
+                "action_mae_z_environment_units": 0.010294565775719203,
+                "normalized_action_mse": 0.010028501287368805
+              }
+            },
+            "pick up the black bowl next to the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.0002477981150150327,
+                "action_mae_pitch_environment_units": -0.00013828813043584298,
+                "action_mae_roll_environment_units": 3.104300092047173e-05,
+                "action_mae_x_environment_units": -0.001531258576189569,
+                "action_mae_y_environment_units": -0.0005230098571897199,
+                "action_mae_yaw_environment_units": -4.2932588159749936e-05,
+                "action_mae_z_environment_units": -0.0007917042071257166,
+                "normalized_action_mse": 6.595070507110778e-05
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0103835180401802,
+                "action_mae_pitch_environment_units": -0.0013807752174981869,
+                "action_mae_roll_environment_units": -0.000285279533478444,
+                "action_mae_x_environment_units": -0.0027692544704039715,
+                "action_mae_y_environment_units": -0.002186523626500604,
+                "action_mae_yaw_environment_units": -8.184144504595238e-05,
+                "action_mae_z_environment_units": -0.0038137670429594164,
+                "normalized_action_mse": -0.003603343993225802
+              }
+            },
+            "pick up the black bowl on the cookie box and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.011624775454401964,
+                "action_mae_pitch_environment_units": -0.00029888485304950876,
+                "action_mae_roll_environment_units": -6.635217464931974e-05,
+                "action_mae_x_environment_units": 0.0022362641490214358,
+                "action_mae_y_environment_units": -0.000183054865726541,
+                "action_mae_yaw_environment_units": -5.103233025738861e-05,
+                "action_mae_z_environment_units": 0.0017964431327112257,
+                "normalized_action_mse": 0.0010868020189393826
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.012975654378533347,
+                "action_mae_pitch_environment_units": -0.000970827243435033,
+                "action_mae_roll_environment_units": 1.2927220572734807e-05,
+                "action_mae_x_environment_units": 0.0003248299849107003,
+                "action_mae_y_environment_units": -0.0005118489608959068,
+                "action_mae_yaw_environment_units": -0.00023088138594594583,
+                "action_mae_z_environment_units": -1.953306898933027e-05,
+                "normalized_action_mse": -0.007292442376326244
+              }
+            },
+            "pick up the black bowl on the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.006997378543019295,
+                "action_mae_pitch_environment_units": -0.0013409763246803492,
+                "action_mae_roll_environment_units": 0.00018290784671288855,
+                "action_mae_x_environment_units": -0.0018555356514559918,
+                "action_mae_y_environment_units": 0.0005767544019737308,
+                "action_mae_yaw_environment_units": 0.0003726428198852598,
+                "action_mae_z_environment_units": 0.0014924240925908994,
+                "normalized_action_mse": 0.0007820045242884349
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.014499342814087879,
+                "action_mae_pitch_environment_units": -0.0026092602722914138,
+                "action_mae_roll_environment_units": -0.00020830048073475736,
+                "action_mae_x_environment_units": -0.001501010998496366,
+                "action_mae_y_environment_units": 0.0033645563830826397,
+                "action_mae_yaw_environment_units": 0.0003791575264867515,
+                "action_mae_z_environment_units": 0.005317024383838506,
+                "normalized_action_mse": 0.0035038405729989897
+              }
+            },
+            "pick up the black bowl on the stove and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.00020114481449126642,
+                "action_mae_pitch_environment_units": 0.00112633578038775,
+                "action_mae_roll_environment_units": 6.683571608766519e-05,
+                "action_mae_x_environment_units": -0.00015948580514497934,
+                "action_mae_y_environment_units": -0.0011852581849862015,
+                "action_mae_yaw_environment_units": 9.671390329562841e-05,
+                "action_mae_z_environment_units": -0.003190692700362832,
+                "normalized_action_mse": 0.0015027123170771872
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.02192884758114813,
+                "action_mae_pitch_environment_units": 0.0024464071560968154,
+                "action_mae_roll_environment_units": 0.00024770373217107827,
+                "action_mae_x_environment_units": 0.003608282612572268,
+                "action_mae_y_environment_units": 0.002259577817798772,
+                "action_mae_yaw_environment_units": 0.0008969686278705426,
+                "action_mae_z_environment_units": 0.003972879356482183,
+                "normalized_action_mse": 0.011198016019937189
+              }
+            },
+            "pick up the black bowl on the wooden cabinet and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.0022210851311683655,
+                "action_mae_pitch_environment_units": -0.0008366784922129375,
+                "action_mae_roll_environment_units": -0.000545720444571551,
+                "action_mae_x_environment_units": -0.0038346520424699312,
+                "action_mae_y_environment_units": -0.001246800293282925,
+                "action_mae_yaw_environment_units": 0.00015862269150077567,
+                "action_mae_z_environment_units": -0.0026528945506850005,
+                "normalized_action_mse": -5.525447029086639e-06
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.013073386624455452,
+                "action_mae_pitch_environment_units": 0.0008595217652358836,
+                "action_mae_roll_environment_units": 0.00030130736636893064,
+                "action_mae_x_environment_units": -0.005458863769181345,
+                "action_mae_y_environment_units": -7.869893503237302e-06,
+                "action_mae_yaw_environment_units": 0.00013625632453500864,
+                "action_mae_z_environment_units": -0.007264459485664301,
+                "normalized_action_mse": -0.004027367805662964
+              }
+            }
+          },
+          "stage_seconds": {
+            "bf16_lora-native200": 487.8231392840389,
+            "bf16_lora-portable": 188.7393701999681
+          }
+        },
+        "nf4_lora": {
+          "applied_updates": 200,
+          "nonfinite_skips": 0,
+          "native_workflow_seconds": 505.3583026230335,
+          "native_phase_clocks": {
+            "checkpoint_seconds": 18.511265018139966,
+            "evaluation_seconds": 329.436602036003,
+            "portable_export_seconds": 1.120413309079595,
+            "startup_seconds": 53.31948071799707,
+            "training_seconds": 95.42007355135866
+          },
+          "history": [
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04993531420917876,
+                "action_mae_gripper_environment_units": 0.1357787735760212,
+                "action_mae_pitch_environment_units": 0.01679471389145995,
+                "action_mae_roll_environment_units": 0.008380835461261412,
+                "action_mae_x_environment_units": 0.056422665883997095,
+                "action_mae_y_environment_units": 0.04715542558013691,
+                "action_mae_yaw_environment_units": 0.009905640157403974,
+                "action_mae_z_environment_units": 0.07510914491397083,
+                "loss": 0.1313539528971887,
+                "normalized_action_mse": 0.055654463751457765
+              },
+              "step": 0
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.04968613084682474,
+                "action_mae_gripper_environment_units": 0.13658120390027761,
+                "action_mae_pitch_environment_units": 0.016545931506013713,
+                "action_mae_roll_environment_units": 0.008293002099762964,
+                "action_mae_x_environment_units": 0.054534666210772534,
+                "action_mae_y_environment_units": 0.04651424816139869,
+                "action_mae_yaw_environment_units": 0.009922860951026896,
+                "action_mae_z_environment_units": 0.0754110030985207,
+                "loss": 0.1292791071238753,
+                "normalized_action_mse": 0.05588415184640325
+              },
+              "step": 100
+            },
+            {
+              "metrics": {
+                "action_mae_environment_units": 0.050152987251005095,
+                "action_mae_gripper_environment_units": 0.1409105083718896,
+                "action_mae_pitch_environment_units": 0.01636503902265982,
+                "action_mae_roll_environment_units": 0.008267306324907112,
+                "action_mae_x_environment_units": 0.053774291331598015,
+                "action_mae_y_environment_units": 0.04599427037316287,
+                "action_mae_yaw_environment_units": 0.009906177317120783,
+                "action_mae_z_environment_units": 0.07585331801569752,
+                "loss": 0.13016461970364618,
+                "normalized_action_mse": 0.057055290754235884
+              },
+              "step": 200
+            }
+          ],
+          "target": null,
+          "source0_exact_full160": {
+            "all_metrics_exact": true,
+            "evaluation_seed": 123,
+            "metric_deltas": {
+              "action_mae_environment_units": 0.0,
+              "action_mae_gripper_environment_units": 0.0,
+              "action_mae_pitch_environment_units": 0.0,
+              "action_mae_roll_environment_units": 0.0,
+              "action_mae_x_environment_units": 0.0,
+              "action_mae_y_environment_units": 0.0,
+              "action_mae_yaw_environment_units": 0.0,
+              "action_mae_z_environment_units": 0.0,
+              "loss": 0.0,
+              "normalized_action_mse": 0.0
+            },
+            "retained_metric_rows_exact": true,
+            "same160_ordered_ids": true,
+            "same_validation_source": true,
+            "scope": "Descriptive comparison of retained row metric aggregates under matched validation/noise semantics. Historical4c and currente64 source identities remain distinct; no raw action tensor recomputation or new acceptance gate.",
+            "source_protocol_sha256": "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7",
+            "source_sha256": "d71df8a2730f2e85aad7a429c9e873abf97d8c241b7f8a104740e8249c8bd73d"
+          },
+          "fresh_full160_exact": true,
+          "trainable_factor_tensors": 480,
+          "frozen_original_head_tensors": 537,
+          "reported_on_compute_fp32_moments": 960,
+          "boundary100_retained": true,
+          "task_transitions": {
+            "pick up the black bowl between the plate and the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.0004900723695754894,
+                "action_mae_pitch_environment_units": 5.611822555619955e-06,
+                "action_mae_roll_environment_units": 9.20386403973298e-05,
+                "action_mae_x_environment_units": -0.0010753679176538633,
+                "action_mae_y_environment_units": 0.00019252357237005413,
+                "action_mae_yaw_environment_units": 4.36187295734039e-05,
+                "action_mae_z_environment_units": -0.00016463731328870967,
+                "normalized_action_mse": -4.3033502463790674e-05
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0007731400430202318,
+                "action_mae_pitch_environment_units": -5.211278722740825e-05,
+                "action_mae_roll_environment_units": 3.9635501311197086e-05,
+                "action_mae_x_environment_units": -0.0035055702602039968,
+                "action_mae_y_environment_units": 0.0007629971130574745,
+                "action_mae_yaw_environment_units": 0.00017763140259892396,
+                "action_mae_z_environment_units": -0.0012077163236591665,
+                "normalized_action_mse": 2.585152230624721e-05
+              }
+            },
+            "pick up the black bowl from table center and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.0008956111967563657,
+                "action_mae_pitch_environment_units": 2.9672184345580152e-05,
+                "action_mae_roll_environment_units": -0.00012128071635226752,
+                "action_mae_x_environment_units": -0.0013301730238301848,
+                "action_mae_y_environment_units": -0.0005803002319836117,
+                "action_mae_yaw_environment_units": -3.828274934028833e-05,
+                "action_mae_z_environment_units": -0.0010456184284298523,
+                "normalized_action_mse": -4.18717282757719e-05
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0014206632971763694,
+                "action_mae_pitch_environment_units": 0.00020213034126541699,
+                "action_mae_roll_environment_units": -0.0002616858440740331,
+                "action_mae_x_environment_units": -0.004573595283371645,
+                "action_mae_y_environment_units": -0.001798520093313296,
+                "action_mae_yaw_environment_units": -0.00010170193982322884,
+                "action_mae_z_environment_units": -0.00073773176114416,
+                "normalized_action_mse": -0.0004783409206928421
+              }
+            },
+            "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.02768423706293105,
+                "action_mae_pitch_environment_units": -0.00033625240687322217,
+                "action_mae_roll_environment_units": -0.0002881871241585338,
+                "action_mae_x_environment_units": 0.003025974687230891,
+                "action_mae_y_environment_units": -0.0017710393616053657,
+                "action_mae_yaw_environment_units": 0.00014224086774774526,
+                "action_mae_z_environment_units": 0.0013249875592653143,
+                "normalized_action_mse": 0.005551693904479703
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.031016257777810086,
+                "action_mae_pitch_environment_units": -0.0003220905623439133,
+                "action_mae_roll_environment_units": -0.00020735525441852812,
+                "action_mae_x_environment_units": -0.0025709449403773996,
+                "action_mae_y_environment_units": -0.0029026272381558194,
+                "action_mae_yaw_environment_units": 0.0004431005797632063,
+                "action_mae_z_environment_units": 0.0004334788626310579,
+                "normalized_action_mse": 0.007329822464713032
+              }
+            },
+            "pick up the black bowl next to the cookie box and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.009885073080658904,
+                "action_mae_pitch_environment_units": -0.0007472065665459649,
+                "action_mae_roll_environment_units": -8.946935892367724e-05,
+                "action_mae_x_environment_units": -0.00032824844477705867,
+                "action_mae_y_environment_units": -0.0012752650888891992,
+                "action_mae_yaw_environment_units": -0.000578550032761015,
+                "action_mae_z_environment_units": 0.0005452577474736736,
+                "normalized_action_mse": -0.005539857454797521
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.004899059608578685,
+                "action_mae_pitch_environment_units": 0.0003895889288318792,
+                "action_mae_roll_environment_units": -0.00020739555559259187,
+                "action_mae_x_environment_units": 0.0015658493679248514,
+                "action_mae_y_environment_units": -0.0006228120232572437,
+                "action_mae_yaw_environment_units": -0.00041433279505518304,
+                "action_mae_z_environment_units": 0.0037834166176103773,
+                "normalized_action_mse": 0.00010548933143061934
+              }
+            },
+            "pick up the black bowl next to the plate and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.016882202774286287,
+                "action_mae_pitch_environment_units": 0.0006128986713241948,
+                "action_mae_roll_environment_units": 0.00014879522600445144,
+                "action_mae_x_environment_units": -0.0024644057942048436,
+                "action_mae_y_environment_units": -0.0011506007443037314,
+                "action_mae_yaw_environment_units": -0.00039560968696777075,
+                "action_mae_z_environment_units": 0.0024598864678682802,
+                "normalized_action_mse": 0.006836340609671823
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.02089468464255334,
+                "action_mae_pitch_environment_units": 0.00014220326530079916,
+                "action_mae_roll_environment_units": -2.8414700600387643e-05,
+                "action_mae_x_environment_units": -0.0067990611094367465,
+                "action_mae_y_environment_units": -0.004668312840608875,
+                "action_mae_yaw_environment_units": -0.000785510560129845,
+                "action_mae_z_environment_units": 0.005293722142150362,
+                "normalized_action_mse": 0.0076513917534612175
+              }
+            },
+            "pick up the black bowl next to the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.0025467313826084137,
+                "action_mae_pitch_environment_units": 0.00020595885031467545,
+                "action_mae_roll_environment_units": 9.163273074371849e-05,
+                "action_mae_x_environment_units": 0.00010590011837446206,
+                "action_mae_y_environment_units": 0.0015669124876076315,
+                "action_mae_yaw_environment_units": 9.204654839561899e-05,
+                "action_mae_z_environment_units": 0.000691944298437136,
+                "normalized_action_mse": 0.0009504273616974881
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.015012325718998909,
+                "action_mae_pitch_environment_units": -0.0010769856237262902,
+                "action_mae_roll_environment_units": -0.00036207844886804175,
+                "action_mae_x_environment_units": -0.0014284346776299167,
+                "action_mae_y_environment_units": -0.0006941844993880036,
+                "action_mae_yaw_environment_units": -0.00015031698430919248,
+                "action_mae_z_environment_units": -0.006435328949436561,
+                "normalized_action_mse": -0.005185415302236963
+              }
+            },
+            "pick up the black bowl on the cookie box and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.0004476450383663205,
+                "action_mae_pitch_environment_units": -0.0003992392040259099,
+                "action_mae_roll_environment_units": 0.0002521595967159163,
+                "action_mae_x_environment_units": -4.2491813748456175e-05,
+                "action_mae_y_environment_units": -0.00018173831625658415,
+                "action_mae_yaw_environment_units": 5.6108038784653466e-05,
+                "action_mae_z_environment_units": 0.0013000546684458075,
+                "normalized_action_mse": 0.0006853123943853581
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0019759483635425484,
+                "action_mae_pitch_environment_units": -0.0015617621868124036,
+                "action_mae_roll_environment_units": -0.00010642554217473767,
+                "action_mae_x_environment_units": -0.0024499176432392633,
+                "action_mae_y_environment_units": 0.00033717709520871,
+                "action_mae_yaw_environment_units": -0.00026767152575302156,
+                "action_mae_z_environment_units": -0.0012548927790004133,
+                "normalized_action_mse": -0.0012871449014970199
+              }
+            },
+            "pick up the black bowl on the ramekin and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": 0.00906772688031196,
+                "action_mae_pitch_environment_units": -0.0009306095006157387,
+                "action_mae_roll_environment_units": 0.0002354286045399001,
+                "action_mae_x_environment_units": -0.0027306118700637233,
+                "action_mae_y_environment_units": -0.0002496861884771773,
+                "action_mae_yaw_environment_units": 0.00032613003180027855,
+                "action_mae_z_environment_units": 0.004370512822406483,
+                "normalized_action_mse": 0.0034643911590267473
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": 0.022427949681878084,
+                "action_mae_pitch_environment_units": -0.0024414971450197297,
+                "action_mae_roll_environment_units": -0.00011074902630310232,
+                "action_mae_x_environment_units": -0.005575120044457371,
+                "action_mae_y_environment_units": -0.00160110611613129,
+                "action_mae_yaw_environment_units": 0.0005635488831635255,
+                "action_mae_z_environment_units": 0.010253481611804088,
+                "normalized_action_mse": 0.006748485418834854
+              }
+            },
+            "pick up the black bowl on the stove and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.000539393723011039,
+                "action_mae_pitch_environment_units": 6.885507587131579e-05,
+                "action_mae_roll_environment_units": -3.802361414728672e-05,
+                "action_mae_x_environment_units": -0.0010183510250484085,
+                "action_mae_y_environment_units": -0.0011257254432720312,
+                "action_mae_yaw_environment_units": 0.00010158773773795773,
+                "action_mae_z_environment_units": -0.003239168392386471,
+                "normalized_action_mse": 0.0005704081717080312
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.0007925011217594369,
+                "action_mae_pitch_environment_units": 0.0005717398714374135,
+                "action_mae_roll_environment_units": -6.693489044258278e-05,
+                "action_mae_x_environment_units": 0.0008000348610523178,
+                "action_mae_y_environment_units": -0.0009245477263666729,
+                "action_mae_yaw_environment_units": 0.00023839718107579195,
+                "action_mae_z_environment_units": -0.0025594537821118854,
+                "normalized_action_mse": 0.000924083703596687
+              }
+            },
+            "pick up the black bowl on the wooden cabinet and place it on the plate": {
+              "endpoint200_minus100": {
+                "action_mae_gripper_environment_units": -0.000630057975649842,
+                "action_mae_pitch_environment_units": -0.00031861375988957025,
+                "action_mae_roll_environment_units": -0.0005400517333780785,
+                "action_mae_x_environment_units": -0.0017459737080238041,
+                "action_mae_y_environment_units": -0.000624858567547952,
+                "action_mae_yaw_environment_units": 8.387417596818388e-05,
+                "action_mae_z_environment_units": -0.0018200702580235956,
+                "normalized_action_mse": -0.0007224218371058161
+              },
+              "endpoint200_minus_source": {
+                "action_mae_gripper_environment_units": -0.007946025207638749,
+                "action_mae_pitch_environment_units": -0.00014796278970720042,
+                "action_mae_roll_environment_units": 0.00017611239761980944,
+                "action_mae_x_environment_units": -0.0019469857942514754,
+                "action_mae_y_environment_units": 0.0005003842592150587,
+                "action_mae_yaw_environment_units": 0.0003022273556370376,
+                "action_mae_z_environment_units": -0.00012724462157662209,
+                "normalized_action_mse": -0.0018259530421346412
+              }
+            }
+          },
+          "stage_seconds": {
+            "nf4_lora-native200": 521.0298939029453,
+            "nf4_lora-portable": 197.49446881900076
+          }
+        }
+      },
+      "workflow": {
+        "whole_pair_seconds": 1406.9885226360057,
+        "stages": [
+          {
+            "elapsed_seconds": 487.8231392840389,
+            "exit_code": 0,
+            "injected_interruption_expected": false,
+            "name": "bf16_lora-native200",
+            "owned_process_cleanup": {
+              "observed_processes": 4,
+              "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+              "signaled_processes": 0
+            },
+            "timed_out": false
+          },
+          {
+            "elapsed_seconds": 188.7393701999681,
+            "exit_code": 0,
+            "injected_interruption_expected": false,
+            "name": "bf16_lora-portable",
+            "owned_process_cleanup": {
+              "observed_processes": 3,
+              "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+              "signaled_processes": 0
+            },
+            "timed_out": false
+          },
+          {
+            "elapsed_seconds": 521.0298939029453,
+            "exit_code": 0,
+            "injected_interruption_expected": false,
+            "name": "nf4_lora-native200",
+            "owned_process_cleanup": {
+              "observed_processes": 4,
+              "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+              "signaled_processes": 0
+            },
+            "timed_out": false
+          },
+          {
+            "elapsed_seconds": 197.49446881900076,
+            "exit_code": 0,
+            "injected_interruption_expected": false,
+            "name": "nf4_lora-portable",
+            "owned_process_cleanup": {
+              "observed_processes": 3,
+              "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+              "signaled_processes": 0
+            },
+            "timed_out": false
+          }
+        ],
+        "scope": "Whole pair includes the four model stages and intervening qualification work. Per-arm native clocks and individual enclosing stage clocks are distinct; their sums do not reconstruct a separately measured complete per-arm cold case. Allocated parent1476 GPU-s is separate. Child step ends five seconds after recorded parent; raw discrepancy retained."
+      },
+      "root_review": "All125 raw files and1098 samples independently replayed. All8x160 row reductions match exact native sequential float addition; initial source and final fresh rows/metrics are exactly equal. An initial ad-hoc use of Python built-in sum differed by an ULP; replaying the actual native ordered += reduction resolved it without any tolerance, metric, or source change.",
+      "decision_scope": "Discard this attention-only head-adapter recipe under unchanged prospective point gates. Both endpoint MSEs worsen against own source and neither scheduled0/100/200 observation reaches target. Point NF/BF ratio within5% does not establish noninferiority, adaptation, recipe superiority or time-to-quality. No mature recovery, horizon extension, additional seed or rollout promoted."
     }
   },
   "read_only_head_memory_diagnostic": {
