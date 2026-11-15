@@ -471,12 +471,34 @@ is 30 seconds, and complete launcher coverage is unverified. They do not close
 the initialization-memory gap. The raw query and interpretation are retained in
 the family evidence; no acceptance rule changed.
 
-These three pairs establish execution improvements over their own references,
-**not promotion**, better task quality, NF4 superiority over BF16, or inference
-acceleration. Their physical placements differ across allocations. The BF16
-seed-42 pair and aggregate/mature-recovery gates remain required.
-Exact receipts, component clocks and limitations are retained in the existing
-family evidence.
+The fourth pair (`38601377`, BF16 seed 42, ON then OFF) passed with exact saved
+states, all 300 numerical updates, resident rows and three fresh score sets.
+Evaluation time fell **305.53 to 255.96 seconds (16.22%)**, native-process time
+**609.59 to 562.28 seconds (7.76%)**, and complete cold-case time **1,145.92 to
+1,052.49 seconds (8.15%)**. Both first reached the target at update 100; native
+publication clocks were 274.16/249.52 seconds, excluding separate launcher costs.
+Sampled owned-GPU peak remained **31.516 GiB**. All 1,595 host observations,
+eight stage summaries, 248 retained files and memory gates passed independent
+replay. Short unsampled phases and pre-observer startup remain outside the bound.
+The allocation cost 2,545 GPU-seconds, including a separate 285.36-second CPU
+state comparison.
+
+All four pairs pass the original aggregate timing rule on build `cbc950f`:
+
+| Precision | Evaluation reduction | Native-process reduction | Complete cold-case reduction |
+|---|---:|---:|---:|
+| NF4 | 14.26% | 9.96% | 7.74% |
+| BF16 | 15.50% | 7.68% | 8.12% |
+
+These use the two-pair geometric mean in each precision, with reversed order for
+seed 42. Within-pair GPU/CPU placement matched; physical placements differ across
+allocations and filesystem-cache warmth was uncontrolled. The four allocations
+cost **16,139 GPU-seconds**, including all fresh scoring and separate comparisons.
+The hash-bound aggregate decision still has **`promote=false`**: same-build
+own-ON update-200-to-300 recovery remains required, followed by current-`e64a735`
+compatibility checks. These are shared execution gains, not improved learning,
+NF4 superiority over BF16, new quality confidence intervals, or inference
+acceleration. Exact receipts and clocks remain in the existing family evidence.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
