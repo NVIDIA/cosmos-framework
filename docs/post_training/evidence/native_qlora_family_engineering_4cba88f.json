@@ -27356,5 +27356,102 @@
     },
     "historical_resume": "Original resolved learning rate and compatible original source build required; old 1e-4 starter runs are reproduced with an explicit lr=1e-4 override.",
     "quality_promotion": false
+  },
+  "gr00t_head_attention_error_diagnostic": {
+    "state": "Prospectively sealed locally; not staged, admitted or executed at this record.",
+    "rationale": "Retained200-update head-adapter screen: all480factors changed with nonzero first moments; BF16/NF4 clipping16/17of200 and zero skipped updates. Flow loss improved slightly while decoded action MSE worsened. These records do not attribute failure to either group, rank, clipping or horizon.",
+    "hypothesis": "The learned language and head-attention deltas may contribute differently to the flow-loss/action-error mismatch. Isolate their current-policy effects before selecting another learning intervention.",
+    "payload": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-head-policy-ablation-e64a735-v1",
+    "manifest_sha256": "699f3596c0fc034a3f6a5dbc95d73f8b2663afbf41de13e384e26a6994af1791",
+    "archive_sha256": "dd176682278727fdf408f1db9f70a3bc242f007ca17a895b6d32f616ba8069c3",
+    "protocol_sha256": "430f46aa3c4a2b21b3d7a06430881ff53aeebc160bf257d9223688e61aeae1e6",
+    "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+    "artifact": {
+      "components": {
+        "model": {
+          "kind": "file",
+          "path": "model.pt",
+          "sha256": "f47704583c50ebaca3bb8fde1c6d45c0100960ae416bbb9a62fba0cc90841397",
+          "size": 132256499
+        },
+        "model_metadata": {
+          "kind": "file",
+          "path": "model_metadata.pt",
+          "sha256": "27b0bd1fd9d882c7b90cb87892e133d54e1d73a0f0477a859ffe112ec7adbe5e",
+          "size": 1544599
+        }
+      },
+      "identity_json_sha256": "3bdae2d43bc5fe148befff2d7aec7551d93f415b46a03d5f9bfdd340c9e85301",
+      "job": "38562915",
+      "marker_sha256": "62792e949d517b0e838b9265d69ac39f508d6ab49cdabfa67dc6e87e2757f51a",
+      "metadata_sha256": "27b0bd1fd9d882c7b90cb87892e133d54e1d73a0f0477a859ffe112ec7adbe5e",
+      "mode": "bf16_lora",
+      "path": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38562915/qualification/native/qualification/gr00t-dit-head-screen-v1/bf16_lora/fixed200/checkpoint_artifacts/iter_000200",
+      "quality": "original fixed200 screen DISCARD remains unchanged",
+      "screen_acceptance_sha256": "097b525cc277527ae4bed155c78bc18167824af7dd7dc9df03b3fd94278e7332",
+      "screen_release_sha256": "8667cf0de67e08f8cade98f6db7e918f7c90da2521982acfbd4bc969e4d2ca09",
+      "step": 200
+    },
+    "calibration": {
+      "selection": "first two consumed rows for each task represented in original first200 IndexedCursor(seed17,shuffle=True); preserve global consumed order; no outcome-based selection",
+      "training_source_sha256": "a6756c8d9a903af010ff3716a6066d78fef2a99f17d89cb4452fc9791ae0a1a6",
+      "cohort_manifest_sha256": "c726e37725c2d4be88efb17e8f96b956d018a07db9f72bde1f6825084392dd00",
+      "selected_ids": [
+        "libero-1545-32",
+        "libero-1651-103",
+        "libero-1651-149",
+        "libero-1544-37",
+        "libero-1559-27",
+        "libero-1357-74",
+        "libero-1399-63",
+        "libero-1296-17",
+        "libero-1433-9",
+        "libero-1524-83",
+        "libero-1367-37",
+        "libero-1637-61",
+        "libero-1362-134",
+        "libero-1514-22",
+        "libero-1544-89",
+        "libero-1532-6",
+        "libero-1615-69",
+        "libero-1488-25",
+        "libero-1584-98",
+        "libero-1296-0"
+      ],
+      "tasks": 10,
+      "absent_tasks": []
+    },
+    "states": [
+      {
+        "head_scale": 1,
+        "language_scale": 1,
+        "name": "both"
+      },
+      {
+        "head_scale": 0,
+        "language_scale": 1,
+        "name": "language_only"
+      },
+      {
+        "head_scale": 1,
+        "language_scale": 0,
+        "name": "head_only"
+      },
+      {
+        "head_scale": 0,
+        "language_scale": 0,
+        "name": "neither"
+      }
+    ],
+    "noise_seed": 123,
+    "sampler_steps": 4,
+    "native_flow_sampler_pairs": 80,
+    "loads": 1,
+    "updates": 0,
+    "restoration": "restore scales/RNG/mixed modes and wrapped methods on success and failure; verify all480factor/allbase/buffer/alias/storage/grad records unchanged; codec validation after original scales restored",
+    "interpretation": "Descriptive current-policy causal attribution on already-consumed training calibration only; not training counterfactual, uncertainty estimate, validation-selection, performance claim or promotion. No new target/threshold/rank/horizon/data/objective.",
+    "measurement": "Reuse qualified v11 raw observer and native allocator phases; retain missing coverage and shutdown errors. No new memory, performance or promotion gate. Actual scheduler cost is separate from worker time.",
+    "cpu_validation": "61 distinct cases:37 actual native adapter/evaluator,13 worker/config/cohort/launcher,11 observer cases. Independent overlapping reruns passed and are not summed. No accelerator outcome is inferred.",
+    "resource_plan": "One A10080,16CPUs,128GiB,30-minute scheduler cap on unchanged authorized routing. Estimated5\u201310minutes is planning only. Must not overlap the active Alpamayo timing allocation."
   }
 }
