@@ -6,6 +6,21 @@ entrypoint, and it does not establish closed-loop driving or real-world safety.
 Accelerator and real-data qualification results must accompany a supported recipe;
 the CPU tests below establish the integration contract only.
 
+The native integration is implemented, but the requested quality outcome remains
+unmet. Read the engineering and learning results separately:
+
+| Requirement | Current evidence |
+|---|---|
+| Native trajectory training and recovery | Real A100 80GB checks include 3,008-token, 16-image inputs, adapter/expert updates, frozen-base integrity, committed recovery and fresh native reload. Build and checkpoint identities below remain binding. |
+| Memory benefit | The selected 512-update study measured 67.104 GiB NF4 versus 76.240 GiB matched BF16 sampled GPU-process peaks: 9.137 GiB saved. These are sampled workflow peaks, not weight-size estimates. |
+| Useful adaptation and quality preservation | The selected 512-update recipe worsened open-loop ADE against its own frozen source in both arms and never reached the fixed target. It is not a quality-qualified training recommendation. |
+| Execution improvement | Bounded evaluation-input reuse reduced complete-case time by 15.83% NF4 and 16.28% BF16 across the two fixed paired seeds. This is a shared execution gain, not better learning or NF4 superiority. |
+| Deployment artifacts | Native portable and standalone unmerged policies preserve trained components and task outputs. Merged exports failed their task-parity checks; closed-loop driving and deployment latency remain unqualified. |
+
+The detailed results below retain their original source revisions, failed attempts,
+measurement limits and decisions. Independent final confirmation also needs
+recording/event-family provenance that the admitted development data does not supply.
+
 The first configuration binds `nvidia/Alpamayo-R1-10B` revision
 `dd4a24cacefc9a6477a6dfc7354de2443401409d`, its public model source
 `NVlabs/alpamayo@11a0e01c13a5622377c45ee37d653351453ec43b`, Transformers 4.57.6,

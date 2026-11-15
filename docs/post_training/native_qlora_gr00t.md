@@ -5,6 +5,22 @@ language backbone. The implementation is available; task quality, performance an
 must be read from the accompanying qualification evidence. CPU tests and configuration acceptance
 alone do not establish accelerator support or robotic task success.
 
+The native integration is implemented, but the requested quality and substantial
+total-memory outcomes remain unmet for the selected full-head recipe:
+
+| Requirement | Current evidence |
+|---|---|
+| Native action training and recovery | Language LoRA and the full action head receive the native flow loss. Real A100 80GB checks cover exact trainable membership, frozen NF4 state, recovery, and fresh native policy reload. |
+| NF4-only memory benefit | The matched selected run measured 30.412 GiB NF4 versus 31.516 GiB BF16 sampled GPU-process peaks: 1.104 GiB saved, about 3.5%. FP32 action-head parameters, gradients and optimizer state dominate; substantial total-memory savings are not established. |
+| Offline quality | Across three paired training seeds, mean NF4 action MSE was 2.224% lower than matched BF16 LoRA, but the one-sided 95% upper regression bound was +9.532%, failing the predefined 5% guard. |
+| Rollout quality | The selected update-200 development rollout scored 98/100 NF4 versus 97/100 BF16; the accuracy-loss upper bound was 3 percentage points, failing the 2-point guard. This does not establish real-robot behavior. |
+| Execution improvement | Four paired cache trials passed their timing gates in both precision arms. Cache-enabled mature recovery and current-build compatibility must pass before promotion; this is a shared evaluation optimization, not NF4 learning superiority. |
+| Deployment artifacts | Native portable and standalone unmerged policies retain action components and reproduce task outputs. Merged exports failed parity checks; controlled deployment-latency improvement remains unproven. |
+
+Detailed results below preserve the original builds, negative trials, uncertainty
+procedure and resource accounting. Optimizer quantization is a separately identified
+integration and is not included in these baseline memory or quality results.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).
