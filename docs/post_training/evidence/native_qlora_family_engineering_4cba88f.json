@@ -27409,6 +27409,635 @@
         "complete_memory_samples": 15132,
         "current_build_release_gate": "Timing criteria PASS; own current-e64 ON128/100-to128/freshportable qualification remains required. Option remains off by default. Historical per-job promotion statuses remain their original decisions."
       }
+    },
+    "38584923": {
+      "job": "38584923",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 7959,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "purpose": "Current-build Alpamayo evaluation-input reuse: own0-to128, own100-to128 and fresh portable2 in both precision arms. No new learning or matched performance comparison.",
+      "protocol_sha256": "a0f72d0fcffdc56b06e8600e7ec8df283dd21456cbd0f99d15be775b8979d855",
+      "payload_manifest_sha256": "7704f4da15c9a2f2816327fa9443fb81356ccc0ac7bac137ba9e59e374c79b49",
+      "admission_sha256": "a3df1ddb18779f564213a8c51f86dddd86cbc1db5a03329f0f1abe26804875b3",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-current-input-reuse-38584923-receipts-v2.tar.gz",
+      "receipt_archive_sha256": "b6213489b6ed874432502eac55466dc23396d91d61b38d8eaacbfc8c5ce49924",
+      "inventory_sha256": "53b1b51c530c6974900ca542ae0679534e866feacbeed91cff30024965e8a4e2",
+      "terminal_release_sha256": "5c856968fa5fab726a6bb4cfdc8fcae12b86dd2efe5e08913c610b10382ada89",
+      "acceptance_sha256": "f1a5cff9d92f8431870fca2976905d23ef216a794d222a31414c8c56177b0447",
+      "owner_readout_sha256": "7f04396b210941b2f84132182b4dcaa65f516181741b5f90f173697e3915dfad",
+      "root_replay_sha256": "d12249c3d4911a18067318cda2841156cc5a635d231a5a31acbe2da69c0eb4a0",
+      "files_verified": 257,
+      "placement_and_versions": {
+        "allocator": "expandable_segments:True",
+        "code": "e64a735d33303d8e7e919b9919d550e644d1312e",
+        "cpu_affinity": [
+          4,
+          5,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          128,
+          129,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137
+        ],
+        "family": "alpamayo",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-69f52621-9dc3-742b-b270-09c140b02db3"
+        },
+        "node": "batch-block4-0045",
+        "numa_nodes": [
+          "node0"
+        ],
+        "slurm_job": "38584923",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "allocation_utc": [
+        "2026-11-15T14:10:57",
+        "2026-11-15T16:23:36"
+      ],
+      "workflow_seconds": 7857.430152810994,
+      "model_stages": [
+        {
+          "elapsed_seconds": 2195.9128286250634,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "bf16_lora-full",
+          "owned_process_cleanup": {
+            "observed_processes": 4,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        },
+        {
+          "elapsed_seconds": 1215.658578603994,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "bf16_lora-resumed",
+          "owned_process_cleanup": {
+            "observed_processes": 4,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        },
+        {
+          "elapsed_seconds": 207.16120067599695,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "bf16_lora-portable",
+          "owned_process_cleanup": {
+            "observed_processes": 3,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        },
+        {
+          "elapsed_seconds": 2206.581047895015,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "nf4_lora-full",
+          "owned_process_cleanup": {
+            "observed_processes": 4,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        },
+        {
+          "elapsed_seconds": 1172.2206151189748,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "nf4_lora-resumed",
+          "owned_process_cleanup": {
+            "observed_processes": 4,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        },
+        {
+          "elapsed_seconds": 178.2829086179845,
+          "exit_code": 0,
+          "injected_interruption_expected": false,
+          "name": "nf4_lora-portable",
+          "owned_process_cleanup": {
+            "observed_processes": 2,
+            "pidfd_backend": "linux_x86_64_pidfd_syscalls",
+            "signaled_processes": 0
+          },
+          "timed_out": false
+        }
+      ],
+      "modes": {
+        "bf16_lora": {
+          "acceptance_sha256": "8df02741ad044741b712e09f11b034c6511283661349cdfa6e9d3b0f6b5a1d2a",
+          "recovery": {
+            "applied_updates": 128,
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "fp32_moment_tensors": 1806,
+            "head_adapters_present": false,
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "optimizer_audits": {
+              "boundary": {
+                "fp32_moment_tensors": 1806,
+                "step": 100,
+                "trainable_tensors": 903
+              },
+              "full": {
+                "fp32_moment_tensors": 1806,
+                "step": 128,
+                "trainable_tensors": 903
+              },
+              "resumed": {
+                "fp32_moment_tensors": 1806,
+                "step": 128,
+                "trainable_tensors": 903
+              }
+            },
+            "own_portable_full_inventory_exact": true,
+            "passed": true,
+            "resume_boundary": 100,
+            "resumed_updates": 28,
+            "rtol": 0,
+            "trainable_tensors": 903
+          },
+          "fresh": {
+            "own_portable_exact": true,
+            "passed": true,
+            "rows": 2,
+            "source_and_scorer_exact": true,
+            "source_rows": 256
+          },
+          "metrics": {
+            "0": {
+              "loss": 0.2666164163815665,
+              "open_loop_ade_1s_meters": 0.045508761263135966,
+              "open_loop_ade_3s_meters": 0.39572003935700195,
+              "open_loop_ade_6p4s_meters": 1.956010947804316,
+              "open_loop_fde_1s_meters": 0.11850085828859847,
+              "open_loop_fde_3s_meters": 1.1632316133618588,
+              "open_loop_fde_6p4s_meters": 6.074706420644361
+            },
+            "128": {
+              "loss": 0.32041692379061715,
+              "open_loop_ade_1s_meters": 0.05750068008001108,
+              "open_loop_ade_3s_meters": 0.5096118122382904,
+              "open_loop_ade_6p4s_meters": 2.573055626358837,
+              "open_loop_fde_1s_meters": 0.1491131978436897,
+              "open_loop_fde_3s_meters": 1.5168019942939281,
+              "open_loop_fde_6p4s_meters": 8.103308086865582
+            }
+          },
+          "fresh_metrics": {
+            "loss": 0.20952903851866722,
+            "open_loop_ade_1s_meters": 0.03936539497226477,
+            "open_loop_ade_3s_meters": 0.22144753485918045,
+            "open_loop_ade_6p4s_meters": 0.6430540680885315,
+            "open_loop_fde_1s_meters": 0.10208259150385857,
+            "open_loop_fde_3s_meters": 0.5217565596103668,
+            "open_loop_fde_6p4s_meters": 2.084352970123291
+          },
+          "reuse_observations": {
+            "full": {
+              "clone_seconds": 6.938970910385251,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 512,
+              "identity_seconds": 57.26491225569043,
+              "misses": 512,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            },
+            "portable": {
+              "clone_seconds": 0.03454543894622475,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 2,
+              "identity_seconds": 0.29406970005948097,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            },
+            "resumed": {
+              "clone_seconds": 3.924823118839413,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 256,
+              "identity_seconds": 31.448368438053876,
+              "misses": 256,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            }
+          },
+          "local_all28_updates_and256_rows_exact": true,
+          "full_tensor_scope": "On-node full903 model/1806 moments/portable and RNG/data assertions; no model/optimizer payloads loaded in this JSON-only replay.",
+          "source26_observational_comparison": {
+            "passed": true,
+            "all_state_rng_data_updates_rows_exact": true,
+            "original_job": "38568479",
+            "scope": "Observational comparison only; current own128 is the recovery reference. No cross-build resume or performance claim.",
+            "raw_sha256": "591451c7c24dc5511c67e1f35403d3b0185fcdaa3787a675f003b68babbd336c",
+            "metadata_allowance_reference": "alpamayo_current_reuse_mature_qualification.observational_comparison",
+            "metadata_rewritten": false,
+            "cross_build_resume": false
+          },
+          "native_clocks": {
+            "native": {
+              "checkpoint_seconds": 85.83462520700414,
+              "evaluation_seconds": 1427.0729157499736,
+              "portable_export_seconds": 21.597829286009073,
+              "startup_seconds": 241.00734944397118,
+              "training_seconds": 387.3951594281243
+            },
+            "resumed": {
+              "checkpoint_seconds": 48.37751770799514,
+              "evaluation_seconds": 719.6131792899687,
+              "portable_export_seconds": 21.80176649708301,
+              "startup_seconds": 307.8043117050547,
+              "training_seconds": 84.59134541300591
+            }
+          },
+          "stage_memory": {
+            "full": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 79466941440,
+              "allocator_peak_reserved_bytes": 80645980160,
+              "sampled": {
+                "device_peak_bytes": 82661539840,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 46528182272,
+                "host_rss_sum_peak_bytes": 47099351040,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 2195.2669150829315,
+                "owned_device_process_peak_bytes": 81862328320,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 1631,
+                "sampling_gap_seconds": {
+                  "count": 1630,
+                  "maximum": 5.3798604011535645,
+                  "mean": 1.3467895184557863,
+                  "median": 1.3080302476882935,
+                  "p95": 1.4313464045524598,
+                  "sum": 2195.2669150829315
+                }
+              }
+            },
+            "resumed": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 79466941440,
+              "allocator_peak_reserved_bytes": 80559996928,
+              "sampled": {
+                "device_peak_bytes": 82575556608,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 46404505600,
+                "host_rss_sum_peak_bytes": 46986809344,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 1575.2736601829529,
+                "owned_device_process_peak_bytes": 81776345088,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 1206,
+                "sampling_gap_seconds": {
+                  "count": 1205,
+                  "maximum": 4.535266399383545,
+                  "mean": 1.3072810457949817,
+                  "median": 1.2856817245483398,
+                  "p95": 1.431467056274414,
+                  "sum": 1575.2736601829529
+                }
+              }
+            },
+            "portable": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 32654130688,
+              "allocator_peak_reserved_bytes": 32759611392,
+              "sampled": {
+                "device_peak_bytes": 34194259968,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 30808807424,
+                "host_rss_sum_peak_bytes": 31477800960,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 213.9047167301178,
+                "owned_device_process_peak_bytes": 33460060160,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 163,
+                "sampling_gap_seconds": {
+                  "count": 162,
+                  "maximum": 1.6045100688934326,
+                  "mean": 1.3203994859883814,
+                  "median": 1.2964013814926147,
+                  "p95": 1.4520015358924865,
+                  "sum": 213.9047167301178
+                }
+              }
+            }
+          }
+        },
+        "nf4_lora": {
+          "acceptance_sha256": "70e623d6045570bf2e1d45de16da41c33678e6899f05f327e4d395b78250b98e",
+          "recovery": {
+            "applied_updates": 128,
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "fp32_moment_tensors": 1806,
+            "head_adapters_present": false,
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "optimizer_audits": {
+              "boundary": {
+                "fp32_moment_tensors": 1806,
+                "step": 100,
+                "trainable_tensors": 903
+              },
+              "full": {
+                "fp32_moment_tensors": 1806,
+                "step": 128,
+                "trainable_tensors": 903
+              },
+              "resumed": {
+                "fp32_moment_tensors": 1806,
+                "step": 128,
+                "trainable_tensors": 903
+              }
+            },
+            "own_portable_full_inventory_exact": true,
+            "passed": true,
+            "resume_boundary": 100,
+            "resumed_updates": 28,
+            "rtol": 0,
+            "trainable_tensors": 903
+          },
+          "fresh": {
+            "own_portable_exact": true,
+            "passed": true,
+            "rows": 2,
+            "source_and_scorer_exact": true,
+            "source_rows": 256
+          },
+          "metrics": {
+            "0": {
+              "loss": 0.26709095919500214,
+              "open_loop_ade_1s_meters": 0.04602302479088394,
+              "open_loop_ade_3s_meters": 0.39951302091867547,
+              "open_loop_ade_6p4s_meters": 1.972519713366637,
+              "open_loop_fde_1s_meters": 0.11959648791435029,
+              "open_loop_fde_3s_meters": 1.1776479348218345,
+              "open_loop_fde_6p4s_meters": 6.102828524013603
+            },
+            "128": {
+              "loss": 0.32808892029788694,
+              "open_loop_ade_1s_meters": 0.05843012623790855,
+              "open_loop_ade_3s_meters": 0.5207342694120598,
+              "open_loop_ade_6p4s_meters": 2.697398077318212,
+              "open_loop_fde_1s_meters": 0.15164832063237554,
+              "open_loop_fde_3s_meters": 1.5572748674312606,
+              "open_loop_fde_6p4s_meters": 8.589016542129684
+            }
+          },
+          "fresh_metrics": {
+            "loss": 0.21075299754738808,
+            "open_loop_ade_1s_meters": 0.038647876121103764,
+            "open_loop_ade_3s_meters": 0.2222432643175125,
+            "open_loop_ade_6p4s_meters": 0.6857497245073318,
+            "open_loop_fde_1s_meters": 0.10062319785356522,
+            "open_loop_fde_3s_meters": 0.5335165113210678,
+            "open_loop_fde_6p4s_meters": 2.2924280762672424
+          },
+          "reuse_observations": {
+            "full": {
+              "clone_seconds": 7.12502295745071,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 512,
+              "identity_seconds": 59.20361018902622,
+              "misses": 512,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            },
+            "portable": {
+              "clone_seconds": 0.027204452897422016,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 2,
+              "identity_seconds": 0.22588775993790478,
+              "misses": 2,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            },
+            "resumed": {
+              "clone_seconds": 3.4634601428406313,
+              "format": "alpamayo-evaluation-preparation-observations-v1",
+              "hits": 256,
+              "identity_seconds": 29.13019661407452,
+              "misses": 256,
+              "retained_tensor_bytes_peak": 70829184,
+              "scope": "current process only; no checkpoint state"
+            }
+          },
+          "local_all28_updates_and256_rows_exact": true,
+          "full_tensor_scope": "On-node full903 model/1806 moments/portable and RNG/data assertions; no model/optimizer payloads loaded in this JSON-only replay.",
+          "source26_observational_comparison": {
+            "passed": true,
+            "all_state_rng_data_updates_rows_exact": true,
+            "original_job": "38564524",
+            "scope": "Observational comparison only; current own128 is the recovery reference. No cross-build resume or performance claim.",
+            "raw_sha256": "6e65e7fccb187eb2ffb5e90ee37afd012379997eaad17c53e999397dc01c93f5",
+            "metadata_allowance_reference": "alpamayo_current_reuse_mature_qualification.observational_comparison",
+            "metadata_rewritten": false,
+            "cross_build_resume": false
+          },
+          "native_clocks": {
+            "native": {
+              "checkpoint_seconds": 74.70106807909906,
+              "evaluation_seconds": 1462.992451732047,
+              "portable_export_seconds": 22.33501217002049,
+              "startup_seconds": 224.05696796695702,
+              "training_seconds": 401.5377026760252
+            },
+            "resumed": {
+              "checkpoint_seconds": 41.836391862947494,
+              "evaluation_seconds": 722.7609035300557,
+              "portable_export_seconds": 23.37991713907104,
+              "startup_seconds": 272.90429338195827,
+              "training_seconds": 85.02579668653198
+            }
+          },
+          "stage_memory": {
+            "full": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 69432915968,
+              "allocator_peak_reserved_bytes": 70835503104,
+              "sampled": {
+                "device_peak_bytes": 72851062784,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 53023295488,
+                "host_rss_sum_peak_bytes": 53726666752,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 2210.3549978733063,
+                "owned_device_process_peak_bytes": 72051851264,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 1603,
+                "sampling_gap_seconds": {
+                  "count": 1602,
+                  "maximum": 5.973553419113159,
+                  "mean": 1.3797471896837117,
+                  "median": 1.318902611732483,
+                  "p95": 1.5120157241821288,
+                  "sum": 2210.3549978733063
+                }
+              }
+            },
+            "resumed": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 69432915968,
+              "allocator_peak_reserved_bytes": 70789365760,
+              "sampled": {
+                "device_peak_bytes": 72804925440,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 53045270528,
+                "host_rss_sum_peak_bytes": 53780996096,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 1468.9371662139893,
+                "owned_device_process_peak_bytes": 72005713920,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 1119,
+                "sampling_gap_seconds": {
+                  "count": 1118,
+                  "maximum": 5.885895490646362,
+                  "mean": 1.3138972864168061,
+                  "median": 1.294918179512024,
+                  "p95": 1.3993106722831725,
+                  "sum": 1468.9371662139893
+                }
+              }
+            },
+            "portable": {
+              "allocator_evidence_complete": true,
+              "allocator_peak_allocated_bytes": 22653659648,
+              "allocator_peak_reserved_bytes": 22758293504,
+              "sampled": {
+                "device_peak_bytes": 24226496512,
+                "errors": [],
+                "gpu_memory_evidence_valid": true,
+                "host_pss_complete": true,
+                "host_pss_sum_peak_bytes": 31227037696,
+                "host_rss_sum_peak_bytes": 31861551104,
+                "nvml_capacity_bytes": 85899345920,
+                "observed_span_seconds": 185.80181312561035,
+                "owned_device_process_peak_bytes": 23492296704,
+                "peaks_are_sampled_lower_bounds": true,
+                "samples": 143,
+                "sampling_gap_seconds": {
+                  "count": 142,
+                  "maximum": 1.9080226421356201,
+                  "mean": 1.308463472715566,
+                  "median": 1.290104866027832,
+                  "p95": 1.3842608213424683,
+                  "sum": 185.80181312561035
+                }
+              }
+            }
+          }
+        }
+      },
+      "memory": {
+        "device_peak_bytes": 82661539840,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 53045270528,
+        "host_rss_sum_peak_bytes": 53780996096,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 7855.908434867859,
+        "owned_device_process_peak_bytes": 81862328320,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 5865,
+        "sampling_gap_seconds": {
+          "count": 5864,
+          "maximum": 5.973553419113159,
+          "mean": 1.3396842487837413,
+          "median": 1.29877769947052,
+          "p95": 1.48184072971344,
+          "sum": 7855.908434867859
+        }
+      },
+      "stage_samples": {
+        "bf16_lora-full": {
+          "actual_samples": 1631,
+          "complete_host_samples": 1631,
+          "positive_owned_gpu_observations": 1619
+        },
+        "bf16_lora-portable": {
+          "actual_samples": 163,
+          "complete_host_samples": 163,
+          "positive_owned_gpu_observations": 146
+        },
+        "bf16_lora-resumed": {
+          "actual_samples": 1206,
+          "complete_host_samples": 1206,
+          "positive_owned_gpu_observations": 919
+        },
+        "nf4_lora-full": {
+          "actual_samples": 1603,
+          "complete_host_samples": 1603,
+          "positive_owned_gpu_observations": 1591
+        },
+        "nf4_lora-portable": {
+          "actual_samples": 143,
+          "complete_host_samples": 143,
+          "positive_owned_gpu_observations": 126
+        },
+        "nf4_lora-resumed": {
+          "actual_samples": 1119,
+          "complete_host_samples": 1119,
+          "positive_owned_gpu_observations": 875
+        }
+      },
+      "memory_summary_sha256": "218525ccd9d5f8a0e7f16557ddfa0af35f5e5e6bda23d3bf8f95385c543457fa",
+      "scope": "Current e64 own-ON100-to128 recovery versus current uninterrupted128, two precisions, full256 final rows and fresh ownportable2. Source26 comparison remains observational only. Full903/1806 model/optimizer/portable and full-state equality are on-node assertions. No 512 completion, new quality, current speedup, inference or ON standalone qualification. Sampler covers the observed workflow; tiny unsampled intervals remain missing and sampled peaks are lower bounds.",
+      "local_replay_note": "Owner and root independently replayed all JSON/raw telemetry/reducers. Full model/optimizer/portable equality was computed on the allocated GPU node; tensor payloads were not downloaded. First root replay omitted optional Alpamayo source PYTHONPATH; corrected environment passed unchanged code, original log retained.",
+      "independent_metadata_controls_peer_sha256": "c109c2e01c0a327ce3fa72e2ea3b571644ac358a46acd26e4380e71c4ce4d6f3"
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -29752,7 +30381,7 @@
     "completed_attempt": "38578617"
   },
   "alpamayo_current_reuse_mature_qualification": {
-    "status": "Prospective local preparation only; all four frozen V5 timing gates must pass before any admission. Replaces the never-admitted short ON6 draft, which remains preserved. No CUDA result or promotion.",
+    "status": "Completed PASS: current e64 own100-to128 recovery and fresh portable reload in both arms, all strict correctness/memory requirements satisfied. Source26 four-pair timing gates separately passed. Recommend explicit opt-in for documented geometry; default remains off. No new quality or current-build speedup claim.",
     "implementation_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
     "workflow": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-current-input-reuse-e64a735-v2",
     "run_sha256": "f9c95eac7009f40ee921307ccb2558c8545c4a3339ec626fb93d74bd872e6f1e",
@@ -29914,6 +30543,53 @@
       "Current-source performance measurements",
       "Old checkpoint compatibility",
       "New standalone/merged export or inference-speed qualification"
-    ]
+    ],
+    "prepared_status_original": "Prospective local preparation only; all four frozen V5 timing gates must pass before any admission. Replaces the never-admitted short ON6 draft, which remains preserved. No CUDA result or promotion.",
+    "executed_protocol_sha256": "a0f72d0fcffdc56b06e8600e7ec8df283dd21456cbd0f99d15be775b8979d855",
+    "executed_payload_manifest_sha256": "7704f4da15c9a2f2816327fa9443fb81356ccc0ac7bac137ba9e59e374c79b49",
+    "executed_timing_prerequisite": {
+      "decision_path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/alpamayo-cache-four-pair-v5-decision-v1.json",
+      "decision_sha256": "645ab9ece30cbaf40260538bc64b707abce1e4413a6d5e99268c18cef893d342",
+      "pairs": [
+        {
+          "mode": "nf4_lora",
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38564524/pair-result.json",
+          "seed": 17,
+          "sha256": "33b7afec6a4da51adb1d58aa0614d9d9fa250685229b4dbcf211246e24336ad3"
+        },
+        {
+          "mode": "nf4_lora",
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38574255/pair-result.json",
+          "seed": 42,
+          "sha256": "cd6388e1017179b18220d7d3c53075c5549b88497d59997d97d1cb217112091c"
+        },
+        {
+          "mode": "bf16_lora",
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38568479/pair-result.json",
+          "seed": 17,
+          "sha256": "ea5bac080e29f21d8ed8aef7f05299f444baad21ed7d5db0d395a728cf89feef"
+        },
+        {
+          "mode": "bf16_lora",
+          "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38580754/pair-result.json",
+          "seed": 42,
+          "sha256": "8ee7abb94592c5900d16d2da32078f114e7aa7be9fa98495f27efcb4dbd7b580"
+        }
+      ],
+      "payload": "alpamayo-evaluation-reuse-comparison-26bc60f-v5",
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90"
+    },
+    "result_job": "38584923",
+    "result_acceptance_sha256": "f1a5cff9d92f8431870fca2976905d23ef216a794d222a31414c8c56177b0447",
+    "result_memory_summary_sha256": "218525ccd9d5f8a0e7f16557ddfa0af35f5e5e6bda23d3bf8f95385c543457fa",
+    "recommendation": {
+      "option": "rl.reuse_evaluation_inputs=true",
+      "scope": "New own-build Alpamayo runs with measured3008-token/16-image/128-supervised-action-element geometry; identical option forBF16; ownresume must preserve it. Portable ON reload qualified; standalone export/load evidence remains reuseOFF.",
+      "default_changed": false,
+      "quality_changed": false,
+      "timing_build": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "recovery_build": "e64a735d33303d8e7e919b9919d550e644d1312e"
+    },
+    "independent_metadata_controls_peer_sha256": "c109c2e01c0a327ce3fa72e2ea3b571644ac358a46acd26e4380e71c4ce4d6f3"
   }
 }

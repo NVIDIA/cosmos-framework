@@ -761,25 +761,43 @@ three clocks and passed its memory gate. The four clean allocations cost 20,957
 GPU-seconds; the earlier failed allocation adds 2,926 seconds, for 23,883 total.
 The unchanged reducer and its full decision were independently replayed.
 
-This qualifies the timing intervention on the recorded source-26 workflow;
-current-build recovery remains pending below, and the option remains off by
-default. This shared evaluation improvement does not improve fixed-step
-trajectory quality or establish faster time to the unreached quality target.
+This qualifies the timing intervention on the recorded source-26 workflow.
+The current-build recovery check below also passed, so bounded input reuse is
+recommended as an explicit option for this measured geometry. The default remains
+off to preserve existing recipe and checkpoint identities. This shared evaluation
+improvement does not improve fixed-step trajectory quality or establish faster
+time to the unreached quality target.
 Placements differed between pairs; their absolute times do not
 establish NF4-versus-BF16 superiority. Raw receipts, exact source/placement,
 component clocks and independent replay are bound in the existing family evidence.
 
-Promotion on the current `e64a735` build additionally requires a trained-checkpoint
-recovery check. The prepared six-stage check uses each precision's own uninterrupted
-ON run to update 128 as its reference, then resumes its own update-100 checkpoint
-and freshly reloads the portable policy. It preserves the selected 512-update
-cosine schedule, 100-update warmup and evaluation cadence; saving at 100 adds no
-evaluation. All 28 resumed updates, complete optimizer/RNG/data state and 256 final
-score rows must match. The older two-update engineering fixture has different data,
-schedule and clipping and cannot serve as this numerical control. Source-26
-comparisons remain observational; its checkpoints are never loaded on changed code.
-The protocol and 76 passing CPU cases are retained in the existing evidence. No
-accelerator result or promotion is implied until the timing gates and this check pass.
+Current-build job `38584923` completed all six stages on `e64a735`: each precision's
+own uninterrupted ON run to update 128, own update-100-to-128 recovery, and a fresh
+portable-policy load. It preserved the selected 512-update cosine schedule,
+100-update warmup and evaluation cadence; saving at 100 added no evaluation.
+All 28 resumed numerical updates, 903 trainable tensors, 1,806 FP32 moment tensors,
+optimizer/scheduler/RNG/data controls, and all 256 final score rows matched exactly.
+Fresh portable scoring reproduced the first two rows and their native reductions.
+Quantized-state integrity and exact optimizer membership passed. Each process
+retained 67.55 MiB, with 512/256/2 hits and misses for full/recovery/fresh scoring.
+
+Both current uninterrupted runs also reproduced the source-26 states, updates and
+scores under the prospectively declared source-metadata comparison. This was an
+observational comparison: no historical checkpoint was loaded on changed code.
+The older two-update fixture has different data, schedule and clipping and was
+not used as the numerical control. The 257 retained files, all 5,865 complete host
+observations, six stage summaries and terminal release were independently replayed.
+The allocation cost 7,959 GPU-seconds. Short unsampled intervals remain unmeasured;
+sampled peaks are lower bounds. This establishes own-build recovery at a trained
+boundary, not completion of 512 updates or new quality/performance qualification.
+
+For a **fresh current-build run** with this 3,008-token, 16-image geometry, add
+`rl.reuse_evaluation_inputs=true` to the native command and retain that value when
+resuming its own checkpoint. Apply the same option to BF16. Its 128-MiB bound,
+media/settings identity checks, and failure cleanup remain enforced. Fresh portable
+reload with reuse is qualified; the separate standalone-artifact checks used
+reuse disabled. The original four-pair timing study remains on source `26bc60f`,
+while this recovery evidence is on `e64a735`; their clocks are not combined.
 
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
