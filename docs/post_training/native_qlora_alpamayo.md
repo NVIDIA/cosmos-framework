@@ -662,6 +662,18 @@ all ten numerical updates, checkpoints at 5/10, native task metrics, and own
 speedup; a matched uninstrumented workflow comparison remains required before
 promotion, and the option remains off by default.
 
+The first matched timing allocation, `38555701`, failed after the OFF case and
+before ON started. Its native 128 updates, two full 256-row scores and downloaded
+trainer/RNG/data controls reproduce the original NF4 seed-17 trajectory. The
+reference native workflow took 2,677.261 seconds; its cold case through step release
+took 2,753.109 seconds. All 2,100 observed host samples were complete. A subsequent
+ownership census timed out querying an unrelated scheduler job, so there is **no
+paired speed result** and no full model/optimizer comparison from this allocation.
+All 2,926 allocated GPU-seconds remain charged. The original failure and raw
+receipts are preserved in the [family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+A clean pair must follow the bounded scheduler-query repair; its clocks cannot be
+spliced with this reference run. The retained trajectory's poor quality is unchanged.
+
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
 (6,214 GPU-seconds, normal controller release). This is the native matched head
