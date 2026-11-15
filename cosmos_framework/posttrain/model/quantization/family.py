@@ -135,6 +135,39 @@ def resolve_family_targets(net: nn.Module, targets: Mapping[str, Sequence[int]])
     return selected
 
 
+def resolve_head_targets(net: nn.Module, targets: Mapping[str, Sequence[int]]) -> dict[str, nn.Linear]:
+    """Validate separately declared FP32 biased head projections before any mutation."""
+    if not isinstance(targets, Mapping) or not targets:
+        raise ValueError("head adapters require an explicit nonempty shape allowlist")
+    slots = parameter_slots(net)
+    occurrences = Counter(id(slot.tensor) for slot in slots.values())
+    modules = dict(net.named_modules(remove_duplicate=False))
+    module_occurrences = Counter(id(module) for module in modules.values())
+    selected = {}
+    for name, shape in sorted(targets.items()):
+        module = modules.get(name)
+        if (
+            not isinstance(name, str)
+            or not name.startswith("action_head.")
+            or type(module) is not nn.Linear
+            or module.bias is None
+            or module_occurrences[id(module)] != 1
+        ):
+            raise ValueError(f"head adapter target requires an unaliased ordinary biased Linear: {name}")
+        if (
+            not isinstance(shape, (tuple, list))
+            or len(shape) != 2
+            or any(type(dim) is not int or dim <= 0 for dim in shape)
+            or tuple(module.weight.shape) != tuple(shape)
+        ):
+            raise ValueError(f"head adapter target geometry mismatch: {name}")
+        for value in (module.weight, module.bias):
+            if value.device.type not in {"cpu", "meta"} or value.dtype != torch.float32 or occurrences[id(value)] != 1:
+                raise ValueError(f"head adapter base and bias must be unshared CPU/meta FP32 tensors: {name}")
+        selected[name] = module
+    return selected
+
+
 @dataclass
 class FamilyBackboneState:
     config: FamilyBackboneConfig
@@ -160,6 +193,7 @@ def install_family_backbone(
     task_identity: Mapping[str, Any],
     device: torch.device,
     read_tensor: Callable[[str], torch.Tensor] | None = None,
+    head_targets: Mapping[str, Sequence[int]] | None = None,
 ) -> FamilyBackboneState:
     """Install before optimizer construction, on a CPU or meta native task model.
 
@@ -174,6 +208,8 @@ def install_family_backbone(
     task-head/projector weights. They remain in portable/resumable artifacts,
     alongside adapters, through the existing parameter-only checkpoint codec.
     Frozen feature-extractor modes intentionally contain no LoRA parameters.
+    Optional head targets instead retain frozen FP32 weights/biases and train
+    separate FP32 factors; they never enter the language quantization path.
     """
     cfg = FamilyBackboneConfig(**{key: getattr(config, key) for key in FamilyBackboneConfig.__dataclass_fields__})
     source = _json_identity(source_identity, "source")
@@ -182,6 +218,19 @@ def install_family_backbone(
     device = torch.device(device)
     _runtime(device, quantized=quantized)
     selected = resolve_family_targets(net, targets)
+    heads = {} if head_targets is None else resolve_head_targets(net, head_targets)
+    if heads and (
+        not adapted
+        or cfg.rank != 32
+        or cfg.alpha != 64
+        or cfg.dropout != 0
+        or auxiliary_parameters
+        or set(heads) & set(selected)
+    ):
+        raise ValueError(
+            "head adapters require separate r32/alpha64/dropout0 LoRA targets and no full-head auxiliaries"
+        )
+    head_source_names = {f"{name}.{leaf}" for name in heads for leaf in ("weight", "bias")}
     slots = parameter_slots(net)
     if (
         isinstance(auxiliary_parameters, (str, bytes))
@@ -240,7 +289,9 @@ def install_family_backbone(
             raise ValueError(f"family source reader returned an incompatible CPU tensor: {name}")
         if value.dtype != existing.dtype:
             raise ValueError(f"family source reader dtype differs from the initialized architecture: {name}")
-        if (name in target_weights or name in auxiliary) and not torch.isfinite(value).all().item():
+        if (name in target_weights or name in auxiliary or name in head_source_names) and not torch.isfinite(
+            value
+        ).all().item():
             raise ValueError(f"family source contains nonfinite backbone or auxiliary values: {name}")
         return value
 
@@ -306,6 +357,28 @@ def install_family_backbone(
     for module in installed.values():
         if adapted:
             module.reset_adapter_parameters(generator=generator)
+    # Head bases have already been streamed in their original FP32 storage. Build
+    # only the new factors on meta, then initialize from an independent generator:
+    # neither language factor initialization nor global RNG changes.
+    installed_heads = {}
+    head_generator = torch.Generator(device=device).manual_seed(cfg.seed) if heads else None
+    for name in heads:
+        base = net.get_submodule(name)
+        meta = nn.Linear(base.in_features, base.out_features, bias=True, device="meta", dtype=torch.float32)
+        replacement = LoraInjectedLinear(meta, cfg.rank, cfg.alpha, dropout=0.0, adapter_dtype=torch.float32)
+        replacement.weight, replacement.bias = base.weight, base.bias
+        replacement.lora_A.weight = nn.Parameter(
+            torch.empty(cfg.rank, base.in_features, device=device, dtype=torch.float32)
+        )
+        replacement.lora_B.weight = nn.Parameter(
+            torch.empty(base.out_features, cfg.rank, device=device, dtype=torch.float32)
+        )
+        replacement.reset_adapter_parameters(generator=head_generator)
+        replacement.train(base.training)
+        parent, _, attribute = name.rpartition(".")
+        net.get_submodule(parent).register_module(attribute, replacement)
+        installed_heads[name] = replacement
+        trainable.update({f"{name}.{key}": value for key, value in replacement.adapter_parameters().items()})
     current = parameter_slots(net)
     packed = {name: module for name, module in installed.items() if quantized}
     frozen = {
@@ -341,6 +414,19 @@ def install_family_backbone(
         "torch_version": torch.__version__,
         "dependencies": {name: version(name) for name in ("transformers", "safetensors")},
     }
+    if heads:
+        identity["head_adapters"] = {
+            "profile": "gr00t_n1d7_dit_attention_lora_v1",
+            "targets": {name: list(head_targets[name]) for name in heads},
+            "rank": cfg.rank,
+            "alpha": cfg.alpha,
+            "dropout": cfg.dropout,
+            "seed": cfg.seed,
+            "base_dtype": "float32",
+            "bias": "frozen_float32",
+            "parameter_dtype": "float32",
+            "compute": "native_separate_gemms_ambient_autocast",
+        }
 
     def validate_frozen() -> None:
         for name, expected in frozen.items():
@@ -360,6 +446,6 @@ def install_family_backbone(
     codec = AdapterCheckpointCodec(net, identity=identity)
     net._cosmos_adapter_checkpoint_codec = codec
     guard_resident_movement(net, device)
-    for module in installed.values():
+    for module in (*installed.values(), *installed_heads.values()):
         guard_resident_movement(module, device)
     return FamilyBackboneState(cfg, installed, identity, codec)

@@ -12,6 +12,8 @@ The artifact requires its family-owned constructor/processor, not a generic HF
 language-model loader. It is deliberately not a training-resume checkpoint.
 The distinct unmerged format preserves actual BF16 effective weights and exact
 FP32 LoRA factors, reconstructing the native separate operations for inference.
+An explicit head-adapter group additionally retains its FP32 bases and biases;
+that group supports only unmerged deployment.
 """
 
 from __future__ import annotations
@@ -103,11 +105,63 @@ def _sidecar_sources(sidecars: Mapping[str, str] | None) -> dict[str, Path]:
     return result
 
 
+def _head_targets(identity: Mapping[str, Any]) -> dict[str, list[int]]:
+    """The optional ordinary FP32 head group is distinct from quantized language targets."""
+    if "head_adapters" not in identity:
+        return {}
+    record = identity["head_adapters"]
+    adapter = identity["adapter"]
+    fixed = {
+        "profile": "gr00t_n1d7_dit_attention_lora_v1",
+        "rank": 32,
+        "alpha": 64.0,
+        "dropout": 0.0,
+        "seed": adapter.get("seed"),
+        "base_dtype": "float32",
+        "bias": "frozen_float32",
+        "parameter_dtype": "float32",
+        "compute": "native_separate_gemms_ambient_autocast",
+    }
+    if (
+        not isinstance(record, dict)
+        or set(record) != {*fixed, "targets"}
+        or any(record.get(key) != value for key, value in fixed.items())
+        or any(adapter.get(key) != fixed[key] for key in ("rank", "alpha", "dropout"))
+        or type(record.get("seed")) is not int
+        or not 0 <= record["seed"] < 2**63
+        or adapter.get("mode") not in {"nf4_lora", "bf16_lora"}
+        or identity.get("auxiliary_parameters") != []
+        or not isinstance(record.get("targets"), dict)
+        or not record["targets"]
+    ):
+        raise ValueError("unsupported FP32 head adapter identity")
+    targets = record["targets"]
+    if set(targets) & (set(identity["targets"]) | set(identity["quantized_tensors"])):
+        raise ValueError("head adapters must be separate from quantized language targets")
+    for name, shape in targets.items():
+        if (
+            not isinstance(name, str)
+            or not name.startswith("action_head.")
+            or not isinstance(shape, list)
+            or len(shape) != 2
+            or any(type(dim) is not int or dim <= 0 for dim in shape)
+        ):
+            raise ValueError("invalid explicit head adapter target geometry")
+        for leaf, expected_shape in (("weight", shape), ("bias", [shape[0]])):
+            frozen = identity["frozen_tensors"].get(f"{name}.{leaf}", {})
+            if frozen.get("shape") != expected_shape or frozen.get("dtype") != "float32":
+                raise ValueError("head adapter requires its complete frozen FP32 base and bias")
+    return targets
+
+
 def _validate_source_inventory(manifest: Mapping[str, Any], *, unmerged: bool = False) -> None:
     from cosmos_framework.posttrain.model.checkpoint import ADAPTER_CHECKPOINT_PROTOCOL
 
     metadata, tensors = manifest["source_metadata"], manifest["tensors"]
     identity = metadata["identity"]
+    heads = _head_targets(identity)
+    if heads and not unmerged:
+        raise ValueError("head adapters support unmerged deployment only; merged export is unqualified")
     if (
         set(metadata) != {"protocol", "identity", "topology", "parameters", "optimizer"}
         or metadata["protocol"] != ADAPTER_CHECKPOINT_PROTOCOL
@@ -116,7 +170,7 @@ def _validate_source_inventory(manifest: Mapping[str, Any], *, unmerged: bool = 
         raise ValueError("family dense source checkpoint schema/topology differs")
     targets = {f"{name}.weight" for name in identity["targets"]}
     adapters = (
-        {f"{name}.lora_{factor}.weight" for name in identity["targets"] for factor in ("A", "B")}
+        {f"{name}.lora_{factor}.weight" for name in (*identity["targets"], *heads) for factor in ("A", "B")}
         if identity["adapter"]["mode"].endswith("_lora")
         else set()
     )
@@ -133,7 +187,7 @@ def _validate_source_inventory(manifest: Mapping[str, Any], *, unmerged: bool = 
         if record["dtype"] != "float32" or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None:
             raise ValueError(f"family dense trained tensor precision/digest differs: {name}")
     if unmerged:
-        for name, (out_features, in_features) in identity["targets"].items():
+        for name, (out_features, in_features) in {**identity["targets"], **heads}.items():
             for factor, shape in (
                 ("A", [identity["adapter"]["rank"], in_features]),
                 ("B", [out_features, identity["adapter"]["rank"]]),
@@ -159,7 +213,11 @@ def _validate_source_inventory(manifest: Mapping[str, Any], *, unmerged: bool = 
     ):
         raise ValueError("family dense parameter aliases require canonical distinct name groups")
     alias_names = [name for group in aliases for name in group]
-    if len(alias_names) != len(set(alias_names)) or not set(alias_names) <= set(identity["frozen_tensors"]) - targets:
+    head_base = {f"{name}.{leaf}" for name in heads for leaf in ("weight", "bias")}
+    if (
+        len(alias_names) != len(set(alias_names))
+        or not set(alias_names) <= set(identity["frozen_tensors"]) - targets - head_base
+    ):
         raise ValueError("family dense aliases may contain only distinct frozen non-target parameters")
     for group in aliases:
         first = {key: tensors[group[0]][key] for key in ("shape", "dtype", "sha256")}
@@ -237,17 +295,22 @@ def _mixed_shard_plan(inventory: Mapping[str, Mapping[str, Any]], max_bytes: int
 
 
 def _inventory(net: nn.Module, identity: Mapping[str, Any], dtype: str, *, unmerged: bool = False):
+    heads = _head_targets(identity)
+    if heads and not unmerged:
+        raise ValueError("head adapters support unmerged deployment only; merged export is unqualified")
     parameters = dict(net.named_parameters(remove_duplicate=False))
     buffers = _buffers(net)
     alias_names = {name for group in _parameter_aliases(parameters) for name in group}
     allowed_aliases = set(identity["frozen_tensors"]) - {f"{name}.weight" for name in identity["targets"]}
+    allowed_aliases -= {f"{name}.{leaf}" for name in heads for leaf in ("weight", "bias")}
     if not alias_names <= allowed_aliases or any(parameters[name].requires_grad for name in alias_names):
         raise ValueError(
             "family dense export aliases must be frozen non-target parameters; adapter/auxiliary aliases are unsupported"
         )
     if set(parameters) & set(buffers):
         raise ValueError("family dense parameter and buffer names overlap")
-    modules = {name: net.get_submodule(name) for name in identity["targets"]}
+    target_shapes = {**identity["targets"], **heads}
+    modules = {name: net.get_submodule(name) for name in target_shapes}
     adapted = identity["adapter"]["mode"].endswith("_lora")
     adapter_names = {f"{name}.lora_{factor}.weight" for name in modules for factor in ("A", "B")} if adapted else set()
     actual_adapters = {name for name, module in net.named_modules() if isinstance(module, NativeLoRAMixin)}
@@ -263,8 +326,12 @@ def _inventory(net: nn.Module, identity: Mapping[str, Any], dtype: str, *, unmer
             continue
         target = name.removesuffix(".weight") if name.endswith(".weight") else None
         inventory[name] = {
-            "shape": list(identity["targets"][target]) if target in modules else list(parameter.shape),
-            "dtype": dtype if target in modules else str(parameter.dtype).removeprefix("torch."),
+            "shape": list(target_shapes[target]) if target in modules else list(parameter.shape),
+            "dtype": "float32"
+            if target in heads
+            else dtype
+            if target in modules
+            else str(parameter.dtype).removeprefix("torch."),
             "kind": "parameter",
         }
     for name, (_, _, value, persistent) in buffers.items():
@@ -281,6 +348,7 @@ def _dense_values(
     net: nn.Module, identity: Mapping[str, Any], dtype: str, *, unmerged: bool = False
 ) -> Iterator[tuple[str, torch.Tensor]]:
     inventory, parameters, buffers, modules = _inventory(net, identity, dtype, unmerged=unmerged)
+    heads = _head_targets(identity)
     for name in sorted(inventory):
         target = name.removesuffix(".weight") if name.endswith(".weight") else None
         if target in modules:
@@ -289,8 +357,9 @@ def _dense_values(
                 effective = _effective_weight(module)
                 try:
                     if unmerged:
-                        if effective.dtype != torch.bfloat16:
-                            raise ValueError("unmerged export requires the actual BF16 effective base")
+                        expected_dtype = torch.float32 if target in heads else torch.bfloat16
+                        if effective.dtype != expected_dtype:
+                            raise ValueError("unmerged export requires the declared actual language/head base dtype")
                         value = effective.to(device="cpu", copy=True)
                     else:
                         value = merge_effective_weight(
@@ -363,6 +432,9 @@ def _export_family_artifact(
     identity = metadata["identity"]
     if identity.get("format") != "cosmos.family-backbone.v1" or not identity.get("task_contract"):
         raise ValueError("family dense export requires a complete native family identity")
+    heads = _head_targets(identity)
+    if heads and not unmerged:
+        raise ValueError("head adapters support unmerged deployment only; merged export is unqualified")
     codec = getattr(net, "_cosmos_adapter_checkpoint_codec", None)
     if codec is None:
         raise ValueError("family dense export requires the constructed native adapter policy")
@@ -370,7 +442,7 @@ def _export_family_artifact(
     trained = {name: tensor_digest(value) for name, value in codec.parameters.items()}
     if unmerged:
         _require_unmerged_identity(identity)
-        for name in identity["targets"]:
+        for name in (*identity["targets"], *heads):
             module = net.get_submodule(name)
             if (
                 not isinstance(module, NativeLoRAMixin)
@@ -385,6 +457,15 @@ def _export_family_artifact(
                 or type(module.lora_dropout) not in (nn.Identity, nn.Dropout)
             ):
                 raise ValueError("unmerged export requires the original ordinary native FP32-adapter arithmetic")
+            if name in heads and (
+                type(module) is not LoraInjectedLinear
+                or module.weight.dtype != torch.float32
+                or module.bias is None
+                or module.bias.dtype != torch.float32
+                or module.weight.requires_grad
+                or module.bias.requires_grad
+            ):
+                raise ValueError("unmerged head adapters require ordinary frozen FP32 weights and biases")
     inventory, parameters, _, _ = _inventory(net, identity, merged_backbone_dtype, unmerged=unmerged)
     aliases = _parameter_aliases(parameters)
     weight_map = _mixed_shard_plan(inventory, max_shard_size_bytes)
@@ -674,6 +755,7 @@ def _load_family_artifact(
 
 
 def _require_unmerged_identity(identity):
+    _head_targets(identity)
     adapter = identity.get("adapter", {})
     if (
         adapter.get("mode") not in {"nf4_lora", "bf16_lora"}
@@ -708,8 +790,11 @@ def _require_unmerged_identity(identity):
 
 
 def _numerical_contract(identity, merged_backbone_dtype, *, unmerged=False):
+    heads = _head_targets(identity)
+    if heads and not unmerged:
+        raise ValueError("head adapters support unmerged deployment only; merged export is unqualified")
     if unmerged:
-        return {
+        result = {
             "base": "dequantize(Q(W))" if identity.get("quantization") else "W_bf16",
             "representation": "dequantized_unmerged_native_lora",
             "effective_backbone_dtype": "bfloat16",
@@ -721,6 +806,12 @@ def _numerical_contract(identity, merged_backbone_dtype, *, unmerged=False):
             "merged": False,
             "requantized": False,
         }
+        if heads:
+            result["head_adapters"] = {
+                key: identity["head_adapters"][key]
+                for key in ("profile", "base_dtype", "bias", "parameter_dtype", "compute")
+            }
+        return result
     return {
         "base": "dequantize(Q(W))" if identity.get("quantization") else "W_bf16",
         "merge": "effective_base + (alpha/rank) * B @ A"
@@ -737,6 +828,7 @@ def _numerical_contract(identity, merged_backbone_dtype, *, unmerged=False):
 def _install_unmerged_graph(net, manifest):
     """Build only meta adapter structure, consuming no RNG and reading no base weights."""
     identity = manifest["source_metadata"]["identity"]
+    heads = _head_targets(identity)
     from cosmos_framework.utils.generator import lora
 
     if identity.get("implementation", {}).get("adapter") != _file_record(Path(lora.__file__))["sha256"]:
@@ -744,19 +836,27 @@ def _install_unmerged_graph(net, manifest):
     adapter = identity["adapter"]
     parameters = dict(net.named_parameters(remove_duplicate=False))
     aliases = {name for group in _parameter_aliases(parameters) for name in group}
-    for name, shape in identity["targets"].items():
+    for name, shape in {**identity["targets"], **heads}.items():
         old = net.get_submodule(name)
+        head = name in heads
         if (
             type(old) is not nn.Linear
-            or old.bias is not None
+            or (old.bias is None if head else old.bias is not None)
             or list(old.weight.shape) != shape
             or old.weight.device.type not in {"cpu", "meta"}
             or f"{name}.weight" in aliases
+            or (
+                head
+                and (old.weight.dtype != torch.float32 or old.bias.dtype != torch.float32 or f"{name}.bias" in aliases)
+            )
         ):
-            raise ValueError(f"unmerged native target requires a matching unaliased CPU/meta Linear: {name}")
-    for name in identity["targets"]:
+            raise ValueError(f"unmerged native target requires its declared unaliased CPU/meta Linear: {name}")
+    for name in (*identity["targets"], *heads):
         old = net.get_submodule(name)
-        meta = nn.Linear(old.in_features, old.out_features, bias=False, device="meta", dtype=torch.bfloat16)
+        head = name in heads
+        meta = nn.Linear(
+            old.in_features, old.out_features, bias=head, device="meta", dtype=torch.float32 if head else torch.bfloat16
+        )
         replacement = LoraInjectedLinear(
             meta, adapter["rank"], adapter["alpha"], dropout=adapter["dropout"], adapter_dtype=torch.float32
         )
