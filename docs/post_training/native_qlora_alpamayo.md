@@ -687,6 +687,32 @@ receipts are preserved in the [family evidence](evidence/native_qlora_family_eng
 A clean pair must follow the bounded scheduler-query repair; its clocks cannot be
 spliced with this reference run. The retained trajectory's poor quality is unchanged.
 
+The clean NF4 seed-17 pair `38564524` subsequently passed its first-block gates
+on the same A100 80GB and 16-CPU placement, with no other campaign allocation.
+Both cases completed 128 updates and full 256-row evaluations at updates 0/128.
+Evaluation time fell from **1,903.16 to 1,468.34 seconds (22.85%)**; the native
+process fell from **2,677.98 to 2,234.27 seconds (16.57%)**; complete cold-case
+time through owned-process release fell from **2,756.80 to 2,308.84 seconds
+(16.25%)**. All numerical updates, task scores and full checkpoint states matched
+each other and the recorded original trajectory. These comparisons do not permit
+cross-build resume or establish a trained-ON-128 continuation.
+
+Allocated, reserved and sampled owned-GPU peaks were unchanged. The latter was
+**67.104 GiB** in both cases; sampled host PSS increased by 10.89 MiB and native
+RSS high-water by 0.32 MiB. The cache retained 67.55 MiB with exactly 512 hits and
+512 misses. All 2,111 OFF and 1,737 ON host observations were complete; sampled
+peaks remain lower bounds and some short setup/verification intervals were
+unsampled. The allocation cost 5,355 GPU-seconds, including a separately recorded
+211.99-second checkpoint comparison. Original failure costs remain separate.
+
+This is **one successful paired block, not promotion**. The frozen study still
+requires the BF16 seed-17 pair and reversed-order seed-42 pairs in both precisions,
+with every pair faster and each precision meeting its aggregate time/memory gates.
+The option remains off by default. This arithmetic-preserving evaluation gain
+does not improve fixed-step trajectory quality or establish faster time to the
+unreached quality target. Raw receipts, exact source/placement, component clocks
+and independent replay are bound in the existing family evidence.
+
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
 (6,214 GPU-seconds, normal controller release). This is the native matched head

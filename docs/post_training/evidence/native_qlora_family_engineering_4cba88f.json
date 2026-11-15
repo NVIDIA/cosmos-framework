@@ -25276,6 +25276,303 @@
         }
       },
       "limits": "726 complete observed collections do not cover all allocation startup or every short reset interval. Per-phase no-sample flags are retained. Whole observed peaks include recovery/checkpoint checks and are not matched training-performance comparisons. No cross-build checkpoint identity was rewritten."
+    },
+    "38564524": {
+      "job": "38564524",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 5355,
+      "native_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "mode": "nf4_lora",
+      "seed": 17,
+      "updates": 128,
+      "evaluation_rows_per_boundary": 256,
+      "evaluation_boundaries": [
+        0,
+        128
+      ],
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90",
+      "payload_manifest_sha256": "55487713513b3aaa8b9f30b000b902139bb816eb85e60f912599811365a9fbda",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-cache-38564524-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "15e523941834fadd74589cecf0636e068d6df9180b741154850a89f8ef152ca1",
+      "inventory_sha256": "78a5b0dbfa7760c9d1113d8d69155b32a529b0a655520480947021fc1c855605",
+      "pair_result_sha256": "33b7afec6a4da51adb1d58aa0614d9d9fa250685229b4dbcf211246e24336ad3",
+      "terminal_sha256": "783914e90feb4ef1d86c6a3b5a6bee41c0ccb31515a3a05b5d851597dcfc2dce",
+      "readout_sha256": "b0a1ab414a981b27e929320312421603e528cf9c83d789f074fcb95c5bb84c8c",
+      "files_verified": 163,
+      "cases": {
+        "off": {
+          "native_process_seconds": 2677.984299106989,
+          "native_clocks": {
+            "checkpoint_seconds": 40.92268004803918,
+            "evaluation_seconds": 1903.1619742088951,
+            "portable_export_seconds": 22.145003768848255,
+            "startup_seconds": 277.6453729260247,
+            "training_seconds": 407.59354824456386
+          },
+          "cold_case_seconds": 2756.800194044132,
+          "native_host_hwm_bytes": 45842206720,
+          "memory": {
+            "allocator_evidence_complete": true,
+            "allocator_peak_allocated_bytes": 69432915968,
+            "allocator_peak_reserved_bytes": 70835503104,
+            "sampled": {
+              "device_peak_bytes": 72851062784,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 46484115456,
+              "host_rss_sum_peak_bytes": 47079895040,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 2687.7106857299805,
+              "owned_device_process_peak_bytes": 72051851264,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 2111,
+              "sampling_gap_seconds": {
+                "count": 2110,
+                "maximum": 5.592268466949463,
+                "mean": 1.2737965335213177,
+                "median": 1.2605026960372925,
+                "p95": 1.329738473892212,
+                "sum": 2687.7106857299805
+              }
+            }
+          },
+          "cache_observations": {
+            "enabled": false,
+            "retained_tensor_bytes_peak": 0
+          },
+          "producing_step_release": {
+            "cleanup_seconds": 8.058303497964516,
+            "owner_sha256": "ffea65ebec136d9d6bc1dc06d67476b52052928f7e14d75900731df461a12f3b",
+            "parent_sha256": "73fa36ea236e99d43b74a04017a0847fc926f76f0a971ba256b2c6e38c12a671",
+            "release_sha256": "8a934a84c462221537938644dfd3fb96084de397748b3ba96eefa5e996b695de",
+            "step_id": "38564524.0"
+          }
+        },
+        "on": {
+          "native_process_seconds": 2234.26745343511,
+          "native_clocks": {
+            "checkpoint_seconds": 40.547045887913555,
+            "evaluation_seconds": 1468.3440688131377,
+            "portable_export_seconds": 22.678769910009578,
+            "startup_seconds": 271.6116379480809,
+            "training_seconds": 405.81685248948634
+          },
+          "cold_case_seconds": 2308.8353230569046,
+          "native_host_hwm_bytes": 45842546688,
+          "memory": {
+            "allocator_evidence_complete": true,
+            "allocator_peak_allocated_bytes": 69432915968,
+            "allocator_peak_reserved_bytes": 70835503104,
+            "sampled": {
+              "device_peak_bytes": 72851062784,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 46495535104,
+              "host_rss_sum_peak_bytes": 47072952320,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 2244.4786989688873,
+              "owned_device_process_peak_bytes": 72051851264,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1737,
+              "sampling_gap_seconds": {
+                "count": 1736,
+                "maximum": 4.375699043273926,
+                "mean": 1.2929024763645665,
+                "median": 1.2832121849060059,
+                "p95": 1.3521473407745361,
+                "sum": 2244.4786989688873
+              }
+            }
+          },
+          "cache_observations": {
+            "clone_seconds": 6.624333324842155,
+            "enabled": true,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 512,
+            "identity_seconds": 62.37146956846118,
+            "misses": 512,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          },
+          "producing_step_release": {
+            "cleanup_seconds": 5.239101555896923,
+            "owner_sha256": "9d0407b1d183fa804c5ae39ed8b134165fbc630db607958474b342e06af17537",
+            "parent_sha256": "daf55dce38a17c45084913972f0dfb800e640a69459600ce47029309400ef933",
+            "release_sha256": "31eda9bdd9153d39ffd396963bd6df3ba787a0b3e055c21f93797c8e85583430",
+            "step_id": "38564524.1"
+          }
+        }
+      },
+      "same_placement": true,
+      "runtime": {
+        "allocator": "expandable_segments:True",
+        "code": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+        "cpu_affinity": [
+          8,
+          9,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          132,
+          133
+        ],
+        "cpu_numa_nodes": {
+          "124": [
+            "node7"
+          ],
+          "125": [
+            "node7"
+          ],
+          "126": [
+            "node7"
+          ],
+          "127": [
+            "node7"
+          ],
+          "128": [
+            "node0"
+          ],
+          "129": [
+            "node0"
+          ],
+          "132": [
+            "node0"
+          ],
+          "133": [
+            "node0"
+          ],
+          "68": [
+            "node4"
+          ],
+          "69": [
+            "node4"
+          ],
+          "70": [
+            "node4"
+          ],
+          "71": [
+            "node4"
+          ],
+          "72": [
+            "node4"
+          ],
+          "73": [
+            "node4"
+          ],
+          "8": [
+            "node0"
+          ],
+          "9": [
+            "node0"
+          ]
+        },
+        "cuda_visible_devices": "0",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "torch_uuid": "66c309d0-6706-4b27-5350-75f9a166b5ac",
+          "uuid": "GPU-66c309d0-6706-4b27-5350-75f9a166b5ac"
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t8-9,68-73,124-129,132-133",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38564524",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "per_pair_metrics": {
+        "GPU_increase_bytes": {
+          "allocated": 0,
+          "owned_process": 0,
+          "reserved": 0
+        },
+        "all_three_clocks_faster": true,
+        "complete_cold_case_on_off_ratio": 0.837505499326711,
+        "evaluator_on_off_ratio": 0.7715286920985787,
+        "host_increase_bytes": {
+          "native_hwm": 339968,
+          "pss": 11419648,
+          "rss": -6942720
+        },
+        "memory_passed": true,
+        "native_process_on_off_ratio": 0.834309392396422,
+        "retained_cache_bytes": 70829184,
+        "seed": 17
+      },
+      "exact_cache_pair": {
+        "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+        "atol": 0,
+        "identity_bridge": {
+          "allowed_observation_only": [
+            "identity.training_contract.evaluation_input_reuse"
+          ],
+          "cross_build_resume_supported": false,
+          "metadata_modified": false,
+          "passed": true
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "original17_numerical_reference": {
+        "off": {
+          "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+          "atol": 0,
+          "identity_bridge": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_input_reuse",
+              "identity.training_contract.implementation",
+              "identity.training_contract.factories.entrypoint_sha256"
+            ],
+            "cross_build_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "passed": true,
+          "rtol": 0
+        },
+        "on": {
+          "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+          "atol": 0,
+          "identity_bridge": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_input_reuse",
+              "identity.training_contract.implementation",
+              "identity.training_contract.factories.entrypoint_sha256"
+            ],
+            "cross_build_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "passed": true,
+          "rtol": 0
+        }
+      },
+      "separate_cpu_comparison_seconds": 211.9901091880165,
+      "allocation_script_seconds": 5348.548853563843,
+      "may_admit_next_pair": true,
+      "promotion": false,
+      "validation_scope": "Root and independent peer replayed all163 file hashes/sizes, all3848 strict host observations,128 updates, four256-row scores/reductions and terminal release. Peer additionally replayed native allocator/sample summaries and small metadata/trainer/data controls. Full model/optimizer/RNG tensor equality is the retained on-node proof, not a local full tensor reread. Some short setup/verification intervals are unsampled; peaks are sampled lower bounds, not a whole-allocation host peak.",
+      "decision": "First-pair correctness/memory/all-three-clocks PASS; continuation eligible only. Full four-pair and per-precision aggregate promotion gates remain pending. Cache remains default-off. No ON128 continuation, full512 workflow, new learning quality, time-to-quality or serving claim. Original38555701 remains FAILED; no clocks spliced.",
+      "phase_measurement_details": "Per-phase semantics, short unsampled intervals and full observed memory records remain in the hash-bound canonical receipts/readout; compact job summary is not a new measurement."
     }
   },
   "read_only_head_memory_diagnostic": {
