@@ -23507,6 +23507,426 @@
         "Current correctness job overlapped GR00T correctness on another node; no timing comparison."
       ],
       "independent_peer_sha256": "5843565ee53c77cd3c41011c6f3d4b7470d531323c84db1bcaaeeb8dc206d177"
+    },
+    "38561399": {
+      "acceptance_sha256": "b3894ec14bbe514025a40a9fde4a5c5c8c99a4c9d8b86a47847ba3ae6f6f541a",
+      "allocated_gpu_seconds": 1072,
+      "archive_sha256": "834fa9da69b522437e524f30dcb3676366d8b3beecf381ef169f78e4a21f43a7",
+      "arms": {
+        "bf16_lora": {
+          "artifact_inventory_replayed": {
+            "aliases_controlled_inputs_outputs_exact": true,
+            "effective_BF16_weights": 112,
+            "frozen_FP32_head_tensors": 537,
+            "head_FP32_bases": 128,
+            "head_FP32_biases": 128,
+            "head_factor_tensors": 256,
+            "merged_refusal": {
+              "build": {
+                "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+                "wheel_sha256": "142ffdb09d9863283988d3b6d43e6c0511be06f789e4fce8aeee3a0235a573e3"
+              },
+              "outcomes": {
+                "bfloat16": {
+                  "error": "head adapters support unmerged deployment only; merged export is unqualified",
+                  "output_absent": true,
+                  "refused": true
+                },
+                "float32": {
+                  "error": "head adapters support unmerged deployment only; merged export is unqualified",
+                  "output_absent": true,
+                  "refused": true
+                }
+              },
+              "passed": true
+            },
+            "new_source_absent_namespace_claim": false,
+            "passed": true,
+            "source_metadata_exact": true,
+            "trained_FP32_tensors": 480
+          },
+          "factor_tensors": 480,
+          "frozen_original_FP32_head": 537,
+          "head_factors": 256,
+          "head_targets": 128,
+          "language_factors": 224,
+          "language_targets": 112,
+          "large_tensor_recomputed_on_login": false,
+          "numerical_update_and_two_rows_replayed_exact": true,
+          "optimizer_membership": 480,
+          "original_native_job": "38559188",
+          "original_updates": 3,
+          "own_recovered_update": 3,
+          "reported_on_compute_FP32_moments": 960,
+          "reported_on_compute_full_state_recovery": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          }
+        },
+        "nf4_lora": {
+          "artifact_inventory_replayed": {
+            "aliases_controlled_inputs_outputs_exact": true,
+            "effective_BF16_weights": 112,
+            "frozen_FP32_head_tensors": 537,
+            "head_FP32_bases": 128,
+            "head_FP32_biases": 128,
+            "head_factor_tensors": 256,
+            "merged_refusal": {
+              "build": {
+                "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+                "wheel_sha256": "142ffdb09d9863283988d3b6d43e6c0511be06f789e4fce8aeee3a0235a573e3"
+              },
+              "outcomes": {
+                "bfloat16": {
+                  "error": "head adapters support unmerged deployment only; merged export is unqualified",
+                  "output_absent": true,
+                  "refused": true
+                },
+                "float32": {
+                  "error": "head adapters support unmerged deployment only; merged export is unqualified",
+                  "output_absent": true,
+                  "refused": true
+                }
+              },
+              "passed": true
+            },
+            "new_source_absent_namespace_claim": false,
+            "passed": true,
+            "source_metadata_exact": true,
+            "trained_FP32_tensors": 480
+          },
+          "factor_tensors": 480,
+          "frozen_original_FP32_head": 537,
+          "head_factors": 256,
+          "head_targets": 128,
+          "language_factors": 224,
+          "language_targets": 112,
+          "large_tensor_recomputed_on_login": false,
+          "numerical_update_and_two_rows_replayed_exact": true,
+          "optimizer_membership": 480,
+          "original_native_job": "38561399",
+          "original_updates": 3,
+          "own_recovered_update": 3,
+          "reported_on_compute_FP32_moments": 960,
+          "reported_on_compute_full_state_recovery": {
+            "atol": 0,
+            "controls_rng_and_data_exact": true,
+            "excluded_storage_identity_fields": [
+              "validation.publication.destination",
+              "validation.publication.id",
+              "validation.publication.manifest"
+            ],
+            "maximum_tensor_difference": {
+              "model": 0.0,
+              "optim": 0.0
+            },
+            "passed": true,
+            "rtol": 0
+          }
+        }
+      },
+      "clock_scope": "Current allocation and original FAILED634s/438-sample span are separate; no reconstructed whole-lifecycle cold clock or timing comparison.",
+      "continuation_sha256": "ed4a3ccb8fda701c4fe45f81fb9358ba0e4e4855a8238937c1647d22d47595da",
+      "current_model_stages": [
+        "bf16_lora-resume2to3",
+        "bf16_lora-portable",
+        "bf16_lora-export",
+        "bf16_lora-unmerged-fresh",
+        "nf4_lora-native3",
+        "nf4_lora-resume2to3",
+        "nf4_lora-portable",
+        "nf4_lora-export",
+        "nf4_lora-unmerged-fresh"
+      ],
+      "exit_code": "0:0",
+      "inventory_sha256": "66a6a543346510bf30a05793f96d01c16c495a5a2731217d973c1679fbe6b404",
+      "job_id": "38561399",
+      "no_large_tensor_payloads_loaded": true,
+      "original_continuation_small_bindings": 67,
+      "original_failed_acceptance_still_absent": true,
+      "original_failed_gpu_seconds": 634,
+      "original_failed_job": "38559188",
+      "original_small_files_reverified": 112,
+      "overall_accepted": true,
+      "protocol_sha256": "e05cb060a4333dcb27b58c25ce6b0882dd4107d5981f8944690a020499c6ef1b",
+      "raw_files_verified": 203,
+      "screen200_started": false,
+      "state": "COMPLETED",
+      "terminal_release_sha256": "6173f248415cda1593a9ec566c935ee587ead15b0364f6b4ee52aa047553ed54",
+      "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "readout_sha256": "b21bd6d298923987dd02cca1a65026ffe1c4dbc589b87cde8fe1b2ae23968135",
+      "current_memory": {
+        "complete_host_samples": 764,
+        "samples": 764,
+        "summary": {
+          "device_peak_bytes": 14667677696,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 5380398080,
+          "host_rss_sum_peak_bytes": 5908393984,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1003.9156031608582,
+          "owned_device_process_peak_bytes": 13933477888,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 764,
+          "sampling_gap_seconds": {
+            "count": 763,
+            "maximum": 1.8034675121307373,
+            "mean": 1.3157478416262884,
+            "median": 1.3093445301055908,
+            "p95": 1.3574090480804444,
+            "sum": 1003.9156031608582
+          }
+        }
+      },
+      "stage_memory": {
+        "bf16_lora-export": {
+          "allocator_peak_allocated_bytes": 9666960896,
+          "allocator_peak_reserved_bytes": 9799991296,
+          "sampled": {
+            "device_peak_bytes": 11047993344,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3941143552,
+            "host_rss_sum_peak_bytes": 4469014528,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 143.64406967163086,
+            "owned_device_process_peak_bytes": 10313793536,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 111,
+            "sampling_gap_seconds": {
+              "count": 110,
+              "maximum": 1.467177152633667,
+              "mean": 1.3058551788330077,
+              "median": 1.2972255945205688,
+              "p95": 1.3964303493499757,
+              "sum": 143.64406967163086
+            }
+          }
+        },
+        "bf16_lora-portable": {
+          "allocator_peak_allocated_bytes": 9800172544,
+          "allocator_peak_reserved_bytes": 9988734976,
+          "sampled": {
+            "device_peak_bytes": 11282874368,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3485313024,
+            "host_rss_sum_peak_bytes": 4028141568,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 108.21916389465332,
+            "owned_device_process_peak_bytes": 10548674560,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 84,
+            "sampling_gap_seconds": {
+              "count": 83,
+              "maximum": 1.5201303958892822,
+              "mean": 1.3038453481283532,
+              "median": 1.2982659339904785,
+              "p95": 1.3174068689346314,
+              "sum": 108.21916389465332
+            }
+          }
+        },
+        "bf16_lora-resume2to3": {
+          "allocator_peak_allocated_bytes": 12808056320,
+          "allocator_peak_reserved_bytes": 12859736064,
+          "sampled": {
+            "device_peak_bytes": 14667677696,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4620708864,
+            "host_rss_sum_peak_bytes": 5162201088,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 107.8224229812622,
+            "owned_device_process_peak_bytes": 13933477888,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 82,
+            "sampling_gap_seconds": {
+              "count": 81,
+              "maximum": 1.6658709049224854,
+              "mean": 1.3311410244600272,
+              "median": 1.322427749633789,
+              "p95": 1.403850793838501,
+              "sum": 107.8224229812622
+            }
+          }
+        },
+        "bf16_lora-unmerged-fresh": {
+          "allocator_peak_allocated_bytes": 9761899520,
+          "allocator_peak_reserved_bytes": 9902751744,
+          "sampled": {
+            "device_peak_bytes": 11196891136,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3249641472,
+            "host_rss_sum_peak_bytes": 3792322560,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 100.43367600440979,
+            "owned_device_process_peak_bytes": 10462691328,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 77,
+            "sampling_gap_seconds": {
+              "count": 76,
+              "maximum": 1.613508701324463,
+              "mean": 1.3214957369001288,
+              "median": 1.3139656782150269,
+              "p95": 1.3739538192749023,
+              "sum": 100.43367600440979
+            }
+          }
+        },
+        "nf4_lora-export": {
+          "allocator_peak_allocated_bytes": 8560353792,
+          "allocator_peak_reserved_bytes": 8707375104,
+          "sampled": {
+            "device_peak_bytes": 10032971776,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 5380398080,
+            "host_rss_sum_peak_bytes": 5908393984,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 129.54451370239258,
+            "owned_device_process_peak_bytes": 9298771968,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 100,
+            "sampling_gap_seconds": {
+              "count": 99,
+              "maximum": 1.3959944248199463,
+              "mean": 1.3085304414383088,
+              "median": 1.3093900680541992,
+              "p95": 1.3206220626831056,
+              "sum": 129.54451370239258
+            }
+          }
+        },
+        "nf4_lora-native3": {
+          "allocator_peak_allocated_bytes": 11622785024,
+          "allocator_peak_reserved_bytes": 11731468288,
+          "sampled": {
+            "device_peak_bytes": 13539409920,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4257577984,
+            "host_rss_sum_peak_bytes": 4800278528,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 97.71074557304382,
+            "owned_device_process_peak_bytes": 12805210112,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 75,
+            "sampling_gap_seconds": {
+              "count": 74,
+              "maximum": 1.8034675121307373,
+              "mean": 1.3204154807168085,
+              "median": 1.3067538738250732,
+              "p95": 1.3727459073066708,
+              "sum": 97.71074557304382
+            }
+          }
+        },
+        "nf4_lora-portable": {
+          "allocator_peak_allocated_bytes": 8638253056,
+          "allocator_peak_reserved_bytes": 8839495680,
+          "sampled": {
+            "device_peak_bytes": 10169286656,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3751808000,
+            "host_rss_sum_peak_bytes": 4294381568,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 108.0127637386322,
+            "owned_device_process_peak_bytes": 9435086848,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 82,
+            "sampling_gap_seconds": {
+              "count": 81,
+              "maximum": 1.682828426361084,
+              "mean": 1.333490910353484,
+              "median": 1.3317406177520752,
+              "p95": 1.374638557434082,
+              "sum": 108.0127637386322
+            }
+          }
+        },
+        "nf4_lora-resume2to3": {
+          "allocator_peak_allocated_bytes": 11625534464,
+          "allocator_peak_reserved_bytes": 11643387904,
+          "sampled": {
+            "device_peak_bytes": 13451329536,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 4536534016,
+            "host_rss_sum_peak_bytes": 5078843392,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 94.0508668422699,
+            "owned_device_process_peak_bytes": 12717129728,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 72,
+            "sampling_gap_seconds": {
+              "count": 71,
+              "maximum": 1.621647596359253,
+              "mean": 1.3246600963699986,
+              "median": 1.319258451461792,
+              "p95": 1.3564921617507935,
+              "sum": 94.0508668422699
+            }
+          }
+        },
+        "nf4_lora-unmerged-fresh": {
+          "allocator_peak_allocated_bytes": 9761899520,
+          "allocator_peak_reserved_bytes": 9902751744,
+          "sampled": {
+            "device_peak_bytes": 11196891136,
+            "errors": [],
+            "gpu_memory_evidence_valid": true,
+            "host_pss_complete": true,
+            "host_pss_sum_peak_bytes": 3628379136,
+            "host_rss_sum_peak_bytes": 4170797056,
+            "nvml_capacity_bytes": 85899345920,
+            "observed_span_seconds": 91.60066318511963,
+            "owned_device_process_peak_bytes": 10462691328,
+            "peaks_are_sampled_lower_bounds": true,
+            "samples": 71,
+            "sampling_gap_seconds": {
+              "count": 70,
+              "maximum": 1.536912202835083,
+              "mean": 1.308580902644566,
+              "median": 1.3044925928115845,
+              "p95": 1.3194340348243714,
+              "sum": 91.60066318511963
+            }
+          }
+        }
+      },
+      "original_failure_memory_scope": "Original438 observations/634GPU-s separately verified; no joined workflow clock or current stage attribution. Earlier pre-runtime failed8s also retained.",
+      "root_review": "All203 file hashes/sizes, all9 current outcomes, both recovery/initial/artifact assertions, sourcee64 and all764 memory samples independently checked. Local assertion first treated stage list as count; corrected to exact list equality/length without changing evidence or criteria. Full tensors remain the on-compute proofs.",
+      "limits": [
+        "Three-update lifecycle on real multimodal inputs, not recipe quality or mature200-update recovery.",
+        "No matched speed, total memory reduction or smaller-GPU claim.",
+        "All current and prior whole-stage observations complete; some short intervals lack samples.",
+        "New head profile supports portable and standalone unmerged only; merged export explicitly refused."
+      ],
+      "independent_peer_sha256": "fdc8bd6ed380c91656e7023342a8e43e0efb5324029fb80794a2521789f59876"
     }
   },
   "read_only_head_memory_diagnostic": {

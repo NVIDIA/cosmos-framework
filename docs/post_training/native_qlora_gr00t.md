@@ -117,11 +117,23 @@ language-adapter gradients, then completed three native BF16 updates. Its enclos
 qualification failed because the checker omitted one `.model` level from the
 canonical language-target paths; the saved policy contains all 112 intended targets.
 The failed 634-GPU-second allocation and its complete 438 memory observations are
-retained. Optimizer tensor auditing, recovery, fresh portable/unmerged reload, NF4
-updates and development quality remain pending. Diagnostic full-head memory is
+retained. Continuation `38561399` then passed the remaining nine model stages,
+reusing those initialized controls and the completed BF16 run. Both arms verified
+all 480 trainables and 960 FP32 moments, frozen original head/quantized state,
+exact own-update-2-to-3 recovery, and fresh two-row portable and standalone
+unmerged outputs. Unmerged artifacts retain all frozen head weights and biases
+alongside the factors; both merged output dtypes are explicitly refused.
+All 764 current host observations and the 438 original observations were complete,
+with separate clocks and memory records. Some short phase intervals were unsampled.
+The successful continuation cost 1,072 GPU-seconds; the failed 634-second attempt
+and the earlier eight-second pre-runtime failure remain charged separately.
+
+These three-update checks establish lifecycle correctness, not development quality,
+long-run recovery or a matched performance result. Diagnostic full-head memory is
 separate from the new recipe's training peak. The retained full-head and frozen-head
 negative results remain unchanged; any head-state memory saving belongs to both
-precision arms.
+precision arms. The fixed 200-update development screen remains the next learning
+test; it does not automatically authorize a horizon or seed extension.
 
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16
