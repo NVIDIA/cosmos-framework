@@ -365,9 +365,10 @@ Implementation `47587e0`, with ownership fix `cbc950f`, adds
 It reuses only the raw backbone output within one evaluation batch, with independent
 inputs for both native head calls and a 16 MiB retained-tensor bound. The head
 mutates its input mapping, so reusing already transformed features is incorrect.
-The option remains off by default pending matched workflow qualification; the
-completed real-model correctness continuation is recorded below. The planned study gives both precision arms the same option and
-requires exact numerical trajectories; an achieved speed benefit remains unmeasured.
+The option remains off by default pending the complete matched workflow study
+and its trained-boundary recovery gate. The study gives both precision arms the
+same option and requires exact numerical trajectories; its first completed pair
+is recorded below alongside the real-model correctness continuation.
 The first profile allocation `38548693` failed before model loading because a
 launcher imported an executable monitor module; its 68 GPU-seconds remain
 recorded separately from the successful diagnostic's 334 GPU-seconds.
@@ -405,6 +406,33 @@ qualification remain separate gates. Evaluation reuse combined with the newer Di
 head-adapter profile has not been qualified; its retained `e64a735` lifecycle and
 learning checks used reuse disabled. Configuration acceptance does not establish
 that combination or transfer the older source-bound artifact evidence.
+
+The first frozen timing pair (`38590055`, NF4 seed 17, OFF then ON) completed
+on one A100 80GB with identical 16-CPU affinity and recorded NUMA constraints.
+Memory-page residency was not measured. Both cases ran all 300 updates, full 160-row evaluations at 0/100/200/300, and three fresh
+160-row portable evaluations. All numerical updates, trained/optimizer states
+at 100/200/300, scheduler/RNG/cursor controls and task rows matched exactly.
+
+Evaluation time fell from **328.91 to 259.96 seconds (20.96%)**, native-process
+time from **630.50 to 560.84 seconds (11.05%)**, and complete cold-case time
+through fresh scoring and owned-step release from **1,182.69 to 1,067.76 seconds
+(9.72%)**. Both reached the unchanged target at update 200; the native run's own
+target-publication clock was 435.11/381.35 seconds. That clock excludes the
+separately recorded launcher prelude and is not reconstructed from cold-case time.
+
+Sampled owned-GPU peak was unchanged at **30.412 GiB**. Host PSS rose by 2.31 MiB;
+the cache retained 2.11 MiB with 640 hits and 640 misses in native evaluation.
+All 1,604 observed host samples and eight model-stage summaries passed. Short
+unsampled setup, publication and checkpoint intervals remain explicit; sampled
+peaks are lower bounds. Independent replay verified 238 files and terminal
+release. The allocation cost 2,622 GPU-seconds, including a separate 271.00-second
+saved-state comparison.
+
+This pair passes the frozen continuation rule, **not promotion**. The BF16 pair,
+reversed-order pairs and aggregate/mature-recovery gates remain required. It
+establishes an execution improvement over this NF4 reference, not better task
+quality, NF4 superiority over BF16, or inference acceleration. Exact receipts,
+component clocks and limitations are retained in the existing family evidence.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
