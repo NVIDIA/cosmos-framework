@@ -166,6 +166,38 @@ with a different build and horizon. The matched NF4 increment here is 1.123 GiB.
 Memory savings do not override the failed learning gate. No mature continuation,
 horizon extension, extra seed or rollout is promoted from this screen.
 
+A read-only diagnostic (`38567435`, 222 GPU-seconds) then loaded the rejected
+BF16 update-200 policy and temporarily disabled either learned adapter group.
+It used the first two already-consumed training rows per task in the original
+200-update cursor: 20 fixed rows, identical inputs/noise, and native four-step
+sampling. These are interventions on one trained policy, **not retraining with
+different trainable modules** or held-out quality estimates.
+
+| Applied learned deltas | Native flow loss | Sampled normalized action MSE |
+|---|---:|---:|
+| Language and head | 0.02260408 | 0.01013668 |
+| Language only | 0.02358116 | 0.01011890 |
+| Head only | 0.03066952 | 0.00994220 |
+| Neither | 0.03151182 | 0.00994368 |
+
+With the learned head delta retained, adding the language delta reduced flow loss
+by 26.30% but increased sampled action MSE by 1.96%; MSE worsened on 13/20 rows.
+Thus lower native flow loss does not establish better sampled actions here.
+The result identifies a checkpoint-specific effect, not a coding defect, an NF4
+effect, or proof that another learning rate or training policy will help. The
+original screen remains rejected; the selected full-head recipe is a different
+policy and requires its own diagnosis before transferring this conclusion.
+
+All input/RNG comparisons and restoration of scales, mixed modes, gradients,
+storage and tensor values passed; independent replay checked the 68 retained
+files and native metric reductions. Full tensor/RNG equality remains the on-device
+attestation. The observer failed before its first host/NVML sample because absolute
+script dispatch under `PYTHONSAFEPATH` omitted a sibling import. Those measurements
+are missing, not zero. Native allocator records remain. A future-only package-module
+dispatch correction passed five actual safe-path subprocess tests; the original
+payload and failure are unchanged, and no GPU repeat was made solely for memory
+paperwork. This diagnostic supplies no memory-saving or performance claim.
+
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16
 autocast**, trains only the native head, and uses `adamw_torch` with HF decay/no-decay groups.

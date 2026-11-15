@@ -25573,6 +25573,198 @@
       "validation_scope": "Root and independent peer replayed all163 file hashes/sizes, all3848 strict host observations,128 updates, four256-row scores/reductions and terminal release. Peer additionally replayed native allocator/sample summaries and small metadata/trainer/data controls. Full model/optimizer/RNG tensor equality is the retained on-node proof, not a local full tensor reread. Some short setup/verification intervals are unsampled; peaks are sampled lower bounds, not a whole-allocation host peak.",
       "decision": "First-pair correctness/memory/all-three-clocks PASS; continuation eligible only. Full four-pair and per-precision aggregate promotion gates remain pending. Cache remains default-off. No ON128 continuation, full512 workflow, new learning quality, time-to-quality or serving claim. Original38555701 remains FAILED; no clocks spliced.",
       "phase_measurement_details": "Per-phase semantics, short unsampled intervals and full observed memory records remain in the hash-bound canonical receipts/readout; compact job summary is not a new measurement."
+    },
+    "38567435": {
+      "job_id": "38567435",
+      "terminal_state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 222,
+      "worker_seconds": 158.7030278070597,
+      "wrapper_seconds": 159.01901583001018,
+      "source": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "artifact": {
+        "components": {
+          "model": {
+            "kind": "file",
+            "path": "model.pt",
+            "sha256": "f47704583c50ebaca3bb8fde1c6d45c0100960ae416bbb9a62fba0cc90841397",
+            "size": 132256499
+          },
+          "model_metadata": {
+            "kind": "file",
+            "path": "model_metadata.pt",
+            "sha256": "27b0bd1fd9d882c7b90cb87892e133d54e1d73a0f0477a859ffe112ec7adbe5e",
+            "size": 1544599
+          }
+        },
+        "identity_json_sha256": "3bdae2d43bc5fe148befff2d7aec7551d93f415b46a03d5f9bfdd340c9e85301",
+        "job": "38562915",
+        "marker_sha256": "62792e949d517b0e838b9265d69ac39f508d6ab49cdabfa67dc6e87e2757f51a",
+        "metadata_sha256": "27b0bd1fd9d882c7b90cb87892e133d54e1d73a0f0477a859ffe112ec7adbe5e",
+        "mode": "bf16_lora",
+        "path": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38562915/qualification/native/qualification/gr00t-dit-head-screen-v1/bf16_lora/fixed200/checkpoint_artifacts/iter_000200",
+        "quality": "original fixed200 screen DISCARD remains unchanged",
+        "screen_acceptance_sha256": "097b525cc277527ae4bed155c78bc18167824af7dd7dc9df03b3fd94278e7332",
+        "screen_release_sha256": "8667cf0de67e08f8cade98f6db7e918f7c90da2521982acfbd4bc969e4d2ca09",
+        "step": 200
+      },
+      "runtime": {
+        "allocator": null,
+        "code": "e64a735d33303d8e7e919b9919d550e644d1312e",
+        "cpu_affinity": [
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          154,
+          155,
+          156,
+          157,
+          158,
+          159,
+          160,
+          161
+        ],
+        "family": "gr00t",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-979b2d59-e19d-a1c0-33f5-de48c4aa310f"
+        },
+        "node": "batch-block7-03342",
+        "numa_nodes": [
+          "node1",
+          "node2"
+        ],
+        "slurm_job": "38567435",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "payload_manifest_sha256": "699f3596c0fc034a3f6a5dbc95d73f8b2663afbf41de13e384e26a6994af1791",
+      "protocol_sha256": "430f46aa3c4a2b21b3d7a06430881ff53aeebc160bf257d9223688e61aeae1e6",
+      "archive_sha256": "2acaae8690822b7c5aaae58c4b8109f11d97fadc668c05eb915d2df5ae20d38a",
+      "inventory_sha256": "0b4fd2053cb79839b89f4b28420fc62542d63aaa08f89eb3b1ca3bc58d4291c4",
+      "release_sha256": "0582f8a75eeca5f8c884397da7d909433f9c342c349e141e87237dcfafc68b48",
+      "result_sha256": "7f7f3e89e6370f16c7f1f60253e46d2c5dbda46c466a8373ec264318cad6b38c",
+      "reduction_sha256": "6d38d598a9b4a87f2952ad887a476300b39117b217e93ef54e50555fd8f782ed",
+      "parameter_updates": 0,
+      "rows": 20,
+      "tasks": 10,
+      "conditions": 4,
+      "metrics": {
+        "both": {
+          "action_mae_environment_units": 0.016462505136810596,
+          "action_mae_gripper_environment_units": 0.034517678618431094,
+          "action_mae_pitch_environment_units": 0.006001505599117261,
+          "action_mae_roll_environment_units": 0.0027544222045481083,
+          "action_mae_x_environment_units": 0.02562404092155931,
+          "action_mae_y_environment_units": 0.01954384915603056,
+          "action_mae_yaw_environment_units": 0.004206653045038566,
+          "action_mae_z_environment_units": 0.02258938641294929,
+          "loss": 0.02260407990543172,
+          "normalized_action_mse": 0.010136678119056991
+        },
+        "head_only": {
+          "action_mae_environment_units": 0.01568377782049304,
+          "action_mae_gripper_environment_units": 0.03470040023326874,
+          "action_mae_pitch_environment_units": 0.005395330861043299,
+          "action_mae_roll_environment_units": 0.0024744844376096784,
+          "action_mae_x_environment_units": 0.02368539049302366,
+          "action_mae_y_environment_units": 0.016828129078918702,
+          "action_mae_yaw_environment_units": 0.003960434069684655,
+          "action_mae_z_environment_units": 0.022742275569902545,
+          "loss": 0.030669520376250148,
+          "normalized_action_mse": 0.009942199631727168
+        },
+        "language_only": {
+          "action_mae_environment_units": 0.01647342543605389,
+          "action_mae_gripper_environment_units": 0.03524026185274124,
+          "action_mae_pitch_environment_units": 0.005968607180734429,
+          "action_mae_roll_environment_units": 0.0027208776779720357,
+          "action_mae_x_environment_units": 0.025667209753033948,
+          "action_mae_y_environment_units": 0.019377412906506155,
+          "action_mae_yaw_environment_units": 0.004263804419868962,
+          "action_mae_z_environment_units": 0.02207580426152047,
+          "loss": 0.02358116037212312,
+          "normalized_action_mse": 0.010118895735857742
+        },
+        "neither": {
+          "action_mae_environment_units": 0.01583745423902698,
+          "action_mae_gripper_environment_units": 0.03553565919399262,
+          "action_mae_pitch_environment_units": 0.00547352657502095,
+          "action_mae_roll_environment_units": 0.0024860682314502293,
+          "action_mae_x_environment_units": 0.02404653235067552,
+          "action_mae_y_environment_units": 0.016827437605469377,
+          "action_mae_yaw_environment_units": 0.0040687457140490026,
+          "action_mae_z_environment_units": 0.02242421000253117,
+          "loss": 0.0315118168189656,
+          "normalized_action_mse": 0.00994367745837995
+        }
+      },
+      "restoration": {
+        "factor_base_records_exact": true,
+        "mixed_modes_restored": true,
+        "passed": true,
+        "rng_restored": true,
+        "scales_restored": true,
+        "storage_gradient_graph_exact": true
+      },
+      "monitor_failure": "Absolute script dispatch with PYTHONSAFEPATH=1 lacks sibling fallback module monitor_gpu; no sample published. Original payload/log unchanged.",
+      "monitor_shutdown": {
+        "alive_at_worker_end": false,
+        "errors": [],
+        "exit_code": 1,
+        "reaped": true
+      },
+      "memory": {
+        "device_peak_bytes": null,
+        "errors": [
+          "no_samples"
+        ],
+        "gpu_memory_evidence_valid": false,
+        "host_pss_complete": false,
+        "host_pss_sum_peak_bytes": null,
+        "host_rss_sum_peak_bytes": null,
+        "nvml_capacity_bytes": null,
+        "observed_span_seconds": 0,
+        "owned_device_process_peak_bytes": null,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 0,
+        "sampling_gap_seconds": {
+          "count": 0,
+          "maximum": null,
+          "mean": null,
+          "median": null,
+          "p95": null,
+          "sum": 0.0
+        }
+      },
+      "readout_sha256": "9ed1be8170b7f0d9dab04d25d8d9975763882c6d4f9329bcff977f2bbff2b2da",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-head-ablation-38567435-receipts-v1.tar.gz",
+      "files_verified": 68,
+      "allocator_peak_allocated_bytes": 9800172032,
+      "allocator_peak_reserved_bytes": 10034872320,
+      "independent_json_reduction_sha256": "6d38d598a9b4a87f2952ad887a476300b39117b217e93ef54e50555fd8f782ed",
+      "independent_validation_log_sha256": "a0e4136cb116d69851bdd87e8a3f0bcf9251d43c6cf71be9c7db8d8b0e8b01e9",
+      "future_observer_fix": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-head-ablation-observer-dispatch-v2/observe.py",
+        "sha256": "897faed6bcda6130c5ee33c7d8772f6c5b2959f60c3c43f2a0b520443ac96674",
+        "scope": "Only absolute monitor-script argv changed to package -m dispatch. Original sealed25-file payload and failed monitor log unchanged. Five owner/independent actual safe-path CPUsubprocess tests; test-only NVML sentinel, no GPU/sampling qualification or rerun.",
+        "peer_log_sha256": "9a31bde2c0b10cf89a43c45a74a4f18dab6597730ab65377b6325c2cc7291834"
+      },
+      "validation_scope": "Root and independent peer verified all68 hashes/sizes, exact20 IDs/fourstates/native sum-count reductions/restoration flags and qualified terminal release. Peer verified processed input records/first source-input projection. Full tensor and RNG equality remains on-device attestation; only normalized action prefix values and full action hashes are retained locally. Observer0samples are missing coverage, not zero memory. No training, optimizer step, export, heldout scoring, promotion or performance claim.",
+      "decision": "Original head-adapter screen remains DISCARD. On these20consumed trainrows, learnedlanguage delta reducesflowloss but increases sampledMSE in bothheadconditions. This model-local inference intervention does not establish a trainingcounterfactual or remedy; selectedfullhead needs separate diagnosis before transferring the effect."
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -27749,6 +27941,8 @@
     "interpretation": "Descriptive current-policy causal attribution on already-consumed training calibration only; not training counterfactual, uncertainty estimate, validation-selection, performance claim or promotion. No new target/threshold/rank/horizon/data/objective.",
     "measurement": "Reuse qualified v11 raw observer and native allocator phases; retain missing coverage and shutdown errors. No new memory, performance or promotion gate. Actual scheduler cost is separate from worker time.",
     "cpu_validation": "61 distinct cases:37 actual native adapter/evaluator,13 worker/config/cohort/launcher,11 observer cases. Independent overlapping reruns passed and are not summed. No accelerator outcome is inferred.",
-    "resource_plan": "One A10080,16CPUs,128GiB,30-minute scheduler cap on unchanged authorized routing. Estimated5\u201310minutes is planning only. Must not overlap the active Alpamayo timing allocation."
+    "resource_plan": "One A10080,16CPUs,128GiB,30-minute scheduler cap on unchanged authorized routing. Estimated5\u201310minutes is planning only. Must not overlap the active Alpamayo timing allocation.",
+    "completed_job": "38567435",
+    "outcome": "Completed descriptive diagnostic; read jobs.38567435. Original failed qualitydecision unchanged; no newrecipepromotion."
   }
 }
