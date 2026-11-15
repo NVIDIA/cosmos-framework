@@ -23251,6 +23251,30 @@
       "allocator_peak_allocated_bytes": 69432915968,
       "allocator_peak_reserved_bytes": 70835503104,
       "memory_scope": "Complete observed OFF process span; sampled lower bounds. Four very short phase categories have no sample. Original controller failure remains and no ON/timing acceptance exists."
+    },
+    "38558325": {
+      "allocated_gpu_seconds": 8,
+      "archive_sha256": "09a5125d4f5520e3e497f21199437c430adffa4264b895da5438cae3633d2507",
+      "exit_code": "1:0",
+      "failure": "Host placement protocol digest uses hashlib.file_digest, unavailable in the actual batch interpreter; failure before srun.",
+      "initial_controls_completed": 0,
+      "inventory_sha256": "f94706d7436b283f482d2e4089610255f8d1d514f8f33f83dd70ec5e0c208183",
+      "job": "38558325",
+      "model_or_runtime_started": false,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "native_updates": 0,
+      "payload_manifest_sha256": "5a0a8c4535807a7ed3daf5073f5b9b82de78a5b3d08736ab63fb8128da4d009b",
+      "protocol_sha256": "db81790a99b6fece0751f5ebb3b6cd5d4d756b966f0b75d8d3947af3d82ce56d",
+      "qualification_accepted": false,
+      "release_verified": true,
+      "retry_submitted": false,
+      "scope": "Original failure preserved; no changed source, identity, clock, tolerance or quality result. Local and compute Python tests did not exercise the older host API.",
+      "state": "FAILED",
+      "strict_memory_evidence": false,
+      "terminal_release_sha256": "447059b3a4124d46ec101d18bd25b79f946e3379a044995f8bcbafec20a68658",
+      "verified_raw_files": 44,
+      "readout_sha256": "4d08c40eb5069e2fc653a2bd21316a99213f850cb79f794adc3bc29525fee1f1",
+      "root_review": "All44 file digests/sizes, terminal/accounting/noqueue/nosteps and exact pre-srun traceback independently replayed. No runtime or native experiment started."
     }
   },
   "read_only_head_memory_diagnostic": {
