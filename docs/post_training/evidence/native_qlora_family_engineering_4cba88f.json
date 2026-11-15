@@ -29733,6 +29733,21 @@
       ],
       "next_executable_action": "With the exact locator, read only that episode, compare all 92 actions and 8-dimensional states bitwise against retained source 831effd0 (plus frame correspondence and image identity where needed), then verify recorded controller interval from bound environment/configuration. If mismatch, trace filtering/order before any resampling. No exact download command/byte count is asserted until a locator exists."
     },
+    "raw_locator_availability": {
+      "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-physical-clock-locator-availability-v2.json",
+      "sha256": "32778411da58dc5fccf82701157e4095d0452b836a1fc5f911a4c6828c24561f",
+      "publisher_declared_lineage": {
+        "finding": "Pinned publisher card explicitly says all four suites came from openvla/modified_libero_rlds and were converted to LeRobot.",
+        "limit": "Names upstream repository but not its immutable revision, exact converter, environment or physical controller clock. Population counts also agree; content identity remains a testable question.",
+        "publisher": "physical-intelligence/libero",
+        "readme_sha256": "b178f7bb726feb0bbe82a6836895a962b91f957ae328ae3340a269c93b5e9b6e",
+        "revision": "a4336d589d589045d1c56423ffdf3b88a0e19b1f"
+      },
+      "prospective_content_scan_bytes": 1914626550,
+      "prospective_content_scan_shards": 16,
+      "scan_performed": false,
+      "limit": "The scan can identify the raw record and serialized source filename; the raw RLDS schema supplies no physical controller clock. Separate regenerated HDF5 is not an authenticated original release. No raw download or model scoring was performed."
+    },
     "available_data_coverage_audit": {
       "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-available-coverage-audit-v1.json",
       "sha256": "4e079ba40995bfc65b204e070f9718b86df8b3aea832648cf4138f76d08ea717",

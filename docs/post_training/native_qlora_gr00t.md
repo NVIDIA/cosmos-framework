@@ -782,6 +782,9 @@ these 92 rows. Current regeneration code and a 20 Hz simulator default do not
 establish the historical dataset clock. The next check requires that exact locator
 and generation/conversion configuration, then an exact raw-state/action comparison.
 No trajectory downloads, model scoring, resampling or recipe changes were made.
+The pinned conversion publisher identifies OpenVLA as its source. A 1.915 GB raw
+record scan could recover the episode locator, but the RLDS schema supplies no
+controller clock; this scan remains deferred pending a way to establish that link.
 
 A read-only coverage audit confirms that staged data is **not exhausted**. The
 prepared spatial population contains 342 training and 90 validation episodes.
