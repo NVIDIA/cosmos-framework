@@ -445,10 +445,27 @@ causal memory benefit of caching. Independent replay verified all 242 files,
 unsampled intervals and sampled lower bounds remain. The allocation cost 2,499
 GPU-seconds, including a separate 251.50-second saved-state comparison.
 
-These two pairs establish execution improvements over each precision's reference,
+The third pair (`38595290`, NF4 seed 42, ON then OFF) also passed the unchanged
+continuation rule. Evaluation time fell **613.75 to 570.83 seconds (6.99%)**,
+native-process time **1,332.80 to 1,214.67 seconds (8.86%)**, and complete cold-case
+time **3,271.24 to 3,084.11 seconds (5.72%)**. Both reached the fixed target at
+update 100; native target-publication clocks were 501.73/416.06 seconds, with the
+same separate-launcher scope. All 300 updates, checkpoint states at 100/200/300,
+resident rows and three fresh score sets matched exactly.
+
+Sampled owned-GPU peak remained **30.414 GiB**; host PSS rose 25.55 MiB, within
+the frozen bound, and the retained cache remained 2.11 MiB. Independent replay
+verified 244 files, all 3,299 observed host samples and eight stage summaries.
+The observed model-workflow spans exclude earlier launcher/container verification;
+short unsampled phases and unmeasured filesystem cache remain explicit. Loading
+was unusually slow, including 548.06 seconds for one fresh model load. The cause
+was not established. All delays remain in the cold clocks. The allocation cost
+8,473 GPU-seconds, including a separate 2,070.99-second saved-state comparison.
+
+These three pairs establish execution improvements over their own references,
 **not promotion**, better task quality, NF4 superiority over BF16, or inference
-acceleration. Their physical placements differ across allocations. The two
-reversed-order seed-42 pairs and aggregate/mature-recovery gates remain required.
+acceleration. Their physical placements differ across allocations. The BF16
+seed-42 pair and aggregate/mature-recovery gates remain required.
 Exact receipts, component clocks and limitations are retained in the existing
 family evidence.
 

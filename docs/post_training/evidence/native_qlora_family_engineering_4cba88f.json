@@ -5,6 +5,383 @@
   "receipt_archive": "cosmos-qlora-family-20261113/family-engineering-4cba88f-receipts-v2.tar.gz",
   "receipt_archive_sha256": "934d9b56bc47dc71d8cf18001d582b545a6c63207ba08cb03d4b5ee37a038078",
   "jobs": {
+    "38595290": {
+      "job": "38595290",
+      "allocated_gpu_seconds": 8473,
+      "archive_sha256": "7c371f670d68e696b6472125909a17c1ef34ead6b27b6a23d500a1c266ed980c",
+      "inventory_sha256": "eaa4b96343b89014d8ee78bba0c80b796171579e17093430f773ce05af4c3905",
+      "files_verified": 244,
+      "payload_files_verified": 48,
+      "pair_result_sha256": "64274fc6f3a0d0d40f2ba56e88a646aba4ba98f49f07262a04571f7ce06ae126",
+      "terminal_release_sha256": "fa25adc689a091cdfb4c0d034287d01e93da782469c1429b80ddd12d5897cc40",
+      "allocation": {
+        "elapsed_seconds": 8467.297635041876,
+        "exit_code": 0,
+        "mode": "nf4_lora",
+        "scope": "Two fresh native300 cases plus separate CPU state comparison; no interrupted clocks spliced",
+        "seed": 42
+      },
+      "comparison_clock": {
+        "scope": "Post-case CPU state comparisons; separately charged",
+        "seconds": 2070.9872968818527
+      },
+      "per_pair_metrics": {
+        "GPU_increase_bytes": {
+          "allocated": -8114176,
+          "owned_process": 0,
+          "reserved": 0
+        },
+        "all_three_clocks_faster": true,
+        "complete_cold_case_on_off_ratio": 0.9427969890551977,
+        "evaluator_on_off_ratio": 0.9300756715655671,
+        "host_increase_bytes": {
+          "native_hwm": 5521408,
+          "pss": 26796032,
+          "rss": -42758144
+        },
+        "memory_passed": true,
+        "native_process_on_off_ratio": 0.9113670191447556,
+        "retained_cache_bytes": 2214696,
+        "seed": 42
+      },
+      "may_admit_next_pair": true,
+      "scope": "Same sealed CBC NF42 ON/OFF, one allocation/exact GPU+16CPU placement. Native source/scorer, all300 applied updates, checkpoint100/200/300 small metadata/trainer/RNG/cursor and every160-row sum/count replayed locally. Full model/optimizer tensor equality at allthree boundaries remains on-node proof; no model/moment/shard tensor loading here. Reported sampled model-workflow/stage memory and every phase coverage retained; pre-runtime launcher/container verification is outside that observation span, while its entire elapsed time remains in the cold-case/allocation clocks; independent peer replays raw v11/a466. Short unsampled phases remain explicit. One pair only; no allfour/mature/default-enable/quality or cross-precision claim.",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "native_revision": "cbc950f867329838a81f57fa303dbc033b12bef2",
+      "protocol_sha256": "5c3118024028ed43fa6bc9d84b9c16233007c1b92cf0486b986a3dcf5d982f13",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-reuse-timing-38595290-receipts-v2.tar.gz",
+      "owner_readout_sha256": "5ee6983e0413e01213f78b09d9e1c967df388e85bde1f4e2e91a4cdc58718582",
+      "independent_raw_peer_sha256": "6c534ede698baa5525e35676670ca0f2255f057e57c4e828189402c9999e15c5",
+      "mode": "nf4_lora",
+      "seed": 42,
+      "order": [
+        "on",
+        "off"
+      ],
+      "placement_and_versions": {
+        "code": "cbc950f867329838a81f57fa303dbc033b12bef2",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "torch_uuid": "b7064320-cc4d-d42b-fa9c-7b4bd679d502",
+          "uuid": "GPU-b7064320-cc4d-d42b-fa9c-7b4bd679d502",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          72,
+          73,
+          74,
+          75,
+          84,
+          85,
+          86,
+          87,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208,
+          209
+        ],
+        "cpu_numa_nodes": {
+          "72": [
+            "node4"
+          ],
+          "73": [
+            "node4"
+          ],
+          "74": [
+            "node4"
+          ],
+          "75": [
+            "node4"
+          ],
+          "84": [
+            "node5"
+          ],
+          "85": [
+            "node5"
+          ],
+          "86": [
+            "node5"
+          ],
+          "87": [
+            "node5"
+          ],
+          "202": [
+            "node4"
+          ],
+          "203": [
+            "node4"
+          ],
+          "204": [
+            "node4"
+          ],
+          "205": [
+            "node4"
+          ],
+          "206": [
+            "node4"
+          ],
+          "207": [
+            "node4"
+          ],
+          "208": [
+            "node5"
+          ],
+          "209": [
+            "node5"
+          ]
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t72-75,84-87,202-209",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38595290",
+        "cuda_visible_devices": "0",
+        "allocator": {
+          "PYTORCH_ALLOC_CONF": null,
+          "PYTORCH_CUDA_ALLOC_CONF": null
+        }
+      },
+      "state_proof": {
+        "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+        "atol": 0,
+        "comparison_contract": {
+          "100": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_backbone_reuse.enabled"
+            ],
+            "cross_flag_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "200": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_backbone_reuse.enabled"
+            ],
+            "cross_flag_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "300": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_backbone_reuse.enabled"
+            ],
+            "cross_flag_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          }
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "cases": {
+        "off": {
+          "applied_updates": 300,
+          "cache_observations": {
+            "enabled": false,
+            "retained_tensor_bytes_peak": 0
+          },
+          "checkpoint_boundaries": [
+            100,
+            200,
+            300
+          ],
+          "clocks": {
+            "complete_cold_case_seconds": 3271.235565318959,
+            "model_workflow_seconds": 2663.9680719079915,
+            "native_process_seconds": 1332.8037092420273,
+            "resident_evaluation_seconds": 613.7454454661347
+          },
+          "fresh_rows": 480,
+          "native_rows": 640,
+          "native_host_hwm_bytes": 31341424640,
+          "target": {
+            "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38595290/off/run/native/qualification/gr00t-evaluation-reuse-v1/nf4_lora-seed42/off/checkpoints/iter_000100",
+            "seconds": 501.73308860184625,
+            "step": 100,
+            "timing_scope": "uninterrupted"
+          },
+          "trainable_tensors": 761,
+          "language_factors": 224,
+          "full_fp32_head_parameters": 537,
+          "native_component_seconds": {
+            "checkpoint_seconds": 109.94654360110871,
+            "evaluation_seconds": 613.7454454661347,
+            "portable_export_seconds": 28.00143891084008,
+            "startup_seconds": 48.95993029884994,
+            "training_seconds": 273.5207995697856
+          },
+          "memory": {
+            "allocator_evidence_complete": true,
+            "allocator_peak_allocated_bytes": 30843175424,
+            "allocator_peak_reserved_bytes": 31581011968,
+            "sampled": {
+              "device_peak_bytes": 33432993792,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 31433448448,
+              "host_rss_sum_peak_bytes": 32026443776,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 2661.2280943393707,
+              "owned_device_process_peak_bytes": 32656850944,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1640,
+              "sampling_gap_seconds": {
+                "count": 1639,
+                "maximum": 5.969912528991699,
+                "mean": 1.6236901124706349,
+                "median": 1.5447828769683838,
+                "p95": 2.1786332607269285,
+                "sum": 2661.2280943393707
+              }
+            }
+          },
+          "native_and_fresh_stages": [
+            {
+              "name": "native300",
+              "exit_code": 0,
+              "elapsed_seconds": 1332.8037092420273,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-123",
+              "exit_code": 0,
+              "elapsed_seconds": 378.1029945539776,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-456",
+              "exit_code": 0,
+              "elapsed_seconds": 630.3262657318264,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-789",
+              "exit_code": 0,
+              "elapsed_seconds": 310.9259654500056,
+              "timed_out": false
+            }
+          ],
+          "raw_case_result_sha256": "0036e3435eed17ef567d1e36a754492cf94f874b0079fdb486b266a021c4f354"
+        },
+        "on": {
+          "applied_updates": 300,
+          "cache_observations": {
+            "enabled": true,
+            "format": "gr00t-evaluation-raw-backbone-observations-v1",
+            "hits": 640,
+            "misses": 640,
+            "retained_tensor_bytes_peak": 2214696,
+            "scope": "current process only"
+          },
+          "checkpoint_boundaries": [
+            100,
+            200,
+            300
+          ],
+          "clocks": {
+            "complete_cold_case_seconds": 3084.111041472992,
+            "model_workflow_seconds": 2500.2992719681934,
+            "native_process_seconds": 1214.67334359698,
+            "resident_evaluation_seconds": 570.8297073622234
+          },
+          "fresh_rows": 480,
+          "native_rows": 640,
+          "native_host_hwm_bytes": 31346946048,
+          "target": {
+            "checkpoint": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38595290/on/run/native/qualification/gr00t-evaluation-reuse-v1/nf4_lora-seed42/on/checkpoints/iter_000100",
+            "seconds": 416.0600054219831,
+            "step": 100,
+            "timing_scope": "uninterrupted"
+          },
+          "trainable_tensors": 761,
+          "language_factors": 224,
+          "full_fp32_head_parameters": 537,
+          "native_component_seconds": {
+            "checkpoint_seconds": 90.75844196695834,
+            "evaluation_seconds": 570.8297073622234,
+            "portable_export_seconds": 91.72309902589768,
+            "startup_seconds": 49.02291519893333,
+            "training_seconds": 263.2635822847951
+          },
+          "memory": {
+            "allocator_evidence_complete": true,
+            "allocator_peak_allocated_bytes": 30835061248,
+            "allocator_peak_reserved_bytes": 31581011968,
+            "sampled": {
+              "device_peak_bytes": 33432993792,
+              "errors": [],
+              "gpu_memory_evidence_valid": true,
+              "host_pss_complete": true,
+              "host_pss_sum_peak_bytes": 31460244480,
+              "host_rss_sum_peak_bytes": 31983685632,
+              "nvml_capacity_bytes": 85899345920,
+              "observed_span_seconds": 2498.641587972641,
+              "owned_device_process_peak_bytes": 32656850944,
+              "peaks_are_sampled_lower_bounds": true,
+              "samples": 1659,
+              "sampling_gap_seconds": {
+                "count": 1658,
+                "maximum": 3.533275842666626,
+                "mean": 1.5070214643984565,
+                "median": 1.4629710912704468,
+                "p95": 1.8451661229133605,
+                "sum": 2498.641587972641
+              }
+            }
+          },
+          "native_and_fresh_stages": [
+            {
+              "name": "native300",
+              "exit_code": 0,
+              "elapsed_seconds": 1214.67334359698,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-123",
+              "exit_code": 0,
+              "elapsed_seconds": 248.84103157185018,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-456",
+              "exit_code": 0,
+              "elapsed_seconds": 781.0633656138089,
+              "timed_out": false
+            },
+            {
+              "name": "portable-evaluation-789",
+              "exit_code": 0,
+              "elapsed_seconds": 243.1347618829459,
+              "timed_out": false
+            }
+          ],
+          "raw_case_result_sha256": "e70da3c0e1d579127d9fcfed350edaf1d9e913ad2a2ebbc6c470c5e4523fde0d"
+        }
+      },
+      "promotion": "Not promoted: third fixed pair passes continuation only. BF16 seed42, aggregate gates and own enabled200-to300 recovery remain required; current-e64 check is separately bounded.",
+      "memory_scope": "All3299 observed v11 host samples complete with valid owned-GPU attribution; eight stage and a466 phase reductions independently replayed. Observer spans2498.64/2661.23seconds (ON/OFF) do not cover earlier launcher/container verification. Short setup/publication/checkpoint phases remain unsampled. Peaks are sampled lower bounds; filesystem cache/page residency is unmeasured.",
+      "target_clock_scope": "Native run preparation through its verified target checkpoint; separate cold-case includes launcher/prelude, fresh scores and release. No retrospective splicing of the target clock.",
+      "slow_loading_and_audit": {
+        "on_fresh456_loading_seconds": 548.0591061059386,
+        "separate_cpu_comparison_seconds": 2070.9872968818527,
+        "bounded_comparison_inspection_sha256": "1bd3eb0f06fb444702a22ac38dae4cd112d246cc65b080df9de1ac706b89f47a",
+        "limit": "All observed delays retained. The inspection saw the DCP loader and CPU use but did not establish the cause of the slowdown; no startup clocks were reset or corrected."
+      }
+    },
     "38507817": {
       "family": "alpamayo",
       "slurm_state": "COMPLETED",
