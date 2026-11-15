@@ -23414,6 +23414,99 @@
       },
       "root_review": "All112 rawfiles/sizes and terminal/accounting/noqueue/nosteps verified. Six JSON forward/loss/sampler/mode comparisons and all438 raw memory observations independently replayed; original on-node gradient/RNG tensor comparisons not repeated locally. No optimizer tensor, recovery or fresh artifact acceptance.",
       "next": "Correct qualification canonicalpath only using actual metadata; preserve all six initialized proofs and BF3, then finish remaining nine model stages with separate clocks/memory. No200screen yet."
+    },
+    "38560176": {
+      "job_id": "38560176",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "allocated_gpu_seconds": 1942,
+      "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "original_acceptance_absent": true,
+      "native_model_stages_completed": 7,
+      "failure": "Qualification finalizer indexed host_memory_evidence_complete; exact pinned analyzer returns host_pss_complete. All native subproofs, workflow and memory records were published before the KeyError.",
+      "retrospective_validation": {
+        "analysis_only": true,
+        "passed": true,
+        "source_sha256": "49cb8a22ce767148102197116f91dea185cb75d0e21424e405ed0c91ddb178db",
+        "receipt_sha256": "b1c5e4324f316784feb6384f25c710c776edf9d899c8596e53b67dd2dc6f9290",
+        "prospective_cpu_receipt_sha256": "26b9a9e56290610c3d9557cc527dad35e414955d2c79e126c9a146a9a37b80d8",
+        "scope": "Separate read-only validation of retained source, completed native subproofs, actual pinned memory decoder and terminal release. Original failed job, absent acceptance and clocks remain unchanged; no model rerun or original completion fabricated."
+      },
+      "archive_sha256": "9b8a375bfa25d699609312670b96d52120f6196542fdd51c00d02e3cd4aebcf3",
+      "inventory_sha256": "213f56740772698098d316a2e900201a67e5407686d8c8e3d1bf621d307de6d3",
+      "raw_files_verified": 163,
+      "readout_sha256": "fee7877617ec7987f3ab8ec0b6699a1a31018c6aff06c9e540d5d5feb399f58e",
+      "terminal_release_sha256": "b42fa8ae8f77af29562f9681d3ce6e9c2f8295c690f09800bf0f9e03a6c33e9a",
+      "mode_contract": {
+        "both": [
+          "bf16_lora",
+          "nf4_lora"
+        ],
+        "native_updates": 2,
+        "own_resume_boundary": 1,
+        "model_optimizer_maximum_difference": 0,
+        "rng_cursor_controls_evaluation_exact": true,
+        "trainable_tensors": 903,
+        "language_factors": 494,
+        "auxiliary_fp32_tensors": 409,
+        "quantization_targets": 247,
+        "head_adapters_present": false,
+        "fresh_portable_rows": 2,
+        "real_tokens": 3008,
+        "real_images": 16,
+        "old_same_base_source_refusal": true
+      },
+      "legacy_standalone": {
+        "original_job": "38530040",
+        "mode": "nf4_lora",
+        "rows": [
+          0,
+          255
+        ],
+        "seed": 123,
+        "outputs_exact": true,
+        "original_metadata_unchanged": true,
+        "quantizer_imports_blocked": true,
+        "whole_namespace_absence_claim": false
+      },
+      "memory": {
+        "samples": 1388,
+        "complete_host_samples": 1388,
+        "whole_span": {
+          "device_peak_bytes": 82659442688,
+          "errors": [],
+          "gpu_memory_evidence_valid": true,
+          "host_pss_complete": true,
+          "host_pss_sum_peak_bytes": 49975626752,
+          "host_rss_sum_peak_bytes": 50661961728,
+          "nvml_capacity_bytes": 85899345920,
+          "observed_span_seconds": 1868.5687754154205,
+          "owned_device_process_peak_bytes": 81860231168,
+          "peaks_are_sampled_lower_bounds": true,
+          "samples": 1388,
+          "sampling_gap_seconds": {
+            "count": 1387,
+            "maximum": 6.336263418197632,
+            "mean": 1.3472017126282771,
+            "median": 1.3113009929656982,
+            "p95": 1.4483225107192994,
+            "sum": 1868.5687754154205
+          }
+        },
+        "allocator_peak_allocated_bytes": 79466941440,
+        "allocator_peak_reserved_bytes": 80645980160,
+        "all7_model_stages_observed": true,
+        "some_fine_phases_unsampled": true,
+        "scope": "Current correctness workflow including recovery, export and legacy dense reload. Peaks are sampled lower bounds, not a matched performance study; whole-stage completeness does not imply every short phase was sampled."
+      },
+      "workflow_seconds": 1870.1283910700004,
+      "root_review": "All163 raw files/sizes, both exact recovery subproofs, original failed status/cost/full release, and all1388 samples were independently replayed. Full model/optimizer tensor comparisons remain the retained on-node proofs; no large tensor payload reread on login.",
+      "limits": [
+        "No new512-update or mature recovery evidence.",
+        "No learning quality, matched timing or memory-reduction claim.",
+        "Current correctness job overlapped GR00T correctness on another node; no timing comparison."
+      ],
+      "independent_peer_sha256": "5843565ee53c77cd3c41011c6f3d4b7470d531323c84db1bcaaeeb8dc206d177"
     }
   },
   "read_only_head_memory_diagnostic": {

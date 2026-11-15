@@ -203,6 +203,19 @@ The affected shared evaluator passed exact fresh portable scores on two real
 Alpamayo rows in `38554101`. This is compatibility evidence, separate from
 Alpamayo training/recovery and cache-performance qualification.
 
+Current build `e64a735` completed both two-update native runs, exact own-update-1
+recovery and fresh two-row portable reload (`38560176`). All 903 trainables,
+optimizer values, RNG, cursor and evaluation state matched; the shared head-adapter
+extension remained absent for Alpamayo. Actual inputs contained 3,008 tokens and
+16 images. The unchanged NF4-origin standalone artifact also reproduced its two
+recorded trajectory probes with the current loader. The enclosing job **failed**
+after all seven model stages because its final report used an incorrect memory
+field name. A separately recorded, read-only analysis verified the completed
+subproofs, strict memory criteria and terminal release; it did not rewrite the
+failed job or create its missing original acceptance. All 1,388 observed host
+collections were complete, while some short phase intervals had no sample.
+This extends current-source reliability, not the historical quality or timing results.
+
 The separate `posttrain.checkpoint.tools.export_family_dense` command reconstructs
 `dequantize(Q(W)) + (alpha/rank) BA` with FP32 accumulation. Specify
 `--merged-backbone-dtype=bfloat16` or `float32`; all other parameters and buffers
