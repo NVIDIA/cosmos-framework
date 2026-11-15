@@ -604,6 +604,8 @@ class Gr00tN1d7ModelConfig:
             result.pop("backbone_buffer_dtype")
         if self.backbone_adaptation is None:
             result.pop("backbone_adaptation")
+        elif self.backbone_adaptation.action_head_adapter_profile is None:
+            result["backbone_adaptation"].pop("action_head_adapter_profile")
         return result
 
     def identity_hash(self) -> str:

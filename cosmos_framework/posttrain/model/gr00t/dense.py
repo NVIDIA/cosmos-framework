@@ -50,7 +50,14 @@ def _task_identity(config, root):
         "config": identity,
         "implementation": {
             name: file_sha256(str(Path(__file__).parent / name))
-            for name in ("adaptation.py", "action_sft.py", "policy.py", "packer.py", "qlora_source.py")
+            for name in (
+                "adaptation.py",
+                "head_adaptation.py",
+                "action_sft.py",
+                "policy.py",
+                "packer.py",
+                "qlora_source.py",
+            )
         },
         "native_model_config": json.loads((native / "config.json").read_text()),
         "processor_config": json.loads((native / "processor_config.json").read_text()),
@@ -78,6 +85,7 @@ def build_policy(config, artifact, *, device, output, unmerged=False):
 
     from cosmos_framework.posttrain.checkpoint.adapter import _require_subset
     from cosmos_framework.posttrain.checkpoint.family_dense import (
+        _head_targets,
         load_family_dense,
         load_family_unmerged,
         read_family_dense,
@@ -85,12 +93,16 @@ def build_policy(config, artifact, *, device, output, unmerged=False):
     )
     from cosmos_framework.posttrain.model.gr00t.action_sft import Gr00tActionPacker
     from cosmos_framework.posttrain.model.gr00t.adaptation import _construct_meta, resolve_language_targets
+    from cosmos_framework.posttrain.model.gr00t.head_adaptation import configured_head_targets
     from cosmos_framework.posttrain.model.gr00t.policy import OFFICIAL_PRECISION, Gr00tN1d7TrainPolicy, load_processor
     from cosmos_framework.posttrain.model.gr00t.qlora_source import recorded_source
     from cosmos_framework.posttrain.model.precision import compute_context
     from cosmos_framework.utils.lazy_config import instantiate
 
     model = copy.deepcopy(instantiate(config.model))
+    model.backbone_adaptation.__post_init__()
+    if model.backbone_adaptation.action_head_adapter_profile is not None and not unmerged:
+        raise ValueError("GR00T head adapters require standalone unmerged artifacts")
     root = Path(artifact).resolve()
     # Verification occurs before any tokenizer/model constructor reads artifact sidecars.
     read_artifact = read_family_unmerged if unmerged else read_family_dense
@@ -115,6 +127,13 @@ def build_policy(config, artifact, *, device, output, unmerged=False):
     model.revision = ""
     model.backbone_adaptation.backbone_path = str(root / "backbone")
     net = _construct_meta(task["native_model_config"], model.backbone_adaptation.backbone_path)
+    head_targets = configured_head_targets(net, model.backbone_adaptation)
+    identity = manifest["source_metadata"]["identity"]
+    if head_targets is None:
+        if "head_adapters" in identity:
+            raise ValueError("GR00T artifact contains an unrequested head adapter profile")
+    elif {name: list(shape) for name, shape in head_targets.items()} != _head_targets(identity):
+        raise ValueError("GR00T artifact differs from the explicit head adapter profile")
     if {name: list(shape) for name, shape in resolve_language_targets(net).items()} != manifest["source_metadata"][
         "identity"
     ]["targets"]:

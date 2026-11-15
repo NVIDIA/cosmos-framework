@@ -200,6 +200,7 @@ def build_adapted_gr00t(config: Any, *, device: Any, save_cfg_dir: Any) -> tuple
     import torch
     from safetensors import safe_open
 
+    from cosmos_framework.posttrain.model.gr00t.head_adaptation import configured_head_targets
     from cosmos_framework.posttrain.model.gr00t.policy import load_processor
     from cosmos_framework.posttrain.model.gr00t.qlora_source import pinned_source_identity
     from cosmos_framework.posttrain.model.gr00t.source import _metadata, _resolve
@@ -218,6 +219,7 @@ def build_adapted_gr00t(config: Any, *, device: Any, save_cfg_dir: Any) -> tuple
     payload = json.loads((checkpoint / "config.json").read_text())
     model = _construct_meta(payload, str(backbone))
     targets = resolve_language_targets(model)
+    head_targets = configured_head_targets(model, adaptation)
     auxiliary = tuple(
         name
         for name, parameter in model.named_parameters()
@@ -257,7 +259,14 @@ def build_adapted_gr00t(config: Any, *, device: Any, save_cfg_dir: Any) -> tuple
         "config": task_config,
         "implementation": {
             name: file_sha256(str(Path(__file__).parent / name))
-            for name in ("adaptation.py", "action_sft.py", "policy.py", "packer.py", "qlora_source.py")
+            for name in (
+                "adaptation.py",
+                "head_adaptation.py",
+                "action_sft.py",
+                "policy.py",
+                "packer.py",
+                "qlora_source.py",
+            )
         },
         "native_model_config": payload,
         "precision": {
@@ -285,6 +294,7 @@ def build_adapted_gr00t(config: Any, *, device: Any, save_cfg_dir: Any) -> tuple
         task_identity=task_identity,
         device=torch.device(device),
         read_tensor=read_tensor,
+        head_targets=head_targets,
     )
     # `original_inv_freq` is upstream's unregistered alias, not a weight or packed quantization
     # buffer. Bind it to the moved registered buffer without recomputing arithmetic.

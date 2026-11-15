@@ -7,6 +7,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+HEAD_ADAPTER_PROFILE = "gr00t_n1d7_dit_attention_lora_v1"
+
 
 @dataclass
 class Gr00tBackboneAdaptation:
@@ -15,6 +17,9 @@ class Gr00tBackboneAdaptation:
     ``*_frozen`` quantizes or casts the feature extractor but does not train language adapters.
     ``*_lora`` propagates the original action loss into FP32 ordinary LoRA parameters.
     The action projector/DiT retain the checkpoint's native finetune selection when enabled.
+    ``action_head_adapter_profile`` opts into ordinary DiT attention LoRA with
+    ``train_action_head=False``: only original head parameters are frozen. Native
+    tune flags, training modes and dropout remain those of full-head tuning.
     """
 
     backbone_path: str = ""
@@ -25,6 +30,7 @@ class Gr00tBackboneAdaptation:
     seed: int = 17
     train_action_head: bool = True
     profile: str = "gr00t_n1d7_reason2_2b_layer16_v1"
+    action_head_adapter_profile: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"nf4_lora", "bf16_lora", "nf4_frozen", "bf16_frozen"}:
@@ -43,3 +49,10 @@ class Gr00tBackboneAdaptation:
             raise ValueError("GR00T frozen-backbone training requires a trainable action head")
         if self.profile != "gr00t_n1d7_reason2_2b_layer16_v1":
             raise ValueError("GR00T adaptation supports only its explicit N1.7 16-layer Reason2-2B profile")
+        if self.action_head_adapter_profile is not None:
+            if self.action_head_adapter_profile != HEAD_ADAPTER_PROFILE:
+                raise ValueError("GR00T action-head adaptation requires its explicit DiT attention profile")
+            if self.train_action_head or self.mode not in {"nf4_lora", "bf16_lora"}:
+                raise ValueError("GR00T head adapters require language LoRA and frozen original head parameters")
+            if (self.rank, self.alpha, self.dropout) != (32, 64.0, 0.0):
+                raise ValueError("GR00T head adapters require the shared rank=32, alpha=64, dropout=0 policy")
