@@ -63,6 +63,14 @@ Follow the [Framework setup guide](../../../docs/setup.md)
 for installation in your selected checkout, then apply the additional
 [Auto requirements](../cosmos3-inference-simulation-auto/references/framework-runtime.md). Reuse a working Framework environment.
 
+> **Skill note (not in the source):** in a checkout without a prepared environment, run the three commands below from its root first; they open the block of the [Auto requirements](../cosmos3-inference-simulation-auto/references/framework-runtime.md). `uv sync` stops with `error: Required uv version` on any `uv` other than 0.11.29, `uv self update` is refused for a `uv` that a package manager installed, and without the FFmpeg shared libraries the first training launch stops with `RuntimeError: Could not load libtorchcodec`. The second command needs root on Debian or Ubuntu.
+
+```bash
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }
+[ -n "$(/sbin/ldconfig -p 2>/dev/null | grep 'libavutil\.so')" ] || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+uv sync --locked --python 3.13 --group cu130-train --extra train --extra guardrail
+```
+
 The commands use the native
 [four-phase recipes](../../../cosmos_framework/configs/simulation/common/transfer_auto_recipes.py)
 and [registrations](../../../cosmos_framework/configs/simulation/experiment/auto/transfer_auto.py)
@@ -268,6 +276,14 @@ Follow the [Framework setup guide](../../../docs/setup.md)
 for installation in your selected checkout, then check the additional
 [Auto requirements](../cosmos3-inference-simulation-auto/references/framework-runtime.md).
 Reuse a working Framework environment.
+
+> **Skill note (not in the source):** in a checkout without a prepared environment, run these three commands from its root first. They are the ones under [Set up the environment (Transfer-Auto)](#set-up-the-environment-transfer-auto), where the note says what each prevents.
+
+```bash
+uv --version 2>/dev/null | grep -q '^uv 0\.11\.29' || { curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh; export PATH="$HOME/.local/bin:$PATH"; hash -r; }
+[ -n "$(/sbin/ldconfig -p 2>/dev/null | grep 'libavutil\.so')" ] || { apt-get update && apt-get install -y --no-install-recommends ffmpeg; }
+uv sync --locked --python 3.13 --group cu130-train --extra train --extra guardrail
+```
 
 ### Quickstart: train Stage 1
 
