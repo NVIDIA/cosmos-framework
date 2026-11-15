@@ -1,0 +1,187 @@
+{
+  "cache_reuse": false,
+  "cohort": {
+    "cameras": 2,
+    "episode_row_and_media_overlap": false,
+    "manifest_sha256": "c726e37725c2d4be88efb17e8f96b956d018a07db9f72bde1f6825084392dd00",
+    "media_geometry": [
+      256,
+      256,
+      3
+    ],
+    "outputs": {
+      "train": {
+        "episodes": 80,
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/inputs/gr00t-development-v1/gr00t-train.jsonl",
+        "rows": 1280,
+        "sha256": "a6756c8d9a903af010ff3716a6066d78fef2a99f17d89cb4452fc9791ae0a1a6"
+      },
+      "validation": {
+        "episodes": 40,
+        "path": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/inputs/gr00t-development-v1/gr00t-validation.jsonl",
+        "rows": 160,
+        "sha256": "0e74e90b82dfe4512c77734783bf0056bde222b49c10677f2ab32c3bb27317ac"
+      }
+    },
+    "supervised_action_elements_per_row": 70,
+    "tasks": 10,
+    "training_episodes": 80,
+    "validation_episodes": 40
+  },
+  "criteria": {
+    "all_correctness_gates_required": true,
+    "axis_names": [
+      "x",
+      "y",
+      "z",
+      "roll",
+      "pitch",
+      "yaw",
+      "gripper"
+    ],
+    "both_endpoint_mse_max": 0.049561327725898344,
+    "endpoint_update": 200,
+    "every_decoded_axis_no_worse_than_own_source": true,
+    "nf4_bf16_mse_ratio_max": 1.05,
+    "no_one_arm_extension": true,
+    "no_quality_early_stop": true,
+    "no_rollout_admission": true
+  },
+  "evaluation_seed": 123,
+  "evaluation_steps": [
+    0,
+    100,
+    200
+  ],
+  "format": "native-gr00t-dit-attention-head-lora-development-v1",
+  "horizon": 200,
+  "horizon_rationale": "Declared before outcomes: retained joint seed17 controls first reached the fixed target at200; both100 controls missed. This does not extend or reclassify the failed frozen-head100 screen.",
+  "hypothesis": "Restrict original FP32 action-head plasticity to ordinary low-rank DiT attention updates while retaining language LoRA, to test whether adaptation can reach the fixed target without the observed motion-axis drift of full-head tuning.",
+  "learning": {
+    "accumulation": 1,
+    "alpha": 64,
+    "batch": 1,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "clip_norm": 1.0,
+    "dropout": 0,
+    "eps": 1e-08,
+    "lr": 1e-05,
+    "optimizer": "fused FP32 AdamW",
+    "rank": 32,
+    "schedule": "constant",
+    "source_action_head_dtype": "float32",
+    "source_action_head_tensors": 537,
+    "trainable_factor_tensors": 480,
+    "trained_original_head_parameter_tensors": 0,
+    "weight_decay": 1e-05
+  },
+  "limits": "One paired development seed on the existing exposed ten-task cohort. This is a new parameterization and clipping trajectory, not an arithmetic-preserving optimization or a release claim.",
+  "locked_target": {
+    "baseline": 0.05506814191766483,
+    "calibration_protocol_sha256": "56c5419d3033fe71e9a9d364ff172e2fd35abd2cab43d92a92d5c3d7ebe3e0d7",
+    "sha256": "eff946f62dbdc9c57f61ac96f03f13640baaf5bee4695d9fd1381830b95e4534",
+    "threshold": 0.049561327725898344
+  },
+  "memory_attribution": {
+    "head_policy": "Any head-gradient/moment saving belongs to BOTH precision arms. Report actual allocated and sampled owned-process peaks and missing host coverage separately. No algebraic saving is a measured peak.",
+    "nf4_raw_weight_saving_ceiling_gib": 1.125,
+    "no_quantized_optimizer": true
+  },
+  "no_automatic_followup": "No new rank/LR sweep, seed, horizon extension, rollout, dataset change or quality-based omission; all failed correctness and learning outcomes remain retained.",
+  "order": [
+    "bf16_lora",
+    "nf4_lora"
+  ],
+  "parameter_policy": {
+    "artifacts": "Native own-source DCP and portable; standalone unmerged FP32 head base/bias plus exact factors. Merged conversion is unsupported for this profile.",
+    "compute": "Preserve native BF16 ambient autocast and native FP32 training state/action/noise/time math; no optimizer precision or group change.",
+    "excluded": "All seven category-specific projectors; FF, AdaNorm, timestep/output projectors, VL self-attention, embeddings and normalization; no head-base quantization or cast.",
+    "graph": "Both factor groups finalized before the existing checkpoint codec and optimizer; explicit head_adapters identity, original language targets unchanged, no auxiliary trainables.",
+    "head_adapter_dropout": 0.0,
+    "head_alpha": 64.0,
+    "head_bias_policy": "frozen_float32",
+    "head_factor_elements": 13107200,
+    "head_factor_tensors": 256,
+    "head_rank": 32,
+    "head_target_geometry": "FP32 biased ordinary Linear: out1536; in2048 for even-block k/v, otherwise1536",
+    "head_target_names": "action_head.model.transformer_blocks.{0..31}.attn1.{to_q,to_k,to_v,to_out.0}",
+    "head_targets": 128,
+    "initialization": "Original language factor initialization unchanged. Independent same-seed device generator initializes FP32 head A and zero B after language initialization, without consuming global noise RNG.",
+    "language_factor_elements": 19922944,
+    "language_factor_tensors": 224,
+    "language_targets": 112,
+    "native_modes": "Preserve original full-head tune_projector/tune_diffusion_model/tune_vlln and native training/dropout modes; train_action_head=false freezes original parameters only, without no_grad or eval wrappers.",
+    "original_head_dtype": "float32",
+    "original_head_parameter_tensors_frozen": 537,
+    "total_optimizer_parameter_tensors": 480
+  },
+  "pre_screen_qualification": {
+    "controlled_backward": "Finite FP32 gradients for every required factor, initial zero A gradient allowed, nonzero head B and later A gradients on declared diagnostic inputs; no original-head gradients or changed frozen base/quantized state.",
+    "endpoint": "Full160 native evaluations at0/100/200 and fresh portable160 at200 with exact rows/metrics/source binding; retain equal-budget endpoints and unreached targets.",
+    "initialized_comparison": "Same input tensors and RNG; full native forward/flow loss/four-step sampled outputs and existing language unclipped gradients against the full/frozen original-head paths; global RNG and native modes exact.",
+    "lifecycle": "Actual CUDA multiple applied updates with exact480 optimizer membership, own-source short recovery with model/optimizer/RNG/data parity, fresh portable and standalone unmerged probes; both precisions pass before learning.",
+    "prospective_arithmetic_policy": "Start with exact zero-initialization forward/loss/sampler/RNG and existing-language-gradient comparisons, supported by zero B and unchanged native base operations. Any necessary real-kernel tolerance must be justified and fixed before GPU outcomes; no post-failure widening.",
+    "status": "Required before any200-update screen. Actual CUDA tolerances and lifecycle payload require root review before admission; CPU results are not CUDA qualification."
+  },
+  "prior_controls": {
+    "frozen": "Retain38539345 frozen-head100 technical PASS/quality DISCARD at100, without extension or relabeling. Native modes/dropout were the same as full-head; only trainability differed.",
+    "joint": "Retain selected LR1e-5 full-head controls at their actual100/200/300 checkpoints and all12 negative primary result. No checkpoint selection change."
+  },
+  "profile": "gr00t_n1d7_dit_attention_lora_v1",
+  "seed": 17,
+  "source_model": {
+    "backbone_metadata_repository": "nvidia/Cosmos-Reason2-2B",
+    "backbone_metadata_revision": "9ce19a195e423419c349abfc86fd07178b230561",
+    "isaac_revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "repository": "nvidia/GR00T-N1.7-LIBERO",
+    "revision": "2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21",
+    "runtime_build": "New exact source/wheel identity to be sealed only after CPU implementation review; no bridge to historical artifacts.",
+    "weights": "Complete original GR00T checkpoint; no replacement Qwen weights."
+  },
+  "source_references": {
+    "bf16_lora": {
+      "job": "38509654",
+      "metrics": {
+        "action_mae_gripper_environment_units": 0.1372063398733735,
+        "action_mae_pitch_environment_units": 0.016093830139640716,
+        "action_mae_roll_environment_units": 0.008225875696466987,
+        "action_mae_x_environment_units": 0.053972841933195764,
+        "action_mae_y_environment_units": 0.0449414604387712,
+        "action_mae_yaw_environment_units": 0.009601551121868425,
+        "action_mae_z_environment_units": 0.07409409063177787,
+        "normalized_action_mse": 0.05506814191766483
+      },
+      "remote": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38509654/calibration/evaluation/native/evaluation.json",
+      "sha256": "5ef0f594b77335cc3aaa5875ec191dfb90bcf61fa5985cfa65426d4e93a4a0d8"
+    },
+    "nf4_lora": {
+      "job": "38509843",
+      "metrics": {
+        "action_mae_gripper_environment_units": 0.1357787735760212,
+        "action_mae_pitch_environment_units": 0.01679471389145995,
+        "action_mae_roll_environment_units": 0.008380835461261412,
+        "action_mae_x_environment_units": 0.056422665883997095,
+        "action_mae_y_environment_units": 0.04715542558013691,
+        "action_mae_yaw_environment_units": 0.009905640157403974,
+        "action_mae_z_environment_units": 0.07510914491397083,
+        "normalized_action_mse": 0.055654463751457765
+      },
+      "remote": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38509843/calibration/evaluation/native/evaluation.json",
+      "sha256": "d71df8a2730f2e85aad7a429c9e873abf97d8c241b7f8a104740e8249c8bd73d"
+    }
+  },
+  "status": "prospective scientific protocol; native CPU implementation only; no GPU admission",
+  "unchanged_release_guards": {
+    "adaptation_guard": "The trained recipe must reach the fixed offline adaptation target and demonstrate useful action/task behavior over the original source. A noninferiority pass alone does not show adaptation.",
+    "closed_loop_rationale": "At most one additional failed trajectory per 50 episodes. This requires actual simulator outcomes; action MSE is insufficient.",
+    "closed_loop_success_loss_upper95_pp_max": 2.0,
+    "decision": "No release qualification from this exposed development cohort. Retain every failed/unreached trial and the unchanged NF4 control before any further learning intervention.",
+    "improvement_objective": "Report paired quality and time-to-quality improvement versus BF16 LoRA separately from preservation. Favorable means alone do not establish improvement.",
+    "offline_action_mse_relative_upper95_max": 0.05,
+    "offline_rationale": "A 5% MSE budget allows at most sqrt(1.05)-1 = 2.47% relative RMSE amplitude increase. This is a prospective task-level precision budget, not a WTS NLL margin.",
+    "primary_reference": "bf16_lora"
+  }
+}
