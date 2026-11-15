@@ -522,8 +522,24 @@ cursor, evaluation history and the resumed update matched exactly. Frozen-base
 validation and fresh source/scorer identities passed. All six model stages and
 726 observed host collections passed; short unsampled phases remain recorded.
 The allocation cost 1,054 GPU-seconds. This closes current-source default training,
-recovery and portable reload coverage; it does not repeat mature recovery, qualify
-current-default standalone export or establish learning/performance improvement.
+recovery and portable reload coverage; it does not repeat mature recovery or
+establish learning/performance improvement.
+
+Current-default standalone export subsequently passed in `38578617` on the same
+`e64a735` implementation. Both own-update-2 BF16/NF4 portable policies reproduced
+their two native action-score rows, controlled task outputs and processor inputs
+after export and fresh loading without the original checkpoint paths or quantizer
+imports. Each artifact retained all 761 trained tensors, 112 effective backbone
+matrices and required native sidecars: 21 indexed shards, 10,247,208,358 bytes.
+The 512-MiB payload limit permits three indivisible oversized tensors per artifact.
+The shared Alpamayo/GR00T allocation completed all twelve stages and cost 2,806
+GPU-seconds; all 1,818 observed host/GPU samples passed independent replay, while
+22 short unsampled intervals remain explicit. Native scoring/publication clocks
+and extra integrity-capture costs are recorded separately in the
+[family evidence](evidence/native_qlora_family_engineering_4cba88f.json).
+This closes current-default unmerged reconstruction coverage, not merged parity,
+full-cohort quality, mature recovery or deployment-speed qualification. The earlier
+35-second pre-model UID-check failure remains a separate failed allocation.
 
 ## Fresh-process evaluation
 

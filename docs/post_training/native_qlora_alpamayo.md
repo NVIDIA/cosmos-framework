@@ -216,6 +216,23 @@ failed job or create its missing original acceptance. All 1,388 observed host
 collections were complete, while some short phase intervals had no sample.
 This extends current-source reliability, not the historical quality or timing results.
 
+Both own-update-2 BF16/NF4 policies subsequently passed current-build standalone
+export and reload in `38578617`, using unchanged `e64a735` model code. Their two
+native trajectory-score rows, controlled outputs and processor inputs matched
+exactly after fresh loading without the original base/processor directories or
+quantizer imports. Each export retained all 903 trained tensors, 247 effective
+backbone matrices and native sidecars: 51 indexed shards, 27,070,952,449 bytes.
+Two indivisible embedding/output tensors exceed the otherwise 512-MiB shard limit.
+The shared four-artifact Alpamayo/GR00T allocation completed all twelve stages and
+cost 2,806 GPU-seconds. Independent replay verified 267 receipt files and all
+1,818 observed host/GPU samples; 22 short unsampled intervals remain explicit.
+The [family evidence](evidence/native_qlora_family_engineering_4cba88f.json) separates
+native scoring/publication, extra capture, export and complete allocation costs.
+This is current-default unmerged artifact correctness, not a new full-development
+quality, mature-recovery, merged-parity or inference-speed result. Neither the
+original `38560176` failure nor the separate 35-second pre-model UID-check failure
+is reclassified by this successful check.
+
 The separate `posttrain.checkpoint.tools.export_family_dense` command reconstructs
 `dequantize(Q(W)) + (alpha/rank) BA` with FP32 accumulation. Specify
 `--merged-backbone-dtype=bfloat16` or `float32`; all other parameters and buffers
