@@ -26142,6 +26142,215 @@
         "repair": "Reuse qualified whole-census timeout restart/replay,10squeries/180s full deadline,zero-owned host context. Strict malformed/error/ownership refusals retained; distinct attempt2 paths;26-file science/native unchanged.41 distinct CPU cases passed owner and independentpeer. Both actual preflight and submission complete fresh censuses passed with21unrelated/zero-owned jobs each."
       },
       "local_analysis_limits": "The independent peer corrected one supplemental memory-summary call signature locally before executing the frozen reduction. Original traceback/empty log retained; no GPU/source/raw-data repeat or metric change."
+    },
+    "38574255": {
+      "job": "38574255",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 5211,
+      "native_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "mode": "nf4_lora",
+      "seed": 42,
+      "updates": 128,
+      "evaluation_rows_per_boundary": 256,
+      "evaluation_boundaries": [
+        0,
+        128
+      ],
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90",
+      "payload_manifest_sha256": "55487713513b3aaa8b9f30b000b902139bb816eb85e60f912599811365a9fbda",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-cache-38574255-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "6c3c5ce6a954d1f3f72a3afc423c1eeb3db565e935e144bcf556c23e0df1c2c3",
+      "inventory_sha256": "cced4c7d6404d7a00de8ca64af1368a08108388c07ec18a02adce84de71b05fc",
+      "pair_result_sha256": "cd6388e1017179b18220d7d3c53075c5549b88497d59997d97d1cb217112091c",
+      "terminal_sha256": "4cb006329f11e43edd1e2ef76c391f653b5721a3db4602ca0bb6920d6196cbd7",
+      "terminal_release_sha256": "4cb006329f11e43edd1e2ef76c391f653b5721a3db4602ca0bb6920d6196cbd7",
+      "readout_sha256": "4def3d9e19fc0fb9d07339af40ab137d57de4ed7363469bc5df92c56bc79cf0b",
+      "files_verified": 177,
+      "placement": {
+        "cpu_affinity": [
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          156,
+          157,
+          158,
+          159,
+          160,
+          161,
+          162,
+          163
+        ],
+        "cpu_numa_nodes": {
+          "156": [
+            "node1"
+          ],
+          "157": [
+            "node1"
+          ],
+          "158": [
+            "node1"
+          ],
+          "159": [
+            "node1"
+          ],
+          "160": [
+            "node2"
+          ],
+          "161": [
+            "node2"
+          ],
+          "162": [
+            "node2"
+          ],
+          "163": [
+            "node2"
+          ],
+          "28": [
+            "node1"
+          ],
+          "29": [
+            "node1"
+          ],
+          "30": [
+            "node1"
+          ],
+          "31": [
+            "node1"
+          ],
+          "32": [
+            "node2"
+          ],
+          "33": [
+            "node2"
+          ],
+          "34": [
+            "node2"
+          ],
+          "35": [
+            "node2"
+          ]
+        },
+        "gpu_bytes": 85174583296,
+        "gpu_name": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-9667281c-de6e-2e30-3f33-0cec8854afbc",
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t28-35,156-163",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38574255"
+      },
+      "runtime_versions": {
+        "bitsandbytes": "0.49.2",
+        "diffusers": "0.35.1",
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "transformers": "4.57.6"
+      },
+      "allocator": "expandable_segments:True",
+      "cases": {
+        "off": {
+          "native_process_seconds": 2656.341880520995,
+          "native_clocks": {
+            "checkpoint_seconds": 40.90607770299539,
+            "evaluation_seconds": 1895.912569447988,
+            "portable_export_seconds": 21.7027656930004,
+            "startup_seconds": 268.13275607000105,
+            "training_seconds": 404.32480086902797
+          },
+          "cold_case_seconds": 2729.5400719030004,
+          "native_host_hwm_bytes": 46080036864,
+          "observed_samples": 2079,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 69432915968,
+          "allocator_peak_reserved_bytes": 70835503104,
+          "sampled_owned_gpu_peak_bytes": 72051851264,
+          "sampled_host_pss_peak_bytes": 46773954560,
+          "sampled_host_rss_peak_bytes": 47288188928,
+          "cache_observations": {
+            "enabled": false,
+            "retained_tensor_bytes_peak": 0
+          }
+        },
+        "on": {
+          "native_process_seconds": 2231.4373815770086,
+          "native_clocks": {
+            "checkpoint_seconds": 40.64917988301022,
+            "evaluation_seconds": 1461.6159130559972,
+            "portable_export_seconds": 23.037205561005976,
+            "startup_seconds": 276.3854997699964,
+            "training_seconds": 403.70871520107903
+          },
+          "cold_case_seconds": 2309.0309262579976,
+          "native_host_hwm_bytes": 45841817600,
+          "observed_samples": 1740,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 69432915968,
+          "allocator_peak_reserved_bytes": 70835503104,
+          "sampled_owned_gpu_peak_bytes": 72051851264,
+          "sampled_host_pss_peak_bytes": 46485895168,
+          "sampled_host_rss_peak_bytes": 47019220992,
+          "cache_observations": {
+            "clone_seconds": 6.840794625080889,
+            "enabled": true,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 512,
+            "identity_seconds": 61.8678500285896,
+            "misses": 512,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          }
+        }
+      },
+      "per_pair_metrics": {
+        "GPU_increase_bytes": {
+          "allocated": 0,
+          "owned_process": 0,
+          "reserved": 0
+        },
+        "all_three_clocks_faster": true,
+        "complete_cold_case_on_off_ratio": 0.8459413913817982,
+        "evaluator_on_off_ratio": 0.7709300189309678,
+        "host_increase_bytes": {
+          "native_hwm": -238219264,
+          "pss": -288059392,
+          "rss": -268967936
+        },
+        "memory_passed": true,
+        "native_process_on_off_ratio": 0.8400414863539144,
+        "retained_cache_bytes": 70829184,
+        "seed": 42
+      },
+      "exact_cache_pair": {
+        "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+        "atol": 0,
+        "identity_bridge": {
+          "allowed_observation_only": [
+            "identity.training_contract.evaluation_input_reuse"
+          ],
+          "cross_build_resume_supported": false,
+          "metadata_modified": false,
+          "passed": true
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "original17_numerical_reference": {},
+      "separate_cpu_comparison_seconds": 94.2412357639987,
+      "allocation_script_seconds": 5205.382234953999,
+      "may_admit_next_pair": true,
+      "promotion": false,
+      "validation_scope": "Root verified177 file hashes/sizes and c928 terminal/controller/queue/step release. Independent peers replayed3819 strict v11 observations,128 numerical updates,four256-row reductions,placement,census and allocator summaries. The sole frozen reader also checked10 small metadata/trainer/data files; full model/optimizer equality remains the retained on-node assertion. Seed42 has no historical seed17 reference. Short unsampled phases and sampled lower-bound scope remain explicit; recorded CPU/NUMA masks do not imply new memory binding.",
+      "decision": "NF42 reversed-order correctness/memory/all-three-clocks PASS; three of four prospective pairs complete. BF42 and aggregate per-precision gates remain required; no promotion or default change. No trained-ON128 continuation,full512 quality/time-to-target,inference acceleration or cross-placement NF4/BF16 superiority claim.",
+      "execution_order": [
+        "on",
+        "off"
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {

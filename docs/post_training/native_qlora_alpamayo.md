@@ -717,12 +717,23 @@ sampled-peak and short unsampled-interval limitations. Independent replay verifi
 168 files and terminal release. The allocation cost 5,265 GPU-seconds, including
 a separate 179.55-second state comparison.
 
-These are **two successful seed-17 blocks, not promotion**. The frozen study still
-requires reversed-order seed-42 pairs in both precisions, with every pair faster
+The reversed-order NF4 seed-42 pair `38574255` then passed: evaluation fell from
+**1,895.91 to 1,461.62 seconds (22.91%)**, native-process time from **2,656.34 to
+2,231.44 seconds (16.00%)**, and complete-case time from **2,729.54 to 2,309.03
+seconds (15.41%)**. All 128 numerical updates, four 256-row score sets and full
+checkpoint states matched between OFF and ON; no historical seed-17 reference
+was used for this seed. GPU peaks were unchanged. All 3,819 host observations
+were complete, with the same sampled-peak limitations; the 67.55-MiB cache again
+recorded 512 hits and misses. The allocation cost 5,211 GPU-seconds, including a
+separately measured 94.24-second state comparison. Independent replay verified
+177 files and terminal release.
+
+These are **three successful blocks, not promotion**. The frozen study still
+requires the reversed-order BF16 seed-42 pair, with every pair faster
 and each precision meeting its aggregate time/memory gates. The option remains
 off by default. This shared evaluation improvement does not improve fixed-step
 trajectory quality or establish faster time to the unreached quality target.
-The two precision pairs used different placements; their absolute times do not
+Placements differed between pairs; their absolute times do not
 establish NF4-versus-BF16 superiority. Raw receipts, exact source/placement,
 component clocks and independent replay are bound in the existing family evidence.
 
