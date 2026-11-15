@@ -367,8 +367,8 @@ inputs for both native head calls and a 16 MiB retained-tensor bound. The head
 mutates its input mapping, so reusing already transformed features is incorrect.
 The option remains off by default pending the complete matched workflow study
 and its trained-boundary recovery gate. The study gives both precision arms the
-same option and requires exact numerical trajectories; its first completed pair
-is recorded below alongside the real-model correctness continuation.
+same option and requires exact numerical trajectories; its two completed seed-17
+pairs are recorded below alongside the real-model correctness continuation.
 The first profile allocation `38548693` failed before model loading because a
 launcher imported an executable monitor module; its 68 GPU-seconds remain
 recorded separately from the successful diagnostic's 334 GPU-seconds.
@@ -428,11 +428,29 @@ peaks are lower bounds. Independent replay verified 238 files and terminal
 release. The allocation cost 2,622 GPU-seconds, including a separate 271.00-second
 saved-state comparison.
 
-This pair passes the frozen continuation rule, **not promotion**. The BF16 pair,
-reversed-order pairs and aggregate/mature-recovery gates remain required. It
-establishes an execution improvement over this NF4 reference, not better task
-quality, NF4 superiority over BF16, or inference acceleration. Exact receipts,
-component clocks and limitations are retained in the existing family evidence.
+The second frozen pair (`38592360`, BF16 seed 17, OFF then ON) also passes the
+continuation rule. It repeats the same 300-update/full-160-row/fresh-three-seed
+protocol on one A100 with identical within-pair CPU affinity and recorded NUMA
+constraints. All saved states at 100/200/300, numerical updates, task rows and
+fresh scores match exactly. Evaluation time fell **303.15 to 258.37 seconds
+(14.77%)**, native-process time **606.95 to 560.82 seconds (7.60%)**, and complete
+cold-case time **1,146.60 to 1,053.89 seconds (8.09%)**. Both reached the unchanged
+target at update 200; their native target-publication clocks were 413.30/382.31
+seconds, with the same separate-launcher scope described above.
+
+Sampled owned-GPU peak remained **31.516 GiB**, and all memory gates passed.
+The cache retained 2.11 MiB; the observed host-peak decrease does not establish a
+causal memory benefit of caching. Independent replay verified all 242 files,
+1,566 complete host samples, eight stage summaries and terminal release. Short
+unsampled intervals and sampled lower bounds remain. The allocation cost 2,499
+GPU-seconds, including a separate 251.50-second saved-state comparison.
+
+These two pairs establish execution improvements over each precision's reference,
+**not promotion**, better task quality, NF4 superiority over BF16, or inference
+acceleration. Their physical placements differ across allocations. The two
+reversed-order seed-42 pairs and aggregate/mature-recovery gates remain required.
+Exact receipts, component clocks and limitations are retained in the existing
+family evidence.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
