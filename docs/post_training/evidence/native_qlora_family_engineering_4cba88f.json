@@ -27089,6 +27089,326 @@
       },
       "validation_scope": "Root independently rehashed all267 files/sizes/archive and replayed qualified c928 terminal release. Owner and independent peer rederived native metadata/index/sidecars, all source/scorer/native2-row/capture records, actual UID mappings and1818 v11/a466 raw observations. Full tensor/shard payload/RNG equality remains retained compute-side proof; no local full-weight reads. All22 short unsampled subphases remain explicit; sampled peaks are lower bounds.",
       "decision": "PASS current-default same-base portable and standalone unmerged reconstruction in both families/precision arms. No new training, mature recovery, full-cohort quality, merged parity, memory-reduction or speed claim. Original source Alpa38560176 remains FAILED with separate retrospective proof; prior standalone38577606 remains FAILED35s."
+    },
+    "38580754": {
+      "job": "38580754",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 5126,
+      "native_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "mode": "bf16_lora",
+      "seed": 42,
+      "updates": 128,
+      "evaluation_rows_per_boundary": 256,
+      "evaluation_boundaries": [
+        0,
+        128
+      ],
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90",
+      "payload_manifest_sha256": "55487713513b3aaa8b9f30b000b902139bb816eb85e60f912599811365a9fbda",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-cache-38580754-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "7ec1c737247575bdd4cfe9f4dd029eedbdd65fc6e2d862571afa8fe5ee426ac0",
+      "inventory_sha256": "9a2808720aa283c14c0c7cc79ba9cedef526d3bc57b36a9fb1211909700bc129",
+      "pair_result_sha256": "8ee7abb94592c5900d16d2da32078f114e7aa7be9fa98495f27efcb4dbd7b580",
+      "terminal_sha256": "359e814e78de586ae3dd0f8bcc3fd5809529d55b430292ca3f9d8efc3eac75a9",
+      "terminal_release_sha256": "359e814e78de586ae3dd0f8bcc3fd5809529d55b430292ca3f9d8efc3eac75a9",
+      "readout_sha256": "8e44dc6bef7eb5e65881f3b456581bf0495e8b3c862dea026d59cb79b19787ae",
+      "files_verified": 183,
+      "placement": {
+        "cpu_affinity": [
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147
+        ],
+        "cpu_numa_nodes": {
+          "14": [
+            "node0"
+          ],
+          "140": [
+            "node0"
+          ],
+          "141": [
+            "node0"
+          ],
+          "142": [
+            "node0"
+          ],
+          "143": [
+            "node0"
+          ],
+          "144": [
+            "node1"
+          ],
+          "145": [
+            "node1"
+          ],
+          "146": [
+            "node1"
+          ],
+          "147": [
+            "node1"
+          ],
+          "15": [
+            "node0"
+          ],
+          "16": [
+            "node1"
+          ],
+          "17": [
+            "node1"
+          ],
+          "18": [
+            "node1"
+          ],
+          "19": [
+            "node1"
+          ],
+          "20": [
+            "node1"
+          ],
+          "21": [
+            "node1"
+          ]
+        },
+        "gpu_bytes": 85174583296,
+        "gpu_name": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-a9f2ce8d-1f94-2650-9cb7-150ab2083612",
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t14-21,140-147",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38580754"
+      },
+      "runtime_versions": {
+        "bitsandbytes": "0.49.2",
+        "diffusers": "0.35.1",
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "transformers": "4.57.6"
+      },
+      "allocator": "expandable_segments:True",
+      "cases": {
+        "off": {
+          "native_process_seconds": 2593.042738071992,
+          "native_clocks": {
+            "checkpoint_seconds": 47.94312350905966,
+            "evaluation_seconds": 1861.417895823135,
+            "portable_export_seconds": 22.400447953958064,
+            "startup_seconds": 236.21798171196133,
+            "training_seconds": 392.0866845351411
+          },
+          "cold_case_seconds": 2670.9226116130594,
+          "native_host_hwm_bytes": 45800665088,
+          "observed_samples": 2018,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 79466941440,
+          "allocator_peak_reserved_bytes": 80645980160,
+          "sampled_owned_gpu_peak_bytes": 81862328320,
+          "sampled_host_pss_peak_bytes": 46472866816,
+          "sampled_host_rss_peak_bytes": 46977929216,
+          "cache_observations": {
+            "enabled": false,
+            "retained_tensor_bytes_peak": 0
+          }
+        },
+        "on": {
+          "native_process_seconds": 2158.850237267907,
+          "native_clocks": {
+            "checkpoint_seconds": 47.54728536203038,
+            "evaluation_seconds": 1425.7080373200588,
+            "portable_export_seconds": 21.843225282034837,
+            "startup_seconds": 239.9607811960159,
+            "training_seconds": 390.7875655766111
+          },
+          "cold_case_seconds": 2239.7124972209567,
+          "native_host_hwm_bytes": 45783900160,
+          "observed_samples": 1688,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 79466941440,
+          "allocator_peak_reserved_bytes": 80645980160,
+          "sampled_owned_gpu_peak_bytes": 81862328320,
+          "sampled_host_pss_peak_bytes": 46425361408,
+          "sampled_host_rss_peak_bytes": 46970470400,
+          "cache_observations": {
+            "clone_seconds": 6.7270777800586075,
+            "enabled": true,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 512,
+            "identity_seconds": 55.73158032738138,
+            "misses": 512,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          }
+        }
+      },
+      "per_pair_metrics": {
+        "GPU_increase_bytes": {
+          "allocated": 0,
+          "owned_process": 0,
+          "reserved": 0
+        },
+        "all_three_clocks_faster": true,
+        "complete_cold_case_on_off_ratio": 0.8385538717905119,
+        "evaluator_on_off_ratio": 0.7659258248882358,
+        "host_increase_bytes": {
+          "native_hwm": -16764928,
+          "pss": -47505408,
+          "rss": -7458816
+        },
+        "memory_passed": true,
+        "native_process_on_off_ratio": 0.8325548227844016,
+        "retained_cache_bytes": 70829184,
+        "seed": 42
+      },
+      "exact_cache_pair": {
+        "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+        "atol": 0,
+        "identity_bridge": {
+          "allowed_observation_only": [
+            "identity.training_contract.evaluation_input_reuse"
+          ],
+          "cross_build_resume_supported": false,
+          "metadata_modified": false,
+          "passed": true
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "original17_numerical_reference": {},
+      "separate_cpu_comparison_seconds": 103.58613080298528,
+      "allocation_script_seconds": 5114.996540562948,
+      "may_admit_next_pair": true,
+      "promotion": false,
+      "validation_scope": "Root independently verified183 file hashes/sizes and c928 terminal/controller/queue/step release. Frozen reader and independent replay verified3706 strict v11 observations,128 numerical updates,four256-row reductions,placement,census and allocator summaries. Ten small metadata/trainer/data files were read locally; full model/optimizer equality is the retained on-node assertion. Seed42 has no historical seed17 reference. Short unsampled phases and sampled lower-bound scope remain explicit; recorded CPU/NUMA masks do not imply new memory binding.",
+      "decision": "BF42 reversed-order correctness/memory/all-three-clocks PASS; all four prospective pairs complete. Frozen aggregate decision is recorded separately. Current-build trained-ON recovery remains required before recommending the option; no full512 quality/time-to-target,inference acceleration or cross-placement NF4/BF16 superiority claim.",
+      "execution_order": [
+        "on",
+        "off"
+      ],
+      "four_pair_decision": {
+        "path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-cache-four-pair-v5-decision-v1.json",
+        "sha256": "645ab9ece30cbaf40260538bc64b707abce1e4413a6d5e99268c18cef893d342",
+        "frozen_reducer_sha256": "6e756e1b1b365e7a6b486d772b51974da0a8c08169935451e98efbbdd8ee1e6d",
+        "result": {
+          "complete": true,
+          "precision_results": {
+            "bf16_lora": {
+              "complete_cold_case_geometric_mean_on_off_ratio": 0.8372397170636158,
+              "evaluator_geometric_mean_on_off_ratio": 0.7668821474518364,
+              "native_process_geometric_mean_on_off_ratio": 0.833196180802939,
+              "pairs": [
+                {
+                  "GPU_increase_bytes": {
+                    "allocated": 0,
+                    "owned_process": 0,
+                    "reserved": 0
+                  },
+                  "all_three_clocks_faster": true,
+                  "complete_cold_case_on_off_ratio": 0.8359276218378494,
+                  "evaluator_on_off_ratio": 0.7678396640642807,
+                  "host_increase_bytes": {
+                    "native_hwm": -708608,
+                    "pss": 36052992,
+                    "rss": 40660992
+                  },
+                  "memory_passed": true,
+                  "native_process_on_off_ratio": 0.833838032891172,
+                  "retained_cache_bytes": 70829184,
+                  "seed": 17
+                },
+                {
+                  "GPU_increase_bytes": {
+                    "allocated": 0,
+                    "owned_process": 0,
+                    "reserved": 0
+                  },
+                  "all_three_clocks_faster": true,
+                  "complete_cold_case_on_off_ratio": 0.8385538717905119,
+                  "evaluator_on_off_ratio": 0.7659258248882358,
+                  "host_increase_bytes": {
+                    "native_hwm": -16764928,
+                    "pss": -47505408,
+                    "rss": -7458816
+                  },
+                  "memory_passed": true,
+                  "native_process_on_off_ratio": 0.8325548227844016,
+                  "retained_cache_bytes": 70829184,
+                  "seed": 42
+                }
+              ],
+              "passed": true
+            },
+            "nf4_lora": {
+              "complete_cold_case_geometric_mean_on_off_ratio": 0.8417128770491429,
+              "evaluator_geometric_mean_on_off_ratio": 0.7712292974241461,
+              "native_process_geometric_mean_on_off_ratio": 0.8371705334444838,
+              "pairs": [
+                {
+                  "GPU_increase_bytes": {
+                    "allocated": 0,
+                    "owned_process": 0,
+                    "reserved": 0
+                  },
+                  "all_three_clocks_faster": true,
+                  "complete_cold_case_on_off_ratio": 0.837505499326711,
+                  "evaluator_on_off_ratio": 0.7715286920985787,
+                  "host_increase_bytes": {
+                    "native_hwm": 339968,
+                    "pss": 11419648,
+                    "rss": -6942720
+                  },
+                  "memory_passed": true,
+                  "native_process_on_off_ratio": 0.834309392396422,
+                  "retained_cache_bytes": 70829184,
+                  "seed": 17
+                },
+                {
+                  "GPU_increase_bytes": {
+                    "allocated": 0,
+                    "owned_process": 0,
+                    "reserved": 0
+                  },
+                  "all_three_clocks_faster": true,
+                  "complete_cold_case_on_off_ratio": 0.8459413913817982,
+                  "evaluator_on_off_ratio": 0.7709300189309678,
+                  "host_increase_bytes": {
+                    "native_hwm": -238219264,
+                    "pss": -288059392,
+                    "rss": -268967936
+                  },
+                  "memory_passed": true,
+                  "native_process_on_off_ratio": 0.8400414863539144,
+                  "retained_cache_bytes": 70829184,
+                  "seed": 42
+                }
+              ],
+              "passed": true
+            }
+          },
+          "promote": true,
+          "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90",
+          "scope": "128-update paused engineering workflow under unchanged512 schedule. No full512 timing, useful-quality improvement, NF4 superiority, or inference-latency claim."
+        },
+        "independent_replay": "Exact full decision equality independently replayed using all four canonical pair hashes, unchanged reducer/run/protocol and exact native source26 identities.",
+        "clean_pair_gpu_seconds": 20957,
+        "prior_failed_gpu_seconds": 2926,
+        "total_timing_gpu_seconds": 23883,
+        "complete_memory_samples": 15132,
+        "current_build_release_gate": "Timing criteria PASS; own current-e64 ON128/100-to128/freshportable qualification remains required. Option remains off by default. Historical per-job promotion statuses remain their original decisions."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {

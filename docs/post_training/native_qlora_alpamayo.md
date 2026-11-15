@@ -745,10 +745,25 @@ recorded 512 hits and misses. The allocation cost 5,211 GPU-seconds, including a
 separately measured 94.24-second state comparison. Independent replay verified
 177 files and terminal release.
 
-These are **three successful blocks, not promotion**. The frozen study still
-requires the reversed-order BF16 seed-42 pair, with every pair faster
-and each precision meeting its aggregate time/memory gates. The option remains
-off by default. This shared evaluation improvement does not improve fixed-step
+The final reversed-order BF16 seed-42 pair `38580754` also passed. Evaluation
+fell from **1,861.42 to 1,425.71 seconds (23.41%)**, native-process time from
+**2,593.04 to 2,158.85 seconds (16.74%)**, and complete-case time from **2,670.92
+to 2,239.71 seconds (16.14%)**. All 128 updates, task scores and checkpoint
+states matched; GPU peaks were unchanged. All 3,706 observed host samples were
+complete, with the same sampling limitations. Independent replay verified 183
+files and terminal release. The allocation cost 5,126 GPU-seconds, including
+a separate 103.59-second state comparison.
+
+**All four frozen timing gates passed.** Across the two seeds, geometric-mean
+evaluation/native-process/complete-case reductions were **22.88%/16.28%/15.83%
+for NF4** and **23.31%/16.68%/16.28% for BF16**. Every pair was faster on all
+three clocks and passed its memory gate. The four clean allocations cost 20,957
+GPU-seconds; the earlier failed allocation adds 2,926 seconds, for 23,883 total.
+The unchanged reducer and its full decision were independently replayed.
+
+This qualifies the timing intervention on the recorded source-26 workflow;
+current-build recovery remains pending below, and the option remains off by
+default. This shared evaluation improvement does not improve fixed-step
 trajectory quality or establish faster time to the unreached quality target.
 Placements differed between pairs; their absolute times do not
 establish NF4-versus-BF16 superiority. Raw receipts, exact source/placement,
