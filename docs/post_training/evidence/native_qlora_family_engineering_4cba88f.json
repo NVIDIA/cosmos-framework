@@ -27944,5 +27944,76 @@
     "resource_plan": "One A10080,16CPUs,128GiB,30-minute scheduler cap on unchanged authorized routing. Estimated5\u201310minutes is planning only. Must not overlap the active Alpamayo timing allocation.",
     "completed_job": "38567435",
     "outcome": "Completed descriptive diagnostic; read jobs.38567435. Original failed qualitydecision unchanged; no newrecipepromotion."
+  },
+  "gr00t_selected_fullhead_language_error_diagnostic": {
+    "status": "Prospectively sealed locally before outcomes; no remote staging/admission during active AlpamayoBF17 timing",
+    "rationale": "The rejected BF head-adapter policy exhibits lower flowloss but higher sampled actionerror from its learned language delta on20 consumed trainrows. Selected full-head behavior cannot be inferred from that policy; test that transfer before selecting a learning intervention.",
+    "source": {
+      "code_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "manifest_sha256": "da8103ce69578992a1b11aed793b0dbb89f6e3f86bd3e3d72122965270abe671",
+      "scope": "Original compatible runtime-curated4c closure, no source or metadata bridge",
+      "wheel_sha256": "9113351965b501d293f9a71f476926fc212c51732144a63f90aca144120f0697"
+    },
+    "artifact": {
+      "components": {
+        "model": {
+          "kind": "file",
+          "path": "model.pt",
+          "sha256": "481414015d614ee6056a4929b4f080b4f4ad03066e860ef6d2f1f8292d946858",
+          "size": 6561996339
+        },
+        "model_metadata": {
+          "kind": "file",
+          "path": "model_metadata.pt",
+          "sha256": "d12af7495a3fcb2b917be13ddea208c4060d0c3bfc2b3a6b12b735a35d8b15b8",
+          "size": 1500183
+        }
+      },
+      "extracted_identity_record_sha256": "b34e27aeed8b3013bec6b09c1a8e1c3f8a632e13a9db4f416c9782ebddc0e614",
+      "fresh160_sha256": "72f4ae0eb1bf155c3b6aa9ff4b3395f2ffaa1cdbcad190db4800cf8103f1da98",
+      "identity_json_sha256": "ede5e3cc72cf31da4db7f6b0fa1774e934eee1ce25ab475ac18ecc17777ebdf3",
+      "job": "38515136",
+      "marker_sha256": "a3faf7771725336bed85219e9d87258ddb98b282efa2bedaf573e367a0fa362c",
+      "metadata_sha256": "d12af7495a3fcb2b917be13ddea208c4060d0c3bfc2b3a6b12b735a35d8b15b8",
+      "mode": "bf16_lora",
+      "path": "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38531405/publication/bf16_lora/checkpoint_artifacts/iter_000200",
+      "publication_acceptance_sha256": "a4ecc6cfe4aa5a734cbdc82d93a6951394ed409e6c2e5aed7a77a59ac344a6fe",
+      "publication_job": "38531405",
+      "scope": "Exact original selected full-head BF200 policy; unchanged all761 portable tensors published from originalDCP200. No e64 identity bridge.",
+      "step": 200
+    },
+    "payload_manifest_sha256": "ee582bf4c99f49eeff8b18e6b01732fee8ac1fe84eda046f1b966824e93a2e3f",
+    "protocol_sha256": "50e54911bc88264f0a891efe4ea7ef81241a74a48356096245a3871082fded51",
+    "archive_sha256": "40e33f8f24af4a4db8d6ea88dba7dcb305e0612c12e7c388342d2488ca2f3c29",
+    "payload_path": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/gr00t-full-head-language-ablation-4cba88f-v1",
+    "rows": "Same fixed20 training IDs, firsttwo per10tasks actuallyconsumed withinoriginalseed17first200; no newinput or selection by results",
+    "conditions": [
+      {
+        "language_scale": 1,
+        "name": "language_on"
+      },
+      {
+        "language_scale": 0,
+        "name": "language_off"
+      }
+    ],
+    "noise_seed": 123,
+    "sampler_steps": 4,
+    "updates": 0,
+    "intervention": "Only learned language alpha1vs0; all537 trained FP32 head tensors and224 language factors remain unchanged. Original4c native evaluator/get_action/noise/input semantics; restorefullstate/modes/scales/RNG even onerror.",
+    "interpretation_rule": {
+      "all_required": {
+        "language_on_native_flow_loss_strictly_lower": true,
+        "language_on_over_off_normalized_action_mse_relative_increase_at_least": 0.01,
+        "represented_task_count": 10,
+        "task_mean_mse_strictly_worse_count_at_least": 6
+      },
+      "if_all": "Justifies considering one separately authorized lower-language-LR screen on the selected full-head policy; does not implement or admit it.",
+      "otherwise": "Do not transfer the rejected head-profile diagnosis to the selected full-head policy.",
+      "statistics": "Native weighted sum/count reductions; equal two rows per task, report both task mean MSEs and worse count. No CI, margin search, promotion or new metric."
+    },
+    "authorization_scope": "Existing user authorization covers necessary bounded learning/qualification. A separately reviewed future learning protocol is required for scientifically interpretable admission; no new user budget-transfer permission is implied. No LR change is selected by this preparation.",
+    "resources": "Existingroute;1A10080/16CPU128G/30mincap, defaultallocator, one model load/40native row evaluations. Existing corrected package-module v11observer; missing coverage descriptive, no newmemorygate. No concurrent timing allocation.",
+    "cpu_validation": "66distinct independent core andworker/source tests;5 actualsafe-path dispatch tests. No GPU/numericalpolicy claim from these tests."
   }
 }
