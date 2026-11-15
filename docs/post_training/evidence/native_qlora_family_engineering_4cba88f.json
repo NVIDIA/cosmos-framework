@@ -233,6 +233,151 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38603421": {
+      "job": "38603421",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "allocated_gpu_seconds": 88,
+      "native_revision": "cbc950f867329838a81f57fa303dbc033b12bef2",
+      "protocol_sha256": "5c3118024028ed43fa6bc9d84b9c16233007c1b92cf0486b986a3dcf5d982f13",
+      "receipt_archive": "cosmos-qlora-family-20261113/gr00t-reuse-mature-38603421-receipts-v2.tar.gz",
+      "archive_sha256": "d2485991d12a96e45f628013b14a1285d043a6caff4ea5a6453ce2a7397adedf",
+      "inventory_sha256": "9d7a31b0bdf4dd67b6cdf5c27462fdf854323e1bc856eb97b7f97b4c10eabae4",
+      "files_verified": 182,
+      "payload_files_verified": 48,
+      "terminal_release_sha256": "a6a6e331254899e5723c1eab06a552ede211e8dcf8074931b90a22bfcfe7fbda",
+      "admission_sha256": "a331577d3c71a368b9903bd230ca70054722323f746dd3683aba1f490198f241",
+      "independent_failure_peer_sha256": "f4d48407e602aecd62f84274ec2dd70ed2029326c4ad1c3e0a198de4a6052946",
+      "runtime": {
+        "code": "cbc950f867329838a81f57fa303dbc033b12bef2",
+        "versions": {
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6",
+          "bitsandbytes": "0.49.2",
+          "safetensors": "0.8.0",
+          "diffusers": "0.35.1"
+        },
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "torch_uuid": "e968f41d-bc12-e29e-4807-fa918c01ddc3",
+          "uuid": "GPU-e968f41d-bc12-e29e-4807-fa918c01ddc3",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          188,
+          189,
+          190,
+          191,
+          192,
+          193,
+          194,
+          195
+        ],
+        "cpu_numa_nodes": {
+          "46": [
+            "node2"
+          ],
+          "47": [
+            "node2"
+          ],
+          "48": [
+            "node3"
+          ],
+          "49": [
+            "node3"
+          ],
+          "50": [
+            "node3"
+          ],
+          "51": [
+            "node3"
+          ],
+          "52": [
+            "node3"
+          ],
+          "53": [
+            "node3"
+          ],
+          "188": [
+            "node3"
+          ],
+          "189": [
+            "node3"
+          ],
+          "190": [
+            "node3"
+          ],
+          "191": [
+            "node3"
+          ],
+          "192": [
+            "node4"
+          ],
+          "193": [
+            "node4"
+          ],
+          "194": [
+            "node4"
+          ],
+          "195": [
+            "node4"
+          ]
+        },
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t46-53,188-195",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38603421",
+        "cuda_visible_devices": "0",
+        "allocator": {
+          "PYTORCH_ALLOC_CONF": null,
+          "PYTORCH_CUDA_ALLOC_CONF": null
+        }
+      },
+      "case_clock": {
+        "started_monotonic": 5785705.993168934,
+        "ended_monotonic": 5785783.987610822,
+        "elapsed_seconds": 77.99444188736379,
+        "exit_code": 1,
+        "worker_exit_code": 1,
+        "srun_returned_monotonic": 5785778.019049632,
+        "cleanup_seconds": 5.968561189249158,
+        "step_released": true,
+        "step_release_sha256": "ad9c033d85f5cee320943fe5bd453a9706eb06deb34ee1d13911044d04714c34",
+        "scope": "Launch, preparation, native workflow, process exit and verified owned-step release"
+      },
+      "failure": {
+        "exception": "ValueError: mature reference absent from full timing decision",
+        "location": "sealed mature.py:161, before reference inventory/model/stage/observer initialization",
+        "observed_reference_arguments": [
+          "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38590055",
+          "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38592360"
+        ],
+        "recorded_canonical_references": [
+          "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38590055/pair-result.json",
+          "/lustre/fs11/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/jobs/38592360/pair-result.json"
+        ],
+        "mechanism": "Literal resolved-path/hash membership differs under separate fsw/fs11 bind mounts. Exact checkpoint-reference bytes at two hardlink aliases reproduce the rejection; dispatching the recorded decision parent passes that predicate. This diagnoses launch provenance, not model arithmetic.",
+        "alias_fixture_log": "/tmp/gr00t-mature-alias-predicate-shared.log",
+        "alias_fixture_log_sha256": "4e9f3ac406a978b5ba81b4c84b775fafd2f6ed627c8aa0f7b52477dfddfff20f",
+        "metadata_schema": "Actual both-mode ON200/300 small metadata passes the unchanged mature inventory check; no dtype correction required."
+      },
+      "qualification": {
+        "resumed_training_stages_started": 0,
+        "accepted": false,
+        "memory_observations": null,
+        "scope": "No resumed update, fresh scoring, recovery or memory qualification result. Completed four-pair timing evidence unchanged. Original failed allocation retained; operational path correction is separate and requires actual successful execution."
+      }
+    },
     "38601377": {
       "allocated_gpu_seconds": 2545,
       "allocation": {

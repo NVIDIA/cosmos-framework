@@ -500,6 +500,15 @@ compatibility checks. These are shared execution gains, not improved learning,
 NF4 superiority over BF16, new quality confidence intervals, or inference
 acceleration. Exact receipts and clocks remain in the existing family evidence.
 
+The first mature-recovery allocation (`38603421`) failed before starting a
+resumed update, consuming **88 GPU-seconds**. Its launcher passed `fsw` reference
+paths while the accepted decision recorded canonical `fs11` paths; separate
+container mounts defeated literal resolved-path identity. A CPU reproduction
+with identical bytes confirms the predicate failure. The correction dispatches
+the exact recorded paths and leaves the 48-file payload, native source, recovery
+comparisons and timing results unchanged. No recovery or memory pass is inferred
+from this failed attempt; a corrected execution is still required.
+
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
 was valid. Sampled peaks were 38.254 GiB owned GPU memory and 29.019 GiB host PSS;
