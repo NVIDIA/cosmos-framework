@@ -28394,5 +28394,68 @@
     "cpu_validation": "66distinct independent core andworker/source tests;5 actualsafe-path dispatch tests. No GPU/numericalpolicy claim from these tests.",
     "completed_job": "38573209",
     "outcome": "Read jobs.38573209; technical/restoration PASS is separate from failed prospective learning-hypothesis condition. All prior quality and performance decisions remain unchanged."
+  },
+  "current_default_standalone_artifact_qualification": {
+    "status": "prospective; locally sealed, not admitted",
+    "implementation_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+    "payload": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/current-default-unmerged-e64a735-v1",
+    "manifest_sha256": "fdc709872f0375ed365db92efbbf144cb59c6955e46200ebae2b655c003df8c8",
+    "archive_sha256": "aca9957def19550603bf00f401ccdc3bad1b29ecbc4f3782fae4e131b8843073",
+    "protocol_sha256": "1da7881f9eb84b1ed32538d9053f1051bc8a0e0fff8163236fbcc41ca7049711",
+    "bindings_sha256": "61268f15cf0b089739aba279f72e242ce414366bdfe75499795a24a8bb3c3a8e",
+    "scope": "Four existing current-build step2 default BF16/NF4 portable artifacts, two real native rows each; zero training. This closes current-default standalone export/reload coverage, not mature or full-cohort quality qualification.",
+    "source_jobs": {
+      "gr00t": {
+        "job": "38563905",
+        "acceptance_sha256": "f7e88ea66261ef7d8ea30a1e5cc77a9d49b57ee4725bc51c2928c920ba490510"
+      },
+      "alpamayo": {
+        "job": "38560176",
+        "original_status": "FAILED; original final acceptance absent",
+        "separate_retrospective_validation_sha256": "b1c5e4324f316784feb6384f25c710c776edf9d899c8596e53b67dd2dc6f9290"
+      }
+    },
+    "native_stages_per_artifact": [
+      "same-base portable native evaluation plus separately timed controlled capture",
+      "native unmerged effective-BF16-base export with 512 MiB standard shards",
+      "fresh native standalone evaluation and controlled capture with original source paths absent and quantizer imports blocked"
+    ],
+    "required_parity": [
+      "exact two-row native score records versus source-specific retained evaluation",
+      "exact task outputs and processor inputs",
+      "all trained auxiliary weights and adapter factors",
+      "effective base weights, aliases, immutable task and processor metadata",
+      "native commit-last manifest and deterministic sharding"
+    ],
+    "resources": {
+      "cpus": 16,
+      "gpu": 1,
+      "host_gib": 128,
+      "storage_floor_gib": 200,
+      "timing_estimate_scope": "Planning bound only. Prior same-shape exports were10.247GB perGR and27.071GB perAlpa; expected total~74.64GB, not reserved capacity.",
+      "wall_minutes": 90
+    },
+    "memory_scope": {
+      "method": "proc-identity-state-read-attempts-v11",
+      "scope": "Each actual model-phase wrapper and stages; sampled lower bounds, startup before observer and any missing intervals remain explicit; no reduction or speed gate.",
+      "strict_memory": "Preserve qualified host/GPU validity and require actual per-stage host/owned-GPU samples; report raw sample coverage and all allocator phases.",
+      "worker_timeout_seconds": 1800
+    },
+    "cpu_validation": {
+      "distinct_cases": 60,
+      "probe_cases": 39,
+      "orchestration_cases": 21,
+      "independent_peer_passed": true,
+      "overlapping_peer_runs_not_added": true
+    },
+    "admission_condition": "After active sole-owned timing study terminal release; fresh bounded whole scheduler census and actual durable destination write checks. No timing interference or duplicate launch.",
+    "not_claimed": [
+      "merged equivalence",
+      "full-development task quality",
+      "mature recovery",
+      "training or inference speedup",
+      "memory reduction",
+      "independent confirmation"
+    ]
   }
 }
