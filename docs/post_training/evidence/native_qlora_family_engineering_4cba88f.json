@@ -25765,6 +25765,244 @@
       },
       "validation_scope": "Root and independent peer verified all68 hashes/sizes, exact20 IDs/fourstates/native sum-count reductions/restoration flags and qualified terminal release. Peer verified processed input records/first source-input projection. Full tensor and RNG equality remains on-device attestation; only normalized action prefix values and full action hashes are retained locally. Observer0samples are missing coverage, not zero memory. No training, optimizer step, export, heldout scoring, promotion or performance claim.",
       "decision": "Original head-adapter screen remains DISCARD. On these20consumed trainrows, learnedlanguage delta reducesflowloss but increases sampledMSE in bothheadconditions. This model-local inference intervention does not establish a trainingcounterfactual or remedy; selectedfullhead needs separate diagnosis before transferring the effect."
+    },
+    "38568479": {
+      "job": "38568479",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 5265,
+      "native_revision": "26bc60f7151ae5edb09aa26071be2d69820ff8ad",
+      "mode": "bf16_lora",
+      "seed": 17,
+      "updates": 128,
+      "evaluation_rows_per_boundary": 256,
+      "evaluation_boundaries": [
+        0,
+        128
+      ],
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90",
+      "payload_manifest_sha256": "55487713513b3aaa8b9f30b000b902139bb816eb85e60f912599811365a9fbda",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-cache-38568479-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "94b8910fe6232d5084725d32e7b215bc04363d4a0c2c0b7a54860af76a9291c6",
+      "inventory_sha256": "289586edc6bb405d78a1905d50d3e38943de4e9976d439e4d9de8be8895953ac",
+      "pair_result_sha256": "ea5bac080e29f21d8ed8aef7f05299f444baad21ed7d5db0d395a728cf89feef",
+      "terminal_sha256": "1cd9b69157898c4badd024888a036c23e0f17eb88b154c32121fb9e9d0184af4",
+      "terminal_release_sha256": "1cd9b69157898c4badd024888a036c23e0f17eb88b154c32121fb9e9d0184af4",
+      "readout_sha256": "c77658960d5ff8612b0333ff115a375618d6e52939992b1b6aaf71939e671022",
+      "files_verified": 168,
+      "placement": {
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          32,
+          33,
+          34,
+          35,
+          124,
+          125,
+          126,
+          127,
+          156,
+          157,
+          158,
+          159
+        ],
+        "cpu_numa_nodes": {
+          "0": [
+            "node0"
+          ],
+          "1": [
+            "node0"
+          ],
+          "124": [
+            "node7"
+          ],
+          "125": [
+            "node7"
+          ],
+          "126": [
+            "node7"
+          ],
+          "127": [
+            "node7"
+          ],
+          "156": [
+            "node1"
+          ],
+          "157": [
+            "node1"
+          ],
+          "158": [
+            "node1"
+          ],
+          "159": [
+            "node1"
+          ],
+          "2": [
+            "node0"
+          ],
+          "3": [
+            "node0"
+          ],
+          "32": [
+            "node2"
+          ],
+          "33": [
+            "node2"
+          ],
+          "34": [
+            "node2"
+          ],
+          "35": [
+            "node2"
+          ]
+        },
+        "gpu_bytes": 85174583296,
+        "gpu_name": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-3964ddff-32dc-a079-31e1-db6e00eba492",
+        "process_memory_policy": [
+          "Cpus_allowed_list:\t0-3,32-35,124-127,156-159",
+          "Mems_allowed_list:\t0-7"
+        ],
+        "slurm_job": "38568479"
+      },
+      "runtime_versions": {
+        "bitsandbytes": "0.49.2",
+        "diffusers": "0.35.1",
+        "safetensors": "0.8.0",
+        "torch": "2.10.0+cu128",
+        "transformers": "4.57.6"
+      },
+      "allocator": "expandable_segments:True",
+      "cases": {
+        "off": {
+          "native_process_seconds": 2650.8530432749976,
+          "native_clocks": {
+            "checkpoint_seconds": 47.946661968002445,
+            "evaluation_seconds": 1872.9823494629964,
+            "portable_export_seconds": 22.118003162991954,
+            "startup_seconds": 282.06624524599465,
+            "training_seconds": 391.6655554870231
+          },
+          "cold_case_seconds": 2728.6696270200046,
+          "native_host_hwm_bytes": 45764403200,
+          "observed_samples": 2047,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 79466941440,
+          "allocator_peak_reserved_bytes": 80645980160,
+          "sampled_owned_gpu_peak_bytes": 81862328320,
+          "sampled_host_pss_peak_bytes": 46436867072,
+          "sampled_host_rss_peak_bytes": 46941831168,
+          "cache_observations": {
+            "enabled": false,
+            "retained_tensor_bytes_peak": 0
+          }
+        },
+        "on": {
+          "native_process_seconds": 2210.382087088001,
+          "native_clocks": {
+            "checkpoint_seconds": 49.520517908997135,
+            "evaluation_seconds": 1438.1501380099944,
+            "portable_export_seconds": 22.683784629989532,
+            "startup_seconds": 275.1229006860085,
+            "training_seconds": 391.670694821034
+          },
+          "cold_case_seconds": 2280.970312096004,
+          "native_host_hwm_bytes": 45763694592,
+          "observed_samples": 1712,
+          "strict_memory_passed": true,
+          "allocator_peak_allocated_bytes": 79466941440,
+          "allocator_peak_reserved_bytes": 80645980160,
+          "sampled_owned_gpu_peak_bytes": 81862328320,
+          "sampled_host_pss_peak_bytes": 46472920064,
+          "sampled_host_rss_peak_bytes": 46982492160,
+          "cache_observations": {
+            "clone_seconds": 6.802550861801137,
+            "enabled": true,
+            "format": "alpamayo-evaluation-preparation-observations-v1",
+            "hits": 512,
+            "identity_seconds": 60.369759840134066,
+            "misses": 512,
+            "retained_tensor_bytes_peak": 70829184,
+            "scope": "current process only; no checkpoint state"
+          }
+        }
+      },
+      "per_pair_metrics": {
+        "GPU_increase_bytes": {
+          "allocated": 0,
+          "owned_process": 0,
+          "reserved": 0
+        },
+        "all_three_clocks_faster": true,
+        "complete_cold_case_on_off_ratio": 0.8359276218378494,
+        "evaluator_on_off_ratio": 0.7678396640642807,
+        "host_increase_bytes": {
+          "native_hwm": -708608,
+          "pss": 36052992,
+          "rss": 40660992
+        },
+        "memory_passed": true,
+        "native_process_on_off_ratio": 0.833838032891172,
+        "retained_cache_bytes": 70829184,
+        "seed": 17
+      },
+      "exact_cache_pair": {
+        "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+        "atol": 0,
+        "identity_bridge": {
+          "allowed_observation_only": [
+            "identity.training_contract.evaluation_input_reuse"
+          ],
+          "cross_build_resume_supported": false,
+          "metadata_modified": false,
+          "passed": true
+        },
+        "passed": true,
+        "rtol": 0
+      },
+      "original17_numerical_reference": {
+        "off": {
+          "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+          "atol": 0,
+          "identity_bridge": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_input_reuse",
+              "identity.training_contract.implementation",
+              "identity.training_contract.factories.entrypoint_sha256"
+            ],
+            "cross_build_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "passed": true,
+          "rtol": 0
+        },
+        "on": {
+          "all_task_rows_weights_optimizer_scheduler_rng_cursor_exact": true,
+          "atol": 0,
+          "identity_bridge": {
+            "allowed_observation_only": [
+              "identity.training_contract.evaluation_input_reuse",
+              "identity.training_contract.implementation",
+              "identity.training_contract.factories.entrypoint_sha256"
+            ],
+            "cross_build_resume_supported": false,
+            "metadata_modified": false,
+            "passed": true
+          },
+          "passed": true,
+          "rtol": 0
+        }
+      },
+      "separate_cpu_comparison_seconds": 179.54898555000545,
+      "allocation_script_seconds": 5259.7873657699965,
+      "may_admit_next_pair": true,
+      "promotion": false,
+      "validation_scope": "Root and independent peer replayed168 file hashes/sizes,3759 strict v11 host observations,128 numerical updates,four256-row metrics and terminal/controller/queue/steps. Peer additionally checked allocator summaries and16 small metadata/trainer/data files. Full model/optimizer equality is the retained on-node assertion. Tiny setup/verification intervals retain no_samples flags; observed-span completeness is not a whole-allocation peak claim. Actual affinity/memory masks are recorded; no new NUMA memory binding is inferred.",
+      "decision": "BF17 correctness/memory/all-three-clocks PASS; both seed17 pairs eligible to continue, not promotion. Frozen reversed-order NF42/BF42 and per-precision aggregate gates remain required; default remains off. No trained-ON128 continuation,full512 quality/time-to-target or inference-speed claim. Shared execution benefit applies to both precision arms; no cross-placement NF4/BF16 superiority claim."
     }
   },
   "read_only_head_memory_diagnostic": {

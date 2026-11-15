@@ -705,13 +705,26 @@ peaks remain lower bounds and some short setup/verification intervals were
 unsampled. The allocation cost 5,355 GPU-seconds, including a separately recorded
 211.99-second checkpoint comparison. Original failure costs remain separate.
 
-This is **one successful paired block, not promotion**. The frozen study still
-requires the BF16 seed-17 pair and reversed-order seed-42 pairs in both precisions,
-with every pair faster and each precision meeting its aggregate time/memory gates.
-The option remains off by default. This arithmetic-preserving evaluation gain
-does not improve fixed-step trajectory quality or establish faster time to the
-unreached quality target. Raw receipts, exact source/placement, component clocks
-and independent replay are bound in the existing family evidence.
+The matched BF16 seed-17 pair `38568479` also passed its block gates. Evaluation
+time fell from **1,872.98 to 1,438.15 seconds (23.22%)**; native-process time from
+**2,650.85 to 2,210.38 seconds (16.62%)**; complete-case time through release from
+**2,728.67 to 2,280.97 seconds (16.41%)**. All 128 numerical updates, four 256-row
+score sets and full checkpoint states matched the original BF16 trajectory.
+Allocated, reserved and sampled owned-GPU peaks were unchanged; sampled host PSS
+rose by 34.38 MiB, within the frozen limit. The same 67.55-MiB cache recorded
+512 hits and 512 misses. All 3,759 host observations were complete, with the same
+sampled-peak and short unsampled-interval limitations. Independent replay verified
+168 files and terminal release. The allocation cost 5,265 GPU-seconds, including
+a separate 179.55-second state comparison.
+
+These are **two successful seed-17 blocks, not promotion**. The frozen study still
+requires reversed-order seed-42 pairs in both precisions, with every pair faster
+and each precision meeting its aggregate time/memory gates. The option remains
+off by default. This shared evaluation improvement does not improve fixed-step
+trajectory quality or establish faster time to the unreached quality target.
+The two precision pairs used different placements; their absolute times do not
+establish NF4-versus-BF16 superiority. Raw receipts, exact source/placement,
+component clocks and independent replay are bound in the existing family evidence.
 
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
