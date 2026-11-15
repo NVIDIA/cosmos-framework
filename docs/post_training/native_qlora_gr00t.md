@@ -335,9 +335,12 @@ The original NF4 training/recovery/fresh-load proofs are carried forward from
 `38551713`; new NF4 diagnostics/export and all BF16 checks come from `38554101`.
 The combined qualification cost is 3,096 GPU-seconds, with separate clocks and
 no repaired historical acceptance. Independent replay verified all 193 new raw
-files. This establishes current-build correctness, not a speed, quality or new
+files. This establishes `cbc950f` correctness, not a speed, quality or new
 source-path-absence claim. Matched timing and any resulting mature enabled-mode
-qualification remain separate gates.
+qualification remain separate gates. Evaluation reuse combined with the newer DiT
+head-adapter profile has not been qualified; its retained `e64a735` lifecycle and
+learning checks used reuse disabled. Configuration acceptance does not establish
+that combination or transfer the older source-bound artifact evidence.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution
@@ -443,6 +446,18 @@ Historical GR00T checkpoints, portable policies and standalone artifacts therefo
 their recorded compatible loaders; the examples and qualified results below do not imply
 cross-build compatibility with `cbc950f`. Its own artifact qualification is separate.
 Never edit source-identity metadata to force an older policy through the new loader.
+
+Current `e64a735` default full-head checks passed in `38563905`: both BF16 and
+NF4 completed two updates, exact own-update-1 recovery and fresh two-row portable
+reload with evaluation reuse disabled. The optimizer contained all 224 language
+factors and 537 FP32 auxiliary tensors, with 1,522 FP32 moment tensors and no
+`head_adapters` record. Model and optimizer differences were zero; RNG, data
+cursor, evaluation history and the resumed update matched exactly. Frozen-base
+validation and fresh source/scorer identities passed. All six model stages and
+726 observed host collections passed; short unsampled phases remain recorded.
+The allocation cost 1,054 GPU-seconds. This closes current-source default training,
+recovery and portable reload coverage; it does not repeat mature recovery, qualify
+current-default standalone export or establish learning/performance improvement.
 
 Every checkpoint/portable policy includes all trained action-head/projector tensors alongside LoRA,
 with source, model, quantization, processor/statistics, embodiment, action settings, resolved targets,

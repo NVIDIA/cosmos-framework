@@ -24834,6 +24834,448 @@
       },
       "root_review": "All125 raw files and1098 samples independently replayed. All8x160 row reductions match exact native sequential float addition; initial source and final fresh rows/metrics are exactly equal. An initial ad-hoc use of Python built-in sum differed by an ULP; replaying the actual native ordered += reduction resolved it without any tolerance, metric, or source change.",
       "decision_scope": "Discard this attention-only head-adapter recipe under unchanged prospective point gates. Both endpoint MSEs worsen against own source and neither scheduled0/100/200 observation reaches target. Point NF/BF ratio within5% does not establish noninferiority, adaptation, recipe superiority or time-to-quality. No mature recovery, horizon extension, additional seed or rollout promoted."
+    },
+    "38563905": {
+      "job_id": "38563905",
+      "code_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "payload_manifest_sha256": "0bc6757616ae0215bfbab39704eecf774dfcbfa639eb1fcdfe8de352aaee6c90",
+      "protocol_sha256": "2d35c0c4a9a998e60de57ad394f64d68eb2a4cee33b8048c1586ca2ce22d321c",
+      "admission_sha256": "3430e263c78fe34626431d5267af76e5c9b384190eb0850e5625f609fcdc73e0",
+      "archive_sha256": "92264f9d76a719a2377cba87ebbbf129525206b4952f0bddbc00cba634fd481d",
+      "inventory_sha256": "0c6f7e903cc00a5a29fd0ac6f47ec6b12fa2b1c9bec81869895314d136f5801d",
+      "acceptance_sha256": "f7e88ea66261ef7d8ea30a1e5cc77a9d49b57ee4725bc51c2928c920ba490510",
+      "release_sha256": "5787fb7d63ff7592ae69a71f9f6d54a31d7a950654f17249aba49fdb97a43be8",
+      "raw_files_verified": 156,
+      "reader_sha256": "811bd8d010f99ee50ed9aed5f624ae3ebb7fcad1a00476e4cee7afccc2ec609c",
+      "allocation_utc": [
+        "2026-11-15T03:56:57",
+        "2026-11-15T04:14:31"
+      ],
+      "runtime": {
+        "allocator": null,
+        "code": "e64a735d33303d8e7e919b9919d550e644d1312e",
+        "cpu_affinity": [
+          8,
+          9,
+          10,
+          11,
+          16,
+          17,
+          20,
+          21,
+          132,
+          133,
+          134,
+          135,
+          144,
+          145,
+          152,
+          153
+        ],
+        "family": "gr00t",
+        "gpu": {
+          "bytes": 85174583296,
+          "name": "NVIDIA A100-SXM4-80GB",
+          "nvml_uuid_roundtrip": true,
+          "uuid": "GPU-a8e99076-c8ff-cef3-3183-bd0c223bdacc"
+        },
+        "node": "batch-block4-2045",
+        "numa_nodes": [
+          "node0",
+          "node1"
+        ],
+        "slurm_job": "38563905",
+        "versions": {
+          "bitsandbytes": "0.49.2",
+          "diffusers": "0.35.1",
+          "numpy": "1.26.4",
+          "safetensors": "0.8.0",
+          "torch": "2.10.0+cu128",
+          "transformers": "4.57.6"
+        }
+      },
+      "workflow_seconds": 969.928251925041,
+      "memory": {
+        "device_peak_bytes": 35832135680,
+        "errors": [],
+        "gpu_memory_evidence_valid": true,
+        "host_pss_complete": true,
+        "host_pss_sum_peak_bytes": 33999466496,
+        "host_rss_sum_peak_bytes": 34567294976,
+        "nvml_capacity_bytes": 85899345920,
+        "observed_span_seconds": 968.3759937286377,
+        "owned_device_process_peak_bytes": 35055992832,
+        "peaks_are_sampled_lower_bounds": true,
+        "samples": 726,
+        "sampling_gap_seconds": {
+          "count": 725,
+          "maximum": 4.910337924957275,
+          "mean": 1.3356910258326038,
+          "median": 1.2922618389129639,
+          "p95": 1.4634503364562987,
+          "sum": 968.3759937286377
+        }
+      },
+      "samples": 726,
+      "complete_host_samples": 726,
+      "allocator": {
+        "allocator_evidence_complete": true,
+        "allocator_peak_allocated_bytes": 32043892224,
+        "allocator_peak_reserved_bytes": 33982251008,
+        "phase_family": "native_action",
+        "phase_semantics": "Adjacent reset-delimited native action intervals; training blocks include multiple updates, ingestion and logging. Nested checkpoint setup/write/verification intervals are disjoint, not additional enclosing checkpoint clocks. Loading includes factory work after model_loading_begin, but excludes earlier process startup. Host RSS/PSS are interval samples, not cumulative VmHWM.",
+        "phases": {
+          "action_checkpoint_setup": {
+            "allocator_peak_allocated_bytes": 29366249472,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 12,
+              "maximum": 0.1966448170132935,
+              "mean": 0.075135349247527,
+              "median": 0.04086843645200133,
+              "p95": 0.19087980610202065,
+              "sum": 0.901624190970324
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": null,
+            "sampled_host_rss_sum_peak_bytes": null,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "action_checkpoint_verification": {
+            "allocator_peak_allocated_bytes": 29366249472,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 6,
+              "maximum": 0.5360579219413921,
+              "mean": 0.4800038040266372,
+              "median": 0.46392895752796903,
+              "p95": 0.5336807989806402,
+              "sum": 2.8800228241598234
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": 27379609600,
+            "sampled_host_rss_sum_peak_bytes": 27968069632,
+            "sampled_owned_device_process_peak_bytes": 34399584256
+          },
+          "action_evaluation": {
+            "allocator_peak_allocated_bytes": 32043892224,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 10,
+              "maximum": 1.9262094530276954,
+              "mean": 1.258082352625206,
+              "median": 1.1568900305428542,
+              "p95": 1.7203419127035882,
+              "sum": 12.580823526252061
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 27382463488,
+            "sampled_host_rss_sum_peak_bytes": 27970678784,
+            "sampled_owned_device_process_peak_bytes": 35055992832
+          },
+          "action_final_integrity": {
+            "allocator_peak_allocated_bytes": 29369395200,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 6,
+              "maximum": 3.3691810519667342,
+              "mean": 2.633186559639095,
+              "median": 2.5481260254164226,
+              "p95": 3.322724148980342,
+              "sum": 15.79911935783457
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 27385982976,
+            "sampled_host_rss_sum_peak_bytes": 27974488064,
+            "sampled_owned_device_process_peak_bytes": 35055992832
+          },
+          "action_model_setup": {
+            "allocator_peak_allocated_bytes": 0,
+            "allocator_peak_reserved_bytes": 2097152,
+            "interval_seconds": {
+              "count": 4,
+              "maximum": 0.015068733016960323,
+              "mean": 0.012376679747831076,
+              "median": 0.012352025485597551,
+              "p95": 0.014670039602788164,
+              "sum": 0.049506718991324306
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": null,
+            "sampled_host_rss_sum_peak_bytes": null,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "action_trainer_setup_or_resume": {
+            "allocator_peak_allocated_bytes": 30423215616,
+            "allocator_peak_reserved_bytes": 33325842432,
+            "interval_seconds": {
+              "count": 4,
+              "maximum": 16.20751207903959,
+              "mean": 8.025626067537814,
+              "median": 7.8940500285243616,
+              "p95": 16.094520019186895,
+              "sum": 32.10250427015126
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": 6134323200,
+            "sampled_host_rss_sum_peak_bytes": 6680702976,
+            "sampled_owned_device_process_peak_bytes": 31654412288
+          },
+          "action_training_block": {
+            "allocator_peak_allocated_bytes": 30422167040,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 4,
+              "maximum": 0.7909527679439634,
+              "mean": 0.721529704722343,
+              "median": 0.7438164814957418,
+              "p95": 0.7866333311947529,
+              "sum": 2.886118818889372
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": 27373554688,
+            "sampled_host_rss_sum_peak_bytes": 27961827328,
+            "sampled_owned_device_process_peak_bytes": 32516341760
+          },
+          "checkpoint_write": {
+            "allocator_peak_allocated_bytes": 29369395200,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 6,
+              "maximum": 27.37342398997862,
+              "mean": 24.986139491957147,
+              "median": 26.092850087443367,
+              "p95": 27.14623035248951,
+              "sum": 149.91683695174288
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 27385756672,
+            "sampled_host_rss_sum_peak_bytes": 27973922816,
+            "sampled_owned_device_process_peak_bytes": 35055992832
+          },
+          "data_preparation": {
+            "allocator_peak_allocated_bytes": 0,
+            "allocator_peak_reserved_bytes": 2097152,
+            "interval_seconds": {
+              "count": 4,
+              "maximum": 6.136944856960326,
+              "mean": 4.751491672242992,
+              "median": 5.387137535959482,
+              "p95": 6.03649903696496,
+              "sum": 19.005966688971967
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 4459011072,
+            "sampled_host_rss_sum_peak_bytes": 5043474432,
+            "sampled_owned_device_process_peak_bytes": 991952896
+          },
+          "evaluation_publication": {
+            "allocator_peak_allocated_bytes": 9644941312,
+            "allocator_peak_reserved_bytes": 12595494912,
+            "interval_seconds": {
+              "count": 2,
+              "maximum": 0.19287674000952393,
+              "mean": 0.18145465099951252,
+              "median": 0.18145465099951252,
+              "p95": 0.1917345311085228,
+              "sum": 0.36290930199902505
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": null,
+            "sampled_host_rss_sum_peak_bytes": null,
+            "sampled_owned_device_process_peak_bytes": null
+          },
+          "loading": {
+            "allocator_peak_allocated_bytes": 9614532096,
+            "allocator_peak_reserved_bytes": 9747562496,
+            "interval_seconds": {
+              "count": 6,
+              "maximum": 61.12157351302449,
+              "mean": 46.93525434130182,
+              "median": 41.52044228394516,
+              "p95": 61.06486310099717,
+              "sum": 281.6115260478109
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 17888259072,
+            "sampled_host_rss_sum_peak_bytes": 18476191744,
+            "sampled_owned_device_process_peak_bytes": 10737418240
+          },
+          "portable_export": {
+            "allocator_peak_allocated_bytes": 29366537216,
+            "allocator_peak_reserved_bytes": 33982251008,
+            "interval_seconds": {
+              "count": 4,
+              "maximum": 33.28262379299849,
+              "mean": 21.23696558451047,
+              "median": 17.608659620513208,
+              "p95": 30.935846154752646,
+              "sum": 84.94786233804189
+            },
+            "sampled_errors": [],
+            "sampled_gpu_evidence_complete": true,
+            "sampled_host_pss_complete": true,
+            "sampled_host_pss_sum_peak_bytes": 33999466496,
+            "sampled_host_rss_sum_peak_bytes": 34567294976,
+            "sampled_owned_device_process_peak_bytes": 35055992832
+          },
+          "scoring_setup": {
+            "allocator_peak_allocated_bytes": 9610337792,
+            "allocator_peak_reserved_bytes": 9747562496,
+            "interval_seconds": {
+              "count": 2,
+              "maximum": 0.8294805949553847,
+              "mean": 0.7060671420185827,
+              "median": 0.7060671420185827,
+              "p95": 0.8171392496617045,
+              "sum": 1.4121342840371653
+            },
+            "sampled_errors": [
+              "no_samples"
+            ],
+            "sampled_gpu_evidence_complete": false,
+            "sampled_host_pss_complete": false,
+            "sampled_host_pss_sum_peak_bytes": 4751906816,
+            "sampled_host_rss_sum_peak_bytes": 5339865088,
+            "sampled_owned_device_process_peak_bytes": 10261364736
+          }
+        }
+      },
+      "model_stages": [
+        "bf16_lora-full",
+        "bf16_lora-resumed",
+        "bf16_lora-portable",
+        "nf4_lora-full",
+        "nf4_lora-resumed",
+        "nf4_lora-portable"
+      ],
+      "stage_counts": {
+        "bf16_lora-full": {
+          "complete_host_samples": 106,
+          "positive_owned_gpu_observations": 94,
+          "samples": 106
+        },
+        "bf16_lora-portable": {
+          "complete_host_samples": 67,
+          "positive_owned_gpu_observations": 54,
+          "samples": 67
+        },
+        "bf16_lora-resumed": {
+          "complete_host_samples": 208,
+          "positive_owned_gpu_observations": 93,
+          "samples": 208
+        },
+        "nf4_lora-full": {
+          "complete_host_samples": 103,
+          "positive_owned_gpu_observations": 93,
+          "samples": 103
+        },
+        "nf4_lora-portable": {
+          "complete_host_samples": 65,
+          "positive_owned_gpu_observations": 51,
+          "samples": 65
+        },
+        "nf4_lora-resumed": {
+          "complete_host_samples": 177,
+          "positive_owned_gpu_observations": 84,
+          "samples": 177
+        }
+      },
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "allocated_gpu_seconds": 1054,
+      "readout_sha256": "420ca7b68ee4f45729b6d956f04c5180e9bc5da7d2e2c32050771c623b0648bb",
+      "scope": "Current e64 default full-head, cache OFF. Both own two-update native runs, committed-update-1 recovery and fresh two-row portable reload; no learning, speed, mature recovery or standalone export claim.",
+      "root_replay": "All156 retained file hashes/sizes, six successful outcomes, terminal release/accounting and both recovery/fresh dictionaries independently checked. Peer replay verified actual source identities,22 small metadata/control files, all726 raw memory observations and pinned phase reductions. Large model/moment/RNG/data assertions remain on-node evidence; no local tensor payload reread.",
+      "reliability": {
+        "bf16_lora": {
+          "own2_resume1to2_exact": true,
+          "metadata_parameters": 761,
+          "language_factors": 224,
+          "fp32_auxiliary": 537,
+          "language_targets": 112,
+          "head_adapters_present": false,
+          "on_node_fp32_moment_tensors": 1522,
+          "on_node_maximum_tensor_difference": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "on_node_rng_and_full_data_equality": true,
+          "local_small_controls_cursor_evaluation_exact": true,
+          "source_and_scorer_exact": true,
+          "fresh_rows": [
+            [
+              "libero-1589-0"
+            ],
+            [
+              "libero-1589-28"
+            ]
+          ],
+          "acceptance_sha256": "ba34402966f0807977e11ff44ba5b9dc7f562cdeff3ad9f9e5f367f24253ab7c",
+          "fresh_sha256": "b3ab81703ae6a8f731a8fda3ed39c7fb785194eddeec37fdf59c6a4a9fdc932e"
+        },
+        "nf4_lora": {
+          "own2_resume1to2_exact": true,
+          "metadata_parameters": 761,
+          "language_factors": 224,
+          "fp32_auxiliary": 537,
+          "language_targets": 112,
+          "head_adapters_present": false,
+          "on_node_fp32_moment_tensors": 1522,
+          "on_node_maximum_tensor_difference": {
+            "model": 0.0,
+            "optim": 0.0
+          },
+          "on_node_rng_and_full_data_equality": true,
+          "local_small_controls_cursor_evaluation_exact": true,
+          "source_and_scorer_exact": true,
+          "fresh_rows": [
+            [
+              "libero-1589-0"
+            ],
+            [
+              "libero-1589-28"
+            ]
+          ],
+          "acceptance_sha256": "d2e25f0fda562195565ed6e7db7634cd445f78e5d15680d1a8dfa14748c9c981",
+          "fresh_sha256": "d9fdb94d76032dd851a1609edb36617eb74160651207a480b1f643c8c9433984"
+        }
+      },
+      "limits": "726 complete observed collections do not cover all allocation startup or every short reset interval. Per-phase no-sample flags are retained. Whole observed peaks include recovery/checkpoint checks and are not matched training-performance comparisons. No cross-build checkpoint identity was rewritten."
     }
   },
   "read_only_head_memory_diagnostic": {
