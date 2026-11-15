@@ -29430,5 +29430,170 @@
       "status": "Qualified namespace repair passed in actual38578617; no native model/source change."
     },
     "completed_attempt": "38578617"
+  },
+  "alpamayo_current_reuse_mature_qualification": {
+    "status": "Prospective local preparation only; all four frozen V5 timing gates must pass before any admission. Replaces the never-admitted short ON6 draft, which remains preserved. No CUDA result or promotion.",
+    "implementation_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+    "workflow": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/alpamayo-current-input-reuse-e64a735-v2",
+    "run_sha256": "f9c95eac7009f40ee921307ccb2558c8545c4a3339ec626fb93d74bd872e6f1e",
+    "protocol_sha256": "f0a2142217f3b1b0fc92b6f231db9bbe2bc763c0ad213b8b9b118114bee91dcf",
+    "source26_bindings_sha256": "f3e1fca6a4ecda0875ebdac4b65a518e2d158b645bf650d8f83aa689a7743370",
+    "cpu_validation_sha256": "90568d741bcd182238c55792afa0d728eed76065f12fa7a667d148f9a506fac9",
+    "reason": "Short ON5-to-10/ON1-to-2 and historical OFF384-to-512 checks do not establish current-build mature ON recovery. Source26 ON128 artifacts predate the optimizer snapshot-lifetime fix and cannot be restored on current code by editing identities.",
+    "native_stages_per_mode": [
+      "Current e64 uninterrupted selected-development ON0-to-128, preserving max/cosine512,warmup100,clip1,eval128; add save100 and pause128",
+      "Strict own-current-ON100-to-128 recovery, including all28 updates and full256 final scoring",
+      "Fresh own portable evaluation of first2 rows from the bound256-row source, using exact native sum/count reduction"
+    ],
+    "modes": [
+      "bf16_lora",
+      "nf4_lora"
+    ],
+    "seed": 17,
+    "cohort": {
+      "directory": "/lustre/fsw/portfolios/edgeai/projects/edgeai_tao-ptm_image-foundation-model-clip/users/rarunachalam/cosmos-qlora-family-20261113/inputs/alpamayo-development-v1",
+      "jsonl_sha256": {
+        "train": "8790aec36113d1544b0bc9ec403d7cba67f712234f388451fdbdde7613835ed4",
+        "validation": "1bf0d48e2746a3639e34e2472226ac9ff3c1f015d3a449da6a95e948d27acba0"
+      },
+      "manifest_sha256": "2272c9fae7cd50eb13adaa8fd3bdaaa8467b91621c4983441b201b1faa97c810",
+      "native_sources": {
+        "training": {
+          "format": "physicalai-alpamayo-flow-v1",
+          "sha256": "adcacb2108bc7bf86c173298ebe4d453f55f04e50d4fdcb3c28547f8c28456bf"
+        },
+        "validation": {
+          "format": "physicalai-alpamayo-flow-v1",
+          "sha256": "16bda44fee0691a9b02ead9a895bd127158839fd29318238f7bdf2e4ce2818bb"
+        }
+      },
+      "train_rows": 1024,
+      "validation_rows": 256
+    },
+    "trainables": {
+      "FP32_auxiliary": 409,
+      "head_adapters": false,
+      "language_factors": 494,
+      "language_targets": 247,
+      "total": 903
+    },
+    "activation_checkpointing": "full",
+    "allocator": {
+      "PYTORCH_ALLOC_CONF": "expandable_segments:True"
+    },
+    "cache_counts_per_process": {
+      "full": 512,
+      "portable": 2,
+      "resumed": 256
+    },
+    "recovery_requirements": [
+      "Exact model and optimizer states at128; audit checkpoint100 plus full and resumed128",
+      "903 FP32 trainables and1806 FP32 moment tensors; intended membership and frozen-base integrity",
+      "Exact scheduler/update/RNG/data cursor/history and all28 resumed numerical updates",
+      "Full256 final rows and native reductions; fresh first2 rows and their reduction",
+      "Strict v11/a466 whole and per-model-stage memory coverage, retaining gaps and failures"
+    ],
+    "observational_comparison": {
+      "allowed_added_training_files": [
+        "utils/gr00t_evaluation_backbone.py"
+      ],
+      "allowed_changed_training_files": [
+        "checkpoint/adapter.py",
+        "config/action_sft.py",
+        "entrypoints/action_sft.py",
+        "roles/trainer/llm.py",
+        "utils/action_evaluation_inputs.py",
+        "utils/action_training_identity.py"
+      ],
+      "current_build": "build.json",
+      "disabled_gr_record": {
+        "enabled": false,
+        "format": "gr00t-evaluation-raw-backbone-v1",
+        "max_retained_bytes": 16777216
+      },
+      "implementation_family": {
+        "current": "36708960f323bcebe4283e6f6760f467095c91353283ebbd9fd09f2469a10e11",
+        "source26": "803ca945270c55b207e596a8abe6e266d925be50c4ced4f45e7b2ba3d662fa03"
+      },
+      "loader_normalization": false,
+      "metadata_rewritten": false,
+      "required": true,
+      "source_build": "source26-build.json"
+    },
+    "observational_comparison_scope": "Require exact source26 ON128 versus current full128 tensors, controls,128 updates and0/128 scores after only prospectively verified source differences on private comparison copies. Never normalize metadata in a loader or resume across builds. Current uninterrupted128 is the primary recovery reference.",
+    "historical_OFF2_scope": "Engineering8/2 cohort, constant schedule,warmup0,clip0 differs from selected1024/256/cosine512/warmup100/clip1. ExistingOFF2 is historical integration evidence only, not a numerical control even for first2 updates.",
+    "timing_prerequisite": {
+      "decision_path": "UNBOUND",
+      "decision_sha256": "UNBOUND",
+      "pairs": [
+        {
+          "mode": "nf4_lora",
+          "path": "UNBOUND",
+          "seed": 17,
+          "sha256": "UNBOUND"
+        },
+        {
+          "mode": "nf4_lora",
+          "path": "UNBOUND",
+          "seed": 42,
+          "sha256": "UNBOUND"
+        },
+        {
+          "mode": "bf16_lora",
+          "path": "UNBOUND",
+          "seed": 17,
+          "sha256": "UNBOUND"
+        },
+        {
+          "mode": "bf16_lora",
+          "path": "UNBOUND",
+          "seed": 42,
+          "sha256": "UNBOUND"
+        }
+      ],
+      "payload": "alpamayo-evaluation-reuse-comparison-26bc60f-v5",
+      "protocol_sha256": "365345b4d3d5dceab1cc59f5f30366fe36d03579cae5dd8cf5695df04db74d90"
+    },
+    "resources": {
+      "cpus": 16,
+      "gpu": "A10080GB",
+      "gpus": 1,
+      "host_gib": 128,
+      "nominal_current_output_payload_bytes": 208189448368,
+      "parameter_payload_bytes": 9463156744,
+      "planning_minutes": [
+        110,
+        150
+      ],
+      "storage_floor_gib": 350,
+      "storage_floor_is_reservation": false,
+      "wallcap_hours": 3
+    },
+    "cpu_validation": {
+      "distinct_cases": 76,
+      "independent_runs": 2,
+      "owner_log_sha256": "764cc4019116e4422f82a51a39613d6d4dba3741f4acbbca7a0ad9d3ff17b5e2",
+      "peer_log_sha256": "480a209196f5d9a438a350b77cd7df0e05939cdca6b053e732729a3c6e30a3ea",
+      "scope": [
+        "Actual selected1024/256 native configs, exact e64 training source/scorer; save100 excluded from training identity",
+        "Actual bound BF/NF source26 ON128 metadata with exact prospective source/family/scorer allowance and undeclared-difference refusal",
+        "Native metadata reader rejects old source under current identity before any model load",
+        "Real tiny native128 and own100->128 DCP/Adam/RNG/data/schedule/portable equality; save100 leaves RNG/optimizer/scheduler unchanged; OFF restore and changed cursor refused",
+        "All28 native update records and256 rows; exact prefix2 sum/count reduction distinct from full256",
+        "Actual native evaluate then publication then input geometry capture; full256 source required, RNG/mixed modes preserved",
+        "512/256/2 process counters and128MiB cap",
+        "Frozen four-pair pure reducer unchanged, all future actual bindings UNBOUND before model/proof reads",
+        "a466 host_pss_complete and all six-stage strict memory/failure retention",
+        "Ruff and bash syntax clean"
+      ],
+      "native_changes": false
+    },
+    "not_claimed": [
+      "A repeated512-update campaign",
+      "New learning-quality or time-to-target superiority",
+      "Current-source performance measurements",
+      "Old checkpoint compatibility",
+      "New standalone/merged export or inference-speed qualification"
+    ]
   }
 }

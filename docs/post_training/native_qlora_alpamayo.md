@@ -754,6 +754,18 @@ Placements differed between pairs; their absolute times do not
 establish NF4-versus-BF16 superiority. Raw receipts, exact source/placement,
 component clocks and independent replay are bound in the existing family evidence.
 
+Promotion on the current `e64a735` build additionally requires a trained-checkpoint
+recovery check. The prepared six-stage check uses each precision's own uninterrupted
+ON run to update 128 as its reference, then resumes its own update-100 checkpoint
+and freshly reloads the portable policy. It preserves the selected 512-update
+cosine schedule, 100-update warmup and evaluation cadence; saving at 100 adds no
+evaluation. All 28 resumed updates, complete optimizer/RNG/data state and 256 final
+score rows must match. The older two-update engineering fixture has different data,
+schedule and clipping and cannot serve as this numerical control. Source-26
+comparisons remain observational; its checkpoints are never loaded on changed code.
+The protocol and 76 passing CPU cases are retained in the existing evidence. No
+accelerator result or promotion is implied until the timing gates and this check pass.
+
 The original third seed-17 control, frozen BF16 backbone with **409 FP32
 expert/action trainables and no LoRA**, completed all 512 updates in `38533726`
 (6,214 GPU-seconds, normal controller release). This is the native matched head
