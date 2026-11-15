@@ -217,8 +217,8 @@ Implementation `47587e0`, with ownership fix `cbc950f`, adds
 It reuses only the raw backbone output within one evaluation batch, with independent
 inputs for both native head calls and a 16 MiB retained-tensor bound. The head
 mutates its input mapping, so reusing already transformed features is incorrect.
-The option remains off by default pending complete real-model correctness and matched workflow
-qualification. The planned study gives both precision arms the same option and
+The option remains off by default pending matched workflow qualification; the
+completed real-model correctness continuation is recorded below. The planned study gives both precision arms the same option and
 requires exact numerical trajectories; an achieved speed benefit remains unmeasured.
 The first profile allocation `38548693` failed before model loading because a
 launcher imported an executable monitor module; its 68 GPU-seconds remain
@@ -230,10 +230,30 @@ NF4 OFF/ON states at updates 5 and 10 matched exactly; its own enabled 5-to-10
 recovery matched model/optimizer, RNG, cursor, controls and subsequent updates.
 Fresh DCP and portable evaluation matched all 20 engineering rows. Reuse retained
 2,214,696 bytes and recorded 60 hits/60 misses over the uninterrupted validations.
-All 702 recorded host collections were complete. These retained subproofs do not
-establish the uncompleted arithmetic/failure diagnostic, BF16, standalone export,
-Alpamayo regression or overall acceptance. A narrow qualification-helper repair
-must preserve this failure and use separately identified continuation evidence.
+All 702 recorded host collections were complete. Those subproofs alone did not
+establish the arithmetic/failure diagnostic, BF16, standalone export, Alpamayo
+regression or overall acceptance. The original failure remains unchanged.
+
+Continuation `38554101` completed on the same `cbc950f` native build after a
+qualification-only repair of the actual `BatchFeature` comparison. Both precision
+arms now pass OFF/ON state comparisons at updates 5 and 10, enabled 5-to-10
+recovery, fresh 20-row checkpoint/portable scoring, and strict source refusal.
+Real-model diagnostics match all 761 unclipped gradients and native sampled
+outputs, with unchanged inputs. Injected evaluation failures restore RNG and mixed
+module modes and clear cached inputs/features. Standalone unmerged reload preserves all 761 FP32 trained
+tensors, 112 effective BF16 weights, aliases and controlled task outputs. A
+two-row Alpamayo portable regression also matches through the shared evaluator.
+
+The new allocation consumed 2,100 GPU-seconds and passed all 1,557 observed host
+collections with valid GPU attribution. Its observed workflow was 2,027.981 seconds;
+startup outside the observer and unsampled short subintervals remain explicit.
+The original NF4 training/recovery/fresh-load proofs are carried forward from
+`38551713`; new NF4 diagnostics/export and all BF16 checks come from `38554101`.
+The combined qualification cost is 3,096 GPU-seconds, with separate clocks and
+no repaired historical acceptance. Independent replay verified all 193 new raw
+files. This establishes current-build correctness, not a speed, quality or new
+source-path-absence claim. Matched timing and any resulting mature enabled-mode
+qualification remain separate gates.
 
 For the official seed-17 control `38546671`, strict v11 memory acceptance passed
 across the whole observed workflow and all four model stages: all 768 host samples were complete and owned-GPU attribution

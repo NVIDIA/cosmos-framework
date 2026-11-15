@@ -199,6 +199,9 @@ contracts require the original build and remain
 unchanged; compatible portable inference is still separate.
 The GR00T task-identity change in `cbc950f` does not change Alpamayo's model identity;
 the shared training-source change still requires own-build Alpamayo resume.
+The affected shared evaluator passed exact fresh portable scores on two real
+Alpamayo rows in `38554101`. This is compatibility evidence, separate from
+Alpamayo training/recovery and cache-performance qualification.
 
 The separate `posttrain.checkpoint.tools.export_family_dense` command reconstructs
 `dequantize(Q(W)) + (alpha/rank) BA` with FP32 accumulation. Specify
