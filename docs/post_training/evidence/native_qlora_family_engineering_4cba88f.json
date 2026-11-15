@@ -26351,6 +26351,31 @@
         "on",
         "off"
       ]
+    },
+    "38577606": {
+      "job": "38577606",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "allocated_gpu_seconds": 35,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "scope": "First current-default standalone qualification attempt; failed before any model/runtime/workflow stage. No new training or task result.",
+      "receipt_archive": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/current-default-unmerged-38577606-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "20b297414306381367c93df730adf31dc3e60f7b4a6c99989b868c06a8a8a6d8",
+      "inventory_sha256": "5a4c66e94b432e52099fce3c7e26edeb85980025bd3804f36ed2ea17e298e88c",
+      "terminal_release_sha256": "3c0ae185e7a880f407c98b1553cf2e4e64472234d7c320e836ff12f38ad45e18",
+      "files_verified": 78,
+      "allocation": {
+        "complete": false,
+        "exit_code": 1,
+        "elapsed_seconds": 31.825960302958265,
+        "phases": {},
+        "scope": "Four existing current-build default artifacts;12 model stages,zero training; qualification capture cost separate; no performance/quality/merged claim."
+      },
+      "compute_storage_probe_sha256": "1aa2519849f41c3d5b3df753d3bf455600634ae1fac353df1ce926b6bc3b579b",
+      "cause": "Qualification launch.sh PRE line10/fileline26 compared namespace-local os.getuid() directly with host SLURM_JOB_UID. Actual compute probe passed under real/effectiveUID0 with kernel UID map0\u219241852 and GID0\u219230; the redundant equality then failed. Existing native storage_probe.compute_identity correctly validates this mapping.",
+      "repair_scope": "Reuse the pinned native namespace-aware identity validator with expected_host_uid41852 in an immutable qualification payload derivative; keep original failure and all sources/scientific settings. No native model/checkpoint or optimizer change.",
+      "verification": "All78 hashes/sizes and failed terminal release independently verified; exact original identity proof replayed. Root additional explicit expected-host check also passed; its first full-dict comparison differed solely in expected_host_uid(None versus41852), corrected offline without changing raw evidence.",
+      "independent_readout_sha256": "e3cd0c8666ca6602e86a26d4d8d0c6c34fbd4db6363fa7f911d4e1238b92a6c8"
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -28605,7 +28630,7 @@
     "outcome": "Read jobs.38573209; technical/restoration PASS is separate from failed prospective learning-hypothesis condition. All prior quality and performance decisions remain unchanged."
   },
   "current_default_standalone_artifact_qualification": {
-    "status": "prospective; locally sealed, not admitted",
+    "status": "First admitted attempt38577606 failed before model loading at a qualification-only raw UID assertion; immutable targeted repair in progress.",
     "implementation_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
     "payload": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/current-default-unmerged-e64a735-v1",
     "manifest_sha256": "fdc709872f0375ed365db92efbbf144cb59c6955e46200ebae2b655c003df8c8",
@@ -28665,6 +28690,31 @@
       "training or inference speedup",
       "memory reduction",
       "independent confirmation"
-    ]
+    ],
+    "first_attempt": "38577606",
+    "repair": {
+      "scope": "Qualification-only namespace validation; existing native helper reused, not changed. Original failure and payload immutable.",
+      "native_helper": "tools/native_qlora_qualification/storage.py:78",
+      "helper_sha256": "0a8d563e58cd650d64f1227abfbf69df5162eb21cd9310b0f62593387e94a53f",
+      "payload": "/localhome/local-rarunachalam/qlora-family-qualification-20261113/current-default-unmerged-e64a735-v2",
+      "manifest_sha256": "59bf83bc4c6d6c470544ddb80d896b1b46394dc2d225617e5f4976b0d2187bfb",
+      "archive_sha256": "78b90c49054ccf2e4f788bcadb1b6ee4ff2cb02627d2f83ac96e8b8a4af3e6c5",
+      "files": 36,
+      "changed_existing_files": [
+        "launch.sh: namespace-aware UID check and recorded proof",
+        "qualify.sbatch: immutable v2 payload path only",
+        "test_run.py: affected launcher assertion"
+      ],
+      "added_files": [
+        "references/failed-v1-compute-storage.json",
+        "test_uid_launch.py",
+        "uid-repair.json",
+        "uid-validation.json"
+      ],
+      "unchanged": "Native e64 source, protocol1da788, bindings61268, four exact source artifacts,12 stages, zero updates,90minute cap, routes, memory and numerical criteria.",
+      "validation": "Root verified all36 hashes and exact three-file delta; independent peer14 focused CPU cases passed, including actual remapped UID, direct UID, and nine invalid identity cases. Existing60 unrelated cases retained.",
+      "peer_log_sha256": "63de39c6f20113b4c02110716c05969a43ce9321f06a0d5d7ec6030f5fde858d",
+      "status": "Locally sealed and reviewed; fresh technical preflight required before any replacement."
+    }
   }
 }
