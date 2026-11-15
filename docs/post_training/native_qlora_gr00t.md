@@ -82,6 +82,40 @@ SFT surrogate is used. The matched head-only controls above use fused AdamW and 
 the older native official recipe uses unfused AdamW and HF decay groups, and remains a distinct
 comparison rather than an interchangeable control.
 
+Build `df24559`, using shared artifact changes `6fbf332`, adds the explicit
+`gr00t_n1d7_dit_attention_lora_v1` head profile. It trains ordinary rank-32/alpha-64
+LoRA in the 128 q/k/v/output projections of the native DiT, alongside the existing
+112 language targets. All 537 original head tensors remain frozen FP32; native
+dropout, flow loss, state/action processing and sampling are unchanged. Category-specific
+projectors, feed-forward blocks, normalization and VL self-attention receive no adapters.
+The optimizer contains exactly 480 FP32 factor tensors. This is a new learning
+recipe, not an arithmetic-preserving replacement for full-head training.
+
+Select it through the same native training/evaluation/export commands with both
+overrides:
+
+```text
+model.backbone_adaptation.train_action_head=false
+model.backbone_adaptation.action_head_adapter_profile=gr00t_n1d7_dit_attention_lora_v1
+```
+
+Here `train_action_head=false` freezes original head parameters; it does not disable
+the head adapters or put the head in evaluation mode. Portable artifacts retain all
+480 factors. Standalone unmerged artifacts additionally retain every frozen FP32
+head base and bias; merged export explicitly refuses this profile. The new source
+identity requires its own compatible loader; historical artifacts retain their
+recorded builds and are not rewritten.
+
+The shared 132 CPU checks, 53 affected native checks and 21 existing configuration
+checks passed; independent peers also passed the 24 shared and 28 native new cases.
+These overlapping suites are contract evidence, not CUDA qualification. The
+[prospective paired development screen](evidence/native_qlora_gr00t_dit_attention_protocol.json)
+fixes seed 17, LR `1e-5`, 200 updates, the unchanged action-MSE target and all seven
+source-relative decoded-axis guards before outcomes. Real-model initial arithmetic,
+multi-update recovery, portable/unmerged reload, quality and memory results remain
+pending. The retained full-head and frozen-head negative results remain unchanged;
+any head-state memory saving belongs to both precision arms.
+
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16
 autocast**, trains only the native head, and uses `adamw_torch` with HF decay/no-decay groups.
