@@ -763,10 +763,10 @@ Earlier 25-file contracts still require their original build; they are not rewri
 or upgraded during resume. This extension does not bind portable inference to training code.
 
 `cbc950f` changes the GR00T task implementation identity, including with reuse disabled.
-Historical GR00T checkpoints, portable policies and standalone artifacts therefore require
-their recorded compatible loaders; the examples and qualified results below do not imply
-cross-build compatibility with `cbc950f`. Its own artifact qualification is separate.
-Never edit source-identity metadata to force an older policy through the new loader.
+Training resume and export of historical artifacts require their recorded compatible
+builds. Native inference has only the narrow reviewed exception described below;
+other historical configurations still require their original loaders. Never edit
+source-identity metadata to force an older policy through a new loader.
 
 Current `e64a735` default full-head checks passed in `38563905`: both BF16 and
 NF4 completed two updates, exact own-update-1 recovery and fresh two-row portable
@@ -812,17 +812,26 @@ against the retained selected policies is still required before claiming parity.
 Every checkpoint/portable policy includes all trained action-head/projector tensors alongside LoRA,
 with source, model, quantization, processor/statistics, embodiment, action settings, resolved targets,
 implementation hashes and dtype identities. Portable reload reconstructs the same quantized base.
-Use a new output directory for a fresh-process native action evaluation:
+Use a new output directory for a fresh-process native action evaluation. This
+example specifies the selected seed-17, rank-32/alpha-64 NF4 policy explicitly;
+use the artifact's actual settings for another trained policy:
 
 ```bash
 torchrun --standalone --nproc-per-node=1 \
   -m cosmos_framework.posttrain.entrypoints.action_eval \
   --config cosmos_framework/posttrain/configs/gr00t_n1d7_libero_qlora.py \
-  --checkpoint /run/checkpoints/iter_000100 \
+  --checkpoint /run/checkpoints/iter_000200 \
   --output /durable/path/fresh-action-evaluation -- \
   model.checkpoint_path=/staged/GR00T-N1.7-LIBERO/libero_spatial \
   model.backbone_adaptation.backbone_path=/staged/Cosmos-Reason2-2B-metadata \
-  data.validation_path=/prepared/gr00t/validation.jsonl
+  model.backbone_adaptation.mode=nf4_lora \
+  model.backbone_adaptation.rank=32 model.backbone_adaptation.alpha=64 \
+  model.backbone_adaptation.dropout=0 model.backbone_adaptation.seed=17 \
+  model.backbone_adaptation.train_action_head=true \
+  model.denoising_steps=4 model.training_prefix=10 model.execution_horizon=8 \
+  data.validation_path=/prepared/gr00t/validation.jsonl \
+  rl.seed=17 rl.evaluation_seed=123 rl.evaluation_max_samples=0 \
+  rl.reuse_evaluation_inputs=false rl.reuse_gr00t_evaluation_backbone=false
 ```
 
 The same command accepts the portable path printed in `completion.json`. It verifies the commit,

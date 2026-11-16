@@ -345,6 +345,7 @@ policy = build_policy(config, device=device, output=output)
 load_adapter_weights(
     artifact, policy.net._cosmos_adapter_checkpoint_codec,
     manager=CheckpointManager(checkpoint_format="dcp"),
+    purpose="inference",
 )
 policy.net.eval()
 inputs = prepare_observation(policy, observation_sample)
