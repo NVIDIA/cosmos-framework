@@ -1449,8 +1449,8 @@ blank lines are not counted, and a new line of the destination (a pointer, a new
 | --- | --- | --- | --- |
 | `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-auto/SKILL.md` L1-13); the old values are under "Removed text" |
 | `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L6 | "Post-train Cosmos3-Nano-Transfer-Auto" (the title) | replaced by the heading `## Fine-tune Transfer-Auto` (`cosmos3-post-train-simulation-auto/SKILL.md` L39) |
-| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L8-29 | from `Fine-tune the released Transfer-Auto model on your …`; "Choose your starting point"; "Set up the environment" | `cosmos3-post-train-simulation-auto/SKILL.md` L43-64 |
-| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L31-116 | from `The commands use the native`; "Quickstart: fine-tune the released model" to "Prepare a local training bundle" (4 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L74-159 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L8-25 | from `Fine-tune the released Transfer-Auto model on your …`; "Choose your starting point"; "Set up the environment" | `cosmos3-post-train-simulation-auto/SKILL.md` L43-60 |
+| `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L27-116 | from `Follow the [Framework setup guide](../../../../docs/setup.md)`; "Quickstart: fine-tune the released model" to "Prepare a local training bundle" (4 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L70-159 |
 | `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L118-123 | from `The builder copies media and tokenizer resources. …` | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` L7-12 |
 | `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L125-203 | "Configure the fine-tuning run" to "Reproduce the four training phases" (4 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L163-241 |
 | `cosmos3-nano-transfer-auto/post-training/SKILL.md` | L205-219 | from `Follow the [curriculum and handoffs](references/canonical-recipe.md):` | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md` L16-30 |
@@ -1459,8 +1459,8 @@ blank lines are not counted, and a new line of the destination (a pointer, a new
 | `cosmos3-nano-sim-auto/post-training/SKILL.md` | L6 | "Post-train Cosmos3-Nano-Sim-Auto" (the title) | replaced by the heading `## Distill Sim-Auto` (`cosmos3-post-train-simulation-auto/SKILL.md` L245) |
 | `cosmos3-nano-sim-auto/post-training/SKILL.md` | L8-28 | from `Start from **Transfer-Auto**, including a Transfer-Auto model …`; "Choose your starting point"; "What you need" | `cosmos3-post-train-simulation-auto/SKILL.md` L249-269 |
 | `cosmos3-nano-sim-auto/post-training/SKILL.md` | L30-56 | from `The shared [reference scene](../../cosmos3-inference-simulation-auto/references/reference-scene.md)`; "Three stages" | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md` L7-33 |
-| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L58-63 | "Set up the environment" | `cosmos3-post-train-simulation-auto/SKILL.md` L273-278 |
-| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L65-222 | "Quickstart: train Stage 1" to "Continue training and export" (6 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L288-445 |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L58 | "Set up the environment" (the heading) | replaced by the heading `### Set up the environment (Sim-Auto)` (`cosmos3-post-train-simulation-auto/SKILL.md` L273) |
+| `cosmos3-nano-sim-auto/post-training/SKILL.md` | L60-222 | from `Follow the [Framework setup guide](../../../../docs/setup.md)`; "Quickstart: train Stage 1" to "Continue training and export" (6 headings) | `cosmos3-post-train-simulation-auto/SKILL.md` L283-445 |
 | `cosmos3-nano-sim-auto/post-training/SKILL.md` | L224-239 | from `The reference budget is 4000 **total trainer …` | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md` L37-52 |
 | `cosmos3-nano-sim-auto/post-training/SKILL.md` | L241-252 | "References" (heading and 10 list items) | the heading is replaced by `## Reference files` (`cosmos3-post-train-simulation-auto/SKILL.md` L457) and each item's words open a row of its table (L469-476, L479-480); the items are under "Removed text" |
 | `cosmos3-nano-sim-bimanual/post-training/SKILL.md` | L1-4 | frontmatter `name` and `description` | replaced by the new frontmatter (`cosmos3-post-train-simulation-bimanual/SKILL.md` L1-12); the old values are under "Removed text" |
@@ -1888,7 +1888,7 @@ sections, the entry skill) is not marked line by line; it is under "New text".
 
 | File                                                                                | Added               | Reworded        | Link target only | Unchanged |
 | ----------------------------------------------------------------------------------- | ------------------- | --------------- | ---------------- | --------- |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L66, L280           | —               | —                | —         |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L62, L275           | —               | —                | —         |
 | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3                  | —               | —                | —         |
 | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3                  | —               | —                | —         |
 | `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3                  | —               | —                | —         |
@@ -1914,8 +1914,8 @@ Notes added:
 
 | File                                                                                | Line | Form                                                     | Opening words                                                                                    |
 | ----------------------------------------------------------------------------------- | ---- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L66  | note in the text: a requirement the sources do not state | `in a checkout without a prepared environment, run the three commands below …`                   |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L280 | note in the text: a requirement the sources do not state | `in a checkout without a prepared environment, run these three commands from …`                  |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L62  | note in the text: a requirement the sources do not state | `in a checkout without a prepared environment, start here: run the three …`                      |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                       | L275 | note in the text: a requirement the sources do not state | `in a checkout without a prepared environment, start here: run these three …`                    |
 | `cosmos3-post-train-simulation-auto/references/transfer-auto-training-notes.md`     | L3   | provenance note after the first heading                  | `these blocks are from the body of the Transfer-Auto post-training skill that …`                 |
 | `cosmos3-post-train-simulation-auto/references/sim-auto-training-notes.md`          | L3   | provenance note after the first heading                  | `these blocks are from the body of the Sim-Auto post-training skill that …`                      |
 | `cosmos3-post-train-simulation-auto/references/troubleshooting.md`                  | L3   | provenance note after the first heading                  | `this file holds what the Transfer-Auto and Sim-Auto troubleshooting skills say about …`         |
@@ -2009,11 +2009,11 @@ paragraph of the Auto `SKILL.md` (L37) quotes two phrases of its `references/run
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L21-24   | section "When to use this skill": heading and 2 lines                                             |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L26-33   | section "Starting points": heading and a table of 4 rows                                          |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L35-37   | section "Prerequisites": heading and 1 line                                                       |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L66-72   | 6 lines from `> **Skill note (not in the source):** …`                                            |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L62-68   | 6 lines from `> **Skill note (not in the source):** …`                                            |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L161     | one-line pointer to the block moved to `references/transfer-auto-training-notes.md`               |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L243     | one-line pointer to the block moved to `references/transfer-auto-training-notes.md`               |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L271     | one-line pointer to the block moved to `references/sim-auto-training-notes.md`                    |
-| `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L280-286 | 6 lines from `> **Skill note (not in the source):** …`                                            |
+| `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L275-281 | 6 lines from `> **Skill note (not in the source):** …`                                            |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L447     | one-line pointer to the block moved to `references/sim-auto-training-notes.md`                    |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L449-451 | section "Run inference with your checkpoint": heading and 1 line                                  |
 | `cosmos3-post-train-simulation-auto/SKILL.md`                                      | L453-455 | section "Troubleshooting": heading and 1 line                                                     |
