@@ -32185,6 +32185,50 @@
         "gpu_seconds": 0
       },
       "quality_or_performance_claim": false
+    },
+    "38629190": {
+      "job": "38629190",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 57,
+      "native_revision": "f1feaa4c7bd85d2b085d01df1f7c638c2f00b662",
+      "scope": "First prospective-generated LIBERO engineering allocation; failed before runtime/model/EGL/scene/measurement-stage publication. No scientific acceptance or memory/performance claim.",
+      "protocol_sha256": "421ce31305d2031a25d537eb34e4378fdd340961a1f6580f49e15a909c965c36",
+      "payload_manifest_sha256": "468f3d761d9de25fbe450789d0974a9e7de4b32deb722db822c417178176ee6d",
+      "operational_sbatch_sha256": "c7d867de927843cafade1020903cc687603c0e2bbe5cb637b94f3600bd557b5f",
+      "admission_sha256": "bf82c3bdbc92fd5559662c3849fbcecdf93fdb27aec73fd7dcc7d41b35b395c4",
+      "approved_preflight_sha256": "c3a2276081776cd2499139757f7e482c74fcce42037d7353953eb136024be0ef",
+      "receipt_archive": "gr00t-generated-scenes-v2-38629190-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "297dd4dc0fdcc7ad03b525e7fd96e67a4017da87b186a75152c22c9bf7c224df",
+      "inventory_sha256": "a73396bd30e7d913aafa48addb90d8652792719d8a0e6697d5007697c2577d2b",
+      "listed_files": 85,
+      "regular_archive_members": 86,
+      "terminal_release_sha256": "548370b8a39871517d9ab680fb3d52d93d0004e46b3630e2c2b9a15cbde7f9bc",
+      "independent_failure_replay_sha256": "8d4d2f3db020b1ce8856b0ea14e34f5912b693870ed12af228d93eb32d1df8c3",
+      "failure": {
+        "stage": "compute pre-model imports",
+        "exception": "ModuleNotFoundError: No module named 'tools.native_qlora_qualification.storage'",
+        "cause": "Regular measurement package precedes and shadows complete native package, but omitted storage.py. Isolated safe-path execution reproduced this exact error.",
+        "compute_uid_and_storage_probe_passed": true,
+        "model_loaded": false,
+        "scenes_generated": 0,
+        "gpu_memory_peak_measured": false
+      },
+      "pre_submission_repairs": {
+        "failed_receipt_bundle_sha256": "e870c48819a4c7351dbfa80d5021cd2c455233ecb7eabae26b6a10c1dd2129d2",
+        "successful_preflight_bundle_sha256": "90d92603243b303835be7bbdc92e01b4202354c2c17ceedd88be3d12f403724d",
+        "actual_submission_bundle_sha256": "1817666debe29852c1e91f354062c4024666ce8c400ca896dd7201b5f2f47a17",
+        "scope": "Preserved pre-child exact-fsw/fs11 alias failure and preflight GLVND files versus files_sha256 mismatch. Narrow tested validators repaired before sole submission; original native/science/route unchanged.",
+        "gpu_seconds": 0
+      },
+      "prepared_mechanical_successor": {
+        "payload_manifest_sha256": "6913345db1de5f1d2548a92bbfbf4a71f40d3927f9981a2993b490fcf2fa1b5b",
+        "added_file": "measurement/tools/native_qlora_qualification/storage.py",
+        "added_file_sha256": "0a8d563e58cd650d64f1227abfbf69df5162eb21cd9310b0f62593387e94a53f",
+        "all_32_original_files_unchanged": true,
+        "native_and_protocol_unchanged": true,
+        "physical_acceptance": false
+      }
     }
   },
   "read_only_head_memory_diagnostic": {

@@ -984,6 +984,16 @@ policy response latency. CPU fixtures cover these contracts; real pinned-runtime
 fresh-process regeneration and policy/simulator acceptance remain required before use as
 rollout evidence. No generated-scene campaign is qualified by this implementation alone.
 
+The first allocated check (`38629190`) failed after **57 GPU-seconds**, before
+model loading, EGL initialization or scene generation. Compute-side storage probes
+passed, but the qualification measurement package shadowed the native tools package
+and omitted `storage.py`. The retained 86-file archive includes the failure and
+terminal release. Its mechanical successor adds the existing pinned module while
+preserving all 32 original packet files, the native build and the experiment
+protocol. Isolated import tests validate packaging; they do not replace the pending
+physical execution. Earlier path-alias and GLVND-schema preflight failures consumed
+no GPU time and remain recorded separately.
+
 Historical selected-update-200 policies require their compatible native loader.
 The evaluation-only backport `fe72f850d9f6e3922bb1a3b1332549e3ab96c82d` on
 `integration/libero-generated-native64` adds the same five scene-evaluation files
