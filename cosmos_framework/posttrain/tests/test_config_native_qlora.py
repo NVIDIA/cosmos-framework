@@ -30,7 +30,7 @@ def _model_config(**kwargs):
 
 def _root(model_cfg):
     return SimpleNamespace(
-        model_backend="i4",
+        model_backend="native",
         model=NativePolicyBuildSpec(builder=BUILDER, model_id="/verified/snapshot", model_config=model_cfg),
     )
 

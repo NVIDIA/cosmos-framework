@@ -87,7 +87,7 @@ class ImmutableModelSource:
     processor_manifest_sha256: str
 ```
 
-Validate these types and values at configuration preflight and validate realized tensors after loading. The first capability also fixes world size one, `model_backend="i4"` with `NativePolicyBuildSpec`, SDPA, full non-reentrant activation checkpointing, `use_cache=False`, and compilation disabled. Reject contradictory base trainability, additional trained modules, adapter method extensions, unsupported offload, quantizers, dtypes, hardware, or strategy combinations. Do not catch a failed backend/kernel check and continue with a dense base, CPU backend, or alternate quantizer.
+Validate these types and values at configuration preflight and validate realized tensors after loading. The first capability also fixes world size one, `model_backend="native"` with `NativePolicyBuildSpec`, SDPA, full non-reentrant activation checkpointing, `use_cache=False`, and compilation disabled. Reject contradictory base trainability, additional trained modules, adapter method extensions, unsupported offload, quantizers, dtypes, hardware, or strategy combinations. Do not catch a failed backend/kernel check and continue with a dense base, CPU backend, or alternate quantizer.
 
 | Quantity                                 | Initial policy                                                                                                             |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -178,7 +178,7 @@ The kernel preflight must actually quantize, execute BF16 multi-token forward an
 Add paired native Python recipes, `sft_qwen3_vl_8b_lora.py` and `sft_qwen3_vl_8b_qlora.py`, sharing one configuration factory. The proposed fragment below depends on the new schema and is not runnable on the audit baseline:
 
 ```python
-config.model_backend = "i4"
+config.model_backend = "native"
 config.model = NativePolicyBuildSpec(
     builder="cosmos_framework.posttrain.model.qwen3_vl.build_qwen3_vl_native_policy",
     model_id=verified_snapshot_path,

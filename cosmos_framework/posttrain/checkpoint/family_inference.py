@@ -37,6 +37,8 @@ _CURRENT_GR00T = {
     **_OLD_GR00T,
     "action_sft.py": "0bfdac4de03308e198174dca409bbf949c500792a56d459fba615e4ef10b4e71",
     "adaptation.py": "2ce4e15613405c5abd71978e45a02ad5354ee4048ea328df0efb0f50d689e961",
+    # Upstream main changed only one docstring line; the reviewed old hash stays in _OLD_GR00T.
+    "packer.py": "bae0ac6a8940c1af1b27e63d81dcee7ce62871df9d78db427f6a1aa5b1333a2e",
     "policy.py": "c6c459a9f7962bf29e427d525774f1fe86f73dca63f7fe072e1b5ac9c122d1a3",
     "head_adaptation.py": "38242c02aad0af1a9ccc24feecaba502911aeb7d8c49a8a42551843840a7ff6d",
 }

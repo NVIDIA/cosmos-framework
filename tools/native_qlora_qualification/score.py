@@ -216,7 +216,7 @@ def dense_scoring_config(config: Any, manifest: dict[str, Any]) -> Any:
     selected = select_policy_backend(config)
     spec = selected.native_spec
     if (
-        selected.backend != "i4"
+        selected.backend != "native"
         or spec is None
         or spec.builder != NATIVE_POLICY_BUILDER
         or config.grid.backend != "local"
