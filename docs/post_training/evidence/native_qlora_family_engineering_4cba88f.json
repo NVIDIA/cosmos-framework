@@ -32064,6 +32064,127 @@
         "quality_or_performance_claim": false
       },
       "scope_comparison": "Earlier full160 development evaluation improved BF16 MSE .055068142 to .044357853 and NF4 .055654464 to .043024754. Its cohort and native RNG stream differ. This TRAIN-only mechanism result does not overwrite those gains or the failed historical quality uncertainty gates."
+    },
+    "38626296": {
+      "job": "38626296",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_gpu_seconds": 1828,
+      "native_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "scope": "20already-consumed TRAIN rows,target-energy stratified4/stratum,source versus selected512 bothprecisionarms;3paired nativeevaluation-noise seeds;244evaluations/0updates. Mechanism diagnostic, not held-out quality or training-seed inference.",
+      "protocol_sha256": "8d1a8e8c446eaa6cbc6beaf56fb07ef2113dac0ac7e9b2be5486782d13c3dfed",
+      "payload_manifest_sha256": "7dd770b9745a0d7273944a8eaf8620181239e21db72df9ce7812e0f7f283e28d",
+      "admission_sha256": "ec8a40c256f314d73af97d6f3a58ad0434b008bbb47b9693c2634351f40ee2ca",
+      "operational_executor_sha256": "28198fbf79c173d57363201ad6aa261cfa7ffa7484c291e278f5b3116003868c",
+      "operational_sbatch_sha256": "61a2e38e3c39b5a289faed056795b56f597322b524e3993d54bd3bfed3e0f75d",
+      "receipt_archive": "alpamayo-curvature-38626296-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "058e8a2dd6909c2870c59a5659cad75ae300db74ab2d1a69c39c7589c90d2647",
+      "inventory_sha256": "8d13abdc36044a9fafec1ee0028935646d9f6196e23f4e56533e659f368bd07a",
+      "terminal_release_sha256": "c2cf8c6aa45eaf16de4a1f0fdd3169ee65b57b0eac3229c53458a1db8187f199",
+      "result_sha256": "b5fbddc4a30743a4d58d96da14d75d48519be1da4ae5c1b9f6f26d39a0cc10f5",
+      "listed_files": 95,
+      "missing_paths": [],
+      "population_weights": [
+        0.5,
+        0.298828125,
+        0.150390625,
+        0.0390625,
+        0.01171875
+      ],
+      "tail_population_count": 26,
+      "decision": {
+        "checks": {
+          "bf16_lora": {
+            "123": {
+              "sum_other_positive_changes": 0.0032471229267724494,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": false,
+              "total_positive": false,
+              "weighted_tail_curvature_change": -0.004098555722166636,
+              "weighted_total_flow_change": -0.009287662358034566
+            },
+            "456": {
+              "sum_other_positive_changes": 0.1130524166373386,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": true,
+              "total_positive": true,
+              "weighted_tail_curvature_change": 0.007491916964381021,
+              "weighted_total_flow_change": 0.12054433360171962
+            },
+            "789": {
+              "sum_other_positive_changes": 0.015078211590846744,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": false,
+              "total_positive": true,
+              "weighted_tail_curvature_change": -0.0024669834781735275,
+              "weighted_total_flow_change": 0.010248226462204125
+            }
+          },
+          "nf4_lora": {
+            "123": {
+              "sum_other_positive_changes": 0.002839652401982304,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": false,
+              "total_positive": false,
+              "weighted_tail_curvature_change": -0.0035561555989494682,
+              "weighted_total_flow_change": -0.010890867421886635
+            },
+            "456": {
+              "sum_other_positive_changes": 0.11009899392399745,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": true,
+              "total_positive": true,
+              "weighted_tail_curvature_change": 0.006073852791268567,
+              "weighted_total_flow_change": 0.11617284671526602
+            },
+            "789": {
+              "sum_other_positive_changes": 0.00990052534737632,
+              "tail_exceeds_other_positive": false,
+              "tail_positive": false,
+              "total_positive": true,
+              "weighted_tail_curvature_change": -0.0017417281867673487,
+              "weighted_total_flow_change": 0.007421354043063797
+            }
+          }
+        },
+        "decision": "Terminate this curvature-tail robustness hypothesis; no learning screen selected.",
+        "gradient_or_optimizer_update_domination_established": false,
+        "promotion": false,
+        "prospective_condition_met": false
+      },
+      "raw_replay": {
+        "independent_script_sha256": "37a482d11f6e73eea6eb8181adb8eb2983d8beeca0f1f3e23574dc2f5834638a",
+        "independent_result_sha256": "7802da6da935ccfcb4aec9f839f7faf0f2db3f62f31199707af2ef436213a510",
+        "byte_exact_sealed_reducer_result_sha256": "b5fbddc4a30743a4d58d96da14d75d48519be1da4ae5c1b9f6f26d39a0cc10f5",
+        "native_flow_observations": 240,
+        "raw_tensors": 1680,
+        "plain_controls": 4,
+        "all_four_restoration_receipts_passed": true,
+        "paired_inputs_and_rng_exact": true,
+        "scope": "Raw F32 targets,predictions,SSE/interpolation/native scalar bounds and population reductions independently reconstructed on CPU. Full model/frozen-state equality is the on-node attestation."
+      },
+      "measurement": {
+        "owner_readout_sha256": "bfbd2dfb59967509a982731081c8fd75bff9cc70b3cc817e23fa91a7135d2f9b",
+        "valid_host_complete_samples": {
+          "bf16_lora": 720,
+          "nf4_lora": 648
+        },
+        "native_phase_events": 16,
+        "worker_seconds": {
+          "bf16_lora": 918.421705699,
+          "nf4_lora": 838.814957945
+        },
+        "limits": "Pre-monitor startup and tiny scoring-setup/interphase intervals unsampled. Includes capture/audit/plain-control overhead; not a matched performance or training-memory comparison."
+      },
+      "admission_failure_preserved": {
+        "stage": "before sbatch",
+        "cause": "All3 whole-UID queue queries exceeded the unchanged10-second bound. No GPUjob or advancing admission receipt existed.",
+        "failed_bundle_manifest_sha256": "f7d50569b20c5bda6bee2cb96b8f73eedf7ea34f0be28dc90e7fa014d948304d",
+        "successful_submission_bundle_manifest_sha256": "370677ceed4ab986c05c62043f4039b467af9e401931a3e417be1e37b5d91a2c",
+        "retry_change": "Only unique release-journal/process naming; routing/timeouts/science/validators unchanged.",
+        "gpu_seconds": 0
+      },
+      "quality_or_performance_claim": false
     }
   },
   "read_only_head_memory_diagnostic": {

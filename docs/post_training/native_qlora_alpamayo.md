@@ -924,6 +924,37 @@ These are interventions on one trained BF16 control, not retraining, held-out
 quality, NF4 qualification or an independent-family confidence interval. The
 existing family evidence retains the raw records and unchanged decision rule.
 
+The subsequent curvature-tail diagnostic (`38626296`, **1,828 GPU-seconds**)
+also rejected its proposed learning intervention. It compared the source and
+update-512 policy in both precision arms on 20 already-consumed training rows,
+with three paired evaluation-noise seeds. Four rows were selected per target-energy
+stratum; the primary weights were the original population counts
+`[256,153,77,20,6]/512`, not the oversampled 20-row average. The upper two strata
+represent 26/512 population rows. The prospective rule required their curvature
+contribution to dominate the other positive loss changes in **every** arm/noise
+comparison, alongside positive total and tail changes.
+
+| Evaluation noise | BF16 total change | NF4 total change | BF16 tail-curvature change | NF4 tail-curvature change |
+|---|---:|---:|---:|---:|
+| 123 | -0.009288 | -0.010891 | -0.004099 | -0.003556 |
+| 456 | +0.120544 | +0.116173 | +0.007492 | +0.006074 |
+| 789 | +0.010248 | +0.007421 | -0.002467 | -0.001742 |
+
+These are population-weighted native flow-loss differences, not held-out task
+quality. Tail dominance failed all six comparisons; no curvature-robustness
+training screen is selected. The earlier target-energy/loss association did not
+establish this mechanism or gradient/update domination. The existing development
+quality failures remain unchanged.
+
+All 244 native evaluations completed without updates, including four plain
+controls, and all four model/frozen-state, mixed-mode, scale, gradient-structure
+and RNG restorations passed on the accelerator. Independent replay verified all
+95 retained files, 1,680 raw tensors and the six weighted decisions. All 1,368
+recorded memory samples passed; pre-monitor startup and short unsampled phases
+remain outside coverage. The initial admission stopped before `sbatch` after
+three queue-query timeouts; its retained failure consumed no GPU time. The
+successful retry preserved routing and every validation rule.
+
 The optimizer-loading fix in build `02f93ba` passed its own Alpamayo gate
 (`38543454`, **2,109 GPU-seconds**). Both NF4/BF16 LoRA modes completed ten native
 updates, matched the retained `4cba88f` states at updates 5 and 10, and recovered
