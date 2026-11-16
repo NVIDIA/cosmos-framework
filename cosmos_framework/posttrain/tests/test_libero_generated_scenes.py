@@ -528,19 +528,78 @@ def test_describe_hashes_actual_robot_controller_physics_and_assets_without_env(
     assert g.describe_source()["tasks"][0] != baseline["tasks"][0]
 
 
-def test_timeout_retains_original_seed_and_runs_next_requested_seed_once(manifest, monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "expected_stdout", "expected_stderr"),
+    [
+        (b"partial output\n", b"worker failure\n", "partial output\n", "worker failure\n"),
+        ("partial output\n", "worker failure\n", "partial output\n", "worker failure\n"),
+        (None, None, "", ""),
+        (b"partial \xe2\x82", b"invalid \xff", "partial \\xe2\\x82", "invalid \\xff"),
+        (b"output", "error", "output", "error"),
+    ],
+)
+def test_timeout_retains_original_seed_and_runs_next_requested_seed_once(
+    manifest, monkeypatch, tmp_path, stdout, stderr, expected_stdout, expected_stderr
+):
     manifest["plan"]["requests"].append({"task_id": 0, "construction_seed": 1, "reset_seed": 2})
     calls = []
 
     def timeout(command, **kw):
         calls.append(json.loads(kw["input"])["index"])
-        raise subprocess.TimeoutExpired(command, kw["timeout"])
+        raise subprocess.TimeoutExpired(command, kw["timeout"], output=stdout, stderr=stderr)
 
     monkeypatch.setattr(subprocess, "run", timeout)
     result = g.prepare(manifest["plan"], journal=tmp_path / "attempts")
     assert calls == [0, 1]
     assert [row["request"] for row in result["records"]] == manifest["plan"]["requests"]
     assert all(row["status"] == "error" for row in result["records"])
+    for index, row in enumerate(result["records"]):
+        assert row["stdout"] == expected_stdout and row["stderr"] == expected_stderr
+        assert "timed out after 180 seconds" in row["error"]
+        assert row["scene_id"] == g.scene_id(manifest["plan"]["source"], row["request"])
+        journal = json.loads((tmp_path / "attempts" / f"{index:06d}.result.json").read_text())
+        assert journal == {"index": index, "plan_sha256": g.digest(manifest["plan"]), "record": row}
+    with pytest.raises(ValueError, match="incomplete or unexpected prepared scene fields"):
+        g.validate_manifest(result)
+
+
+@pytest.mark.parametrize("action", ["plan", "verify"])
+def test_real_worker_timeout_keeps_partial_streams_without_publishing_manifest(manifest, monkeypatch, tmp_path, action):
+    # Actual subprocess timeout and captured bytes, without importing a simulator.
+    original, output = tmp_path / "input.json", tmp_path / "scenes.json"
+    original.write_text(json.dumps(manifest if action == "verify" else manifest["plan"]))
+    run = subprocess.run
+    calls = []
+
+    def worker(command, **kwargs):
+        calls.append(json.loads(kwargs["input"]))
+        assert kwargs["text"] is True and kwargs["timeout"] == 180
+        return run(
+            [
+                sys.executable,
+                "-u",
+                "-c",
+                "import os,time; os.write(1,b'partial output\\n'); os.write(2,b'partial error\\n'); time.sleep(60)",
+            ],
+            **{**kwargs, "timeout": 1},
+        )
+
+    monkeypatch.setattr(subprocess, "run", worker)
+    args = [g.MODULE, "--" + action, str(original), "--output", str(output)]
+    if action == "verify":
+        args += ["--sha256", g.file_sha(original)]
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(ValueError, match="incomplete or unexpected prepared scene fields"):
+        g.main()
+    assert len(calls) == 1 and calls[0]["index"] == 0 and calls[0]["plan"] == manifest["plan"]
+    assert ("expected" in calls[0]) == (action == "verify")
+    assert not output.exists()
+    journal = output.with_name(output.name + ".attempts")
+    record = json.loads((journal / "000000.result.json").read_text())["record"]
+    request = manifest["plan"]["requests"][0]
+    assert record["status"] == "error" and "timed out" in record["error"]
+    assert record["stdout"] == "partial output\n" and record["stderr"] == "partial error\n"
+    assert record["request"] == request and record["scene_id"] == g.scene_id(manifest["plan"]["source"], request)
 
 
 def test_generated_policy_noise_is_stable_paired_and_separate_from_public(monkeypatch):

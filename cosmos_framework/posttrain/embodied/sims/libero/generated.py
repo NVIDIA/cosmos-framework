@@ -585,7 +585,18 @@ def prepare(plan, *, journal, expected=None):
                 ):
                     raise ValueError("worker returned a different generated request")
             record["stderr"] = child.stderr
-        except (subprocess.TimeoutExpired, ValueError, TypeError, OSError) as exc:
+        except subprocess.TimeoutExpired as exc:
+            # TimeoutExpired can contain bytes even with text=True, including a
+            # truncated UTF-8 sequence. Retain both streams in the durable failure.
+            record = {
+                "status": "error",
+                "error": str(exc),
+                **{
+                    name: value.decode("utf-8", errors="backslashreplace") if isinstance(value, bytes) else value or ""
+                    for name, value in (("stdout", exc.stdout), ("stderr", exc.stderr))
+                },
+            }
+        except (ValueError, TypeError, OSError) as exc:
             record = {"status": "error", "error": str(exc)}
         # Every original request remains visible, including a failed worker. Never replace or resample it.
         record = {**record, "request": request, "scene_id": scene_id(plan["source"], request)}
