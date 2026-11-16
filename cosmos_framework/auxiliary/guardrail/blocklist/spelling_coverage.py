@@ -9,12 +9,14 @@ a data move, a new exemption mechanism -- carries the opposite risk, and a
 corpus cannot show it: the phrasings that would newly slip through are exactly
 the ones ordinary output does not contain.
 
-This builds that missing side. For every entry it writes five prompts, one per
+This builds that missing side. For every entry it writes six prompts, one per
 way the entry can be spelled while still reading as itself:
 
     verbatim    the entry as written
     spaced      split in the middle, the fusing evasion ("de skin")
     invisible   split with a zero-width space
+    selector    split with a variation selector, which draws nothing but is
+                not a format character
     fullwidth   spelled in fullwidth letters
     lookalike   every letter that has one swapped for a Cyrillic or Greek twin
 
@@ -29,10 +31,10 @@ Entry text is never printed, so output can be pasted into a review. A frozen
 probe file does hold the probe prompts, and so the entries, in plain text: keep
 it with the lists, not in a ticket.
 
-    coverage.py <blocklist-dir> --write-probes probes.json
-    coverage.py <blocklist-dir> --probes probes.json --whitelist-dir <dir> --json before.json
-    coverage.py <new-blocklist-dir> --probes probes.json --whitelist-dir <new-dir> --json after.json
-    coverage.py --compare before.json after.json
+    spelling_coverage.py <blocklist-dir> --write-probes probes.json
+    spelling_coverage.py <blocklist-dir> --probes probes.json --whitelist-dir <dir> --json before.json
+    spelling_coverage.py <new-blocklist-dir> --probes probes.json --whitelist-dir <new-dir> --json after.json
+    spelling_coverage.py --compare before.json after.json
 
 The exact-match list and nltk data beside <blocklist-dir> are picked up on their
 own; the whitelist is not, so pass --whitelist-dir to measure the production
@@ -50,7 +52,8 @@ from pathlib import Path
 # Lowercase ASCII letter -> its fullwidth presentation form.
 FULLWIDTH = {chr(code): chr(code - 0x61 + 0xFF41) for code in range(0x61, 0x7B)}
 
-ZERO_WIDTH_SPACE = "​"
+ZERO_WIDTH_SPACE = "\u200b"
+VARIATION_SELECTOR = "\ufe0f"
 
 
 def _lookalike_spelling() -> dict[str, str]:
@@ -71,7 +74,7 @@ PROMPT_TEMPLATE = "a photo of {body} in the scene"
 
 
 def spellings(entry: str) -> dict[str, str]:
-    """The five prompts probing one entry.
+    """The six prompts probing one entry.
 
     Splitting at the midpoint is arbitrary but stable: the point is to produce a
     spelling the matcher has to fuse back together, not to find the split a
@@ -83,6 +86,7 @@ def spellings(entry: str) -> dict[str, str]:
         "verbatim": PROMPT_TEMPLATE.format(body=entry),
         "spaced": PROMPT_TEMPLATE.format(body=f"{entry[:middle]} {entry[middle:]}"),
         "invisible": PROMPT_TEMPLATE.format(body=f"{entry[:middle]}{ZERO_WIDTH_SPACE}{entry[middle:]}"),
+        "selector": PROMPT_TEMPLATE.format(body=f"{entry[:middle]}{VARIATION_SELECTOR}{entry[middle:]}"),
         "fullwidth": PROMPT_TEMPLATE.format(body="".join(FULLWIDTH.get(c, c) for c in entry)),
         "lookalike": PROMPT_TEMPLATE.format(body="".join(LOOKALIKE.get(c, c) for c in entry.lower())),
     }
@@ -265,7 +269,7 @@ def main(argv=None) -> int:
     results = measure(probes, is_blocked)
     summary = summarize(results)
     print(f"entries: {len(entries)}   prompts: {len(results)}   probe set: {corpus_id(probes)}")
-    for spelling in ("verbatim", "spaced", "invisible", "fullwidth", "lookalike", "total"):
+    for spelling in ("verbatim", "spaced", "invisible", "selector", "fullwidth", "lookalike", "total"):
         if spelling in summary:
             counts = summary[spelling]
             print(f"  {spelling:10s} blocked={counts['blocked']:5d} passed={counts['passed']:5d}")
