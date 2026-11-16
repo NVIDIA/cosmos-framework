@@ -506,13 +506,21 @@ command:
 
 ```bash
   -e NIM_MULTIVIEW_LAYER_OFFLOAD=false \
-  -e NIM_MULTIVIEW_VAE_TILING=false \
 ```
+
+`NIM_MULTIVIEW_LAYER_OFFLOAD=false` turns off transformer layer offload and VAE
+tiling together.
 
 Turning a reduction off raises peak GPU memory, and a request that no longer
 fits fails with an out-of-memory error. Validate each change with your largest
 expected request. At startup the Generator logs a `VRAM optimizations for
 profile <id>` block that lists each reduction in effect.
+
+`layer` profiles need much more host memory than resident ones, because every
+GPU keeps a pinned copy of the transformer weights and the SeaCache history in
+host memory. Check the system-memory floor in
+[Multiview Profiles](support-matrix.md#multiview-profiles) before choosing a
+host.
 
 ## Guardrails
 

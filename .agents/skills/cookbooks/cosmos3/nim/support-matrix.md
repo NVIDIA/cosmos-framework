@@ -215,9 +215,8 @@ configuration is validated for the deployment.
 
 The `multiview` Generator has its own profiles and is not covered by the
 [Generator Profiles](#generator-profiles) table. BF16 and FP8 profiles share
-the same layouts and floors except where a row names one precision. Every
-profile keeps the guardrails resident, and none supports unified-memory
-systems or Transfer.
+the same layouts except where a row names one precision. Every profile keeps
+the guardrails resident, and none supports unified-memory systems or Transfer.
 
 **Model VRAM Optimized** is `True` for profiles tagged `offload: layer`. These
 profiles offload transformer layers to host memory and enable the other VRAM
@@ -227,23 +226,41 @@ They run slower but fit GPUs with less memory.
 
 | Precision | Performance Profile | GPUs | Parallelism | Model VRAM Optimized | Minimum VRAM/Device | System-Memory Floor |
 | --- | --- | ---: | --- | --- | ---: | ---: |
-| BF16, FP8 | `latency` | 1 | None | False | 150 GiB | 40 GiB |
-| BF16, FP8 | `latency` | 1 | None | True | 72 GiB | 64 GiB |
-| BF16, FP8 | `latency` | 2 | CFG 2 | False | 150 GiB | 40 GiB |
-| BF16, FP8 | `latency` | 2 | Ulysses 2 | False | 93 GiB | 40 GiB |
-| BF16, FP8 | `latency` | 2 | CFG 2 | True | 72 GiB | 64 GiB |
-| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | False | 93 GiB | 40 GiB |
-| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | True | 72 GiB | 64 GiB |
-| BF16, FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | False | 93 GiB | 40 GiB |
-| BF16 | `latency` | 8 | CFG 2 × Ulysses 2 × TP 2 | True | 72 GiB | 64 GiB |
-| FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | True | 72 GiB | 64 GiB |
-| BF16, FP8 | `throughput` | 2, 4, 8 | One replica per GPU | False | 93 GiB | 40 GiB |
-| BF16, FP8 | `throughput` | 2, 4, 8 | One replica per GPU | True | 72 GiB | 64 GiB |
+| BF16, FP8 | `latency` | 1 | None | False | 149 / 145 GiB | 45 / 40 GiB |
+| BF16, FP8 | `latency` | 1 | None | True | 74 / 78 GiB | 91 / 75 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | False | 150 / 145 GiB | 68 / 64 GiB |
+| BF16, FP8 | `latency` | 2 | Ulysses 2 | False | 107 / 90 GiB | 51 / 44 GiB |
+| BF16, FP8 | `latency` | 2 | CFG 2 | True | 72 / 77 GiB | 165 / 138 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | False | 101 / 87 GiB | 67 / 74 GiB |
+| BF16, FP8 | `latency` | 4 | CFG 2 × Ulysses 2 | True | 70 GiB | 211 / 159 GiB |
+| BF16, FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | False | 90 / 66 GiB | 99 / 134 GiB |
+| BF16 | `latency` | 8 | CFG 2 × Ulysses 2 × TP 2 | True | 58 GiB | 291 GiB |
+| FP8 | `latency` | 8 | CFG 2 × Ulysses 4 | True | 58 GiB | 263 GiB |
+| BF16, FP8 | `throughput` | 2 | One replica per GPU | False | 150 / 142 GiB | 68 / 64 GiB |
+| BF16, FP8 | `throughput` | 2 | One replica per GPU | True | 75 / 78 GiB | 165 / 138 GiB |
+| BF16, FP8 | `throughput` | 4 | One replica per GPU | False | 150 / 142 GiB | 114 / 116 GiB |
+| BF16, FP8 | `throughput` | 4 | One replica per GPU | True | 75 / 78 GiB | 313 / 264 GiB |
+| BF16, FP8 | `throughput` | 8 | One replica per GPU | False | 150 / 142 GiB | 206 / 220 GiB |
+| BF16, FP8 | `throughput` | 8 | One replica per GPU | True | 74 / 78 GiB | 609 / 516 GiB |
 
-Latency layouts without Ulysses or tensor parallelism (one GPU, or CFG 2 on two
-GPUs) hold the whole model and sequence on every GPU, so they need the
-150-GiB floor of B200-class GPUs. Two-GPU `latency` deployments have both a
-CFG 2 and a Ulysses 2 profile. To require Ulysses, set
+Where BF16 and FP8 floors differ, the table lists BF16 / FP8. The floors come
+from per-GPU peaks measured on B200 for the largest request (720p, 200 frames,
+eleven cameras, joint LiDAR), plus the resident guardrails and headroom, and
+were checked on every listed GPU class. Profile selection checks both floors,
+so the host or container memory limit must meet the system-memory floor as well
+as the GPUs meeting the VRAM floor.
+
+The system-memory floor grows with the GPU count because every GPU runs its own
+engine process with its own host buffers. `layer` profiles keep a pinned copy of
+the transformer weights and the SeaCache history in host memory on every GPU,
+so they need far more than resident profiles. This memory is pinned: it counts
+toward the container memory limit, not toward `--shm-size`, and stays allocated
+between requests.
+
+Layouts without Ulysses or tensor parallelism (one GPU, CFG 2 on two GPUs, and
+`throughput` replicas) run the whole sequence on every GPU, so their resident
+profiles need B200-class GPUs. Two-GPU `latency` deployments have both a CFG 2
+and a Ulysses 2 profile. To require Ulysses, set
 `NIM_TAGS_SELECTOR='n_gpus=2,nim_up=2'`. Each `throughput` replica runs a full
 one-GPU engine and serves its own requests.
 
