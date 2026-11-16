@@ -1,0 +1,6 @@
+$ sacct -j 4815390 --format=JobID,JobName%32,State,ExitCode,DerivedExitCode,Elapsed,NodeList -P
+JobID|JobName|State|ExitCode|DerivedExitCode|Elapsed|NodeList
+4815390|cosmos3-reasoner-train-a19f03|FAILED|1:0|1:0|02:17:40|gpu-b[031-032]
+4815390.batch|batch|FAILED|1:0||02:17:40|gpu-b031
+4815390.extern|extern|COMPLETED|0:0||02:17:41|gpu-b[031-032]
+4815390.0|cosmos-train|FAILED|1:0||02:16:22|gpu-b[031-032]

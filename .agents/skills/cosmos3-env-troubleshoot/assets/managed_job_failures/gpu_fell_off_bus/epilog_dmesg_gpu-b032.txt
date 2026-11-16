@@ -1,0 +1,7 @@
+# Captured by the SLURM epilog on gpu-b032 after job 4815390 (dmesg -T | grep -E 'NVRM|Xid')
+[Sat Nov 15 15:37:38 2026] NVRM: GPU at PCI:0000:9b:00: GPU-5e1c7a02-3f6b-8d41-a0c2-71d94e8b6f13
+[Sat Nov 15 15:37:38 2026] NVRM: Xid (PCI:0000:9b:00): 79, pid=98812, name=python, GPU has fallen off the bus.
+[Sat Nov 15 15:37:38 2026] NVRM: GPU 0000:9b:00.0: GPU has fallen off the bus.
+[Sat Nov 15 15:37:39 2026] NVRM: A GPU crash dump has been created. If possible, please run
+                           NVRM: nvidia-bug-report.sh as root to collect this data before
+                           NVRM: the NVIDIA kernel module is unloaded.

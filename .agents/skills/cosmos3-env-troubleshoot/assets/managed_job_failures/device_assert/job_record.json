@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "cosmos3-reasoner-train-7c41d2",
+  "platform": "slurm",
+  "backend_ref": "4815162",
+  "image": "cosmos-framework:local",
+  "network_arch": "cosmos3-reasoner",
+  "action": "train",
+  "results_dir": "/lustre/cosmos/results/cosmos3-reasoner-train-7c41d2",
+  "storage_tier": "A",
+  "upload_excludes": [],
+  "submitted_at": "2026-11-14T08:02:11+00:00",
+  "transitions": [
+    {
+      "ts": "2026-11-14T08:02:11+00:00",
+      "state": "PENDING",
+      "message": "record opened before launch",
+      "source": "agent"
+    },
+    {
+      "ts": "2026-11-14T08:03:40+00:00",
+      "state": "RUNNING",
+      "message": "sbatch accepted: 4815162",
+      "source": "agent"
+    }
+  ],
+  "terminal_state": null,
+  "redacted": true
+}
