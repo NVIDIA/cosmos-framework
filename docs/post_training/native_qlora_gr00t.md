@@ -53,6 +53,16 @@ two: `srun` consumed the input stream carrying the remaining case schedule. The
 original sixteen-line schedule and failed allocation are retained. The narrow
 launcher repair isolates stdin; no partial case is spliced into a matched result.
 
+The next full attempt (`38619742`, 4,681 GPU-seconds) passed thirteen native and
+wrapper cases, then failed before case fourteen: Pyxis/enroot could not create
+the canonical output mount directory beneath a read-only parent bind. All 226
+raw files, 845 response calls, 260 untimed proofs and 3,009 strict memory samples
+were independently replayed. Available own-policy output comparisons pass, but
+the sixteen-case comparator never ran; this remains a failed study with no
+matched latency claim. A later login-host write probe passed. It does not explain
+the exact failed-node trigger or establish container writability. Narrow input
+mounts and repeated compute-side container starts must be checked before a retry.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).

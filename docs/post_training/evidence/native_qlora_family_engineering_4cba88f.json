@@ -233,6 +233,62 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38619742": {
+      "job": "38619742",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 4681,
+      "scope": "Selected GR00T update-200 / Alpamayo update-512 response benchmark. Thirteen native and wrapper cases passed; container setup failed before case14. No complete matched latency comparison.",
+      "native_implementations": {
+        "gr00t": "64ea823db4a7978c387d195bb464879b4f4733d0",
+        "alpamayo": "02f93bad9deeb32a48f259348607fd1b77f92ebb"
+      },
+      "protocol_sha256": "e0d830f997068a2bde7bb2351d63095d8a12ba9e5c6474595e8ac94a63114a82",
+      "scientific_packet_manifest_sha256": "46d56953448f98bc7031d4c94fd12cbe9b886d2af9bfad714fabb78379e60142",
+      "operational_manifest_sha256": "a1447486ed6ce9a7828b8a99662d53c1668e2c20b1cae378caddf24349a530be",
+      "admission_sha256": "e62945f49b445695f4ff0e75a7c6d5719a22841e947d2ab2de5debf123dbc1e1",
+      "receipt_directory": "selected-action-latency-38619742-receipts-v1",
+      "download_manifest_sha256": "b87919393871478498c3fbd0e7a4ef6a0f7a163cdeba4e4f6394e31f6df09bf1",
+      "retained_raw_files": 226,
+      "retained_raw_bytes": 78022526,
+      "terminal_release_sha256": "230b9fbabdecee8dd206c70f34ce58e36861d6854ffab0f7b34c995bdede98b4",
+      "peer_replay": {
+        "log": "selected-action-latency-38619742-shared-peer.log",
+        "sha256": "1aed8ddba457dde947831fb864a26c2c3dd203e09e5b24685497e5a260c32d29",
+        "completed_cases": 13,
+        "response_calls": 845,
+        "warmup_calls": 65,
+        "measured_calls": 780,
+        "untimed_input_task_proofs": 260,
+        "own_portable_unmerged_pairs_checked": 6,
+        "repeated_cases_checked": 5,
+        "strict_complete_host_samples": 3009,
+        "invalid_samples": 0,
+        "publication_intervals_without_samples": 12,
+        "scope": "Exact raw hashes, terminal release, calls/proofs, available own-policy parity, placement and memory reductions. Full tensor/frozen/RNG/mode checks remain hash-bound on-node attestations; no full-study comparator or cross-precision speed claim."
+      },
+      "failure": {
+        "component": "Pyxis/enroot container mount setup",
+        "case": "block1/gr00t-bf16_lora-portable",
+        "step": "38619742.13",
+        "errno": "EROFS / Read-only file system",
+        "target": "canonical durable jobs/38619742 mount directory below a read-only parent bind",
+        "before_worker_start": true,
+        "allocation_complete": false,
+        "remaining_cases_absent": 3,
+        "node": "batch-block7-03620",
+        "interpretation": "All cases used the same existing output root. The exact node-side trigger is not established; this is not evidence of a quantization or model arithmetic defect."
+      },
+      "post_terminal_host_probe": {
+        "receipt": "selected-action-latency-38619742-host-mount-diagnostic-v1.json",
+        "sha256": "4bf332be9860f7d518172076d179ba2071a293af0ccf2330033f7f4287afdb9d",
+        "passed": true,
+        "scope": "Login-host UID41852, fsw/fs11 same inode, existing writable parents, nested private directories and four bounded fsync/rename/readback writes with cleanup. Does not recreate the failed node/container or reserve capacity."
+      },
+      "next_engineering_check": "Replace broad read-only ancestors of the writable job directory with explicit immutable input/artifact mounts; verify coverage and repeated actual container starts before a fresh complete study.",
+      "matched_latency_claim": false,
+      "recipe_quality_claim": false
+    },
     "38618180": {
       "job": "38618180",
       "state": "FAILED",
