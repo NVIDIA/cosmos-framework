@@ -520,7 +520,12 @@ profile <id>` block that lists each reduction in effect.
 GPU keeps a pinned copy of the transformer weights and the SeaCache history in
 host memory. Check the system-memory floor in
 [Multiview Profiles](support-matrix.md#multiview-profiles) before choosing a
-host.
+host. With `NIM_MULTIVIEW_LAYER_OFFLOAD=false`,
+`VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD=0`, or
+`VLLM_OMNI_SEACACHE_HISTORY_DEVICE=cuda`, profile selection uses the
+resident profile's system-memory floor instead, while the VRAM floor stays. These
+combinations don't have verified memory floors; refer to
+[Multiview configuration](configuration.md#multiview).
 
 ## Guardrails
 

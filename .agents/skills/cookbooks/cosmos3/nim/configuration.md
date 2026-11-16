@@ -197,10 +197,14 @@ These variables apply only to `NIM_MODEL_VARIANT=multiview`. Profiles tagged
 on GPUs with less memory. Each reduction costs speed and can be turned off on
 its own. Refer to [GPU Memory and `layer` Profiles](multiview.md#gpu-memory-and-layer-profiles).
 
-These variables are runtime overrides. They do not take part in profile
-selection: the NIM first selects a profile, including its VRAM floor, and then
-applies them. To choose a different profile, use `NIM_OFFLOAD_MODE` or the
-other [Advanced Profile Controls](#advanced-profile-controls) instead.
+These variables are runtime overrides: the NIM applies them to the profile it
+selects, and they never change a profile's VRAM floor or the order in which
+profiles are preferred. Turning off one of the three host-memory settings
+(`NIM_MULTIVIEW_LAYER_OFFLOAD`, `VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD`,
+`VLLM_OMNI_SEACACHE_HISTORY_DEVICE`) also lowers the system-memory floor of
+`layer` profiles, so a host with less memory can select one, as described after
+the table. To choose a different profile, use `NIM_OFFLOAD_MODE` or the other
+[Advanced Profile Controls](#advanced-profile-controls) instead.
 
 | Name | Default | Use |
 | --- | --- | --- |
@@ -220,6 +224,17 @@ model uses, split across Ulysses GPUs. The
 both. Turning layer offload off (`NIM_MULTIVIEW_LAYER_OFFLOAD=false`) drops the
 pinned weight copy, and `VLLM_OMNI_SEACACHE_HISTORY_DEVICE=cuda` moves the
 history from host memory to the GPU.
+
+If any of the three host-memory settings is off (`NIM_MULTIVIEW_LAYER_OFFLOAD=false`,
+`VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD` other than `1`, or
+`VLLM_OMNI_SEACACHE_HISTORY_DEVICE` other than `cpu`), profile selection holds
+each `layer` profile to the system-memory floor of the matching resident
+profile. The `layer` profile keeps its own VRAM floor. A host with less memory
+than the `layer` floor can then start a `layer` profile; these combinations
+don't have verified memory floors, and the NIM logs a warning when it selects
+one. Refer to [Multiview Profiles](support-matrix.md#multiview-profiles) for the
+floors. `VLLM_OMNI_COSMOS3_MASKLESS_HEAD_GROUPS` and `PYTORCH_CUDA_ALLOC_CONF`
+save only GPU memory but may impact performance.
 
 The NIM sets these variables automatically for the selected profile, so most
 deployments do not need to set any of them. Override them only for advanced
