@@ -207,7 +207,7 @@ Transformers `5.22.1`. On this iGPU, VAE decode at 480p with 33 or more frames,
 including Edge's default 121, did not complete. The guardrail cannot be enabled
 on XPU with `cosmos_guardrail` 0.3.2, which loads a CUDA-saved checkpoint
 without `map_location`; see
-[the Diffusers skill reference](../../cosmos3-generate-media/references/diffusers.md#cosmos3-edge-on-intel-xpu-skill-addition-not-in-the-readme).
+[the Diffusers skill reference](../../cosmos3-inference-generate-media/references/diffusers.md#cosmos3-edge-on-intel-xpu-skill-addition-not-in-the-readme).
 
 If `import torch` fails with `undefined symbol: urGraphGetIdExp`, a system oneAPI
 install on `LD_LIBRARY_PATH` is shadowing the runtime shipped with the XPU wheel;
