@@ -298,6 +298,26 @@ any GPU launch. Its failure and successful write probe were preserved; a narrow
 reuse of the existing bounded whole-census retry passed 41 CPU checks and the
 fresh preflight before the single submission. No scientific setting changed.
 
+The subsequent source-versus-update-200 component diagnostic (`38624956`,
+361 GPU-seconds) completed all 84 native calls in both precision arms. Independent
+replay verified 80 captured rows, 160 masked error arrays, native scalar reductions,
+paired inputs/RNG and all four restoration receipts. The proposed explanation was
+that gripper gains concealed worsening motion errors inside an improved objective.
+Its prospective conjunction **failed**: all six motion-axis means worsened and
+gripper means improved, but total error increased in both arms and both objectives.
+
+| Fixed TRAIN diagnostic | BF16 source → selected200 | NF4 source → selected200 |
+|---|---:|---:|
+| Native flow loss | 0.031512 → 0.050722 | 0.026149 → 0.044059 |
+| Sampled normalized action MSE | 0.009944 → 0.022078 | 0.009969 → 0.018253 |
+
+The component-weighting hypothesis is terminated; no learning screen was selected.
+These twenty consumed training rows use per-row common noise, unlike the retained
+full-160 development cohort and scorer stream. They do not overturn its observed
+MSE improvements or establish representative training harm, gradient conflict,
+a code defect, quality preservation or performance. All raw captures and the
+negative decision remain in the existing family evidence record.
+
 The separate `gr00t_n1d7_libero_official_head.py` native action-SFT recipe makes that existing
 control executable. It streams the same pinned base into **FP32 backbone/head storage with BF16
 autocast**, trains only the native head, and uses `adamw_torch` with HF decay/no-decay groups.

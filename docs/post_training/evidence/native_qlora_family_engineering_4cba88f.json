@@ -31992,6 +31992,78 @@
       "repeated_start_qualification": false,
       "matched_latency_claim": false,
       "recipe_quality_claim": false
+    },
+    "38624956": {
+      "job": "38624956",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_gpu_seconds": 361,
+      "scope": "Fixed20 already-consumed TRAIN rows,two/task,source versus selected update200 in bothprecisionarms; per-row common noise123,84nativecalls,0updates. Mechanism diagnostic, not representative quality or noninferiority.",
+      "native_revision": "4cba88f4d84ce69037c194e58670e8491388a36d",
+      "protocol_sha256": "b3045da44163c2f5aaa61c8c74e37e62fd53b7f00bf94779da5dc313fe5a63ee",
+      "payload_manifest_sha256": "cb4334ea4f561cebf720bc934fbd2374b30b9255baa2eaf61990db99d3c8cfef",
+      "operational_sbatch_sha256": "c0714d3280b1821abe6433e68f6686b1e00ee7a074f672be361c5ccaeef89d28",
+      "admission_sha256": "920bde982bbd5447421ca751ad25b4750760717448a845058b6dc3ed32e16cea",
+      "receipt_archive": "gr00t-component-error-38624956-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "c7ce14dd10103a668f2551586ecf540483a8d671e7d4e2daa2bd559c91df1808",
+      "terminal_release_sha256": "3b4fa4e5f64e5d0c6d02575e7deb172e296b683a3ccb5cb5d4769dd037eab828",
+      "retained_archive_members": 87,
+      "retained_uncompressed_bytes": 86545193,
+      "missing_paths": [],
+      "raw_replay": {
+        "byte_exact_sealed_reducer_sha256": "da33d672095024fe0230e36cc057a8be102f5cd293565b618ce6c3e867c7862e",
+        "independent_numpy_peer": "gr00t-component-error-38624956-root-numpy-peer-v1.json",
+        "independent_numpy_peer_sha256": "d7b78028bb55ebd6302746f30e255a554095921c428fd73ef3bfbfccda1b8193",
+        "rows": 80,
+        "masked_squared_error_arrays": 160,
+        "valid_action_elements_per_row": 70,
+        "paired_inputs_and_rng_exact": true,
+        "all_four_restoration_receipts_passed": true,
+        "first_row_plain_controls_passed": true,
+        "scope": "Raw tensors, masks, per-axis sums/counts, native float32 scalar bounds, sampled-action arithmetic, paired inputs/RNG and prospective reduction replayed locally. Full model/frozen-state equality remains the on-node attestation."
+      },
+      "equal_task_component_means": {
+        "bf16_lora": {
+          "velocity": {
+            "source_mean": 0.031511816355224646,
+            "selected200_mean": 0.050721612304565435,
+            "relative_increase_percent": 60.96061151408625,
+            "motion_contribution_delta": 0.04372071199749859,
+            "gripper_contribution_delta": -0.024510916048157808
+          },
+          "sample": {
+            "source_mean": 0.009943677062326812,
+            "selected200_mean": 0.022077954955607715,
+            "relative_increase_percent": 122.0300882382185,
+            "motion_contribution_delta": 0.014821388475234511,
+            "gripper_contribution_delta": -0.002687110581953613
+          }
+        },
+        "nf4_lora": {
+          "velocity": {
+            "source_mean": 0.026148810152694175,
+            "selected200_mean": 0.04405882378486914,
+            "relative_increase_percent": 68.49265235240406,
+            "motion_contribution_delta": 0.0340744064921075,
+            "gripper_contribution_delta": -0.016164392859932538
+          },
+          "sample": {
+            "source_mean": 0.009968632717400283,
+            "selected200_mean": 0.018253050018523797,
+            "relative_increase_percent": 83.1048503438494,
+            "motion_contribution_delta": 0.010845895767637625,
+            "gripper_contribution_delta": -0.002561478466514109
+          }
+        }
+      },
+      "decision": {
+        "prospective_condition_met": false,
+        "reason": "All six motion-axis means worsen and gripper means improve, but totals increase in both arms and both velocity/sample objectives. The required net improvement is absent.",
+        "action": "Terminate the component-weighting hypothesis; no learning trial selected.",
+        "training_gradient_conflict_established": false,
+        "quality_or_performance_claim": false
+      },
+      "scope_comparison": "Earlier full160 development evaluation improved BF16 MSE .055068142 to .044357853 and NF4 .055654464 to .043024754. Its cohort and native RNG stream differ. This TRAIN-only mechanism result does not overwrite those gains or the failed historical quality uncertainty gates."
     }
   },
   "read_only_head_memory_diagnostic": {
