@@ -979,3 +979,104 @@ def test_resolution_given_as_a_number_is_accepted(value: int | str, expected: st
 def test_resolution_outside_the_tiers_is_still_rejected(value: object) -> None:
     with pytest.raises(pydantic.ValidationError):
         OmniSampleOverrides(resolution=value)
+
+
+def _bidirectional_transfer_model_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        action_gen=False,
+        sound_gen=False,
+        resolution="480",
+        tokenizer=SimpleNamespace(temporal_compression_factor=4),
+        video_temporal_causal=False,
+        vlm_config=SimpleNamespace(model_name="Qwen/Qwen3-VL-8B-Instruct"),
+        fixed_step_sampler_config=None,
+    )
+
+
+def _built_in_transfer_sample(tmp_path: Path, **fields: object) -> OmniSampleOverrides:
+    control = tmp_path / "depth.mp4"
+    control.touch()
+    return OmniSampleOverrides(
+        name="depth",
+        prompt="A car drives on a sunny road.",
+        model_mode="video2video",
+        output_dir=tmp_path / "output",
+        depth={"control_path": str(control)},
+        autoregressive=False,
+        resolution="480",
+        aspect_ratio="16,9",
+        **fields,
+    )
+
+
+def _default_negative_caption() -> str:
+    return args_module._load_modality_defaults("video2video")["negative_prompt"]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sample_negative_prompt_file_wins_over_built_in_default_caption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry, low quality"}))
+
+    sample = _built_in_transfer_sample(tmp_path, negative_prompt_file=str(negative)).build_sample(
+        model_config=_bidirectional_transfer_model_config()
+    )
+
+    assert json.loads(sample.negative_prompt) == {"caption": "blurry, low quality"}
+    assert not any("negative_prompt" in w for w in warnings)
+    # The cached preset itself is left untouched for the next sample.
+    assert args_module._load_modality_defaults("video2video")["negative_prompt"] is not None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_spec_relative_negative_prompt_file_wins_over_built_in_default_caption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "neg.json").write_text(json.dumps({"caption": "grainy"}))
+    monkeypatch.chdir(tmp_path)
+    parsed = _built_in_transfer_sample(tmp_path, negative_prompt_file="assets/neg.json")
+    monkeypatch.chdir(tmp_path.parent)
+
+    sample = parsed.build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert json.loads(sample.negative_prompt) == {"caption": "grainy"}
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_built_in_default_caption_is_used_when_the_sample_sets_no_caption(tmp_path: Path) -> None:
+    sample = _built_in_transfer_sample(tmp_path).build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert sample.negative_prompt == _default_negative_caption()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_sample_negative_prompt_still_wins_over_its_file_with_built_in_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _record_contract_warnings(monkeypatch)
+    negative = tmp_path / "negative.json"
+    negative.write_text(json.dumps({"caption": "blurry"}))
+
+    sample = _built_in_transfer_sample(
+        tmp_path, negative_prompt="grainy", negative_prompt_file=str(negative)
+    ).build_sample(model_config=_bidirectional_transfer_model_config())
+
+    assert sample.negative_prompt == "grainy"
+    assert any("both 'negative_prompt' and 'negative_prompt_file' are set" in w for w in warnings)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_missing_sample_negative_prompt_file_fails_its_sample_with_built_in_defaults(tmp_path: Path) -> None:
+    sample = _built_in_transfer_sample(tmp_path, negative_prompt_file=str(tmp_path / "missing.json"))
+
+    with pytest.raises(ValueError, match="negative_prompt_file not found"):
+        sample.build_sample(model_config=_bidirectional_transfer_model_config())
