@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """OneLogger as one `ControllerLifecycleObserver` implementation of the bus in `control/lifecycle.py`.
 
-Lives in `callbacks/` with the other observability implementations (DESIGN §9, Appendix A: callbacks
-hang on control's event bus; `control/` owns the bus, not its backends). It is imported lazily by
+Lives in `callbacks/` with the other observability implementations. It is imported lazily by
 `build_controller_observers` at the composition boundary and is not part of the package's eager
 `callbacks/__init__` exports, so an absent `one_logger` wheel or torch is touched only by a run that
 asked for OneLogger.
@@ -32,7 +31,7 @@ Contract:
 - The clocks are the controller's. The bus delivers events asynchronously, so a hook runs on the
   observer worker some time after the loop emitted it, and a slow observer ahead in the queue can
   deliver a batch's start and end back to back. Every event carries the controller thread's wall and
-  monotonic clocks from the moment of emission (`LifecycleEvent`); :meth:`OneLoggerLifecycleObserver.observe`
+  monotonic clocks from the moment of emission (`LifecycleEvent`);:meth:`OneLoggerLifecycleObserver.observe`
   makes them the current clock for the hook it runs, and the wrapper's timers read that clock
   (:class:`EmissionClockTimer`, installed on the wrapper at ``on_app_start``), so every interval
   OneLogger derives (``train_batch`` / ``train_iterations`` / ``save_checkpoint`` latest, min, max,
@@ -69,7 +68,7 @@ from cosmos_framework.posttrain.control.dispatch import LifecycleEvent
 from cosmos_framework.posttrain.control.lifecycle import ControllerLifecycleObserver
 from cosmos_framework.posttrain.utils.log import logger
 
-ONE_LOGGER_PROJECT = "imaginaire4"
+ONE_LOGGER_PROJECT = "cosmos-framework"
 APP_TAG_RUN_VERSION = "0.0.0"
 
 Clock = Callable[[], tuple[float, float]]  # (wall seconds since the epoch, monotonic seconds)

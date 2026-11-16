@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Reproduction of Akash's 32B (64bm32b) T2I DPO — wandb nvidia-dir/cosmos3_vfm/20260523175740
+"""Reproduction of a 32B (64bm32b) T2I DPO reference run
 (`ga_64bm32b_v1p5_hq_dpo_b5000_lr5e6_ebs256_500iter`, CRASHED at step ~152; we align the
-first 152 steps against his curve and then complete the 500 he never finished).
+first 152 steps against the reference curve and then complete the remaining steps).
 
 Reference setup (from the run's wandb config, pulled 2026-07-07):
   base   `cosmos3_ga_image_only/cosmos3_ga_64bm32b_from_v2_image_only_v1p5_hq_distill/

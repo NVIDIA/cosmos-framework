@@ -22,6 +22,9 @@ for enablement, capacity, and idle timeouts.
 > Checkpoint and KV-cache precision affect streaming quality. NVFP4 checkpoints
 > are currently not recommended for streaming. Use either an FP8 checkpoint
 > with BF16 KV-cache precision or a BF16 checkpoint for streaming workloads.
+>
+> When DFlash is enabled, set `NIM_DFLASH_BF16_KV_CACHE=true` for BF16 KV cache.
+> Refer to [Streaming Video Sessions](configuration.md#streaming-video-sessions).
 
 For a shared NVIDIA Dynamo frontend, use the [Dynamo streaming deployment](dynamo/dynamo_with_streaming.md)
 and the client's `--backend dynamo --transport rest` mode. Dynamo supports REST

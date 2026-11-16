@@ -16,28 +16,10 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask
 
 import cosmos_framework.model.generator.mot.attention as attention
-from cosmos_framework.model.attention import attention as imaginaire_attention
-from cosmos_framework.model.attention import merge_attentions, multi_dimensional_attention_varlen
-from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
-from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
-from cosmos_framework.utils.misc import set_torch_compile_options
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     CrossViewTemporalWindowConfig,
     SameViewTemporalWindowConfig,
 )
-from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
-from cosmos_framework.model.generator.mot import multiview_maskless_attention
-from cosmos_framework.model.generator.mot.attention import (
-    build_packed_sequence,
-)
-from cosmos_framework.model.generator.mot.flex_attention import (
-    FlexBackend,
-    SensorMaskItem,
-    build_multiview_block_mask,
-    resolve_flex_backend,
-)
-from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
-from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_all_seq,
@@ -56,6 +38,24 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     zeros_like,
 )
 from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
+from cosmos_framework.model.attention import attention as imaginaire_attention
+from cosmos_framework.model.attention import merge_attentions, multi_dimensional_attention_varlen
+from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
+from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
+from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
+from cosmos_framework.model.generator.mot import multiview_maskless_attention
+from cosmos_framework.model.generator.mot.attention import (
+    build_packed_sequence,
+)
+from cosmos_framework.model.generator.mot.flex_attention import (
+    FlexBackend,
+    SensorMaskItem,
+    build_multiview_block_mask,
+    resolve_flex_backend,
+)
+from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
+from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
+from cosmos_framework.utils.misc import set_torch_compile_options
 
 MAX_SEQ_LEN = 24
 SEQS_PER_BATCH = 4
@@ -286,7 +286,7 @@ def _test_attention_impls(
 
     # NOTE: we should try and maintain only one copy of QKV offsets if they're identical
     # between queries and key/values, since this enables the "don't care" mask, which enables
-    # more attention backends in I4 attention.
+    # more attention backends in native attention.
     if query_factored_1["_causal_seq_offsets"].equal(key_factored_1["_causal_seq_offsets"]) and query_factored_1[
         "_causal_seq_offsets"
     ].equal(value_factored_1["_causal_seq_offsets"]):

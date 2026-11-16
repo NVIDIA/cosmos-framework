@@ -345,7 +345,7 @@ class Rollout(Protocol):
 
     def apply_weights(self, source: "Any | None" = None) -> None:
         """Import updated trainer weights via the bound backend; no-op when trainer and rollout
-        share a model instance (the SharedRef no-op, §8.2 #4). PEER-ONLY: ``source`` is the policy
+        share a model instance (the SharedRef no-op). PEER-ONLY: ``source`` is the policy
         peer (WorkerGroup/PeerClient/body), or None for the degenerate stamp-only contracts. This is
         the KEPT consumer-PULL surface for manual/NCCL rigs, NOT the training-loop entry (the loop uses
         producer-driven ``weight_sync``/``push_weights`` — see module docstring). The WeightPayload
@@ -366,6 +366,6 @@ class Rollout(Protocol):
 
     def prepare_recv(self) -> dict[str, ShardSpec]:
         """Report THIS rank's receive layout per param as a `ShardSpec` — the backend's own shard,
-        in the shared planner's terms (§2.4). v1 (no TP / gather-then-slice): the whole tensor
+        in the shared planner's terms. v1 (no TP / gather-then-slice): the whole tensor
         `ShardSpec(0, dim0_len, 0)`. vLLM/SGLang report their real TP slice so v2 can send only that."""
         ...

@@ -22,7 +22,7 @@ layout (one directory per skill) and do not restructure it.
 The bar: a skill passes its eval when every documented command works unchanged
 on the first attempt, for each of the four agent backends, on every runner class
 (see [`references/running-the-eval.md`](references/running-the-eval.md)).
-Self-corrections count against the skill. `../cosmos3-generate-media/SKILL.md`
+Self-corrections count against the skill. `../cosmos3-inference-generate-media/SKILL.md`
 is the worked example behind every rule in this file.
 
 ## Skill directory structure
@@ -65,7 +65,7 @@ Rules the automated static checks enforce (keep them green):
   (see `cosmos3-setup`'s "Path convention" section).
 - **Scripts**: any `*.sh` needs a shebang.
 
-Section order that works (the `cosmos3-generate-media` layout): a short
+Section order that works (the `cosmos3-inference-generate-media` layout): a short
 intro; **Read this first** (numbered rules the agent must apply before the
 first command: which reference to read, what to check on the host, which tool
 versions each variant uses, how to verify outputs); any decision tables
@@ -125,7 +125,7 @@ forward workflow test; run them against the finished skill with a fresh agent.
   is declared in the block that carries it and listed in the fixes PR.
 
 Before/after evidence for each rule: the worked example
-`../cosmos3-generate-media/SKILL.md`; its fixes and the 44/44 result cited
+`../cosmos3-inference-generate-media/SKILL.md`; its fixes and the 44/44 result cited
 below come from the stacked fixes PR (#327), which merges into the #324 branch
 before that branch reaches `main`.
 
@@ -410,9 +410,9 @@ carries both to `main`.
 
 ## Related skills
 
-| Skill                                | When to use                                                                                                                                                      |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`          | Environment setup the eval cases assume                                                                                                                          |
-| `../cosmos3-inference/SKILL.md`      | Inference workflows your cases exercise                                                                                                                          |
-| `../cosmos3-codebase-nav/SKILL.md`   | Finding configs/params to reference                                                                                                                              |
-| `../cosmos3-generate-media/SKILL.md` | Worked example: 7 variants, 11 eval cases; 44/44 PASS, 44/44 first-attempt on the fixes PR's full run (group `ci-pr327-b7ad087`; fixes from the stacked PR #327) |
+| Skill                                          | When to use                                                                                                                                                      |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`                    | Environment setup the eval cases assume                                                                                                                          |
+| `../cosmos3-inference/SKILL.md`                | Inference workflows your cases exercise                                                                                                                          |
+| `../cosmos3-codebase-nav/SKILL.md`             | Finding configs/params to reference                                                                                                                              |
+| `../cosmos3-inference-generate-media/SKILL.md` | Worked example: 7 variants, 11 eval cases; 44/44 PASS, 44/44 first-attempt on the fixes PR's full run (group `ci-pr327-b7ad087`; fixes from the stacked PR #327) |

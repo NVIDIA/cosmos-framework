@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""metadata/bulk split — the bulk side (DESIGN §3.4).
+"""metadata/bulk split — the bulk side.
 
 A data item = lightweight **metadata** that travels on the control flow + **bulk**
 (video/image/large tensors) that STAYS where produced and is pulled on demand. This
 module is the bulk side: a `BulkStore` (lives with the producer) hands out `BulkRef`
 handles; the bulk is fetched only when a consumer actually needs it.
 
-Payoff (DESIGN §3.4): control flow / routing / dispatch / filtering touch only
+Payoff: control flow / routing / dispatch / filtering touch only
 metadata (BulkRefs) — dropped samples' bulk never moves (filter-before-transfer).
 
 v0: single-process, in-memory store + a module registry so a ref finds its store.
@@ -115,7 +115,7 @@ class BulkStore:
         Returns:
             The stored bulk object.
         """
-        # Refcounted consume (design spec 2026-07-22 §2.4): the routing map knows how many
+        # Refcounted consume (design the implementation): the routing map knows how many
         # consumer cells will materialize this ref; first fetch initializes the counter,
         # each consuming fetch decrements, pop at zero. readers=1 == the old consume-once.
         # Lock-guarded: this runs on the actor's "bulk" thread and may race a put/pack on the
@@ -189,5 +189,5 @@ def store_for(ref: BulkRef) -> BulkStore:
 def has_local_store(ref: BulkRef) -> bool:
     """True if the ref's bulk lives in THIS process (⇒ zero-copy direct pull). False ⇒
     the producer is remote; the transport must pull one-sided via the connection
-    registry (DESIGN §3.4 remote addressing / §3.2 registry)."""
+    registry."""
     return ref.store_id in _STORE_REGISTRY

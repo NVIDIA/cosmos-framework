@@ -425,7 +425,7 @@ metropolis_vqa_dataset = {
 
 # VANTAGE-bench variants. Each `dataset='VANTAGE_*'` arg triggers the
 # per-dataset-name _S3_PATHS dispatch inside the refactored Metropolis* classes,
-# routing the fetch to the HF-release-with-annotations stage on team-cosmos S3.
+# routing the fetch to the HF-release-with-annotations stage (VLMEVAL_BENCHMARK_S3_BUCKET).
 # Sampling values mirror the upstream VANTAGE-source partials verbatim. These
 # affect vlmevalkit-direct callers (`run.py --data VANTAGE_VQA_8frame`); they
 # don't apply on the vlmeval-metric path, which dispatches via configs/*.json.

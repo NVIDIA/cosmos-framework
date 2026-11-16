@@ -157,7 +157,7 @@ def test_shared_pipeline_dispatches_before_bidirectional_branches(tmp_path: Path
     config = _model_config(_SIM_AUTO_CONFIG if causal else _TRANSFER_AUTO_CONFIG)
     sample = _sample(tmp_path, config, joint=joint)
     pipe = _dispatch_pipe(config)
-    result = OmniInference.generate_batch(cast(OmniInference, pipe), [sample], {}, save_outputs=False)
+    result = OmniInference._generate_batch(cast(OmniInference, pipe), [sample], {}, save_outputs=False)
     assert result == (["causal"] if causal else ["joint-bidi" if joint else "rgb-bidi"])
     assert pipe._generate_causal_multiview_batch.called is causal
     if causal:
@@ -175,10 +175,10 @@ def test_causal_dispatch_precedes_the_caption_chunk_refusal(tmp_path: Path, caus
     sample = _sample(tmp_path, config, captions=False)
     pipe = _dispatch_pipe(config)
     if causal:
-        assert OmniInference.generate_batch(cast(OmniInference, pipe), [sample], {}) == ["causal"]
+        assert OmniInference._generate_batch(cast(OmniInference, pipe), [sample], {}) == ["causal"]
     else:
         with pytest.raises(NotImplementedError, match="caption-chunk path"):
-            OmniInference.generate_batch(cast(OmniInference, pipe), [sample], {})
+            OmniInference._generate_batch(cast(OmniInference, pipe), [sample], {})
         pipe._generate_causal_multiview_batch.assert_not_called()
 
 
@@ -396,6 +396,8 @@ def test_generate_batch_runs_the_causal_frontend_end_to_end(
         benchmark=True,
         warmup=0,
         keep_going=False,
+        enable_cpu_offload=False,
+        enable_layerwise_offload=False,
         use_separate_pipeline_vision_decode_gpu=False,
         checkpoint_type=CheckpointType.HF,
         config_file_type=ConfigFileType.MODULE,

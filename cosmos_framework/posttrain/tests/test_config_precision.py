@@ -4,7 +4,7 @@
 
 Two layers, both torch-free:
   - SCHEMA — where the fields live, that they default to a no-op, that a bad value fails at config
-    load, and that the `hf`-backend algorithms carry them while the `i4`-backend one does not.
+    load, and that the `hf`-backend algorithms carry them while the `native`-backend one does not.
   - RESOLUTION — `config/build.py::resolve_precision`, the ONE place the `""`-means-inherit chain
     and the `model_hf` deprecation live. The load-bearing case is the FIRST one: everything unset
     must reproduce the pre-split behaviour exactly, or the port is not the no-op it claims to be.
@@ -52,7 +52,7 @@ def test_precision_fields_default_to_empty_so_the_block_is_a_no_op():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_hf_backend_algorithms_carry_precision_and_the_i4_one_does_not():
-    """`GRPOConfig`/`OPDConfig` (backend=hf) own the block; `DPOConfig` (backend=i4) must not.
+    """`GRPOConfig`/`OPDConfig` (backend=hf) own the block; `DPOConfig` (backend=native) must not.
 
     DPO's model is the inherited LazyConfig tree, which carries its own dtype — precision fields
     there would be silently ignored. Excluding them makes `rl.master_dtype=...` on a DPO run an
@@ -65,7 +65,7 @@ def test_hf_backend_algorithms_carry_precision_and_the_i4_one_does_not():
 
     dpo_fields = {f.name for f in dataclasses.fields(DPOConfig)}
     for name in _PRECISION_FIELDS:
-        assert name not in dpo_fields, f"DPOConfig must not carry {name} (its backend is i4)"
+        assert name not in dpo_fields, f"DPOConfig must not carry {name} (its backend is native)"
         assert name in {f.name for f in dataclasses.fields(OPDConfig)}
 
 

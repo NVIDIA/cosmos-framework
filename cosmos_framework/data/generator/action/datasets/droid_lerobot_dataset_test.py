@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import huggingface_hub.constants as hf_constants
 import pytest
 import torch
 import torchvision.transforms.v2 as T
 
+from cosmos_framework.data.generator.action.datasets import cosmos3_action_lerobot
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _IMAGE_FEATURES = {"wrist": "wrist_key", "left": "left_key", "right": "right_key"}
@@ -109,3 +113,51 @@ def test_default_keeps_jitter_inside_the_per_view_pipeline() -> None:
     reordered._compose_multi_view(_sample(0.1, 0.5, 0.9))
     assert isinstance(reordered._color_augmentor, T.ColorJitter)
     assert not any(isinstance(t, T.ColorJitter) for t in reordered._image_augmentor.transforms)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_dataset_requires_explicit_root() -> None:
+    with pytest.raises(TypeError, match="root"):
+        DROIDLeRobotDataset()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_dataset_rejects_empty_root() -> None:
+    with pytest.raises(ValueError, match="root must be"):
+        DROIDLeRobotDataset(root="")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("filter_dict_path", [None, ""])
+def test_filter_requires_explicit_path(filter_dict_path: str | None) -> None:
+    # Reject incomplete configuration before touching the dataset directory.
+    with pytest.raises(ValueError, match="filter_dict_path is required"):
+        DROIDLeRobotDataset(root="/nonexistent/droid", use_filter_dict=True, filter_dict_path=filter_dict_path)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("use_filter_dict", [False, True])
+def test_dataset_filter_is_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_filter_dict: bool) -> None:
+    # Keep offline-mode environment and cached flags local to this test.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(hf_constants, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(cosmos3_action_lerobot, "_hf_offline_applied", True)
+    # Source registration needs downloaded episodes; exercise configuration and
+    # real JSON loading without opening video datasets.
+    monkeypatch.setattr(DROIDLeRobotDataset, "_register_sources", lambda self: None)
+    filter_path = tmp_path / "ranges.json"
+    filter_path.write_text('{"episode": [[0, 32]]}')
+    dataset = DROIDLeRobotDataset(
+        root=str(tmp_path / "droid_plus_lerobot_640x360_20260412"),
+        use_filter_dict=use_filter_dict,
+        filter_dict_path=str(filter_path) if use_filter_dict else None,
+    )
+    if use_filter_dict:
+        assert dataset._filter_dict == {"episode": [[0, 32]]}
+    else:
+        assert dataset._filter_dict_path is None
+        assert not hasattr(dataset, "_filter_dict")

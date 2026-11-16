@@ -3,7 +3,7 @@
 """Root config for the DPO entrypoint: `PosttrainConfig` with `rl: DPOConfig`.
 
 The default `--config` for `entrypoints/dpo.py`. Registration + job/trainer defaults come from
-`config.build_root`; this module only pins the typed `rl` section (and inherits `model_backend="i4"`,
+`config.build_root`; this module only pins the typed `rl` section (and inherits `model_backend="native"`,
 the OmniMoT path).
 """
 

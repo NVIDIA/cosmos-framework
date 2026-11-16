@@ -87,7 +87,7 @@ CHAT_TEMPLATE_KEY = "chat_template"
 UNIFIED_SERVE_ASSUMPTION = (
     "the serve sets no enable_thinking: under the unified (processor) template a request with enable_thinking=true is "
     "prefilled with the opener token <think> itself (no newline after it) while the rows supervise the opener as the "
-    "student's first token (review R151-05)"
+    "student's first token (serving contract)"
 )
 # Row rule R1 of record (the lab's brain program, 2026-10-02): the unified template is the processor
 # template with ONE change in its reasoning branch, the replayed ``reasoning_content`` rendered trimmed, so a replay string

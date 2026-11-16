@@ -33,7 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # Canonical converter output: its key list is the authoritative target set
 # (identical to Cosmos3EdgeForConditionalGeneration.state_dict().keys()).
-_CANONICAL_VLM_FILE = _REPO_ROOT / "examples" / "checkpoints" / "Cosmos3-Edge-Reasoner-VLM" / "model.safetensors"
+_CANONICAL_VLM_FILE = _REPO_ROOT / "examples" / "checkpoints" / "Cosmos3-Edge-VLM" / "model.safetensors"
 
 
 def _find_local_edge_snapshot() -> str | None:
@@ -157,7 +157,7 @@ def test_edge_index_remap_miniature_manifest_bijection():
 @pytest.mark.CPU
 def test_edge_index_remap_full_root_index_bijection_onto_canonical():
     """Map ALL reasoner root-index keys of the real snapshot and assert an exact
-    bijection onto the canonical Cosmos3-Edge-Reasoner-VLM key list (the 28
+    bijection onto the canonical Cosmos3-Edge-VLM key list (the 28
     gen-only k_norm_und_for_gen keys are skipped by detection)."""
     snapshot = _find_local_edge_snapshot()
     if snapshot is None:

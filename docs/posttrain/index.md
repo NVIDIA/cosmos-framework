@@ -10,6 +10,8 @@ algorithm they need. The [`glossary.md`](glossary.md) is worth five minutes befo
 
 ## Getting started
 
+Offline supervised fine-tuning is covered in the [SFT guide](guides/sft.md).
+
 | Document                                                 | What it covers                                                                                                            |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | [`howto/run-posttrain.md`](howto/run-posttrain.md)       | Step-by-step container recipes for GRPO, DPO, PPO, OPD, NFT, and Joint PPO, using a four-GPU showcase that can be adapted |

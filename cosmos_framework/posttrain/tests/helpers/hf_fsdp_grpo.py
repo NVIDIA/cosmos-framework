@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Colocated shared-model GRPO over an FSDP2-sharded ``HFModel`` — test fixture.
 
-Builds the tier-3 shape (DESIGN §4.2): ONE ``ActorGroup`` whose ``setup`` constructs a single FSDP
+Builds the tier-3 shape: ONE ``ActorGroup`` whose ``setup`` constructs a single FSDP
 ``HFModel`` that the rollout and the trainer SHARE, so ``push_weights`` is the SharedRef no-op and
 the whole loop runs on a sharded model with no cross-mesh weight transfer. The same wiring binds on
 both backends — ``local`` (bodies in this process, mesh from the torchrun world) and ``ray`` (bodies

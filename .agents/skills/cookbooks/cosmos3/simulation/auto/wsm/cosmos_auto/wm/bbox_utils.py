@@ -9,6 +9,7 @@ from pycg import Isometry
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
+from cosmos_auto.wm.camera.pinhole import PinholeCamera
 from cosmos_auto.wm.graphics_utils import (
     ALL_DIAGONAL_INDICES,
     BACK_DIAGONAL_INDICES,
@@ -16,6 +17,7 @@ from cosmos_auto.wm.graphics_utils import (
     FRONT_DIAGONAL_INDICES,
     FthetaCurvedEdges,
     TriangleList2D,
+    WorldSpaceLines,
     render_geometries,
 )
 
@@ -269,6 +271,29 @@ def _build_edge_endpoints_batched(all_corners_cam, edge_pairs, per_vertex_color,
     colors = np.broadcast_to(colors_e[None], (corners.shape[0], pairs.shape[0], 3))
 
     return endpoints[keep], colors[keep]  # boolean index flattens bbox-major
+
+
+class _PinholeBBoxEdges(WorldSpaceLines):
+    """Per-frame bbox lines; GPU buffers must not outlive the render call."""
+
+    def render(self, ctx, program, **kwargs):
+        try:
+            super().render(ctx, program, **kwargs)
+        finally:
+            self.release_buffers()
+
+
+def _pinhole_bbox_edges(
+    endpoints: np.ndarray,
+    colors: np.ndarray,
+    line_width: float,
+    camera_model: PinholeCamera,
+) -> WorldSpaceLines:
+    """Project the clipped straight edges with the original pinhole calibration."""
+    geometry = _PinholeBBoxEdges(endpoints, np.repeat(colors, 2, axis=0), line_width, camera_model)
+    # The bbox builder has already transformed these endpoints into camera space.
+    geometry.set_world_to_camera(np.eye(4, dtype=np.float32))
+    return geometry
 
 
 from cosmos_auto.wm.minimap_utils import cuboid3d_to_polyline
@@ -572,19 +597,23 @@ def create_bbox_geometry_objects_for_frame(
 
     n_edge_steps = max(1, min(10, curve_subdivide))
 
-    # ftheta params for the GPU geometry shader
-    fw_coef = camera_model._fw_poly.coef  # (6,) forward poly coefficients
-    cx, cy = camera_model._center
-    lc, ld, le = camera_model.linear_cde
-    ftheta_params = {
-        "c": fw_coef.tolist(),
-        "cx": float(cx),
-        "cy": float(cy),
-        "lc": float(lc),
-        "ld": float(ld),
-        "le": float(le),
-        "n_steps": n_edge_steps,
-    }
+    # ftheta params for the GPU geometry shader. Pinhole edges use the existing
+    # native pinhole shader; no distortion polynomial or calibration conversion.
+    is_pinhole = isinstance(camera_model, PinholeCamera)
+    ftheta_params = None
+    if not is_pinhole:
+        fw_coef = camera_model._fw_poly.coef  # (6,) forward poly coefficients
+        cx, cy = camera_model._center
+        lc, ld, le = camera_model.linear_cde
+        ftheta_params = {
+            "c": fw_coef.tolist(),
+            "cx": float(cx),
+            "cy": float(cy),
+            "lc": float(lc),
+            "ld": float(ld),
+            "le": float(le),
+            "n_steps": n_edge_steps,
+        }
 
     # Accumulate all edge endpoints across all bboxes — one batched VBO per call
     all_edge_endpoints = []
@@ -634,7 +663,7 @@ def create_bbox_geometry_objects_for_frame(
         # Edge endpoints for batched GPU geometry shader rendering, z-near
         # clipped on the CPU (all projection/subdivision runs on the GPU).
         # Vectorized across all bboxes of this type; regular and diagonal edges
-        # go to separate FthetaCurvedEdges objects (different depth bias).
+        # go to separate camera-specific geometry objects.
         reg_ep, reg_co = _build_edge_endpoints_batched(
             all_corners_in_cam, EDGE_INDICES, per_vertex_color, edge_color_arr
         )
@@ -649,16 +678,33 @@ def create_bbox_geometry_objects_for_frame(
                 all_diag_endpoints.append(dg_ep)
                 all_diag_colors.append(dg_co)
 
-    # Emit one FthetaCurvedEdges object for all regular edges and one for diagonals
+    # Emit one camera-specific batch for regular edges and one for diagonals.
     if all_edge_endpoints:
         geometry_objects.append(
-            FthetaCurvedEdges(
-                np.concatenate(all_edge_endpoints), np.concatenate(all_edge_colors), line_width, ftheta_params
+            _pinhole_bbox_edges(
+                np.concatenate(all_edge_endpoints),
+                np.concatenate(all_edge_colors),
+                line_width,
+                camera_model,
+            )
+            if is_pinhole
+            else FthetaCurvedEdges(
+                np.concatenate(all_edge_endpoints),
+                np.concatenate(all_edge_colors),
+                line_width,
+                ftheta_params,
             )
         )
     if all_diag_endpoints:
         geometry_objects.append(
-            FthetaCurvedEdges(
+            _pinhole_bbox_edges(
+                np.concatenate(all_diag_endpoints),
+                np.concatenate(all_diag_colors),
+                line_width,
+                camera_model,
+            )
+            if is_pinhole
+            else FthetaCurvedEdges(
                 np.concatenate(all_diag_endpoints),
                 np.concatenate(all_diag_colors),
                 line_width,

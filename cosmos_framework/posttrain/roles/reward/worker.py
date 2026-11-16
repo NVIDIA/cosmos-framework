@@ -288,7 +288,7 @@ class RewardWorker:
                 f"reward providers emitted duplicate reward term(s) {sorted(duplicate_terms)} "
                 f"across scalar/token namespaces on trajectory {trajectory.id!r}"
             )
-        components.update(result.terms)  # named optimized components only (§1.5)
+        components.update(result.terms)  # named optimized components only
         if result.token_terms:
             action_token_count = _completion_action_token_count(trajectory)
             for name, values in result.token_terms.items():
