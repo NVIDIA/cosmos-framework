@@ -32229,6 +32229,104 @@
         "native_and_protocol_unchanged": true,
         "physical_acceptance": false
       }
+    },
+    "38630422": {
+      "job": "38630422",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 299,
+      "native_revision": "f1feaa4c7bd85d2b085d01df1f7c638c2f00b662",
+      "executed_model_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "scope": "Corrected generated-scene packet passed storage/import/EGL prerequisites, then failed old-build versus old-build public rollout trace equality. No new-build policy or generated-scene stage ran.",
+      "protocol_sha256": "421ce31305d2031a25d537eb34e4378fdd340961a1f6580f49e15a909c965c36",
+      "payload_manifest_sha256": "6913345db1de5f1d2548a92bbfbf4a71f40d3927f9981a2993b490fcf2fa1b5b",
+      "operational_sbatch_sha256": "6d5126000c0adcb049d8a4d142e85746606bc46fb2656102c0c39a24039e39ff",
+      "admission_sha256": "5f0797b603206cbb3b17c10544247d0b6607675f01a71a42b62c78bd3291f8ec",
+      "approved_preflight_sha256": "4042d98700e5cac993a5ee6456c0f5c691a792f3065773367c1e5913f37c3ba2",
+      "receipt_archive": "gr00t-generated-scenes-v3-38630422-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "bf00b598d96e89702f3c3f53333c3a80ed6facd13b944e8a57e2fbd0606dfae5",
+      "inventory_sha256": "9c18df748253725c8230b38be4cd954c93c98200aed8cdd6b911bd3c508f2e97",
+      "listed_files": 126,
+      "listed_bytes": 17369391,
+      "regular_archive_members": 127,
+      "terminal_release_sha256": "08f0f01266ba9d09c428972dfe0b35a66cbdc3c68c38101bbe2baada319abaa7",
+      "independent_trace_replay_sha256": "a4b34cd8c718617529cc22f1a1b03da124de7a1dfd705080546fe22325fc7f84",
+      "completed_stages": {
+        "setup-egl": 35.657,
+        "public-old-a": 98.385,
+        "public-old-b": 93.243
+      },
+      "failure": {
+        "stage": "old-old exact trace comparison",
+        "exception": "ValueError: actual native input/action traces differ or are incomplete",
+        "complete_decisions_each": 26,
+        "contexts_exact": true,
+        "first_decision_all_fields_exact": true,
+        "first_difference": {
+          "task_id": 0,
+          "init_state_id": 0,
+          "decision": 1,
+          "observation_field": "wrist_image.sha256",
+          "other_observation_fields_exact": true,
+          "prepared_difference": "pixel_values.sha256",
+          "decoded_different_elements": 62,
+          "decoded_elements": 112,
+          "decoded_max_abs_difference": 0.0033897757530212402
+        },
+        "second_case_initial_observation_difference": "task9/init9/decision0 wrist_image.sha256 only",
+        "episode_endpoints": {
+          "successes_each": 2,
+          "control_steps_each": [
+            80,
+            128
+          ],
+          "task0_first_reward_zero_based_control": [
+            75,
+            79
+          ],
+          "task9_first_reward_zero_based_control": [
+            126,
+            126
+          ]
+        },
+        "observational_uuid_explanation_rejected": true,
+        "physical_cause": "Unresolved: raw pixels and full hidden simulator/controller state were not captured; earliest retained divergence is upstream of model prediction.",
+        "scenes_generated": 0,
+        "acceptance": false,
+        "gate_relaxed": false,
+        "next_diagnostic": "Bounded simulator-only fixed-control replay with raw images, full physics/controller/camera state and RNG; separate unchanged-state rendering from hidden-state divergence before changing native behavior."
+      },
+      "placement": {
+        "node": "batch-block4-1051",
+        "gpu": "A100-SXM4-80GB",
+        "gpu_uuid": "GPU-32e8b86c-4c60-2adf-b017-a8b6407ea210",
+        "cpu_affinity": [
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157,
+          158,
+          159
+        ],
+        "numa_nodes": [
+          1
+        ]
+      },
+      "limits": [
+        "No generated-scene acceptance, task-quality comparison or response-latency result.",
+        "Historical rollout outcomes remain recorded; this failure does not establish exact fresh-process simulator trajectory reproducibility.",
+        "Native training and fixed-input artifact results are not invalidated by an unlocalized on-policy image divergence."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {

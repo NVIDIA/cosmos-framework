@@ -994,6 +994,21 @@ protocol. Isolated import tests validate packaging; they do not replace the pend
 physical execution. Earlier path-alias and GLVND-schema preflight failures consumed
 no GPU time and remain recorded separately.
 
+The corrected run (`38630422`, **299 GPU-seconds**) passed those startup checks
+and completed two old-build public rollouts, then failed their exact trace gate.
+For the first case, their first observation and eight controls matched. At the next decision, only
+the wrist-camera image differed among observations; processed pixels and policy
+actions subsequently differed. Both runs succeeded on both cases, but one reward
+arrived at a different control step. This is not a session-UUID mismatch or a
+QLoRA-versus-BF16 comparison. No new-build or generated-scene stage ran. The 126
+retained files and independent replay locate the earliest recorded divergence
+upstream of prediction; raw pixels and hidden physics state are needed to identify
+its cause. The exact gate and historical outcomes remain unchanged.
+
+The separate timeout-diagnostic fix `1e33f58` retains partial worker stdout and
+stderr in failed-request journals. Its 60 CPU tests include actual subprocess
+timeouts in preparation and verification; they do not establish simulator parity.
+
 Historical selected-update-200 policies require their compatible native loader.
 The evaluation-only backport `fe72f850d9f6e3922bb1a3b1332549e3ab96c82d` on
 `integration/libero-generated-native64` adds the same five scene-evaluation files
