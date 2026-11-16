@@ -1028,6 +1028,21 @@ of the retained arrays measured 68,608,936 bytes, but the complete six-process
 capture footprint remains unmeasured. This failure supplies no trajectory-parity
 result and does not weaken the preceding equality gate.
 
+The lossless chunked successor (`38636235`, **854 GPU-seconds**) completed all six
+fresh-process fixed-control replays and exact analysis. Each captured fifteen
+settling controls, eight policy controls and 62 native render calls; all 21,776
+retained files passed integrity verification. From the first seeded reset render
+onward, recorded physical, controller, camera-pose, non-image cache and clock state
+matched across repeat pairs. Python RNG remained different because the original
+native seed call seeds NumPy only. Image bytes and their cache copies differed by
+at most one RGB level. At the final unchanged physical state, repeated wrist
+renders differed in 16/18 image pairs and agent-view renders in 2/18 pairs.
+This locates variability in image production beyond the captured identical state;
+it does not establish a particular GPU-driver, rasterization or readback cause.
+No model ran, no tolerance changed, and the original rollout equality failure
+remains a failure. Generated-scene qualification remains blocked on this issue;
+fixed-input policy artifact and response checks are separate.
+
 The separate timeout-diagnostic fix `1e33f58` retains partial worker stdout and
 stderr in failed-request journals. Its 60 CPU tests include actual subprocess
 timeouts in preparation and verification; they do not establish simulator parity.

@@ -32476,6 +32476,108 @@
         "Bounded reads establish compute-side access, not a fresh complete payload hash or model-load proof. Admission contains separate content checks.",
         "No simulator trajectory repeatability, native model numerical result, task-quality evidence or deployment-latency improvement is inferred."
       ]
+    },
+    "38636235": {
+      "job": "38636235",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_gpu_seconds": 854,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "setup_revision": "f1feaa4c7bd85d2b085d01df1f7c638c2f00b662",
+      "scope": "Six fresh model-free fixed-control replays and exact diagnostic analysis. Technical capture completed; no policy, task-quality or generated-scene qualification.",
+      "protocol_sha256": "72d626a69f707745e1ab03f75f06933e9fabe13e45c06b188e64843af08df126",
+      "payload_manifest_sha256": "f17c8f65c02b287939985f851aca1928d4f19fefcc4f75af7d2f009843fe8989",
+      "admission_sha256": "b350e0297e54fb4d2e7e0d79e602904bd929864cee74f9537003333ecf1a0d05",
+      "receipt_archive": "gr00t-simulator-replay-v2-38636235-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "aa7daafe6642eb04e94fd416dbe1ca2712194b6487e9198e292d91dcbd92190b",
+      "receipt_archive_bytes": 897922391,
+      "inventory_sha256": "7511260ab74dd2e445424c9d97db82afce951ac3fd1c6c0c67a8df308a09c63d",
+      "listed_files": 21776,
+      "listed_bytes": 1241274801,
+      "regular_archive_members": 21777,
+      "terminal_release_sha256": "8da09849e1030c466b3da7bf2a06277169037b1786cc71e8db2fbdad959ece4a",
+      "owner_diagnosis_sha256": "b3dbdb4afcfc00bddcf50461ad78e5384413f669e67b2f6664ec2cbfbdab9081",
+      "comparison_sha256": "58353ec56d55197ba8075e560d9ec41fd214ef05a885665d7ff618525bb3f56a",
+      "root_independent_checks": "All21776 retained file hashes/sizes and exactc928 terminal release replayed. Local unlisted Python bytecode is not part of the canonical archive.",
+      "workers": 6,
+      "settling_controls_per_worker": 15,
+      "policy_controls_per_worker": 8,
+      "native_render_calls_per_worker": 62,
+      "compressed_raw_chunk_bytes": 867364216,
+      "workflow_seconds": 789.2028639569762,
+      "placement": {
+        "node": "batch-block4-0052",
+        "gpu": {
+          "name": "NVIDIA A100-SXM4-80GB",
+          "bytes": 85174583296,
+          "uuid": "GPU-8fc7920b-3032-a510-443b-e061ff6847d4",
+          "nvml_uuid_roundtrip": true
+        },
+        "cpu_affinity": [
+          16,
+          17,
+          18,
+          19,
+          28,
+          29,
+          30,
+          31,
+          124,
+          125,
+          126,
+          127,
+          136,
+          137,
+          138,
+          139
+        ],
+        "numa_nodes": [
+          "node0",
+          "node1",
+          "node7"
+        ]
+      },
+      "diagnostic": {
+        "first_seeded_image_changed_channel_values": [
+          7,
+          3,
+          3,
+          3,
+          14,
+          3
+        ],
+        "first_seeded_image_max_abs_difference": 1,
+        "recorded_post_seed_physical_controller_model_non_image_cache_clock_differences": 0,
+        "numpy_rng_differences": 0,
+        "python_rng": "Original native seed call leaves Python RNG different; constructor and pre-seed differences remain in the exact capture.",
+        "final_same_state_render_pairs": {
+          "agentview_different_pairs": 2,
+          "agentview_pairs": 18,
+          "robot0_eye_in_hand_different_pairs": 16,
+          "robot0_eye_in_hand_pairs": 18
+        },
+        "final_render_max_changed_channels": {
+          "agentview": 2,
+          "robot0_eye_in_hand": 24
+        },
+        "final_render_max_channel_difference": {
+          "agentview": 1,
+          "robot0_eye_in_hand": 1
+        }
+      },
+      "decision": "Image production varies beyond the captured identical physical state. The exact renderer mechanism is unresolved; original old-old rollout equality gate remains failed. No native numerical change or relaxed tolerance.",
+      "limits": [
+        "Capture does not include all GL state or prove a specific rasterization, resolve/readback or driver defect.",
+        "No model loads, training updates, task success, policy latency or independent confirmation.",
+        "Fixed-input policy artifact/response checks are a separate capability."
+      ],
+      "independent_raw_replay_sha256": "240db455f21d4c4afbcc31d6c239069d547b9359ec2edea1dd092eb438405be1",
+      "independent_raw_replay": {
+        "typed_arrays": 19235,
+        "chunks": 21599,
+        "events_per_worker": 99,
+        "scope": "Bounded decode/full hashes, exhaustive matched post-seed leaves, and36 final raw image pairs. Wrist differing pairs have exact entire recorded before and after states. Twelve front before-state pairs differ only renderer GL-camera pos/forward/up; all36 after-states exact."
+      }
     }
   },
   "read_only_head_memory_diagnostic": {
