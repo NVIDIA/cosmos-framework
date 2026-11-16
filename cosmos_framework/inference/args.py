@@ -902,6 +902,10 @@ class InteractiveDataOverrides(OverridesBase):
             raise ValueError("'camera_trajectory' and 'action_path' are mutually exclusive")
         if not self.autoregressive:
             raise ValueError("'camera_trajectory' requires autoregressive inference")
+        # Parse it now, so a typo fails before generation instead of when its batch is prepared.
+        from cosmos_framework.inference.camera import check_camera_trajectory
+
+        check_camera_trajectory(self.camera_trajectory)
 
 
 class ActionDataOverrides(OverridesBase):
