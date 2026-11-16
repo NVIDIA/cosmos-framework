@@ -79,6 +79,75 @@ def load_rollout_policy(config, checkpoint=None, *, device, output, dense=False,
     return policy
 
 
+def base_policy_binding(identity):
+    """Bind existing native source/quantization/config identity; never fabricate a trained artifact."""
+    from cosmos_framework.posttrain.embodied.sims.libero.generated import digest
+    from cosmos_framework.posttrain.model.gr00t.qlora_source import recorded_source
+
+    if (
+        identity.get("format") != "cosmos.family-backbone.v1"
+        or "training_contract" in identity
+        or identity.get("base") != recorded_source()
+        or identity.get("adapter", {}).get("mode") not in ("bf16_frozen", "nf4_frozen")
+    ):
+        raise ValueError("generated base control requires the pinned untrained native BF16/NF4 policy")
+    return {
+        "kind": "native-base",
+        "source": identity["base"],
+        "adapter": identity["adapter"],
+        "quantization": identity["quantization"],
+        "task_config": identity["task_contract"]["config"],
+        "identity_sha256": digest(identity),
+    }
+
+
+def artifact_policy_binding(args):
+    from cosmos_framework.posttrain.embodied.sims.libero.generated import file_sha
+
+    marker = (
+        "cosmos_family_unmerged_export.json"
+        if args.unmerged
+        else "cosmos_family_dense_export.json"
+        if args.dense
+        else ".posttrain-checkpoint-artifact.json"
+    )
+    return {"kind": "artifact", "manifest_sha256": file_sha(Path(args.checkpoint) / marker)}
+
+
+def require_generated_policy(args, policy, manifest):
+    binding = (
+        base_policy_binding(policy.net._cosmos_adapter_checkpoint_codec.identity)
+        if args.base
+        else artifact_policy_binding(args)
+    )
+    if binding not in manifest["plan"]["policies"]:
+        raise ValueError("loaded policy differs from the prospectively frozen generated-scene policy set")
+
+
+def load_cases(args):
+    """Validate frozen episode inputs before model allocation; public serialization stays unchanged."""
+    from cosmos_framework.posttrain.embodied.sims.libero.protocol import LiberoCase
+
+    if bool(args.cases) == bool(args.generated_scenes):
+        raise ValueError("choose published --cases or --generated-scenes, exclusively")
+    if args.generated_scenes:
+        from cosmos_framework.posttrain.embodied.sims.libero.generated import cases, read_manifest
+
+        manifest = read_manifest(args.generated_scenes, args.generated_scenes_sha256)
+        if args.base:
+            if not any(row["kind"] == "native-base" for row in manifest["plan"]["policies"]):
+                raise ValueError("generated scenes do not bind a native base control")
+        elif not args.checkpoint or artifact_policy_binding(args) not in manifest["plan"]["policies"]:
+            raise ValueError("generated scenes were prepared for a different frozen policy artifact")
+        return cases(manifest), manifest
+    if args.generated_scenes_sha256:
+        raise ValueError("generated manifest digest requires --generated-scenes")
+    selected = [LiberoCase(**row) for row in json.loads(Path(args.cases).read_text())]
+    if not selected or len(set(selected)) != len(selected) or any(case.suite != "libero_spatial" for case in selected):
+        raise ValueError("GR00T artifact rollout requires distinct, declared LIBERO spatial cases")
+    return selected, None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -93,7 +162,10 @@ def main():
         "--unmerged", action="store_true", help="Load a self-contained dequantized-unmerged native LoRA artifact"
     )
     parser.add_argument("--sim-python", required=True)
-    parser.add_argument("--cases", required=True, help="Prospectively frozen JSON list of LiberoCase mappings")
+    scenes = parser.add_mutually_exclusive_group(required=True)
+    scenes.add_argument("--cases", help="Prospectively frozen JSON list of published LiberoCase mappings")
+    scenes.add_argument("--generated-scenes", help="Prepared native generated-scene manifest")
+    parser.add_argument("--generated-scenes-sha256", help="Required trusted digest for --generated-scenes")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--latency-warmup-calls", type=int, default=5)
     parser.add_argument("--output", required=True)
@@ -117,7 +189,6 @@ def main():
     from cosmos_framework.posttrain.embodied.sims.libero.protocol import (
         GR00T_QLORA_SPATIAL_EXECUTION_PROFILE,
         LIBERO_RUNTIME,
-        LiberoCase,
         execution_protocol,
     )
     from cosmos_framework.posttrain.entrypoints.action_sft import _json, validate_config
@@ -126,9 +197,7 @@ def main():
     from cosmos_framework.posttrain.utils.determinism import enable_determinism
     from cosmos_framework.utils.config import load_config
 
-    cases = [LiberoCase(**row) for row in json.loads(Path(args.cases).read_text())]
-    if not cases or len(set(cases)) != len(cases) or any(case.suite != "libero_spatial" for case in cases):
-        raise ValueError("GR00T artifact rollout requires distinct, declared LIBERO spatial cases")
+    cases, generated = load_cases(args)
     config = load_config(args.config, ["--", *opts])
     validate_config(config)
     import torch
@@ -151,30 +220,58 @@ def main():
             base=args.base,
             unmerged=args.unmerged,
         )
+        if generated is not None:
+            require_generated_policy(args, policy, generated)
         policy_loading_seconds = time.monotonic() - started
         rollout = NativeArtifactRollout(policy, latency_capacity=32 * len(cases))
         protocol = execution_protocol("libero_spatial", GR00T_QLORA_SPATIAL_EXECUTION_PROFILE)
-        gateway = SimGatewayBody(
-            sim="libero",
-            sink="null",
-            embodiment="libero_sim",
-            sim_python=args.sim_python,
-            sim_gpu=os.environ["CUDA_VISIBLE_DEVICES"],
-            sim_options={
-                "n_lanes": 1,
-                "suite": "libero_spatial",
-                "execution_horizon": 8,
-                "max_steps": 256,
-                "execution_profile": GR00T_QLORA_SPATIAL_EXECUTION_PROFILE,
-            },
-        )
-        probe = gateway.probe()
-        result = gateway.run_evaluation(
-            policy=rollout, cases=[asdict(case) for case in cases], version=0, seed=args.seed, decisions=32
-        )
+
+        def new_gateway():
+            return SimGatewayBody(
+                sim="libero",
+                sink="null",
+                embodiment="libero_sim",
+                sim_python=args.sim_python,
+                sim_gpu=os.environ["CUDA_VISIBLE_DEVICES"],
+                sim_options={
+                    "n_lanes": 1,
+                    "suite": "libero_spatial",
+                    "execution_horizon": 8,
+                    "max_steps": 256,
+                    "execution_profile": GR00T_QLORA_SPATIAL_EXECUTION_PROFILE,
+                    **(
+                        {
+                            "generated_scenes": str(Path(args.generated_scenes).resolve()),
+                            "generated_scenes_sha256": args.generated_scenes_sha256,
+                        }
+                        if generated is not None
+                        else {}
+                    ),
+                },
+            )
+
+        if generated is None:
+            gateway = new_gateway()
+            probe = gateway.probe()
+            result = gateway.run_evaluation(
+                policy=rollout, cases=[asdict(case) for case in cases], version=0, seed=args.seed, decisions=32
+            )
+        else:
+            probe, result = [], {"episodes": [], "policy_version": 0}
+            for case in cases:
+                # Each scene is reconstructed and exactly verified in a fresh simulator process.
+                gateway = new_gateway()
+                probe.append(gateway.probe())
+                current = gateway.run_evaluation(
+                    policy=rollout, cases=[asdict(case)], version=0, seed=args.seed, decisions=32
+                )
+                result["episodes"].extend(current["episodes"])
+                gateway.close()
+                gateway = None
         episodes = result["episodes"]
-        expected = {(case.task_id, case.init_state_id) for case in cases}
-        actual = {(row["task_id"], row["init_state_id"]) for row in episodes}
+        id_field = "scene_id" if generated is not None else "init_state_id"
+        expected = {(case.task_id, getattr(case, id_field)) for case in cases}
+        actual = {(row["task_id"], row[id_field]) for row in episodes}
         if (
             len(episodes) != len(cases)
             or actual != expected
@@ -206,6 +303,19 @@ def main():
                 if args.dense
                 else policy.net._cosmos_adapter_checkpoint_codec.identity,
                 "cases": [asdict(case) for case in cases],
+                **(
+                    {
+                        "generated_scenes": {
+                            "sha256": args.generated_scenes_sha256,
+                            "format": generated["format"],
+                            "reset_order": generated["reset_order"],
+                            "policy_noise": generated["policy_noise"],
+                            "source": generated["plan"]["source"],
+                        }
+                    }
+                    if generated is not None
+                    else {}
+                ),
                 "seed": args.seed,
                 "execution_profile": GR00T_QLORA_SPATIAL_EXECUTION_PROFILE,
                 "protocol": protocol.identity(),

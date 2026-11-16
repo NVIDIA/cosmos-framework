@@ -174,6 +174,25 @@ class LiberoCase:
         return f"{self.suite}/{self.task_id}/{self.init_state_id}"
 
 
+@dataclass(frozen=True, order=True)
+class GeneratedLiberoCase:
+    """Evaluation-only scene identity, never an alias for a published init-state index."""
+
+    task_id: int
+    scene_id: str
+    suite: str = "libero_spatial"
+
+    def __post_init__(self) -> None:
+        if self.suite != "libero_spatial" or type(self.task_id) is not int or not 0 <= self.task_id < 10:
+            raise ValueError("generated scenes require one of the ten LIBERO Spatial tasks")
+        if not isinstance(self.scene_id, str) or re.fullmatch(r"[0-9a-f]{64}", self.scene_id) is None:
+            raise ValueError("generated scene_id must be a SHA256")
+
+    @property
+    def id(self) -> str:
+        return f"{self.suite}/{self.task_id}/generated/{self.scene_id}"
+
+
 @dataclass(frozen=True)
 class LiberoManifest:
     split: str

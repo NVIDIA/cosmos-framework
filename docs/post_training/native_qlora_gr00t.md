@@ -847,6 +847,87 @@ records expose that publication cost without rewriting old measurements.
 
 ## LIBERO rollout
 
+### Prospectively generated Spatial scenes
+
+The evaluation-only `libero-generated-scenes-v1` input can bind fresh draws from the
+same ten Spatial BDDL task initializers. It does not reinterpret published `init_state_id`
+values. LIBERO's authors describe evaluation states as independent draws from the
+[same initialization distribution](https://github.com/Lifelong-Robot-Learning/LIBERO/issues/2#issuecomment-1596101904)
+and describe [repeated seeded initialization](https://github.com/Lifelong-Robot-Learning/LIBERO/issues/34#issuecomment-2341628132).
+The original generation seeds, subset indices and generation-time settling recipe are
+not recorded. Fresh draws therefore do not reconstruct the released finite inventory.
+They are conditional confirmation on these tasks, not new tasks/embodiments, offline
+expert-action labels, or evidence about an entire training recipe. The pinned
+`rlinf-libero==0.1.3` source-file manifest is authoritative; no exact wheel-to-Git
+attestation is claimed.
+
+Freeze the candidate/control set and explicit task/construction/reset seed list before
+preparation. One manifest is shared by every paired policy, including both precisions
+and native frozen-base controls. Preparation imports no policy or trained weights.
+The source description hashes all ten BDDLs, LIBERO assets, native generation/rollout
+code, and installed robosuite/MuJoCo/NumPy files (including Panda assets and controller
+configuration), in addition to the existing pinned LIBERO runtime/source checks.
+
+```bash
+SIM_PY=/verified/libero-venv/bin/python
+export MUJOCO_GL=egl
+"$SIM_PY" -m cosmos_framework.posttrain.embodied.sims.libero.generated \
+  --describe --output /protocol/generated-source.json
+```
+
+Create `/protocol/generated-plan.json` with these exact fields. `source` is the complete
+description above; `requests` is the prospectively frozen list of objects with integer
+`task_id` in `[0,10)`, `construction_seed` and `reset_seed` in `[0,2**32)`.
+There is no default sample count, task subset, seed search or replacement seed.
+`policies` is a distinct list of typed entries:
+
+- `{"kind":"artifact","manifest_sha256":"<SHA256>"}` binds the committed portable
+  `.posttrain-checkpoint-artifact.json` or the native standalone export manifest selected
+  by `--unmerged`/`--dense`. Existing loader support limits still apply.
+- A native BF16/NF4 `--base` entry is produced by
+  `entrypoints.gr00t_rollout.base_policy_binding(identity)` from its existing complete
+  untrained codec identity, retained in a source-policy receipt. It records the exact
+  source, adapter/quantization/config and full identity digest; it creates no fake artifact.
+  The loaded base must match that entry before policy actions. This generated mode does
+  not yet accept the separate official-head source factory.
+
+The plan's `format` is `libero-generated-plan-v1`; its other keys are `source`, `policies`,
+and `requests`. Candidate-set bindings do not enter scene IDs. The independently versioned
+`libero-generated-scene-policy-v1` noise derivation uses scene ID, policy seed and decision,
+so paired policies share scene/noise coordinates without impersonating public-state seeds.
+
+```bash
+"$SIM_PY" -m cosmos_framework.posttrain.embodied.sims.libero.generated \
+  --plan /protocol/generated-plan.json --output /protocol/generated-scenes.json
+SCENE_SHA=$(sha256sum /protocol/generated-scenes.json | cut -d' ' -f1)
+"$SIM_PY" -m cosmos_framework.posttrain.embodied.sims.libero.generated \
+  --verify /protocol/generated-scenes.json --sha256 "$SCENE_SHA" \
+  --output /protocol/generated-scenes-verification.json
+# In the native rollout command below, replace --cases with:
+# --generated-scenes /protocol/generated-scenes.json --generated-scenes-sha256 "$SCENE_SHA"
+```
+
+Each preparation request runs in a fresh simulator process with a bounded timeout.
+Python/NumPy are seeded before construction, then reseeded for one call to the underlying
+native reset. This bypasses the upstream wrapper's hidden retry loop. Exactly fifteen
+existing open-gripper settling controls follow. The manifest records constructor and
+pre/post-settling physics, compiled model/fixture transforms, controller/buffers, RNG
+and observations. Evaluation recreates each scene in a fresh process and verifies these
+records exactly before exposing its observation to the policy. It never restores only
+flattened `time/qpos/qvel`, which omit fixture and controller state. Native task predicates,
+20 Hz controls, eight-action chunks, action decoding and the 256-control limit are unchanged.
+
+All requested seeds and failures remain in the preparation output; a failed/incomplete
+attempt or duplicate physical scene makes the manifest unusable. No success-based filtering
+or resampling occurs. Duplicate physical identities are not counted as independent episodes.
+Preparation and regeneration seconds measure construction/reset/settling and evidence capture;
+the rollout workflow also includes fresh-process startup and source verification. Neither is
+policy response latency. CPU fixtures cover these contracts; real pinned-runtime preparation,
+fresh-process regeneration and policy/simulator acceptance remain required before use as
+rollout evidence. No generated-scene campaign is qualified by this implementation alone.
+
+### Published initial states
+
 An observation-only native rollout adapter and `entrypoints.gr00t_rollout` also connect a loaded
 portable or dense policy to the existing isolated LIBERO simulator gateway. The separate
 `gr00t_qlora_spatial_8_v1` profile executes eight supervised actions, allows 256 control steps and

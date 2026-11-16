@@ -124,14 +124,28 @@ class NativeArtifactRollout:
         case = context["case"]
         if case["suite"] != "libero_spatial":
             raise ValueError("this GR00T artifact rollout supports only LIBERO spatial")
-        seed = libero_seed(
-            "libero_spatial",
-            "evaluation-policy",
-            context["seed"],
-            case["task_id"],
-            case["init_state_id"],
-            context["decision"],
-        )
+        if "scene_id" in case:
+            from cosmos_framework.posttrain.embodied.sims.libero.generated import POLICY_NOISE
+            from cosmos_framework.posttrain.embodied.sims.libero.protocol import GeneratedLiberoCase
+
+            generated = GeneratedLiberoCase(**case)
+            seed = libero_seed(
+                "libero_spatial",
+                POLICY_NOISE,
+                context["seed"],
+                generated.task_id,
+                int(generated.scene_id, 16),
+                context["decision"],
+            )
+        else:
+            seed = libero_seed(
+                "libero_spatial",
+                "evaluation-policy",
+                context["seed"],
+                case["task_id"],
+                case["init_state_id"],
+                context["decision"],
+            )
         import torch
 
         # NumPy's legacy RNG accepts uint32; preserve the full native policy seed for CUDA noise.
