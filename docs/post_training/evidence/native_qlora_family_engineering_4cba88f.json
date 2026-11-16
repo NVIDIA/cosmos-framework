@@ -31941,6 +31941,57 @@
       "promotion": "Not promoted: second fixed pair passes continuation only. Two reversed-order seed42 pairs, aggregate gates and own enabled200-to300 recovery remain required; current-e64 check separately bounded.",
       "memory_scope": "All1566 observed v11 host samples complete with valid ownedGPU attribution; eight stage and a466 phase reductions independently replayed. Short setup/publication/checkpoint subphases remain unsampled; startup outside observer and unmapped filesystem cache unmeasured. Peaks are sampled lower bounds. Observed host-peak decrease is not established as a causal memory benefit of caching.",
       "target_clock_scope": "Native run preparation through its verified target checkpoint; separate cold-case includes launcher/prelude,fresh scores and release. No retrospective splicing of the target clock."
+    },
+    "38624272": {
+      "job": "38624272",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 91,
+      "scope": "Twenty-start model-free narrow-mount canary; first physical container probe passed, immediate scheduler-release check stopped before start two. No model, update, benchmark or quality claim.",
+      "canary_protocol_sha256": "2f29ce6d4531ae4638a0f159331edb51c5a3898c0a8b712aa48500a54e6ec8a4",
+      "operational_manifest_sha256": "628cb5a2a22975f2a535c26814e44541a13d396bc24a4e586baaba174c44c5c1",
+      "admission_sha256": "0beec310ff1a82c9fed32fd0f945e6dfddf075cb5d686968b4d87ced935ad43f",
+      "receipt_directory": "selected-mount-canary-38624272-receipts-v1",
+      "download_manifest_sha256": "fdef86e8cb7c6f547300e6138620d4d26061565246056357c82a3ec8bf896c7c",
+      "retained_raw_files": 13,
+      "retained_raw_bytes": 3660332,
+      "canonical_terminal_release_sha256": "bad30b2fb9cdcf99537ff6d0fca17b0b464b4c78082787186eab3238678615da",
+      "physical_probe": {
+        "passed": true,
+        "native_package": "64ea823",
+        "receipt_sha256": "fd229263a801b112c8a5fc18fa293d3c658b5d1e1e643e7a083d567396df1fe9",
+        "mounts": 40,
+        "immutable_roots_with_both_aliases": 17,
+        "bounded_file_reads": 4653,
+        "asset_files": 33,
+        "artifact_members": 204,
+        "gr00t_media": 320,
+        "alpamayo_media": 4096,
+        "host_uid": 41852,
+        "container_uid_mapping": "kernel-verified root-to-host41852",
+        "gpu": "NVIDIA A100-SXM4-80GB",
+        "cpu_affinity_count": 16,
+        "node": "batch-block7-03411",
+        "compute_write_fsync_rename_readback_cleanup": true,
+        "scope": "First fresh container only; stat/first-byte reads complement the admission payload hashes. No complete weight rehash in the canary; no capacity reservation."
+      },
+      "failure": {
+        "component": "one-shot scheduler step-release check",
+        "srun_exit_code": 0,
+        "step_query_returncode": 0,
+        "step_query_stderr": "",
+        "listed_numeric_step": "38624272.0",
+        "step_state_at_query": "not queried",
+        "later_step_accounting_state": "COMPLETED",
+        "later_step_accounting_exit_code": "0:0",
+        "later_step_end_utc": "2026-11-16T07:16:35",
+        "batch_end_utc": "2026-11-16T07:16:31",
+        "no_second_start": true
+      },
+      "decision": "Retain original failed twenty-start result. Add a bounded read-only release wait before any second container, never retry srun automatically. The separately prepared one-srun task diagnostics can use the successful single-container mount evidence and their own compute preflight; repeated-start qualification remains required before the multi-container latency study.",
+      "repeated_start_qualification": false,
+      "matched_latency_claim": false,
+      "recipe_quality_claim": false
     }
   },
   "read_only_head_memory_diagnostic": {
@@ -32890,7 +32941,7 @@
       "data_or_recipe_changed": false,
       "minimum_next_inputs": [
         "Authenticated raw episode locator: exact regenerated HDF5 file+demo ID or RLDS snapshot/shard/record corresponding to the already-exposed 92-row sequence; preserve its original file_path and episode identity.",
-        "Exact dataset-generation/replay and HDF5→RLDS→LeRobot conversion revisions and configuration, including environment/robosuite versions, control_freq, noop/frame filtering and TFDS read ordering; or a trustworthy producer attestation of these facts."
+        "Exact dataset-generation/replay and HDF5\u2192RLDS\u2192LeRobot conversion revisions and configuration, including environment/robosuite versions, control_freq, noop/frame filtering and TFDS read ordering; or a trustworthy producer attestation of these facts."
       ],
       "next_executable_action": "With the exact locator, read only that episode, compare all 92 actions and 8-dimensional states bitwise against retained source 831effd0 (plus frame correspondence and image identity where needed), then verify recorded controller interval from bound environment/configuration. If mismatch, trace filtering/order before any resampling. No exact download command/byte count is asserted until a locator exists."
     },

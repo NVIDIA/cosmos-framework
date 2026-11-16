@@ -63,6 +63,16 @@ matched latency claim. A later login-host write probe passed. It does not explai
 the exact failed-node trigger or establish container writability. Narrow input
 mounts and repeated compute-side container starts must be checked before a retry.
 
+The narrower-mount canary (`38624272`, 91 GPU-seconds) passed its first actual
+container probe: all forty mount flags, seventeen input roots at both aliases,
+4,653 bounded file reads, mapped host identity, A100 80GB placement and durable
+write/fsync/rename/readback checks. It then failed before start two because an
+immediate scheduler query still listed step `.0` after successful `srun` return.
+Later accounting records that step as completed. The original twenty-start test
+remains failed; a bounded release wait is needed before the next container.
+Single-container task diagnostics can proceed with their own compute preflight.
+No repeated-start, model-performance or quality result follows from this probe.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).
