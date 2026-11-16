@@ -32327,6 +32327,80 @@
         "Historical rollout outcomes remain recorded; this failure does not establish exact fresh-process simulator trajectory reproducibility.",
         "Native training and fixed-input artifact results are not invalidated by an unlocalized on-policy image divergence."
       ]
+    },
+    "38633630": {
+      "job": "38633630",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 116,
+      "native_revision": "e64a735d33303d8e7e919b9919d550e644d1312e",
+      "setup_revision": "f1feaa4c7bd85d2b085d01df1f7c638c2f00b662",
+      "scope": "Six-process model-free fixed-control replay stopped during first constructor-boundary capture. No model loads, updates, settling or policy controls; no trajectory comparison.",
+      "protocol_sha256": "da2c2a7c0251681958c23b022c23e1732c673622607ec8f43775a749e2931872",
+      "payload_manifest_sha256": "3f3c36ee78529a38e20c007023e4ad44b138bc108c129e2d4a8419a7589b121e",
+      "admission_sha256": "3e96b89aa91f8af1d709e8801d254cbf02ba042b3a9745c6571a3d1fcc97a7ad",
+      "receipt_archive": "gr00t-simulator-replay-v1-38633630-receipts-v1.tar.gz",
+      "receipt_archive_sha256": "a7b70b916bed47480653967f0521c4aaff690081221be54b1da26d7424917735",
+      "receipt_archive_bytes": 79435172,
+      "inventory_sha256": "aa7bf8e87f42c70abbc7395f30e11a5384dbe6025a2185d876cd33acc1086e2a",
+      "listed_files": 458,
+      "listed_bytes": 284841387,
+      "regular_archive_members": 459,
+      "terminal_release_sha256": "62b6ac2641497b9fcf4db15a00872526c745fb5db4b834f9c46b6c0af8a24531",
+      "independent_partial_replay_sha256": "49839f1032052b758d37c3a7ddbcd64545a74a4150312f5db34849850871afef",
+      "failure": {
+        "exception": "RuntimeError: Prospective raw capture limit exhausted; no truncation permitted",
+        "physical_limit_bytes": 536870912,
+        "retained_arrays": 330,
+        "retained_array_bytes": 281170600,
+        "complete_events": 3,
+        "complete_event_array_count": 67,
+        "complete_event_array_bytes": 420873,
+        "unfinished_boundary_array_count": 263,
+        "unfinished_boundary_array_bytes": 280749727,
+        "exact_failed_array_descriptor": null,
+        "attempted_nbytes_lower_bound": 255699289,
+        "source_inference": "Three dictionary frames and sorted model encoding identify model.mjb; the failed descriptor was not persisted. Full-model and individual texture/mesh representations overlap.",
+        "recorded_post_attachment_reset_attempts": 0,
+        "settling_controls": 0,
+        "policy_controls": 0,
+        "native_constructor_internal_reset_count": "Not established by post-attachment hooks.",
+        "parity_result": null,
+        "gate_relaxed": false
+      },
+      "retained_array_storage_census": {
+        "gzip6_bytes": 79021326,
+        "one_mib_unique_zlib6_chunk_bytes": 68608936,
+        "scope": "Lossless CPU packing of the retained partial arrays; no full MJB or complete six-worker footprint was captured."
+      },
+      "placement": {
+        "node": "batch-block4-0051",
+        "gpu": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-bc1e4994-6dd5-e47e-0c01-d36c88b10cdc",
+        "cpu_affinity": [
+          2,
+          3,
+          26,
+          27,
+          36,
+          37,
+          38,
+          39,
+          126,
+          127,
+          130,
+          131,
+          146,
+          147,
+          148,
+          149
+        ]
+      },
+      "limits": [
+        "Two constructor renders have exact recorded pre/post integration and RNG; renderer camera fields change. This does not establish later trajectory repeatability.",
+        "No simulator cause, policy-quality, performance or generated-scene acceptance claim.",
+        "Original failure and protocol remain immutable; any lossless packing repair requires separate validation."
+      ]
     }
   },
   "read_only_head_memory_diagnostic": {

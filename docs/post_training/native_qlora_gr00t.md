@@ -1005,6 +1005,20 @@ retained files and independent replay locate the earliest recorded divergence
 upstream of prediction; raw pixels and hidden physics state are needed to identify
 its cause. The exact gate and historical outcomes remain unchanged.
 
+The model-free diagnostic `38633630` failed after **116 GPU-seconds** when its
+512-MiB capture limit refused another array during constructor-boundary storage.
+It retained 330 arrays (281,170,600 bytes), initial RNG and two constructor renders,
+but no complete constructor boundary, settling controls or replayed policy controls.
+Native construction can itself reset the environment before the observation hooks
+attach; zero recorded reset attempts does not prove construction performed no reset.
+All 458 retained files and the terminal release passed independent verification.
+The failed array's size and field path were not journaled. Source ordering points to
+the full MuJoCo model blob, whose assets overlap the separately captured model fields;
+this attribution is an inference, not a recovered descriptor. Lossless chunk-packing
+of the retained arrays measured 68,608,936 bytes, but the complete six-process
+capture footprint remains unmeasured. This failure supplies no trajectory-parity
+result and does not weaken the preceding equality gate.
+
 The separate timeout-diagnostic fix `1e33f58` retains partial worker stdout and
 stderr in failed-request journals. Its 60 CPU tests include actual subprocess
 timeouts in preparation and verification; they do not establish simulator parity.
