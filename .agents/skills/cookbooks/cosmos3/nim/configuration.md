@@ -197,11 +197,13 @@ These variables apply only to `NIM_MODEL_VARIANT=multiview`. Profiles tagged
 on GPUs with less memory. Each reduction costs speed and can be turned off on
 its own. Refer to [GPU Memory and `layer` Profiles](multiview.md#gpu-memory-and-layer-profiles).
 
-These variables are runtime overrides. They do not change which profiles the
-NIM considers or the VRAM floors: the NIM first selects a profile and then
-applies them. The three host-memory settings lower the system-memory floor of
-`layer` profiles, as described after the table. To choose a different profile,
-use `NIM_OFFLOAD_MODE` or the other
+These variables are runtime overrides: the NIM applies them to the profile it
+selects, and they never change a profile's VRAM floor or the order in which
+profiles are preferred. Turning off one of the three host-memory settings
+(`NIM_MULTIVIEW_LAYER_OFFLOAD`, `VLLM_OMNI_COSMOS3_MULTIVIEW_VAE_OFFLOAD`,
+`VLLM_OMNI_SEACACHE_HISTORY_DEVICE`) also lowers the system-memory floor of
+`layer` profiles, so a host with less memory can select one, as described after
+the table. To choose a different profile, use `NIM_OFFLOAD_MODE` or the other
 [Advanced Profile Controls](#advanced-profile-controls) instead.
 
 | Name | Default | Use |
