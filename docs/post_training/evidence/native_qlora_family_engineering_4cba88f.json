@@ -233,6 +233,44 @@
     "scope": "Source CBC only; both precisions benefit. No task-quality or cross-precision speed claim. Same-build own-ON200to300 recovery and current-e64 compatibility remain pending; no promotion."
   },
   "jobs": {
+    "38618180": {
+      "job": "38618180",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_gpu_seconds": 212,
+      "scope": "Selected GR00T update-200 / Alpamayo update-512 response benchmark; first GR NF4 portable case completed, but launcher consumed remaining schedule stdin before case 2. No matched latency result.",
+      "native_implementations": {
+        "gr00t": "64ea823db4a7978c387d195bb464879b4f4733d0",
+        "alpamayo": "02f93bad9deeb32a48f259348607fd1b77f92ebb"
+      },
+      "protocol_sha256": "e0d830f997068a2bde7bb2351d63095d8a12ba9e5c6474595e8ac94a63114a82",
+      "scientific_packet_manifest_sha256": "46d56953448f98bc7031d4c94fd12cbe9b886d2af9bfad714fabb78379e60142",
+      "admission_sha256": "6077df42111e52963f218f4ba31957caa7622a123b4f801ef902d6e78a772ced",
+      "receipt_directory": "selected-action-latency-38618180-receipts-v1",
+      "download_manifest_sha256": "781c4868b8e5935438a7c52fef63bd2d65a232ee853d3e84ccfb5f6c7a2ee1da",
+      "terminal_release_sha256": "650b73ee2f73f5018b71a48c25376bcd1631615f22ac958d9c65ef3f3bbb112b",
+      "peer_replay_sha256": "25f58b0b6f91b7d5621b400bd94090691ddd1d05a60e25714990c6f6c08fcd82",
+      "first_case": {
+        "native_response_complete": true,
+        "wrapper_complete": true,
+        "calls": 65,
+        "untimed_proof_calls": 20,
+        "strict_memory_samples": 100,
+        "total_memory_samples": 100,
+        "model_frozen_rng_integrity": "On-node assertions passed; raw replay does not reload full tensors."
+      },
+      "failure": {
+        "cause": "Nested srun inherited the while-read cases.tsv stream and drained the remaining schedule. The allocation completeness guard then failed.",
+        "schedule_rows": 16,
+        "completed_cases": 1,
+        "allocation_complete": false,
+        "allocation_json_exit_code": 0,
+        "exit_code_interpretation": "The stored zero is the loop status entering the finalizer; the completeness guard exits 1 and Slurm records FAILED 1:0. Original evidence is unchanged."
+      },
+      "repair": "Isolate srun stdin with /dev/null; actual-script CPU regression must dispatch all sixteen cases and preserve case failure exit status. Native source, protocol, measurements and routing are unchanged.",
+      "matched_latency_claim": false,
+      "recipe_quality_claim": false
+    },
     "38616477": {
       "job": "38616477",
       "state": "FAILED",

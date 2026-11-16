@@ -47,6 +47,12 @@ ownership before loading.
 All sixteen cases must be rerun together before a matched latency claim. This
 does not change either native model or its historical quality conclusions.
 
+The clean retry (`38618180`, 212 GPU-seconds) passed that first case completely,
+including its wrapper and 100/100 strict memory samples, then failed before case
+two: `srun` consumed the input stream carrying the remaining case schedule. The
+original sixteen-line schedule and failed allocation are retained. The narrow
+launcher repair isolates stdin; no partial case is spliced into a matched result.
+
 Native commands: [training and recovery](#native-training-and-recovery),
 [fresh-process evaluation](#fresh-process-evaluation),
 [standalone artifacts](#standalone-artifacts), and [LIBERO rollout](#libero-rollout).
