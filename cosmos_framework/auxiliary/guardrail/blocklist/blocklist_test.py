@@ -1098,3 +1098,75 @@ def test_invisible_only_token_does_not_pull_a_match_into_a_phrase():
     blocked, _ = bl.censor_prompt("\u200b snow white batman")
 
     assert blocked is True
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "char"),
+    [
+        ("variation selector 16", "\ufe0f"),
+        ("variation selector 1", "\ufe00"),
+        ("combining grapheme joiner", "\u034f"),
+        ("Hangul filler", "\u3164"),
+        ("tag letter A", "\U000e0041"),
+    ],
+)
+def test_other_invisible_characters_cannot_reach_the_phrase_exemption(name, char):
+    """Found in review: "desk<U+FE0F>in" read as the whitelisted "desk in".
+
+    The character was not folded before the phrase was located, and the
+    to_ascii pass then turned it into a space, which spelled the phrase.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, f"a desk{char}in the corner")
+
+    assert blocked is True, f"{name} reached the exemption"
+
+    blocked, _ = _blocked(bl, "a desk in the corner")
+    assert blocked is False
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "a \u2764\ufe0fdesk in the corner",
+        "a desk in\ufe0f the corner",
+        "a desk\ufe0f in the corner",
+        "a desk\u034f in the corner",
+    ],
+)
+def test_phrase_still_exempts_with_a_selector_or_emoji_at_its_edge(prompt):
+    """Found in review: a selector or an emoji stuck to a phrase word hid the phrase.
+
+    That failed closed (the prompt was blocked), but it is the same phrase a
+    reader sees, so it is exempt like the plain spelling.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, message = _blocked(bl, prompt)
+
+    assert blocked is False, f"{prompt!r} was blocked: {message}"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "a desk\U0001f178\U0001f17d in the corner",
+        "a desk\U0001f158\U0001f15d in the corner",
+        "a desk\U0001f1ee\U0001f1f3 in the corner",
+    ],
+)
+def test_letter_shaped_symbols_are_not_trimmed_from_a_phrase_word(prompt):
+    """Found in review: squared or circled letters read as part of the word.
+
+    "desk" followed by a squared I and N shows the entry; trimming them as
+    symbols would locate the phrase "desk in" and exempt the match.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, _ = _blocked(bl, prompt)
+
+    assert blocked is True, f"{prompt!r} reached the exemption"

@@ -101,6 +101,33 @@ class _NoLemmatizer:
         return token
 
 
+def _phrase_word(token: str) -> str:
+    """A token as it is compared with a whitelisted phrase's words.
+
+    Punctuation, zero-width characters and symbols such as emoji are trimmed
+    from the edges, so "a \u2764\ufe0fdesk in" and "a desk\ufe0f in" still
+    contain the phrase "desk in". Only the edges: a zero-width character inside
+    a token ("desk<U+FE0F>in") keeps it from reading as two phrase words.
+    """
+    start, end = 0, len(token)
+    while start < end and _is_edge_trim(token[start]):
+        start += 1
+    while end > start and _is_edge_trim(token[end - 1]):
+        end -= 1
+    return token[start:end].lower()
+
+
+def _is_edge_trim(char: str) -> bool:
+    """Punctuation, a zero-width character, or a symbol that is not drawn as a letter.
+
+    Symbols drawn as letters ("\U0001f178", a squared I) are kept: trimming them
+    would read "desk\U0001f178\U0001f17d" as the phrase word "desk".
+    """
+    if char in _STRIP_CHARS or ZERO_WIDTH_CHARS.match(char):
+        return True
+    return unicodedata.category(char) == "So" and "LETTER" not in unicodedata.name(char, "")
+
+
 class Blocklist(ContentSafetyGuardrail):
     def __init__(
         self,
@@ -333,7 +360,7 @@ class Blocklist(ContentSafetyGuardrail):
 
     def whitelisted_phrase_spans(self, tokens: list[str]) -> list[tuple[int, int]]:
         """(start, end) token indices of every whitelisted phrase occurrence."""
-        lowered = [token.strip(_STRIP_CHARS).lower() for token in tokens]
+        lowered = [_phrase_word(token) for token in tokens]
         spans: list[tuple[int, int]] = []
         for phrase in self.whitelist_phrases:
             parts = phrase.strip().lower().split()
